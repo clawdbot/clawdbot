@@ -43,6 +43,25 @@ const PENDING_PLACEMENT_STATES = new Set([
   "reconciling",
 ]);
 
+export function sessionPlacementDispatchParams(params: {
+  key: string;
+  agentId: string;
+  target: SessionPlacementTarget;
+}) {
+  return {
+    key: params.key,
+    agentId: params.agentId,
+    ...(params.target.kind === "profile"
+      ? {
+          profileId: params.target.profileId,
+          ...(params.target.machineClass ? { machineClass: params.target.machineClass } : {}),
+        }
+      : params.target.kind === "device"
+        ? { deviceId: params.target.deviceId }
+        : { autoDevice: true }),
+  };
+}
+
 function isAmbiguousDispatchError(error: unknown): boolean {
   if (error instanceof GatewayRequestError) {
     return error.retryable || error.gatewayCode === "UNAVAILABLE";
@@ -134,7 +153,7 @@ async function resolveActivePlacement(
             ? { status: "cleanup-rejected", error: cleanupError }
             : { status: "cancelled" };
         }
-        const placementError = "cloud worker placement could not be verified";
+        const placementError = "session placement could not be verified";
         return {
           status: "cleanup-rejected",
           error: cleanupError
@@ -155,7 +174,7 @@ async function resolveActivePlacement(
         if (emptyPlacements >= EMPTY_PLACEMENT_LIMIT) {
           return {
             status: "cleanup-rejected",
-            error: "cloud worker placement could not be verified",
+            error: "session placement could not be verified",
           };
         }
       } else {
@@ -209,8 +228,8 @@ async function resolveActivePlacement(
   return {
     status: "cleanup-rejected",
     error: isCurrent()
-      ? "cloud worker placement reconciliation timed out"
-      : "cloud worker cleanup timed out",
+      ? "session placement reconciliation timed out"
+      : "session placement cleanup timed out",
   };
 }
 
@@ -230,10 +249,10 @@ export async function deleteSessionPlacementDraft(
     return existing.error;
   }
   if (existing.status === "unavailable") {
-    return "cloud draft session could not be verified";
+    return "placement draft session could not be verified";
   }
   if (!existing.sessionId) {
-    return "cloud draft session identity is unavailable";
+    return "placement draft session identity is unavailable";
   }
   return archiveAndDeleteSessionPlacementDraft(client, {
     key,
@@ -265,7 +284,7 @@ async function archiveAndDeleteSessionPlacementDraft(
       archivedOnly: true,
     });
     if (deleted.deleted !== true) {
-      throw new Error("cloud draft session was not deleted");
+      throw new Error("placement draft session was not deleted");
     }
     return undefined;
   } catch (error) {
@@ -278,7 +297,7 @@ async function archiveAndDeleteSessionPlacementDraft(
         expectedSessionId: params.sessionId,
       });
     } catch (restoreError) {
-      return `${deleteError}; restoring the cloud draft failed: ${formatUiError(restoreError)}`;
+      return `${deleteError}; restoring the placement draft failed: ${formatUiError(restoreError)}`;
     }
     return deleteError;
   }
@@ -300,7 +319,7 @@ export async function deleteRecoveredSessionPlacementDraft(
     return existing.error;
   }
   if (existing.status === "unavailable") {
-    return "cloud worker placement could not be verified";
+    return "session placement could not be verified";
   }
   if (existing.placement) {
     const cleanupError = await reclaimSessionPlacement(client, { key, agentId, abortRun: false });
@@ -309,7 +328,7 @@ export async function deleteRecoveredSessionPlacementDraft(
     }
   }
   if (!existing.sessionId) {
-    return "cloud draft session identity is unavailable";
+    return "placement draft session identity is unavailable";
   }
   return archiveAndDeleteSessionPlacementDraft(client, {
     key,
@@ -362,19 +381,15 @@ export async function startSessionPlacementInitialTurn(
     }
   }
   if (!resolution) {
-    const dispatchTarget =
-      params.target.kind === "profile"
-        ? {
-            profileId: params.target.profileId,
-            ...(params.target.machineClass ? { machineClass: params.target.machineClass } : {}),
-          }
-        : { deviceId: params.target.deviceId };
     try {
-      const dispatched = await client.request<SessionsDispatchResult>("sessions.dispatch", {
-        key: params.key,
-        agentId: params.agentId,
-        ...dispatchTarget,
-      });
+      const dispatched = await client.request<SessionsDispatchResult>(
+        "sessions.dispatch",
+        sessionPlacementDispatchParams({
+          key: params.key,
+          agentId: params.agentId,
+          target: params.target,
+        }),
+      );
       resolution = await resolveActivePlacement(
         client,
         {
@@ -411,13 +426,13 @@ export async function startSessionPlacementInitialTurn(
     return resolution;
   }
   if (resolution.status === "missing") {
-    return { status: "session-missing", error: "cloud draft session no longer exists" };
+    return { status: "session-missing", error: "placement draft session no longer exists" };
   }
   if (resolution.status === "rejected") {
     const state = typeof resolution.placement?.state === "string" ? resolution.placement.state : "";
     return {
       status: "dispatch-rejected",
-      error: dispatchError || (state ? `cloud worker placement became ${state}` : ""),
+      error: dispatchError || (state ? `session placement became ${state}` : ""),
     };
   }
   if (!isCurrent()) {
@@ -443,7 +458,7 @@ export async function startSessionPlacementInitialTurn(
     });
     return cleanupError
       ? { status: "cleanup-rejected", error: cleanupError }
-      : { status: "send-not-started", error: "cloud recovery storage is unavailable" };
+      : { status: "send-not-started", error: "placement recovery storage is unavailable" };
   }
   try {
     const sent = await client.request<{ messageSeq?: unknown }>("sessions.send", {

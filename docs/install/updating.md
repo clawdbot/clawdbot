@@ -54,6 +54,9 @@ omit `--allow-scripts=openclaw`.
 After the core swap, eligible official npm plugins with bare/default or
 `latest` intent converge to that exact core version. Exact pins and explicit
 non-`latest` tags, third-party plugins, and non-npm sources remain unchanged.
+Version-bound runtime plugins converge to the base release cohort when the
+core is a correction release (for example, `YYYY.M.P-2` uses plugin
+`YYYY.M.P`).
 Catalog installs created by current OpenClaw versions retain that default
 intent. Older records that contain only an exact version remain pinned because
 OpenClaw cannot safely distinguish an old automatic pin from a user pin; run
@@ -73,6 +76,8 @@ default/latest release.
 See [Release channels](/install/development-channels) for channel semantics.
 
 ## Switch between npm and git installs
+
+Installer-driven switches verify the replacement before the working owner is retired. Source wrappers are published atomically; same-path npm shim transitions use an identity-checked backup that is restored on failure, so a failed candidate leaves the previous command runnable. The `openclaw update` command prints its final success result only after post-core convergence and requested restart health checks succeed.
 
 Use channels to change the install type. The updater keeps your state, config,
 credentials, and workspace in `~/.openclaw`; it only changes which OpenClaw
@@ -320,9 +325,13 @@ Every failed apply ends the campaign so the UI does not remain on
 in the restart sentinel and surface after the Gateway returns; direct
 unsupervised failures remain in the running Gateway's logs.
 
-`OPENCLAW_NO_AUTO_UPDATE=1` and external-supervisor mode disable automatic
-applies entirely. Startup update hints can still run unless
-`update.checkOnStart` is also disabled.
+`update.checkOnStart: false` disables all automatic update checks, feature
+statistics, and update notices, even when `update.auto.enabled` is `true`.
+`OPENCLAW_NO_AUTO_UPDATE=1` also disables automatic checks and applies.
+External-supervisor mode disables automatic applies; startup update hints can
+still run unless `update.checkOnStart` is also disabled. See
+[Usage telemetry and update checks](/gateway/telemetry) for the information
+sent by the daily check and optional anonymous feature statistics.
 
 The gateway also logs an update hint on startup (disable with
 `update.checkOnStart: false`). Stored extended-stable selections use this

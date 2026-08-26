@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { AgentDeletionCommitUncertainError } from "../../agents/agent-lifecycle-registry.js";
 import {
   openOpenClawStateDatabase,
@@ -66,11 +67,32 @@ describe("scheduled tool policy provenance", () => {
       throw new TypeError("authority closed");
     });
 
-    await expect(writeScratch(state, job.id, { content: "notes", commitGuard })).rejects.toThrow(
-      "authority closed",
-    );
+    const scratchBlockerEntered = createDeferred();
+    const releaseScratchBlocker = createDeferred();
+    const scratchBlocker = updateWithPrecondition(state, job.id, {}, async () => {
+      scratchBlockerEntered.resolve();
+      await releaseScratchBlocker.promise;
+    });
+    await scratchBlockerEntered.promise;
+    const scratchWrite = writeScratch(state, job.id, { content: "notes", commitGuard });
+    expect(commitGuard).not.toHaveBeenCalled();
+    releaseScratchBlocker.resolve();
+    await scratchBlocker;
+    await expect(scratchWrite).rejects.toThrow("authority closed");
     expect(readCronJobScratchState(storePath, job.id)).toEqual({ currentRevision: 0 });
-    await expect(remove(state, job.id, { commitGuard })).rejects.toThrow("authority closed");
+
+    const removeBlockerEntered = createDeferred();
+    const releaseRemoveBlocker = createDeferred();
+    const removeBlocker = updateWithPrecondition(state, job.id, {}, async () => {
+      removeBlockerEntered.resolve();
+      await releaseRemoveBlocker.promise;
+    });
+    await removeBlockerEntered.promise;
+    const removal = remove(state, job.id, { commitGuard });
+    expect(commitGuard).toHaveBeenCalledOnce();
+    releaseRemoveBlocker.resolve();
+    await removeBlocker;
+    await expect(removal).rejects.toThrow("authority closed");
     expect(state.store?.jobs.some((entry) => entry.id === job.id)).toBe(true);
     expect(commitGuard).toHaveBeenCalledTimes(2);
     if (state.timer) {
@@ -1087,7 +1109,7 @@ describe("cron service ops seam coverage", () => {
         });
         const taskRunId =
           reservationOffsetMs === undefined
-            ? taskRuns.tryCreateCronTaskRun({ state, job, startedAt })
+            ? taskRuns.tryCreateCronTaskRunHandle({ state, job, startedAt })?.runId
             : taskExecutor.createRunningTaskRunCore({
                 runtime: "cron",
                 sourceId: job.id,
@@ -1205,7 +1227,7 @@ describe("cron service ops seam coverage", () => {
         requestHeartbeat: vi.fn(),
         runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
       });
-      const taskRunId = taskRuns.tryCreateCronTaskRun({ state, job, startedAt });
+      const taskRunId = taskRuns.tryCreateCronTaskRunHandle({ state, job, startedAt })?.runId;
       if (!taskRunId) {
         throw new Error("expected invalid finalized cron task run");
       }
@@ -1217,6 +1239,7 @@ describe("cron service ops seam coverage", () => {
           action: "finished",
           job,
           status: "ok",
+          completionStatus: "succeeded",
           runAtMs: startedAt,
           durationMs: 1_000,
         },
@@ -1273,7 +1296,7 @@ describe("cron service ops seam coverage", () => {
         runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
         onEvent: (event) => events.push(structuredClone(event)),
       });
-      const taskRunId = taskRuns.tryCreateCronTaskRun({ state, job, startedAt });
+      const taskRunId = taskRuns.tryCreateCronTaskRunHandle({ state, job, startedAt })?.runId;
       if (!taskRunId) {
         throw new Error("expected cron task run");
       }
@@ -1285,6 +1308,7 @@ describe("cron service ops seam coverage", () => {
           action: "finished",
           job,
           status: "ok",
+          completionStatus: "succeeded",
           summary: "completed before restart",
           runAtMs: startedAt,
           durationMs: endedAt - startedAt,
@@ -1339,7 +1363,7 @@ describe("cron service ops seam coverage", () => {
         requestHeartbeat: vi.fn(),
         runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
       });
-      const taskRunId = taskRuns.tryCreateCronTaskRun({ state, job, startedAt });
+      const taskRunId = taskRuns.tryCreateCronTaskRunHandle({ state, job, startedAt })?.runId;
       if (!taskRunId) {
         throw new Error("expected cron task run");
       }
@@ -1413,7 +1437,11 @@ describe("cron service ops seam coverage", () => {
           requestHeartbeat: vi.fn(),
           runIsolatedAgentJob,
         });
-        const taskRunId = taskRuns.tryCreateCronTaskRun({ state, job: original, startedAt });
+        const taskRunId = taskRuns.tryCreateCronTaskRunHandle({
+          state,
+          job: original,
+          startedAt,
+        })?.runId;
         if (!taskRunId) {
           throw new Error("expected cron task run");
         }
@@ -1425,6 +1453,7 @@ describe("cron service ops seam coverage", () => {
             action: "finished",
             job: original,
             status,
+            completionStatus: status === "ok" ? "succeeded" : "failed",
             ...(status === "error" ? { error: "original failed before restart" } : {}),
             summary: "original completed before restart",
             runAtMs: startedAt,
@@ -1498,6 +1527,9 @@ describe("cron service ops seam coverage", () => {
       const persisted = await loadCronStore(storePath);
       expect(persisted.jobs[0]?.state.lastFailureAlertAtMs).toBe(endedAt);
       expect(persisted.jobs[0]?.state.consecutiveErrors).toBe(1);
+      expect(persisted.jobs[0]?.state.lastFailureNotificationDelivered).toBeUndefined();
+      expect(persisted.jobs[0]?.state.lastFailureNotificationDeliveryStatus).toBe("unknown");
+      expect(persisted.jobs[0]?.state.lastFailureNotificationDeliveryError).toBeUndefined();
       expect(sendCronFailureAlert).not.toHaveBeenCalled();
       stop(state);
     });

@@ -38,7 +38,7 @@ import {
   hasChannelDmPolicyDependencyWarningCandidates,
   normalizeBundledChannelId,
 } from "./validation-channel-rules.js";
-import { validateConfigObjectRaw } from "./validation-core.js";
+import { collectHeartbeatOwnerWarnings, validateConfigObjectRaw } from "./validation-core.js";
 import { withConfigIssuePath } from "./validation-issues.js";
 import {
   collectExplicitPluginReferences,
@@ -218,7 +218,7 @@ function validateConfigObjectWithPluginsBase(
     }
   }
   const config = opts.applyDefaults
-    ? materializeRuntimeConfig(parsedConfig, "snapshot", {
+    ? materializeRuntimeConfig(parsedConfig, {
         manifestRegistry:
           registryInfo?.registry ??
           (opts.pluginValidation === "core-only" ? { plugins: [] } : undefined),
@@ -230,6 +230,7 @@ function validateConfigObjectWithPluginsBase(
 
   const issues: ConfigValidationIssue[] = [];
   const warnings: ConfigValidationIssue[] = [];
+  warnings.push(...collectHeartbeatOwnerWarnings(config));
   const hasExplicitPluginsConfig = isRecord(raw) && Object.hasOwn(raw, "plugins");
   const explicitPluginReferences = collectExplicitPluginReferences(raw);
 
@@ -240,9 +241,7 @@ function validateConfigObjectWithPluginsBase(
       : formatRawChannelConfigIssueMessage(message);
   };
 
-  let compatConfig: OpenClawConfig | null | undefined;
   let compatPluginIds: ReadonlySet<string> | null = null;
-  let compatPluginIdsResolved = false;
   let registryDiagnosticsPushed = false;
 
   const pushRegistryDiagnostics = (registry: PluginManifestRegistry): void => {
@@ -285,22 +284,16 @@ function validateConfigObjectWithPluginsBase(
   const ensureLoadedRegistryInfo = (): RegistryInfo => registryInfo ?? loadValidationRegistry();
 
   const ensureCompatPluginIds = (): ReadonlySet<string> => {
-    if (compatPluginIdsResolved) {
-      return compatPluginIds ?? new Set<string>();
+    if (compatPluginIds) {
+      return compatPluginIds;
     }
-    compatPluginIdsResolved = true;
     const allow = config.plugins?.allow;
     if (!Array.isArray(allow) || allow.length === 0) {
       compatPluginIds = new Set<string>();
       return compatPluginIds;
     }
     const { registry } = registryInfo ?? loadValidationRegistry();
-    const overriddenBundledPluginIds = new Set(
-      registry.diagnostics
-        .filter((diag) => diag.message.includes("duplicate plugin id detected"))
-        .map((diag) => diag.pluginId)
-        .filter((pluginId): pluginId is string => typeof pluginId === "string" && pluginId !== ""),
-    );
+    const overriddenBundledPluginIds = ensureOverriddenPluginIds();
     compatPluginIds = new Set(
       registry.plugins
         .filter(
@@ -314,17 +307,8 @@ function validateConfigObjectWithPluginsBase(
     return compatPluginIds;
   };
 
-  const ensureCompatConfig = (): OpenClawConfig => {
-    if (compatConfig !== undefined) {
-      return compatConfig ?? config;
-    }
-    compatConfig = config;
-    return config;
-  };
-
   const ensureRegistry = (): RegistryInfo => {
     const info = ensureLoadedRegistryInfo();
-    ensureCompatConfig();
     pushRegistryDiagnostics(info.registry);
     return info;
   };
@@ -348,7 +332,7 @@ function validateConfigObjectWithPluginsBase(
 
   const ensureNormalizedPlugins = (): ReturnType<typeof normalizePluginsConfig> => {
     const info = ensureRegistry();
-    info.normalizedPlugins ??= normalizePluginsConfig(ensureCompatConfig().plugins);
+    info.normalizedPlugins ??= normalizePluginsConfig(config.plugins);
     return info.normalizedPlugins;
   };
 
@@ -715,7 +699,6 @@ function validateConfigObjectWithPluginsBase(
     validateExplicitPluginConfig({
       raw,
       config,
-      effectiveConfig: ensureCompatConfig(),
       env: opts.env,
       applyDefaults: opts.applyDefaults,
       registry,

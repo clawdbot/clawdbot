@@ -18,12 +18,17 @@ import type { CronJob } from "../types.js";
 import { timeoutErrorMessage } from "./execution-errors.js";
 import { createCronServiceState as createCronServiceStateBase } from "./state.js";
 import {
-  getActiveCronTaskRunId,
   findCronTaskRunRecoveryInDatabase,
-  tryCreateCronTaskRun,
+  tryCreateCronTaskRunHandle,
   tryFinishCronTaskRun,
   tryFinishCronTaskRunWithoutHistory,
 } from "./task-runs.js";
+
+function tryCreateCronTaskRun(
+  params: Parameters<typeof tryCreateCronTaskRunHandle>[0],
+): string | undefined {
+  return tryCreateCronTaskRunHandle(params)?.runId;
+}
 import { executeJobCoreWithTimeout } from "./timer-job-runner.js";
 
 function createCronServiceState(
@@ -100,9 +105,7 @@ describe("cron task run terminal records", () => {
           updatedAtMs: 100,
           enabled: true,
         };
-        let activeTaskRunId: string | undefined;
         const runIsolatedAgentJob = vi.fn(async ({ onExecutionStarted }) => {
-          activeTaskRunId = getActiveCronTaskRunId();
           onExecutionStarted?.({
             jobId: job.id,
             agentId: "ops",
@@ -137,13 +140,9 @@ describe("cron task run terminal records", () => {
         expect(taskRecords()).toHaveLength(1);
         expect(taskRecords()[0]?.agentId).toBe("ops");
         expect(taskRecords()[0]?.childSessionKey).toBe(testCase.initialSessionKey);
-        expect(getActiveCronTaskRunId()).toBeUndefined();
-
         const runPromise = executeJobCoreWithTimeout(state, job, { runId: taskRunId });
         try {
           await started;
-          expect(activeTaskRunId).toBe(taskRunId);
-          expect(getActiveCronTaskRunId()).toBeUndefined();
           expect(taskRecords()[0]?.agentId).toBe("ops");
           expect(taskRecords()[0]?.childSessionKey).toBe(testCase.executionSessionKey);
           expect(runIsolatedAgentJob.mock.calls[0]?.[0]).not.toHaveProperty("taskRunId");
@@ -196,6 +195,7 @@ describe("cron task run terminal records", () => {
             action: "finished",
             job,
             status: "ok",
+            completionStatus: "succeeded",
             runAtMs: 1_000,
             durationMs: 100,
           },
@@ -536,6 +536,7 @@ describe("cron task run terminal records", () => {
             action: "finished",
             job,
             status: "ok",
+            completionStatus: "succeeded",
             summary: "done",
             sessionKey: "agent:main:cron:retry-job:run:actual",
             runAtMs: startedAt,

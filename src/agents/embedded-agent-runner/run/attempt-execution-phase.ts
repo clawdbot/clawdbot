@@ -32,8 +32,8 @@ export async function runEmbeddedAttemptExecutionPhase(
       activeSession,
       allCustomTools,
       builtinToolNames,
+      coreBuiltinToolNames,
       clientToolCallSlots,
-      clientToolLoopDetection,
       hasDeliveredSourceReply,
       hookRunner,
       markSourceReplyDelivered,
@@ -81,7 +81,6 @@ export async function runEmbeddedAttemptExecutionPhase(
     isOpenAIResponsesApi,
     replayAllowedToolNames,
     liveAllowedToolNames,
-    clientToolLoopDetection,
     anthropicPayloadLogger,
     effectiveAgentTransport,
     providerTextTransforms,
@@ -143,7 +142,15 @@ export async function runEmbeddedAttemptExecutionPhase(
   });
   input.externalAbortController.setRunAbort(abortRun);
   idleTimeoutTriggerRef.current = (error) => {
-    mergeTerminal({ kind: "timeout", phase: "prompt", source: "idle" });
+    // Caller cancellation owns the terminal outcome when it beats a late watchdog callback.
+    if (input.runAbortController.signal.aborted) {
+      return;
+    }
+    mergeTerminal({
+      kind: "timeout",
+      phase: activeSession.isCompacting ? "compaction" : "prompt",
+      source: "idle",
+    });
     abortRun(true, error);
   };
   const abortable = <T>(promise: Promise<T>): Promise<T> =>
@@ -200,6 +207,7 @@ export async function runEmbeddedAttemptExecutionPhase(
     markSourceReplyDelivered,
     sandboxSessionKey: input.setup.sandboxSessionKey,
     builtinToolNames,
+    coreBuiltinToolNames,
     replaySafeToolNames,
     sideEffectToolOwners,
     diagnosticOwner,

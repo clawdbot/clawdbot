@@ -58,6 +58,7 @@ import { filterCodexDynamicTools } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import * as elicitationBridge from "./elicitation-bridge.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
+import { buildCodexRuntimeModelParams } from "./model-runtime.js";
 import {
   buildCodexAppServerConnectionFingerprint,
   buildCodexPluginAppCacheKey,
@@ -74,6 +75,8 @@ import {
   type v2,
 } from "./protocol.js";
 import { itemNotification, rawItemCompleted, turnCompleted } from "./protocol.test-helpers.js";
+import { resolveCodexDynamicToolDirectNames } from "./run-attempt-tools.js";
+import * as userInputBridge from "./user-input-bridge.js";
 
 type CodexAppServerToolTelemetry = Parameters<CodexAppServerEventProjector["buildResult"]>[0];
 import {
@@ -153,26 +156,7 @@ const testing = {
   buildDeveloperInstructions,
   buildDynamicTools,
   filterCodexDynamicTools,
-  resolveCodexDynamicToolDirectNames(
-    params: EmbeddedRunAttemptParams,
-    hostSystemAgentActive = false,
-  ): string[] {
-    const names: string[] = [];
-    if (
-      hostSystemAgentActive &&
-      params.toolsAllow?.length === 1 &&
-      params.toolsAllow[0] === "openclaw"
-    ) {
-      names.push("openclaw");
-    }
-    if (params.sourceReplyDeliveryMode === "message_tool_only") {
-      names.push("message");
-    }
-    if (params.pluginHarnessToolPolicyRestricted === true) {
-      names.push("progress_card");
-    }
-    return names;
-  },
+  resolveCodexDynamicToolDirectNames,
   setOpenClawCodingToolsFactoryForTests(
     factory: NonNullable<typeof dynamicToolBuildState.openClawCodingToolsFactory>,
   ): void {
@@ -445,6 +429,7 @@ async function buildCodexTurnContextForTest(
     sessionKey: params.sessionKey ?? params.sessionId,
     sessionAgentId,
     memoryToolNames,
+    ringZeroActive: false,
   });
   const threadDeveloperInstructions = testing.buildDeveloperInstructions(params, { dynamicTools });
   const openClawPromptContext = buildCodexOpenClawPromptContext({
@@ -2431,6 +2416,10 @@ describe("runCodexAppServerAttempt", () => {
       deny: ["exec", "process", "write", "edit"],
     };
     params.pluginHarnessToolPolicyRestricted = true;
+    const agentsGuidance = "Restricted turns keep workspace AGENTS guidance.";
+    await fs.mkdir(params.workspaceDir, { recursive: true });
+    await fs.writeFile(path.join(params.workspaceDir, "AGENTS.md"), agentsGuidance);
+    setAgentWorkspaceForTest(params, params.workspaceDir);
     const onAgentEvent = vi.fn();
     params.onAgentEvent = onAgentEvent;
     const harness = createStartedThreadHarness(async (method) => {
@@ -2453,6 +2442,7 @@ describe("runCodexAppServerAttempt", () => {
       | {
           dynamicTools?: CodexDynamicToolSpec[];
           environments?: unknown[];
+          developerInstructions?: string;
           config?: Record<string, unknown>;
         }
       | undefined;
@@ -2461,6 +2451,8 @@ describe("runCodexAppServerAttempt", () => {
     );
 
     expect(startParams?.environments).toEqual([]);
+    expect(startParams?.config?.project_doc_max_bytes).toBe(131_072);
+    expect(startParams?.developerInstructions?.split(agentsGuidance)).toHaveLength(2);
     expect(startParams?.config?.["tools.update_plan.enabled"]).toBe(false);
     expect(dynamicToolNames.toSorted()).toEqual(["apply_patch", "progress_card", "read"]);
     const progressCardSpec = flattenSpecsWithNamespace(startParams?.dynamicTools ?? []).find(
@@ -2952,19 +2944,28 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("fails closed when before_prompt_build restricts Codex tools", async () => {
+    const authorizedEnrichment = vi.fn(() => ({ prependContext: "private recalled context" }));
     initializeGlobalHookRunner(
       createMockPluginRegistry([
         {
           hookName: "before_prompt_build",
           handler: () => ({ toolsAllow: ["message"] }),
         },
+        {
+          hookName: "before_prompt_build",
+          handler: authorizedEnrichment,
+          requiresToolAuthority: true,
+        },
       ]),
     );
     const { sessionFile, workspaceDir } = createRunPaths();
+    const params = createParams(sessionFile, workspaceDir);
+    params.toolAuthorityFingerprint = "restrictive-turn-authority";
 
-    await expect(runCodexAppServerAttempt(createParams(sessionFile, workspaceDir))).rejects.toThrow(
+    await expect(runCodexAppServerAttempt(params)).rejects.toThrow(
       "Codex app-server cannot enforce before_prompt_build toolsAllow",
     );
+    expect(authorizedEnrichment).not.toHaveBeenCalled();
   });
 
   it("releases adopted startup resources when continuity prompt rebuilding fails", async () => {
@@ -4378,7 +4379,7 @@ describe("runCodexAppServerAttempt", () => {
     };
     const collaborationInstructions =
       turnStartParams.collaborationMode?.settings?.developer_instructions ?? "";
-    expect(collaborationInstructions).toContain("This is an OpenClaw heartbeat turn");
+    expect(collaborationInstructions).not.toContain("This is an OpenClaw heartbeat turn");
     expect(collaborationInstructions).not.toContain("HEARTBEAT.md exists");
     expect(collaborationInstructions).not.toContain(heartbeatPath);
     const legacyContent = contents.trim();
@@ -5336,13 +5337,58 @@ describe("runCodexAppServerAttempt", () => {
     expect(result.assistantTexts).toEqual(["final completion"]);
     expect(readAttemptTerminal(result)).toMatchObject({ aborted: false, timedOut: false });
   });
+  it("routes ordinary elicitations through the per-turn input bridge after approval classification", async () => {
+    const approvalSpy = vi
+      .spyOn(elicitationBridge, "routeCodexAppServerElicitationRequest")
+      .mockResolvedValue({ kind: "not-mine" });
+    const ordinaryHandler = vi.fn().mockResolvedValue({
+      action: "accept",
+      content: { name: "Ada" },
+      _meta: null,
+    });
+    vi.spyOn(userInputBridge, "createCodexUserInputBridge").mockReturnValue({
+      handleRequest: vi.fn(),
+      handleElicitationRequest: ordinaryHandler,
+      handleNotification: vi.fn(),
+      cancelPending: vi.fn(),
+    });
+    const harness = createStartedThreadHarness();
+    const run = runCodexAppServerAttempt(createRunParams());
+    await harness.waitForMethod("turn/start");
+
+    const params = {
+      threadId: "thread-1",
+      turnId: null,
+      serverName: "forms",
+      mode: "form",
+      message: "Enter a name",
+      requestedSchema: { type: "object", properties: { name: { type: "string" } } },
+    };
+    await expect(
+      harness.handleServerRequest({
+        id: "ordinary-1",
+        method: "mcpServer/elicitation/request",
+        params,
+      }),
+    ).resolves.toEqual({ action: "accept", content: { name: "Ada" }, _meta: null });
+    expect(approvalSpy).toHaveBeenCalledWith(expect.objectContaining({ requestParams: params }));
+    expect(ordinaryHandler).toHaveBeenCalledWith({ id: "ordinary-1", params });
+    const approvalOrder = approvalSpy.mock.invocationCallOrder.at(0);
+    const ordinaryOrder = ordinaryHandler.mock.invocationCallOrder.at(0);
+    if (approvalOrder === undefined || ordinaryOrder === undefined) {
+      throw new Error("expected both elicitation handlers to run");
+    }
+    expect(approvalOrder).toBeLessThan(ordinaryOrder);
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+  });
   it("routes Computer Use MCP elicitations through the native bridge", async () => {
     const bridgeSpy = vi
-      .spyOn(elicitationBridge, "handleCodexAppServerElicitationRequest")
+      .spyOn(elicitationBridge, "routeCodexAppServerElicitationRequest")
       .mockResolvedValue({
-        action: "accept",
-        content: { approve: true },
-        _meta: null,
+        kind: "handled",
+        response: { action: "accept", content: { approve: true }, _meta: null },
       });
     const request = vi.fn(async (method: string) => {
       if (method === "plugin/installed" || method === "plugin/list") {
@@ -5482,16 +5528,18 @@ describe("runCodexAppServerAttempt", () => {
       buildCodexPluginAppCacheKey({
         appServer,
         agentDir,
+        envApiKeyFingerprint: resolveCodexAppServerFallbackApiKeyCacheKey({
+          startOptions: appServer.start,
+        }),
         runtimeIdentity: getMockRuntimeIdentity(),
       }),
       true,
     );
     const bridgeSpy = vi
-      .spyOn(elicitationBridge, "handleCodexAppServerElicitationRequest")
+      .spyOn(elicitationBridge, "routeCodexAppServerElicitationRequest")
       .mockResolvedValue({
-        action: "decline",
-        content: null,
-        _meta: null,
+        kind: "handled",
+        response: { action: "decline", content: null, _meta: null },
       });
     const request = createGoogleCalendarRequest();
     const elicitation = installElicitationClient(request);
@@ -5588,6 +5636,9 @@ describe("runCodexAppServerAttempt", () => {
         buildCodexPluginAppCacheKey({
           appServer,
           agentDir,
+          envApiKeyFingerprint: resolveCodexAppServerFallbackApiKeyCacheKey({
+            startOptions: appServer.start,
+          }),
           runtimeIdentity: getMockRuntimeIdentity(),
         }),
       appInventory: (method: "app/installed" | "app/read") =>
@@ -6212,6 +6263,39 @@ describe("runCodexAppServerAttempt", () => {
     expect(calledWithFailedClient).toBe(true);
     retireSpy.mockRestore();
   });
+  it("uses the prepared execution model without exposing it in lifecycle events", async () => {
+    const { sessionFile, workspaceDir } = createRunPaths();
+    const runtimeModelId = "codex-execution-model";
+    const { requests, waitForMethod, completeTurn } = createStartedThreadHarness(async (method) =>
+      method === "thread/start" ? { ...threadStartResult(), model: runtimeModelId } : undefined,
+    );
+    const params = createParams(sessionFile, workspaceDir);
+    params.modelId = "gpt-5.6-sol";
+    params.model = {
+      ...params.model,
+      id: "gpt-5.6-sol",
+      params: {
+        ...params.model.params,
+        ...buildCodexRuntimeModelParams("gpt-5.6-sol", runtimeModelId),
+      },
+    };
+    const onAgentEvent = vi.fn();
+    params.onAgentEvent = onAgentEvent;
+
+    const run = runCodexAppServerAttempt(params, { runtimeModelId });
+    await completeStartedRun(run, waitForMethod, completeTurn);
+
+    for (const method of ["thread/start", "turn/start"]) {
+      const request = requests.find((entry) => entry.method === method);
+      const requestParams = request?.params as Record<string, unknown> | undefined;
+      expect(requestParams?.model).toBe(runtimeModelId);
+    }
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "codex_app_server.lifecycle",
+      data: expect.objectContaining({ phase: "turn_starting", model: "gpt-5.6-sol" }),
+    });
+  });
+
   it("passes configured app-server policy, sandbox, service tier, and model on resume", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     await writeExistingBinding(sessionFile, workspaceDir, { model: "gpt-5.2" });
@@ -6487,6 +6571,9 @@ describe("runCodexAppServerAttempt", () => {
     nativeResponse.modelProvider = "openai";
     nativeResponse.thread.modelProvider = "openai";
     const harness = createAppServerHarness(async (method) => {
+      if (method === "config/read") {
+        return { config: { model_provider: "openai" }, origins: {} };
+      }
       if (method === "thread/read") {
         return { thread: nativeResponse.thread };
       }

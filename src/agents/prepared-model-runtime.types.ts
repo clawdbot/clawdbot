@@ -26,6 +26,8 @@ export type PreparedModelRuntimePluginGeneration = Readonly<{
   configuredCatalogEntries: readonly ModelCatalogEntry[];
   pluginRegistry?: PluginRegistry;
   inboundPluginRegistry?: PluginRegistry;
+  /** Immutable artifact choice for every registry reuse in this generation. */
+  preferBuiltPluginArtifacts?: boolean;
 }>;
 
 export type PreparedModelRuntimeSnapshot = Readonly<{
@@ -114,6 +116,7 @@ export type PreparedModelRuntimeRefreshOptions = {
   onBuildStats?: (stats: PreparedModelRuntimeBuildStats) => void;
   allowGatewaySubagentBinding?: boolean;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
+  isPublicationCurrent?: () => boolean;
 };
 
 export type PreparedModelRuntimeBuildStats = Readonly<{
@@ -150,6 +153,8 @@ export type PreparedModelRuntimeOwner = {
   refreshError?: Error;
   snapshot?: PreparedModelRuntimeSnapshot;
   pluginGeneration?: PreparedModelRuntimePluginGeneration;
+  /** Explicit generation admitted for the current publication, when known. */
+  pendingPluginGeneration?: PreparedModelRuntimePluginGeneration;
   pending?: Promise<PreparedModelRuntimeSnapshot>;
   buildCompletion?: Promise<void>;
   leaseCount?: number;

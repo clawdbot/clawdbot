@@ -48,6 +48,7 @@ export async function sendGatewayHello(
 ): Promise<void> {
   const {
     connId,
+    bootId,
     nodeReapprovalCoordinator,
     gatewayMethods,
     events,
@@ -102,6 +103,7 @@ export async function sendGatewayHello(
   const snapshot = buildGatewaySnapshot({
     includeSensitive: scopes.includes(ADMIN_SCOPE),
     includeUpdateDetails: canReadDetailedUpdateMetadata(role, scopes),
+    revisionProjector: buildRequestContext().configRevisionProjector,
   });
   const cachedHealth = getHealthCache();
   if (cachedHealth) {
@@ -125,6 +127,7 @@ export async function sendGatewayHello(
     server: {
       version: resolveRuntimeServiceVersion(process.env),
       ...(serverBuildId ? { buildId: serverBuildId } : {}),
+      bootId,
       controlUiBuildSource,
       connId,
     },

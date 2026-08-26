@@ -11,11 +11,7 @@ import { renderGroupedMessage } from "./chat-message-bubble.ts";
 import { renderChatTimestamp } from "./chat-message-timestamp.ts";
 import { renderChatQuestionSummary } from "./chat-question-card.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
-import {
-  shouldToggleSelectableDisclosure,
-  syncToolDisclosureOverflow,
-  toggleToolDisclosureKeepingScroll,
-} from "./chat-tool-cards.ts";
+import { shouldToggleSelectableDisclosure, syncToolDisclosureOverflow } from "./chat-tool-cards.ts";
 import { renderChatWorkingIndicator } from "./chat-working-indicator.ts";
 
 /** A contiguous run of in-flight streaming items rendered under one assistant group. */
@@ -32,7 +28,7 @@ type StreamMessageOptions = Pick<
   | "runActive"
   | "onRequestUpdate"
   | "canvasPluginSurfaceUrl"
-  | "basePath"
+  | "resourceBasePath"
   | "localMediaPreviewRoots"
   | "assistantAttachmentAuthToken"
   | "resolveArtifactDownload"
@@ -94,7 +90,7 @@ export function renderStreamGroupParts(
               runActive: opts.runActive,
               onRequestUpdate: opts.onRequestUpdate,
               canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
-              basePath: opts.basePath,
+              resourceBasePath: opts.resourceBasePath,
               localMediaPreviewRoots: opts.localMediaPreviewRoots,
               assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
               resolveArtifactDownload: opts.resolveArtifactDownload,
@@ -115,7 +111,7 @@ export function renderStreamGroupParts(
 // arrives as several stream segments renders under a single avatar/footer
 // instead of flashing a separate avatar+bubble per segment (#63956).
 export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOptions = {}) {
-  const { assistant, basePath, assistantAttachmentAuthToken } = opts;
+  const { assistant, resourceBasePath, assistantAttachmentAuthToken } = opts;
   const name = assistant?.name ?? "Assistant";
   // Footer (sender + time) anchors to the earliest streamed segment; a run that
   // is only the reading indicator has no timestamp and therefore no footer.
@@ -128,7 +124,13 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
   const avatar =
     workingOnly || opts.showAssistantAvatar === false
       ? nothing
-      : renderChatAvatar("assistant", assistant, undefined, basePath, assistantAttachmentAuthToken);
+      : renderChatAvatar(
+          "assistant",
+          assistant,
+          undefined,
+          resourceBasePath,
+          assistantAttachmentAuthToken,
+        );
   const groupClass = `chat-group assistant${workingOnly ? " chat-group--working" : ""}${footerStartedAt !== null ? " chat-group--with-footer" : ""}`;
 
   return html`
@@ -156,34 +158,37 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
  */
 export function renderWorkGroupSummary(
   item: { key: string; durationMs: number | null },
-  opts: { expanded: boolean; onToggle: () => void },
+  opts: { expanded: boolean; onToggle: () => void; presentation?: "standalone" | "continuation" },
 ) {
   const duration = formatDurationCompact(item.durationMs);
   const label = duration ? t("chat.workRun.workedFor", { duration }) : t("chat.workRun.worked");
-  return html`
-    <div class="chat-group tool chat-group--work" data-chat-row-key=${item.key}>
-      <div class="chat-group-messages">
-        <div class="chat-activity-group chat-work-group ${opts.expanded ? "is-open" : ""}">
-          <button
-            class="chat-inline-disclosure chat-activity-group__summary"
-            type="button"
-            aria-expanded=${String(opts.expanded)}
-            @pointerenter=${syncToolDisclosureOverflow}
-            @focus=${syncToolDisclosureOverflow}
-            @click=${(event: MouseEvent) => {
-              if (shouldToggleSelectableDisclosure(event)) {
-                toggleToolDisclosureKeepingScroll(event, opts.onToggle);
-              }
-            }}
-          >
-            <span class="chat-tool-disclosure__content">
-              <span class="chat-activity-group__label" title=${label}>${label}</span>
-            </span>
-            <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
-          </button>
-          <div class="chat-work-group__separator" aria-hidden="true"></div>
-        </div>
-      </div>
+  const content = html`
+    <div class="chat-activity-group chat-work-group ${opts.expanded ? "is-open" : ""}">
+      <button
+        class="chat-inline-disclosure chat-activity-group__summary"
+        type="button"
+        aria-expanded=${String(opts.expanded)}
+        @pointerenter=${syncToolDisclosureOverflow}
+        @focus=${syncToolDisclosureOverflow}
+        @click=${(event: MouseEvent) => {
+          if (shouldToggleSelectableDisclosure(event)) {
+            opts.onToggle();
+          }
+        }}
+      >
+        <span class="chat-tool-disclosure__content">
+          <span class="chat-activity-group__label" title=${label}>${label}</span>
+        </span>
+        <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
+      </button>
+      <div class="chat-work-group__separator" aria-hidden="true"></div>
     </div>
   `;
+  return opts.presentation === "continuation"
+    ? content
+    : html`
+        <div class="chat-group tool chat-group--work" data-chat-row-key=${item.key}>
+          <div class="chat-group-messages">${content}</div>
+        </div>
+      `;
 }

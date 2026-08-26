@@ -4,6 +4,10 @@ import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
@@ -226,6 +230,8 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
+  clearRuntimeConfigSnapshot();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   trajectoryTempDirs.cleanup();
@@ -1294,6 +1300,7 @@ describe("runAgentHarnessAttempt", () => {
       }),
     );
     expect(classifyCall?.[1]).not.toHaveProperty("admittedRunContext");
+    expect(classifyCall?.[1]).not.toHaveProperty("operationalRunInstance");
     expect(result.agentHarnessId).toBe("codex");
     expect(result.agentHarnessResultClassification).toBe("empty");
   });
@@ -2035,6 +2042,45 @@ describe("selectAgentHarness", () => {
     });
   });
 
+  it("ignores catalog-seeded compatibility when selecting an official OpenAI route", () => {
+    const createConfig = (compat?: { supportsStore: boolean }) =>
+      ({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [
+                {
+                  id: "gpt-5.5",
+                  name: "GPT-5.5",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  maxTokens: 8192,
+                  ...(compat ? { compat } : {}),
+                },
+              ],
+            },
+          },
+        },
+      }) satisfies OpenClawConfig;
+    const sourceConfig = createConfig();
+    const runtimeConfig = createConfig({ supportsStore: false });
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+
+    expect(
+      buildAgentHarnessSupportContext({
+        provider: "openai",
+        modelId: "gpt-5.5",
+        requestedRuntime: "codex",
+        config: runtimeConfig,
+      }).modelProvider,
+    ).toMatchObject({
+      requestTransportOverrides: "none",
+      runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
+    });
+  });
+
   it.each([
     {
       label: "default",
@@ -2169,6 +2215,34 @@ describe("selectAgentHarness", () => {
         modelProvider: expect.objectContaining({ requestTransportOverrides: "present" }),
       }),
     );
+  });
+
+  it("keeps a private-QA forced runtime despite a plugin-declared fallback", () => {
+    vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", "1");
+    vi.stubEnv("OPENCLAW_QA_FORCE_RUNTIME", "codex");
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      supports: () => ({
+        supported: false,
+        reason: "authored request params are unsupported",
+        fallbackRuntime: "openclaw",
+      }),
+      runAttempt: vi.fn(async () => createAttemptResult("codex")),
+    });
+
+    expect(
+      selectAgentHarness({
+        provider: "openai",
+        modelId: "gpt-5.6-sol",
+        modelProvider: {
+          api: "openai-responses",
+          baseUrl: "http://127.0.0.1:43123/v1",
+          requestTransportOverrides: "present",
+          runtimePolicy: { compatibleIds: ["openclaw"] },
+        },
+      }).id,
+    ).toBe("codex");
   });
 
   it("keeps request-scoped transport overrides on the implicit OpenClaw runtime", () => {
@@ -2501,6 +2575,31 @@ describe("selectAgentHarness", () => {
         ...pin,
       }).id,
     ).toBe("openclaw");
+  });
+
+  it("keeps private-QA forced Codex across prepared routes that declare fallback", () => {
+    vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", "1");
+    vi.stubEnv("OPENCLAW_QA_FORCE_RUNTIME", "codex");
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      supports: (ctx) =>
+        ctx.modelProvider?.requestTransportOverrides === "present"
+          ? { supported: false, fallbackRuntime: "openclaw" }
+          : { supported: true },
+      runAttempt: vi.fn(async () => createAttemptResult("codex")),
+    });
+
+    expect(
+      selectAgentHarnessForPreparedModelProviders({
+        provider: "openai",
+        modelId: "gpt-5.6-sol",
+        modelProviders: [
+          { requestTransportOverrides: "none" },
+          { requestTransportOverrides: "present" },
+        ],
+      }).id,
+    ).toBe("codex");
   });
 
   it.each([

@@ -224,6 +224,59 @@ describe("listThinkingLevels", () => {
     ).toBe("off");
   });
 
+  it.each([
+    "claude-opus-5",
+    "claude-opus-4-8",
+    "claude-opus-4-7",
+    "claude-opus-4-6",
+    "claude-sonnet-5",
+    "claude-fable-5",
+    "claude-sonnet-4-6",
+  ])("uses materialized CLI runtime capabilities for %s thinking", (model) => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(({ context }) => ({
+      levels:
+        context.reasoning === true
+          ? [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }]
+          : [{ id: "off" }],
+      defaultLevel: context.reasoning === true ? "medium" : "off",
+    }));
+    const catalog = [{ provider: "anthropic", id: model, name: model, reasoning: true }];
+
+    expect(listThinkingLevels("anthropic", model, catalog, "claude-cli")).toEqual([
+      "off",
+      "low",
+      "medium",
+      "high",
+    ]);
+  });
+
+  it("keeps a materialized runtime reasoning opt-out authoritative", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
+      levels: [{ id: "off" }, { id: "low" }],
+    });
+    const catalog = [{ provider: "demo", id: "demo-model", name: "Demo", reasoning: false }];
+
+    expect(listThinkingLevels("demo", "demo-model", catalog, "demo-cli")).toEqual(["off"]);
+  });
+
+  it("keeps a configured logical reasoning opt-out authoritative", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
+      levels: [{ id: "off" }, { id: "low" }],
+    });
+    const catalog = [
+      {
+        provider: "demo",
+        id: "demo-model",
+        name: "Demo",
+        reasoning: false,
+        configuredReasoning: false,
+      },
+      { provider: "demo-cli", id: "demo-model", name: "Demo CLI", reasoning: true },
+    ];
+
+    expect(listThinkingLevels("demo", "demo-model", catalog, "demo-cli")).toEqual(["off"]);
+  });
+
   it("preserves provider-authoritative thinking profiles over stale catalog reasoning", () => {
     providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
       levels: [{ id: "off" }, { id: "minimal" }, { id: "low" }, { id: "medium" }],
@@ -328,7 +381,6 @@ describe("listThinkingLevels", () => {
     ];
 
     expect(listThinkingLevels("microsoft-foundry", "company-fable", catalog)).toEqual([
-      "off",
       "minimal",
       "low",
       "medium",
@@ -551,6 +603,67 @@ describe("listThinkingLevels", () => {
     ).toEqual(["off", "minimal", "low", "medium", "high"]);
   });
 
+  it("honors provider-owned thinking maps before compat and derives OpenClaw Ultra", () => {
+    const catalog = [
+      {
+        provider: "custom",
+        id: "reasoning-model",
+        reasoning: true,
+        thinkingLevelMap: {
+          off: "none",
+          minimal: null,
+          low: null,
+          medium: null,
+          high: "high",
+          xhigh: null,
+          max: "max",
+        },
+        compat: { supportedReasoningEfforts: ["high", "xhigh", "max"] },
+      },
+    ];
+
+    expect(listThinkingLevels("custom", "reasoning-model", catalog, "openclaw")).toEqual([
+      "off",
+      "high",
+      "max",
+      "ultra",
+    ]);
+    expect(
+      resolveThinkingDefaultForModel({
+        provider: "custom",
+        model: "reasoning-model",
+        catalog,
+        agentRuntime: "openclaw",
+      }),
+    ).toBe("high");
+    expect(listThinkingLevels("custom", "reasoning-model", catalog, "codex")).toEqual([
+      "off",
+      "high",
+      "max",
+    ]);
+  });
+
+  it("exposes mapped advanced efforts without requiring duplicate compat metadata", () => {
+    const catalog = [
+      {
+        provider: "custom",
+        id: "mapped-model",
+        reasoning: true,
+        thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
+      },
+    ];
+
+    expect(listThinkingLevels("custom", "mapped-model", catalog, "openclaw")).toEqual([
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultra",
+    ]);
+  });
+
   it("matches provider-qualified catalog ids for provider thinking profiles", () => {
     providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(({ context }) =>
       context.reasoning === true && context.compat?.thinkingFormat === "qwen-chat-template"
@@ -662,6 +775,7 @@ describe("listThinkingLevels", () => {
         provider: "zai",
         id: "glm-4.7",
         name: "GLM 4.7",
+        thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
         compat: { supportedReasoningEfforts: ["xhigh"] },
       },
     ];

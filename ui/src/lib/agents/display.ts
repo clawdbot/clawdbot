@@ -216,6 +216,7 @@ type AgentConfigEntry = {
   workspace?: string;
   agentDir?: string;
   model?: unknown;
+  models?: Record<string, { alias?: unknown }>;
   agentRuntime?: unknown;
   skills?: string[];
   tools?: {
@@ -232,7 +233,7 @@ type ConfigSnapshot = {
     defaults?: {
       workspace?: string;
       model?: unknown;
-      models?: Record<string, { alias?: string }>;
+      models?: Record<string, { alias?: unknown }>;
       skills?: string[];
     };
     entries?: Record<string, AgentConfigEntry>;
@@ -363,14 +364,17 @@ export function buildAgentContext(
   const workspace =
     workspaceFromFiles ||
     config.entry?.workspace ||
-    config.defaults?.workspace ||
     agent.workspace ||
+    config.defaults?.workspace ||
     "default";
-  const modelLabel = config.entry?.model
-    ? resolveModelLabel(config.entry?.model)
-    : config.defaults?.model
-      ? resolveModelLabel(config.defaults?.model)
-      : resolveModelLabel(agent.model);
+  const primary =
+    resolveModelPrimary(config.entry?.model) ??
+    resolveModelPrimary(config.defaults?.model) ??
+    resolveModelPrimary(agent.model);
+  const fallbacks =
+    resolveEffectiveModelFallbacks(config.entry?.model, config.defaults?.model) ??
+    (configForm ? null : resolveModelFallbacks(agent.model));
+  const modelLabel = primary ? resolveModelLabel({ primary, fallbacks }) : "-";
   const runtime = resolveAgentRuntimeLabel(agent.agentRuntime);
   const identityName =
     normalizeOptionalString(agent.identity?.name) ||
@@ -488,34 +492,35 @@ type ConfiguredModelOption = {
   value: string;
   label: string;
   provider?: string;
+  tags?: string[];
+  alias?: string;
 };
 
 function resolveConfiguredModels(
   configForm: Record<string, unknown> | null,
+  agentId?: string,
 ): ConfiguredModelOption[] {
-  const cfg = configForm as ConfigSnapshot | null;
-  const models = cfg?.agents?.defaults?.models;
-  if (!models || typeof models !== "object") {
-    return [];
-  }
+  const defaultModels = (configForm as ConfigSnapshot | null)?.agents?.defaults?.models;
+  const agentModels = agentId ? resolveAgentConfig(configForm, agentId)?.entry?.models : undefined;
+  const modelIds = Object.keys({ ...defaultModels, ...agentModels });
   const options: ConfiguredModelOption[] = [];
-  for (const [modelId, modelRaw] of Object.entries(models)) {
+  for (const modelId of modelIds) {
     const trimmed = modelId.trim();
     if (!trimmed) {
       continue;
     }
+    const defaultMetadata = defaultModels?.[modelId];
+    const agentMetadata = agentModels?.[modelId];
     const alias =
-      modelRaw && typeof modelRaw === "object" && "alias" in modelRaw
-        ? typeof (modelRaw as { alias?: unknown }).alias === "string"
-          ? (modelRaw as { alias?: string }).alias?.trim()
-          : undefined
-        : undefined;
-    const label = alias && alias !== trimmed ? `${alias} (${trimmed})` : trimmed;
+      agentMetadata?.alias !== undefined
+        ? (normalizeOptionalString(agentMetadata.alias) ?? "")
+        : normalizeOptionalString(defaultMetadata?.alias);
     const separator = trimmed.indexOf("/");
     options.push({
       value: trimmed,
-      label,
-      ...(separator > 0 ? { provider: trimmed.slice(0, separator) } : {}),
+      label: alias && alias !== trimmed ? `${alias} (${trimmed})` : trimmed,
+      provider: separator > 0 ? trimmed.slice(0, separator) : undefined,
+      alias,
     });
   }
   return options;
@@ -525,43 +530,55 @@ export function buildModelOptions(
   configForm: Record<string, unknown> | null,
   current?: string | null,
   catalog?: ModelCatalogEntry[],
+  agentId?: string,
 ) {
   const seen = new Set<string>();
   const options: ConfiguredModelOption[] = [];
   const catalogOptions = new Map<string, ConfiguredModelOption>();
-  const addOption = (value: string, label: string, provider?: string) => {
-    const key = normalizeLowercaseStringOrEmpty(value);
+  const configuredOptions = resolveConfiguredModels(configForm, agentId);
+  const addOption = (option: ConfiguredModelOption) => {
+    const key = normalizeLowercaseStringOrEmpty(option.value);
     if (seen.has(key)) {
       return;
     }
     seen.add(key);
-    options.push({ value, label, ...(provider ? { provider } : {}) });
+    options.push(option);
   };
 
   if (catalog) {
-    const displayLookup = buildCatalogDisplayLookup(catalog);
-    for (const entry of catalog) {
+    const configuredAliases = new Map(
+      configuredOptions.map(
+        (option) => [normalizeLowercaseStringOrEmpty(option.value), option.alias] as const,
+      ),
+    );
+    const displayCatalog = catalog.map((entry) => {
+      const key = normalizeLowercaseStringOrEmpty(`${entry.provider}/${entry.id}`);
+      const alias = configuredAliases.get(key);
+      if (alias === undefined) {
+        return entry;
+      }
+      return { ...entry, alias: alias || undefined };
+    });
+    const displayLookup = buildCatalogDisplayLookup(displayCatalog);
+    for (const entry of displayCatalog) {
       const option = buildChatModelOptionFromLookup(entry, displayLookup);
       catalogOptions.set(normalizeLowercaseStringOrEmpty(option.value), {
         ...option,
         provider: entry.provider,
+        tags: entry.tags,
       });
     }
   }
 
-  for (const opt of resolveConfiguredModels(configForm)) {
-    // Configured options keep their order and fallback aliases; an authoritative
-    // catalog match must still expose the same model identity as the chat picker.
+  for (const opt of configuredOptions) {
+    // Raw config supplies rows the Gateway catalog lacks and explicit alias edits;
+    // catalog identity and tags remain authoritative for matching rows.
     const catalogOption = catalogOptions.get(normalizeLowercaseStringOrEmpty(opt.value));
-    addOption(
-      opt.value,
-      catalogOption?.label ?? opt.label,
-      catalogOption?.provider ?? opt.provider,
-    );
+    addOption(catalogOption ?? opt);
   }
 
   for (const option of catalogOptions.values()) {
-    addOption(option.value, option.label, option.provider);
+    addOption(option);
   }
 
   if (current && !seen.has(normalizeLowercaseStringOrEmpty(current))) {
@@ -569,7 +586,7 @@ export function buildModelOptions(
     options.unshift({
       value: current,
       label: `Current (${current})`,
-      ...(separator > 0 ? { provider: current.slice(0, separator) } : {}),
+      provider: separator > 0 ? current.slice(0, separator) : undefined,
     });
   }
 

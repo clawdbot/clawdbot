@@ -18,6 +18,7 @@ const CODEX_ON_DEMAND_ASSERTIONS_SCRIPT = "scripts/e2e/lib/codex-on-demand/asser
 const CODEX_NPM_PLUGIN_LIVE_ASSERTIONS_SCRIPT =
   "scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs";
 const DISABLE_EXPERIMENTAL_WARNING = "--disable-warning=ExperimentalWarning";
+const CODEX_VERSION = "0.149.1";
 const tempDirs: string[] = [];
 const tmpFixtureFiles = [
   "/tmp/openclaw-codex-agent.err",
@@ -50,12 +51,13 @@ function writeJson(filePath: string, value: unknown) {
   writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
-function writeAuthProfileStoreSqlite(agentDir: string) {
-  mkdirSync(agentDir, { recursive: true });
-  const db = new DatabaseSync(path.join(agentDir, "openclaw-agent.sqlite"));
+function writeAuthProfileStoreSqlite(stateDir: string) {
+  const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+  mkdirSync(path.dirname(databasePath), { recursive: true });
+  const db = new DatabaseSync(databasePath);
   try {
     db.exec(`
-      CREATE TABLE IF NOT EXISTS auth_profile_store (
+      CREATE TABLE IF NOT EXISTS auth_profile_stores (
         store_key TEXT NOT NULL PRIMARY KEY,
         store_json TEXT NOT NULL,
         updated_at INTEGER NOT NULL
@@ -63,11 +65,11 @@ function writeAuthProfileStoreSqlite(agentDir: string) {
     `);
     db.prepare(
       `
-        INSERT INTO auth_profile_store (store_key, store_json, updated_at)
+        INSERT INTO auth_profile_stores (store_key, store_json, updated_at)
         VALUES (?, ?, ?)
       `,
     ).run(
-      "primary",
+      "shared",
       JSON.stringify({
         version: 1,
         profiles: {
@@ -198,6 +200,19 @@ function runCodexNpmPluginLivePluginAssertions(root: string) {
       },
     },
   );
+}
+
+function runCodexNpmPluginLiveDependencyAssertions(root: string) {
+  return spawnSync(process.execPath, [CODEX_NPM_PLUGIN_LIVE_ASSERTIONS_SCRIPT, "assert-npm-deps"], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      HOME: path.join(root, "home"),
+      NODE_OPTIONS: nodeOptionsWithoutExperimentalWarnings(),
+      OPENCLAW_CONFIG_PATH: path.join(root, "state", "openclaw.json"),
+      OPENCLAW_STATE_DIR: path.join(root, "state"),
+    },
+  });
 }
 
 function writeCodexBindingStateSqlite(params: {
@@ -530,23 +545,62 @@ function createLegacyCodexNpmPluginLiveFixture(root: string) {
   return convertCodexNpmPluginLiveFixtureToLegacy(createCodexNpmPluginLiveFixture(root));
 }
 
+function currentCodexPlatformTarget() {
+  const platformTargets: Record<string, { alias: string; os: string; cpu: string }> = {
+    "linux:x64": { alias: "@openai/codex-linux-x64", os: "linux", cpu: "x64" },
+    "linux:arm64": { alias: "@openai/codex-linux-arm64", os: "linux", cpu: "arm64" },
+    "darwin:x64": { alias: "@openai/codex-darwin-x64", os: "darwin", cpu: "x64" },
+    "darwin:arm64": { alias: "@openai/codex-darwin-arm64", os: "darwin", cpu: "arm64" },
+    "win32:x64": { alias: "@openai/codex-win32-x64", os: "win32", cpu: "x64" },
+    "win32:arm64": { alias: "@openai/codex-win32-arm64", os: "win32", cpu: "arm64" },
+  };
+  const target = platformTargets[`${process.platform}:${process.arch}`];
+  if (!target) {
+    throw new Error(`unsupported Codex test platform: ${process.platform}/${process.arch}`);
+  }
+  return target;
+}
+
 function createCodexInstallFixture(root: string) {
   const stateDir = path.join(root, "state");
   const npmRoot = path.join(stateDir, "npm");
   const installPath = path.join(npmRoot, "projects", "codex", "node_modules", "@openclaw", "codex");
   const projectRoot = npmProjectRootForInstalledPackage(installPath, "@openclaw/codex");
-  writeJson(path.join(installPath, "package.json"), { name: "@openclaw/codex" });
+  const target = currentCodexPlatformTarget();
+  const pluginPackageJson = path.join(installPath, "package.json");
+  writeJson(pluginPackageJson, {
+    name: "@openclaw/codex",
+    dependencies: { "@openai/codex": CODEX_VERSION },
+    openclaw: { install: { requiredPlatformPackages: [target.alias] } },
+  });
   const openAiCodexRoot = path.join(projectRoot, "node_modules", "@openai", "codex");
-  writeJson(path.join(openAiCodexRoot, "package.json"), {
+  const openAiCodexPackageJson = path.join(openAiCodexRoot, "package.json");
+  writeJson(openAiCodexPackageJson, {
     name: "@openai/codex",
+    version: CODEX_VERSION,
     bin: { codex: "bin/codex.js" },
+    optionalDependencies: {
+      [target.alias]: `npm:@openai/codex@${CODEX_VERSION}-${process.platform}-${process.arch}`,
+    },
   });
   const codexBin = path.join(openAiCodexRoot, "bin", "codex.js");
   mkdirSync(path.dirname(codexBin), { recursive: true });
-  writeFileSync(codexBin, '#!/usr/bin/env node\nconsole.log("codex-cli 0.0.0-test");\n', {
+  writeFileSync(codexBin, `#!/usr/bin/env node\nconsole.log("codex-cli ${CODEX_VERSION}");\n`, {
     mode: 0o755,
   });
   chmodSync(codexBin, 0o755);
+  const platformPackageJson = path.join(
+    projectRoot,
+    "node_modules",
+    ...target.alias.split("/"),
+    "package.json",
+  );
+  writeJson(platformPackageJson, {
+    name: "@openai/codex",
+    version: `${CODEX_VERSION}-${process.platform}-${process.arch}`,
+    os: [target.os],
+    cpu: [target.cpu],
+  });
   writeJson(path.join(stateDir, "openclaw.json"), {
     agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } },
     models: { providers: { openai: { agentRuntime: { id: "codex" } } } },
@@ -574,7 +628,14 @@ function createCodexInstallFixture(root: string) {
   writeJson("/tmp/openclaw-plugins-list.json", {
     plugins: [{ id: "codex", enabled: true, status: "loaded" }],
   });
-  writeAuthProfileStoreSqlite(path.join(stateDir, "agents", "main", "agent"));
+  writeAuthProfileStoreSqlite(stateDir);
+  return {
+    pluginPackageJson,
+    openAiCodexPackageJson,
+    platformPackageJson,
+    codexBin,
+    target,
+  };
 }
 
 describe("Codex install helpers", () => {
@@ -687,11 +748,144 @@ describe("Codex install helpers", () => {
   it("accepts a complete on-demand Codex npm install fixture", () => {
     const root = makeTempDir(tempDirs, "openclaw-codex-on-demand-");
     createCodexInstallFixture(root);
+    const agentDatabasePath = path.join(
+      root,
+      "state",
+      "agents",
+      "main",
+      "agent",
+      "openclaw-agent.sqlite",
+    );
+    mkdirSync(path.dirname(agentDatabasePath), { recursive: true });
+    const agentDatabase = new DatabaseSync(agentDatabasePath);
+    try {
+      agentDatabase.exec("CREATE TABLE unrelated_state (key TEXT PRIMARY KEY)");
+    } finally {
+      agentDatabase.close();
+    }
 
     const result = runCodexOnDemandAssertions(root);
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
+    expect(result.stdout).toContain(`[codex-release] packageVersion=${CODEX_VERSION}`);
+    expect(result.stdout).toContain(`[codex-release] cliVersion=${CODEX_VERSION}`);
+    expect(result.stdout).toContain(
+      `[codex-release] platformAlias=${currentCodexPlatformTarget().alias}`,
+    );
+    expect(result.stdout).toContain(
+      `[codex-release] platformVersion=${CODEX_VERSION}-${process.platform}-${process.arch}`,
+    );
+    expect(result.stdout).toContain(`[codex-release] platformOs=${process.platform}`);
+    expect(result.stdout).toContain(`[codex-release] platformCpu=${process.arch}`);
+  });
+
+  it("records the same exact Codex release package evidence for the npm-live install", () => {
+    const root = makeTempDir(tempDirs, "openclaw-codex-npm-deps-");
+    createCodexInstallFixture(root);
+
+    const result = runCodexNpmPluginLiveDependencyAssertions(root);
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain(`[codex-release] packageVersion=${CODEX_VERSION}`);
+    expect(result.stdout).toContain(`[codex-release] cliVersion=${CODEX_VERSION}`);
+    expect(result.stdout).toContain(
+      `[codex-release] platformAlias=${currentCodexPlatformTarget().alias}`,
+    );
+  });
+
+  it("rejects an installed @openai/codex package outside the exact release version", () => {
+    const root = makeTempDir(tempDirs, "openclaw-codex-on-demand-package-version-");
+    const fixture = createCodexInstallFixture(root);
+    writeJson(fixture.openAiCodexPackageJson, {
+      name: "@openai/codex",
+      version: "0.148.0",
+      bin: { codex: "bin/codex.js" },
+      optionalDependencies: {
+        [fixture.target.alias]:
+          `npm:@openai/codex@${CODEX_VERSION}-${process.platform}-${process.arch}`,
+      },
+    });
+
+    const result = runCodexOnDemandAssertions(root);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      `installed @openai/codex version mismatch: expected ${CODEX_VERSION}, got 0.148.0`,
+    );
+  });
+
+  it("rejects a managed Codex CLI outside the exact release version", () => {
+    const root = makeTempDir(tempDirs, "openclaw-codex-on-demand-cli-version-");
+    const fixture = createCodexInstallFixture(root);
+    writeFileSync(fixture.codexBin, '#!/usr/bin/env node\nconsole.log("codex-cli 0.148.0");\n', {
+      mode: 0o755,
+    });
+
+    const result = runCodexOnDemandAssertions(root);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      `managed Codex CLI version mismatch: expected ${CODEX_VERSION}`,
+    );
+  });
+
+  it("rejects a missing current-platform Codex alias", () => {
+    const root = makeTempDir(tempDirs, "openclaw-codex-on-demand-platform-missing-");
+    const fixture = createCodexInstallFixture(root);
+    rmSync(path.dirname(fixture.platformPackageJson), { force: true, recursive: true });
+
+    const result = runCodexOnDemandAssertions(root);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(`missing current Codex platform alias ${fixture.target.alias}`);
+  });
+
+  it("rejects the wrong current-platform Codex alias version", () => {
+    const root = makeTempDir(tempDirs, "openclaw-codex-on-demand-platform-version-");
+    const fixture = createCodexInstallFixture(root);
+    writeJson(fixture.platformPackageJson, {
+      name: "@openai/codex",
+      version: `0.148.0-${process.platform}-${process.arch}`,
+      os: [fixture.target.os],
+      cpu: [fixture.target.cpu],
+    });
+
+    const result = runCodexOnDemandAssertions(root);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      `installed ${fixture.target.alias} version mismatch: expected ${CODEX_VERSION}-${process.platform}-${process.arch}`,
+    );
+  });
+
+  it("rejects current-platform Codex alias OS and CPU metadata drift", () => {
+    const root = makeTempDir(tempDirs, "openclaw-codex-on-demand-platform-manifest-");
+    const fixture = createCodexInstallFixture(root);
+    writeJson(fixture.platformPackageJson, {
+      name: "@openai/codex",
+      version: `${CODEX_VERSION}-${process.platform}-${process.arch}`,
+      os: ["unsupported-os"],
+      cpu: [fixture.target.cpu],
+    });
+
+    const osResult = runCodexOnDemandAssertions(root);
+    expect(osResult.status).not.toBe(0);
+    expect(osResult.stderr).toContain(
+      `installed ${fixture.target.alias} os mismatch: expected [${fixture.target.os}]`,
+    );
+
+    writeJson(fixture.platformPackageJson, {
+      name: "@openai/codex",
+      version: `${CODEX_VERSION}-${process.platform}-${process.arch}`,
+      os: [fixture.target.os],
+      cpu: ["unsupported-cpu"],
+    });
+    const cpuResult = runCodexOnDemandAssertions(root);
+    expect(cpuResult.status).not.toBe(0);
+    expect(cpuResult.stderr).toContain(
+      `installed ${fixture.target.alias} cpu mismatch: expected [${fixture.target.cpu}]`,
+    );
   });
 
   it("rejects on-demand fixtures without the canonical SQLite install record", () => {

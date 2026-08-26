@@ -103,6 +103,43 @@ describe("OpenClaw database maintenance schema validation", () => {
     }
   });
 
+  it("keeps lifecycle bindings additive and keyed only by canonical owner identity", () => {
+    const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
+      "CREATE TABLE IF NOT EXISTS execution_owner_lifecycle_bindings (",
+    );
+    const endMarker = ") STRICT;";
+    const end = start >= 0 ? OPENCLAW_STATE_SCHEMA_SQL.indexOf(endMarker, start) : -1;
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const previousSchema = `${OPENCLAW_STATE_SCHEMA_SQL.slice(0, start)}${OPENCLAW_STATE_SCHEMA_SQL.slice(end + endMarker.length)}`;
+    const database = createGlobalDatabase();
+    try {
+      expect(() =>
+        assertSqliteSchemaContains(database, "previous global schema", previousSchema),
+      ).not.toThrow();
+      expect(
+        database.prepare("PRAGMA table_info(execution_owner_lifecycle_bindings)").all(),
+      ).toEqual([
+        { cid: 0, name: "owner_kind", type: "TEXT", notnull: 1, dflt_value: null, pk: 1 },
+        { cid: 1, name: "owner_id", type: "TEXT", notnull: 1, dflt_value: null, pk: 2 },
+        { cid: 2, name: "context_id", type: "TEXT", notnull: 1, dflt_value: null, pk: 0 },
+        { cid: 3, name: "execution_id", type: "TEXT", notnull: 1, dflt_value: null, pk: 0 },
+      ]);
+      expect(
+        database
+          .prepare(
+            `SELECT COUNT(*) AS count
+             FROM sqlite_schema
+             WHERE type = 'index' AND tbl_name = 'execution_owner_lifecycle_bindings'
+               AND sql IS NOT NULL`,
+          )
+          .get(),
+      ).toEqual({ count: 0 });
+    } finally {
+      database.close();
+    }
+  });
+
   it("accepts compatible future columns in shared-state and agent databases", () => {
     const globalDatabase = createGlobalDatabase();
     const agentDatabase = createAgentDatabase();
@@ -179,6 +216,7 @@ describe("OpenClaw database maintenance schema validation", () => {
       "worker_environments.node_device_id TEXT",
       "worker_session_placements.terminal_reason TEXT",
       "worker_session_placements.terminal_at_ms INTEGER",
+      "worker_session_placement_moves.abandon_source INTEGER",
       "worker_session_placement_moves.target_machine_class TEXT",
       "worktrees.run_end_cleanup_json TEXT",
       "device_bootstrap_tokens.setup_id TEXT",
@@ -339,39 +377,40 @@ describe("OpenClaw database maintenance schema validation", () => {
     }
   });
 
-  it.each(["node_worker_launches", "worker_environment_ssh_fallback_ports"])(
-    "allows lazy table %s to be absent but rejects drift",
-    (tableName) => {
-      const database = createGlobalDatabase();
-      try {
-        const canonicalTable = database
-          .prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ?")
-          .get(tableName) as { sql?: unknown } | undefined;
-        if (typeof canonicalTable?.sql !== "string") {
-          throw new Error(`missing canonical ${tableName} table`);
-        }
-        database.exec(`DROP TABLE ${tableName};`);
-
-        expect(() =>
-          assertOpenClawStateDatabaseForMaintenance(database, {
-            pathname: "global.sqlite",
-          }),
-        ).not.toThrow();
-
-        const driftedTableSql = canonicalTable.sql.replace("(\n", "(\n  unexpected TEXT,\n");
-        expect(driftedTableSql).not.toBe(canonicalTable.sql);
-        database.exec(driftedTableSql);
-
-        expect(() =>
-          assertOpenClawStateDatabaseForMaintenance(database, {
-            pathname: "global.sqlite",
-          }),
-        ).toThrow(`column definitions differ for ${tableName}`);
-      } finally {
-        database.close();
+  it.each([
+    "node_worker_launches",
+    "node_worker_launch_containers",
+    "worker_environment_ssh_fallback_ports",
+  ])("allows lazy table %s to be absent but rejects drift", (tableName) => {
+    const database = createGlobalDatabase();
+    try {
+      const canonicalTable = database
+        .prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ?")
+        .get(tableName) as { sql?: unknown } | undefined;
+      if (typeof canonicalTable?.sql !== "string") {
+        throw new Error(`missing canonical ${tableName} table`);
       }
-    },
-  );
+      database.exec(`DROP TABLE ${tableName};`);
+
+      expect(() =>
+        assertOpenClawStateDatabaseForMaintenance(database, {
+          pathname: "global.sqlite",
+        }),
+      ).not.toThrow();
+
+      const driftedTableSql = canonicalTable.sql.replace("(\n", "(\n  unexpected TEXT,\n");
+      expect(driftedTableSql).not.toBe(canonicalTable.sql);
+      database.exec(driftedTableSql);
+
+      expect(() =>
+        assertOpenClawStateDatabaseForMaintenance(database, {
+          pathname: "global.sqlite",
+        }),
+      ).toThrow(`column definitions differ for ${tableName}`);
+    } finally {
+      database.close();
+    }
+  });
 
   it("rejects a current agent database with a missing canonical table", () => {
     const database = createAgentDatabase();

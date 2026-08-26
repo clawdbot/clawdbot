@@ -38,7 +38,14 @@ type SessionRosterRefreshHost = {
 type ManagedSessionListRefresh = {
   append: boolean;
   offset?: number;
+  invalidated?: true;
 };
+
+type SessionRosterLoadOptions = SessionRefreshOptions & {
+  provisional?: boolean;
+};
+
+const OWNER_FIRST_SESSION_LIST_LIMIT = 60;
 
 type ManagedSessionListQuery = Readonly<Record<string, unknown>> & { readonly limit: number };
 
@@ -119,7 +126,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       listeners: new Set(),
       coordinator: createSessionEventRefreshCoordinator({
         active: pageActive,
-        refresh: () => refreshManagedList(entry, { append: false }),
+        refresh: () => refreshManagedList(entry, { append: false, invalidated: true }),
       }),
       pending: null,
       queued: null,
@@ -137,7 +144,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       return Promise.resolve();
     }
     if (entry.pending) {
-      if (!refresh.append) {
+      if (refresh.invalidated) {
         entry.queued = refresh;
       }
       return entry.pending;
@@ -223,26 +230,38 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     }
   };
 
-  const load = async (options: SessionRefreshOptions) => {
+  const load = async (
+    options: SessionRosterLoadOptions,
+    ownerFirst?: Promise<SessionsListResult | null>,
+  ): Promise<SessionsListResult | null> => {
     const scope = host.connection.capture();
     if (!scope) {
-      return;
+      return null;
     }
-    const { append = false, force: _force, backgroundHydrate = false, ...requestOptions } = options;
+    const {
+      append = false,
+      force: _force,
+      backgroundHydrate = false,
+      provisional = false,
+      ...requestOptions
+    } = options;
     // Every canonical roster replaces visible session names, so omitted title
     // enrichment must inherit the UI default instead of publishing fallback ids.
     requestOptions.includeDerivedTitles ??= true;
     const durableListOptions: SessionListOptions = { ...requestOptions };
     // Pagination is request-local; replacements retain filters but restart at page one.
     delete durableListOptions.offset;
-    if (!backgroundHydrate) {
+    if (!backgroundHydrate && !provisional) {
       lastListOptions = durableListOptions;
       hasForegroundListOptions = true;
-    } else if (!hasForegroundListOptions && !hasSeededListOptions) {
+    } else if (!provisional && !hasForegroundListOptions && !hasSeededListOptions) {
       lastListOptions = durableListOptions;
       hasSeededListOptions = true;
     }
-    if (!backgroundHydrate) {
+    // A provisional owner window may only paint an empty sidebar faster; once a
+    // roster is on screen it stays silent so foreign-owned rows never blink out.
+    const provisionalSilent = provisional && Boolean(host.readState().result);
+    if (!backgroundHydrate && !provisionalSilent) {
       const error = host.observerError();
       host.publish(
         { ...host.readState(), loading: true, error, deletedSessions: [] },
@@ -250,22 +269,36 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       );
     }
     try {
-      const result = await requestSessionList(scope.client, requestOptions);
+      const request = requestSessionList(scope.client, requestOptions);
+      const ownerRows = ownerFirst ? await ownerFirst.catch(() => null) : null;
+      const result = await request;
       if (!host.connection.isCurrent(scope)) {
-        return;
+        return null;
       }
       const currentState = host.readState();
+      if (provisional && currentState.result) {
+        return result;
+      }
+      const merged = result && ownerRows ? appendSessionResults(ownerRows, result) : result;
+      const mergeWithCurrent = append && typeof requestOptions.offset === "number";
       let nextResult =
-        result && append && requestOptions.offset && currentState.result
-          ? appendSessionResults(currentState.result, result)
-          : reconcileRosterPresentationMetadata(result, currentState.result);
+        merged && mergeWithCurrent && currentState.result
+          ? appendSessionResults(currentState.result, merged)
+          : reconcileRosterPresentationMetadata(merged, currentState.result);
       if (append && nextResult && !backgroundHydrate) {
-        // Canonical event refreshes must retain all previously appended visible pages.
+        const ownerFirstPage =
+          Boolean(host.snapshot().selfUser?.id.trim()) &&
+          isPrimarySessionListQuery(durableListOptions);
+        const retainedListLimit =
+          ownerFirstPage && result && typeof requestOptions.offset === "number"
+            ? requestOptions.offset + result.sessions.length
+            : nextResult.sessions.length;
+        // Retain the shared pagination window, excluding owner rows merged ahead of it.
         lastListOptions = {
           ...durableListOptions,
           limit: Math.max(
             durableListOptions.limit ?? DEFAULT_SESSION_LIST_QUERY.limit,
-            nextResult.sessions.length,
+            retainedListLimit,
           ),
         };
       }
@@ -302,7 +335,9 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
         }
       }
       nextResult = host.decorate(nextResult);
-      host.onCanonicalList(nextResult);
+      if (!provisional) {
+        host.onCanonicalList(nextResult);
+      }
       const state = host.readState();
       const error = host.observerError();
       host.publish(
@@ -319,8 +354,9 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
         },
         error ? "session-observer" : undefined,
       );
+      return result;
     } catch (error) {
-      if (host.connection.isCurrent(scope)) {
+      if (host.connection.isCurrent(scope) && !(provisional && host.readState().result)) {
         const state = host.readState();
         host.publish(
           {
@@ -332,6 +368,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
           "operation",
         );
       }
+      return null;
     }
   };
 
@@ -360,6 +397,35 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     return { ...lastListOptions, force: true };
   };
 
+  const refreshPlan = (options: SessionRefreshOptions) => {
+    const ownerId = host.snapshot().selfUser?.id.trim();
+    if (!ownerId || options.append === true || !isPrimarySessionListQuery(options)) {
+      return { initial: options, shared: undefined };
+    }
+    const sharedLimit = Math.max(
+      OWNER_FIRST_SESSION_LIST_LIMIT,
+      typeof options.limit === "number" && options.limit > 0
+        ? Math.floor(options.limit)
+        : DEFAULT_SESSION_LIST_QUERY.limit,
+    );
+    // Keep owner-first and shared loads atomic in the existing refresh queue.
+    // Only the shared phase advances canonical membership and durable options;
+    // it merges the owner window from the initial load's returned rows, so the
+    // provisional phase never has to publish to be part of the final roster.
+    return {
+      initial: {
+        ...options,
+        ownerId,
+        limit: OWNER_FIRST_SESSION_LIST_LIMIT,
+        provisional: true,
+      },
+      shared: {
+        ...options,
+        limit: sharedLimit,
+      },
+    };
+  };
+
   const drainRefreshQueue = async (options: SessionRefreshOptions) => {
     const scope = host.connection.capture();
     if (!scope) {
@@ -367,7 +433,9 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     }
     let next: SessionRefreshOptions | null = options;
     while (next) {
-      await load(next);
+      const { initial, shared } = refreshPlan(next);
+      const initialLoad = load(initial);
+      await (shared ? load(shared, initialLoad) : initialLoad);
       if (!host.connection.isCurrent(scope)) {
         return;
       }
@@ -471,9 +539,20 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       entry.listeners.add(listener);
       return () => {
         entry.listeners.delete(listener);
-        if (entry.listeners.size === 0 && managedLists.get(entry.key) === entry) {
-          entry.coordinator.dispose();
-          managedLists.delete(entry.key);
+        if (entry.listeners.size > 0 || managedLists.get(entry.key) !== entry) {
+          return;
+        }
+        const release = () => {
+          if (entry.listeners.size === 0 && managedLists.get(entry.key) === entry) {
+            entry.coordinator.dispose();
+            managedLists.delete(entry.key);
+          }
+        };
+        // Route replacement may briefly remove every subscriber while this query still owns a request.
+        if (entry.pending) {
+          void entry.pending.finally(release);
+        } else {
+          release();
         }
       };
     },
@@ -484,6 +563,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       const entry = managedList(options);
       return refreshManagedList(entry, {
         append: options.append === true,
+        ...(options.force === true && options.append !== true ? { invalidated: true } : {}),
         ...(options.offset !== undefined ? { offset: options.offset } : {}),
       });
     },
@@ -552,8 +632,12 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       return refresh({ ...options, force: true });
     },
     lastOptions: () => lastListOptions,
-    scheduleEvent(options: { agentId?: string | null } = {}) {
-      eventRefreshCoordinator.schedule();
+    // Gateway-owned membership filters require an authoritative list refresh.
+    canApplyPrimarySnapshot: () => isPrimarySessionListQuery(lastListOptions),
+    scheduleEvent(options: { agentId?: string | null; primarySnapshotApplied?: boolean } = {}) {
+      if (!options.primarySnapshotApplied) {
+        eventRefreshCoordinator.schedule();
+      }
       const agentId = options.agentId ? normalizeAgentId(options.agentId) : null;
       for (const entry of managedLists.values()) {
         const queryAgentId = managedSessionListAgentId(entry);

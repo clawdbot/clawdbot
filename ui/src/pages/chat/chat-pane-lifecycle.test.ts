@@ -951,6 +951,29 @@ describe("chat pane connection lifecycle", () => {
     expect(retireModelOverride).toHaveBeenCalledWith("global");
   });
 
+  it("discards Guardian and system notices when Gateway ownership changes", () => {
+    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    state.guardianNotices = [
+      {
+        key: "guardian:old-run:review:denied",
+        runId: "old-run",
+        timestamp: 1,
+        kind: "denied",
+        command: "private command",
+      },
+    ];
+
+    pane.applyGatewaySnapshot({
+      ...pane.context.gateway.snapshot,
+      client,
+      phase: "reconnecting",
+      hello: null,
+    });
+
+    expect(state.guardianNotices).toEqual([]);
+  });
+
   it("releases sending state when the Gateway owner changes", () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });

@@ -19,14 +19,10 @@ import {
 } from "../plugins/management-service.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import {
-  CONTROL_UI_CATALOG_ICON_PATH_PREFIX,
-  CONTROL_UI_LINK_FAVICON_PATH_PREFIX,
-  CONTROL_UI_PLUGIN_ICON_PATH_PREFIX,
-} from "./control-ui-contract.js";
+import { parseControlUiResourcePath } from "./control-ui-contract.js";
 import { respondNotFound as sendNotFound } from "./control-ui-http-utils.js";
 import { sendMethodNotAllowed } from "./http-common.js";
-import { authorizeGatewayHttpRequestOrReply } from "./http-utils.js";
+import { authorizeControlUiReadRequestOrReply } from "./http-utils.js";
 
 const PLUGIN_ID_RE =
   /^(?:[a-z0-9][a-z0-9._-]{0,127}|@[a-z0-9][a-z0-9._-]{0,63}\/[a-z0-9][a-z0-9._-]{0,127})$/iu;
@@ -64,62 +60,6 @@ type PluginIconCacheEntry = {
 let pluginIconCache = new Map<string, PluginIconCacheEntry>();
 const pluginIconImageProcessor = createImageProcessor();
 
-function normalizeBasePath(basePath?: string): string {
-  const trimmed = basePath?.trim() ?? "";
-  if (!trimmed || trimmed === "/") {
-    return "";
-  }
-  const withLeadingSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-  return withLeadingSlash.replace(/\/+$/u, "");
-}
-
-export function resolvePluginIconRoutePrefix(basePath?: string): string {
-  return `${normalizeBasePath(basePath)}${CONTROL_UI_PLUGIN_ICON_PATH_PREFIX}/`;
-}
-
-type IconRequestPathResolution = { matched: false } | { matched: true; value: string | null };
-
-function parseIconRequestPath(
-  urlRaw: string | undefined,
-  prefix: string,
-  isValid: (value: string) => boolean = Boolean,
-): IconRequestPathResolution {
-  if (!urlRaw) {
-    return { matched: false };
-  }
-  const pathname = new URL(urlRaw, "http://localhost").pathname;
-  if (!pathname.startsWith(prefix)) {
-    return { matched: false };
-  }
-  const encodedValue = pathname.slice(prefix.length);
-  if (!encodedValue || encodedValue.includes("/")) {
-    return { matched: true, value: null };
-  }
-  try {
-    const value = decodeURIComponent(encodedValue);
-    return { matched: true, value: isValid(value) ? value : null };
-  } catch {
-    return { matched: true, value: null };
-  }
-}
-
-function parsePluginIconRequest(
-  urlRaw: string | undefined,
-  basePath?: string,
-): IconRequestPathResolution {
-  return parseIconRequestPath(urlRaw, resolvePluginIconRoutePrefix(basePath), (value) =>
-    PLUGIN_ID_RE.test(value),
-  );
-}
-
-function parseCatalogIconRequest(
-  urlRaw: string | undefined,
-  basePath?: string,
-): IconRequestPathResolution {
-  const prefix = `${normalizeBasePath(basePath)}${CONTROL_UI_CATALOG_ICON_PATH_PREFIX}/`;
-  return parseIconRequestPath(urlRaw, prefix);
-}
-
 function normalizeLinkFaviconHostname(value: string): string | null {
   if (value.length > 253) {
     return null;
@@ -134,18 +74,6 @@ function normalizeLinkFaviconHostname(value: string): string | null {
   } catch {
     return null;
   }
-}
-
-function parseLinkFaviconRequest(
-  urlRaw: string | undefined,
-  basePath?: string,
-): IconRequestPathResolution {
-  const prefix = `${normalizeBasePath(basePath)}${CONTROL_UI_LINK_FAVICON_PATH_PREFIX}/`;
-  return parseIconRequestPath(
-    urlRaw,
-    prefix,
-    (value) => normalizeLinkFaviconHostname(value) !== null,
-  );
 }
 
 function normalizeMimeType(contentType: string | undefined): string | undefined {
@@ -315,13 +243,17 @@ export async function handlePluginIconHttpRequest(
     rateLimiter?: AuthRateLimiter;
   },
 ): Promise<boolean> {
-  const pluginRequest = parsePluginIconRequest(req.url, opts.basePath);
-  const catalogRequest = parseCatalogIconRequest(req.url, opts.basePath);
-  const faviconRequest = parseLinkFaviconRequest(req.url, opts.basePath);
+  const pathname = req.url ? new URL(req.url, "http://localhost").pathname : undefined;
+  const pluginRequest = parseControlUiResourcePath("pluginIcon", pathname, opts.basePath);
+  const catalogRequest = parseControlUiResourcePath("catalogIcon", pathname, opts.basePath);
+  const faviconRequest = parseControlUiResourcePath("linkFavicon", pathname, opts.basePath);
   if (!pluginRequest.matched && !catalogRequest.matched && !faviconRequest.matched) {
     return false;
   }
-  const pluginId = pluginRequest.matched ? pluginRequest.value : null;
+  const pluginId =
+    pluginRequest.matched && pluginRequest.value && PLUGIN_ID_RE.test(pluginRequest.value)
+      ? pluginRequest.value
+      : null;
   const catalogIconUrl = catalogRequest.matched ? catalogRequest.value : null;
   const faviconHostname = faviconRequest.matched
     ? faviconRequest.value
@@ -333,7 +265,7 @@ export async function handlePluginIconHttpRequest(
     sendMethodNotAllowed(res, "GET, HEAD");
     return true;
   }
-  const requestAuth = await authorizeGatewayHttpRequestOrReply({
+  const requestAuth = await authorizeControlUiReadRequestOrReply({
     req,
     res,
     auth: opts.auth,

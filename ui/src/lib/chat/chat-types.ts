@@ -43,7 +43,8 @@ export type ChatGuardianNotice = {
   key: string;
   runId: string;
   timestamp: number;
-  kind: "approved" | "denied" | "warning";
+  kind: "approved" | "denied" | "reviewing" | "strict-review-required" | "warning";
+  source?: "system";
   command?: string;
   riskLevel?: string;
   rationale?: string;
@@ -57,14 +58,6 @@ export type ToolApprovalReview = {
   riskLevel?: string;
   userAuthorization?: string;
   rationale?: string;
-};
-
-export type ChatQueueSkillWorkshopRevision = {
-  proposalId: string;
-  agentId?: string;
-  /** Process-local owner; revision requests must never replay after reconnect. */
-  connectionClient?: object;
-  connectionEpoch?: number;
 };
 
 export type ChatQueueItem = {
@@ -98,7 +91,6 @@ export type ChatQueueItem = {
   sessionKey?: string;
   agentId?: string;
   sender?: SenderIdentity;
-  skillWorkshopRevision?: ChatQueueSkillWorkshopRevision;
 };
 
 /** Union type for items in the chat thread */
@@ -112,6 +104,7 @@ export type ChatItem =
       icon?: keyof typeof toolIcons;
       label?: string;
       startsTurn?: true;
+      boundaryId?: string;
       tone?: "danger";
     }
   | {
@@ -124,8 +117,22 @@ export type ChatItem =
       action?: { kind: "session-checkpoints"; label: string };
       timestamp: number;
     }
-  | { kind: "stream"; key: string; text: string; startedAt: number; isStreaming: boolean }
-  | { kind: "reading-indicator"; key: string; startedAt: number }
+  | {
+      kind: "stream";
+      key: string;
+      text: string;
+      startedAt: number;
+      isStreaming: boolean;
+      runId?: string;
+      boundaryId?: string;
+    }
+  | {
+      kind: "reading-indicator";
+      key: string;
+      startedAt: number;
+      runId?: string;
+      boundaryId?: string;
+    }
   | { kind: "question"; key: string; questionId: string; startedAt: number };
 
 export type ChatStreamSegment = {
@@ -186,6 +193,7 @@ export type MessageGroup = {
   messages: Array<{ message: unknown; key: string; duplicateCount?: number }>;
   timestamp: number;
   isStreaming: boolean;
+  runId?: string;
 };
 
 /** Content item types in a normalized message */

@@ -7,9 +7,11 @@ import {
 } from "../../infra/agent-events.js";
 import * as replyRunSettle from "./reply-run-finalization-lease.js";
 import {
+  REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
   replyMessageInjectionTargetOperation,
+  replyRunInterruptTargetOperation,
   type ReplyOperation,
-  type ReplyOperationPhase,
+  type ReplyRunInterruptTarget,
   type ReplyRunRegistry,
 } from "./reply-run-registry.contracts.js";
 import { resolveReplyMessageInjectionRejection } from "./reply-run-registry.message-injection.js";
@@ -120,6 +122,10 @@ export const replyRunRegistry: ReplyRunRegistry = {
       ...(resolved.backend.runId ? { runId: resolved.backend.runId } : {}),
     };
   },
+  resolveCurrentInterruptTarget(sessionKey) {
+    const operation = this.get(sessionKey);
+    return operation ? { [replyRunInterruptTargetOperation]: operation } : undefined;
+  },
   abort(sessionKey) {
     const operation = this.get(sessionKey);
     if (!operation) {
@@ -184,6 +190,17 @@ export const replyRunRegistry: ReplyRunRegistry = {
   },
 };
 
+/** Abort and await only the captured operation; a same-key successor is never rediscovered. */
+export async function interruptReplyRunTarget(
+  target: ReplyRunInterruptTarget,
+  timeoutMs = REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+): Promise<{ aborted: boolean; settled: boolean }> {
+  const operation = target[replyRunInterruptTargetOperation];
+  const aborted = operation.abortByUser();
+  const settled = await waitForReplyOperationOwnerSettlement(operation, timeoutMs);
+  return { aborted, settled };
+}
+
 export function resolveActiveReplyRunSessionId(sessionKey: string): string | undefined {
   return replyRunRegistry.resolveSessionId(sessionKey);
 }
@@ -199,9 +216,7 @@ export function supersedeReplyRunByRunId(runId: string, beforeCancel: () => void
     if (normalizeOptionalString(backend?.runId) !== expectedRunId) {
       continue;
     }
-    beforeCancel();
-    backend?.cancel("superseded");
-    return true;
+    return operation.supersede(beforeCancel);
   }
   return false;
 }
@@ -212,12 +227,6 @@ export function resolveActiveReplyRunThreadId(sessionKey: string): string | numb
 
 export function isReplyRunActiveForSessionId(sessionId: string): boolean {
   return resolveReplyRunForCurrentSessionId(sessionId) !== undefined;
-}
-
-export function resolveReplyRunPhaseForSessionId(
-  sessionId: string,
-): ReplyOperationPhase | undefined {
-  return resolveReplyRunForCurrentSessionId(sessionId)?.phase;
 }
 
 export function isReplyRunAbortableForCompaction(sessionId: string): boolean {

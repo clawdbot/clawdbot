@@ -588,7 +588,8 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
 
     const outcomeSummary = logPluginUpdateOutcomes({
       outcomes: [...pluginResult.outcomes, ...hookResult.outcomes],
-      log: (message) => defaultRuntime.log(message),
+      log: defaultRuntime.log,
+      error: defaultRuntime.error,
     });
     if (outcomeSummary.hasErrors) {
       defaultRuntime.exit(1);

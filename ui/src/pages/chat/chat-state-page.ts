@@ -163,6 +163,7 @@ export function createPageState(
     connected: false,
     connectionEpoch: 0,
     hello: null,
+    selfUser: null,
     canvasPluginSurfaceUrl: null,
     terminalAvailable: false,
     browserPanelAvailable: false,
@@ -234,6 +235,7 @@ export function createPageState(
     dispatchClientPresentation: (action: CommandClientPresentationAction) =>
       dispatchCommandClientPresentation(context, action),
     basePath: context.basePath,
+    resourceBasePath: context.resourceBasePath,
     chatNewMessagesBelow: false,
     chatLocalInputHistoryBySession: {},
     chatInputHistorySessionKey: null,
@@ -292,7 +294,7 @@ export function createPageState(
   };
   attachChatRealtimeActions(state);
   state.loadAssistantIdentity = () => loadPageAssistantIdentity(state);
-  state.handleSendChat = (messageOverride, options) => {
+  state.handleSendChat = (messageOverride, options, submissionAction) => {
     const message = messageOverride ?? state.chatMessage;
     const isCommand =
       parseSlashCommand(message) !== null ||
@@ -311,7 +313,7 @@ export function createPageState(
     ) {
       autoPromptNotificationsOnSend(context);
     }
-    return handleSendChat(state, messageOverride, options as never);
+    return handleSendChat(state, messageOverride, options as never, submissionAction);
   };
   state.handleAbortChat = async (options) => {
     await handleAbortChat(state, options as never);

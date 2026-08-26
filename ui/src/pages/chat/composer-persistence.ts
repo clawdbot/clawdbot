@@ -124,7 +124,6 @@ function serializeChatAttachment(attachment: ChatAttachment): ChatAttachment | n
 
 function serializeQueueItem(item: ChatQueueItem): ChatQueueItem | null {
   if (
-    item.skillWorkshopRevision ||
     !item.id?.trim() ||
     (!item.text?.trim() && !item.attachments?.length) ||
     item.pendingRunId ||

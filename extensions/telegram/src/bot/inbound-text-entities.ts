@@ -101,7 +101,12 @@ function markdownAffixesForTelegramEntity(
     case "pre":
       return markdownPreAffixes(entity, content);
     case "text_link":
-      return ["[", `](${entity.url})`];
+      return [
+        "[",
+        `](${entity.url.replace(/[\\()<>\s]/gu, (character) =>
+          character === "(" || character === ")" ? `\\${character}` : encodeURIComponent(character),
+        )})`,
+      ];
     default:
       return null;
   }
@@ -191,6 +196,7 @@ export function renderTelegramTextEntities(
 
   const sortedQuoteEdges = [...quoteEdges].toSorted((left, right) => left - right);
   const boundaries = new Map<number, TelegramMarkdownBoundary[]>();
+  const escapedLinkLabelOffsets = new Set<number>();
   const addBoundary = (offset: number, boundary: TelegramMarkdownBoundary) => {
     const entries = boundaries.get(offset);
     if (entries) {
@@ -205,6 +211,11 @@ export function renderTelegramTextEntities(
     }
     for (const segment of splitTelegramFormattingAtQuoteEdges(text, entity, sortedQuoteEdges)) {
       const content = text.slice(segment.offset, segment.offset + segment.length);
+      if (segment.type === "text_link") {
+        for (const match of content.matchAll(/[\\[\]]/gu)) {
+          escapedLinkLabelOffsets.add(segment.offset + match.index);
+        }
+      }
       const affixes = markdownAffixesForTelegramEntity(segment, content);
       if (!affixes) {
         continue;
@@ -252,7 +263,7 @@ export function renderTelegramTextEntities(
         });
     }
     if (offset < text.length) {
-      result += text[offset];
+      result += escapedLinkLabelOffsets.has(offset) ? `\\${text[offset]}` : text[offset];
     }
   }
   return result;

@@ -175,6 +175,17 @@ export function setCurrentPluginMetadataSnapshot(
   publishCurrentPluginMetadataSnapshot(snapshot, options);
 }
 
+/** Publishes a prepared CLI snapshot without displacing a lifecycle owner. */
+export function adoptCurrentPluginMetadataSnapshotIfAbsent(
+  snapshot: PluginMetadataSnapshot,
+  options: CurrentPluginMetadataSnapshotOptions = {},
+): void {
+  if (getCurrentPluginMetadataSnapshotState().snapshot !== undefined) {
+    return;
+  }
+  setCurrentPluginMetadataSnapshot(snapshot, options);
+}
+
 function captureCurrentPluginMetadataSnapshotState(): CurrentPluginMetadataSnapshotState {
   return {
     ...getCurrentPluginMetadataSnapshotState(),
@@ -447,4 +458,7 @@ export function getCurrentPluginMetadataSnapshot(
 // Light bridges (plugin-metadata-snapshot.runtime.ts) serve reads through this
 // instance whenever the metadata system is loaded; the require fallback only
 // covers cold processes.
-registerPluginMetadataSnapshotReaders({ getCurrentPluginMetadataSnapshot });
+registerPluginMetadataSnapshotReaders({
+  adoptCurrentPluginMetadataSnapshotIfAbsent,
+  getCurrentPluginMetadataSnapshot,
+});

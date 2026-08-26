@@ -21,7 +21,7 @@ import {
 import { persistDevicePairingStoreState as persistState } from "./device-pairing-store.js";
 import { createDeviceAuthToken, resolveRoleTokenScopes } from "./device-pairing-tokens.js";
 import {
-  clearNodePairingGenerationBins,
+  clearNodePairingGenerationState,
   invalidatePairedCardRendererCache,
   resolveNodePairingGeneration,
 } from "./device-pairing.js";
@@ -362,7 +362,7 @@ async function approveDevicePairingWithOptions(
     const nodePairingGenerationChanged = Boolean(
       previousNodeGeneration && previousNodeGeneration.key !== nextNodeGeneration?.key,
     );
-    clearNodePairingGenerationBins(device, previousNodeGeneration);
+    clearNodePairingGenerationState(device, previousNodeGeneration);
     const installationIdentityChanged = Boolean(
       existing && existing.publicKey !== device.publicKey,
     );
@@ -486,7 +486,7 @@ export async function approveBootstrapDevicePairing(
     const nodePairingGenerationChanged = Boolean(
       previousNodeGeneration && previousNodeGeneration.key !== nextNodeGeneration?.key,
     );
-    clearNodePairingGenerationBins(device, previousNodeGeneration);
+    clearNodePairingGenerationState(device, previousNodeGeneration);
     const installationIdentityChanged = Boolean(
       existing && existing.publicKey !== device.publicKey,
     );

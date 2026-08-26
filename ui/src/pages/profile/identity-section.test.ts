@@ -25,15 +25,13 @@ function createProps(overrides: Partial<IdentitySectionProps> = {}): IdentitySec
     profile: PROFILE,
     avatarUrl: "/api/users/profile-1/avatar?v=2",
     displayName: "Ada Lovelace",
-    githubUsername: "",
+    gitCoauthorEnabled: false,
     busy: null,
     error: null,
     onDisplayNameInput: vi.fn(),
     onSaveDisplayName: vi.fn(),
     onAvatarSelect: vi.fn(),
-    onGitHubUsernameInput: vi.fn(),
-    onSaveGitHubIdentity: vi.fn(),
-    onClearGitHubIdentity: vi.fn(),
+    onGitCoauthorChange: vi.fn(),
     ...overrides,
   };
 }
@@ -63,7 +61,13 @@ describe("renderIdentitySection", () => {
       [...container.querySelectorAll(".settings-row__title")].map((node) =>
         node.textContent?.trim(),
       ),
-    ).toEqual(["Avatar", "Display name", "Linked emails", "GitHub"]);
+    ).toEqual([
+      "Avatar",
+      "Display name",
+      "Linked emails",
+      "GitHub account",
+      "Git co-author credit",
+    ]);
     expect(container.textContent).toContain("ada@example.test, ada@work.test");
   });
 
@@ -120,7 +124,13 @@ describe("renderIdentitySection", () => {
     const container = document.createElement("div");
     render(renderIdentitySection(createProps({ onAvatarSelect })), container);
 
+    const chooser = container.querySelector<HTMLButtonElement>(".identity-avatar-control .btn");
     const input = container.querySelector<HTMLInputElement>('input[type="file"]');
+    const clickInput = vi.spyOn(input!, "click");
+    chooser?.click();
+    expect(chooser?.type).toBe("button");
+    expect(clickInput).toHaveBeenCalledOnce();
+
     const file = new File(["avatar"], "avatar.webp", { type: "image/webp" });
     Object.defineProperty(input, "files", { configurable: true, value: [file] });
     input?.dispatchEvent(new Event("change", { bubbles: true }));
@@ -128,17 +138,21 @@ describe("renderIdentitySection", () => {
     expect(input?.accept).toBe("image/png,image/jpeg,image/webp");
     expect(input?.value).toBe("");
     expect(onAvatarSelect).toHaveBeenCalledWith(file);
+
+    render(renderIdentitySection(createProps({ busy: "display-name" })), container);
+    expect(
+      container.querySelector<HTMLButtonElement>(".identity-avatar-control .btn")?.disabled,
+    ).toBe(true);
+    expect(container.querySelector<HTMLInputElement>('input[type="file"]')?.disabled).toBe(true);
   });
 
-  it("links, changes, and disconnects the public GitHub identity", () => {
-    const onGitHubUsernameInput = vi.fn();
-    const onSaveGitHubIdentity = vi.fn();
-    const onClearGitHubIdentity = vi.fn();
+  it("shows verified GitHub identity and explicit co-author credit", () => {
+    const onGitCoauthorChange = vi.fn();
     const container = document.createElement("div");
     render(
       renderIdentitySection(
         createProps({
-          githubUsername: "octocat",
+          gitCoauthorEnabled: true,
           profile: {
             ...PROFILE,
             githubIdentity: {
@@ -147,9 +161,7 @@ describe("renderIdentitySection", () => {
               avatarUrl: "https://avatars.githubusercontent.com/u/583231?v=4",
             },
           },
-          onGitHubUsernameInput,
-          onSaveGitHubIdentity,
-          onClearGitHubIdentity,
+          onGitCoauthorChange,
         }),
       ),
       container,
@@ -162,47 +174,31 @@ describe("renderIdentitySection", () => {
     expect(account?.querySelector("img")?.src).toBe(
       "https://avatars.githubusercontent.com/u/583231?v=4",
     );
-    const input = container.querySelector<HTMLInputElement>(".identity-github-form input");
-    input!.value = "octo-renamed";
-    input!.dispatchEvent(new Event("input", { bubbles: true }));
-    container
-      .querySelector<HTMLFormElement>(".identity-github-form")
-      ?.dispatchEvent(new SubmitEvent("submit", { bubbles: true, cancelable: true }));
-    [...container.querySelectorAll<HTMLButtonElement>("button")]
-      .find((button) => button.textContent?.trim() === "Disconnect")
-      ?.click();
-
-    expect(onGitHubUsernameInput).toHaveBeenCalledWith("octo-renamed");
-    expect(onSaveGitHubIdentity).toHaveBeenCalledOnce();
-    expect(onClearGitHubIdentity).toHaveBeenCalledOnce();
-    expect(container.textContent).toContain("public GitHub co-author credit");
-    expect(container.textContent).toContain("never a private email");
-    expect(container.textContent).toContain("account you control");
+    expect(container.querySelector(".identity-github-form")).toBeNull();
+    expect(container.textContent).toContain("Verified from your GitHub-backed sign-in");
+    expect(container.textContent).not.toContain("Disconnect");
+    expect(container.textContent).toContain("public GitHub noreply address");
+    expect(container.textContent).toContain("future commits only");
+    const toggle = container.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
+    expect(toggle?.checked).toBe(true);
+    expect(toggle?.hasAttribute("disabled")).toBe(false);
+    toggle!.checked = false;
+    toggle?.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(onGitCoauthorChange).toHaveBeenCalledWith(false);
   });
 
-  it("disables relinking an unchanged canonical GitHub login", () => {
+  it("explains unavailable GitHub verification and disables co-author credit", () => {
     const container = document.createElement("div");
-    render(
-      renderIdentitySection(
-        createProps({
-          githubUsername: " OctoCat ",
-          profile: {
-            ...PROFILE,
-            githubIdentity: {
-              login: "octocat",
-              profileUrl: "https://github.com/octocat",
-              avatarUrl: "https://avatars.githubusercontent.com/u/583231?v=4",
-            },
-          },
-        }),
-      ),
-      container,
-    );
+    render(renderIdentitySection(createProps()), container);
 
-    expect(
-      container.querySelector<HTMLButtonElement>('.identity-github-form button[type="submit"]')
-        ?.disabled,
-    ).toBe(true);
+    expect(container.querySelector(".settings-account")).toBeNull();
+    expect(container.textContent).toContain("Unavailable");
+    expect(container.textContent).toContain("GitHub-backed sign-in");
+    expect(container.textContent).toContain("Refresh to retry");
+    expect(container.querySelector(".identity-github-form")).toBeNull();
+    const toggle = container.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
+    expect(toggle?.checked).toBe(false);
+    expect(toggle?.hasAttribute("disabled")).toBe(true);
   });
 
   it("reports mutation errors without inventing another settings surface", () => {

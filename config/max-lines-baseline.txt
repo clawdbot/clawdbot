@@ -154,7 +154,6 @@ extensions/memory-lancedb/index.test.ts
 extensions/memory-wiki/src/chatgpt-import.ts
 extensions/memory-wiki/src/cli.ts
 extensions/memory-wiki/src/compile.ts
-extensions/memory-wiki/src/markdown.ts
 extensions/memory-wiki/src/query.test.ts
 extensions/memory-wiki/src/query.ts
 extensions/microsoft-foundry/index.test.ts
@@ -324,7 +323,6 @@ src/agents/bash-tools.exec.approval-id.test.ts
 src/agents/bash-tools.process.ts
 src/agents/btw.test.ts
 src/agents/btw.ts
-src/agents/cli-auth-epoch.test.ts
 src/agents/cli-runner.reliability.test.ts
 src/agents/cli-runner.spawn.test.ts
 src/agents/cli-runner/execute.supervisor-capture.test.ts
@@ -500,7 +498,6 @@ src/cli/plugins-cli-test-helpers.ts
 src/cli/plugins-cli.install.test.ts
 src/cli/plugins-cli.runtime.ts
 src/cli/plugins-cli.update.test.ts
-src/cli/program/register.status-health-sessions.ts
 src/cli/run-main.exit.test.ts
 src/cli/run-main.ts
 src/cli/skills-cli.commands.test.ts

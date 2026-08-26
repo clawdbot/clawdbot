@@ -44,6 +44,7 @@ function createProps(snapshot: ChannelsProps["snapshot"]): ChannelsProps {
     configForm: null,
     configUiHints: {},
     configSaving: false,
+    configError: null,
     configFormDirty: false,
     showAdvancedSettings: false,
     nostrProfileFormState: null,
@@ -157,7 +158,12 @@ function renderWhatsAppButtons(params: {
 function renderChannelDetailFixture(
   channelId: string,
   data: ChannelsChannelData,
-  options: { label?: string; onRefresh?: ChannelsProps["onRefresh"] } = {},
+  options: {
+    label?: string;
+    loading?: boolean;
+    configError?: string;
+    onRefresh?: ChannelsProps["onRefresh"];
+  } = {},
 ) {
   const status = Object.entries(data).find(([key]) => key === channelId)?.[1] ?? {};
   const channelAccounts = data.channelAccounts ?? {};
@@ -170,6 +176,8 @@ function renderChannelDetailFixture(
     channelAccounts,
     channelDefaultAccountId: accounts?.length ? { [channelId]: accounts[0]!.accountId } : {},
   });
+  props.loading = options.loading ?? false;
+  props.configError = options.configError ?? null;
   if (options.onRefresh) {
     props.onRefresh = options.onRefresh;
   }
@@ -296,6 +304,24 @@ describe("channel config advanced tier", () => {
 });
 
 describe("channel detail", () => {
+  it.each(["telegram", "whatsapp", "nostr"] as const)(
+    "shows an escaped configuration save error inside the %s editor",
+    (channelId) => {
+      const data: ChannelsChannelData =
+        channelId === "whatsapp"
+          ? { whatsapp: createWhatsAppStatus() }
+          : channelId === "nostr"
+            ? { nostr: null }
+            : { telegram: { configured: true, running: true } };
+      const message = 'Gateway rejected <img src="x" onerror="alert(1)">';
+      const container = renderChannelDetailFixture(channelId, data, { configError: message });
+      const alert = container.querySelector(".channels-detail [role=alert]");
+
+      expect(alert?.textContent).toBe(message);
+      expect(alert?.querySelector("img")).toBeNull();
+    },
+  );
+
   it("links every channel to its docs page", () => {
     const props = createProps({
       ts: Date.now(),
@@ -372,6 +398,22 @@ describe("channel detail", () => {
       expect(onRefresh).toHaveBeenCalledWith(true);
     },
   );
+
+  it("projects an in-flight channel read onto the detail Probe action", () => {
+    const onRefresh = vi.fn();
+    const container = renderChannelDetailFixture(
+      "telegram",
+      { telegram: { configured: true, running: true }, channelAccounts: {} },
+      { loading: true, onRefresh },
+    );
+    const probe = container.querySelector<HTMLButtonElement>(".settings-row--actions button");
+
+    expect(probe?.disabled).toBe(true);
+    expect(probe?.getAttribute("aria-busy")).toBe("true");
+    expect(probe?.textContent?.trim()).toBe("Refreshing…");
+    probe?.click();
+    expect(onRefresh).not.toHaveBeenCalled();
+  });
 
   it("keeps missing Google Chat status unknown while other known channels are stopped", () => {
     const google = renderChannelDetailFixture("googlechat", { googlechat: null });

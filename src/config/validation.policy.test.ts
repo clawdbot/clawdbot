@@ -1,7 +1,11 @@
 // Covers config validation policy decisions and warning behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
-import { validateConfigObjectRaw, validateConfigObjectRawWithPlugins } from "./validation.js";
+import {
+  validateConfigObjectRaw,
+  validateConfigObjectRawWithPlugins,
+  validateConfigObjectWithPlugins,
+} from "./validation.js";
 
 vi.mock("../channels/plugins/legacy-config.js", () => ({
   collectChannelLegacyConfigRules: () => [],
@@ -355,5 +359,75 @@ describe("config validation gateway.port policy", () => {
     // port 1 — valid TCP min
     const min = validateConfigObjectRaw({ gateway: { port: 1 } });
     expect(min.ok).toBe(true);
+  });
+});
+
+describe("config validation ambient heartbeat ownership", () => {
+  const validate = (raw: unknown) =>
+    validateConfigObjectWithPlugins(raw, {
+      pluginMetadataSnapshot: { manifestRegistry: { diagnostics: [], plugins: [] } },
+    });
+  const heartbeatOwnerWarnings = (raw: unknown) => {
+    const result = validate(raw);
+    expect(result.ok).toBe(true);
+    return result.warnings.filter(
+      (warning) => warning.path === "agents.defaults.heartbeat.agentId",
+    );
+  };
+
+  it("warns that heartbeats stay disabled for an ownerless explicit multi-agent roster", () => {
+    expect(
+      heartbeatOwnerWarnings({
+        agents: { ownership: "explicit", entries: { main: {}, ops: {} } },
+      }),
+    ).toEqual([
+      {
+        path: "agents.defaults.heartbeat.agentId",
+        message:
+          "Multi-agent config has no ambient heartbeat owner; heartbeats stay disabled until agents.defaults.heartbeat.agentId or agents.defaults.systemAgent.agentId is set.",
+      },
+    ]);
+  });
+
+  it.each([
+    {
+      name: "system owner",
+      cfg: {
+        agents: {
+          ownership: "explicit",
+          entries: { main: {}, ops: {} },
+          defaults: { systemAgent: { agentId: "ops" } },
+        },
+      },
+    },
+    {
+      name: "single-agent roster",
+      cfg: { agents: { ownership: "explicit", entries: { main: {} } } },
+    },
+    {
+      name: "per-agent heartbeat",
+      cfg: {
+        agents: {
+          ownership: "explicit",
+          entries: { main: {}, ops: { heartbeat: { every: "30m" } } },
+        },
+      },
+    },
+    {
+      name: "broadcast heartbeat defaults",
+      cfg: {
+        agents: {
+          ownership: "explicit",
+          entries: { main: {}, ops: {} },
+          defaults: { heartbeat: { every: "30m" } },
+        },
+      },
+    },
+    {
+      name: "legacy default marker",
+      cfg: { agents: { entries: { main: { default: true }, ops: {} } } },
+    },
+  ])("does not warn for a $name", ({ cfg }) => {
+    expect(heartbeatOwnerWarnings(cfg)).toEqual([]);
   });
 });

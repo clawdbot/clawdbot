@@ -125,7 +125,11 @@ async function resolveActiveRecallForRun(
 
 function forgetActiveRecallRun(runId: string | undefined): void {
   if (runId) {
-    activeRecallRuns.delete(runId);
+    for (const key of activeRecallRuns.keys()) {
+      if (key === runId || key.startsWith(`${runId}:`)) {
+        activeRecallRuns.delete(key);
+      }
+    }
   }
 }
 
@@ -134,8 +138,29 @@ function buildCacheKey(params: {
   sessionKey?: string;
   sessionId?: string;
   query: string;
+  authorityFingerprint: string;
+  memorySlot?: string;
+  activeProjectKeys?: string[];
+  modelProviderId?: string;
+  modelId?: string;
+  recallToolNames: string[];
+  resourceScope?: string;
 }): string {
-  const hash = crypto.createHash("sha1").update(params.query).digest("hex");
+  const hash = crypto
+    .createHash("sha256")
+    .update(
+      JSON.stringify({
+        query: params.query,
+        authorityFingerprint: params.authorityFingerprint,
+        memorySlot: params.memorySlot,
+        activeProjectKeys: [...(params.activeProjectKeys ?? [])].toSorted(),
+        modelProviderId: params.modelProviderId,
+        modelId: params.modelId,
+        recallToolNames: [...params.recallToolNames].toSorted(),
+        resourceScope: params.resourceScope,
+      }),
+    )
+    .digest("hex");
   return `${params.agentId}:${params.sessionKey ?? params.sessionId ?? "none"}:${hash}`;
 }
 

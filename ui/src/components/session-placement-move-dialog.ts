@@ -7,8 +7,8 @@ import {
   renderCloudProfileMenuItems,
   renderSessionMenuItem,
 } from "../pages/new-session/cloud-target.ts";
-import type { DraftCloudProfile, DraftNode } from "../pages/new-session/discovery.ts";
-import { isDraftNodeSessionEligible } from "../pages/new-session/discovery.ts";
+import type { DevicePlacementOption } from "../pages/new-session/device-placement.ts";
+import type { DraftCloudProfile } from "../pages/new-session/discovery.ts";
 import { DraftCloudMachineState } from "../pages/new-session/draft-cloud-machine-state.ts";
 import "../styles/new-session.css";
 import { icons } from "./icons.ts";
@@ -16,13 +16,14 @@ import "./modal-dialog.ts";
 
 type Catalog = {
   profiles: readonly DraftCloudProfile[];
-  nodes: readonly DraftNode[];
+  devices: readonly DevicePlacementOption[];
 };
 
 type Options = {
   sessionLabel: string;
   activeRun: boolean;
   deviceDisabledReason?: string;
+  profileDisabledReason?: (profile: DraftCloudProfile) => string | undefined;
   loadCatalog: () => Promise<Catalog>;
 };
 
@@ -52,7 +53,7 @@ export function showSessionPlacementMoveDialog(
   return new Promise((resolve) => {
     let loading = true;
     let loadError: string | null = null;
-    let catalog: Catalog = { profiles: [], nodes: [] };
+    let catalog: Catalog = { profiles: [], devices: [] };
     let selected: SessionMoveTarget = { kind: "gateway" };
     const cloudMachines = new DraftCloudMachineState();
 
@@ -83,7 +84,6 @@ export function showSessionPlacementMoveDialog(
 
     function paint() {
       const selectedKey = targetKey(selected);
-      const nodes = catalog.nodes.filter(isDraftNodeSessionEligible);
       render(
         html`
           <openclaw-modal-dialog
@@ -118,29 +118,33 @@ export function showSessionPlacementMoveDialog(
                           },
                           false,
                         )}
-                        ${nodes.length > 0
+                        ${catalog.devices.length > 0
                           ? html`
                               <div class="new-session-page__menu-title">
                                 ${t("newSession.yourDevices")}
                               </div>
-                              ${nodes.map((node) =>
-                                renderSessionMenuItem(
+                              ${catalog.devices.map((device) => {
+                                const disabledReason =
+                                  options.deviceDisabledReason ?? device.disabledReason;
+                                return renderSessionMenuItem(
                                   {
-                                    value: `device:${node.nodeId}`,
-                                    label: node.displayName,
+                                    value: `device:${device.deviceId}`,
+                                    label: device.label,
+                                    sub: device.subtitle,
                                     icon: icons.monitor,
                                     facts: options.deviceDisabledReason
                                       ? [options.deviceDisabledReason]
-                                      : undefined,
-                                    checked: selectedKey === `device:${node.nodeId}`,
-                                    disabled: Boolean(options.deviceDisabledReason),
-                                    title: options.deviceDisabledReason,
+                                      : device.facts,
+                                    checked: selectedKey === `device:${device.deviceId}`,
+                                    disabled:
+                                      Boolean(options.deviceDisabledReason) || !device.selectable,
+                                    title: disabledReason,
                                     onSelect: () =>
-                                      select({ kind: "device", deviceId: node.nodeId }),
+                                      select({ kind: "device", deviceId: device.deviceId }),
                                   },
                                   false,
-                                ),
-                              )}
+                                );
+                              })}
                             `
                           : nothing}
                         ${catalog.profiles.length > 0
@@ -162,6 +166,7 @@ export function showSessionPlacementMoveDialog(
                                     selectedId: profileSelected ? profile.id : "",
                                     submitting: false,
                                     icon: icons.server,
+                                    profileDisabledReason: options.profileDisabledReason,
                                     onSelect: (profileId) => select({ kind: "profile", profileId }),
                                   })}
                                   ${profileSelected && machines.length > 0

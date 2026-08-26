@@ -19,6 +19,7 @@ type SessionMenuData = {
 };
 type SessionMenuElement = HTMLElement & {
   anchor: { x: number; y: number };
+  compact: boolean;
   lastActive: string;
   session: SessionMenuData;
   ownerOptions: readonly SessionOwnerOption[];
@@ -37,6 +38,7 @@ afterEach(() => {
 async function mountMenu(
   options: {
     session?: Partial<SessionMenuData>;
+    compact?: boolean;
     work?: SessionMenuWork | null;
     workboard?: { captured: boolean; busy: boolean } | null;
     archiveAllowed?: boolean;
@@ -73,6 +75,7 @@ async function mountMenu(
   render(
     html`<openclaw-session-menu
       .session=${session}
+      .compact=${options.compact ?? false}
       .selectionCount=${options.selectionCount ?? 1}
       .lastActive=${options.lastActive ?? "57d"}
       .anchor=${{ x: 100, y: 100 }}
@@ -130,6 +133,16 @@ function menuItem(menu: ParentNode, label: string): SessionMenuItem {
 
 function iconChoices(menu: ParentNode): HTMLButtonElement[] {
   return Array.from(menu.querySelectorAll<HTMLButtonElement>(".session-menu__icon-choice"));
+}
+
+function selectMenuValue(menu: SessionMenuElement, value: string) {
+  menu.querySelector("wa-dropdown")?.dispatchEvent(
+    new CustomEvent("wa-select", {
+      bubbles: true,
+      composed: true,
+      detail: { item: { value } },
+    }),
+  );
 }
 
 describe("session menu", () => {
@@ -226,6 +239,53 @@ describe("session menu", () => {
       "Archive session",
       "Delete…",
     ]);
+  });
+
+  it("drills into compact menu groups without rendering side flyouts", async () => {
+    const ada = { type: "human", id: "profile-ada", label: "Ada" } as const;
+    const research = { type: "agent", id: "research:one", label: "Research owner" } as const;
+    const menu = await mountMenu({
+      compact: true,
+      groups: ["Research", "Operations"],
+      ownerOptions: [ada, research],
+      selfOwner: ada,
+      currentOwnerId: research.id,
+      work: {
+        loading: false,
+        pullRequestUrl: "https://example.test/pr",
+        worktreePath: "/work/openclaw",
+      },
+    });
+
+    expect(menu.querySelector("[slot='submenu']")).toBeNull();
+    expect(menuItemLabels(menu)).toContain("Open in");
+    expect(menuItemLabels(menu)).toContain("Assign to…");
+    expect(menuItemLabels(menu)).toContain("Set icon");
+    expect(menuItemLabels(menu)).toContain("Move to group");
+
+    selectMenuValue(menu, "compact:open-open-in");
+    await menu.updateComplete;
+    expect(menuItemLabels(menu)).toEqual(["Back", "Cursor", "VS Code", "Windsurf", "Zed"]);
+
+    selectMenuValue(menu, "compact:back");
+    await menu.updateComplete;
+    selectMenuValue(menu, "compact:open-assign-owner");
+    await menu.updateComplete;
+    expect(menuItemLabels(menu)).toEqual(["Back", "Ada", "Research owner"]);
+
+    selectMenuValue(menu, "compact:back");
+    await menu.updateComplete;
+    selectMenuValue(menu, "compact:open-icon");
+    await menu.updateComplete;
+    expect(menuItemLabels(menu)).toEqual(["Back"]);
+    expect(menu.querySelector(".session-menu__icon-picker")?.getAttribute("slot")).toBeNull();
+
+    selectMenuValue(menu, "compact:back");
+    await menu.updateComplete;
+    selectMenuValue(menu, "compact:open-group");
+    await menu.updateComplete;
+    expect(menuItemLabels(menu)).toEqual(["Back", "Research", "Operations", "New group…"]);
+    expect(menu.querySelector("[slot='submenu']")).toBeNull();
   });
 
   it("omits root placement actions for child sessions", async () => {
@@ -664,8 +724,9 @@ describe("session menu", () => {
 
     const openPr = menuItem(menu, "Open PR");
     expect(openPr.disabled).toBe(false);
+    expect(openPr.hasAttribute("data-new-tab-action")).toBe(true);
     expect(openPr.querySelector(".session-menu__shortcut")?.textContent).toBe("G");
-    expect(menuItem(menu, "Open in").disabled).toBe(true);
+    expect(menuItemLabels(menu)).not.toContain("Open in");
 
     document.dispatchEvent(
       new KeyboardEvent("keydown", { key: "g", bubbles: true, cancelable: true }),

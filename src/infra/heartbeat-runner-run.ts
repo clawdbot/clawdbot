@@ -143,21 +143,15 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
   try {
     await heartbeatTyping?.onReplyStart();
     const agentRun = await invokeHeartbeatAgentRun(opts, wake, prepared);
-    if (agentRun.kind === "busy") {
-      emitHeartbeatEvent({
-        status: "skipped",
-        reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
-        durationMs: Date.now() - startedAt,
-      });
-      return { status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT };
-    }
-    if (agentRun.kind === "preempted") {
-      emitHeartbeatEvent({
-        status: "skipped",
-        reason: HEARTBEAT_SKIP_PREEMPTED,
-        durationMs: Date.now() - startedAt,
-      });
-      return { status: "skipped", reason: HEARTBEAT_SKIP_PREEMPTED };
+    if (agentRun.kind !== "completed") {
+      const reason =
+        agentRun.kind === "busy"
+          ? HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT
+          : agentRun.kind === "preempted"
+            ? HEARTBEAT_SKIP_PREEMPTED
+            : "agent-runner-cancelled";
+      emitHeartbeatEvent({ status: "skipped", reason, durationMs: Date.now() - startedAt });
+      return { status: "skipped", reason };
     }
     const outcome = classifyHeartbeatAgentOutcome({
       agentRun,

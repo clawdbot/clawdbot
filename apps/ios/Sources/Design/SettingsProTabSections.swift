@@ -1515,7 +1515,6 @@ extension SettingsProTab {
             self.settingsToggle("Discovery Debug Logs", isOn: self.$discoveryDebugLogsEnabled) { enabled in
                 self.gatewayController.setDiscoveryDebugLoggingEnabled(enabled)
             }
-            self.settingsToggle("Debug Screen Status", isOn: self.$canvasDebugStatusEnabled)
             NavigationLink {
                 GatewayDiscoveryDebugLogView()
             } label: {

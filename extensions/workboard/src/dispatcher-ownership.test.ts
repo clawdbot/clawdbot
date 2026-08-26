@@ -567,7 +567,7 @@ describe("Workboard dispatcher ownership", () => {
         status: "ready",
         workspaceAccess: { unrestricted: true },
       });
-      vi.spyOn(store, "enrichExecutionAssociation").mockRejectedValue(
+      vi.spyOn(store, "acceptExecutionLaunch").mockRejectedValue(
         new Error("execution enrichment unavailable"),
       );
       let provisionalRunId = "";
@@ -583,6 +583,15 @@ describe("Workboard dispatcher ownership", () => {
             status: "running",
             sessionKey: input.sessionKey,
             runId: provisionalRunId,
+          },
+          metadata: {
+            automation: {
+              launch: {
+                phase: "prepared",
+                requestedSessionKey: input.sessionKey,
+                provisionalRunId,
+              },
+            },
           },
         });
         return { sessionKey: canonicalSessionKey, runId: "accepted-run" };
@@ -619,6 +628,7 @@ describe("Workboard dispatcher ownership", () => {
         runId: provisionalRunId,
         execution: { status: "running", runId: provisionalRunId },
         metadata: {
+          automation: { launch: { phase: "prepared", provisionalRunId } },
           claim: { ownerId: "workboard-dispatcher" },
           workerLogs: [expect.objectContaining({ runId: "accepted-run" })],
         },
@@ -641,6 +651,56 @@ describe("Workboard dispatcher ownership", () => {
       expect(run).toHaveBeenCalledOnce();
     },
   );
+
+  it("marks a prepared launch accepted after Gateway acceptance", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({
+      title: "Worker with durable acceptance",
+      status: "ready",
+      workspaceAccess: { unrestricted: true },
+    });
+    const canonicalSessionKey = `agent:worker:subagent:workboard-default-${card.id}`;
+    let provisionalRunId = "";
+    const run = vi.fn().mockImplementation(async (input) => {
+      provisionalRunId = input.idempotencyKey;
+      await expect(store.get(card.id)).resolves.toMatchObject({
+        sessionKey: input.sessionKey,
+        runId: provisionalRunId,
+        metadata: {
+          automation: {
+            launch: {
+              phase: "prepared",
+              requestedSessionKey: input.sessionKey,
+              provisionalRunId,
+            },
+          },
+        },
+      });
+      return { sessionKey: canonicalSessionKey, runId: "accepted-run" };
+    });
+
+    await dispatchAndStartWorkboardCards({
+      store,
+      subagent: { run },
+      options: { maxStarts: 1 },
+    });
+
+    await expect(store.get(card.id)).resolves.toMatchObject({
+      sessionKey: canonicalSessionKey,
+      runId: "accepted-run",
+      metadata: {
+        automation: {
+          launch: {
+            phase: "accepted",
+            requestedSessionKey: expect.any(String),
+            provisionalRunId,
+            acceptedSessionKey: canonicalSessionKey,
+            acceptedRunId: "accepted-run",
+          },
+        },
+      },
+    });
+  });
 
   it.each(["backlog", "todo", "ready"] as const)(
     "starts an exact dashboard card from %s",

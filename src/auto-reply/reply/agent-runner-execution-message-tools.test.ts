@@ -71,11 +71,12 @@ describe("executeAgentTurn: message tool progress", () => {
         },
       });
       await params.onAgentEvent?.({
-        stream: "assistant",
+        stream: "item",
         data: {
-          phase: "commentary",
+          kind: "preamble",
+          phase: "update",
           itemId: "commentary-1",
-          text: "This must stay suppressed.",
+          progressText: "This must stay suppressed.",
         },
       });
       releaseItemEvent?.();

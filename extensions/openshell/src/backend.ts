@@ -59,7 +59,7 @@ function buildOpenShellDirectoryUploadArgs(params: {
     "--no-git-ignore",
     params.sandboxName,
     params.localPath,
-    normalizeRemotePath(params.remotePath),
+    `${normalizeRemotePath(params.remotePath)}/`,
   ];
 }
 
@@ -230,24 +230,27 @@ export function createOpenShellSandboxBackendManager(params: {
       };
       const result = await runOpenShellCli({
         context: execContext,
-        args: ["sandbox", "get", entry.containerName],
+        args: ["sandbox", "get", entry.containerName, "--output", "json"],
       });
       const configuredSource = execContext.config.from;
       return {
-        running: result.code === 0,
+        running: result.code === 0 && parseOpenShellSandboxPhase(result.stdout) === "Ready",
         actualConfigLabel: entry.image,
         configLabelMatch: entry.image === configuredSource,
       };
     },
-    async removeRuntime({ entry }) {
+    async removeRuntime({ entry, config }) {
       const execContext: OpenShellExecContext = {
-        config: params.pluginConfig,
+        config: resolveOpenShellPluginConfigFromConfig(config, params.pluginConfig),
         sandboxName: entry.containerName,
       };
-      await runOpenShellCli({
+      const result = await runOpenShellCli({
         context: execContext,
         args: ["sandbox", "delete", entry.containerName],
       });
+      if (result.code !== 0) {
+        throw new Error(result.stderr.trim() || "openshell sandbox delete failed");
+      }
     },
   };
 }
@@ -276,60 +279,12 @@ async function createOpenShellSandboxBackend(params: {
     remoteWorkspaceDir: params.pluginConfig.remoteWorkspaceDir,
     remoteAgentWorkspaceDir: params.pluginConfig.remoteAgentWorkspaceDir,
   });
-
-  return {
-    id: "openshell",
-    runtimeId: sandboxName,
-    runtimeLabel: sandboxName,
-    workdir: params.pluginConfig.remoteWorkspaceDir,
-    env: params.createParams.cfg.docker.env,
-    mode: params.pluginConfig.mode,
-    configLabel: params.pluginConfig.from,
-    configLabelKind: "Source",
-    workdirValidation: "backend",
-    validateWorkdir: async (workdir) => await impl.validateWorkdir(workdir),
-    discardPreparedWorkdir: (workdir) => impl.discardPreparedWorkdir(workdir),
-    workdirRoots: [
-      params.pluginConfig.remoteWorkspaceDir,
-      params.pluginConfig.remoteAgentWorkspaceDir,
-    ],
-    buildExecSpec: async ({ command, workdir, env, usePty }) => {
-      const pending = await impl.prepareExec({ command, workdir, env, usePty });
-      return {
-        argv: pending.argv,
-        env: buildOpenShellSshExecEnv(),
-        stdinMode: "pipe-open",
-        finalizeToken: pending.token,
-      };
-    },
-    finalizeExec: async ({ token }) => {
-      await impl.finalizeExec(token as PendingExec | undefined);
-    },
-    runShellCommand: async (command) => await impl.runRemoteShellScript(command),
-    createFsBridge: ({ sandbox }) =>
-      params.pluginConfig.mode === "remote"
-        ? createRemoteShellSandboxFsBridge({
-            sandbox,
-            runtime: impl.asHandle(),
-          })
-        : createOpenShellFsBridge({
-            sandbox,
-            backend: impl.asHandle(),
-          }),
-    remoteWorkspaceDir: params.pluginConfig.remoteWorkspaceDir,
-    remoteAgentWorkspaceDir: params.pluginConfig.remoteAgentWorkspaceDir,
-    runRemoteShellScript: async (command) => await impl.runRemoteShellScript(command),
-    mkdirpRemotePath: async (remotePath, signal) => await impl.mkdirpRemotePath(remotePath, signal),
-    removeRemotePath: async (remotePath, removeParams) =>
-      await impl.removeRemotePath(remotePath, removeParams),
-    renameRemotePath: async (fromRemotePath, toRemotePath, signal) =>
-      await impl.renameRemotePath(fromRemotePath, toRemotePath, signal),
-    syncLocalPathToRemote: async (localPath, remotePath) =>
-      await impl.syncLocalPathToRemote(localPath, remotePath),
-  };
+  return impl.asHandle();
 }
 
 class OpenShellSandboxBackendImpl {
+  // Filesystem bridges must retain the same lifecycle owner returned by the factory.
+  private handle: OpenShellSandboxBackend | null = null;
   private ensurePromise: Promise<void> | null = null;
   private preparedRemoteWorkspaceForNextExec: {
     workdir: string;
@@ -348,7 +303,10 @@ class OpenShellSandboxBackendImpl {
   ) {}
 
   asHandle(): OpenShellSandboxBackend {
-    return {
+    if (this.handle) {
+      return this.handle;
+    }
+    const handle: OpenShellSandboxBackend = {
       id: "openshell",
       runtimeId: this.params.execContext.sandboxName,
       runtimeLabel: this.params.execContext.sandboxName,
@@ -380,11 +338,11 @@ class OpenShellSandboxBackendImpl {
         this.params.execContext.config.mode === "remote"
           ? createRemoteShellSandboxFsBridge({
               sandbox,
-              runtime: this.asHandle(),
+              runtime: handle,
             })
           : createOpenShellFsBridge({
               sandbox,
-              backend: this.asHandle(),
+              backend: handle,
             }),
       runRemoteShellScript: async (command) => await this.runRemoteShellScript(command),
       mkdirpRemotePath: async (remotePath, signal) =>
@@ -396,6 +354,8 @@ class OpenShellSandboxBackendImpl {
       syncLocalPathToRemote: async (localPath, remotePath) =>
         await this.syncLocalPathToRemote(localPath, remotePath),
     };
+    this.handle = handle;
+    return handle;
   }
 
   async prepareExec(params: {
@@ -663,7 +623,7 @@ class OpenShellSandboxBackendImpl {
         "--no-git-ignore",
         this.params.execContext.sandboxName,
         localPath,
-        path.posix.dirname(remotePath),
+        remotePath,
       ],
       cwd: this.params.createParams.workspaceDir,
     });
@@ -733,6 +693,9 @@ class OpenShellSandboxBackendImpl {
     }
     if (this.params.legacyRuntimeAdopted) {
       throw this.buildLegacyRuntimeUnavailableError(getResult.stderr.trim());
+    }
+    if (!/\bsandbox not found\b/iu.test(getResult.stderr)) {
+      throw new Error(getResult.stderr.trim() || "openshell sandbox get failed");
     }
     const createArgs = [
       "sandbox",
@@ -918,6 +881,7 @@ class OpenShellSandboxBackendImpl {
         await stageDirectoryContents({
           sourceDir: localPath,
           targetDir: stagedRoot,
+          excludeDirs: DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS,
         });
         const stagedEntries = (await fs.readdir(stagedRoot)).toSorted();
         for (const entry of stagedEntries) {
@@ -1028,6 +992,18 @@ function parseOpenShellSandboxPhasePage(
       }
     }
     return { count: parsed.length };
+  } catch {
+    return undefined;
+  }
+}
+
+function parseOpenShellSandboxPhase(stdout: string): string | undefined {
+  try {
+    const parsed: unknown = JSON.parse(stdout);
+    if (typeof parsed !== "object" || parsed === null || !("phase" in parsed)) {
+      return undefined;
+    }
+    return typeof parsed.phase === "string" ? parsed.phase : undefined;
   } catch {
     return undefined;
   }

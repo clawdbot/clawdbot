@@ -34,7 +34,7 @@ import {
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildChannelAccountBindings, resolvePreferredAccountId } from "../routing/bindings.js";
-import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { ExitError, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import {
   buildCredentialsRequiredHealthDiagnostic,
   buildRateLimitedHealthDiagnostic,
@@ -394,24 +394,6 @@ export async function healthCommand(
         runtime.log(`  ${channelId}: ${probes.join(", ") || "(none)"}`);
       }
     }
-    const channelAccountFallbacks = Object.fromEntries(
-      displayPlugins.map((plugin) => {
-        const accountIds = plugin.config.listAccountIds(cfg);
-        const defaultAccountId = resolveChannelDefaultAccountId({
-          plugin,
-          cfg,
-          accountIds,
-        });
-        const preferred = resolvePreferredAccountId({
-          accountIds,
-          defaultAccountId,
-          boundAccounts: defaultAgentId
-            ? (channelBindings.get(plugin.id)?.get(defaultAgentId) ?? [])
-            : [],
-        });
-        return [plugin.id, [preferred] as string[]] as const;
-      }),
-    );
     const accountIdsByChannel = (() => {
       const entries = displayAgents.length > 0 ? displayAgents : resolvedAgents;
       const byChannel: Record<string, string[]> = {};
@@ -427,11 +409,6 @@ export async function healthCommand(
         }
         if (accountIds.length > 0) {
           byChannel[channelId] = accountIds;
-        }
-      }
-      for (const [channelId, fallbackIds] of Object.entries(channelAccountFallbacks)) {
-        if (!byChannel[channelId] || byChannel[channelId].length === 0) {
-          byChannel[channelId] = fallbackIds;
         }
       }
       return byChannel;
@@ -561,6 +538,23 @@ export async function healthCommand(
       }
     }
   }
+}
+
+/**
+ * Runs `healthCommand` inside a host flow (wizard/onboard/doctor). The command's
+ * CLI-style `runtime.exit(1)` diagnostic paths surface as a thrown `ExitError`,
+ * so the host reports the failure and keeps running instead of dying mid-flow.
+ */
+export async function healthCommandNonExiting(
+  opts: Parameters<typeof healthCommand>[0],
+  runtime: RuntimeEnv,
+): Promise<void> {
+  await healthCommand(opts, {
+    ...runtime,
+    exit: (code) => {
+      throw new ExitError(code);
+    },
+  });
 }
 
 export async function readNonObservingHealthConfig(): Promise<OpenClawConfig> {

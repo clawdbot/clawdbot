@@ -3,6 +3,7 @@
 // derive from this walk, so a gate cannot block silently.
 import { t } from "../../i18n/index.ts";
 import type { SessionMethodAccess } from "../../lib/session-method-access.ts";
+import type { SessionPlacementTarget } from "../../lib/sessions/session-placement-recovery.ts";
 import * as catalog from "./catalog-target.ts";
 import { isWorktreeNameValid } from "./create-params.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
@@ -28,14 +29,15 @@ type ReasonedSubmitGate =
   | "disconnected"
   | "access"
   | "folder"
-  | "cloud-recovery"
+  | "placement-recovery"
   | "agents"
   | "agent-not-allowed"
-  | "node"
-  | "node-runtime"
+  | "device"
+  | "device-runtime"
   | "cloud"
   | "worktree-unavailable"
   | "worktree-name"
+  | "terminal-capabilities"
   | "terminal-folder";
 export type NewSessionSubmitBlock =
   | { gate: SilentSubmitGate; reason?: undefined }
@@ -48,6 +50,20 @@ export const PAGE_RENDERED_GATES: ReadonlySet<string> = new Set([
   "worktree-name",
 ]);
 
+export function resolveCloudPlacementDisabledReason(place: DraftPlaceState): string | undefined {
+  const runtimeReason = place.modelControl.cloudRuntimeUnsupportedReason();
+  if (runtimeReason) {
+    return runtimeReason;
+  }
+  if (place.repository.kind === "checking") {
+    return t("newSession.checkingGit");
+  }
+  if (place.repository.kind === "unavailable" && !place.worktreeAvailable()) {
+    return t("newSession.gitCheckUnavailable");
+  }
+  return place.worktreeAvailable() ? undefined : t("newSession.cloudRequiresWorktree");
+}
+
 /** Facts the gate walk reads from DraftSubmissionFlow, kept read-only. */
 type SubmitGateHost = {
   readonly gatewayState: DraftGatewayState;
@@ -58,11 +74,12 @@ type SubmitGateHost = {
   readonly submissionOutcomeUnknown: SubmissionOutcomeReason | null;
   readonly pendingAttachmentReads: number;
   readonly hasDraftAttachments: boolean;
+  readonly hasCapabilityOverrides: boolean;
   submissionSnapshot(): DraftSubmissionSnapshot;
   requiresModelSetup(): boolean;
   submissionAccess(): SessionMethodAccess;
   terminalStartAccess(): SessionMethodAccess;
-  cloudProfileForSubmission(): string;
+  placementTargetForSubmission(): SessionPlacementTarget | null;
   cloudDisabledReason(): string | undefined;
   cloudRuntimeUnsupportedReason(): string | undefined;
 };
@@ -106,7 +123,7 @@ export function resolveNewSessionSubmitBlock(
       reason: t(
         host.submissionOutcomeUnknown === "gateway-changed"
           ? "newSession.createOutcomeUnknown"
-          : "newSession.cloudSetupInterrupted",
+          : "newSession.placementSetupInterrupted",
       ),
     };
   }
@@ -122,6 +139,12 @@ export function resolveNewSessionSubmitBlock(
   if (!access.allowed) {
     return { gate: "access", reason: access.reason };
   }
+  if (kind === "terminal" && host.hasCapabilityOverrides) {
+    return {
+      gate: "terminal-capabilities",
+      reason: t("newSession.terminalCapabilityOverridesUnsupported"),
+    };
+  }
   if (place.folderSubmissionBlocked()) {
     return { gate: "folder", reason: t("newSession.checkingPlace") };
   }
@@ -129,16 +152,16 @@ export function resolveNewSessionSubmitBlock(
     const retryReady = Boolean(
       host.pendingPlacement.retryAllowed &&
       client.recoveryScopeReady &&
-      host.cloudProfileForSubmission() &&
+      host.placementTargetForSubmission() &&
       host.pendingPlacement.agentId &&
       host.pendingPlacement.gatewayUrl === connection.connection.gatewayUrl &&
       host.pendingPlacement.recoveryScope === client.recoveryScope,
     );
     // Recovery retries own the remaining draft state; the place gates
-    // below intentionally do not apply to a restored cloud draft.
+    // below intentionally do not apply to a restored placement draft.
     return retryReady
       ? emptyDraftBlock(host, kind, pendingPlacementActive)
-      : { gate: "cloud-recovery", reason: t("newSession.cloudNotReady") };
+      : { gate: "placement-recovery", reason: t("newSession.placementNotReady") };
   }
   if (place.agents().length === 0) {
     return { gate: "agents", reason: t("newSession.agentsUnavailable") };
@@ -146,14 +169,21 @@ export function resolveNewSessionSubmitBlock(
   if (!catalog.allowsSelectedAgent(snapshot.data, place.selectedAgent())) {
     return { gate: "agent-not-allowed", reason: t("newSession.catalogUnavailable") };
   }
-  if (!place.execNodeReady()) {
-    return { gate: "node", reason: t("newSession.nodeUnavailable") };
+  if (!place.devicePlacementReady()) {
+    return {
+      gate: "device",
+      reason: place.devicePlacementDisabledReason() ?? t("newSession.nodeUnavailable"),
+    };
   }
   const deviceRuntimeUnsupportedReason = place.modelControl.devicePlacementUnsupportedReason();
-  if (place.execNode && deviceRuntimeUnsupportedReason) {
-    return { gate: "node-runtime", reason: deviceRuntimeUnsupportedReason };
+  if ((place.deviceId || place.autoDevice) && deviceRuntimeUnsupportedReason) {
+    return { gate: "device-runtime", reason: deviceRuntimeUnsupportedReason };
   }
-  const cloudProfileId = host.cloudProfileForSubmission();
+  const placementTarget = host.placementTargetForSubmission();
+  if (placementTarget && (!client.recoveryScope || !client.recoveryScopeReady)) {
+    return { gate: "placement-recovery", reason: t("newSession.placementNotReady") };
+  }
+  const cloudProfileId = placementTarget?.kind === "profile" ? placementTarget.profileId : "";
   if (
     cloudProfileId &&
     (!client.recoveryScope ||
@@ -166,11 +196,10 @@ export function resolveNewSessionSubmitBlock(
   ) {
     const reason =
       host.cloudDisabledReason() ??
-      (place.worktree ? t("newSession.cloudNotReady") : t("newSession.cloudRequiresWorktree"));
+      (place.worktree ? t("newSession.placementNotReady") : t("newSession.cloudRequiresWorktree"));
     return { gate: "cloud", reason };
   }
-  // worktreeAvailable() is already false when an exec node is selected, so
-  // this single gate also covers the node+worktree combination.
+  // Remote placements force a managed worktree; this gate owns repository readiness for both.
   if (place.worktree && !place.worktreeAvailable()) {
     return {
       gate: "worktree-unavailable",

@@ -1,5 +1,4 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { GatewaySessionRow } from "../../api/types.ts";
 import {
   loadChatMetadata,
   peekChatMetadata,
@@ -8,16 +7,19 @@ import {
 } from "../../lib/chat/chat-metadata-store.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { loadModelAuthStatus } from "../../lib/model-auth.ts";
+import { loadModels } from "../../lib/model-catalog-store.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { refreshChatAvatar, resolveAgentIdForSession } from "./chat-avatar.ts";
 import { applyRemoteSlashCommandsResult, refreshSlashCommands } from "./chat-commands.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { flushChatQueueForEvent } from "./chat-send-actions.ts";
-import { flushChatQueueAfterIdleSessionReconciliation } from "./chat-session.ts";
+import {
+  flushChatQueueAfterIdleSessionReconciliation,
+  refreshCurrentChatSessionList,
+} from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
-import { loadModels } from "./models.ts";
 import {
   reconcileChatRunFromCurrentSessionRow,
   reconcileChatRunFromSessionRow,
@@ -189,11 +191,16 @@ export async function refreshChatModelCatalogOnDemand(host: ChatPageHost): Promi
   try {
     const models = await loadModels(client, {
       agentId,
+      refreshIfDue: true,
       rejectOnFailure: true,
     });
     if (ownsRequest()) {
       host.chatModelCatalog = models;
       host.chatModelCatalogError = null;
+      // Full model discovery can complete after the session projection used at mount time.
+      // Refresh through the normal session owner so thinking/context metadata converges without
+      // letting the UI guess which provider- or runtime-specific levels are valid.
+      await refreshCurrentChatSessionList(host).catch(() => undefined);
     }
   } catch (error) {
     if (ownsRequest()) {
@@ -234,22 +241,28 @@ async function refreshChat(
     if (!history?.sessionInfo) {
       return;
     }
-    if (areUiSessionKeysEquivalent(history.sessionInfo.key, refreshedSessionKey)) {
-      host.selectedChatSessionArchived = history.sessionInfo.archived === true;
-      host.selectedChatSessionIncognito = history.sessionInfo.incognito === true;
-    }
-    const reconciled = host.sessions.reconcile(history.sessionInfo, history.defaults, {
-      resultAgentId: host.sessionsResultAgentId ?? refreshedAgentId,
+    host.sessions.reconcile(history.sessionInfo, history.defaults, {
+      resultAgentId: host.sessions.state.agentId ?? refreshedAgentId,
       selectedGlobalAgentId: refreshedAgentId,
+      sourceCanonicalListRevision: history.sourceCanonicalListRevision,
       // The routed chat remains visible after archive even though the active
       // roster excludes it. Keep its descriptor in shared session state until
       // navigation changes; otherwise the pane briefly falls back to the raw
       // key while the sidebar lineage reload catches up.
       archivedFilter: history.sessionInfo.archived === true ? "all" : host.sessionsArchivedFilter,
     });
-    const sessionsResult = reconciled ? host.sessions.state.result : host.sessionsResult;
-    if (reconciled) {
-      host.sessionsResult = sessionsResult;
+    host.sessionsResult = host.sessions.state.result;
+    host.sessionsResultAgentId = host.sessions.state.agentId;
+    const sessionsResult = host.sessions.state.result;
+    const sessionInfo = sessionsResult?.sessions.find(
+      (row) =>
+        areUiSessionKeysEquivalent(row.key, history.sessionInfo?.key) ||
+        areUiSessionKeysEquivalent(row.key, refreshedSessionKey),
+    );
+    const rosterRow = sessionInfo ?? history.sessionInfo;
+    if (areUiSessionKeysEquivalent(rosterRow.key, refreshedSessionKey)) {
+      host.selectedChatSessionArchived = rosterRow.archived === true;
+      host.selectedChatSessionIncognito = rosterRow.incognito === true;
     }
     const snapshotRunId = history.inFlightRun?.runId?.trim();
     const activeRunIds = history.sessionInfo.activeRunIds;
@@ -264,11 +277,6 @@ async function refreshChat(
       // timestamp may still describe its prior terminal state during remount.
       return;
     }
-    const sessionInfo = sessionsResult?.sessions.find(
-      (row: GatewaySessionRow) =>
-        areUiSessionKeysEquivalent(row.key, history.sessionInfo?.key) ||
-        row.key === refreshedSessionKey,
-    );
     if (!sessionInfo) {
       return;
     }

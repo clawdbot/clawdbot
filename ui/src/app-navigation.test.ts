@@ -306,7 +306,8 @@ describe("subtitleForRoute", () => {
       "memory-import": "Bring Codex and Claude Code memory into an agent workspace.",
       notifications: "Browser push notifications from your gateway.",
       security: "Gateway auth, exec policy, tool profile, and approvals.",
-      secrets: "Secret values are hidden after saving. Env var values stay visible here.",
+      secrets:
+        "Choose protected, write-only secrets or intentionally agent-readable Gateway environment values.",
       advanced: "Every remaining config section, plus the raw file editor.",
       debug: "Snapshots, events, RPC.",
       logs: "Live gateway logs.",
@@ -493,6 +494,9 @@ describe("inferBasePathFromPathname", () => {
     // Real mount directories that merely contain a route-suffix keep working.
     expect(inferBasePathFromPathname("/ui/config")).toBe("/ui");
     expect(inferBasePathFromPathname("/ui/settings/appearance")).toBe("/ui");
+    expect(inferBasePathFromPathname("/focus/terminal")).toBe("");
+    expect(inferBasePathFromPathname("/openclaw/focus/dashboard/main")).toBe("/openclaw");
+    expect(inferBasePathFromPathname("/company/focus/focus/terminal")).toBe("/company/focus");
   });
 });
 

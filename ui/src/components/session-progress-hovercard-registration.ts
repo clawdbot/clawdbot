@@ -8,7 +8,7 @@ import {
 } from "./lazy-hovercard-registration.ts";
 import {
   SESSION_PROGRESS_HOVER_LINK_SELECTOR,
-  sessionProgressHoverAnchorFromEvent,
+  sessionProgressHoverTargetFromEvent,
 } from "./session-progress-hovercard-target.ts";
 
 const HOVERCARD_TAG = "openclaw-session-progress-hovercard-provider";
@@ -78,20 +78,20 @@ async function activateHovercard(event: Event, trigger: HovercardBootstrapTrigge
   ) {
     return;
   }
-  const anchor = sessionProgressHoverAnchorFromEvent(event);
-  if (!anchor || !bootstrap.providerFor(anchor)) {
+  const target = sessionProgressHoverTargetFromEvent(event);
+  if (!target || !bootstrap.providerFor(target)) {
     return;
   }
   await bootstrap.define();
-  const target = event.target;
+  const eventTarget = event.target;
   if (
-    !(target instanceof EventTarget) ||
-    !anchor.isConnected ||
-    !hovercardBootstrapIntentActive(anchor, trigger)
+    !(eventTarget instanceof EventTarget) ||
+    !target.isConnected ||
+    !hovercardBootstrapIntentActive(target, trigger, true)
   ) {
     return;
   }
-  target.dispatchEvent(
+  eventTarget.dispatchEvent(
     new Event(trigger === "pointer" ? "pointerover" : "focusin", {
       bubbles: true,
       composed: true,

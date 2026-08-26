@@ -11,6 +11,7 @@ import { clearAllCliSessions, getCliSessionBinding } from "../../agents/cli-sess
 import { resetRegisteredAgentHarnessSessions } from "../../agents/harness/registry.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../browser-lifecycle-cleanup.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
+import { conversationRouteContextFromMsgContext } from "../../config/sessions/conversation-route-context.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import {
   hasTerminalMainSessionTranscriptNewerThanRegistry,
@@ -51,6 +52,7 @@ import {
   DEFAULT_RESET_TRIGGERS,
   SESSION_TOTAL_TOKENS_VERSION,
   type GroupKeyResolution,
+  type InternalSessionEntry,
   type SessionEntry,
   type SessionScope,
 } from "../../config/sessions/types.js";
@@ -111,8 +113,7 @@ import { isResetAuthorizedForContext } from "./reset-authorization.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import {
   maybeRetireLegacyMainDeliveryRoute,
-  resolveLastChannelRaw,
-  resolveLastToRaw,
+  resolveSessionDeliveryRoute,
 } from "./session-delivery.js";
 import {
   createReplySessionEntryHandle,
@@ -384,7 +385,7 @@ function selectSessionModelOverride(
   };
 }
 
-function resolveReplySessionRolloverState(entry: SessionEntry): Partial<SessionEntry> {
+function resolveReplySessionRolloverState(entry: SessionEntry): Partial<InternalSessionEntry> {
   const preservedSelection = resolveResetPreservedSelection({ entry });
   return {
     thinkingLevel: entry.thinkingLevel,
@@ -822,17 +823,9 @@ async function initSessionStateAttemptLocked(
   const baseDeliveryContext = deliveryContextFromSession(baseEntry);
   const baseDeliveryRoute = sessionDeliveryRoute(baseEntry);
   const baseDeliveryOrigin = sessionDeliveryOrigin(baseEntry);
-  const lastChannelRaw = isSystemEvent
-    ? baseDeliveryContext?.channel
-    : resolveLastChannelRaw({
-        originatingChannelRaw,
-        persistedLastChannel: baseDeliveryContext?.channel,
-        sessionKey,
-        isInterSession,
-      });
-  const lastToRaw = isSystemEvent
-    ? baseDeliveryContext?.to
-    : resolveLastToRaw({
+  const deliveryRoute = isSystemEvent
+    ? { channel: baseDeliveryContext?.channel, to: baseDeliveryContext?.to }
+    : resolveSessionDeliveryRoute({
         originatingChannelRaw,
         originatingToRaw: ctx.OriginatingTo,
         toRaw: ctx.To,
@@ -841,6 +834,7 @@ async function initSessionStateAttemptLocked(
         sessionKey,
         isInterSession,
       });
+  const { channel: lastChannelRaw, to: lastToRaw } = deliveryRoute;
   const lastAccountIdRaw = isSystemEvent
     ? baseDeliveryContext?.accountId
     : resolveSessionDefaultAccountId({
@@ -1031,6 +1025,11 @@ async function initSessionStateAttemptLocked(
       }
     },
     previousEntry: previousSessionEntry,
+    ...(!isSystemEvent &&
+    sessionCtxForState.InboundAccessAuthorized === true &&
+    sessionCtxForState.ConversationRouteContextObserved === true
+      ? { routeContext: conversationRouteContextFromMsgContext(sessionCtxForState) ?? null }
+      : {}),
     retiredEntry: retiredLegacyMainDelivery,
     sessionEntry,
     sessionKey,

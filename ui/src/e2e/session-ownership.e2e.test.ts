@@ -6,6 +6,11 @@ import { expect as expectBrowser } from "playwright/test";
 import { afterEach, expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { openNewSessionPlusMenu, replaceGatewayClient } from "./new-session-page.test-support.ts";
+import {
+  avatarLabelCenterDelta,
+  routeAvatarFixtures,
+} from "./session-ownership-visuals.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI session ownership",
@@ -13,12 +18,32 @@ const suite = createControlUiE2eSuite({
 
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const uiProofArtifactDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "drafts-ux");
+const sessionOwnerProofArtifactDir = path.join(
+  process.cwd(),
+  ".artifacts",
+  "control-ui-e2e",
+  "session-owner-stack",
+);
 
 let page: Page | undefined;
-function sessionsList(owners: [string, string]) {
+function sessionsList(owners: [string, string], withAvatars = false) {
   const ownerFacet = [
-    { type: "human" as const, id: owners[0], label: "Ada" },
-    ...(owners[1] === owners[0] ? [] : [{ type: "human" as const, id: owners[1], label: "Bob" }]),
+    {
+      type: "human" as const,
+      id: owners[0],
+      label: "Ada",
+      ...(withAvatars ? { avatarUrl: `/api/users/${owners[0]}/avatar?v=1` } : {}),
+    },
+    ...(owners[1] === owners[0]
+      ? []
+      : [
+          {
+            type: "human" as const,
+            id: owners[1],
+            label: "Bob",
+            ...(withAvatars ? { avatarUrl: `/api/users/${owners[1]}/avatar?v=1` } : {}),
+          },
+        ]),
   ];
   return {
     count: 2,
@@ -67,6 +92,59 @@ function draftSessionsList() {
   return result;
 }
 
+function collaborativeSessionsList() {
+  const ada = {
+    type: "human" as const,
+    id: "profile-ada",
+    label: "Ada",
+    avatarUrl: "/api/users/profile-ada/avatar?v=1",
+  };
+  const bob = {
+    type: "human" as const,
+    id: "profile-bob",
+    label: "Bob",
+    avatarUrl: "/api/users/profile-bob/avatar?v=1",
+  };
+  const carol = { type: "human" as const, id: "profile-carol", label: "Carol" };
+  return {
+    count: 3,
+    owners: [ada, bob, carol],
+    defaults: { contextTokens: null, model: null, modelProvider: null },
+    path: "",
+    sessions: [
+      {
+        key: "agent:main:collaboration",
+        kind: "direct",
+        label: "Fix issue #127689",
+        createdActor: ada,
+        owner: { actor: ada },
+        participants: [bob],
+        participantCount: 1,
+        updatedAt: 3,
+      },
+      {
+        key: "agent:main:release-planning",
+        kind: "direct",
+        label: "Release planning",
+        createdActor: bob,
+        owner: { actor: bob },
+        participants: [ada, { type: "agent" as const, id: "research", label: "Research" }],
+        participantCount: 2,
+        updatedAt: 2,
+      },
+      {
+        key: "agent:main:single-owner",
+        kind: "direct",
+        label: "Single-owner baseline",
+        createdActor: carol,
+        owner: { actor: carol },
+        updatedAt: 1,
+      },
+    ],
+    ts: 1,
+  };
+}
+
 async function captureUiProof(targetPage: Page, fileName: string) {
   if (!captureUiProofEnabled) {
     return;
@@ -79,6 +157,17 @@ async function captureUiProof(targetPage: Page, fileName: string) {
   });
 }
 
+async function captureSessionOwnerProof(targetPage: Page, fileName: string) {
+  if (!captureUiProofEnabled) {
+    return;
+  }
+  await mkdir(sessionOwnerProofArtifactDir, { recursive: true });
+  await targetPage.locator(".sidebar-sessions").screenshot({
+    animations: "disabled",
+    path: path.join(sessionOwnerProofArtifactDir, fileName),
+  });
+}
+
 async function openSidebarSortMenu(targetPage: Page) {
   const filterAndSort = targetPage.getByRole("button", { name: "Filter & sort" });
   await expect.poll(() => filterAndSort.count(), { timeout: 2_000 }).toBe(1);
@@ -86,18 +175,6 @@ async function openSidebarSortMenu(targetPage: Page) {
   const menu = targetPage.locator(".sidebar-session-sort-menu");
   await menu.waitFor();
   return menu;
-}
-
-async function replaceGatewayClient(targetPage: Page) {
-  await targetPage.evaluate(() => {
-    const app = document.querySelector("openclaw-app") as HTMLElement & {
-      runtime?: { context: { gateway: { connect: () => void } } };
-    };
-    if (!app.runtime) {
-      throw new Error("OpenClaw application runtime is unavailable");
-    }
-    app.runtime.context.gateway.connect();
-  });
 }
 
 suite.define(() => {
@@ -109,10 +186,126 @@ suite.define(() => {
     page = undefined;
   });
 
+  it("keeps collaborative owner stacks legible without shifting session rows", async () => {
+    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const currentPage = await context.newPage();
+    page = currentPage;
+    await routeAvatarFixtures(context, currentPage, [
+      { id: "profile-ada", background: "#3f6f76", label: "A" },
+      { id: "profile-bob", background: "#985b42", label: "B" },
+    ]);
+    await installMockGateway(currentPage, {
+      hasMultipleSessionSharingIdentities: true,
+      sessionKey: "agent:main:collaboration",
+      historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
+      methodResponses: { "sessions.list": collaborativeSessionsList() },
+    });
+
+    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
+    const collaborativeRow = currentPage.locator('[data-session-key="agent:main:collaboration"]');
+    const overflowRow = currentPage.locator('[data-session-key="agent:main:release-planning"]');
+    const singleOwnerRow = currentPage.locator('[data-session-key="agent:main:single-owner"]');
+    await collaborativeRow.waitFor();
+    await overflowRow.waitFor();
+    await singleOwnerRow.waitFor();
+    await expect.poll(() => collaborativeRow.locator(".session-owner-stack img").count()).toBe(2);
+    await expect
+      .poll(() =>
+        collaborativeRow
+          .locator(".session-owner-stack img")
+          .evaluateAll((images) =>
+            images.every(
+              (image) =>
+                image instanceof HTMLImageElement && image.complete && image.naturalWidth > 0,
+            ),
+          ),
+      )
+      .toBe(true);
+
+    const geometry = await collaborativeRow.evaluate((row) => {
+      const stack = row.querySelector<HTMLElement>(".session-owner-stack");
+      const back = row.querySelector<HTMLElement>(".session-owner-stack__back .viewer-avatar");
+      const front = row.querySelector<HTMLElement>(".session-owner-stack__front");
+      const slot = row.querySelector<HTMLElement>(".sidebar-session-indicator");
+      const text = row.querySelector<HTMLElement>(".sidebar-recent-session__text");
+      if (!stack || !back || !front || !slot || !text) {
+        throw new Error("expected complete collaborative session row");
+      }
+      const stackBounds = stack.getBoundingClientRect();
+      const backBounds = back.getBoundingClientRect();
+      const frontBounds = front.getBoundingClientRect();
+      const slotBounds = slot.getBoundingClientRect();
+      const textBounds = text.getBoundingClientRect();
+      return {
+        backSize: [backBounds.width, backBounds.height],
+        centerDelta:
+          stackBounds.left + stackBounds.width / 2 - (slotBounds.left + slotBounds.width / 2),
+        frontSize: [frontBounds.width, frontBounds.height],
+        overlap: backBounds.right - frontBounds.left,
+        reveal: frontBounds.left - backBounds.left,
+        slotWidth: slotBounds.width,
+        stackSize: [stackBounds.width, stackBounds.height],
+        textGap: textBounds.left - stackBounds.right,
+      };
+    });
+    expect(geometry).toEqual({
+      backSize: [18, 18],
+      centerDelta: 0,
+      frontSize: [18, 18],
+      overlap: 8,
+      reveal: 10,
+      slotWidth: 20,
+      stackSize: [28, 20],
+      textGap: 4,
+    });
+    await expectBrowser(overflowRow.locator(".session-owner-stack__overflow")).toHaveText("+2");
+    const rowHeights = await Promise.all([
+      collaborativeRow.evaluate((row) => row.getBoundingClientRect().height),
+      singleOwnerRow.evaluate((row) => row.getBoundingClientRect().height),
+    ]);
+    expect(rowHeights[0]).toBeCloseTo(rowHeights[1] ?? 0, 5);
+    const titleLefts = await Promise.all(
+      [collaborativeRow, singleOwnerRow].map((row) =>
+        row
+          .locator(".sidebar-recent-session__text")
+          .evaluate((text) => text.getBoundingClientRect().left),
+      ),
+    );
+    expect(titleLefts[0]).toBeCloseTo(titleLefts[1] ?? 0, 5);
+
+    if (captureUiProofEnabled) {
+      const legacyStyles = await currentPage.addStyleTag({
+        content: `
+          .session-owner-stack { width: 24px; }
+          .session-owner-stack__back { width: 14px; height: 14px; }
+          .session-owner-stack__back .viewer-avatar,
+          .session-owner-stack__overflow { width: 14px; height: 14px; font-size: 7px; }
+          .session-owner-stack__front { width: 20px; height: 20px; }
+        `,
+      });
+      await captureSessionOwnerProof(currentPage, "00-before-light.png");
+      await currentPage.evaluate(() =>
+        document.documentElement.setAttribute("data-theme-mode", "dark"),
+      );
+      await captureSessionOwnerProof(currentPage, "01-before-dark.png");
+      await legacyStyles.evaluate((style) => style.parentNode?.removeChild(style));
+      await captureSessionOwnerProof(currentPage, "02-after-dark.png");
+      await currentPage.evaluate(() =>
+        document.documentElement.setAttribute("data-theme-mode", "light"),
+      );
+      await captureSessionOwnerProof(currentPage, "03-after-light.png");
+    }
+  });
+
   it("shows permanent owner chips and filters existing custom groups", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;
+    await routeAvatarFixtures(context, currentPage, [
+      { id: "profile-patrick", background: "#27496d", label: "P" },
+      { id: "profile-ada", background: "#3f6f76", label: "A" },
+      { id: "profile-bob", background: "#985b42", label: "B" },
+    ]);
     const gateway = await installMockGateway(currentPage, {
       hasMultipleSessionSharingIdentities: true,
       sessionKey: "agent:main:ada",
@@ -121,12 +314,11 @@ suite.define(() => {
           self: true,
           id: "profile-patrick",
           name: "Patrick",
-          avatarUrl:
-            "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlY9Z8AAAAASUVORK5CYII=",
+          avatarUrl: "/api/users/profile-patrick/avatar?v=1",
         },
       ],
       historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
-      methodResponses: { "sessions.list": sessionsList(["profile-ada", "profile-bob"]) },
+      methodResponses: { "sessions.list": sessionsList(["profile-ada", "profile-bob"], true) },
     });
 
     await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
@@ -142,8 +334,10 @@ suite.define(() => {
     await expectBrowser(ownerRows).toHaveCount(3);
     await expectBrowser(ownerRows.first()).toHaveAttribute("value", "owner:profile-patrick");
     await expectBrowser(ownerRows.first()).toContainText("Patrick (You)");
-    await expectBrowser(ownerRows.first().locator("openclaw-session-owner-chip")).toHaveText("P");
+    await expectBrowser(ownerRows.locator("openclaw-session-owner-chip img")).toHaveCount(3);
+    const firstOwnerCenterDelta = await avatarLabelCenterDelta(ownerRows.first());
     await captureUiProof(currentPage, "00-people-sort-available.png");
+    expect(firstOwnerCenterDelta).toBeLessThanOrEqual(0.5);
     await ownerMenu.evaluate((element) =>
       element.dispatchEvent(
         new CustomEvent("wa-select", {
@@ -183,6 +377,103 @@ suite.define(() => {
         ),
       )
       .toBe(true);
+
+    const initialConnections = (await gateway.getRequests("connect")).length;
+    await gateway.closeLatest(1012, "owner filter reconnect proof");
+    await expect
+      .poll(async () => (await gateway.getRequests("connect")).length)
+      .toBeGreaterThan(initialConnections);
+    await expect
+      .poll(async () => (await gateway.getRequests("sessions.list")).at(-1)?.params)
+      .toMatchObject({ ownerId: "profile-ada" });
+    await expect
+      .poll(() => currentPage.locator('[data-session-key="agent:main:bob"]').count())
+      .toBe(0);
+    const reconnectedMenu = await openSidebarSortMenu(currentPage);
+    await expectBrowser(reconnectedMenu.locator('[value="owner:profile-ada"]')).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+  });
+
+  it("keeps unrelated active sessions out of the involving-me filter", async () => {
+    if (captureUiProofEnabled) {
+      await mkdir(sessionOwnerProofArtifactDir, { recursive: true });
+    }
+    const context = await suite.browser.newContext({
+      viewport: { height: 800, width: 1200 },
+      ...(captureUiProofEnabled
+        ? {
+            recordVideo: {
+              dir: sessionOwnerProofArtifactDir,
+              size: { height: 800, width: 1200 },
+            },
+          }
+        : {}),
+    });
+    const currentPage = await context.newPage();
+    page = currentPage;
+    const allSessions = sessionsList(["profile-ada", "profile-bob"]);
+    const gateway = await installMockGateway(currentPage, {
+      hasMultipleSessionSharingIdentities: true,
+      sessionKey: "agent:main:ada",
+      presenceUsers: [{ self: true, id: "profile-ada", name: "Ada" }],
+      historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
+      methodResponses: { "sessions.list": allSessions },
+    });
+
+    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
+    await currentPage.getByText("Bob operations", { exact: true }).first().waitFor();
+    await gateway.setMethodResponse("sessions.list", {
+      ...allSessions,
+      count: 1,
+      sessions: allSessions.sessions.filter((session) => session.key === "agent:main:ada"),
+    });
+    const menu = await openSidebarSortMenu(currentPage);
+    await menu.evaluate((element) =>
+      element.dispatchEvent(
+        new CustomEvent("wa-select", {
+          bubbles: true,
+          detail: { item: { value: "involving-me" } },
+        }),
+      ),
+    );
+    await expect
+      .poll(() => currentPage.locator('[data-session-key="agent:main:bob"]').count())
+      .toBe(0);
+    await expect
+      .poll(async () =>
+        (await gateway.getRequests("sessions.list")).some(
+          (request) =>
+            (request.params as { involvingMe?: unknown } | undefined)?.involvingMe === true,
+        ),
+      )
+      .toBe(true);
+    await captureSessionOwnerProof(currentPage, "02-involving-me-before-active-event.png");
+
+    await gateway.emitGatewayEvent("session.message", {
+      sessionKey: "agent:main:bob",
+      key: "agent:main:bob",
+      kind: "direct",
+      updatedAt: 3,
+      archived: false,
+      hasActiveRun: true,
+      status: "running",
+      owner: { actor: { type: "human", id: "profile-bob", label: "Bob" } },
+      participants: [],
+      participantCount: 0,
+    });
+
+    await expect
+      .poll(() => currentPage.locator('[data-session-key="agent:main:bob"]').count())
+      .toBe(0);
+    await expectBrowser(currentPage.locator('[data-session-key="agent:main:ada"]')).toBeVisible();
+    const filteredMenu = await openSidebarSortMenu(currentPage);
+    await expectBrowser(filteredMenu.locator('[value="involving-me"]')).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    await captureSessionOwnerProof(currentPage, "03-involving-me-after-active-event.png");
   });
 
   it("renders zero ownership chrome for a single owner", async () => {
@@ -309,9 +600,11 @@ suite.define(() => {
     await currentPage.goto(`${suite.server?.baseUrl ?? ""}new`);
     // Playwright check()/isChecked() support role="switch" buttons via aria-checked.
     const draftToggle = currentPage.getByRole("switch", { name: "Draft", exact: true });
+    await currentPage.locator(".new-session-page__composer .agent-chat__composer-footer").hover();
     await draftToggle.waitFor();
     await captureUiProof(currentPage, "02-create-draft-available.png");
     await draftToggle.check();
+    await expectBrowser(draftToggle).toBeChecked();
     await currentPage.locator(".new-session-page__message").fill("work privately first");
     await captureUiProof(currentPage, "03-create-draft-selected.png");
     await currentPage.getByRole("button", { name: "Start session" }).click();
@@ -423,11 +716,11 @@ suite.define(() => {
       code: "INVALID_REQUEST",
       message,
     });
-    const alert = currentPage.getByRole("alert").filter({ hasText: message });
+    const alert = currentPage.locator(".chat-error[role=alert]").filter({ hasText: message });
     await expectBrowser(alert).toBeVisible();
 
     await currentPage.getByRole("button", { name: "Session sharing" }).click();
-    await expectBrowser(dropdown.locator(".chat-pane__sharing-status--error")).toBeVisible();
+    await expectBrowser(dropdown.getByRole("alert").filter({ hasText: message })).toBeVisible();
   });
 
   it("lets a read-scoped owner inspect sharing but blocks mutations", async () => {
@@ -724,19 +1017,23 @@ suite.define(() => {
 
     await currentPage.goto(`${suite.server?.baseUrl ?? ""}new`);
     const draftToggle = currentPage.getByRole("switch", { name: "Draft", exact: true });
+    await currentPage.locator(".new-session-page__composer .agent-chat__composer-footer").hover();
     await draftToggle.check();
     await gateway.setSessionSharingPolicy({
       allowedSessionVisibilities: ["shared"],
       hasMultipleSessionSharingIdentities: false,
     });
     await replaceGatewayClient(currentPage);
-    await expect.poll(() => draftToggle.count()).toBe(0);
+    await expect
+      .poll(() => currentPage.getByRole("button", { name: "Draft", exact: true }).count())
+      .toBe(0);
 
     await gateway.setSessionSharingPolicy({
       allowedSessionVisibilities: ["shared", "draft"],
       hasMultipleSessionSharingIdentities: true,
     });
     await replaceGatewayClient(currentPage);
+    await currentPage.locator(".new-session-page__composer .agent-chat__composer-footer").hover();
     await draftToggle.waitFor();
     expect(await draftToggle.isChecked()).toBe(false);
   });
@@ -752,7 +1049,7 @@ suite.define(() => {
     });
 
     await currentPage.goto(`${suite.server?.baseUrl ?? ""}new`);
-    await currentPage.locator(".new-session-page__message").waitFor();
-    expect(await currentPage.getByRole("switch", { name: "Draft", exact: true }).count()).toBe(0);
+    const menu = await openNewSessionPlusMenu(currentPage);
+    expect(await menu.getByRole("menuitem", { name: "Draft" }).count()).toBe(0);
   });
 });

@@ -2,6 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveManagedGatewayServiceProcessEnv } from "../../daemon/service-types.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
@@ -29,6 +30,7 @@ import {
   restoreDroppedPreUpdateChannels,
 } from "./update-command-config.js";
 import { completePostCorePluginUpdate } from "./update-command-fresh-doctor.js";
+import { retireStandaloneGitWrapper } from "./update-command-git.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
 import {
@@ -87,6 +89,7 @@ function pickUpdateQuip(): string {
 export async function finishUpdate(params: {
   result: UpdateRunResult;
   root: string;
+  previousInstallRoot?: string;
   installKindChanged: boolean;
   configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
   requestedChannel: UpdateChannel | null;
@@ -105,7 +108,7 @@ export async function finishUpdate(params: {
   updateStepTimeoutMs: number;
   invocationCwd?: string;
 }): Promise<void> {
-  if (!params.opts.json || params.result.status !== "ok") {
+  if (params.result.status !== "ok") {
     printResult(params.result, { ...params.opts, hideSteps: params.showProgress });
   }
 
@@ -343,11 +346,7 @@ export async function finishUpdate(params: {
         jsonMode: Boolean(params.opts.json),
       });
     }
-    if (params.opts.json) {
-      defaultRuntime.writeJson(resultWithPostUpdate);
-    } else {
-      defaultRuntime.error(theme.error("Update failed during plugin post-update sync."));
-    }
+    printResult(resultWithPostUpdate, { ...params.opts, hideSteps: params.showProgress });
     defaultRuntime.exit(1);
     return;
   }
@@ -363,6 +362,7 @@ export async function finishUpdate(params: {
   let restartScriptPath: string | null = null;
   let refreshGatewayServiceEnv = false;
   let gatewayServiceEnv: NodeJS.ProcessEnv | undefined;
+  let gatewayServiceInstallEnv: NodeJS.ProcessEnv | null | undefined;
   let skipLegacyServiceRestart = false;
   const serviceStateReadEnv = resolvePostUpdateServiceStateReadEnv({
     updateMode: resultWithPostUpdate.mode,
@@ -423,6 +423,10 @@ export async function finishUpdate(params: {
         })
       ) {
         gatewayServiceEnv = serviceState.env;
+        gatewayServiceInstallEnv = resolveManagedGatewayServiceProcessEnv(
+          serviceState.command,
+          params.ownedManagedUpdateEnv ?? process.env,
+        );
         gatewayPort = resolveUpdatedGatewayRestartPort({
           config: restartConfigSnapshot.valid ? restartConfigSnapshot.config : undefined,
           processEnv: process.env,
@@ -436,6 +440,16 @@ export async function finishUpdate(params: {
         // An ambiguous wrapper may be stopped and restored, but only proven
         // ownership authorizes rewriting the service definition.
         refreshGatewayServiceEnv = serviceOwnershipConfirmed;
+        if (refreshGatewayServiceEnv && gatewayServiceInstallEnv === null) {
+          refreshGatewayServiceEnv = false;
+          const message =
+            "Gateway service metadata refresh was skipped because systemd drop-in environment ownership could not be inspected.";
+          if (params.opts.json) {
+            defaultRuntime.error(message);
+          } else {
+            defaultRuntime.log(theme.warn(message));
+          }
+        }
       }
     } catch (err) {
       if (err instanceof GatewayServiceUpdateOwnershipError) {
@@ -469,6 +483,7 @@ export async function finishUpdate(params: {
       opts: params.opts,
       refreshServiceEnv: refreshGatewayServiceEnv,
       serviceEnv: gatewayServiceEnv,
+      serviceInstallEnv: gatewayServiceInstallEnv,
       gatewayPort,
       restartScriptPath,
       invocationCwd: params.invocationCwd,
@@ -490,15 +505,36 @@ export async function finishUpdate(params: {
     return;
   }
 
+  if (params.installKindChanged && resultWithPostUpdate.mode !== "git") {
+    const retirement = await retireStandaloneGitWrapper({
+      previousRoot: params.previousInstallRoot ?? params.root,
+    });
+    if (retirement.error) {
+      defaultRuntime.error(retirement.error);
+      await markControlPlaneUpdateRestartSentinelFailureBestEffort({
+        meta: params.controlPlaneUpdateSentinelMeta,
+        reason: "wrapper-retirement-failed",
+        jsonMode: Boolean(params.opts.json),
+      });
+      const failedResult: UpdateRunResult = {
+        ...resultWithPostUpdate,
+        status: "error",
+        reason: "wrapper-retirement-failed",
+      };
+      printResult(failedResult, { ...params.opts, hideSteps: params.showProgress });
+      defaultRuntime.exit(1);
+      return;
+    }
+  }
+
   await writeControlPlaneUpdateRestartSentinelBestEffort({
     meta: params.controlPlaneUpdateSentinelMeta,
     result: resultWithPostUpdate,
     jsonMode: Boolean(params.opts.json),
   });
 
+  printResult(resultWithPostUpdate, { ...params.opts, hideSteps: params.showProgress });
   if (!params.opts.json) {
     defaultRuntime.log(theme.muted(pickUpdateQuip()));
-  } else {
-    defaultRuntime.writeJson(resultWithPostUpdate);
   }
 }

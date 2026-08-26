@@ -10,6 +10,7 @@ import type {
   TtsProvider,
 } from "../config/types.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
+import { compareSpeechProviderOrder } from "./provider-registry-core.js";
 import {
   canonicalizeSpeechProviderId,
   getSpeechProvider,
@@ -64,14 +65,7 @@ function sortSpeechProvidersForAutoSelection(
   cfg?: OpenClawConfig,
   providers?: readonly SpeechProviderPlugin[],
 ) {
-  return [...(providers ?? listSpeechProviders(cfg))].toSorted((left, right) => {
-    const leftOrder = left.autoSelectOrder ?? Number.MAX_SAFE_INTEGER;
-    const rightOrder = right.autoSelectOrder ?? Number.MAX_SAFE_INTEGER;
-    if (leftOrder !== rightOrder) {
-      return leftOrder - rightOrder;
-    }
-    return left.id.localeCompare(right.id);
-  });
+  return [...(providers ?? listSpeechProviders(cfg))].toSorted(compareSpeechProviderOrder);
 }
 
 function canonicalizeSpeechProviderIdFromInventory(

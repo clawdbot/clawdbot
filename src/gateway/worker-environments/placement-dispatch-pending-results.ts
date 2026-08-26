@@ -11,8 +11,13 @@ import {
   completeMovedWorkspaceTeardown,
   completeReclaimedWorkspaceTeardown,
 } from "./placement-teardown.js";
+import { isCurrentWorkerWorkspacePendingResultOwner } from "./placement-workspace-result.js";
 import type { WorkerEnvironmentService } from "./service.js";
-import type { WorkerWorkspaceResultConflict } from "./workspace-conflicts.js";
+import { boundedWorkerError } from "./worker-error.js";
+import type {
+  WorkerWorkspaceRecoveryFailureReport,
+  WorkerWorkspaceResultConflict,
+} from "./workspace-conflicts.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
 import type { WorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
@@ -48,12 +53,17 @@ export type PlacementRecoveryDeps = {
       | { cleared: true }
     ),
   ) => Promise<void>;
+  reportWorkspaceResultRecoveryFailure?: (
+    recovery: WorkerWorkspaceRecoveryFailureReport,
+  ) => Promise<void>;
   resolveWorkspaceResultConflict: (params: {
     sessionId: string;
     sessionKey: string;
     agentId: string;
   }) => Promise<WorkerWorkspaceResultConflict | undefined>;
   recoverPlacementMoves?: () => Promise<Set<string>>;
+  prepareAcceptedWorkspacePublication?: (claim: WorkerSessionTurnClaim) => Promise<void>;
+  publishAcceptedWorkspace?: (claim: WorkerSessionTurnClaim) => Promise<void>;
 };
 
 function pendingWorkerLossError(
@@ -79,6 +89,15 @@ type WorkerOwnedPendingPlacement = Extract<
   WorkerDispatchPlacement,
   { state: "active" | "draining" }
 >;
+
+async function prepareAcceptedPublication(
+  deps: PlacementRecoveryDeps,
+  claim: WorkerSessionTurnClaim,
+): Promise<void> {
+  if (deps.prepareAcceptedWorkspacePublication) {
+    await deps.prepareAcceptedWorkspacePublication(claim).catch(() => undefined);
+  }
+}
 
 function completeRecoveredWorkspaceTeardown(params: {
   placements: WorkerDispatchPlacementStore;
@@ -244,6 +263,8 @@ export async function recoverPendingWorkspaceResults(
         ) {
           await environments.destroy(active.environmentId);
         }
+        await prepareAcceptedPublication(deps, turnClaim);
+        await deps.publishAcceptedWorkspace?.(turnClaim);
         completeRecoveredWorkspaceTeardown({ placements, placement: active, turnClaim });
         await environments
           .stopTunnel(active.environmentId, active.activeOwnerEpoch)
@@ -288,6 +309,7 @@ export async function recoverPendingWorkspaceResults(
           await reconciliation.verifyLocalStable();
           const conflictPaths = reconciliation.conflictPaths;
           if (pending.workspaceAcceptedAtMs === null) {
+            await prepareAcceptedPublication(deps, turnClaim);
             placements.acceptWorkspaceResult(turnClaim);
           }
           if (conflictPaths.length > 0 && isWorkerWorkspaceResultCleanupRef(ownedStagedResultRef)) {
@@ -313,6 +335,7 @@ export async function recoverPendingWorkspaceResults(
                 ...report,
               }),
           });
+          await deps.publishAcceptedWorkspace?.(turnClaim);
           await settleStagedWorkspaceResult({
             placements,
             turnClaim,
@@ -345,6 +368,8 @@ export async function recoverPendingWorkspaceResults(
           continue;
         }
         if (pending.workspaceAcceptedAtMs !== null && environment?.state === "destroyed") {
+          await prepareAcceptedPublication(deps, turnClaim);
+          await deps.publishAcceptedWorkspace?.(turnClaim);
           completeRecoveredWorkspaceTeardown({ placements, placement: active, turnClaim });
           continue;
         }
@@ -395,6 +420,7 @@ export async function recoverPendingWorkspaceResults(
             },
           });
           const applied = await verifyReconciledWorkspaceFinal(reconciliation, quiescence);
+          await prepareAcceptedPublication(deps, turnClaim);
           placements.acceptWorkspaceResult(turnClaim);
           const recordedStagedResultRef = placements
             .listPendingWorkspaceResults()
@@ -423,6 +449,7 @@ export async function recoverPendingWorkspaceResults(
                 ...report,
               }),
           });
+          await deps.publishAcceptedWorkspace?.(turnClaim);
           await settleStagedWorkspaceResult({
             placements,
             turnClaim,
@@ -461,8 +488,32 @@ export async function recoverPendingWorkspaceResults(
           }
         }
       });
-    } catch {
-      // Keep the result, claim, and environment fenced. The next sweep retries.
+    } catch (error) {
+      try {
+        const current = placements.get(pending.sessionId);
+        const currentPending = placements
+          .listPendingWorkspaceResults()
+          .find(
+            (candidate) =>
+              candidate.sessionId === pending.sessionId &&
+              candidate.environmentId === pending.environmentId &&
+              candidate.ownerEpoch === pending.ownerEpoch &&
+              candidate.placementGeneration === pending.placementGeneration &&
+              candidate.claimId === pending.claimId &&
+              candidate.runId === pending.runId &&
+              candidate.gatewayInstanceId === pending.gatewayInstanceId,
+          );
+        if (currentPending && isCurrentWorkerWorkspacePendingResultOwner(current, currentPending)) {
+          await deps.reportWorkspaceResultRecoveryFailure?.({
+            sessionId: current.sessionId,
+            sessionKey: current.sessionKey,
+            agentId: current.agentId,
+            error: boundedWorkerError(error),
+          });
+        }
+      } catch {
+        // Transcript reporting must not weaken the durable recovery fence.
+      }
     }
   }
   if (cleanupOrphans) {

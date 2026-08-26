@@ -280,12 +280,26 @@ describe("audit event persistence", () => {
   it("excludes and physically prunes records outside the fixed retention window", () => {
     const database = createDatabaseOptions();
     const occurredAt = Date.now();
-    recordAuditEvent(auditInput({ occurredAt }), database);
+    const { db } = openOpenClawStateDatabase(database);
+    const insert = db.prepare(
+      `INSERT INTO audit_events (
+         event_id, source_id, source_sequence, occurred_at, kind, action, status,
+         actor_type, actor_id, agent_id, run_id
+       ) VALUES (?, ?, ?, ?, 'agent_run', 'agent.run.started', 'started',
+                 'agent', 'main', 'main', ?)`,
+    );
+    for (let index = 0; index < AUDIT_EVENT_PRUNE_BATCH_ROWS_CONTRACT + 1; index += 1) {
+      insert.run(`event-${index}`, `source-${index}`, index + 1, occurredAt, `run-${index}`);
+    }
     const expiredAt = occurredAt + AUDIT_EVENT_RETENTION_MS_CONTRACT + 1;
 
     expect(listAuditEvents({ database, limit: 10, now: expiredAt }).events).toEqual([]);
-    pruneExpiredAuditEvents({ database, now: expiredAt });
-    expect(listAuditEvents({ database, limit: 10, now: occurredAt }).events).toEqual([]);
+    expect(pruneExpiredAuditEvents({ database, now: expiredAt })).toBe(
+      AUDIT_EVENT_PRUNE_BATCH_ROWS_CONTRACT,
+    );
+    expect(db.prepare("SELECT COUNT(*) AS count FROM audit_events").get()).toEqual({ count: 1 });
+    expect(pruneExpiredAuditEvents({ database, now: expiredAt })).toBe(1);
+    expect(pruneExpiredAuditEvents({ database, now: expiredAt })).toBe(0);
   });
 });
 

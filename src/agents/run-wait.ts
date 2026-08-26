@@ -25,16 +25,15 @@ import {
   buildAgentRunTerminalOutcomeFromWaitResult,
   type AgentRunTerminalOutcome,
 } from "./agent-run-terminal-outcome.js";
-import {
-  normalizeAgentRunTerminalReplySnapshot,
-  type AgentRunTerminalReplySnapshot,
-} from "./agent-run-terminal-reply.js";
+import { normalizeAgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.js";
 import {
   normalizeAgentRunTimeoutPhase,
   normalizeProviderStarted,
-  type AgentRunTimeoutPhase,
 } from "./run-timeout-attribution.js";
+import type { AgentWaitResult } from "./run-wait.types.js";
 import { extractStoredAssistantText, stripToolMessages } from "./tools/chat-history-text.js";
+
+export type { AgentWaitResult };
 
 type GatewayCaller = typeof callGateway;
 
@@ -56,21 +55,6 @@ function resolveRunWaitDeadlineAtMs(params: { deadlineAtMs?: number; timeoutMs?:
 export type AssistantReplySnapshot = {
   text?: string;
   fingerprint?: string;
-};
-
-/** Normalized terminal or pending state returned by `agent.wait`. */
-export type AgentWaitResult = {
-  status: "ok" | "timeout" | "error" | "pending";
-  error?: string;
-  startedAt?: number;
-  endedAt?: number;
-  stopReason?: string;
-  livenessState?: string;
-  yielded?: boolean;
-  pendingError?: boolean;
-  timeoutPhase?: AgentRunTimeoutPhase;
-  providerStarted?: boolean;
-  terminalReply?: AgentRunTerminalReplySnapshot;
 };
 
 /** Summary returned after waiting for a dynamic set of pending runs to drain. */

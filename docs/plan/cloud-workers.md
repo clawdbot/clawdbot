@@ -8,7 +8,7 @@ read_when:
 
 ## Status
 
-Superseded historical proposal. The implemented architecture is documented in [Runners and execution environments](/plan/runners) and [Cloud workers](/gateway/cloud-workers): Crabbox provisions a node-backed `worker-turn` lease, the worker child dials the Gateway's authenticated public worker route, and workspace transfer uses the node channel. The former dedicated loopback listener, SSH reverse-forward carrier, and SSH-launched worker-turn path have been removed. SSH remains a separate `remote-exec` workspace transport and desktop carrier.
+Superseded historical proposal. The implemented architecture is documented in [Runners and execution environments](/plan/runners) and [Cloud workers](/gateway/cloud-workers): one Crabbox profile provisions enrolled outbound-node leases for OpenClaw `worker-turn` or Codex `remote-exec`. OpenClaw launches a restricted worker child through the Gateway's authenticated public worker route; Codex uses the explicitly authorized node exec-server while its app-server and authentication remain on the Gateway. Workspace transfer uses the node channel. The former dedicated loopback listener, SSH reverse-forward carrier, and SSH-launched worker-turn path remain removed. SSH is retained only for existing SSH-backed `remote-exec` providers and separately owned desktop carriers.
 
 The sections below preserve the pre-convergence design record and are not the current runtime contract.
 
@@ -97,7 +97,7 @@ Worker mode (`openclaw worker`) is an entry point, not a fork: connection handli
 
 ### 3. Historical transport proposal: everything over SSH
 
-This section describes the superseded carrier. Current `worker-turn` environments use authenticated node connectivity; only `remote-exec` workspace operations retain pinned SSH.
+This section describes the superseded carrier. Current node-backed `worker-turn` and `remote-exec` environments use authenticated node connectivity; existing SSH-backed `remote-exec` providers retain pinned SSH.
 
 The original proposal had the gateway own connectivity while the worker required nothing but sshd:
 
@@ -151,6 +151,13 @@ Runtime placement is a SQLite-owned state machine keyed to the session, not a pa
 `local → requested → provisioning → syncing → starting → active(worker) → draining → reconciling → local | reclaimed | failed`
 
 It persists environment id, transition generation, active owner epoch, workspace base manifest, worker bundle hash, and last ACK cursors. Turn admission atomically claims placement before either loop starts a turn, so a local message admitted against a stale snapshot can never race a worker turn — exactly one loop owns the session at any time.
+
+Device runner availability is a process-current projection, not another
+placement state. An active device placement stays active while its exact v6
+runner proof is absent. The default is to wait. Explicit Gateway continuation
+persists one abandonment bit on the move intent, force-closes the remote owner,
+and resumes from the last Gateway-synced workspace without replay; the UI warns
+that unsynced device files and in-flight work may be lost.
 
 UI:
 

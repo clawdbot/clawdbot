@@ -9,6 +9,7 @@ import {
   resetSystemEventsForTest,
 } from "../../infra/system-events.js";
 import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
+import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { hasControlCommand } from "../command-detection.js";
 import { runReplyAgent } from "./agent-runner.runtime.js";
@@ -621,6 +622,7 @@ describe("runPreparedReply media-only handling", () => {
 
     let call = requireLastRunReplyAgentCall();
     expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(true);
+    expect(call?.followupRun.run.terminalReplyExpectation).toBe("required");
 
     await runPrepared({
       defaultActivation: "mention",
@@ -628,6 +630,7 @@ describe("runPreparedReply media-only handling", () => {
 
     call = requireLastRunReplyAgentCall();
     expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(true);
+    expect(call?.followupRun.run.terminalReplyExpectation).toBe("required");
   });
 
   it.each([
@@ -657,9 +660,10 @@ describe("runPreparedReply media-only handling", () => {
 
     const call = requireLastRunReplyAgentCall();
     expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(false);
+    expect(call?.followupRun.run.terminalReplyExpectation).toBe("required");
   });
 
-  it("keeps empty-assistant silence available for ambient room events", async () => {
+  it("keeps empty-assistant silence optional for ambient room events", async () => {
     const defaults = baseParams();
     await runPrepared({
       ctx: {
@@ -672,10 +676,20 @@ describe("runPreparedReply media-only handling", () => {
         InboundEventKind: "room_event",
         WasMentioned: true,
       },
+      cfg: {
+        agents: {
+          defaults: {
+            silentReply: { group: "disallow" },
+          },
+        },
+      },
     });
 
     const call = requireLastRunReplyAgentCall();
-    expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(true);
+    expect(call.followupRun.run).toMatchObject({
+      allowEmptyAssistantReplyAsSilent: true,
+      terminalReplyExpectation: "optional",
+    });
   });
 
   it("hydrates runtime thinking metadata before trusting static provider support", async () => {
@@ -2098,9 +2112,10 @@ describe("runPreparedReply media-only handling", () => {
     expect(result).toEqual({ text: "ok" });
     expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
   });
-  it("interrupts embedded-only active runs even without a reply operation", async () => {
+  it("routes a channel-configured interrupt through session-work admission", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");
     const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");
+    const storePath = "/tmp/channel-interrupt-sessions.json";
     let embeddedRunActive = true;
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
     vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId).mockImplementation(() =>
@@ -2109,39 +2124,36 @@ describe("runPreparedReply media-only handling", () => {
     vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunActive).mockImplementation(
       () => embeddedRunActive,
     );
-    vi.mocked(embeddedAgentRuntime.abortEmbeddedAgentRun).mockReturnValue(true);
-    vi.mocked(embeddedAgentRuntime.waitForEmbeddedAgentRunEnd).mockImplementation(async () => {
-      embeddedRunActive = false;
-      return true;
+    let releaseActiveAdmission = () => {};
+    const activeAdmission = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities: ["session-key", "session-embedded-only"],
+      assertAllowed: () => {},
+      onInterrupt: () => {
+        releaseActiveAdmission();
+      },
     });
+    releaseActiveAdmission = () => {
+      embeddedRunActive = false;
+      activeAdmission.release();
+    };
 
     try {
       await expect(
         runPrepared({
           isNewSession: false,
           sessionId: "session-embedded-only",
+          storePath,
         }),
       ).resolves.toEqual({ text: "ok" });
     } finally {
+      activeAdmission.release();
       vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId).mockReturnValue(undefined);
       vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunActive).mockReturnValue(false);
-      vi.mocked(embeddedAgentRuntime.abortEmbeddedAgentRun).mockReturnValue(false);
-      vi.mocked(embeddedAgentRuntime.waitForEmbeddedAgentRunEnd).mockResolvedValue(true);
     }
 
-    expect(embeddedAgentRuntime.abortEmbeddedAgentRun).toHaveBeenCalledTimes(2);
-    expect(embeddedAgentRuntime.abortEmbeddedAgentRun).toHaveBeenNthCalledWith(
-      1,
-      "session-embedded-only",
-    );
-    expect(embeddedAgentRuntime.abortEmbeddedAgentRun).toHaveBeenNthCalledWith(
-      2,
-      "session-embedded-only",
-    );
-    expect(embeddedAgentRuntime.waitForEmbeddedAgentRunEnd).toHaveBeenCalledOnce();
-    expect(embeddedAgentRuntime.waitForEmbeddedAgentRunEnd).toHaveBeenCalledWith(
-      "session-embedded-only",
-    );
+    expect(embeddedAgentRuntime.abortEmbeddedAgentRun).not.toHaveBeenCalled();
+    expect(embeddedAgentRuntime.waitForEmbeddedAgentRunEnd).not.toHaveBeenCalled();
     expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
   });
   it("interrupts an embedded-only heartbeat before running a visible Telegram turn", async () => {
@@ -2365,11 +2377,14 @@ describe("runPreparedReply media-only handling", () => {
     vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId).mockReturnValue(
       "session-active",
     );
-    vi.mocked(embeddedAgentRuntime.abortEmbeddedAgentRun).mockReturnValue(true);
     const activeOperation = createReplyOperation({
       sessionId: "session-active",
       sessionKey: "session-key",
       resetTriggered: false,
+    });
+    activeOperation.attachBackend({
+      kind: "embedded",
+      cancel: () => activeOperation.complete(),
     });
 
     try {
@@ -2381,7 +2396,7 @@ describe("runPreparedReply media-only handling", () => {
 
       expect(result).toEqual({ text: "ok" });
       expect(commandQueue.clearCommandLane).toHaveBeenCalledWith("session:session-key");
-      expect(embeddedAgentRuntime.abortEmbeddedAgentRun).toHaveBeenCalledWith("session-active");
+      expect(embeddedAgentRuntime.abortEmbeddedAgentRun).not.toHaveBeenCalled();
       expect(activeOperation.result).toEqual({
         kind: "aborted",
         code: "aborted_by_user",
@@ -2418,6 +2433,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.shouldSteer).toBe(false);
     expect(call?.shouldFollowup).toBe(true);
     expect(call?.isActive).toBe(true);
+    expect(call?.followupRun.run.terminalReplyExpectation).toBeUndefined();
   });
 
   it.each([
@@ -4341,6 +4357,22 @@ describe("runPreparedReply media-only handling", () => {
 
     const call = requireRunReplyAgentCall();
     expect(call.followupRun.run.fastMode).toBe("auto");
+  });
+
+  it("keeps an operator-reviewed proposal revision isolated on the queued run", async () => {
+    const proposalRevision = {
+      agentId: "main",
+      workspaceDir: "/tmp/workspace",
+      proposalId: "proposal-h1",
+      expectedRevisionHash: "revision-h1",
+    };
+    await runPrepared({
+      opts: { skillWorkshopProposalRevision: proposalRevision } as never,
+    });
+
+    const call = requireRunReplyAgentCall();
+    expect(call.followupRun.run.skillWorkshopProposalRevision).toEqual(proposalRevision);
+    expect(call.followupRun.run.skillWorkshopProposalRevision).not.toBe(proposalRevision);
   });
 
   it("carries system events into followupRun.prompt for deferred turns", async () => {

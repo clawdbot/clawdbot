@@ -19,21 +19,24 @@ import {
   type PreparedModelRuntimeAuth,
   type PreparedModelRuntimeAuthScope,
 } from "./prepared-model-runtime-auth.js";
+import type {
+  PreparedModelRuntimeAgentFacts,
+  PreparedModelRuntimeCatalogFacts,
+  PreparedModelRuntimeCatalogSource,
+} from "./prepared-model-runtime.catalog-contract.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import {
   fingerprintPreparedRuntimeFacts,
   prepareAgentCatalogSource,
   prepareConfiguredRuntimeFactsBatch,
-  prepareFullCatalogFacts,
   prepareWorkspaceBuildGroup,
-  type PreparedModelRuntimeAgentFacts,
-  type PreparedModelRuntimeCatalogFacts,
-  type PreparedModelRuntimeCatalogSource,
 } from "./prepared-model-runtime.facts.js";
+import { prepareFullCatalogFacts } from "./prepared-model-runtime.full-catalog.js";
 import {
   createPreparedInboundRegistryLoader,
   preparedModelRuntimeWorkspaceFactsKey,
 } from "./prepared-model-runtime.inbound-registry.js";
+import { notifyPreparedModelRuntimePublication } from "./prepared-model-runtime.publication-events.js";
 import type {
   PreparedModelRuntimeBuildStats,
   PreparedModelRuntimeCatalogMode,
@@ -212,6 +215,7 @@ function createFullModelCatalogAccess(params: {
         pending = build
           .then((catalog) => {
             fullCatalog = catalog;
+            notifyPreparedModelRuntimePublication({ phase: "catalog-published" });
             return catalog;
           })
           .finally(() => {
@@ -340,10 +344,12 @@ async function buildSnapshotBatch(
     const prepareInboundPluginRegistry = groupInputs.some((input) =>
       inboundPluginRegistryInputs.has(input),
     );
+    const preferBuiltPluginArtifacts =
+      pluginGeneration?.preferBuiltPluginArtifacts ?? prepareInboundPluginRegistry;
     const prepared = await prepareWorkspaceBuildGroup(
       groupInputs,
       catalogMode,
-      {},
+      { preferBuiltPluginArtifacts },
       prepareInboundPluginRegistry ? loadInboundPluginRegistry : undefined,
       pluginGeneration,
       pluginMetadataSnapshot,

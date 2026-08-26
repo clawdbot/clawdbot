@@ -3,6 +3,8 @@ import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import { mattermostPlugin } from "./channel.js";
+import { deliverMattermostReplyPayload } from "./mattermost/reply-delivery.js";
+import { sendMessageMattermost } from "./mattermost/send.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 import { setMattermostRuntime } from "./runtime.js";
 
@@ -17,6 +19,76 @@ vi.mock("./mattermost/runtime-api.js", async () => ({
 }));
 
 describe("Mattermost send action loopback", () => {
+  it("reuses the inbound provider channel when delivering a direct reply", async () => {
+    const requests: Array<{ path: string; body?: unknown }> = [];
+
+    await withServer(
+      (request, response) => {
+        let body = "";
+        request.setEncoding("utf8");
+        request.on("data", (chunk) => {
+          body += chunk;
+        });
+        request.on("end", () => {
+          const path = request.url ?? "";
+          requests.push({ path, ...(body ? { body: JSON.parse(body) as unknown } : {}) });
+          response.writeHead(201, { "content-type": "application/json" });
+          if (path === "/api/v4/users/me") {
+            response.end(JSON.stringify({ id: "cccccccccccccccccccccccccc" }));
+            return;
+          }
+          if (path === "/api/v4/channels/direct") {
+            response.end(JSON.stringify({ id: CHANNEL_ID }));
+            return;
+          }
+          response.end(
+            JSON.stringify({
+              id: "post-loopback",
+              channel_id: CHANNEL_ID,
+              message: "prepared direct reply",
+            }),
+          );
+        });
+      },
+      async (baseUrl) => {
+        const core = createPluginRuntimeMock();
+        setMattermostRuntime(core);
+        const cfg = {
+          channels: {
+            mattermost: {
+              botToken: "prepared-inbound-loopback",
+              baseUrl,
+              network: { dangerouslyAllowPrivateNetwork: true },
+            },
+          },
+        } as OpenClawConfig;
+
+        const result = await deliverMattermostReplyPayload({
+          core,
+          cfg,
+          payload: { text: "prepared direct reply" },
+          channelId: CHANNEL_ID,
+          accountId: "default",
+          textLimit: 4000,
+          tableMode: "off",
+          sendMessage: sendMessageMattermost,
+        });
+
+        expect(result).toMatchObject({
+          outcome: "text",
+          messageIds: ["post-loopback"],
+          visibleReplySent: true,
+        });
+        expect(requests).toEqual([
+          {
+            path: "/api/v4/posts",
+            body: { channel_id: CHANNEL_ID, message: "prepared direct reply" },
+          },
+        ]);
+      },
+    );
+  });
+
   it("sends text with blank attachment placeholders and rejects nonblank payloads", async () => {
     const requests: Array<{ path: string; body: unknown }> = [];
 

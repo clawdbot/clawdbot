@@ -276,7 +276,6 @@ vi.mock("./browser-tool.runtime.js", async () => {
         ? { maxDimensionPx: Math.max(1, Math.floor(configured)) }
         : undefined;
     },
-    applyBrowserProxyPaths: vi.fn(),
     getBrowserProfileCapabilities: (profile: Record<string, unknown>) => {
       const existingSession = profile.driver === "existing-session";
       return {
@@ -296,7 +295,7 @@ vi.mock("./browser-tool.runtime.js", async () => {
     }),
     listNodes: nodesUtilsMocks.listNodes,
     normalizeOptionalString: normalizeMockOptionalString,
-    persistBrowserProxyFiles: vi.fn(async () => new Map<string, string>()),
+    persistBrowserProxyResultFiles: vi.fn(async (result: unknown) => result),
     readPositiveIntegerParam: (
       params: Record<string, unknown>,
       key: string,

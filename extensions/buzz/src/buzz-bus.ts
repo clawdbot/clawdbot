@@ -221,7 +221,7 @@ export async function startBuzzBus(options: {
   privateKey: string;
   authTag?: string;
   channelIds: string[];
-  since?: number;
+  since?: (channelId: string) => number;
   onMessage: (message: BuzzInboundMessage, bus: BuzzBus, signal: AbortSignal) => Promise<void>;
   onMessageError?: (error: Error) => void;
   onFatalError?: (error: Error) => void;
@@ -370,7 +370,7 @@ export async function startBuzzBus(options: {
             channelIds: activeChannelIds,
             botPublicKey: publicKey,
             since: sessionStartedAt,
-            messageSince: options.since ?? sessionStartedAt,
+            messageSince: (channelId) => options.since?.(channelId) ?? sessionStartedAt,
             messageLimit: resolveBuzzRoomHistoryLimit(activeChannelIds.length),
             reserveDispatchCapacity: (slots) => dispatchQueue.reserveCapacity(slots),
             onHistoryError: options.onHistoryError,

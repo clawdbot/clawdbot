@@ -63,17 +63,15 @@ import {
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
 } from "../../lib/sessions/session-key.ts";
+import { searchVisibleSessionTranscripts } from "../../lib/sessions/transcript-search.ts";
+import { formatPreservedWorktreesNotice } from "../../lib/sessions/worktree-preservation.ts";
 import { showToast } from "../../lib/toast.ts";
 import { isActiveWorkboardCard } from "../../lib/workboard/card-state.ts";
 import { captureSessionToWorkboard } from "../../lib/workboard/index.ts";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import {
-  searchVisibleSessionTranscripts,
-  sessionAgentIdentityById,
-  sessionAgentIds,
-} from "./agent-scope.ts";
+import { sessionAgentIdentityById, sessionAgentIds } from "./agent-scope.ts";
 import { rememberSessionCustomGroup, sessionCategoryNames } from "./custom-groups.ts";
 import { loadStoredGroupBy, saveStoredGroupBy } from "./page-state.ts";
 import { sessionsPageListQuery, type SessionsRouteData } from "./route.ts";
@@ -672,6 +670,9 @@ class SessionsPage extends OpenClawLightDomElement {
     if (!scope) {
       return;
     }
+    // Snapshot identity and archive authority before a replacement can change them.
+    const rowsByKey = new Map(this.result?.sessions.map((row) => [row.key, row]) ?? []);
+    const rows = keys.map((key) => rowsByKey.get(key) ?? { key });
     const message = t(
       keys.length === 1
         ? "sessionsView.deleteSelectedConfirmOne"
@@ -688,10 +689,7 @@ class SessionsPage extends OpenClawLightDomElement {
     ) {
       return;
     }
-    const rowsByKey = new Map(this.result?.sessions.map((row) => [row.key, row]) ?? []);
-    // Only current row state may opt into write-scoped archive deletion.
-    // Unknown selections stay unflagged and therefore admin-only.
-    await this.deleteSessions(keys.map((key) => rowsByKey.get(key) ?? { key }));
+    await this.deleteSessions(rows);
   }
 
   private async deleteSessions(
@@ -724,15 +722,8 @@ class SessionsPage extends OpenClawLightDomElement {
       if (!this.isRequestScopeCurrent(scope)) {
         return;
       }
-      // Dirty/unpushed checkouts survive deletion; point at the Worktrees page
-      // instead of cascading one force-delete confirm per session.
       if (result.preservedWorktrees.length > 0) {
-        window.alert(
-          t("sessionsView.deletePreservedWorktrees", {
-            count: String(result.preservedWorktrees.length),
-            branches: result.preservedWorktrees.map((worktree) => worktree.branch).join(", "),
-          }),
-        );
+        window.alert(formatPreservedWorktreesNotice(result.preservedWorktrees));
       }
       if (result.deleted.length > 0) {
         const deleted = new Set(result.deleted);
@@ -1375,15 +1366,15 @@ class SessionsPage extends OpenClawLightDomElement {
     );
     void fetchSessionMenuWork({
       client: scope.client,
-      pullRequestsAvailable:
+      loadPullRequests:
         isGatewayMethodAdvertised(
           scope.context.gateway.snapshot,
           SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-        ) === true,
-      sessionKey: row.key,
-      agentId: this.sessionAgentId(row.key, scope.context),
-      loadPullRequests: () => store.load(this, pullRequestKey),
+        ) === true
+          ? () => store.load(this, pullRequestKey)
+          : undefined,
       worktreeId: row.worktree.id,
+      execNode: row.execNode,
     }).then((work) => {
       if (version === this.sessionMenuWorkVersion) {
         this.sessionMenuWork = { loading: false, ...work };
@@ -1516,6 +1507,8 @@ class SessionsPage extends OpenClawLightDomElement {
 
   override render() {
     const context = this.context;
+    const personGroupingAvailable =
+      context?.gateway.snapshot.hello?.policy?.hasMultipleSessionSharingIdentities === true;
     if (!context) {
       return html``;
     }
@@ -1565,7 +1558,10 @@ class SessionsPage extends OpenClawLightDomElement {
           ),
           sortColumn: this.sortColumn,
           sortDir: this.sortDir,
-          groupBy: this.groupBy,
+          // Same reconnect resilience as the sidebar: the stored Person
+          // preference survives a temporarily hidden identity capability.
+          groupBy: personGroupingAvailable || this.groupBy !== "person" ? this.groupBy : "none",
+          personGroupingAvailable,
           knownCategories: this.knownCategories(),
           page: this.page,
           pageSize: this.pageSize,

@@ -10,9 +10,6 @@ const mocks = vi.hoisted(() => ({
   loadSnapshot: vi.fn(),
   prepareSnapshot: vi.fn(),
   prepareScopedCatalog: vi.fn(),
-  fullCatalogAuth: undefined as
-    | undefined
-    | { authStore: { version: number; profiles: object }; authModes: object },
   isFullCatalog: vi.fn(),
   releaseSnapshot: vi.fn(),
 }));
@@ -26,6 +23,7 @@ vi.mock("./agent-scope.js", () => ({
   resolveAgentDir: (_config: object, agentId: string) =>
     mocks.agentDirs.get(agentId) ?? "/tmp/prepared-model-catalog-agent",
   resolveAgentWorkspaceDir: () => "/tmp/prepared-model-catalog-workspace",
+  resolveAmbientOwnerAgentId: () => "main",
   resolveDefaultAgentDir: () => "/tmp/prepared-model-catalog-agent",
   resolveDefaultAgentId: () => "main",
   tryResolveLegacyCompatibilityAgentId: () => "main",
@@ -52,12 +50,8 @@ vi.mock("./prepared-model-runtime.js", () => {
   };
 });
 
-vi.mock("./prepared-model-runtime.facts.js", () => ({
+vi.mock("./prepared-model-runtime.full-catalog.js", () => ({
   isPreparedModelCatalogFull: (...args: unknown[]) => mocks.isFullCatalog(...args),
-}));
-
-vi.mock("./prepared-model-catalog-worker.js", () => ({
-  getPreparedModelFullCatalogAuth: () => mocks.fullCatalogAuth,
 }));
 
 vi.mock("./prepared-model-runtime.scoped-catalog.js", () => ({
@@ -76,6 +70,7 @@ import {
 } from "./prepared-model-catalog.js";
 import {
   getPreparedModelRuntimeAuthStore,
+  setPreparedModelFullCatalogAuth,
   setPreparedModelRuntimeAuthStore,
 } from "./prepared-model-runtime-auth.js";
 import { PreparedModelRuntimeOwnerNotPublishedError } from "./prepared-model-runtime.js";
@@ -105,7 +100,6 @@ describe("prepared model catalog access", () => {
     mocks.loadSnapshot.mockReset();
     mocks.prepareSnapshot.mockReset();
     mocks.prepareScopedCatalog.mockReset();
-    mocks.fullCatalogAuth = undefined;
     mocks.isFullCatalog.mockReset();
     mocks.releaseSnapshot.mockReset();
   });
@@ -207,7 +201,7 @@ describe("prepared model catalog access", () => {
       routeVariants: [],
     };
     const { authStore, ...snapshotFacts } = fullSnapshot;
-    mocks.fullCatalogAuth = { authStore, authModes: {} };
+    setPreparedModelFullCatalogAuth(discoveredCatalog, { authStore, authModes: {} });
     const loadFullModelCatalog = vi.fn(async () => discoveredCatalog);
     const snapshot = {
       ...snapshotFacts,

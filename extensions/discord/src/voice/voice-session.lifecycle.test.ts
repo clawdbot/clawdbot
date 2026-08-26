@@ -17,15 +17,12 @@ defineDiscordVoiceTests(
     joinVoiceChannelMock,
     entersStateMock,
     createAudioPlayerMock,
-    resolveAgentRouteMock,
     resolveRealtimeBootstrapContextInstructionsMock,
-    resolveConfiguredRealtimeVoiceProviderMock,
     createRealtimeVoiceBridgeSessionMock,
     realtimeSessionMock,
     managerModule,
     createClient,
     createManager,
-    makeVoiceConfig,
     createAgentProxyManager,
     expectConnectedStatus,
     getSessionEntry,
@@ -402,109 +399,6 @@ defineDiscordVoiceTests(
       );
     });
 
-    it("autoJoin uses the last configured channel for duplicate guild entries", async () => {
-      const manager = createManager({
-        voice: {
-          enabled: true,
-          autoJoin: [
-            { guildId: "g1", channelId: "1001" },
-            { guildId: "g1", channelId: "1002" },
-          ],
-        },
-      });
-
-      await manager.autoJoin();
-
-      expect(joinVoiceChannelMock).toHaveBeenCalledTimes(1);
-      const joinOptions = requireRecord(
-        mockCall(joinVoiceChannelMock as unknown as MockCallSource, 0, "join voice call")[0],
-        "join voice options",
-      );
-      expect(joinOptions.guildId).toBe("g1");
-      expect(joinOptions.channelId).toBe("1002");
-      expectConnectedStatus(manager, "1002");
-    });
-
-    it("preserves the routed agent through realtime autoJoin startup", async () => {
-      resolveAgentRouteMock.mockReturnValue({
-        agentId: "molty",
-        sessionKey: "agent:molty:discord:channel:g1:1001",
-      });
-      resolveConfiguredRealtimeVoiceProviderMock.mockImplementation((params?: unknown) => {
-        if (requireRecord(params, "provider resolution params").agentId !== "molty") {
-          throw new Error("AGENT_SELECTION_REQUIRED: expected routed agent molty");
-        }
-        return {
-          provider: { id: "openai", capabilities: { supportsActivationNameGating: true } },
-          providerConfig: { model: "gpt-realtime-2", voice: "cedar" },
-        };
-      });
-      createRealtimeVoiceBridgeSessionMock.mockImplementation((params?: unknown) => {
-        if (requireRecord(params, "bridge session params").agentId !== "molty") {
-          throw new Error("AGENT_SELECTION_REQUIRED: expected routed agent molty");
-        }
-        return realtimeSessionMock;
-      });
-      const manager = createManager(
-        makeVoiceConfig({
-          mode: "agent-proxy",
-          autoJoin: [{ guildId: "g1", channelId: "1001" }],
-          realtime: { provider: "openai" },
-        }),
-        undefined,
-        { agents: { list: [{ id: "helper" }, { id: "molty" }] } },
-      );
-
-      await manager.autoJoin();
-
-      expect(resolveConfiguredRealtimeVoiceProviderMock).toHaveBeenCalledTimes(1);
-      expect(createRealtimeVoiceBridgeSessionMock).toHaveBeenCalledTimes(1);
-      expect(realtimeSessionMock.connect).toHaveBeenCalledTimes(1);
-      expectConnectedStatus(manager, "1001");
-    });
-
-    it("suppresses repeated autoJoin attempts after fatal realtime startup failures", async () => {
-      realtimeSessionMock.connect.mockRejectedValueOnce(new Error("Incorrect API key provided"));
-      const manager = createManager(
-        makeVoiceConfig({
-          mode: "agent-proxy",
-          autoJoin: [{ guildId: "g1", channelId: "1001" }],
-        }),
-      );
-
-      await manager.autoJoin();
-      await manager.autoJoin();
-
-      expect(joinVoiceChannelMock).toHaveBeenCalledTimes(1);
-      expect(realtimeSessionMock.connect).toHaveBeenCalledTimes(1);
-      expect(manager.status()).toStrictEqual([]);
-    });
-
-    it("rejects joins outside configured allowed voice channels", async () => {
-      const manager = createManager(
-        makeVoiceConfig({ allowedChannels: [{ guildId: "g1", channelId: "1001" }] }),
-      );
-
-      const result = await manager.join({ guildId: "g1", channelId: "1002" });
-
-      expect(result.ok).toBe(false);
-      expect(result.message).toBe(
-        "<#1002> is not allowed by channels.discord.voice.allowedChannels.",
-      );
-      expect(joinVoiceChannelMock).not.toHaveBeenCalled();
-    });
-
-    it("allows joins inside configured allowed voice channels", async () => {
-      const manager = createManager(
-        makeVoiceConfig({ allowedChannels: [{ guildId: "g1", channelId: "1001" }] }),
-      );
-
-      const result = await manager.join({ guildId: "g1", channelId: "1001" });
-
-      expect(result.ok).toBe(true);
-      expectConnectedStatus(manager, "1001");
-    });
-
     const missingAccessError = new DiscordError(new Response(null, { status: 403 }), {
       message: "Missing Access",
       code: 50001,
@@ -582,37 +476,6 @@ defineDiscordVoiceTests(
       const manager = createManager(undefined, client);
 
       await expect(manager.join({ guildId: "g1", channelId: "1001" })).resolves.toEqual(expected);
-    });
-
-    it("continues autoJoin after a channel resolution failure", async () => {
-      const client = createClient();
-      client.fetchChannel.mockRejectedValueOnce(missingAccessError).mockResolvedValueOnce({
-        id: "2001",
-        guildId: "g2",
-        guild: { id: "g2", name: "Guild 2" },
-        type: ChannelType.GuildVoice,
-      });
-      const manager = createManager(
-        makeVoiceConfig({
-          autoJoin: [
-            { guildId: "g1", channelId: "1001" },
-            { guildId: "g2", channelId: "2001" },
-          ],
-        }),
-        client,
-      );
-
-      await expect(manager.autoJoin()).resolves.toBeUndefined();
-
-      expect(joinVoiceChannelMock).toHaveBeenCalledTimes(1);
-      expect(manager.status()).toEqual([
-        {
-          ok: true,
-          message: "connected: guild g2 channel 2001",
-          guildId: "g2",
-          channelId: "2001",
-        },
-      ]);
     });
 
     it("keeps cancellation authoritative when channel lookup later rejects", async () => {

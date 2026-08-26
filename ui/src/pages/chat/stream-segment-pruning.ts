@@ -1,3 +1,4 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   advanceAccumulatedStreamText,
@@ -65,6 +66,23 @@ export function discardStreamSegmentIndexes(
     state.chatStreamSegments,
     (_segment, index) => discarded.has(index),
   );
+}
+
+/** A durable commentary row immediately replaces its keyed live projection.
+ * Waiting for terminal cleanup renders both copies throughout the active run. */
+export function prunePersistedAssistantStreamSegments(
+  state: StreamCausalBoundaryState,
+  message: unknown,
+): void {
+  const fallback = asNullableRecord(asNullableRecord(message)?.openclawStreamFallback);
+  const itemId = normalizeOptionalString(fallback?.itemId);
+  if (!itemId || !state.chatStreamSegments) {
+    return;
+  }
+  const replacedIndexes = state.chatStreamSegments.flatMap((segment, index) =>
+    normalizeOptionalString(segment.itemId) === itemId ? [index] : [],
+  );
+  discardStreamSegmentIndexes(state, replacedIndexes);
 }
 
 export function pruneHistoryReplacedStreamSegments(

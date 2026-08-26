@@ -14,6 +14,11 @@ import {
   type ShellNavDrawerToggleDetail,
 } from "../../../components/command-palette-contract.ts";
 import { icons } from "../../../components/icons.ts";
+import {
+  personActivityLink,
+  renderStandalonePersonLink,
+  type PersonActivityRouting,
+} from "../../../components/person-activity-link.ts";
 import { renderSessionOwnerChip } from "../../../components/session-owner-chip.ts";
 import { isCloudWorkerPlacementState } from "../../../components/session-row-badges.ts";
 import { syncDropdownItemRadio } from "../../../components/web-awesome.ts";
@@ -44,6 +49,7 @@ type ChatPaneHeaderProps = {
   session: GatewaySessionRow | undefined;
   showOwnerChip?: boolean;
   ownerViewing?: boolean;
+  personActivity?: PersonActivityRouting;
   catalog: boolean;
   editing: boolean;
   renameValue: string;
@@ -445,11 +451,16 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
           >`
         : nothing}
       ${renderIdentityCrumbs(props, copied, copyPathLabel, copyBranchLabel)}
-      ${renderSessionOwnerChip(
-        props.showOwnerChip ? props.session?.owner?.actor : undefined,
-        "header",
-        props.session?.owner?.assignedAt !== undefined ? "owned" : "created",
-        props.ownerViewing,
+      ${renderStandalonePersonLink(
+        renderSessionOwnerChip(
+          props.showOwnerChip ? props.session?.owner?.actor : undefined,
+          "header",
+          props.session?.owner?.assignedAt !== undefined ? "owned" : "created",
+          props.ownerViewing,
+        ),
+        props.showOwnerChip
+          ? personActivityLink(props.session?.owner?.actor.id, props.personActivity)
+          : null,
       )}
       ${props.showOwnerChip && props.session?.participants?.length
         ? html`<openclaw-viewer-facepile
@@ -461,6 +472,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
               watchedSessions: [],
             }))}
             .maxVisible=${4}
+            .personActivity=${props.personActivity}
             variant="session"
           ></openclaw-viewer-facepile>`
         : nothing}
@@ -536,12 +548,13 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
         : nothing}
       ${renderGatewayPicker(props)}
       <div class="chat-pane__actions">
-        ${props.panelActions} ${compactSessionActions ? nothing : props.discussionAction}
+        ${compactSessionActions ? nothing : props.panelActions}
+        ${compactSessionActions ? nothing : props.discussionAction}
         ${props.catalog || compactSessionActions
           ? nothing
           : html`${props.diffAction} ${props.backgroundTasksAction} ${props.workspaceAction}
             ${props.sessionRailAction}`}
-        ${props.onOpenSplitView
+        ${props.onOpenSplitView && !compactSessionActions
           ? html`<openclaw-tooltip .content=${t("chat.splitView.open")}>
               <button
                 class="btn btn--ghost btn--icon chat-icon-btn chat-open-split-view"
@@ -589,7 +602,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
               </button>
             </openclaw-tooltip>`
           : nothing}
-        ${props.mergedChrome
+        ${props.mergedChrome && !compactSessionActions
           ? html`<openclaw-tooltip .content=${t("chat.openCommandPalette")}>
               <button
                 class="btn btn--ghost btn--icon chat-icon-btn chat-pane__palette-open"

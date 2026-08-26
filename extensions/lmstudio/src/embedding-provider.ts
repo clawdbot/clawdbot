@@ -3,6 +3,7 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import {
   buildRemoteBaseUrlPolicy,
   createRemoteEmbeddingProvider,
+  embeddingProviderOwnsDestination,
   normalizeEmbeddingModelWithPrefixes,
   type MemoryEmbeddingProvider,
   type MemoryEmbeddingProviderCreateOptions,
@@ -23,6 +24,7 @@ import {
   resolveLmstudioConfiguredApiKeyForProvider,
   resolveLmstudioProviderHeaders,
   resolveLmstudioRuntimeApiKey,
+  sanitizeLmstudioStringHeaders,
 } from "./runtime.js";
 
 const log = createSubsystemLogger("memory/embeddings");
@@ -144,6 +146,11 @@ function resolveLmstudioLocalServiceBaseUrl(
   return /\/api\/v1$/iu.test(configuredPath) ? `${serverBaseUrl}/api/v1` : `${serverBaseUrl}/v1`;
 }
 
+function resolveLmstudioEmbeddingBaseUrl(configuredBaseUrl?: string): string {
+  const query = configuredBaseUrl?.match(/\?[^#]*/u)?.[0] ?? "";
+  return `${resolveLmstudioInferenceBase(configuredBaseUrl)}${query}`;
+}
+
 async function resolveLmstudioEmbeddingModelKey(params: {
   baseUrl: string;
   apiKey?: string;
@@ -191,23 +198,33 @@ export async function createLmstudioEmbeddingProvider(
       : providerBaseUrl && providerBaseUrl.length > 0
         ? providerBaseUrl
         : undefined;
-  const baseUrl = resolveLmstudioInferenceBase(configuredBaseUrl);
+  const baseUrl = resolveLmstudioEmbeddingBaseUrl(configuredBaseUrl);
+  const providerOwnedBaseUrl = resolveLmstudioEmbeddingBaseUrl(providerBaseUrl);
+  const providerOwnsDestination =
+    !baseUrlSource ||
+    embeddingProviderOwnsDestination({ baseUrl, providerBaseUrl: providerOwnedBaseUrl });
   const model = normalizeLmstudioModel(options.model, resolvedProvider?.providerId);
-  const providerHeaders = await resolveLmstudioProviderHeaders({
-    config: options.config,
-    env: process.env,
-    headers: Object.assign(
-      {},
-      providerConfig?.headers,
-      !isFallbackActivation ? options.remote?.headers : {},
-    ),
-  });
-  const apiKey = hasAuthorizationHeader(providerHeaders)
+  const providerHeaders = providerOwnsDestination
+    ? await resolveLmstudioProviderHeaders({
+        config: options.config,
+        env: process.env,
+        headers: providerConfig?.headers,
+      })
+    : undefined;
+  // Memory remote headers are resolved snapshot values, never fresh SecretRefs.
+  const headerOverrides = Object.assign(
+    {},
+    providerHeaders,
+    !isFallbackActivation ? sanitizeLmstudioStringHeaders(options.remote?.headers) : undefined,
+  );
+  const apiKey = hasAuthorizationHeader(headerOverrides)
     ? undefined
     : !isFallbackActivation
-      ? remoteApiKey?.trim() || (await resolveLmstudioApiKey(options, resolvedProvider?.providerId))
+      ? remoteApiKey?.trim() ||
+        (providerOwnsDestination
+          ? await resolveLmstudioApiKey(options, resolvedProvider?.providerId)
+          : undefined)
       : await resolveLmstudioApiKey(options, resolvedProvider?.providerId);
-  const headerOverrides = Object.assign({}, providerHeaders);
   const headers =
     buildLmstudioAuthHeaders({
       apiKey,

@@ -3,9 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { WORKBOARD_STATUSES } from "@openclaw/workboard-contract";
+import { type WorkboardCard, WORKBOARD_STATUSES } from "@openclaw/workboard-contract";
 import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
@@ -47,9 +48,23 @@ function createSignal() {
   return { promise, resolve };
 }
 
+function expectSameCardState(actual: WorkboardCard | undefined, expected: WorkboardCard): void {
+  expect(actual).toBeDefined();
+  const { updatedAt: _actualUpdatedAt, ...actualState } = actual!;
+  const { updatedAt: _expectedUpdatedAt, ...expectedState } = expected;
+  expect(actualState).toEqual(expectedState);
+}
+
 function createPausedCardStore(delegate: WorkboardCardStore) {
   let pause:
     | {
+        reached: () => void;
+        waitForResume: Promise<void>;
+      }
+    | undefined;
+  let pauseAfter:
+    | {
+        matches: (key: string, value: PersistedWorkboardCard | undefined) => boolean;
         reached: () => void;
         waitForResume: Promise<void>;
       }
@@ -63,29 +78,69 @@ function createPausedCardStore(delegate: WorkboardCardStore) {
     current.reached();
     await current.waitForResume;
   };
+  const afterWrite = async (key: string, value?: PersistedWorkboardCard) => {
+    const current = pauseAfter;
+    if (!current || !current.matches(key, value)) {
+      return;
+    }
+    pauseAfter = undefined;
+    current.reached();
+    await current.waitForResume;
+  };
   return {
     store: {
       async register(key, value) {
         await beforeWrite();
         await delegate.register(key, value);
+        await afterWrite(key, value);
       },
       async registerIfAbsent(key, value) {
         await beforeWrite();
-        return await delegate.registerIfAbsent(key, value);
+        const inserted = await delegate.registerIfAbsent(key, value);
+        if (inserted) {
+          await afterWrite(key, value);
+        }
+        return inserted;
       },
       async registerIfUpdatedAt(key, value, expectedUpdatedAt) {
         await beforeWrite();
-        return await delegate.registerIfUpdatedAt(key, value, expectedUpdatedAt);
+        const updated = await delegate.registerIfUpdatedAt(key, value, expectedUpdatedAt);
+        if (updated) {
+          await afterWrite(key, value);
+        }
+        return updated;
       },
       async claimIfOwnerAvailable(key, value, expectedUpdatedAt, ownerId, now) {
         await beforeWrite();
-        return await delegate.claimIfOwnerAvailable(key, value, expectedUpdatedAt, ownerId, now);
+        const result = await delegate.claimIfOwnerAvailable(
+          key,
+          value,
+          expectedUpdatedAt,
+          ownerId,
+          now,
+        );
+        if (result === "updated") {
+          await afterWrite(key, value);
+        }
+        return result;
+      },
+      async deleteIfUpdatedAt(key, expectedUpdatedAt) {
+        await beforeWrite();
+        const deleted = await delegate.deleteIfUpdatedAt(key, expectedUpdatedAt);
+        if (deleted) {
+          await afterWrite(key);
+        }
+        return deleted;
       },
       async lookup(key) {
         return await delegate.lookup(key);
       },
       async delete(key) {
-        return await delegate.delete(key);
+        const deleted = await delegate.delete(key);
+        if (deleted) {
+          await afterWrite(key);
+        }
+        return deleted;
       },
       async entries() {
         return await delegate.entries();
@@ -99,6 +154,36 @@ function createPausedCardStore(delegate: WorkboardCardStore) {
       const resume = createSignal();
       pause = { reached: () => reached.resolve(), waitForResume: resume.promise };
       return { reached: reached.promise, resume: () => resume.resolve() };
+    },
+    pauseAfterMatchingWrite(
+      matches: (key: string, value: PersistedWorkboardCard | undefined) => boolean,
+    ) {
+      const reached = createSignal();
+      const resume = createSignal();
+      pauseAfter = {
+        matches,
+        reached: () => reached.resolve(),
+        waitForResume: resume.promise,
+      };
+      return { reached: reached.promise, resume: () => resume.resolve() };
+    },
+  };
+}
+
+function createConcurrentSqliteHarness(prefix: string) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const dbPath = path.join(dir, "workboard.sqlite");
+  const operationStores = createWorkboardSqliteStores({ dbPath });
+  const hostStores = createWorkboardSqliteStores({ dbPath });
+  const paused = createPausedCardStore(operationStores.cards);
+  return {
+    operation: new WorkboardStore(paused.store),
+    host: new WorkboardStore(hostStores.cards),
+    paused,
+    close() {
+      hostStores.close();
+      operationStores.close();
+      fs.rmSync(dir, { recursive: true, force: true });
     },
   };
 }
@@ -114,6 +199,45 @@ function statfsFixture(type: number): ReturnType<typeof fs.statfsSync> {
     frsize: 1024,
     ffree: 0,
   };
+}
+
+const WORKBOARD_CARD_CHILD_INDEXES = [
+  ["workboard_card_events", "workboard_card_events_card_idx"],
+  ["workboard_card_attempts", "workboard_card_attempts_card_idx"],
+  ["workboard_card_comments", "workboard_card_comments_card_idx"],
+  ["workboard_card_links", "workboard_card_links_card_idx"],
+  ["workboard_card_proof", "workboard_card_proof_card_idx"],
+  ["workboard_card_artifacts", "workboard_card_artifacts_card_idx"],
+  ["workboard_card_notifications", "workboard_card_notifications_card_idx"],
+  ["workboard_worker_logs", "workboard_worker_logs_card_idx"],
+] as const;
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function explainWorkboardQueryPlan(
+  db: DatabaseSync,
+  sql: string,
+  params: readonly (number | string | null)[] = [],
+): string {
+  const rows = db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...params) as Array<{
+    detail?: unknown;
+  }>;
+  return rows
+    .map((row) => (typeof row.detail === "string" ? row.detail : JSON.stringify(row.detail ?? "")))
+    .join("\n");
+}
+
+function withWorkboardSqliteDatabase(prefix: string, run: (db: DatabaseSync) => void): void {
+  const dir = tempDirs.make(prefix);
+  const dbPath = path.join(dir, "workboard.sqlite");
+  const stores = createWorkboardSqliteStores({ dbPath });
+  stores.close();
+  const db = new DatabaseSync(dbPath);
+  try {
+    run(db);
+  } finally {
+    db.close();
+  }
 }
 
 describe("WorkboardStore", () => {
@@ -232,6 +356,34 @@ describe("WorkboardStore", () => {
         position: 2000,
         updatedAt: moved.updatedAt,
       });
+    } finally {
+      secondStores.close();
+      firstStores.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("deletes a sqlite card only at its exact updatedAt version", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-delete-cas-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const firstStores = createWorkboardSqliteStores({ dbPath });
+    const secondStores = createWorkboardSqliteStores({ dbPath });
+    const first = new WorkboardStore(firstStores.cards);
+    const second = new WorkboardStore(secondStores.cards);
+    try {
+      const created = await first.create({ title: "Delete fence" });
+      const edited = await second.update(created.id, { notes: "Concurrent edit" });
+
+      await expect(
+        firstStores.cards.deleteIfUpdatedAt(created.id, created.updatedAt),
+      ).resolves.toBe(false);
+      await expect(first.get(created.id)).resolves.toMatchObject({
+        notes: "Concurrent edit",
+      });
+      await expect(firstStores.cards.deleteIfUpdatedAt(created.id, edited.updatedAt)).resolves.toBe(
+        true,
+      );
+      await expect(first.get(created.id)).resolves.toBeUndefined();
     } finally {
       secondStores.close();
       firstStores.close();
@@ -428,6 +580,85 @@ describe("WorkboardStore", () => {
     const restored = await store.captureSession({ title: "Restore", sessionKey, boardId: "other" });
     expect([active.id, historical.id]).toContain(restored.id);
     expect(restored.metadata?.archivedAt).toBeUndefined();
+  });
+
+  it("uses card child indexes for per-card ordered reads", () => {
+    withWorkboardSqliteDatabase("openclaw-workboard-index-read-", (db) => {
+      for (const [table, index] of WORKBOARD_CARD_CHILD_INDEXES) {
+        const plan = explainWorkboardQueryPlan(
+          db,
+          `SELECT * FROM ${table} WHERE card_id = ? ORDER BY ordinal ASC`,
+          ["card-1"],
+        );
+        expect(plan).toContain(index);
+        expect(plan).not.toContain("USE TEMP B-TREE FOR ORDER BY");
+      }
+    });
+  });
+
+  it("uses card child indexes for whole-board ordered scans", () => {
+    withWorkboardSqliteDatabase("openclaw-workboard-index-scan-", (db) => {
+      for (const [table, index] of WORKBOARD_CARD_CHILD_INDEXES) {
+        const plan = explainWorkboardQueryPlan(
+          db,
+          `SELECT * FROM ${table} ORDER BY card_id ASC, ordinal ASC`,
+        );
+        expect(plan).toContain(index);
+        expect(plan).not.toContain("USE TEMP B-TREE FOR ORDER BY");
+      }
+    });
+  });
+
+  it("uses card child indexes for parent-card cascades", () => {
+    withWorkboardSqliteDatabase("openclaw-workboard-index-cascade-", (db) => {
+      db.exec("PRAGMA foreign_keys = ON");
+      const plan = explainWorkboardQueryPlan(db, "DELETE FROM workboard_cards WHERE id = ?", [
+        "card-1",
+      ]);
+      for (const [, index] of WORKBOARD_CARD_CHILD_INDEXES) {
+        expect(plan).toContain(index);
+      }
+    });
+  });
+
+  it("restores dropped card child indexes without changing the schema version", () => {
+    const dir = tempDirs.make("openclaw-workboard-index-reopen-");
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const initialized = createWorkboardSqliteStores({ dbPath });
+    initialized.close();
+    const db = new DatabaseSync(dbPath);
+    let initialMigrationIds: Array<{ id: string }>;
+    try {
+      initialMigrationIds = db
+        .prepare("SELECT id FROM workboard_schema_migrations ORDER BY id")
+        .all() as Array<{ id: string }>;
+      for (const [, index] of WORKBOARD_CARD_CHILD_INDEXES) {
+        db.exec(`DROP INDEX ${index}`);
+      }
+    } finally {
+      db.close();
+    }
+
+    const reopened = createWorkboardSqliteStores({ dbPath });
+    reopened.close();
+    const verified = new DatabaseSync(dbPath, { readOnly: true });
+    try {
+      const indexes = new Set(
+        (
+          verified.prepare("SELECT name FROM sqlite_schema WHERE type = 'index'").all() as Array<{
+            name: string;
+          }>
+        ).map((row) => row.name),
+      );
+      for (const [, index] of WORKBOARD_CARD_CHILD_INDEXES) {
+        expect(indexes).toContain(index);
+      }
+      expect(
+        verified.prepare("SELECT id FROM workboard_schema_migrations ORDER BY id").all(),
+      ).toEqual(initialMigrationIds);
+    } finally {
+      verified.close();
+    }
   });
 
   it("persists boards, cards, subscriptions, and attachment blobs in sqlite", async () => {
@@ -979,6 +1210,95 @@ describe("WorkboardStore", () => {
       metadata: { automation: { workspaceAccess: { unrestricted: true } } },
     });
     expect(untrusted.metadata?.automation?.workspaceAccess).toBeUndefined();
+  });
+
+  it("only accepts launch state from store-owned transitions", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({
+      title: "Trusted launch",
+      status: "ready",
+      workspaceAccess: { unrestricted: true },
+      metadata: {
+        automation: {
+          launch: {
+            phase: "prepared",
+            requestedSessionKey: "injected-session",
+            provisionalRunId: "injected-run",
+            preparedAt: 1,
+          },
+        },
+      },
+    });
+    expect(card.metadata?.automation?.launch).toBeUndefined();
+
+    const claimed = await store.claim(card.id, { ownerId: "worker", token: "claim-token" });
+    const prepared = await store.prepareExecutionLaunch(card.id, {
+      requestedSessionKey: "subagent:workboard-default-trusted",
+      now: 100,
+      scope: { ownerId: "worker", token: claimed.token },
+    });
+    const updated = await store.update(card.id, {
+      metadata: {
+        automation: {
+          launch: {
+            ...prepared.launch,
+            phase: "accepted",
+            acceptedAt: 101,
+            acceptedSessionKey: "agent:injected:subagent:workboard-default-trusted",
+            acceptedRunId: "injected-accepted-run",
+          },
+        },
+      },
+    });
+
+    expect(updated.metadata?.automation?.launch).toEqual(prepared.launch);
+  });
+
+  it("does not let a delayed launch failure overwrite a newer retry", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Retried launch", status: "ready" });
+    const firstClaim = await store.claim(card.id, { ownerId: "worker" });
+    const first = await store.prepareExecutionLaunch(card.id, {
+      requestedSessionKey: "subagent:workboard-default-retried",
+      now: 100,
+      scope: { ownerId: "worker", token: firstClaim.token },
+    });
+    await store.failPreparedLaunch(card.id, {
+      expectedLaunch: first.launch,
+      reason: "first launch failed",
+      failedAt: 101,
+    });
+    await store.unblock(card.id);
+    const retryClaim = await store.claim(card.id, { ownerId: "worker" });
+    const retry = await store.prepareExecutionLaunch(card.id, {
+      requestedSessionKey: "subagent:workboard-default-retried",
+      now: 200,
+      scope: { ownerId: "worker", token: retryClaim.token },
+    });
+
+    await expect(
+      store.failPreparedLaunch(card.id, {
+        expectedLaunch: first.launch,
+        reason: "delayed first failure",
+        failedAt: 201,
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      store.syncLifecycle(card.id, {
+        targetStatus: "review",
+        executionStatus: "review",
+        sourceUpdatedAt: undefined,
+        stale: undefined,
+        now: 202,
+        association: {
+          expectedSessionKey: retry.launch.requestedSessionKey,
+          expectedRunId: retry.launch.provisionalRunId,
+          sessionKey: `agent:worker:${retry.launch.requestedSessionKey}`,
+          acceptedAt: 150,
+        },
+      }),
+    ).resolves.toBe(false);
+    expect((await store.get(card.id))?.metadata?.automation?.launch).toEqual(retry.launch);
   });
 
   it("moves cards and records lifecycle timestamps", async () => {
@@ -2545,6 +2865,50 @@ describe("WorkboardStore", () => {
     expect(completed.metadata?.notifications?.[0]?.message.length).toBeLessThanOrEqual(240);
     expect(blocked.metadata?.comments?.[0]?.body).toBe(longReason);
     expect(blocked.metadata?.notifications?.[0]?.message.length).toBeLessThanOrEqual(240);
+  });
+
+  it("heals oversized persisted notifications and keeps dispatching sibling cards", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-notification-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const stores = createWorkboardSqliteStores({ dbPath });
+    try {
+      const store = new WorkboardStore(stores.cards);
+      const poisoned = await store.create({ title: "Oversized notification", status: "ready" });
+      const sibling = await store.create({ title: "Unaffected sibling", status: "ready" });
+      const oversized = `${"x".repeat(238)}🦞${" tail".repeat(60)}`;
+      const rawDb = new DatabaseSync(dbPath);
+      try {
+        rawDb
+          .prepare(
+            "INSERT INTO workboard_card_notifications (id, card_id, ordinal, kind, message, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+          )
+          .run("oversized", poisoned.id, 0, "failed", oversized, Date.now());
+      } finally {
+        rawDb.close();
+      }
+
+      expect((await store.get(poisoned.id))?.metadata?.notifications?.[0]?.message).toBe(oversized);
+      await expect(store.dispatch()).resolves.toBeDefined();
+
+      const repaired = await store.get(poisoned.id);
+      expect(repaired?.metadata?.notifications?.[0]?.message).toBe(`${"x".repeat(238)}…`);
+      expect(repaired?.metadata?.automation?.dispatchCount).toBe(1);
+      expect((await store.get(sibling.id))?.metadata?.automation?.dispatchCount).toBe(1);
+
+      const verifyDb = new DatabaseSync(dbPath, { readOnly: true });
+      try {
+        expect(
+          verifyDb
+            .prepare("SELECT message FROM workboard_card_notifications WHERE id = ?")
+            .get("oversized"),
+        ).toEqual({ message: `${"x".repeat(238)}…` });
+      } finally {
+        verifyDb.close();
+      }
+    } finally {
+      stores.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("dispatches ready cards and blocks expired or timed-out work", async () => {
@@ -4141,6 +4505,242 @@ describe("WorkboardStore", () => {
         links: [expect.objectContaining({ type: "relates_to", targetCardId: parent.id })],
       },
     });
+  });
+
+  it("rolls back every task-owned decomposition write in sqlite when uncontended", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-decompose-control-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const stores = createWorkboardSqliteStores({ dbPath });
+    const store = new WorkboardStore(stores.cards);
+    try {
+      const parent = await store.create({ title: "Parent" });
+      const reusedChild = await store.create({
+        title: "Existing child",
+        idempotencyKey: "child-key",
+      });
+
+      await expect(
+        store.decompose(parent.id, {
+          children: [
+            { title: "New child" },
+            { title: "Existing child", idempotencyKey: "child-key" },
+            { notes: "Missing title" },
+          ],
+        }),
+      ).rejects.toThrow(/title is required/);
+
+      await expect(store.list()).resolves.toEqual([
+        expect.objectContaining({ id: parent.id }),
+        expect.objectContaining({ id: reusedChild.id }),
+      ]);
+      expectSameCardState(await store.get(parent.id), parent);
+      expectSameCardState(await store.get(reusedChild.id), reusedChild);
+    } finally {
+      stores.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reverts completed parent state while preserving a concurrent parent edit", async () => {
+    const harness = createConcurrentSqliteHarness("openclaw-workboard-parent-rollback-");
+    const { operation, host, paused } = harness;
+    try {
+      const createdParent = await operation.create({ title: "Parent", status: "ready" });
+      const claimed = await operation.claim(createdParent.id, { ownerId: "worker" });
+      const parent = claimed.card;
+      const reusedChild = await operation.create({
+        title: "Existing child",
+        idempotencyKey: "child-key",
+      });
+      const pause = paused.pauseAfterMatchingWrite(
+        (key, value) => key === parent.id && value?.card.status === "done",
+      );
+      const decomposition = operation.decompose(
+        parent.id,
+        {
+          summary: "Task-owned decomposition",
+          children: [{ title: "Existing child", idempotencyKey: "child-key" }],
+        },
+        { ownerId: "worker", token: claimed.token },
+      );
+
+      await pause.reached;
+      await host.update(parent.id, { notes: "Concurrent parent edit" });
+      pause.resume();
+
+      await expect(decomposition).rejects.toThrow(/changed while you were editing/);
+      const rolledBackParent = await host.get(parent.id);
+      expect(rolledBackParent?.status).toBe(parent.status);
+      expect(rolledBackParent?.notes).toBe("Concurrent parent edit");
+      expect(rolledBackParent?.completedAt).toBeUndefined();
+      expect(rolledBackParent?.metadata).toEqual(parent.metadata);
+      expect(rolledBackParent?.events?.map((event) => event.kind)).toEqual([
+        ...(parent.events?.map((event) => event.kind) ?? []),
+        "edited",
+      ]);
+      expectSameCardState(await host.get(reusedChild.id), reusedChild);
+    } finally {
+      harness.close();
+    }
+  });
+
+  it.each(["reused child", "new child"] as const)(
+    "reverts decomposition-owned links while preserving a concurrent %s edit",
+    async (target) => {
+      const harness = createConcurrentSqliteHarness("openclaw-workboard-child-rollback-");
+      const { operation, host, paused } = harness;
+      try {
+        const parent = await operation.create({ title: "Parent" });
+        const reusedChild =
+          target === "reused child"
+            ? await operation.create({ title: "Existing child", idempotencyKey: "child-key" })
+            : undefined;
+        const pause = paused.pauseAfterMatchingWrite((_key, value) => {
+          const card = value?.card;
+          if (!card || (target === "reused child" && card.id !== reusedChild?.id)) {
+            return false;
+          }
+          if (target === "new child" && card.title !== "New child") {
+            return false;
+          }
+          return Boolean(
+            card.metadata?.links?.some(
+              (link) => link.type === "parent" && link.targetCardId === parent.id,
+            ),
+          );
+        });
+        const decomposition = operation.decompose(parent.id, {
+          children: [
+            reusedChild
+              ? { title: "Existing child", idempotencyKey: "child-key" }
+              : { title: "New child" },
+            { notes: "Missing title" },
+          ],
+        });
+
+        await pause.reached;
+        const child = reusedChild ?? (await host.list()).find((card) => card.title === "New child");
+        expect(child).toBeDefined();
+        await host.update(child!.id, { notes: `Concurrent ${target} edit` });
+        pause.resume();
+
+        await expect(decomposition).rejects.toThrow(/title is required/);
+        expectSameCardState(await host.get(parent.id), parent);
+        const rolledBackChild = await host.get(child!.id);
+        expect(rolledBackChild?.notes).toBe(`Concurrent ${target} edit`);
+        expect(rolledBackChild?.metadata?.links).toBeUndefined();
+        expect(rolledBackChild?.metadata?.automation).toMatchObject(
+          target === "reused child"
+            ? { idempotencyKey: "child-key" }
+            : { createdByCardId: parent.id },
+        );
+        expect(rolledBackChild?.events?.map((event) => event.kind)).toEqual(["created", "edited"]);
+      } finally {
+        harness.close();
+      }
+    },
+  );
+
+  it("reverts a partial link while preserving a concurrent child edit", async () => {
+    const harness = createConcurrentSqliteHarness("openclaw-workboard-link-rollback-");
+    const { operation, host, paused } = harness;
+    try {
+      const parent = await operation.create({ title: "Parent" });
+      const child = await operation.create({ title: "Child" });
+      const pause = paused.pauseAfterMatchingWrite(
+        (key, value) =>
+          key === parent.id &&
+          Boolean(
+            value?.card.metadata?.links?.some(
+              (link) => link.type === "child" && link.targetCardId === child.id,
+            ),
+          ),
+      );
+      const linking = operation.linkCards(parent.id, child.id);
+
+      await pause.reached;
+      await host.update(child.id, { notes: "Concurrent child edit" });
+      pause.resume();
+
+      await expect(linking).rejects.toThrow(/changed while you were editing/);
+      expectSameCardState(await host.get(parent.id), parent);
+      await expect(host.get(child.id)).resolves.toMatchObject({
+        notes: "Concurrent child edit",
+      });
+      expect((await host.get(child.id))?.metadata?.links).toBeUndefined();
+      expect((await host.get(child.id))?.events?.map((event) => event.kind)).toEqual([
+        ...(child.events?.map((event) => event.kind) ?? []),
+        "edited",
+      ]);
+    } finally {
+      harness.close();
+    }
+  });
+
+  it("reverts task-owned links while preserving a concurrently adopted child", async () => {
+    const harness = createConcurrentSqliteHarness("openclaw-workboard-create-rollback-");
+    const { operation, host, paused } = harness;
+    try {
+      const firstParent = await operation.create({ title: "First parent" });
+      const secondParent = await operation.create({ title: "Second parent" });
+      const pause = paused.pauseAfterMatchingWrite(
+        (key, value) =>
+          key === secondParent.id &&
+          Boolean(
+            value?.card.metadata?.links?.some(
+              (link) => link.type === "child" && link.targetCardId !== undefined,
+            ),
+          ),
+      );
+      const creation = operation.create({
+        title: "New child",
+        parents: [firstParent.id, secondParent.id],
+      });
+
+      await pause.reached;
+      const child = (await host.list()).find((card) => card.title === "New child");
+      expect(child).toBeDefined();
+      await host.update(child!.id, { notes: "Concurrent child edit" });
+      pause.resume();
+
+      await expect(creation).rejects.toThrow(/changed while you were editing/);
+      await expect(host.get(child!.id)).resolves.toMatchObject({
+        notes: "Concurrent child edit",
+      });
+      expect((await host.get(child!.id))?.metadata?.links).toBeUndefined();
+      expect((await host.get(child!.id))?.events?.map((event) => event.kind)).toEqual([
+        "created",
+        "edited",
+      ]);
+      expectSameCardState(await host.get(firstParent.id), firstParent);
+      expectSameCardState(await host.get(secondParent.id), secondParent);
+    } finally {
+      harness.close();
+    }
+  });
+
+  it("preserves a linked-create failure when card compensation also fails", async () => {
+    const cards = createMemoryStore();
+    const store = new WorkboardStore(cards);
+    const parent = await store.create({ title: "Claimed parent", status: "ready" });
+    await store.claim(parent.id, { ownerId: "worker" });
+    cards.delete = async () => {
+      throw new Error("card compensation failed");
+    };
+
+    const error = await store
+      .create({ title: "New child", parents: [parent.id] }, { ownerId: "other" })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(AggregateError);
+    expect(error).toMatchObject({
+      message: expect.stringMatching(/claimed by/),
+      cause: expect.objectContaining({ message: expect.stringMatching(/claimed by/) }),
+    });
+    expect((error as AggregateError).errors).toEqual([
+      expect.objectContaining({ message: expect.stringMatching(/claimed by/) }),
+      expect.objectContaining({ message: "card compensation failed" }),
+    ]);
   });
 
   it("preserves parent child links when decomposition leaves the parent open", async () => {

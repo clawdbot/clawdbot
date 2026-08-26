@@ -22,8 +22,7 @@ import {
   isProviderAdvertised,
   parseProvidersFromHelp,
 } from "../../scripts/crabbox-wrapper-providers.mts";
-import { makeTempDir } from "../helpers/temp-dir.js";
-import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { makeTempDir, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs: string[] = [];
 const invocationLogTempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -729,7 +728,7 @@ function expectMacosPackageCommand(
   expect(output.args).toContain("--shell");
   expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
   expect(remoteCommand).toContain("pnpm --version >&2");
-  expect(remoteCommand).toContain("openclaw_crabbox_require_macos_swift_62");
+  expect(remoteCommand).toContain("openclaw_crabbox_require_macos_swift_63");
   beforeGrouped?.(remoteCommand);
   expectGroupedShellCommand(remoteCommand, command);
 }
@@ -2295,7 +2294,7 @@ describe("scripts/crabbox-wrapper", () => {
     expectGroupedShellCommand(remoteCommand, "node --version");
   });
 
-  it("preflights Swift 6.2 for raw AWS macOS Swift app builds", () => {
+  it("preflights Swift 6.3 for raw AWS macOS Swift app builds", () => {
     const { output, remoteCommand } = runSuccessfulMacosCommand([
       "swift",
       "build",
@@ -2305,13 +2304,14 @@ describe("scripts/crabbox-wrapper", () => {
       "OpenClaw",
     ]);
     expect(output.args).toContain("--shell");
-    expect(remoteCommand).toContain("openclaw_crabbox_require_macos_swift_62");
-    expect(remoteCommand).toContain("/Applications/Xcode_26.1.app");
+    expect(remoteCommand).toContain("openclaw_crabbox_require_macos_swift_63");
+    expect(remoteCommand).toContain("/Applications/Xcode_26*.app");
     expect(remoteCommand).toContain("/Applications/Xcode-26*.app");
+    expect(remoteCommand).toContain("/Applications/Xcode_2[7-9]*.app");
     expect(remoteCommand).toContain('sudo xcode-select -s "$openclaw_developer"');
-    expect(remoteCommand).toContain("OpenClaw macOS app proof requires Swift tools 6.2+");
+    expect(remoteCommand).toContain("OpenClaw macOS app proof requires Swift tools 6.3+");
     expect(remoteCommand).toContain("xcodebuild -version");
-    expect(remoteCommand).toContain("OpenClaw macOS app proof requires Xcode 26.x");
+    expect(remoteCommand).toContain("OpenClaw macOS app proof requires Xcode 26.4+");
     expect(remoteCommand).not.toContain("openclaw_crabbox_bootstrap_macos_js");
     expectGroupedShellCommand(
       remoteCommand,
@@ -2324,8 +2324,8 @@ describe("scripts/crabbox-wrapper", () => {
       runSuccessfulMacosCommand(["pnpm", "mac:package"]),
       "pnpm mac:package",
       (remoteCommand) => {
-        expect(remoteCommand).toContain("OpenClaw macOS app proof requires Swift tools 6.2+");
-        expect(remoteCommand).toContain("OpenClaw macOS app proof requires Xcode 26.x");
+        expect(remoteCommand).toContain("OpenClaw macOS app proof requires Swift tools 6.3+");
+        expect(remoteCommand).toContain("OpenClaw macOS app proof requires Xcode 26.4+");
       },
     );
   });
@@ -2339,7 +2339,7 @@ describe("scripts/crabbox-wrapper", () => {
     ]);
     expect(output.args).toContain("--shell");
     expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
-    expect(remoteCommand).toContain("openclaw_crabbox_require_macos_swift_62");
+    expect(remoteCommand).toContain("openclaw_crabbox_require_macos_swift_63");
     expectGroupedShellCommand(remoteCommand, "openclaw_crabbox_env -i pnpm mac:package");
   });
 
@@ -2376,7 +2376,7 @@ describe("scripts/crabbox-wrapper", () => {
         ...args,
       ]);
       expect(remoteCommand).not.toContain("openclaw_crabbox_bootstrap_macos_js");
-      expect(remoteCommand).toContain("openclaw_crabbox_require_macos_swift_62");
+      expect(remoteCommand).toContain("openclaw_crabbox_require_macos_swift_63");
     }
   });
 
@@ -2519,7 +2519,7 @@ describe("scripts/crabbox-wrapper", () => {
   ])("$name", ({ js = true, script }) => {
     const { output, remoteCommand } = runSuccessfulMacosCommand(["bash", script]);
     expect(output.args).toContain("--shell");
-    expect(remoteCommand).toContain("openclaw_crabbox_require_macos_swift_62");
+    expect(remoteCommand).toContain("openclaw_crabbox_require_macos_swift_63");
     if (js) {
       expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
       expect(remoteCommand).toContain("pnpm --version >&2");
@@ -2534,7 +2534,7 @@ describe("scripts/crabbox-wrapper", () => {
       "echo",
       "scripts/package-mac-app.sh",
     ]);
-    expect(remoteCommand).not.toContain("openclaw_crabbox_require_macos_swift_62");
+    expect(remoteCommand).not.toContain("openclaw_crabbox_require_macos_swift_63");
     expect(output.args).toEqual([
       "run",
       "--provider",
@@ -2575,7 +2575,7 @@ describe("scripts/crabbox-wrapper", () => {
     expect(output.args).toContain("--shell");
     expect(result.stderr).toContain("Node/Corepack/pnpm/Bun");
     expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
-    expect(remoteCommand).toContain("bun_version=1.3.14");
+    expect(remoteCommand).toContain("bun_version=1.4.0");
     expect(remoteCommand).toContain('bun_root="$tool_root/bun-v${bun_version}"');
     expect(remoteCommand).toContain(
       'npm install --global --prefix "$bun_root" --fetch-timeout=120000 --fetch-retries=2 --fetch-retry-mintimeout=2000 --fetch-retry-maxtimeout=15000 "bun@${bun_version}"',
@@ -2842,10 +2842,10 @@ describe("scripts/crabbox-wrapper", () => {
     ].join("\n");
     const { output } = runSuccessfulMacosScript(script);
     expect(output.scriptContent).toContain("openclaw_crabbox_bootstrap_macos_js");
-    expect(output.scriptContent).toContain("openclaw_crabbox_require_macos_swift_62");
-    expect(output.scriptContent).toContain("openclaw_crabbox_require_macos_swift_62 || exit $?");
-    expect(output.scriptContent).toContain("OpenClaw macOS app proof requires Swift tools 6.2+");
-    expect(output.scriptContent).toContain("OpenClaw macOS app proof requires Xcode 26.x");
+    expect(output.scriptContent).toContain("openclaw_crabbox_require_macos_swift_63");
+    expect(output.scriptContent).toContain("openclaw_crabbox_require_macos_swift_63 || exit $?");
+    expect(output.scriptContent).toContain("OpenClaw macOS app proof requires Swift tools 6.3+");
+    expect(output.scriptContent).toContain("OpenClaw macOS app proof requires Xcode 26.4+");
     expect(output.scriptContent).toContain(`\n${script}`);
   });
 
@@ -2854,8 +2854,8 @@ describe("scripts/crabbox-wrapper", () => {
     const { output } = runSuccessfulMacosScript(script);
     expect(output.scriptContent).toContain("openclaw_crabbox_bootstrap_macos_js");
     expect(output.scriptContent).toContain("pnpm --version >&2");
-    expect(output.scriptContent).toContain("openclaw_crabbox_require_macos_swift_62");
-    expect(output.scriptContent).toContain("openclaw_crabbox_require_macos_swift_62 || exit $?");
+    expect(output.scriptContent).toContain("openclaw_crabbox_require_macos_swift_63");
+    expect(output.scriptContent).toContain("openclaw_crabbox_require_macos_swift_63 || exit $?");
     expect(output.scriptContent).toContain(`\n${script}\n`);
   });
 
@@ -2871,7 +2871,7 @@ describe("scripts/crabbox-wrapper", () => {
   it("bootstraps Bun for AWS macOS script-stdin bun shebangs", () => {
     const script = ["#!/usr/bin/env bun", "console.log(Bun.version);"].join("\n");
     const { output } = runSuccessfulMacosScript(script);
-    expect(output.scriptContent).toContain("bun_version=1.3.14");
+    expect(output.scriptContent).toContain("bun_version=1.4.0");
     expect(output.scriptContent).toContain(
       'npm install --global --prefix "$bun_root" --fetch-timeout=120000 --fetch-retries=2 --fetch-retry-mintimeout=2000 --fetch-retry-maxtimeout=15000 "bun@${bun_version}"',
     );

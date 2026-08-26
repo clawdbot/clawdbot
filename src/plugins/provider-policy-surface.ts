@@ -8,6 +8,7 @@ import type {
   ProviderResolveModelRoutesContext,
 } from "../plugin-sdk/provider-model-types.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import type {
   ProviderApplyConfigDefaultsContext,
   ProviderNormalizeConfigContext,
@@ -50,6 +51,7 @@ export type InspectEmbeddingProviderSetup = (params: {
 
 /** Provider policy hooks supported by bundled and trusted official plugins. */
 export type ProviderPolicySurface = {
+  deprecatedProfileIds?: readonly string[];
   normalizeConfig?: (ctx: ProviderNormalizeConfigContext) => ModelProviderConfig | null | undefined;
   applyConfigDefaults?: (
     ctx: ProviderApplyConfigDefaultsContext,
@@ -83,6 +85,12 @@ const bundledProviderPolicySurfaceByPluginId = new Map<
 >();
 const externalProviderPolicySurfaceByPluginId = new Map<string, ProviderPolicySurface | null>();
 
+// Policy hooks and negative lookups must not outlive plugin replacement or installation.
+registerPluginMetadataProcessMemoLifecycleClear(() => {
+  bundledProviderPolicySurfaceByPluginId.clear();
+  externalProviderPolicySurfaceByPluginId.clear();
+});
+
 const PROVIDER_POLICY_HOOK_KEYS = [
   "normalizeConfig",
   "applyConfigDefaults",
@@ -96,6 +104,12 @@ const PROVIDER_POLICY_HOOK_KEYS = [
 
 function extractProviderPolicySurface(mod: Record<string, unknown>): ProviderPolicySurface | null {
   const surface: ProviderPolicySurface = {};
+  if (
+    Array.isArray(mod.deprecatedProfileIds) &&
+    mod.deprecatedProfileIds.every((value) => typeof value === "string")
+  ) {
+    surface.deprecatedProfileIds = mod.deprecatedProfileIds;
+  }
   for (const key of PROVIDER_POLICY_HOOK_KEYS) {
     const hook = mod[key];
     if (typeof hook === "function") {

@@ -188,7 +188,7 @@ describe("recent session prefetch", () => {
     controller.hostUpdated?.();
   }
 
-  it("idles, excludes open and fresh sessions, and fills five cache entries sequentially", async () => {
+  it("quickly warms five eligible sessions together without reopening fresh or active history", async () => {
     store.write("agent:main:fresh", historySnapshot("fresh"));
     await store.flush();
     const open = vi.spyOn(indexedDB, "open");
@@ -232,19 +232,18 @@ describe("recent session prefetch", () => {
 
     updatePrefetch(state);
     expect(request).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(300);
     await settlePromises();
-    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledTimes(5);
 
     for (let index = 0; index < 5; index += 1) {
-      expect(request).toHaveBeenCalledTimes(index + 1);
       const pendingRequest = pending[index];
       if (!pendingRequest) {
         throw new Error(`missing pending history request ${index}`);
       }
       pendingRequest.resolve(historyResult(pendingRequest.sessionKey));
-      await settlePromises();
     }
+    await settlePromises();
 
     expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([
       "agent:main:eligible-1",
@@ -398,6 +397,75 @@ describe("recent session prefetch", () => {
       pagination: { hasMore: false, completeSnapshot: true },
       sessionId: "session-delta",
     });
+  });
+
+  it("retains the prior cursor when a delta carries transient active-run replay", async () => {
+    const sessionKey = "agent:main:active";
+    cacheChatSessionSnapshot(
+      cache,
+      snapshotHost,
+      { sessionKey },
+      {
+        deltaCursor: "cursor-1",
+        messages: [{ role: "user", content: "cached" }],
+        pagination: { hasMore: false, completeSnapshot: true },
+        sessionId: "session-active",
+      },
+    );
+    const request = vi.fn(async () => ({
+      kind: "delta",
+      messages: [],
+      deltaCursor: "cursor-2",
+      sessionInfo: {
+        key: sessionKey,
+        kind: "direct",
+        sessionId: "session-active",
+        updatedAt: 2,
+        hasActiveRun: true,
+      },
+      inFlightRun: {
+        runId: "run-active",
+        events: [
+          {
+            runId: "run-active",
+            seq: 1,
+            stream: "item",
+            ts: 1,
+            sessionKey,
+            data: { kind: "preamble", itemId: "progress", progressText: "Still working" },
+          },
+        ],
+      },
+    }));
+
+    updatePrefetch({
+      client: { request } as unknown as GatewayBrowserClient,
+      listRevision: 1,
+      openSessionKeys: [],
+      rows: [row(sessionKey, NOW + 1)],
+    });
+    await vi.advanceTimersByTimeAsync(2_000);
+    await settlePromises();
+
+    expect(readChatSessionSnapshot(cache, snapshotHost, { sessionKey })?.deltaCursor).toBe(
+      "cursor-1",
+    );
+  });
+
+  it("leaves active sessions for the presented pane to revalidate", async () => {
+    const sessionKey = "agent:main:active";
+    const request = vi.fn();
+
+    updatePrefetch({
+      client: { request } as unknown as GatewayBrowserClient,
+      listRevision: 1,
+      openSessionKeys: [],
+      rows: [{ ...row(sessionKey, NOW + 1), hasActiveRun: true, status: "running" }],
+    });
+    await vi.advanceTimersByTimeAsync(2_000);
+    await settlePromises();
+
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("skips the cycle when another tab holds the Web Lock", async () => {

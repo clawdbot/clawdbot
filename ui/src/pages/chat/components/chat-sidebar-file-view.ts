@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
+import { localEditorFilePath } from "../../../app/native-editor-locality.runtime.ts";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
@@ -52,20 +53,6 @@ export function computeFileMatches(content: string, query: string): number[] {
     );
 }
 
-export function absoluteFilePath(content: FileSidebarContent): string | null {
-  if (
-    content.path.startsWith("/") ||
-    /^[a-z]:[\\/]/i.test(content.path) ||
-    content.path.startsWith("\\\\")
-  ) {
-    return content.path;
-  }
-  if (!content.root) {
-    return null;
-  }
-  return `${content.root.replace(/[\\/]+$/, "")}/${content.path.replace(/^[\\/]+/, "")}`;
-}
-
 export type FileCopyAction = "path" | "contents";
 type FileCopyFeedback = Partial<Record<FileCopyAction, "copied" | "failed">>;
 export const emptyCopyFeedback: FileCopyFeedback = {};
@@ -74,6 +61,7 @@ export type FileViewControls = {
   copyFeedback: FileCopyFeedback;
   currentMatchIndex: number;
   dirty: boolean;
+  execNode: string | null;
   editorMenuOpen: boolean;
   editing: boolean;
   loadingEditor: boolean;
@@ -129,7 +117,7 @@ export function renderSidebarFile(
   onViewRawText: () => void,
   controls?: FileViewControls,
 ) {
-  const absolutePath = absoluteFilePath(content);
+  const absolutePath = localEditorFilePath(content, controls?.execNode);
   const matchNumber = controls?.matches.length ? controls.currentMatchIndex + 1 : 0;
   return html`
     <section class="sidebar-file-view">

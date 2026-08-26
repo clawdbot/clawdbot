@@ -1,5 +1,8 @@
 import { Command } from "commander";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayProtocolRequestTimeoutError } from "../../packages/gateway-client/src/protocol-request.js";
+import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
+import { GatewayTransportError } from "../gateway/transport-error.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -17,7 +20,10 @@ const mocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
   config: {} as { gateway?: { mode: "local" | "remote" } },
   gatewayApply: undefined as
-    | ((request: { method: string; params?: { proposalId?: string } }) => Promise<unknown>)
+    | ((request: {
+        method: string;
+        params?: { proposalId?: string; expectedRevisionHash?: string };
+      }) => Promise<unknown>)
     | undefined,
   acquireGatewayLock: vi.fn(),
   releaseGatewayLock: vi.fn(),
@@ -38,7 +44,8 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway,
   isGatewayCredentialsRequiredError: (error: unknown) =>
     error instanceof Error && error.name === "GatewayCredentialsRequiredError",
-  isGatewayTransportError: () => false,
+  isImplicitLocalGatewayTarget: async ({ config }: { config?: { gateway?: { mode?: string } } }) =>
+    !process.env.OPENCLAW_GATEWAY_URL && config?.gateway?.mode !== "remote",
 }));
 vi.mock("../infra/gateway-lock.js", () => ({
   acquireGatewayLock: mocks.acquireGatewayLock,
@@ -48,10 +55,21 @@ vi.mock("../config/config.js", () => ({
   resetConfigRuntimeState: () => undefined,
 }));
 vi.mock("../agents/agent-scope.js", () => ({
+  resolveConfiguredAgentId: (_config: unknown, agentId: string) => agentId,
   resolveAgentIdByWorkspacePath: () => undefined,
   resolveDefaultAgentId: () => "main",
   resolveAgentWorkspaceDir: () => mocks.workspaceDir,
 }));
+
+function createGatewayTransportError(kind: "closed" | "timeout") {
+  return new GatewayTransportError({
+    kind,
+    message:
+      kind === "closed" ? "gateway closed (1006): unavailable" : "gateway timeout after 1500ms",
+    connectionDetails: { url: "ws://127.0.0.1:18789", urlSource: "local loopback", message: "" },
+    ...(kind === "closed" ? { code: 1006, reason: "unavailable" } : { timeoutMs: 1_500 }),
+  });
+}
 
 describe("skills workshop CLI gateway snapshot invalidation", () => {
   beforeAll(async () => {
@@ -82,11 +100,8 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
     mocks.defaultRuntime.error.mockClear();
     mocks.defaultRuntime.exit.mockClear();
     mocks.callGateway.mockReset().mockImplementation(async (request) => {
-      if (request.method === "health") {
-        return {};
-      }
       if (!mocks.gatewayApply) {
-        throw new Error("gateway unavailable");
+        throw createGatewayTransportError("closed");
       }
       return await mocks.gatewayApply(request);
     });
@@ -95,6 +110,7 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
   afterEach(async () => {
     await testState.cleanup();
     await tempDirs.cleanup();
+    vi.unstubAllEnvs();
   });
 
   it("applies through the gateway process that owns the cached session skill index", async () => {
@@ -117,11 +133,15 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
     const { resolvedSkills: _runtimeOnly, ...persistedSnapshot } = beforeApply;
     const beforeVersion = gatewayRefreshState.getSkillsSnapshotVersion(mocks.workspaceDir);
     mocks.gatewayApply = async (request) => {
+      if (request.method === "skills.proposals.inspect") {
+        return await gatewayWorkshop.inspectSkillProposal(proposal.record.id);
+      }
       expect(request.method).toBe("skills.proposals.apply");
       return await gatewayWorkshop.applySkillProposal({
         workspaceDir: mocks.workspaceDir,
         config: mocks.config,
         proposalId: request.params?.proposalId ?? "",
+        expectedRevisionHash: request.params?.expectedRevisionHash,
       });
     };
 
@@ -137,7 +157,11 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
     expect(mocks.callGateway).toHaveBeenCalledWith(
       expect.objectContaining({
         method: "skills.proposals.apply",
-        params: { agentId: "main", proposalId: proposal.record.id },
+        params: {
+          agentId: "main",
+          proposalId: proposal.record.id,
+          expectedRevisionHash: proposal.revisionHash,
+        },
         timeoutMs: 1_850_000,
       }),
     );
@@ -160,7 +184,10 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
       description: "Apply only in the process that owns snapshot state",
       content: "# Single Dispatch\n\nDo not replay this mutation.\n",
     });
-    mocks.gatewayApply = async () => {
+    mocks.gatewayApply = async (request) => {
+      if (request.method === "skills.proposals.inspect") {
+        return await gatewayWorkshop.inspectSkillProposal(proposal.record.id);
+      }
       throw new Error("gateway apply failed");
     };
 
@@ -172,7 +199,7 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
     ).rejects.toThrow("__exit__:1");
 
     expect(mocks.callGateway.mock.calls.map(([request]) => request.method)).toEqual([
-      "health",
+      "skills.proposals.inspect",
       "skills.proposals.apply",
     ]);
     await expect(gatewayWorkshop.inspectSkillProposal(proposal.record.id)).resolves.toMatchObject({
@@ -180,19 +207,25 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
     });
   });
 
-  it("preserves configless offline apply when no local gateway is listening", async () => {
+  it.each([
+    {
+      label: "missing credentials before connecting",
+      error: Object.assign(new Error("gateway proposal inspection requires credentials"), {
+        name: "GatewayCredentialsRequiredError",
+        method: "skills.proposals.inspect",
+        configPath: "/tmp/openclaw.json",
+      }),
+    },
+    { label: "a local transport close", error: createGatewayTransportError("closed") },
+    { label: "a local transport timeout", error: createGatewayTransportError("timeout") },
+  ])("preserves configless offline apply after $label", async ({ error }) => {
     const proposal = await gatewayWorkshop.proposeCreateSkill({
       workspaceDir: mocks.workspaceDir,
       name: "Offline Upgrade",
       description: "Keep shipped configless Workshop apply behavior",
       content: "# Offline Upgrade\n\nApply without a running gateway.\n",
     });
-    const authError = Object.assign(new Error("gateway health requires credentials"), {
-      name: "GatewayCredentialsRequiredError",
-      method: "health",
-      configPath: "/tmp/openclaw.json",
-    });
-    mocks.callGateway.mockRejectedValueOnce(authError);
+    mocks.callGateway.mockRejectedValueOnce(error);
 
     const program = new Command();
     program.exitOverride();
@@ -214,6 +247,97 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
     });
   });
 
+  it.each([
+    {
+      label: "request validation fails",
+      outcome: "command",
+      error: new GatewayClientRequestError({
+        code: "INVALID_REQUEST",
+        message: "invalid skills.proposals.inspect params: proposalId is required",
+      }),
+    },
+    {
+      label: "the running Gateway crashes",
+      outcome: "command",
+      error: new GatewayClientRequestError({
+        code: "INTERNAL_ERROR",
+        message: "proposal inspection crashed",
+      }),
+    },
+    {
+      label: "pairing is required",
+      outcome: "root",
+      error: new GatewayTransportError({
+        kind: "closed",
+        code: 1008,
+        reason: "pairing required",
+        message: "gateway closed (1008): pairing required",
+        connectionDetails: {
+          url: "ws://127.0.0.1:18789",
+          urlSource: "local loopback",
+          message: "",
+        },
+      }),
+    },
+    {
+      label: "a plain pairing close occurs",
+      outcome: "command",
+      error: new Error("gateway closed (1008): pairing required"),
+    },
+    {
+      label: "an already-dispatched request times out",
+      outcome: "command",
+      error: new GatewayProtocolRequestTimeoutError({
+        method: "skills.proposals.inspect",
+        timeoutMs: 1_500,
+        requestSent: true,
+      }),
+    },
+    {
+      label: "an older Gateway lacks the apply method",
+      outcome: "command",
+      error: new GatewayClientRequestError({
+        code: "INVALID_REQUEST",
+        message: "unknown method: skills.proposals.inspect",
+      }),
+    },
+    {
+      label: "an unknown failure occurs",
+      outcome: "command",
+      error: new Error("gateway unavailable"),
+    },
+  ])("does not bypass implicit-local Gateway ownership when $label", async ({ error, outcome }) => {
+    const proposal = await gatewayWorkshop.proposeCreateSkill({
+      workspaceDir: mocks.workspaceDir,
+      name: "Gateway Owned Upgrade",
+      description: "Keep snapshot invalidation in the running gateway",
+      content: "# Gateway Owned Upgrade\n\nDo not apply in the CLI process.\n",
+    });
+    mocks.callGateway.mockRejectedValueOnce(error);
+
+    const program = new Command();
+    program.exitOverride();
+    registerSkillsCli(program);
+    const command = program.parseAsync(["skills", "workshop", "apply", proposal.record.id], {
+      from: "user",
+    });
+    // Root-owned credential/transport errors propagate; ordinary command errors log and exit.
+    if (outcome === "root") {
+      await expect(command).rejects.toBe(error);
+      expect(mocks.defaultRuntime.error).not.toHaveBeenCalled();
+    } else {
+      await expect(command).rejects.toThrow("__exit__:1");
+      expect(mocks.defaultRuntime.error).toHaveBeenCalledWith(error.message);
+    }
+
+    expect(mocks.callGateway).toHaveBeenCalledTimes(1);
+    expect(mocks.acquireGatewayLock).not.toHaveBeenCalled();
+    expect(mocks.releaseGatewayLock).not.toHaveBeenCalled();
+    await expect(gatewayWorkshop.inspectSkillProposal(proposal.record.id)).resolves.toMatchObject({
+      record: { status: "pending" },
+    });
+  });
+
   it("does not bypass Gateway ownership when CLI credentials are missing", async () => {
     const proposal = await gatewayWorkshop.proposeCreateSkill({
       workspaceDir: mocks.workspaceDir,
@@ -221,9 +345,9 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
       description: "Keep snapshot invalidation in the running gateway",
       content: "# Gateway Owned Upgrade\n\nDo not apply in the CLI process.\n",
     });
-    const authError = Object.assign(new Error("gateway health requires credentials"), {
+    const authError = Object.assign(new Error("gateway proposal inspection requires credentials"), {
       name: "GatewayCredentialsRequiredError",
-      method: "health",
+      method: "skills.proposals.inspect",
       configPath: "/tmp/openclaw.json",
     });
     mocks.callGateway.mockRejectedValueOnce(authError);
@@ -234,20 +358,60 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
     registerSkillsCli(program);
     await expect(
       program.parseAsync(["skills", "workshop", "apply", proposal.record.id], { from: "user" }),
-    ).rejects.toMatchObject({
-      name: "GatewayCredentialsRequiredError",
-      message: "gateway health requires credentials",
-      method: "health",
-      configPath: "/tmp/openclaw.json",
-    });
+    ).rejects.toBe(authError);
 
-    expect(mocks.callGateway).toHaveBeenCalledTimes(1);
-    expect(mocks.acquireGatewayLock).toHaveBeenCalledTimes(1);
+    expect(mocks.callGateway).toHaveBeenCalledOnce();
+    expect(mocks.acquireGatewayLock).toHaveBeenCalledOnce();
     expect(mocks.releaseGatewayLock).not.toHaveBeenCalled();
     await expect(gatewayWorkshop.inspectSkillProposal(proposal.record.id)).resolves.toMatchObject({
       record: { status: "pending" },
     });
   });
+
+  it.each(["configured remote", "environment-selected"] as const)(
+    "does not apply locally after a %s gateway inspection fails",
+    async (target) => {
+      const proposal = await gatewayWorkshop.proposeCreateSkill({
+        workspaceDir: mocks.workspaceDir,
+        name: "Authoritative Gateway",
+        description: "Never mutate the client after an explicitly selected Gateway fails",
+        content: "# Authoritative Gateway\n\nLeave this proposal pending.\n",
+      });
+      if (target === "configured remote") {
+        mocks.config.gateway = { mode: "remote" };
+      } else {
+        vi.stubEnv("OPENCLAW_GATEWAY_URL", "ws://127.0.0.1:9");
+      }
+      mocks.callGateway.mockRejectedValueOnce(
+        Object.assign(new Error("selected gateway requires credentials"), {
+          name: "GatewayCredentialsRequiredError",
+          method: "skills.proposals.inspect",
+          configPath: "/tmp/openclaw.json",
+        }),
+      );
+
+      const program = new Command();
+      program.exitOverride();
+      registerSkillsCli(program);
+      const failure = await program
+        .parseAsync(["skills", "workshop", "apply", proposal.record.id], { from: "user" })
+        .then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+      expect(failure).toMatchObject({
+        name: "GatewayCredentialsRequiredError",
+        message: "selected gateway requires credentials",
+      });
+
+      expect(mocks.acquireGatewayLock).not.toHaveBeenCalled();
+      await expect(gatewayWorkshop.inspectSkillProposal(proposal.record.id)).resolves.toMatchObject(
+        {
+          record: { status: "pending" },
+        },
+      );
+    },
+  );
 
   it("evaluates the exact inspected draft through the gateway plugin registry", async () => {
     mocks.gatewayApply = async (request) => {

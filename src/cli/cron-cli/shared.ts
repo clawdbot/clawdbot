@@ -78,11 +78,12 @@ export function parseCronCommandEnv(values: unknown): Record<string, string> | u
 }
 
 export const getCronChannelOptions = () => {
-  // Keep help truthful even before the plugin registry is bootstrapped.
+  // Keep help truthful even before the plugin registry is bootstrapped. The fallback names the
+  // channel plugin id the runtime resolves, not a per-conversation platform channel identifier.
   const pluginIds = listChannelPlugins()
     .map((plugin) => plugin.id)
     .filter(Boolean);
-  return pluginIds.length > 0 ? ["last", ...pluginIds].join("|") : "last|<channel-id>";
+  return pluginIds.length > 0 ? ["last", ...pluginIds].join("|") : "last|<channel-plugin-id>";
 };
 
 function toLocalIsoTime(value: unknown): string | undefined {
@@ -197,12 +198,16 @@ function decorateStatusWithFailures(status: string, consecutiveErrors: number | 
 
 function formatCronStatusForDisplay(job: CronJob): string {
   const state = job.state ?? {};
-  if (computeStatus(job) === "disabled" && state.autoDisabled) {
+  const status = computeStatus(job);
+  if (status === "disabled" && state.autoDisabled) {
     return state.autoDisabled.reason === "schedule-errors"
       ? "disabled (schedule)"
       : `disabled (${state.autoDisabled.consecutiveErrors}x)`;
   }
-  return decorateStatusWithFailures(computeStatus(job), state.consecutiveErrors);
+  if (status === "ok" && state.lastDeliveryStatus === "not-delivered") {
+    return "ok (not delivered)";
+  }
+  return decorateStatusWithFailures(status, state.consecutiveErrors);
 }
 
 export function handleCronCliError(err: unknown) {
@@ -479,7 +484,7 @@ export function printCronList(
     formatCell("Model", CRON_MODEL_PAD),
   ].join(" ");
 
-  runtime.log(rich ? theme.heading(header) : header);
+  const lines = [rich ? theme.heading(header) : header];
   const now = Date.now();
 
   for (const job of jobs) {
@@ -512,13 +517,13 @@ export function printCronList(
     );
 
     const coloredStatus = (() => {
-      if (statusRaw === "ok") {
+      if (statusRaw === "ok" && state.lastDeliveryStatus !== "not-delivered") {
         return colorize(rich, theme.success, statusLabel);
       }
       if (statusRaw === "error") {
         return colorize(rich, theme.error, statusLabel);
       }
-      if (statusRaw === "running") {
+      if (statusRaw === "running" || statusRaw === "ok") {
         return colorize(rich, theme.warn, statusLabel);
       }
       if (statusRaw === "skipped") {
@@ -554,8 +559,10 @@ export function printCronList(
         : colorize(rich, theme.muted, modelLabel),
     ].join(" ");
 
-    runtime.log(line.trimEnd());
+    lines.push(line.trimEnd());
   }
+
+  runtime.log(lines.join("\n"));
 }
 
 export function printCronShow(

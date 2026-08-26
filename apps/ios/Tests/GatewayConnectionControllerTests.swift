@@ -304,13 +304,16 @@ private func waitUntil(
             let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
             let caps = Set(controller._test_currentCaps())
 
-            #expect(caps.contains(OpenClawCapability.canvas.rawValue))
+            #expect(!caps.contains(OpenClawCapability.canvas.rawValue))
             #expect(caps.contains(OpenClawCapability.screen.rawValue))
             #expect(!caps.contains(OpenClawGatewayClientCapability.inlineWidgets))
             #expect(caps.contains(OpenClawCapability.camera.rawValue))
             #expect(caps.contains(OpenClawCapability.location.rawValue))
             #expect(caps.contains(OpenClawCapability.voiceWake.rawValue))
             #expect(caps.contains(OpenClawCapability.talk.rawValue))
+
+            let commands = controller._test_currentCommands()
+            #expect(!commands.contains(where: { $0.hasPrefix("canvas.") }))
         }
     }
 
@@ -635,7 +638,7 @@ private func waitUntil(
             bootstrapToken: lhs.bootstrapToken,
             password: lhs.password,
             nodeOptions: Self.makeNodeOptions(
-                caps: ["canvas", "screen"],
+                caps: ["camera", "screen"],
                 commands: ["location.get", "notify"],
                 permissions: ["screen": true]))
 
@@ -1557,7 +1560,6 @@ private func waitUntil(
             lanHost: nil,
             tailnetDns: nil,
             gatewayPort: nil,
-            canvasPort: nil,
             tlsEnabled: true,
             tlsFingerprintSha256: nil,
             cliPath: nil)
@@ -2645,7 +2647,7 @@ private func waitUntil(
             bootstrapToken: nil,
             password: nil,
             nodeOptions: self.makeNodeOptions(
-                caps: ["screen", "canvas"],
+                caps: ["screen", "camera"],
                 commands: ["notify", "location.get"],
                 permissions: ["screen": true]))
     }

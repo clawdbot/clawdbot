@@ -6,7 +6,7 @@ export type LinkFaviconFetcher = (hostname: string, signal: AbortSignal) => Prom
 
 export function createLinkFaviconFetcher(params: {
   auth: Parameters<typeof fetchLinkFaviconBlobUrl>[0]["auth"];
-  basePath: string;
+  resourceBasePath: string;
   gatewayUrl: string;
 }): LinkFaviconFetcher {
   return (hostname, signal) => fetchLinkFaviconBlobUrl({ ...params, hostname, signal });

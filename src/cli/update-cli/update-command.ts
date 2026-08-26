@@ -88,7 +88,7 @@ import {
   type ManagedServiceRootRedirect,
   type UpdateCommandRecoveryState,
 } from "./update-command-service.js";
-export { updateFinalizeCommand } from "./update-command-post-core.js";
+export { updateFinalizeCommand } from "./update-command-finalize.js";
 
 const CLI_NAME = resolveCliName();
 const DEFAULT_UPDATE_STEP_TIMEOUT_MS = 30 * 60_000;
@@ -663,6 +663,7 @@ async function updateCommandInternal(
   await finishUpdate({
     result,
     root,
+    previousInstallRoot: discoveredRoot,
     installKindChanged: switchToGit || switchToPackage,
     configSnapshot: finalizationConfigSnapshot,
     requestedChannel,

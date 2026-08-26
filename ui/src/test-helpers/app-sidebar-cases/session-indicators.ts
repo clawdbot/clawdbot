@@ -246,13 +246,16 @@ describe("AppSidebar session indicators", () => {
     for (const row of result.sessions) {
       row.hasActiveRun = true;
       row.status = "running";
+      if (row.key === mainKey) {
+        row.unread = true;
+      }
     }
     const { sidebar } = await mountSidebar(
       createGatewayHarness({} as GatewayBrowserClient).gateway,
       sessions.sessions,
     );
     sidebar.activeRouteId = "chat";
-    sidebar.sessionKey = mainKey;
+    sidebar.sessionKey = workingKey;
     sidebar.outboxAttentionCountForSession = (sessionKey) => (sessionKey === mainKey ? 2 : 0);
     sidebar.hasSessionDraft = (sessionKey) => sessionKey === mainKey;
     sidebar.requestUpdate();
@@ -271,45 +274,12 @@ describe("AppSidebar session indicators", () => {
     expect(homeSpinner?.getAttribute("aria-label")).toBe(
       sessionSpinner?.getAttribute("aria-label"),
     );
+    expect(home?.querySelector(".session-unread-dot")).toBeNull();
+    expect(home?.getAttribute("aria-label")).toBe("Home · Active run · Unread");
     expect(
       home?.querySelector(".nav-item__state .session-row-badge--attention")?.textContent,
     ).toContain("2");
     expect(home?.querySelector(".nav-item__state .session-row-badge--draft")).not.toBeNull();
-  });
-
-  it("shows when an admitted session is queued for a concurrency slot", async () => {
-    const sessionKey = "agent:main:thread:queued";
-    const gateway = createGatewayHarness({} as GatewayBrowserClient).gateway;
-    const harness = createSessionsHarness("main", ["agent:main:main", sessionKey]);
-    const { sidebar } = await mountSidebar(gateway, harness.sessions);
-    sidebar.connected = true;
-    harness.publishList({
-      result: {
-        ts: 2,
-        path: "",
-        count: 2,
-        defaults: { modelProvider: null, model: null, contextTokens: null },
-        sessions: [
-          { key: "agent:main:main", kind: "direct", updatedAt: 4 },
-          {
-            key: sessionKey,
-            kind: "direct",
-            label: "Queued repair",
-            updatedAt: 5,
-            hasActiveRun: true,
-            status: "queued",
-          },
-        ],
-      },
-      agentId: "main",
-    });
-    await sidebar.updateComplete;
-
-    const row = sidebar.querySelector(`[data-session-key="${sessionKey}"]`);
-    expect(row?.textContent).toContain("Waiting for a concurrency slot");
-    const queued = row?.querySelector(".sidebar-child-session__status--queued");
-    expect(queued?.getAttribute("aria-label")).toBe("Queued");
-    expect(row?.querySelector(".session-run-spinner")).toBeNull();
   });
 
   it("preserves child PR indicators and leads a pinned child like any other", async () => {
@@ -354,6 +324,14 @@ describe("AppSidebar session indicators", () => {
           kind: "direct",
           label: "Open PR child",
           updatedAt: 2,
+          hasActiveRun: true,
+          status: "running",
+          unread: true,
+          agentStatus: {
+            note: "Waiting for input",
+            attention: "key",
+            expiresAt: Date.now() + 60_000,
+          },
           worktree: { id: "wt-open", branch: "feature/open", repoRoot: "/repo" },
         },
         {
@@ -419,9 +397,25 @@ describe("AppSidebar session indicators", () => {
     expect(pinnedLead?.innerHTML).toBe(runningLead?.innerHTML);
     expect(pinnedLead?.querySelector("[data-session-pr-state]")).toBeNull();
     expect(pinnedRow?.querySelector(".session-row-state")).toBeNull();
+
+    const attentionLead = sidebar.querySelector(
+      `[data-session-key="${openPullRequestKey}"] .sidebar-session-indicator`,
+    );
+    expect(attentionLead?.querySelector('[data-session-attention="agent"]')).not.toBeNull();
+    expect(attentionLead?.querySelector(".session-glyph__ring")).not.toBeNull();
+    expect(attentionLead?.querySelector(".session-glyph__badge--unread")).toBeNull();
+    expect(attentionLead?.querySelector('[data-session-pr-state="open"]')).not.toBeNull();
+    const attentionLink = sidebar.querySelector(
+      `[data-session-key="${openPullRequestKey}"] .sidebar-recent-session__link`,
+    );
+    const attentionDescriptionId = attentionLink?.getAttribute("aria-describedby");
+    expect(attentionDescriptionId).toBe(
+      `sidebar-session-state-${encodeURIComponent(openPullRequestKey)}`,
+    );
+    expect(sidebar.querySelector(`[id="${attentionDescriptionId}"]`)?.textContent).toBe("Unread");
   });
 
-  it("trails transient activity while keeping persistent status leading", async () => {
+  it("prioritizes an active run over unread activity", async () => {
     const keys = {
       plain: "agent:main:plain",
       forked: "agent:main:forked",
@@ -524,7 +518,7 @@ describe("AppSidebar session indicators", () => {
     ).not.toBeNull();
     expect(
       runningUnread?.querySelector(".session-row-aside > .session-row-state .session-unread-dot"),
-    ).not.toBeNull();
+    ).toBeNull();
 
     for (const key of [keys.unread, keys.runningUnread]) {
       const link = sidebar.querySelector(`[data-session-key="${key}"] a`);

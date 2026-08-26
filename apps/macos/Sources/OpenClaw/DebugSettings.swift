@@ -30,9 +30,6 @@ struct DebugSettings: View {
     @State private var canvasSessionKey: String = "main"
     @State private var canvasStatus: String?
     @State private var canvasError: String?
-    @State private var canvasEvalJS: String = "document.title"
-    @State private var canvasEvalResult: String?
-    @State private var canvasSnapshotPath: String?
 
     init(state: AppState = AppStateStore.shared) {
         self.state = state
@@ -584,51 +581,11 @@ struct DebugSettings: View {
                     Spacer(minLength: 0)
                 }
 
-                HStack(spacing: 8) {
-                    TextField("Eval JS", text: self.$canvasEvalJS)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.caption.monospaced())
-                        .frame(maxWidth: 520)
-                    Button("Eval") {
-                        Task { await self.canvasEval() }
-                    }
-                    .buttonStyle(.bordered)
-                    Button("Snapshot") {
-                        Task { await self.canvasSnapshot() }
-                    }
-                    .buttonStyle(.bordered)
-                    Spacer(minLength: 0)
-                }
-
                 if let canvasStatus {
                     Text(canvasStatus)
                         .font(.caption2.monospaced())
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
-                }
-                if let canvasEvalResult {
-                    Text("eval → \(canvasEvalResult)")
-                        .font(.caption2.monospaced())
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                        .truncationMode(.middle)
-                        .textSelection(.enabled)
-                }
-                if let canvasSnapshotPath {
-                    HStack(spacing: 8) {
-                        Text("snapshot → \(canvasSnapshotPath)")
-                            .font(.caption2.monospaced())
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                            .textSelection(.enabled)
-                        Button("Reveal") {
-                            NSWorkspace.shared
-                                .activateFileViewerSelecting([URL(fileURLWithPath: canvasSnapshotPath)])
-                        }
-                        .buttonStyle(.bordered)
-                        Spacer(minLength: 0)
-                    }
                 }
                 if let canvasError {
                     Text(canvasError)
@@ -881,36 +838,6 @@ extension DebugSettings {
             try html.write(to: url, atomically: true, encoding: .utf8)
             self.canvasStatus = "wrote: \(url.path)"
             _ = try CanvasManager.shared.show(sessionKey: session.isEmpty ? "main" : session, path: "/")
-        } catch {
-            self.canvasError = error.localizedDescription
-        }
-    }
-
-    @MainActor
-    private func canvasEval() async {
-        self.canvasError = nil
-        self.canvasEvalResult = nil
-        do {
-            let session = self.canvasSessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
-            let result = try await CanvasManager.shared.eval(
-                sessionKey: session.isEmpty ? "main" : session,
-                javaScript: self.canvasEvalJS)
-            self.canvasEvalResult = result
-        } catch {
-            self.canvasError = error.localizedDescription
-        }
-    }
-
-    @MainActor
-    private func canvasSnapshot() async {
-        self.canvasError = nil
-        self.canvasSnapshotPath = nil
-        do {
-            let session = self.canvasSessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
-            let path = try await CanvasManager.shared.snapshot(
-                sessionKey: session.isEmpty ? "main" : session,
-                outPath: nil)
-            self.canvasSnapshotPath = path
         } catch {
             self.canvasError = error.localizedDescription
         }

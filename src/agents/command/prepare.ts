@@ -289,6 +289,7 @@ export async function prepareAgentCommandExecution(
   } satisfies ModelManifestNormalizationContext;
   const configuredModel = resolveConfiguredModelRef({
     cfg,
+    agentId: sessionAgentId,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
     allowPluginNormalization: pluginsEnabled,

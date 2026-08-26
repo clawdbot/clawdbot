@@ -11,6 +11,7 @@ import { measureDiagnosticsTimelineSpanSync } from "../../infra/diagnostics-time
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-harness-session-key.js";
 import { isBrowserOperatorUiClient } from "../../utils/message-channel.js";
+import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
 import { pendingChatSendDedupeKey } from "../server-shared.js";
 import {
   loadSessionEntry,
@@ -99,6 +100,7 @@ function loadChatSendSessionContext(params: {
       legacyKey,
       sessionRoutingChanged,
       expectedLeafEntryId,
+      agentIdOverride,
       requestedAgentId,
     },
   };
@@ -117,7 +119,7 @@ export function prepareChatSendSession(params: {
   const loadedValue = loaded.value;
   const { request, client } = params;
   const { p, explicitOrigin, normalizedAttachments, turnKind, rawMessage } = request;
-  const { cfg, sessionKey, entry, legacyKey, rawSessionKey, requestedAgentId } = loadedValue;
+  const { cfg, sessionKey, entry, legacyKey, rawSessionKey, agentIdOverride } = loadedValue;
   if (isIncognitoSessionKey(sessionKey) && !entry) {
     return { ok: false as const, error: `Incognito session "${sessionKey}" was not found.` };
   }
@@ -129,7 +131,7 @@ export function prepareChatSendSession(params: {
   const selectedAgent = validateChatSelectedAgent({
     cfg,
     requestedSessionKey: rawSessionKey,
-    agentId: requestedAgentId,
+    explicitAgentId: agentIdOverride,
   });
   if (!selectedAgent.ok) {
     return { ok: false as const, error: selectedAgent.error };
@@ -151,6 +153,16 @@ export function prepareChatSendSession(params: {
     config: cfg,
     agentId: selectedAgent.agentId,
   });
+  if (!entry) {
+    const creationError = authorizeGatewaySessionCreation({
+      cfg,
+      client,
+      agentId,
+    });
+    if (creationError) {
+      return { ok: false as const, error: creationError };
+    }
+  }
   const activeRunScopeKey = resolveChatSendActiveScopeKey({
     sessionKey,
     agentId: selectedAgent.agentId,

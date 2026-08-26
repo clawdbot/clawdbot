@@ -107,6 +107,7 @@ describe("collectGatewayHealthSnapshot legacy owner projection", () => {
     expect(explicit.defaultAgentId).toBeUndefined();
     expect(explicit.agents.every((agent) => !agent.isDefault)).toBe(true);
     expect(explicit.agents.every((agent) => !agent.heartbeat.enabled)).toBe(true);
+    expect(explicit.heartbeatSeconds).toBe(0);
   });
 
   it("projects the configured heartbeat owner's cadence", async () => {
@@ -129,4 +130,34 @@ describe("collectGatewayHealthSnapshot legacy owner projection", () => {
     );
     expect(health.heartbeatSeconds).toBe(5 * 60);
   });
+
+  it.each([
+    { label: "an earlier agent", heartbeatAgentId: undefined },
+    { label: "the configured owner", heartbeatAgentId: "ops" },
+  ])(
+    "reports the active heartbeat when $label disables its cadence",
+    async ({ heartbeatAgentId }) => {
+      testConfig = {
+        agents: {
+          ownership: "explicit",
+          defaults: {
+            heartbeat: {
+              every: "30m",
+              ...(heartbeatAgentId ? { agentId: heartbeatAgentId } : {}),
+            },
+          },
+          entries: {
+            ops: { heartbeat: { every: "0m" } },
+            research: { heartbeat: { every: "1h" } },
+          },
+        },
+      };
+
+      const health = await collectGatewayHealthSnapshot({ audience: "admin", probe: false });
+
+      expect(health.agents.map((agent) => agent.agentId)).toEqual(["ops", "research"]);
+      expect(health.agents.map((agent) => agent.heartbeat.enabled)).toEqual([false, true]);
+      expect(health.heartbeatSeconds).toBe(60 * 60);
+    },
+  );
 });

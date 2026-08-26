@@ -112,6 +112,14 @@ const CTX = "⟦openclaw:ctx⟧";
 const ctxHeader = (label: string): string => `${label} ${CTX}`;
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "test-key";
+const withAllowedMemoryRecallAuthority = (ctx: Record<string, unknown> = {}) => ({
+  toolAuthority: {
+    fingerprint: "allowed-memory-authority",
+    allows: (toolName: string) => toolName === "memory_recall",
+    assertActive: () => undefined,
+  },
+  ...ctx,
+});
 type MemoryPluginTestConfig = {
   embedding?: {
     provider?: string;
@@ -359,6 +367,81 @@ describe("memory plugin e2e", () => {
       dbPath: getDbPath(),
       ...overrides,
     }) as MemoryPluginTestConfig | undefined;
+  }
+
+  function setupMemoryHookHarness(options: {
+    autoCapture: boolean;
+    autoRecall: boolean;
+    liveConfig?: boolean;
+    searchResults?: Array<Record<string, unknown>>;
+  }) {
+    const embeddingsCreate = vi.fn(async () => ({
+      data: [{ embedding: [0.1, 0.2, 0.3] }],
+    }));
+    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const add = vi.fn(async () => undefined);
+    const toArray = vi.fn(async () => options.searchResults ?? []);
+    const limit = vi.fn(() => ({ toArray }));
+    const vectorSearch = vi.fn(() => createAgentScopedVectorQuery(limit));
+    const openTable = vi.fn(async () => ({
+      schema: createAgentScopedSchemaMock(),
+      vectorSearch,
+      countRows: vi.fn(async () => 0),
+      add,
+      delete: vi.fn(async () => undefined),
+    }));
+    const loadLanceDbModule = vi.fn(async () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable,
+      })),
+    }));
+    const pluginConfig: MemoryPluginTestConfig = {
+      embedding: {
+        apiKey: OPENAI_API_KEY,
+        model: "text-embedding-3-small",
+      },
+      dbPath: getDbPath(),
+      autoCapture: options.autoCapture,
+      autoRecall: options.autoRecall,
+    };
+    let configFile: Record<string, unknown> = {
+      plugins: { entries: { "memory-lancedb": { config: pluginConfig } } },
+    };
+
+    installOpenAiMemoryModuleMocks({
+      ensureGlobalUndiciEnvProxyDispatcher,
+      embeddingsCreate,
+      loadLanceDbModule,
+    });
+
+    const on = vi.fn();
+    const logger = createTestLogger();
+    const mockApi = createMemoryPluginApi(getDbPath(), {
+      pluginConfig,
+      ...(options.liveConfig ? { runtime: { config: { current: () => configFile } } } : {}),
+      logger,
+      on,
+    });
+    registerTestPlugin(memoryPlugin, mockApi);
+
+    return {
+      add,
+      embeddingsCreate,
+      ensureGlobalUndiciEnvProxyDispatcher,
+      loadLanceDbModule,
+      logger,
+      on,
+      vectorSearch,
+      updateConfig: (overrides: Partial<MemoryPluginTestConfig>) => {
+        configFile = {
+          plugins: { entries: { "memory-lancedb": { config: { ...pluginConfig, ...overrides } } } },
+        };
+      },
+      removePluginEntry: () => {
+        configFile = { plugins: { entries: {} } };
+      },
+    };
   }
 
   test("config schema parses valid config", () => {
@@ -819,7 +902,7 @@ describe("memory plugin e2e", () => {
       });
       await hookHandler(on, "before_prompt_build")?.(
         { prompt: "private automatic recall secret", messages: [] },
-        { agentId: "private" },
+        withAllowedMemoryRecallAuthority({ agentId: "private" }),
       );
       await hookHandler(on, "agent_end")?.(
         {
@@ -1315,7 +1398,10 @@ describe("memory plugin e2e", () => {
     )?.[1];
     expect(beforePromptBuild).toBeTypeOf("function");
     await expect(
-      beforePromptBuild?.({ prompt: "what editor should i use?", messages: [] }, {}),
+      beforePromptBuild?.(
+        { prompt: "what editor should i use?", messages: [] },
+        withAllowedMemoryRecallAuthority(),
+      ),
     ).resolves.toBeUndefined();
     expectHookRegistered(on, "agent_end");
   });
@@ -1349,6 +1435,60 @@ describe("memory plugin e2e", () => {
         { agentId: "main" },
       ),
     ).resolves.toBeUndefined();
+  });
+
+  test("does not start auto-recall when the turn authority denies memory_recall", async () => {
+    const embeddingsCreate = vi.fn(async () => ({
+      data: [{ embedding: [0.1, 0.2, 0.3] }],
+    }));
+    const loadLanceDbModule = vi.fn(async () => ({
+      connect: vi.fn(),
+    }));
+
+    await withMockedOpenAiMemoryPlugin({
+      embeddingsCreate,
+      ensureGlobalUndiciEnvProxyDispatcher: vi.fn(),
+      loadLanceDbModule,
+      run: async () => {
+        const on = vi.fn();
+        const mockApi = createMemoryPluginApi(getDbPath(), {
+          pluginConfig: {
+            embedding: {
+              apiKey: OPENAI_API_KEY,
+              model: "text-embedding-3-small",
+            },
+            dbPath: getDbPath(),
+            autoCapture: false,
+            autoRecall: true,
+          },
+          on,
+        });
+
+        registerTestPlugin(memoryPlugin, mockApi);
+        const beforePromptBuild = on.mock.calls.find(
+          ([hookName]) => hookName === "before_prompt_build",
+        )?.[1];
+        const assertActive = vi.fn();
+
+        await expect(
+          beforePromptBuild?.(
+            { prompt: "what editor should i use?", messages: [] },
+            {
+              agentId: "main",
+              toolAuthority: {
+                fingerprint: "denied-memory-authority",
+                allows: () => false,
+                assertActive,
+              },
+            },
+          ),
+        ).resolves.toBeUndefined();
+
+        expect(assertActive).toHaveBeenCalled();
+        expect(embeddingsCreate).not.toHaveBeenCalled();
+        expect(loadLanceDbModule).not.toHaveBeenCalled();
+      },
+    });
   });
 
   test("runs auto-recall through the registered before_prompt_build hook", async () => {
@@ -1431,7 +1571,7 @@ describe("memory plugin e2e", () => {
               },
             ],
           },
-          { agentId: "main" },
+          withAllowedMemoryRecallAuthority({ agentId: "main" }),
         );
 
         expect(loadLanceDbModule).toHaveBeenCalledTimes(1);
@@ -1528,7 +1668,10 @@ describe("memory plugin e2e", () => {
           expect(beforePromptBuild).toBeTypeOf("function");
 
           const hookEvent = { prompt: "what editor should i use?", messages: [] };
-          const resultPromise = beforePromptBuild?.(hookEvent, { agentId: "main" });
+          const resultPromise = beforePromptBuild?.(
+            hookEvent,
+            withAllowedMemoryRecallAuthority({ agentId: "main" }),
+          );
           await vi.advanceTimersByTimeAsync(15_000);
 
           await expect(resultPromise).resolves.toBeUndefined();
@@ -1542,7 +1685,12 @@ describe("memory plugin e2e", () => {
             "memory-lancedb: auto-recall timed out after 15000ms; skipping memory injection to avoid stalling agent startup",
           );
 
-          expect(await beforePromptBuild?.(hookEvent, { agentId: "main" })).toBeUndefined();
+          expect(
+            await beforePromptBuild?.(
+              hookEvent,
+              withAllowedMemoryRecallAuthority({ agentId: "main" }),
+            ),
+          ).toBeUndefined();
           expect(post).toHaveBeenCalledTimes(1);
           expect(logger.debug).toHaveBeenCalledWith(
             "memory-lancedb: auto-recall skipped during recall cooldown: auto-recall timed out after 15s",
@@ -1569,7 +1717,7 @@ describe("memory plugin e2e", () => {
           });
           post.mockRejectedValueOnce(sdkTimeoutError);
           await expect(
-            beforePromptBuild?.(hookEvent, { agentId: "main" }),
+            beforePromptBuild?.(hookEvent, withAllowedMemoryRecallAuthority({ agentId: "main" })),
           ).resolves.toBeUndefined();
           expect(post).toHaveBeenCalledTimes(2);
 
@@ -1586,7 +1734,10 @@ describe("memory plugin e2e", () => {
 
           await vi.advanceTimersByTimeAsync(60_000);
           post.mockResolvedValueOnce({ data: [{ embedding: [0.1, 0.2, 0.3] }] });
-          const probeResult = beforePromptBuild?.(hookEvent, { agentId: "main" });
+          const probeResult = beforePromptBuild?.(
+            hookEvent,
+            withAllowedMemoryRecallAuthority({ agentId: "main" }),
+          );
           await vi.advanceTimersByTimeAsync(0);
           expect(loadLanceDbModule).toHaveBeenCalledTimes(1);
           await vi.advanceTimersByTimeAsync(15_000);
@@ -1594,7 +1745,10 @@ describe("memory plugin e2e", () => {
           expect(post).toHaveBeenCalledTimes(3);
 
           post.mockRejectedValueOnce(Object.assign(new Error("bad auto query"), { status: 400 }));
-          const retryResult = beforePromptBuild?.(hookEvent, { agentId: "main" });
+          const retryResult = beforePromptBuild?.(
+            hookEvent,
+            withAllowedMemoryRecallAuthority({ agentId: "main" }),
+          );
           await vi.advanceTimersByTimeAsync(0);
           expect(post).toHaveBeenCalledTimes(4);
           await expect(retryResult).resolves.toBeUndefined();
@@ -1621,7 +1775,12 @@ describe("memory plugin e2e", () => {
           });
           expect(post).toHaveBeenCalledTimes(6);
 
-          expect(await beforePromptBuild?.(hookEvent, { agentId: "main" })).toBeUndefined();
+          expect(
+            await beforePromptBuild?.(
+              hookEvent,
+              withAllowedMemoryRecallAuthority({ agentId: "main" }),
+            ),
+          ).toBeUndefined();
           expect(post).toHaveBeenCalledTimes(6);
 
           await vi.advanceTimersByTimeAsync(60_000);
@@ -1640,7 +1799,10 @@ describe("memory plugin e2e", () => {
             },
           });
 
-          const finalResult = beforePromptBuild?.(hookEvent, { agentId: "main" });
+          const finalResult = beforePromptBuild?.(
+            hookEvent,
+            withAllowedMemoryRecallAuthority({ agentId: "main" }),
+          );
           await vi.advanceTimersByTimeAsync(0);
           expect(post).toHaveBeenCalledTimes(8);
           await vi.advanceTimersByTimeAsync(15_000);
@@ -1715,98 +1877,26 @@ describe("memory plugin e2e", () => {
 
   test("uses live runtime config to enable auto-recall after startup disable", async () => {
     const recalledPrefix = `I prefer ${"x".repeat(90)}`;
-    const embeddingsCreate = vi.fn(async () => ({
-      data: [{ embedding: [0.1, 0.2, 0.3] }],
-    }));
-    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
-    const toArray = vi.fn(async () => [
-      {
-        id: "memory-1",
-        text: `${recalledPrefix}🚀tail`,
-        vector: [0.1, 0.2, 0.3],
-        importance: 0.8,
-        category: "preference",
-        createdAt: 1,
-        _distance: 0.1,
-      },
-    ]);
-    const limit = vi.fn(() => ({ toArray }));
-    const vectorSearch = vi.fn(() => createAgentScopedVectorQuery(limit));
-    const openTable = vi.fn(async () => ({
-      schema: createAgentScopedSchemaMock(),
-      vectorSearch,
-      countRows: vi.fn(async () => 0),
-      add: vi.fn(async () => undefined),
-      delete: vi.fn(async () => undefined),
-    }));
-    const loadLanceDbModule = vi.fn(async () => ({
-      connect: vi.fn(async () => ({
-        tableNames: vi.fn(async () => ["memories"]),
-        openTable,
-      })),
-    }));
-    let configFile: Record<string, unknown> = {
-      plugins: {
-        entries: {
-          "memory-lancedb": {
-            config: {
-              embedding: {
-                apiKey: OPENAI_API_KEY,
-                model: "text-embedding-3-small",
-              },
-              dbPath: getDbPath(),
-              autoCapture: false,
-              autoRecall: false,
-            },
+    const { embeddingsCreate, loadLanceDbModule, logger, on, updateConfig } =
+      setupMemoryHookHarness({
+        autoCapture: false,
+        autoRecall: false,
+        liveConfig: true,
+        searchResults: [
+          {
+            id: "memory-1",
+            text: `${recalledPrefix}🚀tail`,
+            vector: [0.1, 0.2, 0.3],
+            importance: 0.8,
+            category: "preference",
+            createdAt: 1,
+            _distance: 0.1,
           },
-        },
-      },
-    };
-
-    installOpenAiMemoryModuleMocks({
-      ensureGlobalUndiciEnvProxyDispatcher,
-      embeddingsCreate,
-      loadLanceDbModule,
-    });
-
-    try {
-      const on = vi.fn();
-      const logger = {
-        info: vi.fn(),
-        warn: vi.fn(),
-        error: vi.fn(),
-        debug: vi.fn(),
-      };
-      const mockApi = createMemoryPluginApi(getDbPath(), {
-        runtime: {
-          config: {
-            current: () => configFile,
-          },
-        },
-        logger,
-        on,
+        ],
       });
 
-      registerTestPlugin(memoryPlugin, mockApi);
-
-      configFile = {
-        plugins: {
-          entries: {
-            "memory-lancedb": {
-              config: {
-                embedding: {
-                  apiKey: OPENAI_API_KEY,
-                  model: "text-embedding-3-small",
-                },
-                dbPath: getDbPath(),
-                autoCapture: false,
-                autoRecall: true,
-                recallMaxChars: 100,
-              },
-            },
-          },
-        },
-      };
+    try {
+      updateConfig({ autoRecall: true, recallMaxChars: 100 });
 
       const beforePromptBuild = on.mock.calls.find(
         ([hookName]) => hookName === "before_prompt_build",
@@ -1815,7 +1905,7 @@ describe("memory plugin e2e", () => {
 
       const result = await beforePromptBuild?.(
         { prompt: "what editor should i use?", messages: [] },
-        { agentId: "main" },
+        withAllowedMemoryRecallAuthority({ agentId: "main" }),
       );
 
       expect(loadLanceDbModule).toHaveBeenCalledTimes(1);
@@ -1832,87 +1922,14 @@ describe("memory plugin e2e", () => {
   });
 
   test("uses live runtime config to skip auto-recall after registration", async () => {
-    const embeddingsCreate = vi.fn(async () => ({
-      data: [{ embedding: [0.1, 0.2, 0.3] }],
-    }));
-    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
-    const loadLanceDbModule = vi.fn(async () => ({
-      connect: vi.fn(async () => ({
-        tableNames: vi.fn(async () => ["memories"]),
-        openTable: vi.fn(async () => ({
-          schema: createAgentScopedSchemaMock(),
-          vectorSearch: vi.fn(() =>
-            createAgentScopedVectorQuery(vi.fn(() => ({ toArray: vi.fn(async () => []) }))),
-          ),
-          countRows: vi.fn(async () => 0),
-          add: vi.fn(async () => undefined),
-          delete: vi.fn(async () => undefined),
-        })),
-      })),
-    }));
-    let configFile: Record<string, unknown> = {
-      plugins: {
-        entries: {
-          "memory-lancedb": {
-            config: {
-              embedding: {
-                apiKey: OPENAI_API_KEY,
-                model: "text-embedding-3-small",
-              },
-              dbPath: getDbPath(),
-              autoCapture: false,
-              autoRecall: true,
-            },
-          },
-        },
-      },
-    };
-
-    installOpenAiMemoryModuleMocks({
-      ensureGlobalUndiciEnvProxyDispatcher,
-      embeddingsCreate,
-      loadLanceDbModule,
+    const { embeddingsCreate, loadLanceDbModule, on, updateConfig } = setupMemoryHookHarness({
+      autoCapture: false,
+      autoRecall: true,
+      liveConfig: true,
     });
 
     try {
-      const on = vi.fn();
-      const mockApi = createMemoryPluginApi(getDbPath(), {
-        pluginConfig: {
-          embedding: {
-            apiKey: OPENAI_API_KEY,
-            model: "text-embedding-3-small",
-          },
-          dbPath: getDbPath(),
-          autoCapture: false,
-          autoRecall: true,
-        },
-        runtime: {
-          config: {
-            current: () => configFile,
-          },
-        },
-        on,
-      });
-
-      registerTestPlugin(memoryPlugin, mockApi);
-
-      configFile = {
-        plugins: {
-          entries: {
-            "memory-lancedb": {
-              config: {
-                embedding: {
-                  apiKey: OPENAI_API_KEY,
-                  model: "text-embedding-3-small",
-                },
-                dbPath: getDbPath(),
-                autoCapture: false,
-                autoRecall: false,
-              },
-            },
-          },
-        },
-      };
+      updateConfig({ autoRecall: false });
 
       const beforePromptBuild = on.mock.calls.find(
         ([hookName]) => hookName === "before_prompt_build",
@@ -1921,7 +1938,7 @@ describe("memory plugin e2e", () => {
 
       const result = await beforePromptBuild?.(
         { prompt: "what editor should i use?", messages: [] },
-        { agentId: "main" },
+        withAllowedMemoryRecallAuthority({ agentId: "main" }),
       );
 
       expect(result).toBeUndefined();
@@ -2038,25 +2055,32 @@ describe("memory plugin e2e", () => {
         messages: [{ role: "user", content: "I prefer Helix for editing code every day." }],
       };
 
-      const recallUnscoped = await beforePromptBuild?.(recallEvent, {});
+      const recallUnscoped = await beforePromptBuild?.(
+        recallEvent,
+        withAllowedMemoryRecallAuthority(),
+      );
       await agentEnd?.(captureEvent, {});
       expect(recallUnscoped).toBeUndefined();
       expect(embeddingsCreate).not.toHaveBeenCalled();
       expect(add).not.toHaveBeenCalled();
 
-      const recallDisabled = await beforePromptBuild?.(recallEvent, { agentId: "xiaohuo" });
+      const recallDisabled = await beforePromptBuild?.(
+        recallEvent,
+        withAllowedMemoryRecallAuthority({ agentId: "xiaohuo" }),
+      );
       await agentEnd?.(captureEvent, { agentId: "xiaohuo", sessionKey: "agent:xiaohuo:main" });
       expect(recallDisabled).toBeUndefined();
       expect(embeddingsCreate).not.toHaveBeenCalled();
       expect(add).not.toHaveBeenCalled();
 
-      const recallDisabledCased = await beforePromptBuild?.(recallEvent, {
-        agentId: " XiaoHuo ",
-      });
+      const recallDisabledCased = await beforePromptBuild?.(
+        recallEvent,
+        withAllowedMemoryRecallAuthority({ agentId: " XiaoHuo " }),
+      );
       expect(recallDisabledCased).toBeUndefined();
       expect(embeddingsCreate).not.toHaveBeenCalled();
 
-      await beforePromptBuild?.(recallEvent, { agentId: "main" });
+      await beforePromptBuild?.(recallEvent, withAllowedMemoryRecallAuthority({ agentId: "main" }));
       expect(embeddingsCreate).toHaveBeenCalled();
       embeddingsCreate.mockClear();
       await agentEnd?.(captureEvent, { agentId: "main", sessionKey: "agent:main:main" });
@@ -2092,9 +2116,10 @@ describe("memory plugin e2e", () => {
       expect(add).not.toHaveBeenCalled();
       expect(deleteRows).not.toHaveBeenCalled();
 
-      const recallDefaultDisabled = await beforePromptBuild?.(recallEvent, {
-        agentId: "unlisted",
-      });
+      const recallDefaultDisabled = await beforePromptBuild?.(
+        recallEvent,
+        withAllowedMemoryRecallAuthority({ agentId: "unlisted" }),
+      );
       expect(recallDefaultDisabled).toBeUndefined();
       expect(embeddingsCreate).not.toHaveBeenCalled();
     } finally {
@@ -2103,75 +2128,14 @@ describe("memory plugin e2e", () => {
   });
 
   test("fails closed for auto-recall when the live plugin entry is removed", async () => {
-    const embeddingsCreate = vi.fn(async () => ({
-      data: [{ embedding: [0.1, 0.2, 0.3] }],
-    }));
-    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
-    const loadLanceDbModule = vi.fn(async () => ({
-      connect: vi.fn(async () => ({
-        tableNames: vi.fn(async () => ["memories"]),
-        openTable: vi.fn(async () => ({
-          schema: createAgentScopedSchemaMock(),
-          vectorSearch: vi.fn(() =>
-            createAgentScopedVectorQuery(vi.fn(() => ({ toArray: vi.fn(async () => []) }))),
-          ),
-          countRows: vi.fn(async () => 0),
-          add: vi.fn(async () => undefined),
-          delete: vi.fn(async () => undefined),
-        })),
-      })),
-    }));
-    let configFile: Record<string, unknown> = {
-      plugins: {
-        entries: {
-          "memory-lancedb": {
-            config: {
-              embedding: {
-                apiKey: OPENAI_API_KEY,
-                model: "text-embedding-3-small",
-              },
-              dbPath: getDbPath(),
-              autoCapture: false,
-              autoRecall: true,
-            },
-          },
-        },
-      },
-    };
-
-    installOpenAiMemoryModuleMocks({
-      ensureGlobalUndiciEnvProxyDispatcher,
-      embeddingsCreate,
-      loadLanceDbModule,
+    const { embeddingsCreate, loadLanceDbModule, on, removePluginEntry } = setupMemoryHookHarness({
+      autoCapture: false,
+      autoRecall: true,
+      liveConfig: true,
     });
 
     try {
-      const on = vi.fn();
-      const mockApi = createMemoryPluginApi(getDbPath(), {
-        pluginConfig: {
-          embedding: {
-            apiKey: OPENAI_API_KEY,
-            model: "text-embedding-3-small",
-          },
-          dbPath: getDbPath(),
-          autoCapture: false,
-          autoRecall: true,
-        },
-        runtime: {
-          config: {
-            current: () => configFile,
-          },
-        },
-        on,
-      });
-
-      registerTestPlugin(memoryPlugin, mockApi);
-
-      configFile = {
-        plugins: {
-          entries: {},
-        },
-      };
+      removePluginEntry();
 
       const beforePromptBuild = on.mock.calls.find(
         ([hookName]) => hookName === "before_prompt_build",
@@ -2180,7 +2144,7 @@ describe("memory plugin e2e", () => {
 
       const result = await beforePromptBuild?.(
         { prompt: "what editor should i use after memory is removed?", messages: [] },
-        { agentId: "main" },
+        withAllowedMemoryRecallAuthority({ agentId: "main" }),
       );
 
       expect(result).toBeUndefined();
@@ -2192,51 +2156,19 @@ describe("memory plugin e2e", () => {
   });
 
   test("runs auto-capture through the registered agent_end hook", async () => {
-    const embeddingsCreate = vi.fn(async () => ({
-      data: [{ embedding: [0.1, 0.2, 0.3] }],
-    }));
-    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
-    const add = vi.fn(async () => undefined);
-    const toArray = vi.fn(async () => []);
-    const limit = vi.fn(() => ({ toArray }));
-    const vectorSearch = vi.fn(() => createAgentScopedVectorQuery(limit));
-    const openTable = vi.fn(async () => ({
-      schema: createAgentScopedSchemaMock(),
-      vectorSearch,
-      countRows: vi.fn(async () => 0),
+    const {
       add,
-      delete: vi.fn(async () => undefined),
-    }));
-    const loadLanceDbModule = vi.fn(async () => ({
-      connect: vi.fn(async () => ({
-        tableNames: vi.fn(async () => ["memories"]),
-        openTable,
-      })),
-    }));
-
-    installOpenAiMemoryModuleMocks({
-      ensureGlobalUndiciEnvProxyDispatcher,
       embeddingsCreate,
+      ensureGlobalUndiciEnvProxyDispatcher,
       loadLanceDbModule,
+      on,
+      vectorSearch,
+    } = setupMemoryHookHarness({
+      autoCapture: true,
+      autoRecall: false,
     });
 
     try {
-      const on = vi.fn();
-      const mockApi = createMemoryPluginApi(getDbPath(), {
-        pluginConfig: {
-          embedding: {
-            apiKey: OPENAI_API_KEY,
-            model: "text-embedding-3-small",
-          },
-          dbPath: getDbPath(),
-          autoCapture: true,
-          autoRecall: false,
-        },
-        on,
-      });
-
-      registerTestPlugin(memoryPlugin, mockApi);
-
       const agentEnd = on.mock.calls.find(([hookName]) => hookName === "agent_end")?.[1];
       expect(agentEnd).toBeTypeOf("function");
 
@@ -2286,81 +2218,14 @@ describe("memory plugin e2e", () => {
   });
 
   test("uses live runtime config to enable auto-capture after startup disable", async () => {
-    const embeddingsCreate = vi.fn(async () => ({
-      data: [{ embedding: [0.1, 0.2, 0.3] }],
-    }));
-    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
-    const add = vi.fn(async () => undefined);
-    const toArray = vi.fn(async () => []);
-    const limit = vi.fn(() => ({ toArray }));
-    const vectorSearch = vi.fn(() => createAgentScopedVectorQuery(limit));
-    const openTable = vi.fn(async () => ({
-      schema: createAgentScopedSchemaMock(),
-      vectorSearch,
-      countRows: vi.fn(async () => 0),
-      add,
-      delete: vi.fn(async () => undefined),
-    }));
-    const loadLanceDbModule = vi.fn(async () => ({
-      connect: vi.fn(async () => ({
-        tableNames: vi.fn(async () => ["memories"]),
-        openTable,
-      })),
-    }));
-    let configFile: Record<string, unknown> = {
-      plugins: {
-        entries: {
-          "memory-lancedb": {
-            config: {
-              embedding: {
-                apiKey: OPENAI_API_KEY,
-                model: "text-embedding-3-small",
-              },
-              dbPath: getDbPath(),
-              autoCapture: false,
-              autoRecall: false,
-            },
-          },
-        },
-      },
-    };
-
-    installOpenAiMemoryModuleMocks({
-      ensureGlobalUndiciEnvProxyDispatcher,
-      embeddingsCreate,
-      loadLanceDbModule,
+    const { add, embeddingsCreate, loadLanceDbModule, on, updateConfig } = setupMemoryHookHarness({
+      autoCapture: false,
+      autoRecall: false,
+      liveConfig: true,
     });
 
     try {
-      const on = vi.fn();
-      const mockApi = createMemoryPluginApi(getDbPath(), {
-        runtime: {
-          config: {
-            current: () => configFile,
-          },
-        },
-        on,
-      });
-
-      registerTestPlugin(memoryPlugin, mockApi);
-
-      configFile = {
-        plugins: {
-          entries: {
-            "memory-lancedb": {
-              config: {
-                embedding: {
-                  apiKey: OPENAI_API_KEY,
-                  model: "text-embedding-3-small",
-                },
-                dbPath: getDbPath(),
-                autoCapture: true,
-                autoRecall: false,
-              },
-            },
-          },
-        },
-      };
+      updateConfig({ autoCapture: true });
 
       const agentEnd = on.mock.calls.find(([hookName]) => hookName === "agent_end")?.[1];
       expect(agentEnd).toBeTypeOf("function");
@@ -2389,88 +2254,14 @@ describe("memory plugin e2e", () => {
   });
 
   test("uses live runtime config to skip auto-capture after registration", async () => {
-    const embeddingsCreate = vi.fn(async () => ({
-      data: [{ embedding: [0.1, 0.2, 0.3] }],
-    }));
-    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
-    const add = vi.fn(async () => undefined);
-    const loadLanceDbModule = vi.fn(async () => ({
-      connect: vi.fn(async () => ({
-        tableNames: vi.fn(async () => ["memories"]),
-        openTable: vi.fn(async () => ({
-          schema: createAgentScopedSchemaMock(),
-          vectorSearch: vi.fn(() =>
-            createAgentScopedVectorQuery(vi.fn(() => ({ toArray: vi.fn(async () => []) }))),
-          ),
-          countRows: vi.fn(async () => 0),
-          add,
-          delete: vi.fn(async () => undefined),
-        })),
-      })),
-    }));
-    let configFile: Record<string, unknown> = {
-      plugins: {
-        entries: {
-          "memory-lancedb": {
-            config: {
-              embedding: {
-                apiKey: OPENAI_API_KEY,
-                model: "text-embedding-3-small",
-              },
-              dbPath: getDbPath(),
-              autoCapture: true,
-              autoRecall: false,
-            },
-          },
-        },
-      },
-    };
-
-    installOpenAiMemoryModuleMocks({
-      ensureGlobalUndiciEnvProxyDispatcher,
-      embeddingsCreate,
-      loadLanceDbModule,
+    const { add, embeddingsCreate, loadLanceDbModule, on, updateConfig } = setupMemoryHookHarness({
+      autoCapture: true,
+      autoRecall: false,
+      liveConfig: true,
     });
 
     try {
-      const on = vi.fn();
-      const mockApi = createMemoryPluginApi(getDbPath(), {
-        pluginConfig: {
-          embedding: {
-            apiKey: OPENAI_API_KEY,
-            model: "text-embedding-3-small",
-          },
-          dbPath: getDbPath(),
-          autoCapture: true,
-          autoRecall: false,
-        },
-        runtime: {
-          config: {
-            current: () => configFile,
-          },
-        },
-        on,
-      });
-
-      registerTestPlugin(memoryPlugin, mockApi);
-
-      configFile = {
-        plugins: {
-          entries: {
-            "memory-lancedb": {
-              config: {
-                embedding: {
-                  apiKey: OPENAI_API_KEY,
-                  model: "text-embedding-3-small",
-                },
-                dbPath: getDbPath(),
-                autoCapture: false,
-                autoRecall: false,
-              },
-            },
-          },
-        },
-      };
+      updateConfig({ autoCapture: false });
 
       const agentEnd = on.mock.calls.find(([hookName]) => hookName === "agent_end")?.[1];
       expect(agentEnd).toBeTypeOf("function");
@@ -2492,76 +2283,15 @@ describe("memory plugin e2e", () => {
   });
 
   test("fails closed for auto-capture when the live plugin entry is removed", async () => {
-    const embeddingsCreate = vi.fn(async () => ({
-      data: [{ embedding: [0.1, 0.2, 0.3] }],
-    }));
-    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
-    const add = vi.fn(async () => undefined);
-    const loadLanceDbModule = vi.fn(async () => ({
-      connect: vi.fn(async () => ({
-        tableNames: vi.fn(async () => ["memories"]),
-        openTable: vi.fn(async () => ({
-          schema: createAgentScopedSchemaMock(),
-          vectorSearch: vi.fn(() =>
-            createAgentScopedVectorQuery(vi.fn(() => ({ toArray: vi.fn(async () => []) }))),
-          ),
-          countRows: vi.fn(async () => 0),
-          add,
-          delete: vi.fn(async () => undefined),
-        })),
-      })),
-    }));
-    let configFile: Record<string, unknown> = {
-      plugins: {
-        entries: {
-          "memory-lancedb": {
-            config: {
-              embedding: {
-                apiKey: OPENAI_API_KEY,
-                model: "text-embedding-3-small",
-              },
-              dbPath: getDbPath(),
-              autoCapture: true,
-              autoRecall: false,
-            },
-          },
-        },
-      },
-    };
-
-    installOpenAiMemoryModuleMocks({
-      ensureGlobalUndiciEnvProxyDispatcher,
-      embeddingsCreate,
-      loadLanceDbModule,
-    });
-
-    try {
-      const on = vi.fn();
-      const mockApi = createMemoryPluginApi(getDbPath(), {
-        pluginConfig: {
-          embedding: {
-            apiKey: OPENAI_API_KEY,
-            model: "text-embedding-3-small",
-          },
-          dbPath: getDbPath(),
-          autoCapture: true,
-          autoRecall: false,
-        },
-        runtime: {
-          config: {
-            current: () => configFile,
-          },
-        },
-        on,
+    const { add, embeddingsCreate, loadLanceDbModule, on, removePluginEntry } =
+      setupMemoryHookHarness({
+        autoCapture: true,
+        autoRecall: false,
+        liveConfig: true,
       });
 
-      registerTestPlugin(memoryPlugin, mockApi);
-
-      configFile = {
-        plugins: {
-          entries: {},
-        },
-      };
+    try {
+      removePluginEntry();
 
       const agentEnd = on.mock.calls.find(([hookName]) => hookName === "agent_end")?.[1];
       expect(agentEnd).toBeTypeOf("function");
@@ -3677,7 +3407,6 @@ describe("memory plugin e2e", () => {
           });
           expect(payloads).toEqual([
             expect.objectContaining({ text: "Done — I forgot that memory." }),
-            expect.objectContaining({ isError: true }),
           ]);
           expect(JSON.stringify(payloads)).not.toContain("memory-lancedb");
         }

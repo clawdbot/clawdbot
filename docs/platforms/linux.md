@@ -22,12 +22,17 @@ The OpenClaw Linux companion is a Tauri desktop app for a local Gateway. It:
 - discovers nearby Bonjour Gateways and opens each Control UI in a route-scoped window, so several
   Gateway dashboards can stay connected and be used simultaneously
 - opens the Gateway-served Control UI with its resolved authentication URL
-- opens the Control UI in onboarding mode after its first-run install, which
-  offers to import detected Claude Code, Codex, or Hermes memories into the
-  agent workspace (the same import stays available later under
-  Settings → Import Memory)
-- renders agent-driven Canvas and bundled A2UI content for a colocated CLI node host
+- opens Model Setup after its first-run install, automatically tests available
+  AI credentials, and verifies an existing model before opening the dashboard
+- continues into guided onboarding after connecting a new model; onboarding can
+  import detected Claude Code, Codex, or Hermes memories into the agent workspace
+  (the same import stays available later under Settings → Import Memory)
 - remains available from the system tray when its window is closed
+
+When the desktop app starts with a supported provider API key in its environment,
+the Gateway service keeps that dedicated inference credential in an owner-only
+environment file. Provider admin keys, GitHub tokens, and unrelated environment
+variables are not copied into the service.
 
 ### Host sleep
 
@@ -116,14 +121,6 @@ the shortcut settings are hidden and the tray item remains the entry point.
 After an accepted send, Quick Chat stays open and streams the selected agent's
 plain-text reply below the composer. Press `Esc` to dismiss the bar and its reply;
 `Ctrl+Enter` still opens the dashboard.
-
-### Canvas
-
-Linux Canvas uses two cooperating processes. `openclaw node run` remains the single Gateway node connection; the bundled `linux-canvas` plugin forwards `canvas.*` calls to the running desktop app over a user-only Unix socket. The app owns one on-demand WebView window, including the bundled A2UI renderer and action bridge back to the agent.
-
-The plugin is enabled by default. It advertises Canvas only when the desktop socket exists at `$XDG_RUNTIME_DIR/openclaw-canvas.sock`, or `/tmp/openclaw-canvas-$UID.sock` when `XDG_RUNTIME_DIR` is unavailable. Disable it with `plugins.entries.linux-canvas.enabled: false`. On a headless Linux server without the desktop app, Canvas is not advertised.
-
-Linux v1 uses one Canvas window. HTTP and HTTPS pages are renderable, but A2UI actions are accepted only from the bundled renderer.
 
 ## CLI and SSH alternative
 

@@ -10,7 +10,6 @@ import {
   createAttachedChannelResultAdapter,
   type ChannelOutboundAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
-import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
 import {
   resolveSendableOutboundReplyParts,
@@ -21,6 +20,7 @@ import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { mergeTelegramAccountConfig, resolveDefaultTelegramAccountId } from "./accounts.js";
 import { resolveTelegramInlineButtons, type TelegramInlineButtons } from "./button-types.js";
+import { TELEGRAM_MAX_CAPTION_LENGTH, telegramCaptionDeliveryMetadata } from "./caption.js";
 import { splitTelegramHtmlChunks } from "./format.js";
 import {
   canonicalizeTelegramPresentationPayload,
@@ -32,6 +32,7 @@ import {
   createTelegramPromptContextProjectionCursor,
   resolveTelegramPromptContextSource,
 } from "./prompt-context-projection.js";
+import { registerTelegramQuestionDelivery } from "./question-finalization.js";
 import { loadTelegramSendModule, type TelegramSendModule } from "./send-runtime.js";
 import { normalizeTelegramOutboundTarget, parseTelegramTarget } from "./targets.js";
 
@@ -505,7 +506,6 @@ export function createTelegramOutboundAdapter(
         },
       ),
     afterDeliverPayload: ({ cfg, target, payload, results }) => {
-      const questionId = questionGatewayRuntime.readAskUserQuestionId(payload);
       const telegramResults = results.filter(
         (candidate) => candidate.channel === "telegram" && candidate.messageId,
       );
@@ -517,23 +517,45 @@ export function createTelegramOutboundAdapter(
           ? result.meta.telegramDeliveredText
           : payload.text
       )?.trim();
-      if (!questionId || !result || !text) {
+      if (!result || !text) {
         return;
       }
       const chatId =
         result.target?.kind === "chat"
           ? result.target.id
           : normalizeTelegramOutboundTarget(target.to);
-      questionGatewayRuntime.registerChannelDelivery({
-        questionId,
-        deliveryId: `telegram:${target.accountId ?? "default"}:${chatId}:${result.messageId}`,
-        finalize: async (statusLine) => {
-          const { editMessageTelegram } = await loadSendModule();
-          await editMessageTelegram(chatId, result.messageId, `${text}\n\n${statusLine}`, {
+      const messageId = result.messageId;
+      const accountId = target.accountId ?? undefined;
+      const deliveredPart = result.receipt?.parts.find(
+        (part) => part.platformMessageId === messageId,
+      );
+      const isCaptionDelivery =
+        deliveredPart?.kind === "media" ||
+        (deliveredPart?.kind !== "text" &&
+          result.meta !== undefined &&
+          telegramCaptionDeliveryMetadata.has(result.meta));
+      registerTelegramQuestionDelivery({
+        accountId,
+        chatId,
+        messageId,
+        payload,
+        text,
+        textLimit: isCaptionDelivery ? TELEGRAM_MAX_CAPTION_LENGTH : TELEGRAM_TEXT_CHUNK_LIMIT,
+        clearButtons: async () => {
+          const { editMessageReplyMarkupTelegram } = await loadSendModule();
+          await editMessageReplyMarkupTelegram(chatId, messageId, [], {
             cfg,
-            accountId: target.accountId ?? undefined,
-            buttons: [],
+            accountId,
             verbose: false,
+          });
+        },
+        annotate: async (finalText) => {
+          const { editMessageTelegram } = await loadSendModule();
+          await editMessageTelegram(chatId, messageId, finalText, {
+            cfg,
+            accountId,
+            verbose: false,
+            ...(isCaptionDelivery ? { editMode: "caption" } : {}),
           });
         },
       });

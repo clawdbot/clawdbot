@@ -20,7 +20,7 @@ const mocks = vi.hoisted(() => ({
   resolveActiveEmbeddedRunSessionIdBySessionFile: vi.fn(),
   resolveActiveEmbeddedRunHandleSessionId: vi.fn(),
   resolveActiveEmbeddedRunHandleSessionIdBySessionFile: vi.fn(),
-  resolveEmbeddedAgentReplyRunPhase: vi.fn(),
+  resolveEmbeddedReplyActivity: vi.fn(),
   resolveEmbeddedSessionLane: vi.fn((key: string) => `session:${key}`),
   waitForEmbeddedAgentRunEnd: vi.fn(),
   getDiagnosticSessionActivitySnapshot: vi.fn(),
@@ -58,7 +58,7 @@ vi.mock("../agents/embedded-agent-runner/runs.js", () => ({
   resolveActiveEmbeddedRunHandleSessionId: mocks.resolveActiveEmbeddedRunHandleSessionId,
   resolveActiveEmbeddedRunHandleSessionIdBySessionFile:
     mocks.resolveActiveEmbeddedRunHandleSessionIdBySessionFile,
-  resolveEmbeddedAgentReplyRunPhase: mocks.resolveEmbeddedAgentReplyRunPhase,
+  resolveEmbeddedReplyActivity: mocks.resolveEmbeddedReplyActivity,
   waitForEmbeddedAgentRunEnd: mocks.waitForEmbeddedAgentRunEnd,
 }));
 
@@ -103,7 +103,7 @@ function resetMocks() {
   mocks.resolveActiveEmbeddedRunSessionIdBySessionFile.mockReset();
   mocks.resolveActiveEmbeddedRunHandleSessionId.mockReset();
   mocks.resolveActiveEmbeddedRunHandleSessionIdBySessionFile.mockReset();
-  mocks.resolveEmbeddedAgentReplyRunPhase.mockReset();
+  mocks.resolveEmbeddedReplyActivity.mockReset();
   mocks.resolveEmbeddedSessionLane.mockClear();
   mocks.waitForEmbeddedAgentRunEnd.mockReset();
   mocks.getDiagnosticSessionActivitySnapshot.mockReset();
@@ -401,7 +401,10 @@ describe("stuck session recovery", () => {
   it("keeps the lane while reply work waits for deferred maintenance", async () => {
     mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("queued-reply-session");
     mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
-    mocks.resolveEmbeddedAgentReplyRunPhase.mockReturnValue("waiting_for_deferred_maintenance");
+    mocks.resolveEmbeddedReplyActivity.mockReturnValue({
+      phase: "waiting_for_deferred_maintenance",
+      lastActivityAtMs: Date.now(),
+    });
     mocks.isEmbeddedAgentRunActive.mockReturnValue(true);
     mocks.isEmbeddedAgentRunHandleActive.mockReturnValue(false);
 
@@ -430,7 +433,10 @@ describe("stuck session recovery", () => {
   it("keeps a reply queued on the global lane instead of reclaiming it", async () => {
     mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("queued-reply-session");
     mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
-    mocks.resolveEmbeddedAgentReplyRunPhase.mockReturnValue("waiting_for_global_lane");
+    mocks.resolveEmbeddedReplyActivity.mockReturnValue({
+      phase: "waiting_for_global_lane",
+      lastActivityAtMs: Date.now(),
+    });
     mocks.isEmbeddedAgentRunActive.mockReturnValue(true);
 
     const outcome = await recoverStuckDiagnosticSession({
@@ -494,7 +500,10 @@ describe("stuck session recovery", () => {
       mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
       mocks.isEmbeddedAgentRunActive.mockReturnValue(true);
       mocks.isEmbeddedAgentRunHandleActive.mockReturnValue(false);
-      mocks.resolveEmbeddedAgentReplyRunPhase.mockReturnValue(phase);
+      mocks.resolveEmbeddedReplyActivity.mockReturnValue({
+        phase,
+        lastActivityAtMs: Date.now(),
+      });
       mocks.getDiagnosticSessionActivitySnapshot.mockReturnValue({
         lastProgressAgeMs: 720_000,
       });
@@ -519,6 +528,192 @@ describe("stuck session recovery", () => {
       expect(mocks.abortEmbeddedAgentRun).not.toHaveBeenCalled();
     },
   );
+
+  it.each(
+    (["preflight_compacting", "memory_flushing"] as const)
+      .flatMap((phase) =>
+        [false, true].flatMap((hasEmbeddedHandle) =>
+          [false, true].map((allowActiveAbort) => ({
+            phase,
+            hasEmbeddedHandle,
+            allowActiveAbort,
+            ageMs: 720_000,
+          })),
+        ),
+      )
+      .concat([
+        {
+          phase: "preflight_compacting",
+          hasEmbeddedHandle: false,
+          allowActiveAbort: false,
+          ageMs: 915_000,
+        },
+        {
+          phase: "memory_flushing",
+          hasEmbeddedHandle: true,
+          allowActiveAbort: true,
+          ageMs: 915_000,
+        },
+      ]),
+  )(
+    "honors the configured $phase timeout with queued work (handle=$hasEmbeddedHandle, abort=$allowActiveAbort, age=$ageMs)",
+    async ({ phase, hasEmbeddedHandle, allowActiveAbort, ageMs }) => {
+      const sessionId = "maintenance-reply-session";
+      mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue(sessionId);
+      mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(
+        hasEmbeddedHandle ? sessionId : undefined,
+      );
+      mocks.isEmbeddedAgentRunActive.mockReturnValue(true);
+      mocks.isEmbeddedAgentRunHandleActive.mockReturnValue(hasEmbeddedHandle);
+      mocks.resolveEmbeddedReplyActivity.mockReturnValue({
+        phase,
+        lastActivityAtMs: Date.now() - ageMs,
+      });
+      mocks.getDiagnosticSessionActivitySnapshot.mockReturnValue({ lastProgressAgeMs: ageMs });
+      mocks.abortEmbeddedAgentRun.mockReturnValue(true);
+      mocks.waitForEmbeddedAgentRunEnd.mockResolvedValue(true);
+
+      const outcome = await recoverStuckDiagnosticSession({
+        sessionId,
+        sessionKey: "agent:main:main",
+        ageMs,
+        queueDepth: 1,
+        allowActiveAbort,
+        staleActiveProgressAbortMs: 360_000,
+        compactionSafetyTimeoutMs: 900_000,
+      });
+
+      const withinCompactionSafetyWindow = ageMs < 915_000;
+      expect(outcome.status).toBe(withinCompactionSafetyWindow ? "skipped" : "aborted");
+      expect(mocks.abortEmbeddedAgentRun).toHaveBeenCalledTimes(
+        withinCompactionSafetyWindow ? 0 : 1,
+      );
+    },
+  );
+
+  it.each([
+    {
+      name: "keeps fresh queued preflight despite an old session attention age",
+      replyActivityAgeMs: 1_000,
+      queueDepth: 1,
+      compactionSafetyTimeoutMs: 600_000,
+      expectedAbort: false,
+    },
+    {
+      name: "clamps a future preflight activity clock instead of treating it as stale",
+      replyActivityAgeMs: -1_000,
+      queueDepth: 1,
+      compactionSafetyTimeoutMs: 600_000,
+      expectedAbort: false,
+    },
+    {
+      name: "keeps zero-backlog preflight one millisecond before timeout plus settle",
+      replyActivityAgeMs: 614_999,
+      queueDepth: 0,
+      compactionSafetyTimeoutMs: 600_000,
+      expectedAbort: false,
+    },
+    {
+      name: "recovers queued preflight exactly at timeout plus settle",
+      replyActivityAgeMs: 615_000,
+      queueDepth: 1,
+      compactionSafetyTimeoutMs: 600_000,
+      expectedAbort: true,
+    },
+    {
+      name: "recovers queued preflight after timeout plus settle",
+      replyActivityAgeMs: 615_001,
+      queueDepth: 1,
+      compactionSafetyTimeoutMs: 600_000,
+      expectedAbort: true,
+    },
+    {
+      name: "keeps preflight before the default stale recovery floor",
+      replyActivityAgeMs: 299_999,
+      queueDepth: 1,
+      expectedAbort: false,
+    },
+    {
+      name: "recovers preflight at the default stale recovery floor",
+      replyActivityAgeMs: 300_000,
+      queueDepth: 1,
+      expectedAbort: true,
+    },
+    {
+      name: "uses the default stale recovery floor for an invalid compaction timeout",
+      replyActivityAgeMs: 299_999,
+      queueDepth: 1,
+      compactionSafetyTimeoutMs: 0,
+      expectedAbort: false,
+    },
+  ])(
+    "$name",
+    async ({ replyActivityAgeMs, queueDepth, compactionSafetyTimeoutMs, expectedAbort }) => {
+      const now = 1_800_000;
+      const dateNow = vi.spyOn(Date, "now").mockReturnValue(now);
+      try {
+        mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("preflight-session");
+        mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
+        mocks.isEmbeddedAgentRunActive.mockReturnValue(true);
+        mocks.resolveEmbeddedReplyActivity.mockReturnValue({
+          phase: "preflight_compacting",
+          lastActivityAtMs: now - replyActivityAgeMs,
+        });
+        mocks.abortEmbeddedAgentRun.mockReturnValue(true);
+        mocks.waitForEmbeddedAgentRunEnd.mockResolvedValue(true);
+        mocks.resetCommandLane.mockReturnValue(0);
+
+        const outcome = await recoverStuckDiagnosticSession({
+          sessionId: "preflight-session",
+          sessionKey: "agent:main:main",
+          // Deliberately older than every preflight clock in this table.
+          ageMs: 30 * 60_000,
+          queueDepth,
+          allowActiveAbort: true,
+          compactionSafetyTimeoutMs,
+        });
+
+        expect(mocks.abortEmbeddedAgentRun).toHaveBeenCalledTimes(expectedAbort ? 1 : 0);
+        expect(outcome).toMatchObject(
+          expectedAbort
+            ? { status: "aborted", action: "abort_embedded_run" }
+            : { status: "skipped", action: "keep_lane", reason: "active_reply_work" },
+        );
+      } finally {
+        dateNow.mockRestore();
+      }
+    },
+  );
+
+  it("uses reply activity rather than session age for memory flushing", async () => {
+    const now = Date.now();
+    mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("memory-flush-session");
+    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
+    mocks.isEmbeddedAgentRunActive.mockReturnValue(true);
+    mocks.resolveEmbeddedReplyActivity.mockReturnValue({
+      phase: "memory_flushing",
+      lastActivityAtMs: now,
+    });
+    mocks.abortEmbeddedAgentRun.mockReturnValue(true);
+    mocks.waitForEmbeddedAgentRunEnd.mockResolvedValue(true);
+    mocks.resetCommandLane.mockReturnValue(0);
+
+    const outcome = await recoverStuckDiagnosticSession({
+      sessionId: "memory-flush-session",
+      sessionKey: "agent:main:main",
+      ageMs: 30 * 60_000,
+      queueDepth: 1,
+      allowActiveAbort: true,
+      compactionSafetyTimeoutMs: 600_000,
+    });
+
+    expect(mocks.abortEmbeddedAgentRun).not.toHaveBeenCalled();
+    expect(outcome).toMatchObject({
+      status: "skipped",
+      action: "keep_lane",
+      reason: "active_reply_work",
+    });
+  });
 
   it("keeps reply-only ownership with recent progress even with zero queued backlog", async () => {
     mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("live-reply-session");
@@ -743,7 +938,7 @@ describe("stuck session recovery", () => {
     ]);
   });
 
-  it("reports when recovery finds no active work to release", async () => {
+  it("releases stale processing state when recovery finds no active work", async () => {
     mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
     mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue(undefined);
     mocks.isEmbeddedAgentRunActive.mockReturnValue(false);
@@ -757,8 +952,32 @@ describe("stuck session recovery", () => {
 
     expect(mocks.resetCommandLane).toHaveBeenCalledWith("session:agent:main:main");
     expect(warnLogMessages()).toEqual([
-      "stuck session recovery outcome: status=noop action=none sessionId=stale-session sessionKey=agent:main:main lane=session:agent:main:main reason=no_active_work",
+      "stuck session recovery: sessionId=stale-session sessionKey=agent:main:main age=180s action=release_lane aborted=false drained=true released=0",
+      "stuck session recovery outcome: status=released action=release_lane sessionId=stale-session sessionKey=agent:main:main lane=session:agent:main:main reason=no_active_work released=0",
     ]);
+  });
+
+  it("keeps observing an active run that neither aborted nor released", async () => {
+    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue("active-session");
+    mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("active-session");
+    mocks.isEmbeddedAgentRunActive.mockReturnValue(true);
+    mocks.abortEmbeddedAgentRun.mockReturnValue(false);
+    mocks.forceClearEmbeddedAgentRun.mockReturnValue(false);
+    mocks.resetCommandLane.mockReturnValue(0);
+
+    const outcome = await recoverStuckDiagnosticSession({
+      sessionId: "active-session",
+      sessionKey: "agent:main:main",
+      ageMs: 180_000,
+      allowActiveAbort: true,
+    });
+
+    expect(outcome).toMatchObject({
+      status: "skipped",
+      action: "observe_only",
+      reason: "active_embedded_run",
+      activeSessionId: "active-session",
+    });
   });
 
   it("clears stale queued processing state even when the lane has no active work", async () => {
@@ -777,7 +996,7 @@ describe("stuck session recovery", () => {
     expect(mocks.resetCommandLane).toHaveBeenCalledWith("session:agent:main:main");
     expect(warnLogMessages()).toEqual([
       "stuck session recovery: sessionId=stale-session sessionKey=agent:main:main age=180s action=release_lane aborted=false drained=true released=0",
-      "stuck session recovery outcome: status=released action=release_lane sessionId=stale-session sessionKey=agent:main:main lane=session:agent:main:main released=0",
+      "stuck session recovery outcome: status=released action=release_lane sessionId=stale-session sessionKey=agent:main:main lane=session:agent:main:main reason=no_active_work released=0",
     ]);
   });
 

@@ -20,7 +20,7 @@ import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-clie
 
 describe("createGatewayKernel", () => {
   it("reports startup and readiness as draining during a direct close", async () => {
-    const port = await getFreePort();
+    const port = 19_789;
     const state = await createOpenClawTestState({
       label: "gateway-kernel-direct-close-readiness",
       layout: "home",
@@ -56,6 +56,8 @@ describe("createGatewayKernel", () => {
       expect(getStartup()).toMatchObject({ ok: true, status: "started" });
       expect(getReadiness()).toMatchObject({ ready: true, failing: [] });
 
+      const closeFirstStop = vi.fn(async () => {});
+      kernel.kernel.swapBonjourStop(closeFirstStop);
       const configReloaderStop = createDeferred();
       vi.spyOn(kernel.runtimeState.configReloader, "stop").mockReturnValue(
         configReloaderStop.promise,
@@ -66,6 +68,8 @@ describe("createGatewayKernel", () => {
       expect(getReadiness()).toMatchObject({ ready: false, failing: ["gateway-draining"] });
       configReloaderStop.resolve();
       await closing;
+      expect(closeFirstStop).toHaveBeenCalledOnce();
+      expect(kernel.runtimeState.bonjourStop).toBeNull();
     } finally {
       try {
         await kernel?.closeOnStartupFailure();
@@ -393,8 +397,6 @@ describe("createGatewayKernel", () => {
         "plugins.metadata.scan",
         "plugins.metadata.freeze",
         "config.snapshot.read.materialize",
-        "plugins.metadata.scan",
-        "plugins.metadata.freeze",
         "config.snapshot.read.observe",
         "config.auth",
         "config.auth.snapshot-validate",
@@ -408,8 +410,6 @@ describe("createGatewayKernel", () => {
         "config.auth.secrets-activate",
         "startup.maintenance",
         "plugins.bootstrap",
-        "plugins.metadata.scan",
-        "plugins.metadata.freeze",
         "runtime.config",
         "control-ui.root",
         "tls.runtime",
@@ -421,6 +421,7 @@ describe("createGatewayKernel", () => {
         "runtime.subscriptions",
         "runtime.services",
         "gateway.handlers",
+        "gateway.config-revision-key",
         "gateway.request-context",
       ]);
     } finally {

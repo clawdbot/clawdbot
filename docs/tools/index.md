@@ -84,7 +84,7 @@ semantics, use [Tools and custom providers](/gateway/config-tools).
 
 | Category                | Use when the agent needs to...                                                               | Representative tools                                                                                                | Read next                                                                                                              |
 | ----------------------- | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| Runtime                 | Run commands, manage processes, or use provider-backed Python analysis                       | `exec`, `process`, `terminal`, `code_execution`                                                                     | [Exec](/tools/exec), [Control UI terminal](/web/control-ui#operator-terminal), [Code execution](/tools/code-execution) |
+| Runtime                 | Run commands, manage processes, use shared operator terminals, or use provider-backed Python | `exec`, `process`, `terminal`, `code_execution`                                                                     | [Exec](/tools/exec), [Control UI terminal](/web/control-ui#operator-terminal), [Code execution](/tools/code-execution) |
 | Files                   | Read and change workspace files                                                              | `read`, `write`, `edit`, `apply_patch`                                                                              | [Apply patch](/tools/apply-patch)                                                                                      |
 | Human input             | Pause for a structured decision owned by the user                                            | `ask_user`                                                                                                          | [Ask user](/tools/ask-user)                                                                                            |
 | Web                     | Search the web, search X posts, or fetch readable page content                               | `web_search`, `x_search`, `web_fetch`                                                                               | [Web tools](/tools/web), [Web fetch](/tools/web-fetch)                                                                 |
@@ -121,8 +121,8 @@ Common plugin-provided tools include:
   output
 - [Tool Search](/tools/tool-search) for discovering and calling large tool
   catalogs without putting every schema in the prompt
-- [Canvas](/plugins/reference/canvas) for node Canvas control and A2UI
-  rendering
+- [Canvas](/plugins/reference/canvas) for the macOS widget-panel presenter and
+  A2UI dashboard content
 
 ## Configure access and approvals
 

@@ -3,26 +3,19 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildControlUiChannelAvatarUrl } from "./control-ui-contract.js";
 import { HTTP_IMAGE_MAX_BYTES } from "./http-image-response.js";
 
 const mocks = vi.hoisted(() => ({
   authorize: vi.fn(),
-  resolveScopes: vi.fn(),
-  authorizeScopes: vi.fn(),
-  resolveIsOwner: vi.fn(),
   loadEntry: vi.fn(),
   resolveReference: vi.fn(),
   readMedia: vi.fn(),
 }));
 
 vi.mock("./http-utils.js", () => ({
-  authorizeGatewayHttpRequestOrReply: (...args: unknown[]) => mocks.authorize(...args),
-  resolveOpenAiCompatibleHttpOperatorScopes: (...args: unknown[]) => mocks.resolveScopes(...args),
-  resolveOpenAiCompatibleHttpSenderIsOwner: (...args: unknown[]) => mocks.resolveIsOwner(...args),
-}));
-
-vi.mock("./method-scopes.js", () => ({
-  authorizeOperatorScopesForMethod: (...args: unknown[]) => mocks.authorizeScopes(...args),
+  authorizeControlUiSessionOwnerReadRequestOrReply: (...args: unknown[]) =>
+    mocks.authorize(...args),
 }));
 
 vi.mock("./session-utils-store.js", () => ({
@@ -37,8 +30,7 @@ vi.mock("../media/store.js", () => ({
   readMediaBuffer: (...args: unknown[]) => mocks.readMedia(...args),
 }));
 
-const { clearChannelAvatarCacheForTest, handleChannelAvatarHttpRequest } =
-  await import("./channel-avatar-http.js");
+const { handleChannelAvatarHttpRequest } = await import("./channel-avatar-http.js");
 
 const PNG_BYTES = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zb0YAAAAASUVORK5CYII=",
@@ -88,11 +80,10 @@ describe("handleChannelAvatarHttpRequest", () => {
   });
 
   beforeEach(() => {
-    clearChannelAvatarCacheForTest();
-    mocks.authorize.mockReset().mockResolvedValue({ ok: true });
-    mocks.resolveScopes.mockReset().mockReturnValue(["operator.read"]);
-    mocks.authorizeScopes.mockReset().mockReturnValue({ allowed: true });
-    mocks.resolveIsOwner.mockReset().mockReturnValue(true);
+    mocks.authorize.mockReset().mockResolvedValue({
+      authMethod: "token",
+      operatorScopes: ["operator.admin", "operator.read"],
+    });
     mocks.loadEntry.mockReset().mockReturnValue({ entry: avatarEntry() });
     mocks.resolveReference.mockReset().mockResolvedValue({
       id: "channel-avatar.png",
@@ -109,7 +100,7 @@ describe("handleChannelAvatarHttpRequest", () => {
   });
 
   const avatarRoute = (sessionKey: string) =>
-    `http://127.0.0.1:${port}/__openclaw__/channel-avatar/${encodeURIComponent(sessionKey)}`;
+    `http://127.0.0.1:${port}${buildControlUiChannelAvatarUrl("", sessionKey, "test-revision")}`;
 
   it("serves managed conversation bytes with sandboxed image headers", async () => {
     const response = await fetch(avatarRoute("agent:main:discord:direct:user-1"));
@@ -194,17 +185,14 @@ describe("handleChannelAvatarHttpRequest", () => {
     expect(mocks.resolveReference).not.toHaveBeenCalled();
   });
 
-  it("requires sessions.list scope before resolving the session", async () => {
-    mocks.authorizeScopes.mockReturnValue({ allowed: false, missingScope: "operator.read" });
-
-    const response = await fetch(avatarRoute("agent:main:hidden"));
-
-    expect(response.status).toBe(403);
-    expect(mocks.loadEntry).not.toHaveBeenCalled();
-  });
-
-  it("requires owner access before resolving the session", async () => {
-    mocks.resolveIsOwner.mockReturnValue(false);
+  it("does not resolve the session when the owner-read authorizer denies access", async () => {
+    mocks.authorize.mockImplementation(
+      async (params: { res: { statusCode: number; end: () => void } }) => {
+        params.res.statusCode = 403;
+        params.res.end();
+        return null;
+      },
+    );
 
     const response = await fetch(avatarRoute("agent:main:hidden"));
 

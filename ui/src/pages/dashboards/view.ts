@@ -1,8 +1,8 @@
+import { buildControlUiFocusPath } from "@openclaw/session-url-contract";
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import { titleForRoute } from "../../app-navigation.ts";
-import { dashboardDocumentHref } from "../../app/dashboard-document-mode.ts";
 import { icons } from "../../components/icons.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
@@ -45,6 +45,9 @@ function renderDashboardList(data: DashboardsRouteData) {
             row,
             mainKey: data.mainKey,
           });
+          const focusHref =
+            buildControlUiFocusPath({ kind: "dashboard", path: target.href }, data.basePath) ??
+            target.href;
           return html`<div class="list-item" data-dashboard-session=${row.key}>
             <a class="list-main list-item-clickable" href=${target.href}>
               <span class="list-title">${resolveSessionDisplayName(row.key, row)}</span>
@@ -55,10 +58,10 @@ function renderDashboardList(data: DashboardsRouteData) {
               <a
                 class="btn btn--ghost"
                 data-dashboard-fullscreen=${row.key}
-                href=${dashboardDocumentHref(data.basePath, row.key)}
-                aria-label=${t("dashboardsPage.openFullscreen")}
+                href=${focusHref}
+                aria-label=${t("dashboardsPage.openFocusMode")}
               >
-                ${icons.maximize} ${t("dashboardsPage.openFullscreen")}
+                ${icons.maximize} ${t("dashboardsPage.openFocusMode")}
               </a>
             </span>
           </div>`;

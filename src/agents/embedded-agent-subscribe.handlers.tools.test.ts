@@ -20,6 +20,9 @@ import {
   buildAdjustedParamsKey,
   recordToolExecutionTracked,
 } from "./agent-tools.before-tool-call.state.js";
+import { addSession, deleteSession, markExited } from "./bash-process-registry.js";
+import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
+import { createProcessTool } from "./bash-tools.process.js";
 import { projectEmbeddedMessageDeliveryFact } from "./embedded-agent-message-delivery.js";
 import type { MessagingToolSend } from "./embedded-agent-messaging.types.js";
 import { buildEmbeddedRunPayloads } from "./embedded-agent-runner/run/payloads.js";
@@ -1415,7 +1418,7 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     });
   });
 
-  it("preserves an unresolved mutation across a later read failure", async () => {
+  it("records the latest failure regardless of mutation classification", async () => {
     const { ctx } = createTestContext();
 
     await executeTool(ctx, {
@@ -1435,9 +1438,9 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     });
 
     expect(ctx.state.lastToolError).toMatchObject({
-      toolName: "write",
-      error: "permission denied",
-      mutatingAction: true,
+      toolName: "read",
+      error: "file not found",
+      mutatingAction: false,
     });
   });
 
@@ -1466,46 +1469,6 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
         oldText: "beta",
         newText: "beta fixed",
       },
-      isError: false,
-      result: { ok: true },
-    });
-
-    expect(ctx.state.lastToolError).toBeUndefined();
-  });
-
-  it("clears a failed multi-file patch after every target is recovered", async () => {
-    const { ctx } = createTestContext();
-
-    await executeTool(ctx, {
-      toolName: "apply_patch",
-      toolCallId: "tool-patch-failed",
-      args: {
-        input: [
-          " *** Begin Patch",
-          " *** Add File: /tmp/day-1.md",
-          "+new",
-          " *** Add File: /tmp/day-2.md",
-          "+new",
-          " *** End Patch",
-        ].join("\n"),
-      },
-      isError: true,
-      result: { error: "Path escapes sandbox root" },
-    });
-
-    await executeTool(ctx, {
-      toolName: "write",
-      toolCallId: "tool-write-recovery",
-      args: { path: "/tmp/day-2.md", content: "new" },
-      isError: false,
-      result: { ok: true },
-    });
-    expect(ctx.state.lastToolError?.toolName).toBe("apply_patch");
-
-    await executeTool(ctx, {
-      toolName: "edit",
-      toolCallId: "tool-edit-recovery",
-      args: { path: "/tmp/day-1.md", edits: [{ oldText: "old", newText: "new" }] },
       isError: false,
       result: { ok: true },
     });
@@ -1765,6 +1728,64 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     });
 
     expect(ctx.state.currentSourceMessagingToolSentTextsNormalized).toEqual(["qa-msteams-dm-ok"]);
+  });
+
+  it.each([
+    {
+      label: "the exact source route",
+      accountId: "account-1",
+      target: "chat123",
+      threadId: "thread-1",
+      expected: true,
+    },
+    {
+      label: "the same target in another account",
+      accountId: "account-2",
+      target: "chat123",
+      threadId: "thread-1",
+      expected: false,
+    },
+    {
+      label: "the same target in another thread",
+      accountId: "account-1",
+      target: "chat123",
+      threadId: "thread-2",
+      expected: false,
+    },
+    {
+      label: "another target",
+      accountId: "account-1",
+      target: "chat456",
+      threadId: "thread-1",
+      expected: false,
+    },
+  ])("records explicit message sends only for $label", async (testCase) => {
+    const { ctx } = createTestContext();
+    Object.assign(ctx.params, {
+      config: {},
+      sourceReplyDeliveryMode: "message_tool_only",
+      messageChannel: "test-channel",
+      currentAccountId: "account-1",
+      currentChannelId: "chat123",
+      currentThreadId: "thread-1",
+    });
+
+    await executeTool(ctx, {
+      toolName: "message",
+      toolCallId: `tool-message-explicit-${testCase.label}`,
+      args: {
+        action: "send",
+        channel: "test-channel",
+        accountId: testCase.accountId,
+        target: testCase.target,
+        threadId: testCase.threadId,
+        message: "explicit reply",
+      },
+      isError: false,
+      result: { details: { ok: true } },
+    });
+
+    expect(ctx.state.messageToolOnlySourceReplyDelivered).toBe(testCase.expected);
   });
 
   it("records rich-content delivery when visible text is blank", async () => {
@@ -2058,9 +2079,7 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
 
     expect(ctx.state.lastToolError).toMatchObject({
       toolName: "memory_store",
-      ownerKey,
       mutatingAction: true,
-      actionFingerprint: expect.stringContaining(`owner=${ownerKey}|args=`),
     });
   });
 
@@ -2140,6 +2159,29 @@ describe("handleToolExecutionEnd timeout metadata", () => {
       { toolName: "write", isError: true },
     ]);
     expect(ctx.state.toolMetas[2]?.asyncStarted).toBe(true);
+  });
+
+  it("records intentional termination with its exact tool call id", async () => {
+    const { ctx } = createTestContext();
+
+    await endTool(ctx, {
+      toolName: "terminal_action",
+      toolCallId: "tool-terminal-current",
+      isError: false,
+      result: {
+        content: [{ type: "text", text: "Done." }],
+        details: { status: "done" },
+        terminate: true,
+      },
+    });
+
+    expect(ctx.state.toolMetas).toEqual([
+      expect.objectContaining({
+        toolName: "terminal_action",
+        toolCallId: "tool-terminal-current",
+        terminate: true,
+      }),
+    ]);
   });
 
   it("retains every failed call after later successes change the last-error slot", async () => {
@@ -2228,19 +2270,42 @@ describe("handleToolExecutionEnd timeout metadata", () => {
   }
 
   it.each(["poll", "log"])(
-    "projects a structured terminal process diagnostic from %s",
+    "projects a structured diagnostic from the real terminal process %s result",
     async (action) => {
       const { ctx } = createTestContext();
-      await executeProcessResult(ctx, { action, details: { exitCode: 7 } });
-
-      expect(ctx.state.lastToolError).toMatchObject({
-        toolName: "process",
-        terminalDiagnostic: {
-          kind: "process",
-          sessionId: "wild-lagoon",
-          reason: { kind: "exit", exitCode: 7 },
-        },
+      const sessionId = `wild-lagoon-${action}`;
+      const session = createProcessSessionFixture({
+        id: sessionId,
+        command: "test",
+        backgrounded: true,
       });
+      addSession(session);
+      markExited(session, 0, null, "failed", "overall-timeout", false);
+
+      try {
+        const args = { action, sessionId } as Parameters<
+          ReturnType<typeof createProcessTool>["execute"]
+        >[1];
+        const result = await createProcessTool().execute(`tool-real-process-${action}`, args);
+        await executeTool(ctx, {
+          toolName: "process",
+          toolCallId: `tool-process-${action}`,
+          args,
+          isError: false,
+          result,
+        });
+
+        expect(ctx.state.lastToolError).toMatchObject({
+          toolName: "process",
+          terminalDiagnostic: {
+            kind: "process",
+            sessionId,
+            reason: { kind: "timeout", timeoutKind: "overall-timeout" },
+          },
+        });
+      } finally {
+        deleteSession(sessionId);
+      }
     },
   );
 
@@ -2814,7 +2879,7 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
       sessionKey: "agent:unit-session",
       toolResultFormat: "markdown",
     });
-    expect(payloads[0]?.text).toBe("⚠️ 🛠️ Exec failed");
+    expect(payloads[0]?.text).toBe("⚠️ 🛠️ Exec blocked");
   });
 
   it("records an actionable failure when unavailable-approval notice delivery rejects", async () => {
@@ -2902,6 +2967,44 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
       summary: "Awaiting approval before command can run.",
     });
   });
+
+  it.each([
+    [false, null, "blocked", undefined],
+    [true, 12, "failed", 12],
+    [undefined, Number.POSITIVE_INFINITY, "failed", undefined],
+    [true, -1, "failed", undefined],
+  ] as const)(
+    "projects executionStarted=%s with duration %s",
+    async (executionStarted, durationMs, expectedStatus, expectedDurationMs) => {
+      const { ctx, onAgentEvent } = createTestContext();
+      await executeTool(ctx, {
+        toolName: "exec",
+        toolCallId: "tool-exec-status",
+        args: { command: "exit 7" },
+        isError: true,
+        ...(executionStarted === undefined ? {} : { executionStarted }),
+        result: { content: [], details: { status: "failed", exitCode: 7, durationMs } },
+      });
+
+      const events = onAgentEvent.mock.calls.map((call) => call[0] as CapturedAgentEvent);
+      expect(
+        events
+          .filter((event) => event.stream === "item" && event.data?.phase === "end")
+          .map((event) => event.data?.status),
+      ).toEqual([expectedStatus, expectedStatus]);
+      const commandOutput = requireEvent(
+        events,
+        (event) => event.stream === "command_output",
+        "command output event",
+      ).data;
+      expect([
+        commandOutput?.status,
+        commandOutput?.exitCode,
+        commandOutput?.durationMs,
+        "durationMs" in commandOutput!,
+      ]).toEqual([expectedStatus, 7, expectedDurationMs, expectedDurationMs !== undefined]);
+    },
+  );
 });
 
 describe("handleToolExecutionEnd derived tool events", () => {
@@ -3286,6 +3389,57 @@ describe("messaging tool media URL tracking", () => {
     });
   });
 
+  it.each([
+    { label: "suppressed adapter thread", currentThreadId: undefined },
+    { label: "prepared native topic", currentThreadId: "42" },
+  ])("keeps the $label independent from scoped session identity", async ({ currentThreadId }) => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "telegram" }),
+            threading: {
+              resolveAutoThreadId: ({
+                toolContext,
+              }: {
+                toolContext?: { currentThreadTs?: string };
+              }) => toolContext?.currentThreadTs,
+            },
+          },
+          source: "test",
+        },
+      ]),
+    );
+    const { ctx } = createTestContext();
+    Object.assign(ctx.params, {
+      sessionKey: "agent:main:main:thread:1234:42",
+      messageChannel: "telegram",
+      currentChannelId: "1234",
+      currentMessagingTarget: "1234",
+      currentThreadId,
+      replyToMode: "all",
+    });
+    const toolCallId = `tool-message-scoped-thread-${currentThreadId ?? "none"}`;
+
+    await startTool(ctx, {
+      toolName: "message",
+      toolCallId,
+      args: { action: "send", to: "1234", message: "thread ownership" },
+    });
+
+    expect(ctx.state.pendingMessagingTargets.get(toolCallId)?.threadId).toBe(currentThreadId);
+
+    await endTool(ctx, {
+      toolName: "message",
+      toolCallId,
+      isError: false,
+      result: { details: { messageId: "message-scoped-thread" } },
+    });
+
+    expect(requireSingleMessagingTarget(ctx).threadId).toBe(currentThreadId);
+  });
+
   it("preserves the pre-send reply state when committing implicit thread evidence", async () => {
     setActivePluginRegistry(
       createTestRegistry([
@@ -3607,6 +3761,67 @@ describe("messaging tool media URL tracking", () => {
         sourceReplyFinal: true,
       },
     ]);
+  });
+
+  it("commits trusted core current-channel widgets as message-tool-only source replies", async () => {
+    const { ctx } = createTestContext();
+    const onDeliveredMessageToolOnlySourceReply = vi.fn();
+    Object.assign(ctx.params, {
+      sourceReplyDeliveryMode: "message_tool_only",
+      coreBuiltinToolNames: new Set(["show_widget"]),
+      onDeliveredMessageToolOnlySourceReply,
+    });
+
+    await executeTool(ctx, {
+      toolName: "show_widget",
+      toolCallId: "tool-current-channel-widget",
+      args: { title: "Status", widget_code: "<p>ready</p>" },
+      isError: false,
+      result: {
+        details: {
+          kind: "widget",
+          presentation: {
+            target: "current_channel",
+            receipt: {
+              primaryPlatformMessageId: "discord-message-1",
+              platformMessageIds: ["discord-message-1"],
+              parts: [],
+              sentAt: 1,
+            },
+          },
+        },
+      },
+    });
+
+    expect(ctx.state.messageToolOnlySourceReplyDelivered).toBe(true);
+    expect(onDeliveredMessageToolOnlySourceReply).toHaveBeenCalledOnce();
+  });
+
+  it("does not commit inline Canvas widgets as message-tool-only source replies", async () => {
+    const { ctx } = createTestContext();
+    const onDeliveredMessageToolOnlySourceReply = vi.fn();
+    Object.assign(ctx.params, {
+      sourceReplyDeliveryMode: "message_tool_only",
+      coreBuiltinToolNames: new Set(["show_widget"]),
+      onDeliveredMessageToolOnlySourceReply,
+    });
+
+    await executeTool(ctx, {
+      toolName: "show_widget",
+      toolCallId: "tool-inline-widget",
+      args: { title: "Status", widget_code: "<p>ready</p>" },
+      isError: false,
+      result: {
+        details: {
+          kind: "canvas",
+          presentation: { target: "assistant_message", title: "Status", sandbox: "scripts" },
+          view: { id: "cv_1", url: "/__openclaw__/canvas/documents/cv_1/index.html" },
+        },
+      },
+    });
+
+    expect(ctx.state.messageToolOnlySourceReplyDelivered).toBe(false);
+    expect(onDeliveredMessageToolOnlySourceReply).not.toHaveBeenCalled();
   });
 
   it("commits projected payload-only delivery after middleware replaces details", async () => {

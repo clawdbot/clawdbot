@@ -25,11 +25,12 @@ thread's `/dashboard/<agent>/<sessionRef>` URL. An open Dashboards page updates
 as threads are renamed, archived, deleted, or switched between Chat and
 Dashboard, including after a Gateway reconnect.
 
-Use **Open full-screen dashboard** on a row to open its board as a standalone
-browser document with no sidebar, top bar, or chat. The close button returns to
-the previous page. Inside a session, use the fullscreen button beside the
-Chat / Split / Dashboard switch to enter or leave browser fullscreen while the
-board is visible.
+Use **Open dashboard in focus mode** on a row to open its board as a standalone
+browser document at `/focus/dashboard/<agent>/<sessionRef>`, with no sidebar,
+top bar, or chat. This focus presentation does not invoke browser fullscreen;
+the close button returns to the previous page. Inside a session, use the
+fullscreen button beside the Chat / Split / Dashboard switch to enter or leave
+browser fullscreen while the board is visible.
 
 The Chat or Dashboard face preference is stored server-side per thread. It
 therefore follows you when you connect to the same gateway from another device.
@@ -72,10 +73,15 @@ never needs the agent.
   bottom — pick the side from the small arrow on the header switch — and
   resizes like the sidebar. Choose Dashboard to hide the chat entirely; the
   agent still hears you when you bring it back.
-- **Agent parity.** Everything you can do, the agent can do with its
-  `dashboard` tool: add, update, move, resize, and remove widgets, manage
-  tabs, switch the visible tab, and move or hide the chat dock. Ask "put the
-  chat on the left and show the finance tab" and watch it happen.
+- **Agent parity.** The agent's `dashboard` tool creates or updates trusted
+  plugin widgets, moves, resizes, and removes widgets, manages tabs, switches
+  the visible tab, and moves or hides the chat dock. The `show_widget` tool
+  creates or refreshes custom HTML and registered-source widgets; updating an
+  existing widget uses `pin: true`, the same `name`, and new `widget_code`.
+  Board snapshots identify each widget's `contentOwner` and, when applicable,
+  `registeredContentKind`; remove a widget before replacing its content owner
+  or registered source kind.
+  Ask "put the chat on the left and show the finance tab" and watch it happen.
 
   Switching the visible tab or chat dock requires a connected Control UI. If
   none is connected, the command returns `UNAVAILABLE`; open the Control UI and retry.
@@ -111,17 +117,18 @@ being interrupted.
 
 If your gateway has MCP servers configured, interactive MCP apps that appear
 in chat can be pinned like any widget. Pinned apps come back to life on the
-board with fresh sessions; by default they are display-only, and granting the
-widget its declared server tools makes it fully interactive — with the same
-one-tap, revision-bound approval as everything else.
+board with fresh sessions. By default they render without server tools or
+same-server resource access. Granting the widget its declared server tools
+enables both bridges while that revision-bound grant remains active.
 
 ## A2UI widgets
 
 When the Canvas plugin is enabled, agents can render A2UI JSONL as a dashboard
 widget. A2UI widgets use the same stable name, tab, size, pinning, sandbox, and
 update-in-place behavior as HTML widgets. The renderer is loaded from the
-Gateway's capability-scoped A2UI asset route; the renderer bundle is not copied
-into each widget, and the Canvas file host does not need to be enabled.
+Gateway's `/__openclaw__/a2ui/` asset route, so the renderer bundle is not
+copied into each widget. The Canvas plugin and its hosted routes must be
+enabled; both are enabled by default.
 
 A2UI actions use the normal widget bridge. By default, clicks become quiet
 session notices that the agent sees on its next turn. If the widget declares

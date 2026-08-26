@@ -186,18 +186,18 @@ describe("scripts/run-vitest", () => {
   });
 
   it("isolates mixed explicit directory targets across Vitest projects", () => {
-    expect(resolveImplicitVitestArgs(["extensions/linux-canvas", "src/node-host"])).toEqual([
-      "extensions/linux-canvas",
+    expect(resolveImplicitVitestArgs(["extensions/canvas", "src/node-host"])).toEqual([
+      "extensions/canvas",
       "src/node-host",
       "--isolate",
     ]);
     expect(resolveImplicitVitestArgs(["src/node-host"])).toEqual(["src/node-host"]);
     expect(
-      resolveImplicitVitestArgs(["extensions/linux-canvas", "src/node-host", "--no-isolate"]),
-    ).toEqual(["extensions/linux-canvas", "src/node-host", "--no-isolate"]);
+      resolveImplicitVitestArgs(["extensions/canvas", "src/node-host", "--no-isolate"]),
+    ).toEqual(["extensions/canvas", "src/node-host", "--no-isolate"]);
     expect(
-      resolveImplicitVitestArgs(["extensions/linux-canvas", "src/node-host", "--", "--no-isolate"]),
-    ).toEqual(["extensions/linux-canvas", "src/node-host", "--isolate", "--", "--no-isolate"]);
+      resolveImplicitVitestArgs(["extensions/canvas", "src/node-host", "--", "--no-isolate"]),
+    ).toEqual(["extensions/canvas", "src/node-host", "--isolate", "--", "--no-isolate"]);
   });
 
   it("bounds config-only Gateway server runs in fresh worker processes", () => {
@@ -1227,30 +1227,6 @@ describe("scripts/run-vitest", () => {
       expect(timeoutSpy).toHaveBeenCalledTimes(1);
       expect(logSpy).toHaveBeenCalledWith(
         "[vitest] no output for 1000ms; terminating stalled Vitest process group.",
-      );
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("includes the runner label in watchdog logs when provided", () => {
-    vi.useFakeTimers();
-    try {
-      const stdout = new EventEmitter();
-      const logSpy = vi.fn();
-
-      installVitestNoOutputWatchdog({
-        streams: [stdout],
-        timeoutMs: 1000,
-        forceKillAfterMs: 0,
-        label: "run --config test/vitest/vitest.secrets.config.ts",
-        log: logSpy,
-        onTimeout: () => {},
-      });
-
-      vi.advanceTimersByTime(1000);
-      expect(logSpy).toHaveBeenCalledWith(
-        "[vitest] no output for 1000ms; terminating stalled Vitest process group (run --config test/vitest/vitest.secrets.config.ts).",
       );
     } finally {
       vi.useRealTimers();

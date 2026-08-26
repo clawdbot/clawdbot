@@ -27,8 +27,12 @@ import { hasSessionChangeReceivers } from "./session-change-receivers.js";
 import {
   buildGatewaySessionEventFields,
   buildGatewaySessionEventRow,
+  projectSessionEventActiveRunIds,
 } from "./session-event-payload.js";
-import { resolveSessionSubscriptionKeys } from "./session-subscription-keys.js";
+import {
+  resolveSessionSubscriptionKey,
+  resolveSessionSubscriptionKeys,
+} from "./session-subscription-keys.js";
 import { projectSessionMessagePayload } from "./session-transcript-message.js";
 import { readSessionMessageCountAsync } from "./session-transcript-readers.js";
 import {
@@ -83,14 +87,14 @@ export function buildGatewaySessionSnapshot(params: {
   parentSessionKey?: string;
   status?: GatewaySessionRow["status"];
   hasActiveRun?: boolean;
-  activeRunIds?: string[];
+  activeRunIds?: string[] | null;
 }): Record<string, unknown> {
   const { sessionRow } = params;
   if (!sessionRow) {
     return {};
   }
   // Nested snapshots are the UI merge source, so preserve explicit clear semantics there too.
-  const session = params.includeSession
+  const session: Record<string, unknown> | undefined = params.includeSession
     ? {
         ...buildGatewaySessionEventRow(sessionRow),
         createdActor: sessionRow.createdActor ?? null,
@@ -148,11 +152,28 @@ export function createTranscriptUpdateBroadcastHandler(params: {
         ? readTranscriptUpdateLifecycleOwner(update)?.lifecycleRevision
         : undefined);
     const queuedUpdate = lifecycleRevision ? { ...update, lifecycleRevision } : update;
-    const laneKey =
+    const legacyMarker = parseSqliteSessionFileMarker(update.sessionFile);
+    const sessionKey =
       normalizeOptionalString(update.target?.sessionKey) ??
       normalizeOptionalString(update.sessionKey) ??
-      normalizeOptionalString(update.sessionFile) ??
-      "";
+      (legacyMarker ? resolveTranscriptSessionKeyBySessionId(legacyMarker) : undefined);
+    let agentId =
+      normalizeOptionalString(update.target?.agentId) ??
+      normalizeOptionalString(update.agentId) ??
+      legacyMarker?.agentId;
+    if (!agentId && sessionKey?.toLowerCase() === "global") {
+      const config = getRuntimeConfig();
+      const persistedOwner = resolvePersistedSessionStoreOwnerForKey(config, sessionKey);
+      agentId =
+        persistedOwner.kind === "configured"
+          ? persistedOwner.agentId
+          : tryResolveLegacyCompatibilityAgentId(config);
+    }
+    // Raw global is per-agent storage identity; its qualified aliases must share a lane.
+    const laneKey =
+      sessionKey && agentId
+        ? resolveSessionSubscriptionKey(sessionKey, agentId)
+        : (sessionKey ?? normalizeOptionalString(update.sessionFile) ?? "");
     // Preserve transcript update order within the lane even when counting
     // messages requires an async read from the session file.
     const tail = broadcastQueues.get(laneKey) ?? Promise.resolve();
@@ -344,7 +365,7 @@ async function handleTranscriptUpdateBroadcast(
     includeSession: true,
     status: activeRunState?.active ? (activeRunState.status ?? "running") : undefined,
     hasActiveRun: activeRunState?.active,
-    activeRunIds: activeRunState?.runIds,
+    activeRunIds: projectSessionEventActiveRunIds(activeRunState),
   });
   if (update.message === undefined) {
     // A committed batch without individually proven cursors must invalidate
@@ -368,6 +389,7 @@ async function handleTranscriptUpdateBroadcast(
     message: update.message,
     ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
     ...(messageSeq !== undefined ? { messageSeq } : {}),
+    ...(update.runId ? { runId: update.runId } : {}),
     sessionSnapshot,
   });
   if (projected.payload) {
@@ -454,7 +476,7 @@ export function createLifecycleEventBroadcastHandler(params: {
           displayName: event.displayName,
           parentSessionKey: event.parentSessionKey,
           hasActiveRun: activeRunState?.active,
-          activeRunIds: activeRunState?.runIds,
+          activeRunIds: projectSessionEventActiveRunIds(activeRunState),
         }),
         ...(swarmEvent.swarmGroupId
           ? {

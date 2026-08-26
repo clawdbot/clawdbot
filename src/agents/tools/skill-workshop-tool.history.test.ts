@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { recordSkillCollectionReviewSuccess } from "../../skills/workshop/collection-review-state.js";
+import { recordSkillCollectionReviewHistory } from "../../skills/workshop/collection-review-state.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { createSkillWorkshopTool } from "./skill-workshop-tool.js";
@@ -28,7 +28,7 @@ describe("skill_workshop collection history", () => {
     });
 
     const createTime = Date.UTC(2026, 7, 18, 12, 34, 56);
-    recordSkillCollectionReviewSuccess(
+    recordSkillCollectionReviewHistory(
       workspaceDir,
       createTime,
       {
@@ -71,7 +71,7 @@ describe("skill_workshop collection history", () => {
         (_, index) => `${kind}-${review}-${index}-long-enough-to-fill-the-history-budget`,
       );
     for (let review = 0; review < 20; review += 1) {
-      recordSkillCollectionReviewSuccess(
+      recordSkillCollectionReviewHistory(
         workspaceDir,
         review,
         {
@@ -84,10 +84,11 @@ describe("skill_workshop collection history", () => {
       );
     }
 
-    const result = await createSkillWorkshopTool({ workspaceDir, env: testState.env }).execute(
-      "history",
-      { action: "history" },
-    );
+    const result = await createSkillWorkshopTool({
+      workspaceDir,
+      env: testState.env,
+      modelContextWindowTokens: 200_000,
+    }).execute("history", { action: "history" });
     const text = result.content[0]?.type === "text" ? result.content[0].text : "";
     const firstTenKept = names("kept", 19).slice(0, 10);
 
@@ -109,6 +110,16 @@ describe("skill_workshop collection history", () => {
     const boundedReviews = (result.details as { reviews: unknown[] }).reviews;
     expect(boundedReviews.length).toBeGreaterThan(0);
     expect(boundedReviews.length).toBeLessThan(20);
+
+    const smallContextResult = await createSkillWorkshopTool({
+      workspaceDir,
+      env: testState.env,
+      modelContextWindowTokens: 8_192,
+    }).execute("history-small", { action: "history" });
+    const smallContextText =
+      smallContextResult.content[0]?.type === "text" ? smallContextResult.content[0].text : "";
+    expect(smallContextText.length).toBeLessThanOrEqual(2_867);
+    expect(smallContextText).toMatch(/\(history truncated\)$/u);
   });
 
   it("keeps isolated collection reviews limited to read and reconcile", () => {

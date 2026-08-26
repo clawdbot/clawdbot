@@ -629,13 +629,14 @@ describe("backup commands", () => {
     const originalRaw = `${JSON.stringify(stableConfig, null, 2)}\n`;
     await fs.mkdir(workspaceDir, { recursive: true });
     await fs.writeFile(configPath, originalRaw, "utf8");
+    const canonicalWorkspaceDir = await fs.realpath(workspaceDir);
     const envSnapshot = captureEnv(["OPENCLAW_CONFIG_PATH"]);
     setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
     try {
       const plan = await resolveBackupPlanFromDisk({ nowMs: 123 });
 
       expect(plan.included).toContainEqual(
-        expect.objectContaining({ kind: "workspace", sourcePath: workspaceDir }),
+        expect.objectContaining({ kind: "workspace", sourcePath: canonicalWorkspaceDir }),
       );
       expect(await fs.readFile(configPath, "utf8")).toBe(originalRaw);
       expect(plan.configPath).toBe(configPath);

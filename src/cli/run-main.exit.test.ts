@@ -8,6 +8,7 @@ import { CommanderError } from "commander";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
+import { setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withSecureTestNodeExecPath } from "../secrets/test-node-command.test-support.js";
@@ -613,7 +614,6 @@ describe("runCli exit behavior", () => {
   });
 
   it("does not load inactive provider cleanup modules for cold help", async () => {
-    tryRouteCliMock.mockResolvedValueOnce(false);
     const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
     buildProgramMock.mockReturnValueOnce({
       commands: [{ name: () => "nodes", aliases: () => [] }],
@@ -790,6 +790,33 @@ describe("runCli exit behavior", () => {
       "--json",
       "--limit",
       "all",
+    ]);
+    expect(progressDoneMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("suppresses startup progress for plain model output before full CLI parsing", async () => {
+    tryRouteCliMock.mockResolvedValueOnce(false);
+    const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
+    buildProgramMock.mockReturnValueOnce({
+      commands: [{ name: () => "models", aliases: () => [] }],
+      parseAsync,
+    });
+
+    await runCli(["node", "openclaw", "models", "aliases", "list", "--plain"]);
+
+    expect(createCliProgressMock).toHaveBeenCalledWith({
+      label: "Loading OpenClaw CLI…",
+      indeterminate: true,
+      delayMs: 0,
+      enabled: false,
+    });
+    expect(parseAsync).toHaveBeenCalledWith([
+      "node",
+      "openclaw",
+      "models",
+      "aliases",
+      "list",
+      "--plain",
     ]);
     expect(progressDoneMock).toHaveBeenCalledTimes(1);
   });
@@ -2278,6 +2305,26 @@ describe("runCli exit behavior", () => {
     expect(closeActiveMemorySearchManagersMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["plugins install", ["plugins", "install", "--help"]],
+    ["plugins list", ["plugins", "list", "--help"]],
+    ["gateway status", ["gateway", "status", "--help"]],
+  ])("renders %s help without importing the command router", async (_name, args) => {
+    const argv = ["node", "openclaw", ...args];
+    const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
+    const program = {
+      commands: [{ name: () => args[0], aliases: () => [] }],
+      parseAsync,
+    };
+    buildProgramMock.mockReturnValueOnce(program);
+
+    await runCli(argv);
+
+    expect(tryRouteCliMock).not.toHaveBeenCalled();
+    expect(registerSubCliByNameMock).toHaveBeenCalledWith(program, args[0], argv);
+    expect(parseAsync).toHaveBeenCalledWith(argv);
+  });
+
   it("propagates precomputed help metadata failures", async () => {
     outputPrecomputedSecretsHelpTextMock.mockImplementationOnce(() => {
       throw new Error("startup metadata failed");
@@ -2530,6 +2577,8 @@ describe("runCli exit behavior", () => {
 
   it.each([
     ["cron", ["node", "openclaw", "cron", "status"]],
+    ["cron parent timeout", ["node", "openclaw", "cron", "--timeout", "250", "status"]],
+    ["automations parent port", ["node", "openclaw", "automations", "--port", "18789", "status"]],
     ["cron alias", ["node", "openclaw", "cron", "create", "daily", "message"]],
     ["cron removal alias", ["node", "openclaw", "cron", "delete", "job"]],
     ["cron scratch equals", ["node", "openclaw", "cron", "scratch", "job", "--set=text"]],
@@ -3245,18 +3294,20 @@ describe("runCli exit behavior", () => {
     const stdout: string[] = [];
     const stderr: string[] = [];
     const previousRawConsole = loggingState.rawConsole;
-    const previousOverrideSettings = loggingState.overrideSettings;
+    const previousOverrideSettings = loggingState.overrideSettings as Parameters<
+      typeof setLoggerOverride
+    >[0];
     const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(((
       value: string | Uint8Array,
     ) => {
       stdout.push(String(value));
       return true;
     }) as typeof process.stdout.write);
-    loggingState.overrideSettings = {
+    setLoggerOverride({
       level: "silent",
       consoleLevel: "info",
       consoleStyle: "compact",
-    };
+    });
     loggingState.rawConsole = {
       log: (value) => stdout.push(String(value)),
       info: (value) => stdout.push(String(value)),
@@ -3282,7 +3333,7 @@ describe("runCli exit behavior", () => {
     } finally {
       stdoutWrite.mockRestore();
       loggingState.rawConsole = previousRawConsole;
-      loggingState.overrideSettings = previousOverrideSettings;
+      setLoggerOverride(previousOverrideSettings);
       loggingState.forceConsoleToStderr = false;
       loggingState.earlyConsoleRoutingRestore = null;
     }
@@ -4097,6 +4148,48 @@ describe("runCli exit behavior", () => {
     });
   });
 
+  it("starts the local TUI when any explicit-roster agent has inference configured", async () => {
+    primeBareRootConfig({
+      agents: {
+        ownership: "explicit",
+        entries: {
+          alpha: { model: "openai/gpt-5.6-luna" },
+          beta: { model: "openai/gpt-5.6-sol" },
+        },
+      },
+    });
+    probeGatewayConfiguredModelMock.mockResolvedValueOnce({
+      kind: "unreachable",
+      detail: "offline",
+    });
+
+    await runBareCli();
+
+    expect(runTuiMock).toHaveBeenCalledWith({
+      deliver: false,
+      local: true,
+      forceProcessExitOnReturn: true,
+    });
+  });
+
+  it("routes an explicit roster with no configured inference to onboarding", async () => {
+    primeBareRootConfig({
+      agents: {
+        ownership: "explicit",
+        entries: { alpha: {}, beta: {} },
+      },
+    });
+    probeGatewayConfiguredModelMock.mockResolvedValueOnce({
+      kind: "unreachable",
+      detail: "offline",
+    });
+
+    await runBareCli();
+
+    expect(setupWizardCommandMock).toHaveBeenCalledWith({});
+    expect(runTuiMock).not.toHaveBeenCalled();
+  });
+
   it.each([
     { label: "LAN IP", url: "ws://192.168.1.10:18789" },
     { label: "mDNS", url: "ws://gateway.local:18789" },
@@ -4192,7 +4285,7 @@ describe("runCli exit behavior", () => {
     expectBoundTui({ url, password: "configured-remote-password" });
   });
 
-  it("falls back to gateway env auth when configured remote SecretRefs are unresolved", async () => {
+  it("does not replace unresolved remote SecretRefs with gateway env auth", async () => {
     const url = "ws://127.0.0.1:18789";
     primeBareRootConfig({
       gateway: {
@@ -4225,17 +4318,9 @@ describe("runCli exit behavior", () => {
       },
     );
 
-    expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
-      url,
-      token: "shell-fallback-auth-value",
-      password: "env-remote-password",
-    });
+    expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({ url });
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
-    expectBoundTui({
-      url,
-      token: "shell-fallback-auth-value",
-      password: "env-remote-password",
-    });
+    expectBoundTui({ url });
   });
 
   it("probes an explicitly allowed plaintext private remote gateway", async () => {

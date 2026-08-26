@@ -469,7 +469,7 @@ describe("nodeHandlers node.pair.approve", () => {
     );
   });
 
-  it("keeps private worker eligibility across exact live reapproval", async () => {
+  it("requires current-generation runner inventory after exact live reapproval", async () => {
     const state = await createState("node-approve-retains-worker-dialect");
     const nodeId = "node-1";
     await pairAndroidNodeDevice(state.stateDir, nodeId);
@@ -530,6 +530,20 @@ describe("nodeHandlers node.pair.approve", () => {
       expect.objectContaining({ node: expect.objectContaining({ nodeId }) }),
       undefined,
     );
+    await expect(runtime.nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([]);
+    const republish = createOptions(
+      {
+        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+        workerHost: { enabled: true, capacity: { total: 2, available: 2 } },
+      },
+      { client: client as never },
+    );
+    Object.assign(republish.context, { nodeRegistry: runtime.nodeRegistry });
+    await expectDefined(
+      nodeHandlers["node.runnerInventory.update"],
+      'nodeHandlers["node.runnerInventory.update"] test invariant',
+    )(republish.opts);
+
     await expect(runtime.nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([
       expect.objectContaining({
         connId: "conn-surface-reapproval",

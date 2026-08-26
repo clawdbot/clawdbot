@@ -1,24 +1,17 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import { DraftGatewayState } from "./draft-gateway-state.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { loadNewSessionPreference, patchNewSessionPreference } from "./preferences.ts";
-
-class ControllerHost implements ReactiveControllerHost {
-  readonly updateComplete = Promise.resolve(true);
-  addController(_controller: ReactiveController) {}
-  removeController(_controller: ReactiveController) {}
-  requestUpdate() {}
-}
+import { TestReactiveControllerHost } from "./reactive-controller-host.test-support.ts";
 
 afterEach(() => {
   localStorage.clear();
 });
 
 function createBrowser(request: (method: string) => Promise<unknown>, data?: NewSessionRouteData) {
-  const host = new ControllerHost();
+  const host = new TestReactiveControllerHost();
   const client = { request, recoveryScope: "principal-a", recoveryScopeReady: true };
   const context = {
     gateway: {
@@ -71,9 +64,6 @@ function createBrowser(request: (method: string) => Promise<unknown>, data?: New
     gateway,
     () => ({
       context,
-      nodes: [],
-      folder: "",
-      execNode: "",
       isAdmin: false,
     }),
     {
@@ -125,7 +115,6 @@ describe("DraftPlaceBrowser", () => {
         sessions: [{ execCwd: "/workspace/recent" }],
         workspace: "/workspace",
         workspaceRoots: ["/workspace"],
-        execNodes: [],
         isAdmin: false,
       }),
     ).toEqual([

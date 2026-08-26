@@ -258,6 +258,11 @@ CREATE TABLE IF NOT EXISTS audit_identity_keys (
   created_at INTEGER NOT NULL
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS config_revision_keys (
+  id INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),
+  hmac_key BLOB NOT NULL CHECK (length(hmac_key) = 32)
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS execution_identity_contexts (
   context_id TEXT NOT NULL PRIMARY KEY CHECK (length(context_id) BETWEEN 1 AND 256),
   execution_id TEXT NOT NULL UNIQUE CHECK (length(execution_id) BETWEEN 1 AND 256),
@@ -298,6 +303,16 @@ CREATE INDEX IF NOT EXISTS execution_decision_facts_context_occurred_idx
   ON execution_decision_facts (context_id, occurred_at, receipt_id);
 CREATE INDEX IF NOT EXISTS execution_decision_facts_run_occurred_idx
   ON execution_decision_facts (run_id, occurred_at, receipt_id);
+
+-- Exact admission identity stays separate from owner-native lifecycle rows so
+-- older readers retain byte-compatible cron/task/flow table definitions.
+CREATE TABLE IF NOT EXISTS execution_owner_lifecycle_bindings (
+  owner_kind TEXT NOT NULL,
+  owner_id TEXT NOT NULL,
+  context_id TEXT NOT NULL,
+  execution_id TEXT NOT NULL,
+  PRIMARY KEY (owner_kind, owner_id)
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS session_state_events (
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -367,17 +382,6 @@ CREATE TABLE IF NOT EXISTS session_upstream_links (
 
 CREATE INDEX IF NOT EXISTS idx_session_upstream_links_catalog_id
   ON session_upstream_links(catalog_id);
-
-CREATE TABLE IF NOT EXISTS diagnostic_stability_bundles (
-  bundle_key TEXT NOT NULL PRIMARY KEY,
-  reason TEXT NOT NULL,
-  generated_at TEXT NOT NULL,
-  bundle_json TEXT NOT NULL,
-  created_at INTEGER NOT NULL
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_diagnostic_stability_bundles_created
-  ON diagnostic_stability_bundles(created_at DESC, bundle_key);
 
 CREATE TABLE IF NOT EXISTS state_leases (
   scope TEXT NOT NULL,
@@ -550,6 +554,25 @@ CREATE TABLE IF NOT EXISTS operator_approval_execution_identities (
   )
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS operator_approval_standing_grants (
+  grant_id TEXT NOT NULL PRIMARY KEY CHECK (length(grant_id) > 0),
+  minted_by_approval_id TEXT NOT NULL
+    REFERENCES operator_approvals(approval_id) ON DELETE CASCADE,
+  agent_id TEXT NOT NULL CHECK (length(agent_id) > 0),
+  cron_job_id TEXT NOT NULL CHECK (length(cron_job_id) > 0),
+  job_config_revision TEXT NOT NULL CHECK (length(job_config_revision) > 0),
+  operation_binding TEXT NOT NULL CHECK (length(operation_binding) > 0),
+  created_at_ms INTEGER NOT NULL,
+  expires_at_ms INTEGER NOT NULL CHECK (expires_at_ms >= created_at_ms),
+  revoked_at_ms INTEGER,
+  revoked_by TEXT,
+  last_used_at_ms INTEGER,
+  use_count INTEGER NOT NULL DEFAULT 0
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_operator_approval_standing_grants_binding
+  ON operator_approval_standing_grants(agent_id, cron_job_id, operation_binding, created_at_ms DESC);
+
 CREATE TABLE IF NOT EXISTS schema_meta (
   meta_key TEXT NOT NULL PRIMARY KEY,
   role TEXT NOT NULL,
@@ -691,15 +714,6 @@ CREATE TABLE IF NOT EXISTS gateway_origin_device_tokens (
   PRIMARY KEY (gateway_scope, device_id, role)
 ) STRICT;
 
-CREATE TABLE IF NOT EXISTS android_notification_recent_packages (
-  package_name TEXT NOT NULL PRIMARY KEY,
-  sort_order INTEGER NOT NULL,
-  updated_at_ms INTEGER NOT NULL
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_android_notification_recent_packages_order
-  ON android_notification_recent_packages(sort_order, package_name);
-
 CREATE TABLE IF NOT EXISTS macos_port_guardian_records (
   pid INTEGER NOT NULL PRIMARY KEY,
   port INTEGER NOT NULL,
@@ -772,37 +786,6 @@ CREATE TABLE IF NOT EXISTS native_hook_relay_bridges (
 
 CREATE INDEX IF NOT EXISTS idx_native_hook_relay_bridges_expires
   ON native_hook_relay_bridges(expires_at_ms, relay_id);
-
-CREATE TABLE IF NOT EXISTS model_capability_cache (
-  provider_id TEXT NOT NULL,
-  model_id TEXT NOT NULL,
-  name TEXT NOT NULL,
-  input_text INTEGER NOT NULL,
-  input_image INTEGER NOT NULL,
-  reasoning INTEGER NOT NULL,
-  supports_tools INTEGER,
-  context_window INTEGER NOT NULL,
-  max_tokens INTEGER NOT NULL,
-  cost_input REAL NOT NULL,
-  cost_output REAL NOT NULL,
-  cost_cache_read REAL NOT NULL,
-  cost_cache_write REAL NOT NULL,
-  updated_at_ms INTEGER NOT NULL,
-  PRIMARY KEY (provider_id, model_id)
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_model_capability_cache_provider_updated
-  ON model_capability_cache(provider_id, updated_at_ms DESC, model_id);
-
-CREATE TABLE IF NOT EXISTS agent_model_catalogs (
-  catalog_key TEXT NOT NULL PRIMARY KEY,
-  agent_dir TEXT NOT NULL,
-  raw_json TEXT NOT NULL,
-  updated_at INTEGER NOT NULL
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_agent_model_catalogs_agent_dir
-  ON agent_model_catalogs(agent_dir, updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS managed_outgoing_image_records (
   attachment_id TEXT NOT NULL PRIMARY KEY,
@@ -1006,6 +989,11 @@ CREATE TABLE IF NOT EXISTS node_worker_launches (
 CREATE INDEX IF NOT EXISTS idx_node_worker_launches_terminal_completed
   ON node_worker_launches(completed_at_ms, launch_id)
   WHERE completed_at_ms IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS node_worker_launch_containers (
+  launch_id TEXT PRIMARY KEY,
+  container_json TEXT
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS voicewake_triggers (
   config_key TEXT NOT NULL,
@@ -1355,20 +1343,6 @@ CREATE INDEX IF NOT EXISTS idx_plugin_blob_expiry
 CREATE INDEX IF NOT EXISTS idx_plugin_blob_listing
   ON plugin_blob_entries(plugin_id, namespace, created_at, entry_key);
 
-CREATE TABLE IF NOT EXISTS media_blobs (
-  subdir TEXT NOT NULL,
-  id TEXT NOT NULL,
-  content_type TEXT,
-  size_bytes INTEGER NOT NULL,
-  blob BLOB NOT NULL,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL,
-  PRIMARY KEY (subdir, id)
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_media_blobs_created
-  ON media_blobs(created_at);
-
 CREATE TABLE IF NOT EXISTS skill_uploads (
   upload_id TEXT NOT NULL PRIMARY KEY,
   kind TEXT NOT NULL,
@@ -1649,22 +1623,6 @@ CREATE TABLE IF NOT EXISTS cron_job_scratch (
 
 CREATE INDEX IF NOT EXISTS idx_cron_job_scratch_store_updated
   ON cron_job_scratch(store_key, updated_at_ms DESC, job_id);
-
-CREATE TABLE IF NOT EXISTS command_log_entries (
-  id TEXT NOT NULL PRIMARY KEY,
-  timestamp_ms INTEGER NOT NULL,
-  action TEXT NOT NULL,
-  session_key TEXT NOT NULL,
-  sender_id TEXT NOT NULL,
-  source TEXT NOT NULL,
-  entry_json TEXT NOT NULL
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_command_log_entries_timestamp
-  ON command_log_entries(timestamp_ms DESC, id);
-
-CREATE INDEX IF NOT EXISTS idx_command_log_entries_session
-  ON command_log_entries(session_key, timestamp_ms DESC, id);
 
 CREATE TABLE IF NOT EXISTS delivery_queue_entries (
   queue_name TEXT NOT NULL,
@@ -2285,6 +2243,9 @@ CREATE TABLE IF NOT EXISTS worker_session_placement_moves (
   -- Keep this nullable column constraint-free so lazy ALTER TABLE produces the
   -- same shape as fresh databases; placement-move code validates its value.
   target_machine_class TEXT,
+  -- Explicit source abandonment is a durable operator decision. Keep the bit
+  -- bare and nullable so same-version older readers can safely omit it.
+  abandon_source INTEGER,
   last_error TEXT,
   created_at_ms INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL,
@@ -2366,6 +2327,86 @@ CREATE TABLE IF NOT EXISTS worker_workspace_pending_results (
   created_at_ms INTEGER NOT NULL,
   FOREIGN KEY (session_id) REFERENCES worker_session_placements(session_id) ON DELETE CASCADE
 ) STRICT;
+
+-- GitHub publication intent records the authoritative session worktree. Cloud
+-- requests execute only after the exact turn claim's result is accepted locally.
+-- Secrets stay in the effective Gateway-owned GitHub profile and never enter
+-- this row or the worker protocol.
+CREATE TABLE IF NOT EXISTS github_publication_requests (
+  request_id TEXT NOT NULL PRIMARY KEY,
+  idempotency_key TEXT NOT NULL,
+  request_digest TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  session_key TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  worktree_id TEXT NOT NULL,
+  repository_fingerprint TEXT NOT NULL,
+  claim_id TEXT,
+  run_id TEXT,
+  environment_id TEXT,
+  owner_epoch INTEGER CHECK (owner_epoch IS NULL OR owner_epoch >= 1),
+  placement_generation INTEGER CHECK (
+    placement_generation IS NULL OR placement_generation >= 0
+  ),
+  identity_source TEXT NOT NULL CHECK (
+    identity_source IN ('system-detected', 'system-configured', 'agent-override')
+  ),
+  identity_profile_id TEXT,
+  identity_account_id INTEGER NOT NULL CHECK (identity_account_id >= 1),
+  identity_login TEXT NOT NULL,
+  title TEXT,
+  body TEXT,
+  status TEXT NOT NULL CHECK (
+    status IN ('requested', 'publishing', 'published', 'failed')
+  ),
+  gateway_instance_id TEXT,
+  repository TEXT,
+  branch TEXT NOT NULL,
+  base_branch TEXT,
+  source_head_commit TEXT,
+  source_index_tree TEXT,
+  workspace_tree TEXT,
+  head_commit TEXT,
+  pull_request_url TEXT,
+  error_code TEXT,
+  next_action TEXT,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  reported_at_ms INTEGER,
+  UNIQUE (session_id, idempotency_key),
+  CHECK (
+    (claim_id IS NULL AND run_id IS NULL AND environment_id IS NULL
+      AND owner_epoch IS NULL AND placement_generation IS NULL)
+    OR
+    (claim_id IS NOT NULL AND run_id IS NOT NULL AND placement_generation IS NOT NULL
+      AND ((environment_id IS NULL AND owner_epoch IS NULL)
+        OR (environment_id IS NOT NULL AND owner_epoch IS NOT NULL)))
+  ),
+  CHECK (
+    (identity_source IS 'system-detected' AND identity_profile_id IS NULL)
+    OR
+    (identity_source IN ('system-configured', 'agent-override')
+      AND identity_profile_id IS NOT NULL)
+  ),
+  CHECK (
+    (source_head_commit IS NULL AND source_index_tree IS NULL AND workspace_tree IS NULL)
+    OR
+    (source_head_commit IS NOT NULL AND workspace_tree IS NOT NULL)
+  ),
+  CHECK (
+    (status IS 'published' AND pull_request_url IS NOT NULL AND error_code IS NULL
+      AND next_action IS NULL)
+    OR
+    (status IS 'failed' AND pull_request_url IS NULL AND error_code IS NOT NULL
+      AND next_action IS NOT NULL)
+    OR
+    (status IN ('requested', 'publishing') AND pull_request_url IS NULL
+      AND error_code IS NULL AND next_action IS NULL)
+  )
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_github_publication_requests_pending
+  ON github_publication_requests(status, updated_at_ms, request_id);
 
 -- One active, opaque admission credential per worker environment. Plaintext
 -- may be retried until delivery acknowledgement but never enters durable state.

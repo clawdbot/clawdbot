@@ -84,7 +84,7 @@ describe("AppSidebar session mutation feedback", () => {
     if (!link) {
       throw new Error(`expected row link for ${key}`);
     }
-    link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, metaKey: true }));
+    link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, altKey: true }));
   }
 
   async function mountToastHost() {
@@ -498,7 +498,12 @@ describe("AppSidebar session mutation feedback", () => {
     } as unknown as GatewayBrowserClient);
     harness.deleteSession.mockResolvedValueOnce({
       deleted: true,
-      worktreePreserved: { id: "wt-1", branch: "feature", path: "/tmp/worktree" },
+      worktreePreserved: {
+        id: "wt-1",
+        branch: "feature",
+        path: "/tmp/worktree",
+        reason: "busy",
+      },
     });
     const menu = await openSessionMenu(sidebar, "agent:main:a");
     menu.querySelector<HTMLButtonElement>('[data-shortcut="d"]')?.click();

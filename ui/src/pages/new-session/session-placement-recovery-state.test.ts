@@ -27,10 +27,10 @@ describe("pending session placement recovery state", () => {
       expected: "gateway-changed",
     },
     {
-      name: "an interrupted cloud draft",
+      name: "an interrupted placement draft",
       gatewayIdentityChanged: false,
       placementDraftOwned: true,
-      expected: "cloud-interrupted",
+      expected: "placement-interrupted",
     },
   ])("classifies $name accurately", ({ expected, gatewayIdentityChanged, placementDraftOwned }) => {
     expect(resolveSubmissionOutcomeReason({ gatewayIdentityChanged, placementDraftOwned })).toBe(
@@ -63,6 +63,28 @@ describe("pending session placement recovery state", () => {
       sessionKey: createParams?.key,
       createParams,
     });
+  });
+
+  it("preserves the requested permission mode in placement recovery", () => {
+    const pending = new PendingSessionPlacementRecoveryState();
+    const createParams = pending.stageCreate({
+      agentId: "cloud",
+      target: { kind: "profile", profileId: "aws" },
+      message: "run remotely with guarded permissions",
+      gatewayUrl: "ws://gateway.example",
+      recoveryScope: "principal-a",
+      createParams: {
+        agentId: "cloud",
+        message: "",
+        permissionMode: "guarded",
+        worktree: true,
+      },
+    });
+
+    expect(createParams).toMatchObject({ permissionMode: "guarded" });
+    expect(
+      readSessionPlacementRecovery("ws://gateway.example", "principal-a", pending.sessionKey),
+    ).toMatchObject({ createParams: { permissionMode: "guarded" } });
   });
 
   it.each(["", "x".repeat(129)])(
@@ -187,7 +209,7 @@ describe("pending session placement recovery state", () => {
     expect(pending.sessionKey).toBe(provisionalSessionKey);
   });
 
-  it("keeps incognito cloud drafts in memory without writing recovery storage", () => {
+  it("keeps incognito placement drafts in memory without writing recovery storage", () => {
     const pending = new PendingSessionPlacementRecoveryState();
     const createParams = pending.stageCreate({
       agentId: "cloud",

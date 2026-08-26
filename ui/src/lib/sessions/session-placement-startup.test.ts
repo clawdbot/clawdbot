@@ -55,6 +55,11 @@ describe("session placement startup", () => {
       target: { kind: "device", deviceId: "device-1" } as const,
       expectedTarget: { deviceId: "device-1" },
     },
+    {
+      name: "automatic device",
+      target: { kind: "auto-device" } as const,
+      expectedTarget: { autoDevice: true },
+    },
   ])("serializes a $name target to the flat dispatch contract", async (testCase) => {
     const request = vi
       .fn()
@@ -109,7 +114,7 @@ describe("session placement startup", () => {
       startSessionPlacementInitialTurn(clientWith(request), params, () => true),
     ).resolves.toEqual({
       status: "dispatch-rejected",
-      error: "cloud worker placement became failed",
+      error: "session placement became failed",
     });
     expect(request).toHaveBeenNthCalledWith(3, "sessions.reclaim", {
       key: params.key,
@@ -274,7 +279,7 @@ describe("session placement startup", () => {
       startSessionPlacementInitialTurn(clientWith(request), params, () => true),
     ).resolves.toEqual({
       status: "cleanup-rejected",
-      error: "cloud worker placement could not be verified; cleanup failed: authentication expired",
+      error: "session placement could not be verified; cleanup failed: authentication expired",
     });
     expect(request).toHaveBeenCalledTimes(6);
   });
@@ -283,13 +288,12 @@ describe("session placement startup", () => {
     {
       name: "reclaims the session placement",
       cleanupError: undefined,
-      expectedError: "cloud worker placement could not be verified",
+      expectedError: "session placement could not be verified",
     },
     {
       name: "reports a rejected worker cleanup",
       cleanupError: "cleanup unavailable",
-      expectedError:
-        "cloud worker placement could not be verified; cleanup failed: cleanup unavailable",
+      expectedError: "session placement could not be verified; cleanup failed: cleanup unavailable",
     },
   ])("$name when placement lookups remain unavailable", async ({ cleanupError, expectedError }) => {
     vi.useFakeTimers();
@@ -336,7 +340,7 @@ describe("session placement startup", () => {
       await vi.runAllTimersAsync();
       await expect(outcome).resolves.toEqual({
         status: "cleanup-rejected",
-        error: "cloud worker placement reconciliation timed out",
+        error: "session placement reconciliation timed out",
       });
       expect(request).not.toHaveBeenCalledWith("sessions.reclaim", expect.anything());
     } finally {
@@ -563,7 +567,7 @@ describe("session placement startup", () => {
       ),
     ).resolves.toEqual({
       status: "send-not-started",
-      error: "cloud recovery storage is unavailable",
+      error: "placement recovery storage is unavailable",
     });
     expect(request).toHaveBeenNthCalledWith(2, "sessions.reclaim", {
       key: params.key,
@@ -628,7 +632,7 @@ describe("session placement startup", () => {
     {
       name: "delete no-op",
       deleteResult: { ok: true, deleted: false },
-      expectedError: "cloud draft session was not deleted",
+      expectedError: "placement draft session was not deleted",
     },
     {
       name: "delete rejection",
@@ -678,7 +682,9 @@ describe("session placement startup", () => {
 
     await expect(
       deleteSessionPlacementDraft(clientWith(request), params.key, params.agentId),
-    ).resolves.toBe("delete unavailable; restoring the cloud draft failed: restore unavailable");
+    ).resolves.toBe(
+      "delete unavailable; restoring the placement draft failed: restore unavailable",
+    );
   });
 
   it("reclaims a recovered worker before archiving and deleting its draft session", async () => {
@@ -727,7 +733,7 @@ describe("session placement startup", () => {
 
     await expect(
       deleteRecoveredSessionPlacementDraft(clientWith(request), params.key, params.agentId),
-    ).resolves.toBe("cloud worker placement could not be verified");
+    ).resolves.toBe("session placement could not be verified");
     expect(request).toHaveBeenCalledOnce();
     expect(request).toHaveBeenCalledWith("sessions.describe", { key: params.key });
   });

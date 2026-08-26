@@ -1,5 +1,5 @@
 // Provides typed dependency fixtures for TUI session-action tests.
-import { TUI } from "@earendil-works/pi-tui";
+import { TuiMainScreen, type TUI } from "@earendil-works/pi-tui";
 import { vi } from "vitest";
 import { ChatLog } from "./components/chat-log.js";
 import type { TuiBackend } from "./tui-backend.js";
@@ -79,7 +79,7 @@ export function makeTui(overrides: Partial<TUI> = {}): TUI {
     clearScreen: vi.fn(),
     setTitle: vi.fn(),
     setProgress: vi.fn(),
-  } satisfies ConstructorParameters<typeof TUI>[0];
-  const tui = new TUI(terminal);
+  } satisfies ConstructorParameters<typeof TuiMainScreen>[0];
+  const tui = new TuiMainScreen(terminal);
   return Object.assign(tui, { requestRender: vi.fn(), ...overrides });
 }

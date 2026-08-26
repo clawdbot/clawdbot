@@ -31,6 +31,7 @@ vi.mock("./slash-dispatch.runtime.js", () => {
       cfg: unknown;
       ctxPayload: unknown;
       route: { sessionKey: string };
+      dispatchReplyFromConfig?: unknown;
       dispatcherOptions?: { onSettled?: () => unknown };
       delivery: { deliver?: unknown; onError?: unknown };
       replyOptions?: unknown;

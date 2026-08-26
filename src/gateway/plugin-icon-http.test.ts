@@ -14,7 +14,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./http-utils.js", () => ({
-  authorizeGatewayHttpRequestOrReply: (...args: unknown[]) => mocks.authorize(...args),
+  authorizeControlUiReadRequestOrReply: (...args: unknown[]) => mocks.authorize(...args),
 }));
 
 vi.mock("../media/fetch.js", () => ({
@@ -109,7 +109,7 @@ beforeEach(() => {
   mocks.authorize.mockReset();
   mocks.authorize.mockResolvedValue({
     authMethod: "token",
-    trustDeclaredOperatorScopes: false,
+    operatorScopes: ["operator.admin", "operator.read"],
   });
   mocks.resolveIconUrl.mockResolvedValue("https://cdn.example.test/plugin.svg");
   mocks.resolveCatalogIconUrl.mockImplementation(({ iconUrl }) => iconUrl);

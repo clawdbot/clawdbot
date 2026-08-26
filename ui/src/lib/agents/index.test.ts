@@ -6,6 +6,8 @@ import {
   createAgentCapability,
   loadToolsCatalog,
   loadToolsEffective,
+  refreshVisibleToolsEffectiveForCurrentSession,
+  resetToolsEffectiveState,
   setDefaultAgent,
 } from "./index.ts";
 import type { AgentsState } from "./index.ts";
@@ -16,10 +18,12 @@ type TestRequest = (method: string, payload?: unknown) => Promise<unknown>;
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
     resolve = resolvePromise;
+    reject = rejectPromise;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 function createGatewayHarness(client: GatewayBrowserClient) {
@@ -132,57 +136,37 @@ function createSaveState(): {
 }
 
 describe("createAgentCapability lifecycle", () => {
-  it("keeps an adopted startup roster ahead of an older list request", async () => {
-    const pending = deferred<unknown>();
-    const request = vi.fn<TestRequest>().mockReturnValue(pending.promise);
+  it("reuses the current roster while preserving forced refresh and reconnect ownership", async () => {
+    const first = { defaultId: "main", agents: [{ id: "main" }] };
+    const replacement = { defaultId: "research", agents: [{ id: "research" }] };
+    const reconnected = { defaultId: "writer", agents: [{ id: "writer" }] };
+    const pendingRefresh = deferred<unknown>();
+    const request = vi
+      .fn<TestRequest>()
+      .mockResolvedValueOnce(first)
+      .mockReturnValueOnce(pendingRefresh.promise)
+      .mockResolvedValueOnce(reconnected);
     const client = { request } as unknown as GatewayBrowserClient;
     const harness = createGatewayHarness(client);
     const agents = createAgentCapability(harness.gateway);
 
-    const staleLoad = agents.refreshList();
-    const adopted = {
-      defaultId: "research",
-      mainKey: "main",
-      scope: "per-sender" as const,
-      agents: [{ id: "main" }, { id: "research" }],
-    };
-    agents.adoptList(adopted, client, agents.state.listRevision);
+    await expect(agents.ensureList()).resolves.toEqual(first);
+    await expect(agents.ensureList()).resolves.toEqual(first);
+    expect(request).toHaveBeenCalledTimes(1);
 
-    expect(agents.state.agentsList).toEqual(adopted);
-    expect(agents.state.agentsLoading).toBe(false);
+    const refresh = agents.refreshList();
+    const sharedRefresh = agents.ensureList();
+    expect(request).toHaveBeenCalledTimes(2);
+    pendingRefresh.resolve(replacement);
+    await expect(Promise.all([refresh, sharedRefresh])).resolves.toEqual([
+      replacement,
+      replacement,
+    ]);
 
-    pending.resolve({ defaultId: "main", agents: [{ id: "main" }] });
-    await staleLoad;
-    expect(agents.state.agentsList).toEqual(adopted);
-    agents.dispose();
-  });
-
-  it("rejects startup adoption after a newer list request begins", async () => {
-    const pending = deferred<unknown>();
-    const request = vi.fn<TestRequest>().mockReturnValue(pending.promise);
-    const client = { request } as unknown as GatewayBrowserClient;
-    const harness = createGatewayHarness(client);
-    const agents = createAgentCapability(harness.gateway);
-    const startupRevision = agents.state.listRevision;
-
-    const currentLoad = agents.refreshList();
-    expect(
-      agents.adoptList(
-        { defaultId: "stale", mainKey: "main", scope: "per-sender", agents: [{ id: "stale" }] },
-        client,
-        startupRevision,
-      ),
-    ).toBe(false);
-
-    const current = {
-      defaultId: "research",
-      mainKey: "main",
-      scope: "per-sender" as const,
-      agents: [{ id: "research" }],
-    };
-    pending.resolve(current);
-    await currentLoad;
-    expect(agents.state.agentsList).toEqual(current);
+    harness.publish(false);
+    harness.publish(true);
+    await expect(agents.ensureList()).resolves.toEqual(reconnected);
+    expect(request).toHaveBeenCalledTimes(3);
     agents.dispose();
   });
 
@@ -534,6 +518,71 @@ describe("loadToolsEffective", () => {
     resolveNext({ agentId: "main", profile: "new", groups: [] });
     await nextLoad;
     expect(state.toolsEffectiveResult?.profile).toBe("new");
+    expect(state.toolsEffectiveLoading).toBe(false);
+  });
+
+  it("keeps the newest visible-session tools when an older response finishes last", async () => {
+    const { state, request } = createState();
+    const oldRequest = deferred<unknown>();
+    const currentRequest = deferred<unknown>();
+    request.mockReturnValueOnce(oldRequest.promise).mockReturnValueOnce(currentRequest.promise);
+    state.agentsPanel = "tools";
+    state.sessionKey = "agent:main:older";
+
+    const staleLoad = refreshVisibleToolsEffectiveForCurrentSession(state);
+    state.sessionKey = "agent:main:current";
+    const currentLoad = refreshVisibleToolsEffectiveForCurrentSession(state);
+    currentRequest.resolve({ agentId: "main", profile: "current", groups: [] });
+    await currentLoad;
+    oldRequest.resolve({ agentId: "main", profile: "stale", groups: [] });
+    await staleLoad;
+
+    expect(state.toolsEffectiveResult?.profile).toBe("current");
+    expect(state.toolsEffectiveError).toBeNull();
+    expect(state.toolsEffectiveLoading).toBe(false);
+  });
+
+  it("ignores a retired visible-session failure after a newer tools response", async () => {
+    const { state, request } = createState();
+    const oldRequest = deferred<unknown>();
+    request.mockReturnValueOnce(oldRequest.promise).mockResolvedValueOnce({
+      agentId: "main",
+      profile: "current",
+      groups: [],
+    });
+    state.agentsPanel = "tools";
+    state.sessionKey = "agent:main:older";
+
+    const staleLoad = refreshVisibleToolsEffectiveForCurrentSession(state);
+    state.sessionKey = "agent:main:current";
+    await refreshVisibleToolsEffectiveForCurrentSession(state);
+    oldRequest.reject(new Error("retired connection failed"));
+    await staleLoad;
+
+    expect(state.toolsEffectiveResult?.profile).toBe("current");
+    expect(state.toolsEffectiveError).toBeNull();
+  });
+
+  it("retires an old tools request when the same session is reset and reloaded", async () => {
+    const { state, request } = createState();
+    const oldRequest = deferred<unknown>();
+    const currentRequest = deferred<unknown>();
+    request.mockReturnValueOnce(oldRequest.promise).mockReturnValueOnce(currentRequest.promise);
+    state.agentsPanel = "tools";
+    state.sessionKey = "agent:main:current";
+
+    const staleLoad = refreshVisibleToolsEffectiveForCurrentSession(state);
+    resetToolsEffectiveState(state);
+    const currentLoad = refreshVisibleToolsEffectiveForCurrentSession(state);
+    oldRequest.resolve({ agentId: "main", profile: "stale", groups: [] });
+    await staleLoad;
+
+    expect(state.toolsEffectiveResult).toBeNull();
+    expect(state.toolsEffectiveLoading).toBe(true);
+
+    currentRequest.resolve({ agentId: "main", profile: "current", groups: [] });
+    await currentLoad;
+    expect(state.toolsEffectiveResult?.profile).toBe("current");
     expect(state.toolsEffectiveLoading).toBe(false);
   });
 

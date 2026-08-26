@@ -1334,6 +1334,7 @@
                   "plugins/workboard",
                   "plugins/webhooks",
                   "plugins/admin-http-rpc",
+              "plugins/geolocation",
                   "plugins/beam",
                   "plugins/voice-call",
                   "plugins/vault",
@@ -1362,6 +1363,7 @@
                 "group": "Skills",
                 "pages": [
                   "tools/skills",
+                  "tools/custodian-skills",
                   "tools/skill-workshop",
                   "tools/self-learning",
                   "tools/creating-skills",
@@ -1676,6 +1678,7 @@
                       "gateway/heartbeat",
                       "gateway/doctor",
                       "gateway/audit",
+                      "gateway/telemetry",
                       "logging",
                       "gateway/opentelemetry",
                       "gateway/prometheus",
@@ -1827,6 +1830,7 @@
                       "cli/security",
                       "cli/setup",
                       "cli/status",
+                      "cli/triage",
                       "cli/uninstall",
                       "cli/update"
                     ]

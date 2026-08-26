@@ -6,6 +6,8 @@ import type {
  * Shared types for preparing and executing CLI-backed agent runs.
  */
 import type {
+  BlockReplyContext,
+  PartialReplyPayload,
   SourceReplyDeliveryMode,
   TaskSuggestionDeliveryMode,
 } from "../../auto-reply/get-reply-options.types.js";
@@ -24,15 +26,21 @@ import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import type { CronScheduledToolCallerOrigin } from "../../cron/scheduled-tool-policy.js";
+import type { ExecMode } from "../../infra/exec-approvals.js";
 import type { ImageContent } from "../../llm/types.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
-import type { CliBackendConfig, CliBackendExecutionMode } from "../../plugins/cli-backend.types.js";
+import type {
+  CliBackendConfig,
+  CliBackendExecute,
+  CliBackendExecutionMode,
+} from "../../plugins/cli-backend.types.js";
 import type { PluginHookChannelContext } from "../../plugins/hook-types.js";
 import type { SpawnSecretInput } from "../../process/supervisor/types.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { SkillSnapshot } from "../../skills/types.js";
+import type { SkillWorkshopProposalRevisionConstraint } from "../../skills/workshop/types.js";
 import type { AdmittedRunContext, PreparedAgentRunAdmission } from "../admitted-run-context.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
@@ -42,6 +50,7 @@ import type { ResolvedCliBackend } from "../cli-backends.js";
 import type { CliSessionReuseResult } from "../cli-session.js";
 import type { ContextWindowInfo } from "../context-window-guard.js";
 import type { FailoverReason } from "../embedded-agent-helpers.js";
+import type { BlockReplyPayload } from "../embedded-agent-payloads.js";
 import type { EmbeddedAgentExecutionPhase } from "../embedded-agent-runner/execution-phase.js";
 import type {
   CurrentInboundPromptContext,
@@ -127,6 +136,12 @@ export type RunCliAgentParams = {
   modelProvider?: string;
   /** Vision capability resolved by the run owner from its prepared model catalog. */
   modelHasVision?: boolean;
+  /** Native context window resolved by the run owner from its prepared model catalog. */
+  modelContextWindow?: number;
+  /** Effective context cap resolved by the run owner from its prepared model catalog. */
+  modelContextTokens?: number;
+  /** Session-selected context-window option id carried by the run owner. */
+  contextWindow?: string;
   provider: string;
   model?: string;
   thinkLevel?: ThinkLevel;
@@ -226,13 +241,15 @@ export type RunCliAgentParams = {
   /** Parent session provenance used to validate inherited group policy. */
   spawnedBy?: string | null;
   /** Effective turn-local exec policy resolved before entering the CLI runtime. */
-  execOverrides?: ExecPolicyOverrides;
+  execOverrides?: ExecPolicyOverrides & { mode?: ExecMode };
   /** Effective elevated-exec defaults resolved before entering the CLI runtime. */
   bashElevated?: ExecElevatedDefaults;
   /** Device-scoped operator session allowed to review approvals initiated by this run. */
   approvalReviewerDeviceId?: string;
   /** Runtime tool allow-list. CLI harnesses need a backend-owned exact translation. */
   toolsAllow?: string[];
+  /** Exact Skill Workshop proposal revision bound by the Gateway for this turn. */
+  skillWorkshopProposalRevision?: SkillWorkshopProposalRevisionConstraint;
   /** Trusted server-stamped authority for an explicitly capped scheduled run. */
   scheduledToolPolicy?: ScheduledToolPolicyContext;
   /** Server-authored origin for fresh automation mutations from this CLI run. */
@@ -244,6 +261,8 @@ export type RunCliAgentParams = {
   };
   disableTools?: boolean;
   abortSignal?: AbortSignal;
+  onPartialReply?: (payload: PartialReplyPayload) => boolean | void | Promise<boolean | void>;
+  onBlockReply?: (payload: BlockReplyPayload, context?: BlockReplyContext) => void | Promise<void>;
   onExecutionStarted?: () => void;
   onExecutionPhase?: (info: {
     phase: EmbeddedAgentExecutionPhase;
@@ -281,10 +300,20 @@ type CliPreparedBackend = {
   backend: CliBackendConfig;
   beforeExecution?: () => Promise<void>;
   cleanup?: () => Promise<void>;
+  /** Transfer process-owned native skill artifacts without claiming turn-scoped MCP/auth state. */
+  claimLiveSessionResources?: () => (() => Promise<void>) | undefined;
+  /** Plugin-owned transport bound to this exact prepared local run. */
+  execute?: CliBackendExecute;
   /** Private child-only credential transport; never serialized into env or public plugin state. */
   secretInput?: CliSecretInput;
   /** Gateway-owned capture fence for this prepared bundle-MCP client. */
   mcpClientGrantCapture?: {
+    /** Fresh bearer minted for this prepared turn. */
+    transportToken: string;
+    /** Move this turn's authority onto the bearer held by an existing child. */
+    adoptProcessToken: (processToken: string) => void;
+    /** Revoke the bearer when the child process that holds it exits. */
+    revokeProcessToken: () => void;
     activate: (captureKey: string) => void;
     deactivate: (captureKey: string) => void;
   };
@@ -332,10 +361,9 @@ export type PreparedCliRunContext = {
   contextWindowInfo?: ContextWindowInfo;
   systemPrompt: string;
   systemPromptReport: SessionSystemPromptReport;
-  claudeSkillsPluginArgs?: string[] | undefined;
+  claudeSkillsPluginArgs: string[];
   bootstrapPromptWarningLines: string[];
   openClawHistoryPrompt?: string;
-  heartbeatPrompt?: string;
   authEpoch?: string;
   /** Strict owner fingerprint captured for live inference verification only. */
   authBindingFingerprint?: string;

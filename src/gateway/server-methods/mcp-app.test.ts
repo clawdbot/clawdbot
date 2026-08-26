@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayErrorDetailCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 
 const mocks = vi.hoisted(() => ({
   completeDeferredSessionMcpRuntimeRetirement: vi.fn(),
@@ -84,6 +85,11 @@ function runtime() {
           _meta: { ui: { visibility: ["model"] } },
         },
       ],
+    })),
+    listResources: vi.fn(async () => [{ uri: "ui://demo/state", name: "state" }]),
+    listResourceTemplates: vi.fn(async () => ({ resourceTemplates: [] })),
+    readResource: vi.fn(async (_serverName: string, uri: string) => ({
+      contents: [{ uri, text: "resource" }],
     })),
   };
 }
@@ -382,6 +388,8 @@ describe("MCP App gateway bridge", () => {
   });
 
   it("rechecks current widget authority for every interactive capability", async () => {
+    const activeRuntime = runtime();
+    mocks.peekSessionMcpRuntime.mockReturnValue(activeRuntime);
     view.authorizeAppInteraction = vi.fn(async () => false);
     const params = { sessionKey: "agent:main:main", viewId: "cv_app" };
 
@@ -399,8 +407,75 @@ describe("MCP App gateway bridge", () => {
     expect(listed.mock.calls[0]?.[0]).toBe(false);
     const called = await invoke("mcp.app.callTool", { ...params, toolName: "shared" });
     expect(called.mock.calls[0]?.[0]).toBe(false);
-    expect(view.authorizeAppInteraction).toHaveBeenCalledTimes(4);
+    const resources = await invoke("mcp.app.listResources", params);
+    expect(resources.mock.calls[0]?.[0]).toBe(false);
+    const templates = await invoke("mcp.app.listResourceTemplates", params);
+    expect(templates.mock.calls[0]?.[0]).toBe(false);
+    const resource = await invoke("mcp.app.readResource", {
+      ...params,
+      uri: "ui://demo/state",
+    });
+    expect(resource.mock.calls[0]?.[0]).toBe(false);
+    expect(view.authorizeAppInteraction).toHaveBeenCalledTimes(7);
+    expect(activeRuntime.listResources).not.toHaveBeenCalled();
+    expect(activeRuntime.listResourceTemplates).not.toHaveBeenCalled();
+    expect(activeRuntime.readResource).not.toHaveBeenCalled();
   });
+
+  it.each([
+    {
+      capability: "resource list",
+      method: "mcp.app.listResources" as const,
+      params: {},
+      runtimeMethod: "listResources" as const,
+      result: [{ uri: "ui://demo/state", name: "state" }],
+    },
+    {
+      capability: "resource template list",
+      method: "mcp.app.listResourceTemplates" as const,
+      params: {},
+      runtimeMethod: "listResourceTemplates" as const,
+      result: { resourceTemplates: [{ uriTemplate: "ui://demo/{id}", name: "demo" }] },
+    },
+    {
+      capability: "resource read",
+      method: "mcp.app.readResource" as const,
+      params: { uri: "ui://demo/state" },
+      runtimeMethod: "readResource" as const,
+      result: { contents: [{ uri: "ui://demo/state", text: "protected" }] },
+    },
+  ])(
+    "withholds $capability results when widget authority is revoked in flight",
+    async (testCase) => {
+      const resourceStarted = createDeferred();
+      const releaseResource = createDeferred<unknown>();
+      const activeRuntime = runtime();
+      activeRuntime[testCase.runtimeMethod].mockImplementationOnce(async () => {
+        resourceStarted.resolve();
+        return (await releaseResource.promise) as never;
+      });
+      mocks.peekSessionMcpRuntime.mockReturnValue(activeRuntime);
+      let grantActive = true;
+      view.authorizeAppInteraction = vi.fn(async () => grantActive);
+
+      const pending = invoke(testCase.method, {
+        sessionKey: "agent:main:main",
+        viewId: "cv_app",
+        ...testCase.params,
+      });
+      await resourceStarted.promise;
+      expect(view.authorizeAppInteraction).toHaveBeenCalledOnce();
+      grantActive = false;
+      releaseResource.resolve(testCase.result);
+
+      const denied = await pending;
+      expect(denied.mock.calls[0]?.[0]).toBe(false);
+      expect(denied.mock.calls[0]?.[2]).toMatchObject({
+        message: "MCP App widget grant is no longer active",
+      });
+      expect(view.authorizeAppInteraction).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it("filters model-only tools from app discovery and execution", async () => {
     const params = { sessionKey: "agent:main:main", viewId: "cv_app" };
@@ -438,6 +513,52 @@ describe("MCP App gateway bridge", () => {
     expect(denied.mock.calls[0]?.[0]).toBe(false);
     expect(view.authorizeAppInteraction).toHaveBeenCalledOnce();
     expect(mocks.peekSessionMcpRuntime.mock.results[0]?.value.callTool).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      capability: "calling an App tool",
+      method: "mcp.app.callTool" as const,
+      params: { toolName: "shared" },
+      assertNoToolCall: true,
+    },
+    {
+      capability: "returning App tools",
+      method: "mcp.app.listTools" as const,
+      params: {},
+      assertNoToolCall: false,
+    },
+  ])("rechecks the widget grant after discovery before $capability", async (testCase) => {
+    const catalogStarted = createDeferred();
+    const releaseCatalog =
+      createDeferred<Awaited<ReturnType<ReturnType<typeof runtime>["getCatalog"]>>>();
+    const activeRuntime = runtime();
+    mocks.peekSessionMcpRuntime.mockReturnValue(activeRuntime);
+    activeRuntime.getCatalog.mockImplementationOnce(async () => {
+      catalogStarted.resolve();
+      return await releaseCatalog.promise;
+    });
+    let grantActive = true;
+    view.authorizeAppInteraction = vi.fn(async () => grantActive);
+
+    const pending = invoke(testCase.method, {
+      sessionKey: "agent:main:main",
+      viewId: "cv_app",
+      ...testCase.params,
+    });
+    await catalogStarted.promise;
+    expect(view.authorizeAppInteraction).toHaveBeenCalledOnce();
+    grantActive = false;
+    releaseCatalog.resolve({
+      tools: [{ serverName: "demo", toolName: "shared" }],
+    });
+
+    const denied = await pending;
+    expect(denied.mock.calls[0]?.[0]).toBe(false);
+    expect(view.authorizeAppInteraction).toHaveBeenCalledTimes(2);
+    if (testCase.assertNoToolCall) {
+      expect(activeRuntime.callTool).not.toHaveBeenCalled();
+    }
   });
 
   it("captures only app-visible tools allowed by the originating view", async () => {

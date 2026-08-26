@@ -47,6 +47,7 @@ import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { ConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing.js";
+import type { ExecMode } from "../infra/exec-approvals.js";
 import { logWarn } from "../logger.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
@@ -54,6 +55,7 @@ import {
   DEFAULT_GATEWAY_HTTP_TOOL_DENY,
   GATEWAY_OWNER_ONLY_CORE_TOOLS,
 } from "../security/dangerous-tools.js";
+import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";
 
@@ -104,7 +106,7 @@ export function resolveGatewayScopedTools(params: {
   /** Add the CLI-only, node-forced exec tool before applying the shared policy pipeline. */
   includeNodeExecTool?: boolean;
   execSession?: ExecSessionDefaults;
-  execOverrides?: ExecPolicyOverrides;
+  execOverrides?: ExecPolicyOverrides & { mode?: ExecMode };
   bashElevated?: ExecElevatedDefaults;
   trigger?: string;
   approvalReviewerDeviceId?: string;
@@ -116,6 +118,7 @@ export function resolveGatewayScopedTools(params: {
   groupChannel?: string;
   groupSpace?: string;
   spawnedBy?: string;
+  skillWorkshop?: SkillWorkshopRunOptions;
   scheduledToolPolicy?: ScheduledToolPolicyContext;
 }) {
   const runtimePolicySessionKey = params.runtimePolicySessionKey?.trim() || params.sessionKey;
@@ -284,6 +287,11 @@ export function resolveGatewayScopedTools(params: {
   const openClawTools = createOpenClawTools({
     agentSessionKey: params.sessionKey,
     runId: params.runId,
+    execSession: params.execSession,
+    execOverrides: params.execOverrides,
+    approvalReviewerDeviceIds: params.approvalReviewerDeviceId
+      ? [params.approvalReviewerDeviceId]
+      : undefined,
     requesterAgentIdOverride: sessionAgentId,
     agentChannel: params.messageProvider ?? undefined,
     agentAccountId: params.accountId,
@@ -307,6 +315,7 @@ export function resolveGatewayScopedTools(params: {
     senderIsOwner: params.senderIsOwner,
     conversationReadOrigin: params.conversationReadOrigin,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
+    skillWorkshop: params.skillWorkshop,
     allowMediaInvokeCommands: params.allowMediaInvokeCommands,
     disablePluginTools: params.disablePluginTools,
     wrapBeforeToolCallHook: false,

@@ -10,6 +10,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveExecCommandHighlighting } from "../../config/exec-command-highlighting.js";
 import { resolveCommandAnalysisSummaryForDisplay } from "../../infra/command-analysis/explain.js";
+import { lookupCronRunExecSource } from "../../infra/cron-run-exec-source.js";
 import {
   resolveExecApprovalCommandDisplay,
   sanitizeExecApprovalDisplayText,
@@ -32,6 +33,7 @@ import {
 import { resolveSystemRunApprovalRequestContext } from "../../infra/system-run-approval-context.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { InvalidApprovalIdError, type ExecApprovalManager } from "../exec-approval-manager.js";
+import { buildCronExecOperationBinding } from "../operator-approval-standing-grants.js";
 import { runApprovalRequestDeliveries } from "./approval-request-delivery.js";
 import {
   handleApprovalWaitDecision,
@@ -99,7 +101,7 @@ export function createExecApprovalHandlers(
   opts?: { forwarder?: ExecApprovalForwarder; iosPushDelivery?: ExecApprovalIosPushDelivery },
 ): GatewayRequestHandlers {
   return {
-    "exec.approval.get": async ({ params, respond, client }) => {
+    "exec.approval.get": async ({ params, respond, client, context }) => {
       if (!assertValidParams(params, validateExecApprovalGetParams, "exec.approval.get", respond)) {
         return;
       }
@@ -108,6 +110,7 @@ export function createExecApprovalHandlers(
         manager,
         inputId: p.id,
         client,
+        ...(client?.authenticatedUserProfile ? { cfg: context.getRuntimeConfig() } : {}),
         exposeAmbiguousPrefixError: true,
       });
       if (!resolved.ok) {
@@ -132,10 +135,15 @@ export function createExecApprovalHandlers(
         undefined,
       );
     },
-    "exec.approval.list": async ({ respond, client }) => {
+    "exec.approval.list": async ({ respond, client, context }) => {
       respond(
         true,
-        listVisiblePendingApprovalRequests({ manager, client, approvalKind: "exec" }),
+        listVisiblePendingApprovalRequests({
+          manager,
+          client,
+          approvalKind: "exec",
+          ...(client?.authenticatedUserProfile ? { cfg: context.getRuntimeConfig() } : {}),
+        }),
         undefined,
       );
     },
@@ -180,6 +188,7 @@ export function createExecApprovalHandlers(
         approvalReviewerDeviceIds?: string[];
         requireDeliveryRoute?: boolean;
         suppressDelivery?: boolean;
+        deliverToApprovalClientsOnly?: boolean;
         timeoutMs?: number;
         twoPhase?: boolean;
       };
@@ -319,6 +328,19 @@ export function createExecApprovalHandlers(
       const unavailableDecisions = normalizeExecApprovalUnavailableDecisions(
         p.unavailableDecisions,
       );
+      // Record the cron fact where it happens: the cron run owner registered
+      // its job identity for this active run; a matching gateway-host request
+      // carries it so an allow-always resolution can mint a standing grant
+      // scoped to this exact operation instead of a JSON allowlist digest.
+      const cronRunExecSource =
+        host === "gateway" && requestRunId ? lookupCronRunExecSource(requestRunId) : undefined;
+      const cronExecutionSource =
+        cronRunExecSource && effectiveAgentId && cronRunExecSource.agentId === effectiveAgentId
+          ? {
+              jobId: cronRunExecSource.jobId,
+              jobConfigRevision: cronRunExecSource.jobConfigRevision,
+            }
+          : null;
       const request = {
         command: sanitizedCommandText,
         commandPreview:
@@ -370,6 +392,14 @@ export function createExecApprovalHandlers(
         turnSourceThreadId: trustedAgentRuntime
           ? (trustedAgentRuntime.turnSourceThreadId ?? null)
           : (p.turnSourceThreadId ?? null),
+        cronExecutionSource,
+        cronOperationBinding: cronExecutionSource
+          ? buildCronExecOperationBinding({
+              command: effectiveCommandText,
+              cwd: effectiveCwd,
+              env: p.env,
+            })
+          : null,
       };
       // This check is adjacent to manager creation with no await between them.
       // The abort owner records the tombstone before sweeping pending approvals.
@@ -443,6 +473,10 @@ export function createExecApprovalHandlers(
         approvalKind: "exec",
         requireDeliveryRoute: p.requireDeliveryRoute,
         suppressDelivery: p.suppressDelivery,
+        // The gateway-derived cron fact wins even when an older in-process
+        // caller omits the flag: cron cards belong on approval surfaces only.
+        deliverToApprovalClientsOnly:
+          p.deliverToApprovalClientsOnly === true || cronExecutionSource !== null,
         deliverRequest: () =>
           runApprovalRequestDeliveries({
             context,
@@ -470,6 +504,7 @@ export function createExecApprovalHandlers(
         manager,
         inputId: (params as { id?: string }).id,
         client,
+        ...(client?.authenticatedUserProfile ? { cfg: context.getRuntimeConfig() } : {}),
         respond,
         resolveTerminalReason: (snapshot) => {
           const runId = normalizeOptionalString(snapshot.request.runId);

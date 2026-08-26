@@ -2,6 +2,7 @@ import { consume } from "@lit/context";
 import { initialState, Task } from "@lit/task";
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
+import { GATEWAY_EVENT_DEVICE_PAIR_CHANGED } from "../../../../src/gateway/events.js";
 import type { PresenceEntry } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import {
@@ -10,6 +11,7 @@ import {
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
 import { hasOperatorAdminAccess, hasOperatorPairingAccess } from "../../app/operator-access.ts";
+import { readPresenceEntries } from "../../app/user-profile.ts";
 import { showConfirmDialog, type ConfirmDialogOptions } from "../../components/confirm-dialog.ts";
 import { showSecretRevealDialog } from "../../components/secret-reveal-dialog.ts";
 import { renderDocsLink } from "../../components/settings-ui.ts";
@@ -61,12 +63,6 @@ type InventoryRemovalPrompt =
   | { kind: "entry"; entry: InventoryRemovalRequest }
   | { kind: "stale"; entries: InventoryRemovalRequest[] };
 
-function readPresence(value: unknown): PresenceEntry[] | null {
-  const presence =
-    value && typeof value === "object" ? (value as { presence?: unknown }).presence : null;
-  return Array.isArray(presence) ? (presence as PresenceEntry[]) : null;
-}
-
 function presenceConnectivitySignature(entries: PresenceEntry[]): string {
   const states = new Map<string, "connected" | "offline">();
   for (const entry of entries) {
@@ -74,7 +70,8 @@ function presenceConnectivitySignature(entries: PresenceEntry[]): string {
     if (!id || entry.mode?.trim().toLowerCase() === "gateway") {
       continue;
     }
-    states.set(id, entry.reason?.trim().toLowerCase() === "disconnect" ? "offline" : "connected");
+    const key = entry.roles?.includes("node") ? `${id}:node` : id;
+    states.set(key, entry.reason?.trim().toLowerCase() === "disconnect" ? "offline" : "connected");
   }
   return JSON.stringify([...states].toSorted(([left], [right]) => left.localeCompare(right)));
 }
@@ -152,7 +149,7 @@ class DevicesPage extends OpenClawLightDomElement {
           if (this.gateway.gateway !== gateway || this.context.gateway !== gateway) {
             return;
           }
-          const presence = event.event === "presence" ? readPresence(event.payload) : null;
+          const presence = event.event === "presence" ? readPresenceEntries(event.payload) : null;
           if (presence) {
             const connectivityChanged =
               presenceConnectivitySignature(presence) !==
@@ -166,7 +163,11 @@ class DevicesPage extends OpenClawLightDomElement {
               void this.runPageTask((pageState) => loadNodes(pageState, { quiet: true }));
             }
           }
-          if (event.event === "device.pair.requested" || event.event === "device.pair.resolved") {
+          if (
+            event.event === GATEWAY_EVENT_DEVICE_PAIR_CHANGED ||
+            event.event === "device.pair.requested" ||
+            event.event === "device.pair.resolved"
+          ) {
             if (this.canManagePairing) {
               void this.runPageTask((pageState) => loadDevices(pageState, { quiet: true }));
             }
@@ -220,7 +221,7 @@ class DevicesPage extends OpenClawLightDomElement {
       snapshot.client &&
       (change.identityChanged || change.connectionChanged)
     ) {
-      const initialPresence = readPresence(snapshot.hello?.snapshot);
+      const initialPresence = readPresenceEntries(snapshot.hello?.snapshot);
       this.presence = initialPresence ?? [];
       void this.loadPresence();
     }
@@ -244,7 +245,7 @@ class DevicesPage extends OpenClawLightDomElement {
     const snapshot = this.context.gateway.snapshot;
     if (!this.gateway.isRouteDataCurrent(data)) {
       this.resetServerState(snapshot);
-      this.presence = readPresence(snapshot.hello?.snapshot) ?? [];
+      this.presence = readPresenceEntries(snapshot.hello?.snapshot) ?? [];
       void this.loadPresence();
       this.ensureInitialData();
       return;
@@ -255,7 +256,7 @@ class DevicesPage extends OpenClawLightDomElement {
       connected: snapshot.phase === "connected",
       requestGeneration: this.gateway.epoch,
     };
-    const initialPresence = readPresence(snapshot.hello?.snapshot);
+    const initialPresence = readPresenceEntries(snapshot.hello?.snapshot);
     if (initialPresence) {
       this.presence = initialPresence;
     }

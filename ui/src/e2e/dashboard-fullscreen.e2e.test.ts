@@ -12,7 +12,16 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 
-const sessionKey = "agent:main:dashboard";
+const sessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
+const initialFocusPath = "focus/dashboard/main/12345678";
+const canonicalFocusPath = "/focus/dashboard/main/deploy-monitor-12345678";
+const sessionRow = {
+  key: sessionKey,
+  kind: "direct",
+  boardFace: "dashboard",
+  displayName: "Deploy monitor",
+  updatedAt: 1,
+};
 const boardSnapshot = {
   sessionKey,
   revision: 1,
@@ -67,17 +76,39 @@ async function rememberMainTab(page: Page): Promise<void> {
   );
 }
 
+async function openFocusFromDashboards(page: Page, focusPath: string): Promise<void> {
+  await page.goto(`${suite.server.baseUrl}dashboards`);
+  await page.locator("openclaw-app-shell").waitFor();
+  await page.goto(`${suite.server.baseUrl}${focusPath}`);
+}
+
+async function closeFocusedView(page: Page, label: "Back" | "Close dashboard"): Promise<void> {
+  const action = page.getByRole("button", { name: label, exact: true });
+  await action.waitFor();
+  await action.click();
+  await page.waitForURL(`${suite.server.baseUrl}dashboards`);
+}
+
 suite.define(() => {
+  it("fails an unsupported focus target visibly without mounting the application shell", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      await installMockGateway(page);
+      await openFocusFromDashboards(page, "focus/not-supported");
+      await page.getByRole("alert").getByText("This focused view is not supported.").waitFor();
+      expect(await page.locator("openclaw-app-shell").count()).toBe(0);
+      await closeFocusedView(page, "Back");
+    });
+  });
+
   it("renders a live interactive board in the shell-free dashboard document", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         sessionKey,
+        deferredMethods: ["sessions.resolve"],
         featureCapabilities: [GATEWAY_SERVER_CAPS.BOARD_WIDGET_PUT_CANVAS_DOC],
         featureMethods: ["board.get", "board.update", "board.widget.grant", "board.widget.put"],
         methodResponses: {
-          "sessions.describe": {
-            session: { key: sessionKey, kind: "direct", updatedAt: 1 },
-          },
+          "sessions.describe": { session: sessionRow },
           "board.get": boardSnapshot,
           "board.widget.grant": {
             ...boardSnapshot,
@@ -89,12 +120,24 @@ suite.define(() => {
         },
       });
 
-      await page.goto(
-        `${suite.server.baseUrl}?view=dashboard&session=${encodeURIComponent(sessionKey)}`,
-      );
+      await page.goto(`${suite.server.baseUrl}${initialFocusPath}`);
+      await gateway.waitForRequest("sessions.resolve");
+      expect(await gateway.getRequests("board.get")).toHaveLength(0);
+      expect(await gateway.getRequests("sessions.describe")).toHaveLength(0);
+      const initialSessionListCount = (await gateway.getRequests("sessions.list")).length;
+      await gateway.resolveDeferred("sessions.resolve", {
+        ok: true,
+        key: sessionKey,
+        agentId: "main",
+        displayName: sessionRow.displayName,
+        boardFace: sessionRow.boardFace,
+      });
       const document = page.locator("openclaw-board-document");
       await document.locator("openclaw-board-view").waitFor();
 
+      expect(await gateway.getRequests("sessions.resolve")).toHaveLength(1);
+      expect(await gateway.getRequests("sessions.describe")).toHaveLength(1);
+      expect(await gateway.getRequests("sessions.list")).toHaveLength(initialSessionListCount);
       expect(await page.locator("openclaw-app-shell").count()).toBe(0);
       expect(await page.locator(".agent-chat").count()).toBe(0);
       expect((await gateway.getRequests("board.get"))[0]?.params).toEqual({ sessionKey });
@@ -103,7 +146,7 @@ suite.define(() => {
       await widget.waitFor();
       expect(await widget.getAttribute("aria-label")).toContain("Dashboard widget: Status.");
       await document.getByRole("button", { name: "Close dashboard" }).waitFor();
-      expect(new URL(page.url()).searchParams.get("session")).toBe(sessionKey);
+      expect(new URL(page.url()).pathname).toBe(canonicalFocusPath);
 
       await document
         .locator('[data-widget-name="permissions"]')
@@ -116,11 +159,6 @@ suite.define(() => {
         decision: "rejected",
         revision: 1,
       });
-
-      await page.reload();
-      await widget.waitFor();
-      expect(await widget.getAttribute("aria-label")).toContain("Dashboard widget: Status.");
-      expect(new URL(page.url()).searchParams.get("session")).toBe(sessionKey);
 
       await gateway.setMethodResponse("board.get", {
         ...boardSnapshot,
@@ -189,18 +227,80 @@ suite.define(() => {
     });
   });
 
-  it("shows a clear outcome when the requested session does not exist", async () => {
+  it("keeps ambiguity candidates inside the focused dashboard namespace", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
-      await installMockGateway(page, {
+      const secondKey = "agent:main:dashboard:12345678-aaaa-cdef-1234-567890abcdef";
+      const gateway = await installMockGateway(page, {
         featureMethods: ["board.get"],
-        methodResponses: { "sessions.describe": { session: null } },
+        methodResponses: {
+          "sessions.resolve": {
+            ok: false,
+            candidates: [
+              {
+                key: sessionKey,
+                agentId: "main",
+                displayName: sessionRow.displayName,
+                boardFace: sessionRow.boardFace,
+              },
+              {
+                key: secondKey,
+                agentId: "main",
+                displayName: "Deploy monitor beta",
+                boardFace: sessionRow.boardFace,
+              },
+            ],
+          },
+        },
       });
 
-      await page.goto(
-        `${suite.server.baseUrl}?view=dashboard&session=${encodeURIComponent(sessionKey)}`,
-      );
+      await openFocusFromDashboards(page, initialFocusPath);
+      const links = page.getByRole("link");
+      await expect.poll(() => links.count()).toBe(2);
+      for (const link of await links.all()) {
+        expect(new URL((await link.getAttribute("href")) ?? "", page.url()).pathname).toMatch(
+          /^\/focus\/dashboard\/main\//u,
+        );
+      }
+      expect(await gateway.getRequests("sessions.resolve")).toHaveLength(1);
+      expect(await gateway.getRequests("sessions.describe")).toHaveLength(0);
+      expect(await gateway.getRequests("board.get")).toHaveLength(0);
+      expect(await page.locator("openclaw-board-document").count()).toBe(0);
+      await closeFocusedView(page, "Close dashboard");
+    });
+  });
+
+  it("shows a clear outcome when the requested session does not exist", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["board.get"],
+        methodResponses: { "sessions.resolve": { ok: false } },
+      });
+
+      await openFocusFromDashboards(page, initialFocusPath);
       await page.getByText("This session could not be found.", { exact: true }).waitFor();
       expect(await page.locator("openclaw-app-shell").count()).toBe(0);
+      expect(await page.locator("openclaw-board-document").count()).toBe(0);
+      expect(await gateway.getRequests("board.get")).toHaveLength(0);
+      await closeFocusedView(page, "Close dashboard");
+    });
+  });
+
+  it("escapes a focused dashboard route-resolution failure", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      await installMockGateway(page, {
+        methodResponses: {
+          "sessions.resolve": {
+            __mockError: { code: "UNAVAILABLE", message: "session routing is unavailable" },
+          },
+        },
+      });
+
+      await openFocusFromDashboards(page, initialFocusPath);
+      const alert = page.getByRole("alert");
+      await alert.waitFor();
+      await expect.poll(() => alert.textContent()).toContain("session routing is unavailable");
+      expect(await page.locator("openclaw-app-shell").count()).toBe(0);
+      await closeFocusedView(page, "Close dashboard");
     });
   });
 
@@ -210,23 +310,27 @@ suite.define(() => {
         sessionKey,
         featureMethods: ["board.get"],
         methodResponses: {
-          "sessions.describe": {
-            session: { key: sessionKey, kind: "direct", updatedAt: 1 },
+          "sessions.resolve": {
+            ok: true,
+            key: sessionKey,
+            agentId: "main",
+            displayName: sessionRow.displayName,
+            boardFace: sessionRow.boardFace,
           },
+          "sessions.describe": { session: sessionRow },
           "board.get": {
             __mockError: { code: "UNAVAILABLE", message: "dashboard storage is unavailable" },
           },
         },
       });
 
-      await page.goto(
-        `${suite.server.baseUrl}?view=dashboard&session=${encodeURIComponent(sessionKey)}`,
-      );
+      await openFocusFromDashboards(page, initialFocusPath);
       await gateway.waitForRequest("board.get");
       const alert = page.getByRole("alert");
       await alert.waitFor();
       await expect.poll(() => alert.textContent()).toContain("dashboard storage is unavailable");
       await expect.poll(() => alert.textContent()).toContain("try again");
+      await closeFocusedView(page, "Close dashboard");
     });
   });
 });

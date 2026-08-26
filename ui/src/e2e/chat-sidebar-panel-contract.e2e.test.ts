@@ -9,6 +9,7 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { installDesktopClientFake } from "./desktop-rfb-test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "chat sidebar cold-open invariant",
@@ -16,6 +17,7 @@ const suite = createControlUiE2eSuite({
 });
 
 const HIDDEN_BOARD_SESSION_KEY = "agent:main:hidden-board-slot";
+const RETAINED_DESKTOP_SESSION_KEY = "agent:main:retained-desktop-slot";
 
 const ONE_PIXEL_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nPcAAAAASUVORK5CYII=",
@@ -268,6 +270,83 @@ async function seedHiddenBoardSlot(page: Page) {
   );
 }
 
+async function seedRetainedDesktopSlot(page: Page) {
+  const settingsKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
+  await page.addInitScript(
+    ({ key, sessionKey }) => {
+      localStorage.setItem(
+        key,
+        JSON.stringify({
+          sessionKey,
+          sidebarSessionLayouts: {
+            [sessionKey]: {
+              columns: [
+                {
+                  id: "side-panel-column",
+                  side: "right",
+                  panels: [
+                    { id: "workspace", slot: "workspace" },
+                    { id: "desktop", slot: "desktop" },
+                  ],
+                  activePanelId: "workspace",
+                  height: 360,
+                  width: 480,
+                },
+              ],
+              dock: "right",
+              open: true,
+              expanded: false,
+            },
+          },
+        }),
+      );
+      localStorage.setItem(
+        "openclaw.desktopPanel",
+        JSON.stringify({ open: true, dock: "right", height: 420, width: 560 }),
+      );
+    },
+    { key: settingsKey, sessionKey: RETAINED_DESKTOP_SESSION_KEY },
+  );
+}
+
+function retainedDesktopScenario(): ControlUiMockGatewayScenario {
+  return {
+    ...coldOpenScenario(),
+    sessionKey: RETAINED_DESKTOP_SESSION_KEY,
+    methodResponses: {
+      ...coldOpenScenario().methodResponses,
+      "environments.list": {
+        environments: [
+          {
+            id: "worker-desktop-1",
+            type: "worker",
+            status: "available",
+            desktop: true,
+            worker: {
+              providerId: "crabbox",
+              state: "attached",
+              ageMs: 1_000,
+              attachedSessionIds: [RETAINED_DESKTOP_SESSION_KEY],
+              tunnelStatus: "connected",
+              desktopApps: [],
+            },
+          },
+        ],
+      },
+      "desktop.observe": {
+        transport: "rfb",
+        wsPath: "/desktop/observe?token=retained",
+        expiresAtMs: 60_000,
+        control: false,
+      },
+    },
+  };
+}
+
+async function clickSidebarTab(page: Page, label: string): Promise<void> {
+  await page.locator(".side-panel__header .tabstrip-tab").filter({ hasText: label }).click();
+}
+
 async function readColdOpenOutcome(page: Page): Promise<ColdOpenOutcome> {
   const activePanel = page.locator(".side-panel__panel:not([hidden])");
   await activePanel.waitFor();
@@ -437,6 +516,105 @@ suite.define(() => {
       );
       expect(await browser.locator(".bp-url").inputValue()).toBe("https://blacksmith.sh/");
       expect(await browser.locator(".bp-loading").count()).toBe(0);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
+  it("keeps a retained Desktop dormant until its sidebar tab is active", async () => {
+    const context = await suite.newBrowserContext({ serviceWorkers: "block" });
+    try {
+      const page = await context.newPage();
+      await seedRetainedDesktopSlot(page);
+      const gateway = await installMockGateway(page, retainedDesktopScenario());
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await waitForControlUiGatewayReady(page);
+
+      const desktop = page.locator("openclaw-desktop-panel");
+      await desktop.waitFor({ state: "attached" });
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          }),
+      );
+
+      expect(await desktop.evaluate((element) => element.isConnected)).toBe(true);
+      expect(await gateway.getRequests("environments.list")).toHaveLength(0);
+
+      await clickSidebarTab(page, "Desktop");
+      await expect
+        .poll(async () => (await gateway.getRequests("environments.list")).length)
+        .toBe(1);
+      await clickSidebarTab(page, "Files");
+      expect(await desktop.evaluate((element) => element.isConnected)).toBe(true);
+      expect(await gateway.getRequests("environments.list")).toHaveLength(1);
+
+      await clickSidebarTab(page, "Desktop");
+      await expect
+        .poll(async () => (await gateway.getRequests("environments.list")).length)
+        .toBe(2);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
+  it("tears down retained Desktop work on presentation loss", async () => {
+    const context = await suite.newBrowserContext({ serviceWorkers: "block" });
+    try {
+      const page = await context.newPage();
+      const gateway = await installMockGateway(page, retainedDesktopScenario());
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await waitForControlUiGatewayReady(page);
+      await openChatSidePanelType(page, "Desktop");
+
+      const desktop = page.locator("openclaw-desktop-panel");
+      await desktop.getByText("worker-desktop-1", { exact: true }).waitFor();
+      await installDesktopClientFake(desktop);
+      await gateway.deferNext("desktop.observe");
+      const observeCount = (await gateway.getRequests("desktop.observe")).length;
+      await desktop.getByRole("button", { name: "Connect", exact: true }).click();
+      await gateway.waitForRequest("desktop.observe", { after: observeCount });
+
+      await openChatSidePanelType(page, "Files");
+      await gateway.resolveDeferred("desktop.observe", {
+        transport: "rfb",
+        wsPath: "/desktop/observe?token=stale",
+        expiresAtMs: 60_000,
+        control: false,
+      });
+      await page.evaluate(() => Promise.resolve());
+
+      expect(await desktop.getAttribute("data-connect-count")).toBeNull();
+      expect(await desktop.evaluate((element) => element.isConnected)).toBe(true);
+
+      const inventoryBeforeReactivation = (await gateway.getRequests("environments.list")).length;
+      await clickSidebarTab(page, "Desktop");
+      await expect
+        .poll(async () => (await gateway.getRequests("environments.list")).length)
+        .toBe(inventoryBeforeReactivation + 1);
+      await desktop.getByText("Desktop sources", { exact: true }).waitFor();
+
+      await desktop.getByRole("button", { name: "Connect", exact: true }).click();
+      await expect.poll(() => desktop.getAttribute("data-connect-count")).toBe("1");
+      await clickSidebarTab(page, "Files");
+
+      expect(await desktop.evaluate((element) => element.isConnected)).toBe(true);
+      expect(await desktop.getAttribute("data-disconnect-count")).toBe("1");
+
+      const inventoryBeforeSecondReactivation = (await gateway.getRequests("environments.list"))
+        .length;
+      const observeBeforeSecondReactivation = (await gateway.getRequests("desktop.observe")).length;
+      await clickSidebarTab(page, "Desktop");
+      await expect
+        .poll(async () => (await gateway.getRequests("environments.list")).length)
+        .toBe(inventoryBeforeSecondReactivation + 1);
+      await desktop.getByText("Desktop sources", { exact: true }).waitFor();
+
+      expect(await gateway.getRequests("desktop.observe")).toHaveLength(
+        observeBeforeSecondReactivation,
+      );
+      expect(await desktop.getAttribute("data-connect-count")).toBe("1");
     } finally {
       await suite.closeBrowserContext(context);
     }

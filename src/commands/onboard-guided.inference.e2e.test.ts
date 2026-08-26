@@ -97,7 +97,12 @@ describe("guided onboarding inference composition", () => {
         })}\n`,
       );
 
-      const prompter = createWizardPrompter(undefined, { selectValues: ["full", "use"] });
+      const prompter = createWizardPrompter(
+        {
+          text: vi.fn(async ({ initialValue }) => initialValue ?? ""),
+        },
+        { selectValues: ["full", "use"] },
+      );
       const runSetupMemoryImportStep = vi.fn(async () => ({
         status: "skipped" as const,
         providers: [],
@@ -136,7 +141,7 @@ describe("guided onboarding inference composition", () => {
                 platform: "linux",
                 deps: {
                   probeLocalCommand,
-                  readClaudeCliCredentials: () => null,
+                  detectClaudeLoginState: async () => ({ credentials: false }),
                   readCodexCliCredentials: () => null,
                   readGeminiCliCredentials: () => null,
                   randomInt: () => 0,

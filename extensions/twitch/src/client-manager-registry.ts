@@ -80,10 +80,10 @@ export async function removeClientManager(accountId: string): Promise<void> {
     return;
   }
 
+  registry.delete(accountId);
   try {
     await entry.manager.disconnectAll();
   } finally {
-    registry.delete(accountId);
     entry.logger.info(`Unregistered client manager for account: ${accountId}`);
   }
 }

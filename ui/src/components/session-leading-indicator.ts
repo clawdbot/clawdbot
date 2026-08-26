@@ -5,7 +5,7 @@ import { icons } from "./icons.ts";
 import {
   renderSessionAttentionIcon,
   renderSessionState,
-  renderSessionUnreadState,
+  sessionHasRunningWork,
 } from "./session-attention-presentation.ts";
 import {
   renderSessionGlyph,
@@ -33,7 +33,7 @@ function renderGlyphBadge(
   session: SidebarRecentSession,
   pullRequestState: SessionPullRequestIndicatorState,
 ): SessionGlyphContent {
-  if (session.unread) {
+  if (session.unread && !session.hasActiveRun) {
     return renderSessionUnreadBadge();
   }
   if (pullRequestState === "none") {
@@ -81,16 +81,10 @@ function renderSessionTrailingState(
   pullRequestState: SessionPullRequestIndicatorState,
 ) {
   const sessionState = renderSessionState(session, false);
-  const concurrentUnreadState = session.hasActiveRun ? renderSessionUnreadState(session) : nothing;
-  if (
-    pullRequestState === "none" &&
-    sessionState === nothing &&
-    concurrentUnreadState === nothing
-  ) {
+  if (pullRequestState === "none" && sessionState === nothing) {
     return nothing;
   }
-  return html`${renderPullRequestIndicator(pullRequestState, false)} ${sessionState}
-  ${concurrentUnreadState}`;
+  return html`${renderPullRequestIndicator(pullRequestState, false)} ${sessionState}`;
 }
 
 function renderPersistentSessionIcon(icon: string) {
@@ -104,12 +98,14 @@ export function describeSessionTrailingState(
   session: SidebarRecentSession,
   pullRequestState: SessionPullRequestIndicatorState,
 ) {
+  const runningLabel =
+    session.hasActiveRun && session.status === "queued"
+      ? t("sessionsView.statusQueued")
+      : t("sessionsView.activeRun");
   return [
     session.forkSource ? t("sessionsView.forkedSession") : "",
     pullRequestState === "none" ? "" : pullRequestStateLabel(pullRequestState),
-    session.hasActiveRun
-      ? t(session.status === "queued" ? "sessionsView.statusQueued" : "sessionsView.activeRun")
-      : "",
+    sessionHasRunningWork(session) ? runningLabel : "",
     session.unread ? t("sessionsView.unread") : "",
   ]
     .filter(Boolean)
@@ -131,7 +127,7 @@ export function renderSessionLeadingState(
   trailingIndicator: TemplateResult | typeof nothing;
   renderedOwnerId?: string;
 } {
-  const running = session.hasActiveRun;
+  const running = sessionHasRunningWork(session);
   const trailingIndicator = session.isChild
     ? nothing
     : renderSessionTrailingState(session, pullRequestState);

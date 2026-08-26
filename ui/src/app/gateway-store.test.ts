@@ -90,7 +90,7 @@ function createStore(
   params: {
     settings?: ReturnType<typeof loadSettings>;
     persistDefaultConnectionSettings?: boolean;
-    basePath?: string;
+    resourceBasePath?: string;
   } = {},
 ) {
   const clients: FakeGatewayClient[] = [];
@@ -105,7 +105,7 @@ function createStore(
     },
     {
       persistDefaultConnectionSettings: params.persistDefaultConnectionSettings,
-      basePath: params.basePath,
+      resourceBasePath: params.resourceBasePath,
     },
   );
   const current = () => {
@@ -141,9 +141,9 @@ describe("createApplicationGateway connection phase", () => {
     vi.restoreAllMocks();
   });
 
-  it("passes the explicit same-origin base path to avatar resolution", () => {
+  it("passes the explicit same-origin resource base to avatar resolution", () => {
     const settings = { ...loadSettings(), gatewayUrl: "ws://127.0.0.1:18789/ws" };
-    const { gateway } = createStore({ settings, basePath: "/wilfred" });
+    const { gateway } = createStore({ settings, resourceBasePath: "/wilfred" });
 
     gateway.start();
 
@@ -421,6 +421,19 @@ describe("createApplicationGateway connection phase", () => {
     expect(current().opts.url).toBe("wss://other-gateway.example.test");
     expect(current().opts.token).toBe("other-token");
     expect(gateway.snapshot.phase).toBe("connecting");
+  });
+
+  it("advances the connection revision only when credentials change", () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+    current().opts.onHello?.(HELLO);
+
+    expect(gateway.connectionRevision).toBe(0);
+    gateway.connect({ sessionKey: "agent:main:other" });
+    expect(gateway.connectionRevision).toBe(0);
+
+    gateway.connect({ token: "replacement-token" });
+    expect(gateway.connectionRevision).toBe(1);
   });
 
   it("keeps a newly selected Gateway's first retry at the login gate", () => {

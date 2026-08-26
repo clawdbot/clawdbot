@@ -53,6 +53,7 @@ function createGatewayHarness() {
       return snapshot;
     },
     connection: { gatewayUrl: "ws://example.test", token: "", bootstrapToken: "", password: "" },
+    connectionRevision: 0,
     eventLog: [],
     subscribe: subscribeSnapshots,
     subscribeEvents,
@@ -461,7 +462,28 @@ describe("session pull request snapshot store", () => {
     await flushSync();
   });
 
-  it("keeps foreground keys inside the bounded server union", async () => {
+  it("does not resubscribe when foreground promotion only reorders watched keys", async () => {
+    const harness = createGatewayHarness();
+    const store = sessionPullRequestsForGateway(harness.gateway);
+    const sidebarOwner = {};
+    const hovercardOwner = {};
+    store.watch(sidebarOwner, ["agent:main:first", "agent:main:second"]);
+    await flushSync();
+    harness.request.mockClear();
+
+    store.watch(hovercardOwner, ["agent:main:second"], { foreground: true });
+    await flushSync();
+    expect(harness.request).not.toHaveBeenCalled();
+
+    store.unwatch(hovercardOwner);
+    await flushSync();
+    expect(harness.request).not.toHaveBeenCalled();
+
+    store.unwatch(sidebarOwner);
+    await flushSync();
+  });
+
+  it("resubscribes when foreground promotion changes the bounded server union", async () => {
     const harness = createGatewayHarness();
     const store = sessionPullRequestsForGateway(harness.gateway);
     const normalOwner = {};
@@ -470,12 +492,17 @@ describe("session pull request snapshot store", () => {
       normalOwner,
       Array.from({ length: 201 }, (_value, index) => `normal-${String(index).padStart(3, "0")}`),
     );
-    store.watch(foregroundOwner, ["zz-foreground"], { foreground: true });
+    await flushSync();
+    harness.request.mockClear();
+
+    store.watch(foregroundOwner, ["normal-200"], { foreground: true });
     await flushSync();
 
-    const params = harness.request.mock.calls[0]?.[1] as { sessionKeys: string[] };
+    expect(harness.request).toHaveBeenCalledOnce();
+    const params = harness.request.mock.lastCall?.[1] as { sessionKeys: string[] };
     expect(params.sessionKeys).toHaveLength(200);
-    expect(params.sessionKeys).toContain("zz-foreground");
+    expect(params.sessionKeys[0]).toBe("normal-200");
+    expect(params.sessionKeys).not.toContain("normal-199");
     store.unwatch(normalOwner);
     store.unwatch(foregroundOwner);
     await flushSync();

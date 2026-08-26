@@ -83,7 +83,7 @@ export async function advanceSessionPlacementDraft(params: {
     if (params.recovering && !recoveryPersisted) {
       return {
         status: "cancelled",
-        cleanupError: "cloud recovery storage is unavailable",
+        cleanupError: "placement recovery storage is unavailable",
         recoveryPersisted: false,
       };
     }

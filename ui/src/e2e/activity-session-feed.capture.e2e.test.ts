@@ -35,6 +35,11 @@ suite.define(() => {
         ).getTime();
         const releaseKey = "agent:main:release-readiness";
         const designKey = "agent:main:design-review";
+        const gatewayHandoffKey = "agent:main:gateway-handoff";
+        const nightlyMaintenanceKey = "agent:main:nightly-maintenance";
+        const incidentNotesKey = "agent:main:incident-notes";
+        const automationKeys = [designKey, gatewayHandoffKey, nightlyMaintenanceKey];
+        const nonAutomationKeys = [releaseKey, incidentNotesKey];
         await installMockGateway(page, {
           hasMultipleSessionSharingIdentities: true,
           presenceUsers: [
@@ -115,12 +120,13 @@ suite.define(() => {
                   owner: {
                     actor: { type: "human", id: "profile-bob", label: "Bob Rivera" },
                   },
+                  createdVia: "cron",
                   participants: [{ type: "human", id: "profile-alice", label: "Alice Chen" }],
                   hasAutomation: true,
                   updatedAt: now - 42 * 60_000,
                 },
                 {
-                  key: "agent:main:gateway-handoff",
+                  key: gatewayHandoffKey,
                   kind: "direct",
                   displayName: "Gateway handoff",
                   agentId: "main",
@@ -128,11 +134,12 @@ suite.define(() => {
                   owner: {
                     actor: { type: "human", id: "profile-carol", label: "Carol Singh" },
                   },
+                  createdVia: "cron",
                   hasAutomation: true,
                   updatedAt: now - 2 * 60 * 60_000,
                 },
                 {
-                  key: "agent:main:nightly-maintenance",
+                  key: nightlyMaintenanceKey,
                   kind: "direct",
                   displayName: "Nightly mock maintenance",
                   agentId: "main",
@@ -140,11 +147,12 @@ suite.define(() => {
                   owner: {
                     actor: { type: "human", id: "profile-carol", label: "Carol Singh" },
                   },
+                  createdVia: "cron",
                   hasAutomation: true,
                   updatedAt: now - 3 * 60 * 60_000,
                 },
                 {
-                  key: "agent:main:incident-notes",
+                  key: incidentNotesKey,
                   kind: "direct",
                   displayName: "Incident follow-up",
                   agentId: "main",
@@ -225,6 +233,13 @@ suite.define(() => {
         await waitForControlUiRoute(page, { pathname: "/activity", routeId: "activity" });
         const activityPage = page.locator("openclaw-activity-page");
         await expect.poll(() => activityPage.count()).toBe(1);
+        const titleLeft = await activityPage
+          .locator(".page-title")
+          .evaluate((element) => element.getBoundingClientRect().left);
+        const tabsLeft = await activityPage
+          .locator(".activity-mode-tabs")
+          .evaluate((element) => element.getBoundingClientRect().left);
+        expect(Math.abs(titleLeft - tabsLeft)).toBeLessThanOrEqual(8);
         await activityPage.locator(".activity-feed__people-trigger").click();
         await expect
           .poll(() =>
@@ -236,17 +251,33 @@ suite.define(() => {
           )
           .toBe(3);
         await page.keyboard.press("Escape");
-        const automationGroup = activityPage.locator("[data-activity-automation-group]");
-        const sessionRows = activityPage.locator("[data-activity-session]");
+        const activityFeed = activityPage.locator(".activity-feed");
+        const activitySession = (key: string) =>
+          activityFeed.locator(`[data-activity-session="${key}"]`);
+        const automationGroup = activityFeed.locator("[data-activity-automation-group]");
         await expect.poll(() => automationGroup.count()).toBe(1);
         await expect.poll(() => automationGroup.getAttribute("aria-expanded")).toBe("false");
-        await expect.poll(() => sessionRows.count()).toBe(2);
+        for (const key of nonAutomationKeys) {
+          await expect.poll(() => activitySession(key).count()).toBe(1);
+        }
+        for (const key of automationKeys) {
+          await expect.poll(() => activitySession(key).count()).toBe(0);
+        }
         await automationGroup.click();
-        await expect.poll(() => sessionRows.count()).toBe(5);
+        await expect.poll(() => automationGroup.getAttribute("aria-expanded")).toBe("true");
+        for (const key of automationKeys) {
+          await expect.poll(() => activitySession(key).count()).toBe(1);
+        }
         await automationGroup.click();
-        await expect.poll(() => sessionRows.count()).toBe(2);
+        await expect.poll(() => automationGroup.getAttribute("aria-expanded")).toBe("false");
+        for (const key of automationKeys) {
+          await expect.poll(() => activitySession(key).count()).toBe(0);
+        }
+        for (const key of nonAutomationKeys) {
+          await expect.poll(() => activitySession(key).count()).toBe(1);
+        }
 
-        const liveRow = activityPage.locator(`[data-activity-session="${releaseKey}"]`);
+        const liveRow = activitySession(releaseKey);
         await expect.poll(() => liveRow.locator(".activity-feed__run-dot").count()).toBe(1);
         await expect
           .poll(() => liveRow.locator(".activity-feed__session-headline").textContent())
@@ -263,6 +294,12 @@ suite.define(() => {
         expect(await inspectRun.getAttribute("href")).toBe(
           "/activity?view=run&run=mock%20run%3Aa%2Fb",
         );
+        const timeFilter = activityPage.locator(".activity-feed__time-filter");
+        expect(
+          await timeFilter
+            .locator(".settings-segmented__btn")
+            .evaluateAll((buttons) => buttons.map((button) => button.textContent?.trim())),
+        ).toEqual(["Last 24 hours", "Last 7 days", "Last 30 days", "All time"]);
         await page.screenshot({
           animations: "disabled",
           path: path.join(outputDir, "05-global-activity.png"),
@@ -283,6 +320,81 @@ suite.define(() => {
         await page.screenshot({
           animations: "disabled",
           path: path.join(outputDir, "06-person-activity.png"),
+        });
+
+        await activityPage.locator(".activity-feed__people-clear").click();
+        await expect.poll(() => new URL(page.url()).searchParams.get("person")).toBeNull();
+        await activityPage.locator(".activity-feed__people-trigger").click();
+        await activityPage.locator('[data-activity-person="profile-carol"]').click();
+        await expect
+          .poll(() => new URL(page.url()).searchParams.get("person"))
+          .toBe("profile-carol");
+        await expect.poll(() => activitySession(nightlyMaintenanceKey).count()).toBe(1);
+        await expect
+          .poll(() =>
+            activitySession(nightlyMaintenanceKey)
+              .locator('[data-activity-created-via="cron"]')
+              .count(),
+          )
+          .toBe(1);
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(outputDir, "06-automation-creator-desktop.png"),
+        });
+
+        await activityPage.locator(".activity-feed__people-clear").click();
+        await expect.poll(() => new URL(page.url()).searchParams.get("person")).toBeNull();
+        await page.setViewportSize({ height: 844, width: 390 });
+
+        const peopleControl = activityPage.locator(".activity-feed__people-control");
+        const timeButtonTops = await timeFilter
+          .locator(".settings-segmented__btn")
+          .evaluateAll((buttons) =>
+            buttons.map((button) => Math.round(button.getBoundingClientRect().top)),
+          );
+        expect(new Set(timeButtonTops)).toHaveLength(1);
+        await expect
+          .poll(async () => {
+            const [timeFilterBox, peopleControlBox] = await Promise.all([
+              timeFilter.boundingBox(),
+              peopleControl.boundingBox(),
+            ]);
+            if (!timeFilterBox || !peopleControlBox) {
+              return Number.POSITIVE_INFINITY;
+            }
+            return Math.abs(timeFilterBox.y - peopleControlBox.y);
+          })
+          .toBeLessThan(2);
+        const automationGroupChildTops = await automationGroup
+          .locator(":scope > *")
+          .evaluateAll((children) =>
+            children.map((child) => Math.round(child.getBoundingClientRect().top)),
+          );
+        expect(
+          Math.max(...automationGroupChildTops) - Math.min(...automationGroupChildTops),
+        ).toBeLessThan(3);
+        expect(
+          await activityFeed.evaluate((element) => {
+            const style = getComputedStyle(element);
+            return {
+              backgroundColor: style.backgroundColor,
+              borderTopWidth: style.borderTopWidth,
+            };
+          }),
+        ).toEqual({ backgroundColor: "rgba(0, 0, 0, 0)", borderTopWidth: "0px" });
+        await activityPage.locator(".activity-feed__people-trigger").click();
+        await activityPage.locator('[data-activity-person="profile-carol"]').click();
+        await expect
+          .poll(() => new URL(page.url()).searchParams.get("person"))
+          .toBe("profile-carol");
+        await expect.poll(() => activitySession(nightlyMaintenanceKey).count()).toBe(1);
+        await expect
+          .poll(() => activityFeed.locator('[data-activity-created-via="cron"]').count())
+          .toBe(2);
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(outputDir, "07-automation-creator-mobile.png"),
         });
       },
     );

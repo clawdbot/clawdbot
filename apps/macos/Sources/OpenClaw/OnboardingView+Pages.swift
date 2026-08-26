@@ -103,9 +103,7 @@ extension OnboardingView {
                         systemImage: "network",
                         selected: self.selectedConnectionMode == .remote)
                     {
-                        withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
-                            self.showRemoteChoices.toggle()
-                        }
+                        self.handleRemoteSelection()
                     }
 
                     if self.showRemoteChoices || self.selectedConnectionMode == .remote {
@@ -879,6 +877,7 @@ extension OnboardingView {
     private var installStepStateForInstall: InstallStepState {
         if self.cliInstalled { return .done }
         if self.installingCLI {
+            if self.cliInstallPhase == .choosingTarget { return .pending }
             return self.cliInstallPhase == .startingService ? .done : .running
         }
         if self.installFailed { return .failed }

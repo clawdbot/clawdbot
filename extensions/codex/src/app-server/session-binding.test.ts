@@ -76,6 +76,22 @@ describe("Codex app-server binding store", () => {
     });
   });
 
+  it("preserves the effective managed approval policy in persisted thread bindings", () => {
+    expect(
+      readCodexAppServerThreadBinding({
+        threadId: "thread-untrusted-policy",
+        cwd: "/repo",
+        approvalPolicy: "untrusted",
+        sandbox: "workspace-write",
+      }),
+    ).toEqual({
+      threadId: "thread-untrusted-policy",
+      cwd: "/repo",
+      approvalPolicy: "untrusted",
+      sandbox: "workspace-write",
+    });
+  });
+
   it("stores domain data under the canonical session identity", async () => {
     const { state, values } = createStateStore();
     const store = createCodexAppServerBindingStore(state);

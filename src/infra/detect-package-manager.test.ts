@@ -136,6 +136,42 @@ describe("detectPackageManager", () => {
     },
   );
 
+  it.each([
+    { name: "missing Bun install environment", installEnv: "missing", customGlobalDir: false },
+    {
+      name: "conflicting Bun install environment",
+      installEnv: "conflicting",
+      customGlobalDir: false,
+    },
+    {
+      name: "explicit custom Bun global directory",
+      installEnv: "conflicting",
+      customGlobalDir: true,
+    },
+  ] as const)(
+    "detects lockless Bun ownership with $name",
+    async ({ installEnv, customGlobalDir }) => {
+      await withTestDir({ prefix: "openclaw-detect-pm-bun-owner-" }, async (base) => {
+        const bunInstall = path.join(base, "owning-bun");
+        const globalProject = customGlobalDir
+          ? path.join(base, "custom-global-project")
+          : path.join(bunInstall, "install", "global");
+        const packageRoot = path.join(globalProject, "node_modules", "openclaw");
+        await writePublishedOpenClawRoot(packageRoot, { shrinkwrap: false });
+
+        await withEnvAsync(
+          {
+            BUN_INSTALL: installEnv === "missing" ? undefined : path.join(base, "unrelated-bun"),
+            BUN_INSTALL_GLOBAL_DIR: customGlobalDir ? globalProject : undefined,
+          },
+          async () => {
+            await expect(detectPackageManager(packageRoot)).resolves.toBe("bun");
+          },
+        );
+      });
+    },
+  );
+
   it("keeps pnpm 11 ownership through markerless global virtual-store symlinks", async () => {
     await withTestDir({ prefix: "openclaw-detect-pm-pnpm-global-store-" }, async (base) => {
       const globalRoot = path.join(base, "pnpm-home", "global", "v11");

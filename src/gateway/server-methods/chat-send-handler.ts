@@ -3,6 +3,7 @@ import { performance } from "node:perf_hooks";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { emitDiagnosticsTimelineEvent } from "../../infra/diagnostics-timeline.js";
+import type { SkillWorkshopProposalRevisionConstraint } from "../../skills/workshop/types.js";
 import { discardPreparedInboundMedia } from "../chat-attachments.js";
 import type { ChatRunTiming } from "../server-chat-state.js";
 import { terminalizeRestartSafeChatAdmission } from "./chat-restart-recovery.js";
@@ -25,11 +26,17 @@ import {
 import { createGatewayChatUserTurnController } from "./chat-user-turn-recorder.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
+type ChatSendInternalOptions = {
+  trustedSystemInput?: boolean;
+  toolsAllow?: string[];
+  skillWorkshopProposalRevision?: SkillWorkshopProposalRevisionConstraint;
+};
+
 async function handleChatSendWithOptions(
   { params, respond, context, client }: GatewayRequestHandlerOptions,
   onAdmissionOwned?: () => Promise<boolean>,
   externalAuthorityAdmission?: ChatSendExternalAuthorityAdmission,
-  options?: { trustedSystemInput?: boolean; toolsAllow?: string[] },
+  options?: ChatSendInternalOptions,
 ): Promise<void> {
   const setup = await prepareAndAdmitChatSend(
     { params, respond, context, client },
@@ -57,6 +64,7 @@ async function handleChatSendWithOptions(
     admittedSessionId,
     chatSendTraceAttributes,
     finishAbortedChatSend,
+    interruptedActiveRun,
     lifecycleGeneration,
     messageInjectionTarget,
     restartSafeAdmission,
@@ -243,6 +251,7 @@ async function handleChatSendWithOptions(
     const ackPayload = {
       runId: clientRunId,
       status: "started" as const,
+      ...(interruptedActiveRun ? { interruptedActiveRun: true } : {}),
       ...(serverTiming ? { serverTiming } : {}),
     };
     emitDiagnosticsTimelineEvent(
@@ -271,6 +280,7 @@ async function handleChatSendWithOptions(
       client,
       context,
       toolsAllow: options?.toolsAllow,
+      skillWorkshopProposalRevision: options?.skillWorkshopProposalRevision,
       cronCreatorAuthority,
       externalAuthorityAdmission,
       injection: {
@@ -315,6 +325,17 @@ export async function handleChatSendWithRuntimeTools(
   toolsAllow: string[],
 ): Promise<void> {
   await handleChatSendWithOptions(options, undefined, undefined, { toolsAllow });
+}
+
+/** Dispatches an operator-requested proposal revision with its reviewed revision bound to the run. */
+export async function handleChatSendWithSkillWorkshopProposalRevision(
+  options: GatewayRequestHandlerOptions,
+  proposalRevision: SkillWorkshopProposalRevisionConstraint,
+): Promise<void> {
+  await handleChatSendWithOptions(options, undefined, undefined, {
+    toolsAllow: ["skill_workshop"],
+    skillWorkshopProposalRevision: { ...proposalRevision },
+  });
 }
 
 /** Dispatches Gateway-authored system input without widening the public chat-send contract. */

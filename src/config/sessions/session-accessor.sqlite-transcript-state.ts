@@ -14,7 +14,6 @@ import {
   assertCanonicalSessionKeyWriteMatchesDatabase,
   canonicalSessionKeyMigrationRequiredError,
 } from "./session-canonical-key.js";
-import { deleteSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import {
   foldedSessionKeyAliasCandidates,
   normalizeStoreSessionKey,
@@ -290,7 +289,5 @@ export function deleteTranscriptEventsInTransaction(
     database.db,
     db.deleteFrom("transcript_events").where("session_id", "=", sessionId),
   );
-  // FTS rows have no FK onto transcript_events; clear them in this transaction.
-  deleteSessionTranscriptIndexInTransaction(database.db, sessionId);
   return (result.numAffectedRows ?? 0n) > 0n;
 }

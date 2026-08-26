@@ -120,6 +120,7 @@ const DEFAULT_CODEX_RUNTIME_THREAD_CONFIG = {
   "features.code_mode": true,
   "features.code_mode_only": false,
   "features.apply_patch_streaming_events": true,
+  suppress_unstable_features_warning: true,
   "features.standalone_web_search": false,
   web_search: "cached",
 } as const;
@@ -1285,7 +1286,14 @@ describe("Codex app-server thread lifecycle bindings", () => {
     const request = vi.fn(async (method: string, _requestParams?: unknown) => {
       if (method === "config/read") {
         return {
-          layers: [],
+          layers: [
+            {
+              name: {
+                type: "packagedDefaults",
+                file: "/managed/codex/defaults.toml",
+              },
+            },
+          ],
           config: {
             mcp_servers: {
               "arbitrary.server": { command: "ignored" },
@@ -3737,11 +3745,15 @@ describe("Codex app-server thread lifecycle bindings", () => {
       approvalsReviewer: "auto_review" as const,
     };
     const request = vi.fn(async (method: string) => {
+      if (method === "config/read") {
+        return { config: {}, origins: {} };
+      }
       if (method === "thread/start" || method === "thread/resume") {
         return threadStartResult("thread-plugins");
       }
       throw new Error(`unexpected method: ${method}`);
     });
+    const client = { request } as never;
     const basePolicyContext = createPluginAppPolicyContext();
     const pluginAppPolicyContext = {
       ...basePolicyContext,
@@ -3764,7 +3776,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     }));
 
     await startOrResumeThread({
-      client: { request } as never,
+      client,
       params,
       cwd: workspaceDir,
       dynamicTools: [],
@@ -3777,7 +3789,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       },
     });
     const binding = await startOrResumeThread({
-      client: { request } as never,
+      client,
       params,
       cwd: workspaceDir,
       dynamicTools: [],
@@ -3796,17 +3808,23 @@ describe("Codex app-server thread lifecycle bindings", () => {
     const requestCalls = request.mock.calls as unknown as Array<
       [string, { approvalsReviewer?: string; config?: unknown }]
     >;
-    expect(requestCalls.map(([method]) => method)).toEqual(["thread/start", "thread/resume"]);
-    expect(requestCalls.map(([, requestParams]) => requestParams.approvalsReviewer)).toEqual([
+    expect(requestCalls.map(([method]) => method)).toEqual([
+      "config/read",
+      "thread/start",
+      "config/read",
+      "thread/resume",
+    ]);
+    const threadRequests = requestCalls.filter(([method]) => method !== "config/read");
+    expect(threadRequests.map(([, requestParams]) => requestParams.approvalsReviewer)).toEqual([
       "auto_review",
       "auto_review",
     ]);
-    expect(requestCalls[0]?.[1].config).toEqual({
+    expect(threadRequests[0]?.[1].config).toEqual({
       "features.hooks": true,
       ...DEFAULT_CODEX_RUNTIME_THREAD_CONFIG,
       ...askApprovalConfigPatch,
     });
-    expect(requestCalls[1]?.[1].config).toEqual({
+    expect(threadRequests[1]?.[1].config).toEqual({
       "features.hooks": true,
       ...DEFAULT_CODEX_RUNTIME_THREAD_CONFIG,
       ...askApprovalConfigPatch,

@@ -13,6 +13,10 @@ import type { PollInput } from "../../polls.js";
 /** Delivery durability requested by core when a channel sends agent output. */
 export type MessageDurabilityPolicy = "required" | "best_effort" | "disabled";
 
+export type OutboundReplyFacts =
+  | Readonly<{ source: "explicit"; replyToId: string }>
+  | Readonly<{ source: "implicit"; replyToId: string; mode: "first" | "all" }>;
+
 /** Capability names a channel must advertise before core can rely on durable final delivery. */
 export const durableFinalDeliveryCapabilities = [
   "text",

@@ -305,8 +305,9 @@ describe("cron CLI with the real Gateway pagination contract", () => {
 
     await runCron(["list"]);
 
-    expect(mocks.runtime.log.mock.calls.some(([line]) => line.includes("Job 200"))).toBe(true);
-    expect(mocks.runtime.log).toHaveBeenCalledTimes(202);
+    const output = mocks.runtime.log.mock.calls.map(([line]) => String(line)).join("\n");
+    expect(output).toContain("Job 200");
+    expect(output.split("\n")).toHaveLength(202);
   });
 
   it("fails closed when every cron inventory snapshot changes", async () => {

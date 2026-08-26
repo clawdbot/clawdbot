@@ -1631,6 +1631,9 @@ ${command}
       const result = await runAssertionAsync(["clawhub-preflight"], {
         CLAWHUB_PLUGIN_ID: "openclaw-kitchen-sink-fixture",
         CLAWHUB_PLUGIN_SPEC: "clawhub:@openclaw/kitchen-sink",
+        NODE_OPTIONS: `--import=data:text/javascript,${encodeURIComponent(
+          "const response = await fetch(process.env.OPENCLAW_CLAWHUB_URL); globalThis.fetch = async () => response;",
+        )}`,
         OPENCLAW_CLAWHUB_URL: `http://127.0.0.1:${address.port}`,
         OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_TIMEOUT_MS: "75",
       });

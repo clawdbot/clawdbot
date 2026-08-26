@@ -3420,7 +3420,7 @@ describe("openclaw agent database", () => {
     ).toThrow(/UNIQUE constraint failed/iu);
   });
 
-  it("repairs every canonical agent-state named index", () => {
+  it("repairs every missing or drifted canonical agent-state named index", () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const databasePath = materializeCurrentWorkerAgentDatabase(stateDir);
@@ -3431,6 +3431,10 @@ describe("openclaw agent database", () => {
     const { DatabaseSync } = requireNodeSqlite();
     const drifted = new DatabaseSync(databasePath);
     try {
+      drifted.exec(`
+        DROP INDEX idx_agent_session_windows_session_key;
+        DROP INDEX idx_agent_transcript_event_identity_sequence;
+      `);
       expect(replaceNamedIndexesWithNoncanonicalIndexes(drifted).length).toBeGreaterThan(25);
       expect(drifted.prepare("PRAGMA integrity_check").get()).toEqual({
         integrity_check: "ok",
@@ -3444,6 +3448,7 @@ describe("openclaw agent database", () => {
     expect(normalizeSqliteSchemaShapeSql(collectSqliteSchemaShape(reopened.db))).toEqual(
       canonicalShape,
     );
+    expect(readSqliteNumberPragma(reopened.db, "user_version")).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
   });
 
   it("repairs physical ordinary-index drift before cold-open reads", () => {
@@ -3490,9 +3495,11 @@ describe("openclaw agent database", () => {
         DROP TRIGGER session_nodes_entry_valid_after_insert;
         DROP TRIGGER session_nodes_entry_valid_after_entry_update;
         DROP TRIGGER session_nodes_entry_valid_after_identity_update;
+        DROP TRIGGER session_conversations_route_context_invalidate_after_update;
         DROP INDEX idx_agent_session_nodes_entry_valid_pending;
         DROP TABLE session_key_contract;
         ALTER TABLE session_nodes DROP COLUMN entry_valid;
+        ALTER TABLE session_conversations DROP COLUMN route_context_json;
       `);
       expect(readSqliteNumberPragma(shippedSchema, "user_version")).toBe(
         OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -3515,6 +3522,13 @@ describe("openclaw agent database", () => {
     expect(
       repaired.db.prepare("SELECT main_key FROM session_key_contract WHERE id = 1").get(),
     ).toEqual({ main_key: "main" });
+    expect(
+      repaired.db
+        .prepare(
+          "SELECT name FROM pragma_table_info('session_conversations') WHERE name = 'route_context_json'",
+        )
+        .get(),
+    ).toEqual({ name: "route_context_json" });
   });
 
   it("installs same-version session additions before maintenance index repair", () => {

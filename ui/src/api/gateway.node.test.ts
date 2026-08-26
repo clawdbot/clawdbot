@@ -1,5 +1,5 @@
 /** @vitest-environment node */
-import { createHash } from "node:crypto";
+import { createHash, webcrypto } from "node:crypto";
 import {
   ConnectErrorDetailCodes,
   GATEWAY_CLIENT_CAPS,
@@ -94,6 +94,37 @@ function storeDeviceAuthToken(params: {
   return storeScopedDeviceAuthToken({ ...params, gatewayUrl: DEFAULT_GATEWAY_URL });
 }
 
+function storeDeviceIdentity(deviceId: string) {
+  localStorage.setItem(
+    "openclaw-device-identity-v1",
+    JSON.stringify({
+      version: 1,
+      deviceId,
+      publicKey: "AA",
+      privateKey: "AA",
+      createdAtMs: 1,
+    }),
+  );
+}
+
+function deferDeviceIdentityDigest() {
+  const digest = createDeferred<ArrayBuffer>();
+  const digestMock = vi.fn(() => digest.promise);
+  vi.stubGlobal("crypto", { subtle: { digest: digestMock } });
+  return { digest, digestMock };
+}
+
+function createDeviceTokenState(request: (method: string) => Promise<unknown>) {
+  const state = nodes.createInitialDevicesState({
+    client: {
+      request: request as <T = unknown>(method: string, params?: unknown) => Promise<T>,
+    },
+    connected: true,
+  });
+  state.requestGeneration = 1;
+  return state;
+}
+
 type HandlerMap = {
   close: MockWebSocketHandler[];
   error: MockWebSocketHandler[];
@@ -174,7 +205,7 @@ type ConnectFrame = {
   };
 };
 
-const REQUEST_FRAME_ID = "00000000-0000-4000-8000-000000000000";
+const REQUEST_FRAME_ID = "2:00000000-0000-4000-8000-000000000000";
 
 function requestFrameBytes(method: string, params?: unknown): number {
   const frame =
@@ -471,6 +502,7 @@ describe("GatewayBrowserClient", () => {
       GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
       GATEWAY_CLIENT_CAPS.INLINE_WIDGETS,
       GATEWAY_CLIENT_CAPS.UI_COMMANDS,
+      GATEWAY_CLIENT_CAPS.USAGE_REFRESHING,
     ]);
     expect(connectFrame.params?.scopes).toEqual([...CONTROL_UI_OPERATOR_SCOPES]);
   });
@@ -1648,7 +1680,7 @@ describe("GatewayBrowserClient", () => {
 
     const { connectFrame } = await startConnect(client);
 
-    expect(connectFrame.id).toBe("req-insecure");
+    expect(connectFrame.id).toBe("1:req-insecure");
     expect(connectFrame.method).toBe("connect");
     expect(connectFrame.params?.auth).toEqual({
       token: "shared-auth-token",
@@ -1668,7 +1700,7 @@ describe("GatewayBrowserClient", () => {
 
     const { connectFrame } = await startConnect(client);
 
-    expect(connectFrame.id).toBe("req-insecure");
+    expect(connectFrame.id).toBe("1:req-insecure");
     expect(connectFrame.method).toBe("connect");
     expect(connectFrame.params?.auth).toEqual({
       token: undefined,
@@ -1703,6 +1735,81 @@ describe("GatewayBrowserClient", () => {
       token: "stored-device-token",
       nonce: "nonce-1",
     });
+  });
+
+  it("selects the replacement token after a successful self rotation retires the page epoch", async () => {
+    localStorage.clear();
+    storeDeviceIdentity("00");
+    loadOrCreateDeviceIdentityMock.mockResolvedValue({
+      deviceId: "00",
+      privateKey: "private-key", // pragma: allowlist secret
+      publicKey: "public-key", // pragma: allowlist secret
+    });
+    const { digest, digestMock } = deferDeviceIdentityDigest();
+    const state = createDeviceTokenState(async () => ({
+      deviceId: "00",
+      role: "operator",
+      token: "replacement-device-token",
+      scopes: ["operator.read"],
+      rotatedAtMs: 1_800_000_000_000,
+      tokenDelivery: "in-band",
+    }));
+
+    const operation = nodes.rotateDeviceToken(state, {
+      deviceId: "00",
+      gatewayUrl: DEFAULT_GATEWAY_URL,
+      role: "operator",
+    });
+    await vi.waitFor(() => expect(digestMock).toHaveBeenCalledOnce());
+    state.requestGeneration += 1;
+    digest.resolve(new Uint8Array([0]).buffer);
+    await expect(operation).resolves.toEqual({
+      delivery: "in-band",
+      token: "replacement-device-token",
+    });
+
+    vi.stubGlobal("crypto", webcrypto);
+    const nextClient = new GatewayBrowserClient({ url: DEFAULT_GATEWAY_URL });
+    const { connectFrame } = await startConnect(nextClient);
+    expect(connectFrame.params?.auth).toMatchObject({
+      token: "replacement-device-token",
+      deviceToken: "replacement-device-token",
+    });
+    nextClient.stop();
+  });
+
+  it("selects no revoked token after a successful self revocation retires the page epoch", async () => {
+    localStorage.clear();
+    storeDeviceIdentity("00");
+    storeDeviceAuthToken({
+      deviceId: "00",
+      role: "operator",
+      token: "revoked-device-token",
+      scopes: ["operator.read"],
+    });
+    loadOrCreateDeviceIdentityMock.mockResolvedValue({
+      deviceId: "00",
+      privateKey: "private-key", // pragma: allowlist secret
+      publicKey: "public-key", // pragma: allowlist secret
+    });
+    const { digest, digestMock } = deferDeviceIdentityDigest();
+    const state = createDeviceTokenState(async () => ({}));
+
+    const operation = nodes.revokeDeviceToken(state, {
+      deviceId: "00",
+      gatewayUrl: DEFAULT_GATEWAY_URL,
+      role: "operator",
+    });
+    await vi.waitFor(() => expect(digestMock).toHaveBeenCalledOnce());
+    state.requestGeneration += 1;
+    digest.resolve(new Uint8Array([0]).buffer);
+    await operation;
+
+    vi.stubGlobal("crypto", webcrypto);
+    const nextClient = new GatewayBrowserClient({ url: DEFAULT_GATEWAY_URL });
+    const { connectFrame } = await startConnect(nextClient);
+    expect(connectFrame.params?.auth).toBeUndefined();
+    nextClient.stop();
   });
 
   it("uses a scoped device token when legacy cleanup fails", async () => {

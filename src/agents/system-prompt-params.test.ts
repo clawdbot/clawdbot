@@ -185,4 +185,70 @@ describe("buildSystemPromptParams", () => {
     expect(runtimeInfo.sessionKey).toBe("agent:main:main");
     expect(runtimeInfo.sessionId).toBe("23ae7fce-3c27-4a51-b58e-d800d8ca091f");
   });
+
+  it.each([
+    {
+      name: "an HTTPS public origin",
+      config: {
+        gateway: {
+          publicOrigin: "https://gateway.example",
+          controlUi: { basePath: "/control" },
+        },
+      },
+      expected:
+        "https://gateway.example/control/chat/main/dashboard/12345678-90ab-cdef-1234-567890abcdef",
+    },
+    {
+      name: "no public origin",
+      config: { gateway: {} },
+      expected: undefined,
+    },
+    {
+      name: "a disabled Control UI",
+      config: {
+        gateway: {
+          publicOrigin: "https://gateway.example",
+          controlUi: { enabled: false },
+        },
+      },
+      expected: undefined,
+    },
+    {
+      name: "an HTTP loopback origin",
+      config: { gateway: { publicOrigin: "http://127.0.0.1:18789" } },
+      expected: undefined,
+    },
+  ] as const)("publishes the current session URL with $name", ({ config, expected }) => {
+    const { runtimeInfo } = buildSystemPromptParams({
+      config,
+      agentId: "main",
+      runtime: {
+        sessionKey: "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef",
+        host: "host",
+        os: "os",
+        arch: "arch",
+        node: "node",
+        model: "model",
+      },
+    });
+
+    expect(runtimeInfo.sessionUrl).toBe(expected);
+  });
+
+  it("omits oversized current session URLs from model context", () => {
+    const { runtimeInfo } = buildSystemPromptParams({
+      config: { gateway: { publicOrigin: "https://gateway.example" } },
+      agentId: "main",
+      runtime: {
+        sessionKey: `agent:main:dashboard:${"a".repeat(512)}`,
+        host: "host",
+        os: "os",
+        arch: "arch",
+        node: "node",
+        model: "model",
+      },
+    });
+
+    expect(runtimeInfo.sessionUrl).toBeUndefined();
+  });
 });

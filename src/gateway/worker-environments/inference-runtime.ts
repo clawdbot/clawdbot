@@ -8,7 +8,6 @@ import type {
   WorkerInferenceTerminalOutcome,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import {
-  resolveAgentConfig,
   resolveAgentDir,
   resolveAgentEffectiveModelPrimary,
   resolveAgentWorkspaceDir,
@@ -74,6 +73,7 @@ import {
 } from "./inference-terminal-message.js";
 import { createWorkerToolCallStream } from "./inference-tool-call-stream.js";
 import { resolveWorkerSessionTarget, type ResolvedWorkerSessionTarget } from "./session-target.js";
+import { boundedWorkerError } from "./worker-error.js";
 
 type WorkerInferenceStreamEvent = WorkerInferenceEventParams["event"];
 export type WorkerInferenceExecutor = import("./inference.js").WorkerInferenceExecutor;
@@ -380,27 +380,16 @@ async function resolveApprovedModel(params: {
         manifestPlugins: manifestSnapshot.plugins,
         ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
       });
-      const agentModels = resolveAgentConfig(lifecycleConfig, target.agentId)?.models;
-      const aliasConfig = agentModels
-        ? {
-            ...lifecycleConfig,
-            agents: {
-              ...lifecycleConfig.agents,
-              defaults: {
-                ...lifecycleConfig.agents?.defaults,
-                models: { ...lifecycleConfig.agents?.defaults?.models, ...agentModels },
-              },
-            },
-          }
-        : lifecycleConfig;
       const aliasIndex = buildModelAliasIndex({
-        cfg: aliasConfig,
+        cfg: lifecycleConfig,
+        agentId: target.agentId,
         defaultProvider: defaultModel.provider,
         manifestPlugins: manifestSnapshot.plugins,
         ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
       });
       const resolved = resolveModelRefFromString({
-        cfg: aliasConfig,
+        cfg: lifecycleConfig,
+        agentId: target.agentId,
         raw: rawRef,
         defaultProvider: defaultModel.provider,
         aliasIndex,
@@ -508,6 +497,7 @@ async function resolveApprovedModel(params: {
         ...(selectedProfileId ? { preferredProfile: selectedProfileId } : {}),
         ...(selectedProfileId ? { bindAuthOwner: true } : {}),
         allowMissingApiKeyModes: ["aws-sdk"],
+        allowBundledStaticCatalogFallback: true,
         modelResolver: dependencies.resolveModel,
         preparedModelRuntime: runtimeSnapshot,
         workspaceDir,
@@ -570,7 +560,11 @@ export function createWorkerInferenceExecutor(
     return await withPluginRuntimeGenerationScope(approved.runtimeSnapshot, async () => {
       try {
         if ("error" in approved.prepared) {
-          return inferenceError("provider-error");
+          return inferenceError(
+            "provider-error",
+            undefined,
+            boundedWorkerError(approved.prepared.error, 256),
+          );
         }
         // Keep logical identity separate from transport endpoint encoding.
         const modelIdentity: WorkerInferenceModelIdentity = {

@@ -28,6 +28,7 @@ export type ExecToolDefaults = {
   hasCronTool?: boolean;
   host?: ExecTarget;
   mode?: ExecMode;
+  bypassHostApprovalFloors?: boolean;
   security?: ExecSecurity;
   ask?: ExecAsk;
   trigger?: string;
@@ -129,8 +130,20 @@ export type ExecElevatedDefaults = {
   fullAccessBlockedReason?: EmbeddedFullAccessBlockedReason;
 };
 
+/** One model-backed approval review recorded on an exec tool call. */
+export type ExecToolApprovalReview = {
+  id: string;
+  label: string;
+  status: "in_progress" | "approved" | "denied" | "timed_out" | "aborted";
+  riskLevel?: string;
+  rationale?: string;
+};
+
 /** Structured details returned by exec tool calls. */
-export type ExecToolDetails =
+export type ExecToolDetails = {
+  approvalReviews?: readonly ExecToolApprovalReview[];
+  approvalReviewOutcome?: "approved" | "denied" | "reviewing";
+} & (
   | {
       status: "running";
       sessionId: string;
@@ -185,4 +198,5 @@ export type ExecToolDetails =
       cwd?: string;
       nodeId?: string;
       warningText?: string;
-    };
+    }
+);

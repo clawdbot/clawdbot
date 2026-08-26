@@ -268,6 +268,7 @@ export function resolveSubagentSpawnModelSelection(params: {
     `${runtimeDefault.provider}/${runtimeDefault.model}`;
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
+    agentId: params.agentId,
     defaultProvider: runtimeDefault.provider,
   });
   return resolveModelThroughAliases(raw, aliasIndex);
@@ -298,6 +299,7 @@ export function resolveConfiguredSubagentSpawnModelSelection(params: {
     }).provider;
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
+    agentId: params.agentId,
     defaultProvider,
   });
   return resolveModelThroughAliases(raw, aliasIndex);

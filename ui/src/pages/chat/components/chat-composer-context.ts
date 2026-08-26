@@ -16,6 +16,7 @@ import {
   type QuotaBudgetSummary,
   type QuotaLimitSummary,
 } from "../../../lib/provider-quota-summary.ts";
+import { handleChatComposerDetailsToggle } from "./chat-picker-overlay.ts";
 
 const CONTEXT_NOTICE_RATIO = 0.85;
 const CONTEXT_COMPACT_RATIO = 0.9;
@@ -120,7 +121,6 @@ function getContextNoticeViewModel(
   input: number | null;
   output: number | null;
   cost: number | null;
-  provider: string | null;
   detail: string;
   color: string;
   bg: string;
@@ -154,7 +154,6 @@ function getContextNoticeViewModel(
     input,
     output,
     cost,
-    provider: session?.modelProvider?.trim() || null,
   };
   if (!warning) {
     return {
@@ -350,7 +349,7 @@ export function renderContextNotice(
         )
       : undefined;
   };
-  const currentGroup = findQuotaGroup(model?.provider) ?? findQuotaGroup(providerCosts?.provider);
+  const currentGroup = findQuotaGroup(session?.modelProvider?.trim() || providerCosts?.provider);
   const planGroups = currentGroup
     ? [currentGroup, ...quotaGroups.filter((group) => group !== currentGroup)]
     : quotaGroups;
@@ -386,7 +385,7 @@ export function renderContextNotice(
       class="context-usage"
       style=${model ? `--ctx-color:${model.color};--ctx-bg:${model.bg}` : ""}
     >
-      <details>
+      <details @toggle=${handleChatComposerDetailsToggle}>
         <summary
           class="context-ring ${model?.warning ? "context-ring--warning" : ""}"
           aria-label=${summary}

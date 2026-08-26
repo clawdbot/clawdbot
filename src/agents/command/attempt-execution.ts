@@ -22,6 +22,7 @@ import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-deliv
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import {
+  loadSessionEntry,
   persistSessionTranscriptTurn,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
@@ -67,7 +68,7 @@ import {
   resolveCliExecutionAuthProfileId,
 } from "../cli-execution-auth.js";
 import { runCliAgent } from "../cli-runner.js";
-import { hasClaudeSession } from "../cli-runner/claude-live-registry.js";
+import { hasCliLiveSession } from "../cli-runner/cli-live-session-registry.js";
 import { resolveCliRuntimeToolsAllow } from "../cli-runner/tool-policy.js";
 import {
   getCliSessionBinding,
@@ -83,6 +84,7 @@ import type { ContextEngineLogicalTurnLease } from "../harness/context-engine-lo
 import type { ContextEngineTurnAttemptFacts } from "../harness/context-engine-turn-attempt.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
 import { resolveAvailableAgentHarnessPolicy } from "../harness/selection.js";
+import { AGENT_LANE_SUBAGENT } from "../lanes.js";
 import { resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
 import { isCliProvider } from "../model-selection.js";
 import { resolveOpenAIRuntimeProvider } from "../openai-routing.js";
@@ -491,6 +493,7 @@ export function runAgentAttempt(params: {
   providerOverride: string;
   modelOverride: string;
   modelHasVision?: boolean;
+  modelThinkingCapability?: RunEmbeddedAgentInternalParams["modelThinkingCapability"];
   configuredAuthProfileId?: string;
   originalProvider: string;
   cfg: OpenClawConfig;
@@ -558,6 +561,7 @@ export function runAgentAttempt(params: {
           ? { id: sessionAuthProfileId, source: sessionAuthProfileSource }
           : undefined;
   const isRawModelRun = params.opts.modelRun === true || params.opts.promptMode === "none";
+  const isSubagentLane = params.opts.lane === AGENT_LANE_SUBAGENT;
   // A completion handoff relays frozen child output, so only a verified private
   // capability plus persisted requester lineage may restore its tool surface.
   const isSubagentAnnounceHandoff = isSubagentAnnounceCompletionHandoff({
@@ -843,7 +847,7 @@ export function runAgentAttempt(params: {
       const hasManagedClaudeLiveSession = Boolean(
         isClaudeCliProvider(cliExecutionProvider) &&
         cliSessionBinding?.sessionId &&
-        hasClaudeSession({
+        hasCliLiveSession({
           backendId: cliExecutionProvider,
           agentAccountId: params.runContext.accountId,
           agentId: params.sessionAgentId,
@@ -919,6 +923,7 @@ export function runAgentAttempt(params: {
             sessionTarget: params.sessionTarget,
             sessionEntry: params.sessionEntry,
             chatType: params.sessionEntry?.chatType,
+            contextWindow: params.sessionEntry?.contextWindow,
             agentId: params.sessionAgentId,
             trigger: "user",
             sessionFile: params.sessionFile,
@@ -1028,7 +1033,7 @@ export function runAgentAttempt(params: {
             onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
             suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
             disableTools,
-            allowEmptyAssistantReplyAsSilent: isSubagentAnnounceHandoff,
+            allowEmptyAssistantReplyAsSilent: isSubagentLane || isSubagentAnnounceHandoff,
             ...(forkStoreParams && !forkCliSessionOnResume
               ? {
                   onBeforeForkedCliSessionRetry: async (retry) => {
@@ -1058,7 +1063,18 @@ export function runAgentAttempt(params: {
               ? {
                   onBeforeFreshCliSessionRetry: async (retry) => {
                     if (
-                      hasNewGeneratedMediaTaskForSessionKey(params.sessionKey, mediaTaskIdsBefore)
+                      hasNewGeneratedMediaTaskForSessionKey(
+                        params.sessionKey,
+                        mediaTaskIdsBefore,
+                      ) ||
+                      getCliSessionBinding(
+                        loadSessionEntry({
+                          sessionKey: mutableCliSessionStore.sessionKey,
+                          storePath: mutableCliSessionStore.storePath,
+                          readConsistency: "latest",
+                        }),
+                        cliExecutionProvider,
+                      )?.sessionId !== retry.sessionId
                     ) {
                       return false;
                     }
@@ -1134,10 +1150,13 @@ export function runAgentAttempt(params: {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     chatType: params.sessionEntry?.chatType,
+    contextWindow: params.sessionEntry?.contextWindow,
     sessionTarget: params.sessionTarget,
     sandboxSessionKey: params.sessionKey,
     agentId: params.sessionAgentId,
     trigger: "user",
+    // Subagent lifecycle owns the stricter explicit visible/silent/empty evidence check.
+    terminalReplyExpectation: isSubagentLane ? "optional" : undefined,
     messageChannel: params.messageChannel,
     messageProvider: params.opts.messageProvider ?? params.messageChannel,
     agentAccountId: params.runContext.accountId,
@@ -1166,6 +1185,8 @@ export function runAgentAttempt(params: {
     agentHarnessId: embeddedAgentHarnessOverride,
     modelSelectionLocked: !isRawModelRun && params.sessionEntry?.modelSelectionLocked === true,
     agentHarnessRuntimeOverride: embeddedAgentHarnessOverride,
+    agentHarnessRuntimePreparationHint:
+      agentHarnessPolicy.runtimeSource !== "implicit" ? agentHarnessPolicy.runtime : undefined,
     skillsSnapshot: params.skillsSnapshot,
     prompt: embeddedModelPrompt,
     transcriptPrompt: embeddedPersistencePrompt,
@@ -1178,6 +1199,7 @@ export function runAgentAttempt(params: {
     provider: embeddedAgentProvider,
     model: params.modelOverride,
     modelHasVision: params.modelHasVision,
+    modelThinkingCapability: params.modelThinkingCapability,
     modelFallbacksOverride: params.modelFallbacksOverride,
     authProfileId,
     authProfileIdSource: authProfileId ? harnessAuthSelection.authProfileIdSource : undefined,
@@ -1227,7 +1249,7 @@ export function runAgentAttempt(params: {
     modelRun: params.opts.modelRun,
     promptMode: params.opts.promptMode,
     disableTools,
-    allowEmptyAssistantReplyAsSilent: isSubagentAnnounceHandoff,
+    allowEmptyAssistantReplyAsSilent: isSubagentLane || isSubagentAnnounceHandoff,
     onAgentEvent: params.onAgentEvent,
     deferTerminalLifecycle: params.deferTerminalLifecycle,
     suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,

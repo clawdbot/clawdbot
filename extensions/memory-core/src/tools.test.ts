@@ -2,6 +2,7 @@ import type { MemorySearchRuntimeDebug } from "openclaw/plugin-sdk/memory-core-h
 // Memory Core tests cover tools plugin behavior.
 import { clearMemoryPluginState } from "openclaw/plugin-sdk/memory-host-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MEMORY_GET_TOOL_CONTRACT, MEMORY_SEARCH_TOOL_CONTRACT } from "./memory-tool-contract.js";
 import {
   getMemoryCloseMockCalls,
   getMemorySearchManagerMockCalls,
@@ -11,6 +12,7 @@ import {
   resetMemoryToolMockState,
   setMemoryCloseImpl,
   setMemoryCustomStatus,
+  setMemoryPendingSyncSources,
   setMemorySearchImpl,
   setMemorySearchManagerImpl,
   setMemorySourceCounts,
@@ -18,11 +20,7 @@ import {
 } from "./memory-tool-manager.test-mocks.js";
 import { applyProjectRanking } from "./memory/project-ranking.js";
 import { createMemorySearchTool, testing as memoryToolsTesting } from "./tools.js";
-import {
-  buildMemorySearchUnavailableResult,
-  MemoryGetSchema,
-  MemorySearchSchema,
-} from "./tools.shared.js";
+import { buildMemorySearchUnavailableResult } from "./tools.shared.js";
 import {
   asOpenClawConfig,
   createMemorySearchToolOrThrow,
@@ -58,19 +56,14 @@ vi.mock("openclaw/plugin-sdk/session-transcript-hit", async (importOriginal) => 
 
 describe("memory tool schemas", () => {
   it("uses flat corpus enums for provider tool compatibility", () => {
-    const searchCorpus = MemorySearchSchema.properties.corpus as {
-      anyOf?: unknown;
-      enum?: unknown;
-    };
-    const getCorpus = MemoryGetSchema.properties.corpus as {
-      anyOf?: unknown;
-      enum?: unknown;
-    };
-
-    expect(searchCorpus.anyOf).toBeUndefined();
-    expect(searchCorpus.enum).toEqual(["memory", "wiki", "all", "sessions"]);
-    expect(getCorpus.anyOf).toBeUndefined();
-    expect(getCorpus.enum).toEqual(["memory", "wiki", "all"]);
+    expect(MEMORY_SEARCH_TOOL_CONTRACT.parameters.properties.corpus).toEqual({
+      type: "string",
+      enum: ["memory", "wiki", "all", "sessions"],
+    });
+    expect(MEMORY_GET_TOOL_CONTRACT.parameters.properties.corpus).toEqual({
+      type: "string",
+      enum: ["memory", "wiki", "all"],
+    });
   });
 });
 
@@ -560,6 +553,25 @@ describe("memory_search unavailable payloads", () => {
       action: "Run: openclaw memory status --index --agent main",
     });
     expect(getMemorySyncMockCalls()).toBe(0);
+  });
+
+  it("does not qualify results while session-only catch-up is in progress", async () => {
+    setMemoryStatusDirty(true);
+    setMemoryPendingSyncSources(["sessions"]);
+    setMemorySearchImpl(async () => []);
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { citations: "off" },
+      },
+    });
+
+    const result = await tool.execute("session-catch-up", { query: "hidden codeword" });
+
+    expect(result.details).toMatchObject({ results: [] });
+    expect(result.details).not.toHaveProperty("stale");
+    expect(result.details).not.toHaveProperty("warning");
+    expect(result.details).not.toHaveProperty("action");
   });
 
   it("surfaces embedding bootstrap degradation when keyword search has no hits", async () => {

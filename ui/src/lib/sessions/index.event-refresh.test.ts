@@ -36,7 +36,7 @@ function sessionChangedEvent(key: string): GatewayEventFrame {
   };
 }
 
-function createHarness(request: GatewayBrowserClient["request"]) {
+function createHarness(request: GatewayBrowserClient["request"], ownerId?: string) {
   const client = { request } as GatewayBrowserClient;
   let eventListener: ((event: GatewayEventFrame) => void) | undefined;
   const sessions = createSessionCapability({
@@ -46,6 +46,7 @@ function createHarness(request: GatewayBrowserClient["request"]) {
       sessionKey: "agent:main:main",
       assistantAgentId: "main",
       hello: null,
+      selfUser: ownerId ? { id: ownerId } : null,
     },
     subscribe: () => () => undefined,
     subscribeEvents(listener) {
@@ -84,6 +85,55 @@ function installPageLifecycle() {
 }
 
 describe("event-driven session list refresh", () => {
+  it("does not admit an active message for a session absent from the canonical roster", async () => {
+    const visibleKey = "agent:main:visible";
+    const unrelatedKey = "agent:main:unrelated";
+    const request = vi.fn(async (method: string): Promise<SessionsListResult> => {
+      if (method !== "sessions.list") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      const visible = {
+        key: visibleKey,
+        kind: "direct" as const,
+        updatedAt: 1,
+        owner: { actor: { type: "human" as const, id: "profile-self" } },
+      };
+      return sessionsResult(1, [visible]);
+    });
+    const { sessions, emitEvent } = createHarness(
+      request as unknown as GatewayBrowserClient["request"],
+    );
+
+    try {
+      await sessions.refresh({ agentId: "main", force: true });
+      expect(sessions.state.result?.sessions.map((row) => row.key)).toEqual([visibleKey]);
+
+      const event = {
+        type: "event",
+        event: "session.message",
+        payload: {
+          sessionKey: unrelatedKey,
+          key: unrelatedKey,
+          kind: "direct",
+          updatedAt: 2,
+          archived: false,
+          hasActiveRun: true,
+          status: "running",
+          owner: { actor: { type: "human", id: "profile-other" } },
+          participants: [],
+          participantCount: 0,
+        },
+      } as const satisfies GatewayEventFrame;
+      emitEvent(event);
+      // Chat consumes the same event after the capability-level subscriber.
+      sessions.reconcileChanged(event.payload);
+
+      expect(sessions.state.result?.sessions.map((row) => row.key)).toEqual([visibleKey]);
+    } finally {
+      sessions.dispose();
+    }
+  });
+
   it("refreshes exact managed queries by agent and retains appended dashboard windows", async () => {
     vi.useFakeTimers();
     const dashboardRows = Array.from({ length: 4 }, (_, index) => ({
@@ -245,12 +295,27 @@ describe("event-driven session list refresh", () => {
       emitEvent({
         type: "event",
         event: "session.message",
-        payload: { sessionKey: key, updatedAt: 1, status: "done" },
+        payload: {
+          sessionKey: key,
+          hasActiveRun: false,
+          status: "done",
+          session: {
+            key,
+            kind: "direct",
+            updatedAt: 2,
+            hasActiveRun: false,
+            status: "done",
+          },
+        },
       });
       await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
 
-      expect(request).toHaveBeenCalledTimes(2);
-      expect(calls).toEqual({ canonical: 2, main: 2, research: 1 });
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(request).toHaveBeenCalledWith(
+        "sessions.list",
+        expect.objectContaining({ agentId: "main", includeUnknown: false }),
+      );
+      expect(calls).toEqual({ canonical: 1, main: 2, research: 1 });
       expect(sessions.state.result?.sessions[0]).toMatchObject({
         key,
         hasActiveRun: false,
@@ -268,6 +333,212 @@ describe("event-driven session list refresh", () => {
       vi.useRealTimers();
     }
   });
+
+  it("refreshes the configured-only roster for a terminal snapshot outside its last list", async () => {
+    vi.useFakeTimers();
+    const mainRow = { key: "agent:main:main", kind: "direct" as const, updatedAt: 1 };
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      return sessionsResult(1, [mainRow]);
+    });
+    const { sessions, emitEvent } = createHarness(
+      request as unknown as GatewayBrowserClient["request"],
+    );
+
+    try {
+      await sessions.refresh({ force: true });
+      expect(request).toHaveBeenCalledWith(
+        "sessions.list",
+        expect.objectContaining({ configuredAgentsOnly: true }),
+      );
+      request.mockClear();
+
+      emitEvent({
+        type: "event",
+        event: "session.message",
+        payload: {
+          agentId: "local",
+          sessionKey: "agent:local:main",
+          hasActiveRun: false,
+          status: "done",
+          session: {
+            key: "agent:local:main",
+            kind: "direct",
+            updatedAt: 2,
+            archived: false,
+            hasActiveRun: false,
+            status: "done",
+          },
+        },
+      });
+
+      expect(sessions.state.result?.sessions).toEqual([mainRow]);
+      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+
+      expect(request).toHaveBeenCalledExactlyOnceWith(
+        "sessions.list",
+        expect.objectContaining({ configuredAgentsOnly: true }),
+      );
+      expect(sessions.state.result?.sessions).toEqual([mainRow]);
+    } finally {
+      sessions.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps an archived terminal session until the Gateway replaces the active roster", async () => {
+    vi.useFakeTimers();
+    const mainRow = { key: "agent:main:main", kind: "direct" as const, updatedAt: 1 };
+    const fallbackRow = { key: "agent:main:fallback", kind: "direct" as const, updatedAt: 2 };
+    let listCalls = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      listCalls += 1;
+      return sessionsResult(listCalls, listCalls === 1 ? [mainRow] : [fallbackRow]);
+    });
+    const { sessions, emitEvent } = createHarness(
+      request as unknown as GatewayBrowserClient["request"],
+    );
+
+    try {
+      await sessions.refresh({ force: true });
+      request.mockClear();
+      const visibleRosters: SessionsListResult["sessions"][] = [];
+      let previousRoster = sessions.state.result?.sessions;
+      const unsubscribe = sessions.subscribe((next) => {
+        if (next.result?.sessions !== previousRoster) {
+          previousRoster = next.result?.sessions;
+          visibleRosters.push(next.result?.sessions ?? []);
+        }
+      });
+
+      emitEvent({
+        type: "event",
+        event: "session.message",
+        payload: {
+          sessionKey: mainRow.key,
+          hasActiveRun: false,
+          status: "done",
+          session: {
+            ...mainRow,
+            updatedAt: 3,
+            archived: true,
+            hasActiveRun: false,
+            status: "done",
+          },
+        },
+      });
+
+      expect(sessions.state.result?.sessions).toEqual([mainRow]);
+      expect(visibleRosters).toEqual([]);
+      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+
+      expect(request).toHaveBeenCalledExactlyOnceWith(
+        "sessions.list",
+        expect.objectContaining({ configuredAgentsOnly: true }),
+      );
+      expect(visibleRosters).toEqual([[fallbackRow]]);
+      expect(sessions.state.result?.sessions).toEqual([fallbackRow]);
+      unsubscribe();
+    } finally {
+      sessions.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    {
+      filter: "ownerId",
+      query: { ownerId: "profile-ada" },
+      applyFilter: (sessions: ReturnType<typeof createSessionCapability>) =>
+        sessions.setOwnerFilter("profile-ada"),
+    },
+    {
+      filter: "involvingMe",
+      query: { involvingMe: true },
+      applyFilter: (sessions: ReturnType<typeof createSessionCapability>) =>
+        sessions.setInvolvingMeFilter(true),
+    },
+    {
+      filter: "search",
+      query: { search: "Ada" },
+      applyFilter: (sessions: ReturnType<typeof createSessionCapability>) =>
+        sessions.refresh({ agentId: "main", search: "Ada", force: true }),
+    },
+  ])(
+    "refreshes the $filter-filtered primary roster after a terminal session message",
+    async ({ applyFilter, query }) => {
+      vi.useFakeTimers();
+      const key = "agent:main:main";
+      let matchesFilteredRoster = true;
+      const row = {
+        key,
+        kind: "direct" as const,
+        updatedAt: 1,
+        hasActiveRun: true,
+        status: "running" as const,
+        label: "Ada",
+        owner: { actor: { type: "human" as const, id: "profile-ada", label: "Ada" } },
+      };
+      const request = vi.fn(
+        async (
+          method: string,
+          params?: { ownerId?: string; involvingMe?: boolean; search?: string },
+        ) => {
+          if (method !== "sessions.list") {
+            throw new Error(`Unexpected request: ${method}`);
+          }
+          const filtered = Boolean(params?.ownerId || params?.involvingMe || params?.search);
+          return sessionsResult(
+            matchesFilteredRoster ? 1 : 2,
+            filtered && !matchesFilteredRoster ? [] : [row],
+          );
+        },
+      );
+      const { sessions, emitEvent } = createHarness(
+        request as unknown as GatewayBrowserClient["request"],
+      );
+
+      try {
+        await sessions.refresh({ agentId: "main", force: true });
+        await applyFilter(sessions);
+        expect(sessions.state.result?.sessions.map((session) => session.key)).toEqual([key]);
+        request.mockClear();
+        matchesFilteredRoster = false;
+
+        emitEvent({
+          type: "event",
+          event: "session.message",
+          payload: {
+            sessionKey: key,
+            hasActiveRun: false,
+            status: "done",
+            session: {
+              ...row,
+              updatedAt: 2,
+              hasActiveRun: false,
+              status: "done",
+              label: "Bob",
+              owner: { actor: { type: "human", id: "profile-bob", label: "Bob" } },
+            },
+          },
+        });
+        expect(sessions.state.result?.sessions).toEqual([row]);
+        await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+
+        expect(request).toHaveBeenCalledTimes(1);
+        expect(request).toHaveBeenCalledWith("sessions.list", expect.objectContaining(query));
+        expect(sessions.state.result?.sessions).toEqual([]);
+      } finally {
+        sessions.dispose();
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("retains every loaded page when a session event replaces the canonical list", async () => {
     vi.useFakeTimers();

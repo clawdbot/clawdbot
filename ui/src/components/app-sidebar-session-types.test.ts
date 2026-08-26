@@ -6,9 +6,11 @@ import {
   loadStoredHiddenSessionCatalogIds,
   loadStoredSidebarSessionSortMode,
   loadStoredSidebarSessionStatusFilter,
+  loadStoredSidebarSessionsShowPreview,
   setStoredSessionCatalogHidden,
   storeSidebarSessionSortMode,
   storeSidebarSessionStatusFilter,
+  storeSidebarSessionsShowPreview,
 } from "./app-sidebar-session-types.ts";
 
 // getSafeLocalStorage only accepts an own value property under Vitest, so the
@@ -83,6 +85,18 @@ describe("sidebar session sort preference", () => {
 describe("collapsed sidebar sections preference", () => {
   it("defaults Coding to compact while Online remains expanded", () => {
     expect([...loadStoredCollapsedSessionSections()]).toEqual(["work"]);
+  });
+});
+
+describe("sidebar session preview preference", () => {
+  it("defaults to showing previews and round-trips the stored choice", () => {
+    expect(loadStoredSidebarSessionsShowPreview()).toBe(true);
+
+    storeSidebarSessionsShowPreview(false);
+    expect(loadStoredSidebarSessionsShowPreview()).toBe(false);
+
+    storeSidebarSessionsShowPreview(true);
+    expect(loadStoredSidebarSessionsShowPreview()).toBe(true);
   });
 });
 

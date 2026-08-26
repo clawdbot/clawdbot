@@ -234,20 +234,17 @@ export function resolveNodePairingGeneration(
   return { nodeId: device.deviceId, key };
 }
 
-/** Clear node-surface cache state when its owning pairing generation changes. */
-export function clearNodePairingGenerationBins(
+/** Clear node runtime facts when their owning pairing generation changes. */
+export function clearNodePairingGenerationState(
   device: PairedDevice,
   previousGeneration: NodePairingGeneration | null,
 ): void {
   const nextGeneration = resolveNodePairingGeneration(device);
-  if (
-    previousGeneration?.key === nextGeneration?.key ||
-    !device.nodeSurface ||
-    device.nodeSurface.bins === undefined
-  ) {
+  if (previousGeneration?.key === nextGeneration?.key || !device.nodeSurface) {
     return;
   }
   delete device.nodeSurface.bins;
+  delete device.nodeSurface.sessionHost;
 }
 
 /** Resolve connection identity and optional approved surface generation from one row. */

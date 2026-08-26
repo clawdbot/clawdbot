@@ -60,7 +60,13 @@ export function recordSessionParticipant(
         database.db,
         kysely
           .selectFrom("session_participants")
-          .select(["actor_id", "actor_source", "last_prompted_at"])
+          .select([
+            "actor_id",
+            "actor_source",
+            "contribution_count",
+            "first_prompted_at",
+            "last_prompted_at",
+          ])
           .where("session_key", "=", resolved.sessionKey)
           .where("actor_type", "=", params.actor.type)
           .where("actor_id", "=", actorId),
@@ -77,6 +83,8 @@ export function recordSessionParticipant(
           return "capped";
         }
       }
+      const profileContribution = params.actor.type === "human" && params.source === "profile";
+      const existingProfile = existing?.actor_source === "profile";
       executeSqliteQuerySync(
         database.db,
         kysely
@@ -86,12 +94,24 @@ export function recordSessionParticipant(
             actor_type: params.actor.type,
             actor_id: actorId,
             actor_source: params.source,
+            contribution_count: profileContribution ? 1 : null,
             first_prompted_at: promptedAt,
             last_prompted_at: promptedAt,
           })
           .onConflict((conflict) =>
             conflict.columns(["session_key", "actor_type", "actor_id"]).doUpdateSet({
               actor_source: mergeSessionParticipantSource(existing?.actor_source, params.source),
+              contribution_count: profileContribution
+                ? existingProfile
+                  ? (existing.contribution_count ?? 1) + 1
+                  : 1
+                : (existing?.contribution_count ?? null),
+              first_prompted_at:
+                profileContribution && !existingProfile
+                  ? promptedAt
+                  : existingProfile && !profileContribution
+                    ? existing.first_prompted_at
+                    : Math.min(existing?.first_prompted_at ?? promptedAt, promptedAt),
               last_prompted_at: Math.max(existing?.last_prompted_at ?? promptedAt, promptedAt),
             }),
           ),

@@ -62,8 +62,22 @@ export function createOperationRegistrars(state: PluginRegistryState) {
 
   const registerWidgetPresenter = (record: PluginRecord, presenter: WidgetPresenter) => {
     const description = normalizeOptionalString(presenter.description);
+    const currentCapabilities =
+      presenter.target === "current_channel" ? presenter.capabilities : undefined;
+    const currentChannelValid =
+      presenter.target === "current_channel" &&
+      typeof presenter.match === "function" &&
+      currentCapabilities !== undefined &&
+      Array.isArray(currentCapabilities.sourceKinds) &&
+      currentCapabilities.sourceKinds.length > 0 &&
+      currentCapabilities.sourceKinds.every(
+        (kind) => typeof kind === "string" && kind.trim().length > 0,
+      ) &&
+      (currentCapabilities.maxSourceBytes === undefined ||
+        (Number.isInteger(currentCapabilities.maxSourceBytes) &&
+          currentCapabilities.maxSourceBytes > 0));
     if (
-      presenter.target !== "node_panel" ||
+      (presenter.target !== "node_panel" && !currentChannelValid) ||
       !description ||
       description.length > 160 ||
       typeof presenter.availability !== "function" ||
@@ -77,9 +91,12 @@ export function createOperationRegistrars(state: PluginRegistryState) {
       });
       return;
     }
-    const existing = registry.widgetPresenters.find(
-      (registration) => registration.presenter.target === presenter.target,
-    );
+    const existing =
+      presenter.target === "current_channel"
+        ? undefined
+        : registry.widgetPresenters.find(
+            (registration) => registration.presenter.target === presenter.target,
+          );
     if (existing) {
       pushDiagnostic({
         level: "error",
@@ -349,23 +366,35 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     });
   };
 
-  const registerService = (record: PluginRecord, service: OpenClawPluginService) => {
+  const resolveServiceRegistrationId = (
+    record: PluginRecord,
+    service: { id: string },
+    kind: "service" | "gateway discovery service",
+  ) => {
     const id = service.id.trim();
-    if (!id) {
-      return;
+    const registrations =
+      kind === "service" ? registry.services : registry.gatewayDiscoveryServices;
+    const existing = id ? registrations.find((entry) => entry.service.id.trim() === id) : undefined;
+    if (id && !existing) {
+      return id;
     }
-    const existing = registry.services.find((entry) => entry.service.id === id);
-    if (existing) {
-      // Snapshot and activating loads can both register the same owner; keep the first.
-      if (existing.pluginId === record.id) {
-        return;
-      }
+    // Snapshot and activating loads can both register the same owner; keep the first.
+    if (existing?.pluginId !== record.id) {
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
         source: record.source,
-        message: `service already registered: ${id} (${existing.pluginId})`,
+        message: existing
+          ? `${kind} already registered: ${id} (${existing.pluginId})`
+          : `${kind} registration missing id`,
       });
+    }
+    return undefined;
+  };
+
+  const registerService = (record: PluginRecord, service: OpenClawPluginService) => {
+    const id = resolveServiceRegistrationId(record, service, "service");
+    if (!id) {
       return;
     }
     record.services.push(id);
@@ -384,21 +413,8 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     record: PluginRecord,
     service: OpenClawGatewayDiscoveryService,
   ) => {
-    const id = service.id.trim();
+    const id = resolveServiceRegistrationId(record, service, "gateway discovery service");
     if (!id) {
-      return;
-    }
-    const existing = registry.gatewayDiscoveryServices.find((entry) => entry.service.id === id);
-    if (existing) {
-      if (existing.pluginId === record.id) {
-        return;
-      }
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `gateway discovery service already registered: ${id} (${existing.pluginId})`,
-      });
       return;
     }
     record.gatewayDiscoveryServiceIds.push(id);

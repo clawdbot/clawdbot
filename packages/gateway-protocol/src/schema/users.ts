@@ -7,9 +7,11 @@ import { NonEmptyString } from "./primitives.js";
 export const USER_PREFS_ENTRY_LIMIT = 32;
 export const USER_PREFS_PROFILE_KEY_LIMIT = 128;
 export const USER_PREFS_VALUE_BYTES = 4 * 1024;
+export const GIT_COAUTHOR_PREFERENCE_KEY = "git.coauthor.enabled";
 
 const UserProfileIdSchema = Type.String({ minLength: 1, maxLength: 128 });
 const UserProfileDisplayNameSchema = Type.String({ maxLength: 256 });
+const UserProfileRoleSchema = Type.String({ minLength: 1, maxLength: 128, pattern: "\\S" });
 const UserPreferenceKeySchema = Type.String({ pattern: "^.{1,256}$" });
 const UserPreferenceEntriesSchema = Type.Record(UserPreferenceKeySchema, Type.Unknown());
 const UserPreferenceSetEntriesSchema = Type.Record(UserPreferenceKeySchema, Type.Unknown(), {
@@ -36,6 +38,7 @@ export const UserProfileSchema = closedObject({
   emails: Type.Array(NonEmptyString),
   githubIdentity: Type.Union([UserProfileGitHubIdentitySchema, Type.Null()]),
   hasAvatar: Type.Boolean(),
+  role: Type.Optional(UserProfileRoleSchema),
 });
 
 export const UsersListParamsSchema = closedObject({});
@@ -56,6 +59,12 @@ export const UsersSetDisplayNameParamsSchema = closedObject({
 });
 export const UsersSetDisplayNameResultSchema = closedObject({ profile: UserProfileSchema });
 
+export const UsersSetRoleParamsSchema = closedObject({
+  profileId: UserProfileIdSchema,
+  role: Type.Union([UserProfileRoleSchema, Type.Null()]),
+});
+export const UsersSetRoleResultSchema = closedObject({ profile: UserProfileSchema });
+
 export const UsersSetAvatarParamsSchema = closedObject({
   profileId: UserProfileIdSchema,
   mime: UserProfileAvatarMimeSchema,
@@ -65,13 +74,6 @@ export const UsersSetAvatarResultSchema = closedObject({
   profile: UserProfileSchema,
   avatarRevision: NonEmptyString,
 });
-
-export const UsersSetGitHubIdentityParamsSchema = closedObject({
-  username: Type.String({ minLength: 1, maxLength: 39 }),
-});
-export const UsersSetGitHubIdentityResultSchema = closedObject({ profile: UserProfileSchema });
-export const UsersClearGitHubIdentityParamsSchema = closedObject({});
-export const UsersClearGitHubIdentityResultSchema = closedObject({ profile: UserProfileSchema });
 
 export const UsersPrefsGetParamsSchema = closedObject({
   keys: Type.Optional(
@@ -101,12 +103,10 @@ export type UsersLinkEmailParams = Static<typeof UsersLinkEmailParamsSchema>;
 export type UsersLinkEmailResult = Static<typeof UsersLinkEmailResultSchema>;
 export type UsersSetDisplayNameParams = Static<typeof UsersSetDisplayNameParamsSchema>;
 export type UsersSetDisplayNameResult = Static<typeof UsersSetDisplayNameResultSchema>;
+export type UsersSetRoleParams = Static<typeof UsersSetRoleParamsSchema>;
+export type UsersSetRoleResult = Static<typeof UsersSetRoleResultSchema>;
 export type UsersSetAvatarParams = Static<typeof UsersSetAvatarParamsSchema>;
 export type UsersSetAvatarResult = Static<typeof UsersSetAvatarResultSchema>;
-export type UsersSetGitHubIdentityParams = Static<typeof UsersSetGitHubIdentityParamsSchema>;
-export type UsersSetGitHubIdentityResult = Static<typeof UsersSetGitHubIdentityResultSchema>;
-export type UsersClearGitHubIdentityParams = Static<typeof UsersClearGitHubIdentityParamsSchema>;
-export type UsersClearGitHubIdentityResult = Static<typeof UsersClearGitHubIdentityResultSchema>;
 export type UsersPrefsGetParams = Static<typeof UsersPrefsGetParamsSchema>;
 export type UsersPrefsGetResult = Static<typeof UsersPrefsGetResultSchema>;
 export type UsersPrefsSetParams = Static<typeof UsersPrefsSetParamsSchema>;

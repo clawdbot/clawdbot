@@ -69,10 +69,10 @@ export const terminalPanelStyles = css`
     max-height: min(420px, var(--tp-session-menu-max-height));
     overflow-y: auto;
     padding: var(--menu-padding);
-    border: 1px solid var(--border-strong);
+    border: 1px solid var(--overlay-border);
     border-radius: var(--menu-radius);
     background: var(--bg-elevated);
-    box-shadow: var(--shadow-md);
+    box-shadow: var(--overlay-shadow);
   }
   .tp-session-menu__header {
     display: flex;

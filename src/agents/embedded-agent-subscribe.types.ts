@@ -113,6 +113,7 @@ export type SubscribeEmbeddedAgentSessionParams = {
   currentChannelId?: string;
   /** Routable target for the current conversation when it differs from the native channel ID. */
   currentMessagingTarget?: string;
+  currentAccountId?: string;
   /** Current transport thread resolved for this run. */
   currentThreadId?: string;
   /** Current inbound message id used to distinguish child replies from explicit roots. */
@@ -129,6 +130,8 @@ export type SubscribeEmbeddedAgentSessionParams = {
    * Exact raw names of OpenClaw tools registered for this run.
    */
   builtinToolNames?: ReadonlySet<string>;
+  /** Exact raw names of core-owned tools registered for this run. */
+  coreBuiltinToolNames?: ReadonlySet<string>;
   /** Exact registered tool names whose concrete instances are safe to replay. */
   replaySafeToolNames?: ReadonlySet<string>;
   /** Canonical owner keys for unique plugin tools that can change durable state. */

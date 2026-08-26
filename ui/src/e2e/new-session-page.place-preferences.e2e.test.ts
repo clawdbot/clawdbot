@@ -21,6 +21,61 @@ const REGISTERED_PROJECT = {
 };
 
 suite.define(() => {
+  it("ignores a restored cloud preference for a write-scoped caller", async () => {
+    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const appUrl = new URL(suite.server.baseUrl);
+    const gatewayUrl = `${appUrl.protocol === "https:" ? "wss:" : "ws:"}//${appUrl.host}`;
+    const storageKey = `openclaw.new-session.preferences.v1:${gatewayOriginScope(gatewayUrl)}`;
+    await page.addInitScript(
+      ({ key, workspace }) => {
+        localStorage.setItem(
+          key,
+          JSON.stringify({
+            agents: {
+              main: { workspace, folder: workspace, where: { kind: "cloud", id: "aws" } },
+            },
+          }),
+        );
+      },
+      { key: storageKey, workspace: WORKSPACE },
+    );
+    const gateway = await installMockGateway(page, {
+      workspace: WORKSPACE,
+      workspaceGit: true,
+      operatorScopes: ["operator.read", "operator.write"],
+      methodResponses: {
+        "environments.list": {
+          environments: [
+            {
+              id: "node:writer-runner",
+              type: "node",
+              label: "Writer runner",
+              status: "available",
+              sessionHost: true,
+              workerSlots: { total: 1, available: 1 },
+            },
+          ],
+          profiles: [{ id: "aws", providerId: "crabbox" }],
+        },
+        "worktrees.branches": GIT_BRANCHES,
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}new`);
+      await gateway.waitForRequest("environments.list");
+      const where = page.locator("#new-session-where-trigger");
+      await expect.poll(() => where.getAttribute("data-cloud-profile")).toBeNull();
+      await where.click();
+      const picker = page.locator("wa-popover.new-session-page__where-popover");
+      await picker.locator('[data-value="device:writer-runner"]').waitFor();
+      expect(await picker.locator('[data-value="cloud:aws"]').count()).toBe(0);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("restores three-chip defaults from local storage without a durable identity", async () => {
     const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
     const page = await context.newPage();
@@ -86,7 +141,6 @@ suite.define(() => {
         "chat.metadata",
         "chat.startup",
         "environments.list",
-        "node.list",
         "projects.list",
         "sessions.create",
         "users.prefs.get",
@@ -98,7 +152,6 @@ suite.define(() => {
           environments: [{ id: "gateway", type: "local", status: "available" }],
           profiles: [{ id: "aws", providerId: "crabbox" }],
         },
-        "node.list": { nodes: [] },
         "projects.list": { projects: [REGISTERED_PROJECT], recents: [] },
         "users.prefs.get": {
           status: "ok",

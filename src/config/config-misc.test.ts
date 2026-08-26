@@ -518,6 +518,18 @@ describe("ui.seamColor", () => {
   });
 });
 
+describe("ui.prefs.accent", () => {
+  it.each([
+    ["lowercase hex", "#ff5c5c", true],
+    ["uppercase hex", "#AbCdEf", true],
+    ["missing hash", "ff5c5c", false],
+    ["invalid hex", "#gggggg", false],
+    ["invalid length", "#ff5c5c00", false],
+  ])("validates %s", (_label, accent, valid) => {
+    expect(validateConfigObject({ ui: { prefs: { accent } } }).ok).toBe(valid);
+  });
+});
+
 describe("ui.prefs.sidebarEntries", () => {
   it("accepts the route and session entries synchronized by the Control UI", () => {
     const result = validateConfigObject({
@@ -567,6 +579,42 @@ describe("gateway.controlUi.embedSandbox", () => {
       },
     });
     expect(result.success).toBe(false);
+  });
+});
+
+describe("gateway.controlUi.environment", () => {
+  it("accepts named environment colors and trims the label", () => {
+    for (const color of [
+      "teal",
+      "amber",
+      "purple",
+      "coral",
+      "pink",
+      "blue",
+      "green",
+      "red",
+      "gray",
+    ]) {
+      const result = OpenClawSchema.safeParse({
+        gateway: { controlUi: { environment: { label: " edge ", color } } },
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.gateway?.controlUi?.environment?.label).toBe("edge");
+      }
+    }
+  });
+
+  it.each([
+    { label: "edge", color: "orange" },
+    { label: " ", color: "amber" },
+    { label: "a".repeat(25), color: "amber" },
+    { label: "edge" },
+    { color: "amber" },
+  ])("rejects invalid environment configuration %#", (environment) => {
+    expect(OpenClawSchema.safeParse({ gateway: { controlUi: { environment } } }).success).toBe(
+      false,
+    );
   });
 });
 

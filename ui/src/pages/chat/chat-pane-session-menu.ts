@@ -113,9 +113,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       };
       switch (action.kind) {
         case "assign-owner":
-          await scope.sessions.assignOwner(row.key, action.owner, {
-            agentId: parseAgentSessionKey(row.key)?.agentId ?? scope.selectedAgentId,
-          });
+          await operations.assignSessionOwner(host, session, action.owner, scope);
           break;
         case "fork":
           await operations.forkSession(host, session, scope);
@@ -250,11 +248,16 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       return;
     }
     const customLabel = normalizeOptionalString(row.label) ?? null;
+    const generatedTitle = parseAgentSessionKey(row.key)?.rest.startsWith("dashboard:")
+      ? (normalizeOptionalString(row.displayName) ??
+        (row.worktree ? undefined : normalizeOptionalString(row.derivedTitle)))
+      : undefined;
     this.headerRenameSessionKey = row.key;
     this.headerRenameInitialLabel = customLabel;
-    // Editable session names come only from persisted user data. Seeding from
-    // paneTitle would let display decoration become the next stored label.
-    this.headerRenameValue = customLabel ?? "";
+    // Dashboard titles are generated session text; channel/account decoration
+    // remains display-only and must never become the stored label.
+    this.headerRenameInitialValue = customLabel ?? generatedTitle ?? "";
+    this.headerRenameValue = this.headerRenameInitialValue;
     this.headerEditing = true;
     void this.updateComplete.then(() => {
       const input = this.querySelector<HTMLInputElement>(".chat-pane__session-title-input");
@@ -275,11 +278,13 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     const key = this.headerRenameSessionKey;
     const trimmed = this.headerRenameValue.trim();
     const label = trimmed || null;
+    const unchangedGeneratedTitle =
+      this.headerRenameInitialLabel === null && trimmed === this.headerRenameInitialValue.trim();
     const unchangedLabel = label === this.headerRenameInitialLabel;
     this.headerEditing = false;
     this.headerRenameSessionKey = "";
     const state = this.state;
-    if (!key || !state || unchangedLabel) {
+    if (!key || !state || unchangedGeneratedTitle || unchangedLabel) {
       return;
     }
     const access = readSessionMethodAccess(this.context.gateway.snapshot, {

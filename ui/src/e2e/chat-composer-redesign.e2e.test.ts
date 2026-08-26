@@ -9,82 +9,29 @@ const suite = createControlUiE2eSuite({
 
 // Browser contexts preserve test isolation; keep one process warm for this file.
 suite.define(() => {
-  it("uses only authoritative catalog snapshots to gate the composer", async () => {
-    await suite.withPage({ viewport: { width: 1280, height: 800 } }, async ({ page }) => {
-      const coldModels = [
-        {
-          id: "gpt-5.5",
-          name: "GPT-5.5",
-          provider: "openai",
-          available: false,
-        },
-      ];
-      const gateway = await installMockGateway(page, {
-        agentModel: "openai/gpt-5.5",
-        models: coldModels,
-      });
+  it("keeps offline status in one bounded composer row", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const gateway = await installMockGateway(page);
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("chat.startup");
-
-      const composer = page.locator(".agent-chat__input");
-      const textarea = composer.locator("textarea");
-      const model = composer.locator('[data-chat-model-select="true"]');
-      const disabledReason = composer.locator(".agent-chat__disabled-reason");
-      const authFailure =
-        "Authentication failed. Review the provider credential or sign-in, then retry.";
-
-      await expect.poll(() => textarea.isDisabled()).toBe(true);
-      await expect.poll(async () => (await disabledReason.textContent())?.trim()).toBe(authFailure);
-      await expect.poll(() => textarea.getAttribute("placeholder")).toBe("Message OpenClaw");
-
       await gateway.setOnline(false);
+
+      const statusBand = page.locator(".agent-chat__composer-status-band");
       await expect
-        .poll(async () =>
-          (await model.locator(".chat-controls__inline-select-label").textContent())?.trim(),
+        .poll(() => statusBand.locator("xpath=..").getAttribute("data-tone"))
+        .toBe("warn");
+      await expect.poll(() => statusBand.textContent()).toContain("Offline");
+      await expect
+        .poll(() =>
+          statusBand.locator("svg").evaluate((node) => {
+            const bounds = node.getBoundingClientRect();
+            return [bounds.width, bounds.height];
+          }),
         )
-        .toBe("Offline");
-      await expect.poll(() => textarea.isEnabled()).toBe(true);
-      await expect.poll(() => disabledReason.count()).toBe(0);
-
-      await gateway.deferNext("chat.startup");
-      await gateway.setOnline(true);
-      await gateway.waitForRequest("chat.startup", { after: 1 });
+        .toEqual([16, 16]);
       await expect
-        .poll(() => composer.locator('[data-chat-model-catalog-state="refreshing"]').count())
-        .toBe(1);
-      await expect.poll(() => textarea.isEnabled()).toBe(true);
-      await expect.poll(() => disabledReason.count()).toBe(0);
-
-      await gateway.resolveDeferred("chat.startup");
-      await expect.poll(() => textarea.isDisabled()).toBe(true);
-      await expect.poll(async () => (await disabledReason.textContent())?.trim()).toBe(authFailure);
-
-      await gateway.setMethodResponse("models.list", {
-        __mockError: { code: "UNAVAILABLE", message: "mock catalog refresh failed" },
-      });
-      const beforeFailure = (await gateway.getRequests("models.list")).length;
-      await model.click();
-      await gateway.waitForRequest("models.list", { after: beforeFailure });
-      await expect.poll(() => composer.locator("[data-chat-model-catalog-state]").count()).toBe(0);
-      await expect
-        .poll(() => composer.locator('[data-chat-model-option="openai/gpt-5.5"]').count())
-        .toBe(1);
-      await expect.poll(() => textarea.isEnabled()).toBe(true);
-      await expect.poll(() => disabledReason.count()).toBe(0);
-
-      await gateway.setMethodResponse("models.list", {
-        models: [{ ...coldModels[0], available: true }],
-      });
-      const beforeRetry = (await gateway.getRequests("models.list")).length;
-      await model.click();
-      await model.click();
-      const retry = await gateway.waitForRequest("models.list", { after: beforeRetry });
-      expect(retry.params).toEqual({ agentId: "main", view: "configured" });
-      await expect.poll(() => textarea.isEnabled()).toBe(true);
-      await expect.poll(() => composer.locator("[data-chat-model-catalog-state]").count()).toBe(0);
-      await expect
-        .poll(() => composer.locator('[data-chat-model-option="openai/gpt-5.5"]').isEnabled())
-        .toBe(true);
+        .poll(() => statusBand.evaluate((node) => node.getBoundingClientRect().height))
+        .toBe(44);
     });
   });
 
@@ -140,7 +87,7 @@ suite.define(() => {
     });
   });
 
-  it("keeps the model in the bottom bar, session settings in the header, and switches the primary action with input state", async () => {
+  it("keeps the model in the bottom bar, session settings in the header, and holds send beside the microphone in every input state", async () => {
     await suite.withPage({ viewport: { width: 1920, height: 1080 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         assistantName: "Rosita",
@@ -210,7 +157,6 @@ suite.define(() => {
                 label: "Main",
                 model: "gpt-5.5",
                 modelProvider: "openai",
-                permissionMode: "workspace",
                 status: "done",
                 totalTokens: 46_000,
                 totalTokensFresh: true,
@@ -231,7 +177,6 @@ suite.define(() => {
       const chatMain = page.locator(".chat-workbench__main");
       const model = composer.locator('[data-chat-model-select="true"]');
       const effort = composer.locator('[data-chat-thinking-select="true"]');
-      const permission = composer.locator('[data-chat-permission-select="true"]');
       const usage = composer.locator('[data-chat-provider-usage="true"]');
       const contextUsage = composer.locator(".context-ring");
       const textarea = composer.locator("textarea");
@@ -247,7 +192,6 @@ suite.define(() => {
       const microphonePickerShell = page.locator(".chat-talk-input-picker");
 
       await expect.poll(() => model.isVisible()).toBe(true);
-      await expect.poll(() => permission.isVisible()).toBe(true);
       expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
       expect(await gateway.getRequests("models.list")).toHaveLength(0);
       await expect.poll(() => contextUsage.isVisible()).toBe(true);
@@ -266,37 +210,28 @@ suite.define(() => {
       await expect
         .poll(() => page.getByRole("button", { name: "Start video talk" }).count())
         .toBe(0);
+      // The editor's row holds nothing but the text: attachments open from the
+      // leading end of the action row and voice sits with the primary action at
+      // its trailing end, so the whole bottom row is one band of controls.
       await expect
-        .poll(() =>
-          attach.evaluate((node) => node.closest(".agent-chat__composer-input-row") != null),
-        )
+        .poll(() => attach.evaluate((node) => node.closest(".agent-chat__composer-lead") != null))
         .toBe(true);
       await expect
-        .poll(() =>
-          voice.evaluate((node) => node.closest(".agent-chat__composer-input-row") != null),
-        )
+        .poll(() => voice.evaluate((node) => node.closest(".agent-chat__composer-trail") != null))
         .toBe(true);
+      // The device chevron is hidden at rest and grows out of the microphone's
+      // leading edge on approach, so the resting action row shows one circular
+      // mic and nothing beside it. It must claim no width while collapsed, or it
+      // would hold an empty gap in the row it is supposed to stay out of.
+      const pickerWidth = () =>
+        microphonePicker.evaluate((node) => node.getBoundingClientRect().width);
+      await expect.poll(pickerWidth).toBe(0);
+      await voice.hover();
+      await expect.poll(pickerWidth).toBeGreaterThanOrEqual(12);
+      await page.mouse.move(0, 0);
+      await expect.poll(pickerWidth).toBe(0);
       await expect
         .poll(() => model.evaluate((node) => node.closest(".agent-chat__composer-footer") != null))
-        .toBe(true);
-      await expect
-        .poll(() =>
-          permission.evaluate((node) => node.closest(".agent-chat__composer-meta") != null),
-        )
-        .toBe(true);
-      await expect
-        .poll(() =>
-          permission.evaluate((node) => node.closest(".chat-composer-model-control") == null),
-        )
-        .toBe(true);
-      await expect
-        .poll(async () => {
-          const [permissionBox, modelBox] = await Promise.all([
-            permission.boundingBox(),
-            model.boundingBox(),
-          ]);
-          return Boolean(permissionBox && modelBox && permissionBox.x < modelBox.x);
-        })
         .toBe(true);
       await expect
         .poll(() => settings.evaluate((node) => node.closest(".chat-pane__header") != null))
@@ -312,21 +247,13 @@ suite.define(() => {
           (await effort.locator(".chat-controls__inline-select-label").textContent())?.trim(),
         )
         .toBe("High");
-      for (const trigger of [model, effort]) {
-        const title = await trigger.getAttribute("title");
-        expect(title).toBeTruthy();
-        await trigger.hover();
-        expect(await trigger.getAttribute("title")).toBe("");
-        await page.mouse.move(0, 0);
-        await expect.poll(() => trigger.getAttribute("title")).toBe(title);
-      }
       await expect.poll(() => contextUsage.locator(".context-ring__detail").count()).toBe(0);
       await expect
         .poll(() => contextUsage.getAttribute("aria-label"))
         .toBe("Session context usage: 46k of 200k (23%)");
       await expect
         .poll(() =>
-          contextUsage.evaluate((node) => node.closest(".agent-chat__composer-context") != null),
+          contextUsage.evaluate((node) => node.closest(".agent-chat__composer-meta") != null),
         )
         .toBe(true);
       await contextUsage.click();
@@ -519,6 +446,25 @@ suite.define(() => {
       await expect
         .poll(() => page.getByRole("button", { name: "Start voice input" }).isVisible())
         .toBe(true);
+      // Every other control here is a step of the surface itself, so colour is
+      // what marks the one committed action once there is something to send.
+      const brandFill = await page.evaluate(() => {
+        const probe = document.createElement("span");
+        probe.style.color = getComputedStyle(document.documentElement)
+          .getPropertyValue("--primary")
+          .trim();
+        document.body.append(probe);
+        const resolved = getComputedStyle(probe).color;
+        probe.remove();
+        return resolved;
+      });
+      await expect
+        .poll(() =>
+          page
+            .getByRole("button", { name: "Send message" })
+            .evaluate((node) => getComputedStyle(node).backgroundColor),
+        )
+        .toBe(brandFill);
 
       await page.getByRole("button", { name: "Send message" }).click();
       const sendRequest = await gateway.waitForRequest("chat.send");
@@ -585,25 +531,11 @@ suite.define(() => {
       await textarea.fill("");
       const stop = page.getByRole("button", { name: "Stop generating" });
       await expect.poll(() => stop.isVisible()).toBe(true);
-      await voice.hover();
+      // Stop is deliberately left out of the brand fill: commit and interrupt
+      // share one slot, so they must not share one colour.
       await expect
-        .poll(() => microphonePickerShell.evaluate((node) => getComputedStyle(node).opacity))
-        .toBe("1");
-      const [runningVoiceBox, runningPickerBox, runningStopBox] = await Promise.all([
-        voice.boundingBox(),
-        microphonePicker.boundingBox(),
-        stop.boundingBox(),
-      ]);
-      expect(runningVoiceBox).not.toBeNull();
-      expect(runningPickerBox).not.toBeNull();
-      expect(runningStopBox).not.toBeNull();
-      if (!runningVoiceBox || !runningPickerBox || !runningStopBox) {
-        throw new Error("expected running composer action layout boxes");
-      }
-      const microphonePickerGap = runningPickerBox.x - (runningVoiceBox.x + runningVoiceBox.width);
-      const stopGap = runningStopBox.x - (runningPickerBox.x + runningPickerBox.width);
-      expect(microphonePickerGap).toBeLessThanOrEqual(1);
-      expect(stopGap).toBeGreaterThanOrEqual(8);
+        .poll(() => stop.evaluate((node) => getComputedStyle(node).backgroundColor))
+        .not.toBe(brandFill);
       await textarea.press("Escape");
       const abortRequest = await gateway.waitForRequest("chat.abort");
       expect(abortRequest.params).toMatchObject({
@@ -618,13 +550,25 @@ suite.define(() => {
         .toBe(true);
       await expect.poll(() => emptySend.isVisible()).toBe(true);
       await expect.poll(() => emptySend.isDisabled()).toBe(true);
+      // Send holds its place with nothing to send: it goes unavailable rather
+      // than disappearing, so the composer never looks like it lost the control
+      // that commits a turn.
+      await expect
+        .poll(async () => {
+          const [voiceRect, sendRect] = await Promise.all([
+            voice.boundingBox(),
+            emptySend.boundingBox(),
+          ]);
+          return voiceRect && sendRect ? sendRect.x - (voiceRect.x + voiceRect.width) : null;
+        })
+        .toBeGreaterThanOrEqual(-1);
 
       await page.setViewportSize({ width: 393, height: 852 });
       await expect.poll(() => camera.count()).toBe(0);
       expect(await page.evaluate(() => matchMedia("(pointer: coarse)").matches)).toBe(false);
       await expect
-        .poll(() => microphonePickerShell.evaluate((node) => getComputedStyle(node).opacity))
-        .toBe("0");
+        .poll(() => microphonePickerShell.evaluate((node) => node.getBoundingClientRect().width))
+        .toBe(0);
       // Resize re-layout is async; wait for the header controls to adopt the
       // mobile width before sampling one-shot bounding boxes below.
       await expect
@@ -655,6 +599,22 @@ suite.define(() => {
       ) {
         throw new Error("expected mobile composer controls to have layout boxes");
       }
+      await expect
+        .poll(() =>
+          model.evaluate((node) => {
+            const style = getComputedStyle(node);
+            return [style.paddingInlineStart, style.paddingInlineEnd];
+          }),
+        )
+        .toEqual(["0px", "0px"]);
+      await expect
+        .poll(() =>
+          effort.evaluate((node) => {
+            const style = getComputedStyle(node);
+            return [style.paddingInlineStart, style.paddingInlineEnd];
+          }),
+        )
+        .toEqual(["4px", "4px"]);
       for (const control of [mobileModelBox, mobileContextBox]) {
         expect(
           Math.abs(control.y + control.height / 2 - (mobileModelBox.y + mobileModelBox.height / 2)),
@@ -715,36 +675,34 @@ suite.define(() => {
       await page.setViewportSize({ width: 1280, height: 900 });
       await gateway.setOnline(false);
       await expect.poll(() => voice.isDisabled()).toBe(true);
+      // The device chevron is a modifier on the microphone, not a second half of
+      // a split pill: it carries no ground of its own in any state, so an
+      // unavailable microphone cannot leave a tinted segment stranded beside it.
+      await expect
+        .poll(() => microphonePicker.evaluate((node) => getComputedStyle(node).backgroundColor))
+        .toBe("rgba(0, 0, 0, 0)");
+      await expect
+        .poll(() => microphonePicker.evaluate((node) => getComputedStyle(node).borderLeftWidth))
+        .toBe("0px");
+      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      if (artifactDir) {
+        await composerShell.screenshot({
+          animations: "disabled",
+          path: `${artifactDir}/voice-picker-disabled-background.png`,
+        });
+      }
       await page.mouse.move(0, 0);
       await expect.poll(() => page.locator("wa-tooltip[open]").count()).toBe(0);
-      // The picker reserves its width while hidden; only opacity reveals it, so
-      // hovering never shifts the right-aligned mic/send cluster sideways.
       await expect
         .poll(() => microphonePickerShell.evaluate((node) => node.getBoundingClientRect().width))
-        .toBe(22);
-      await expect
-        .poll(() => microphonePickerShell.evaluate((node) => getComputedStyle(node).opacity))
-        .toBe("0");
+        .toBe(0);
       await expect.poll(() => voice.evaluate((node) => getComputedStyle(node).opacity)).toBe("0.4");
-      const idleVoiceBox = await voice.boundingBox();
-      expect(idleVoiceBox).not.toBeNull();
 
       await voice.hover();
       await expect
-        .poll(() => microphonePickerShell.evaluate((node) => getComputedStyle(node).opacity))
-        .toBe("1");
-      await expect
         .poll(() => microphonePickerShell.evaluate((node) => node.getBoundingClientRect().width))
-        .toBe(22);
-      const hoveredVoiceBox = await voice.boundingBox();
-      expect(hoveredVoiceBox).not.toBeNull();
-      if (!idleVoiceBox || !hoveredVoiceBox) {
-        throw new Error("expected voice button layout boxes around hover");
-      }
-      expect(hoveredVoiceBox.x).toBe(idleVoiceBox.x);
-      await microphonePicker.click();
-      await expect.poll(() => microphonePicker.getAttribute("aria-expanded")).toBe("true");
-      await expect.poll(() => page.locator(".chat-talk-input-picker[open]").count()).toBe(1);
+        .toBe(0);
+      await expect.poll(() => microphonePicker.isVisible()).toBe(false);
     });
   });
 });

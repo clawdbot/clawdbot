@@ -23,6 +23,11 @@ type AgentHarnessPreparedEnvironment = Readonly<{
   managedLocalIdentity: boolean;
 }>;
 
+type AgentHarnessToolSurfaceOptions = Omit<
+  NonNullable<Parameters<(typeof import("../agent-tools.js"))["createOpenClawCodingTools"]>[0]>,
+  "operationalRunInstance"
+>;
+
 export type AgentHarnessHostCapabilities = Readonly<{
   kind: "agent-harness-host-capability";
   version: 1;
@@ -37,6 +42,11 @@ export type AgentHarnessHostCapabilities = Readonly<{
   preparedEnvironment?: () => AgentHarnessPreparedEnvironment;
   /** Applies the exact host caller binding to a plugin-built tool surface. */
   bindToolSurface: (tools: AnyAgentTool[], options?: Readonly<{ cwd?: string }>) => AnyAgentTool[];
+  /** Creates and binds core tools without exposing admitted-run correlation to the plugin. */
+  createToolSurface?: (
+    options: AgentHarnessToolSurfaceOptions,
+    bindingOptions?: Readonly<{ cwd?: string }>,
+  ) => AnyAgentTool[];
   /** Core-owned byte binding for a native command approval, scoped to this admitted run. */
   prepareMutableFileApproval?: (request: { command: string; cwd?: string }) => Promise<
     | {

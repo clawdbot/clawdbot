@@ -2,8 +2,16 @@ import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
-import { providerDisplayLabel } from "../../../components/provider-icon.ts";
+import {
+  hasProviderBrandIcon,
+  providerDisplayLabel,
+  renderProviderBrandIcon,
+} from "../../../components/provider-icon.ts";
 import { t } from "../../../i18n/index.ts";
+import {
+  type ChatContextWindowControlParams,
+  renderContextWindowControl,
+} from "./chat-context-window-control.ts";
 import {
   renderChatModelPickerOption,
   renderChatModelPickerTargetOption,
@@ -11,7 +19,7 @@ import {
   type ChatModelPickerOption,
   type ChatModelPickerTargetGroup,
 } from "./chat-model-picker-options.ts";
-import { syncChatPickerOverlay } from "./chat-picker-overlay.ts";
+import { handleChatComposerDetailsToggle, syncChatPickerOverlay } from "./chat-picker-overlay.ts";
 
 export type ChatModelCatalogState = {
   hasSnapshot: boolean;
@@ -19,7 +27,7 @@ export type ChatModelCatalogState = {
 };
 
 type ChatModelPickerParams = {
-  defaultModelLabel: string;
+  contextWindow?: ChatContextWindowControlParams;
   disabled: boolean;
   disabledReason?: string;
   modelCatalogState?: ChatModelCatalogState;
@@ -290,7 +298,9 @@ function renderCatalogState(
                 onModelSetup();
               }}
             >
-              ${t("modelSetup.connectionFailure.action")}
+              ${hasOptions
+                ? t("modelSetup.connectionFailure.action")
+                : t("chat.modelControls.emptyModelsAction")}
             </button>
           `
         : nothing}
@@ -305,12 +315,32 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
       ? defaultModelOption
       : params.modelOptions.find((option) => option.value === params.selectedModelValue);
   const modelToolsUnavailable = activeModelOption?.supportsTools === false;
+  const selectedContextWindowOption = params.contextWindow?.options.find(
+    (option) => option.id === params.contextWindow?.selected,
+  );
+  const showContextWindowBadge =
+    selectedContextWindowOption !== undefined &&
+    params.contextWindow?.selected !== params.contextWindow?.defaultId;
   const triggerTitle = [
     params.triggerStatusLabel ?? params.triggerModelLabel,
     modelToolsUnavailable ? t("chat.modelControls.chatOnly") : "",
   ]
     .filter(Boolean)
     .join(" · ");
+  // Brand mark ahead of the model name, and only when one actually ships:
+  // hasProviderBrandIcon gates out the lettered fallback badge, so a provider
+  // without a mark renders nothing rather than a placeholder — the trigger's gap
+  // sits between boxes that exist, so nothing reserves space either. A status
+  // label replaces the model name outright, and a provider mark next to
+  // "Loading..." would claim an identity the trigger is not showing.
+  const triggerProviderIcon =
+    !params.triggerStatusLabel &&
+    activeModelOption &&
+    hasProviderBrandIcon(activeModelOption.provider)
+      ? renderProviderBrandIcon(activeModelOption.provider, {
+          className: "chat-controls__trigger-provider-icon",
+        })
+      : nothing;
   const providerGroups = new Map<string, ChatModelPickerOption[]>();
   for (const option of params.modelOptions) {
     const existing = providerGroups.get(option.provider);
@@ -357,7 +387,9 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
     const details = (event.currentTarget as HTMLElement).closest<HTMLDetailsElement>("details");
     if (details) {
       details.open = false;
-      details.querySelector<HTMLElement>("summary")?.focus();
+      if (event.detail === 0) {
+        details.querySelector<HTMLElement>("summary")?.focus({ preventScroll: true });
+      }
     }
   };
   const selectTarget = (groupId: string, value: string, event: MouseEvent) => {
@@ -370,7 +402,9 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
     const details = (event.currentTarget as HTMLElement).closest<HTMLDetailsElement>("details");
     if (details) {
       details.open = false;
-      details.querySelector<HTMLElement>("summary")?.focus();
+      if (event.detail === 0) {
+        details.querySelector<HTMLElement>("summary")?.focus({ preventScroll: true });
+      }
     }
   };
   const highlightOption = (row: HTMLButtonElement) => {
@@ -385,6 +419,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
       @keydown=${handleModelPickerKeydown}
       @toggle=${(event: Event) => {
         const details = event.currentTarget as HTMLDetailsElement;
+        handleChatComposerDetailsToggle(event);
         syncChatPickerOverlay(details);
         if (!details.open) {
           resetModelSearch(details);
@@ -428,9 +463,23 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
               </openclaw-tooltip>
             `
           : nothing}
+        ${triggerProviderIcon}
         <span class="chat-controls__inline-select-label">
           ${params.triggerStatusLabel ?? params.triggerModelLabel}
         </span>
+        ${showContextWindowBadge
+          ? html`
+              <span
+                class="chat-controls__locked-model-badge chat-controls__model-context-badge"
+                data-chat-model-context-badge
+              >
+                ${selectedContextWindowOption.label}
+              </span>
+            `
+          : nothing}
+        <span class="chat-controls__inline-select-chevron" aria-hidden="true"
+          >${icons.chevronUp}</span
+        >
       </summary>
       <wa-popup data-anchored-overlay>
         <div
@@ -577,12 +626,15 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                       >
                         ${t("chat.modelControls.noMatchingModels")}
                       </div>
+                      ${params.contextWindow
+                        ? renderContextWindowControl(params.contextWindow, params.sessionKey)
+                        : nothing}
                       ${params.modelOptions.length > 0 && params.selectedModelValue !== ""
                         ? html`<footer class="chat-controls__model-provenance">
                             <span>${t("chat.modelControls.sessionOverride")}</span>
                             <openclaw-tooltip
                               .content=${t("chat.modelControls.resetToDefault", {
-                                model: params.defaultModelLabel,
+                                model: defaultModelOption?.label ?? params.triggerModelLabel,
                               })}
                             >
                               <button
@@ -597,12 +649,19 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                     return;
                                   }
                                   commitModel("");
-                                  const details = (
-                                    event.currentTarget as HTMLElement
-                                  ).closest<HTMLDetailsElement>("details");
+                                  const resetButton = event.currentTarget;
+                                  if (!(resetButton instanceof HTMLElement)) {
+                                    return;
+                                  }
+                                  const details =
+                                    resetButton.closest<HTMLDetailsElement>("details");
                                   if (details) {
                                     details.open = false;
-                                    details.querySelector<HTMLElement>("summary")?.focus();
+                                    if (event.detail === 0) {
+                                      details
+                                        .querySelector<HTMLElement>("summary")
+                                        ?.focus({ preventScroll: true });
+                                    }
                                   }
                                 }}
                               >

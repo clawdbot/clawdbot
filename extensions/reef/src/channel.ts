@@ -32,7 +32,12 @@ import {
   ReefReceiptNotifier,
 } from "./owner-notice.js";
 import { isRephrasedReefResend } from "./rejection-resend.js";
-import { getActiveReef, getOptionalReefRuntime, getReefRuntime, setActiveReef } from "./runtime.js";
+import {
+  createReefRuntimeAuthority,
+  getActiveReef,
+  getOptionalReefRuntime,
+  getReefRuntime,
+} from "./runtime.js";
 import { reefSetupContract, reefSetupWizard } from "./setup.js";
 import { assertReefIdentityBinding, loadKeys, openStores, ReefInboxCursorStore } from "./state.js";
 import {
@@ -255,12 +260,13 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
         relayUrl: parseReefRelayUrl(ctx.account.config.relayUrl),
       };
       assertReefIdentityBinding(runtime, identityBinding);
+      const authority = createReefRuntimeAuthority(ctx.abortSignal);
       const transport = new ReefTransportClient(
         ctx.account.config.relayUrl,
         ctx.account.config.handle!,
         keys,
       );
-      const stores = openStores(runtime, keys);
+      const stores = openStores(runtime, keys, { authoritySignal: authority.signal });
       const inboxCursor = new ReefInboxCursorStore(runtime, identityBinding);
       const reviews = stores.reviews;
       const pairing = createChannelPairingController({
@@ -269,12 +275,15 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
         accountId: "default",
       });
       const trust = openReefTrustStore(runtime, ctx.account.config);
-      const friends = new ReefFriendManager(transport, trust, {
-        list: pairing.readAllowFromStore,
-        remove: async (peer) => {
-          return (await pairing.removeAllowFromStoreEntry(peer)).changed;
+      const friends = new ReefFriendManager(
+        transport,
+        trust,
+        {
+          list: pairing.readAllowFromStore,
+          remove: async (peer) => (await pairing.removeAllowFromStoreEntry(peer)).changed,
         },
-      });
+        authority.signal,
+      );
       const onIngress = async (message: ReefIngressMessage) => {
         const dispatchContent = resolveReefInboundDispatchContent(message);
         const budget = autonomyBudget(message.autonomy);
@@ -341,6 +350,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
         replay: stores.replay,
         reviews,
         delivered: stores.delivered,
+        authoritySignal: authority.signal,
         onIngress,
         onOwnerNotice: async (text) =>
           ownerNotice({
@@ -426,8 +436,8 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
           signal: ctx.abortSignal,
         },
       );
-      const reconcile = async () => {
-        await friends.reconcile();
+      const reconcile = async (signal: AbortSignal) => {
+        await friends.reconcile(signal);
         await friends.surfacePairingCandidates(async ({ peer, fingerprint, approvalToken }) => {
           await pairing.issueChallenge({
             senderId: peer,
@@ -435,7 +445,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
             meta: { reefApproval: approvalToken },
             sendPairingReply: async () => {},
           });
-        });
+        }, signal);
       };
       // Attempt the peer-key refresh before recovery can dispatch an agent
       // turn. The lifecycle activates only after that attempt is classified.
@@ -445,7 +455,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
         if (ctx.abortSignal.aborted) {
           return;
         }
-        setActiveReef({ flow, friends, reviews });
+        authority.activate({ flow, friends, reviews });
         ctx.setStatus({ accountId: "default", running: true, connected: false });
       };
       const inbox = new ReefInboxConnection(
@@ -463,19 +473,10 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
           initialCursor: inboxCursor.load(),
           persistCursor: (cursor) => inboxCursor.advance(cursor),
           onState: (state) => {
-            if (ctx.abortSignal.aborted) {
+            if (ctx.abortSignal.aborted || state !== "connected") {
               return;
             }
-            ctx.setStatus(
-              state === "connected"
-                ? channelReadyPatch({ accountId: "default" })
-                : {
-                    accountId: "default",
-                    running: true,
-                    connected: false,
-                    lifecycle: "recovering",
-                  },
-            );
+            ctx.setStatus(channelReadyPatch({ accountId: "default", lastDisconnect: null }));
           },
           onError: (error) => {
             if (ctx.abortSignal.aborted) {
@@ -488,6 +489,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
               connected: false,
               lifecycle: "recovering",
               lastError: error.message,
+              lastDisconnect: { at: Date.now(), error: error.message },
             });
           },
         },
@@ -496,16 +498,17 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
         await runReefChannelLifecycle({
           parentSignal: ctx.abortSignal,
           startInbox: (signal) => inbox.start(signal),
-          reconcile: async () => {
+          reconcile: async (signal) => {
             // The overdue sweep must run even while the relay is unreachable:
             // that outage is exactly when queued sends go unconfirmed, and the
             // notices themselves are local.
             let reconcileError: Error | undefined;
             try {
-              await reconcile();
+              await reconcile(signal);
             } catch (error) {
               reconcileError = error instanceof Error ? error : new Error(String(error));
             }
+            signal.throwIfAborted();
             await notifyOverdueReefDeliveries({ trust, ownerNotice });
             if (reconcileError) {
               throw reconcileError;
@@ -517,6 +520,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
           onReady: activate,
         });
       } finally {
+        authority.release();
         ctx.setStatus({ accountId: "default", running: false, connected: false });
       }
     },

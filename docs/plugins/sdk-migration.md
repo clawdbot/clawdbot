@@ -83,6 +83,20 @@ External-plugin compatibility work follows this order:
 6. Remove only after the announced migration window, usually in a major
    release.
 
+### Memory read missing results
+
+Memory managers now return `status: "ok"` for successful excerpts and
+`status: "not_found"` when an allowed file is missing. This keeps empty files
+and empty ranges distinct from missing files without relying on pagination
+metadata.
+
+At registration, every statusless result from an older external memory manager
+preserves its legacy successful-read semantics and becomes `status: "ok"`,
+including empty results without range metadata. Only an explicit
+`status: "not_found"` reports absence. New producers must emit that status for
+missing files; registered-input normalization remains available through the
+next Plugin SDK major.
+
 ### Channel state migration declarations
 
 Channel plugins should declare `doctorContract.stateMigrations: true` in
@@ -142,15 +156,17 @@ review date; removal still requires the reader condition in the final column.
 ### Published channel setup compatibility
 
 Slack, Discord, Signal, and Microsoft Teams packages published through
-`2026.7.1` imported channel-specific config schemas from
+`2026.7.1` import channel-specific config schemas from
 `openclaw/plugin-sdk/bundled-channel-config-schema`. The published Slack and
-Discord packages also imported `createLegacyCompatChannelDmPolicy` and
+Discord packages also import `createLegacyCompatChannelDmPolicy` and
 `promptLegacyChannelAllowFromForAccount` from
 `openclaw/plugin-sdk/setup-runtime`.
 
-Those compatibility exports were removed in August 2026. Channel plugins must
-own their config schemas and setup policy locally, using generic primitives
-from `channel-config-schema` and `setup-runtime`.
+Those exports remain available as deprecated runtime compatibility adapters.
+New and republished plugins should own their config schemas and setup policy
+locally, using generic primitives from `channel-config-schema` and
+`setup-runtime`. The compatibility exports can be removed only after the
+minimum supported published package versions no longer import them.
 
 ### Channel setup input field compatibility
 
@@ -967,7 +983,9 @@ await gateway.request("talk.session.create", {
   sessionKey: "main",
 });
 await gateway.request("talk.session.appendAudio", { sessionId, audioBase64 });
-await gateway.request("talk.session.cancelOutput", { sessionId, reason: "barge-in" });
+// Capture this before stopping playback from the active output `talk.event`.
+const turnId = activeOutputTalkEvent.talkEvent.turnId;
+await gateway.request("talk.session.cancelOutput", { sessionId, turnId, reason: "barge-in" });
 await gateway.request("talk.session.submitToolResult", {
   sessionId,
   callId,

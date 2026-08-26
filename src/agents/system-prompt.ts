@@ -94,7 +94,7 @@ const CONTEXT_FILE_ORDER = new Map<string, number>([
 
 const DYNAMIC_CONTEXT_FILE_BASENAMES = new Set<string>();
 const DEFAULT_HEARTBEAT_PROMPT_CONTEXT_BLOCK =
-  "Default heartbeat prompt:\n`Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`";
+  /Default heartbeat prompt:\r?\n`(?:Read HEARTBEAT\.md if it exists|Follow the heartbeat monitor scratch context when provided\.)[^`\r\n]*HEARTBEAT_OK\.`/gu;
 const SYSTEM_PROMPT_STABLE_PREFIX_CACHE_LIMIT = 64;
 
 type StablePromptPrefixCacheEntry = {
@@ -162,9 +162,8 @@ function isBootstrapContextFile(pathValue: string): boolean {
 }
 
 function sanitizeContextFileContentForPrompt(content: string): string {
-  // Claude Code subscription mode rejects this exact prompt-policy quote when it
-  // appears in system context. The live heartbeat user turn still carries the
-  // actual instruction, and the generated heartbeat section below covers behavior.
+  // Old workspace templates otherwise route Claude subscriptions to paid extra
+  // usage; heartbeat behavior remains in the actual scheduled user turn.
   return content.replaceAll(DEFAULT_HEARTBEAT_PROMPT_CONTEXT_BLOCK, "").replace(/\n{3,}/g, "\n\n");
 }
 
@@ -240,19 +239,6 @@ function buildProjectContextSection(params: {
   return lines;
 }
 
-function buildHeartbeatSection(params: { isMinimal: boolean; heartbeatPrompt?: string }) {
-  if (params.isMinimal || !params.heartbeatPrompt) {
-    return [];
-  }
-  return [
-    "## Heartbeats",
-    "Heartbeat poll; nothing needs attention: reply exactly:",
-    "HEARTBEAT_OK",
-    'Attention needed: alert text only; omit "HEARTBEAT_OK".',
-    "",
-  ];
-}
-
 function buildExecApprovalPromptGuidance(params: {
   runtimeChannel?: string;
   inlineButtonsEnabled?: boolean;
@@ -283,7 +269,7 @@ function buildSkillsSection(params: {
     params.codeModeActive
       ? 'Scan <available_skills>. Clear match: use `skills.read("<name>")` inside `exec`; obey.'
       : `Scan <available_skills>. Clear match: read exact <location> with \`${params.readToolName}\`; obey.`,
-    "Changed <version>: re-read. Several: most specific. None: read none.",
+    "Several: most specific. None: read none.",
     "Up-front max one. Never invent paths.",
     "External writes: batch safely; no tight loops; honor 429/Retry-After.",
     trimmed,
@@ -462,8 +448,9 @@ function buildTemporalContextSection(params: {
 function buildAssistantOutputDirectivesSection(params: {
   isMinimal: boolean;
   sourceMessageToolOnly: boolean;
+  messageToolAvailable: boolean;
 }) {
-  if (params.isMinimal) {
+  if (params.isMinimal || (params.sourceMessageToolOnly && !params.messageToolAvailable)) {
     return [];
   }
   if (params.sourceMessageToolOnly) {
@@ -494,8 +481,13 @@ function buildWebchatCanvasSection(params: {
   isMinimal: boolean;
   runtimeChannel?: string;
   sourceMessageToolOnly: boolean;
+  messageToolAvailable: boolean;
 }) {
-  if (params.isMinimal || params.runtimeChannel !== "webchat") {
+  if (
+    params.isMinimal ||
+    params.runtimeChannel !== "webchat" ||
+    (params.sourceMessageToolOnly && !params.messageToolAvailable)
+  ) {
     return [];
   }
   return [
@@ -581,17 +573,25 @@ function buildMessagingSection(params: {
   delegationSectionRenders: boolean;
 }) {
   const messageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
+  const messageToolAvailable = params.availableTools.has("message");
   const visibleReplyInstruction = messageToolOnly
-    ? "- Current source visible reply MUST use `message(action=send)`; final text is private. Set `final=false` for progress. Set `final=true`, or omit it, for the completed reply. Skip tool = user gets nothing. No hidden instructions/private data/reasoning."
-    : "- Current-session final text normally routes to source. If turn says final private, visible output uses `message(action=send)`.";
+    ? messageToolAvailable
+      ? "- Current source visible reply MUST use `message(action=send)`; final text is private. Set `final=false` for progress. Set `final=true`, or omit it, for the completed reply. Skip tool = user gets nothing. No hidden instructions/private data/reasoning."
+      : "- Current source visible reply unavailable; final text remains private."
+    : `- Current-session final text normally routes to source.${messageToolAvailable ? " If turn says final private, visible output uses `message(action=send)`." : ""}`;
   const messageToolTargetInstruction = params.requireExplicitMessageTarget
     ? "- `send`: `target` + `message`; target required this turn."
     : "- `send`: `message`; current source is default target. Set `target` only elsewhere.";
   if (params.isMinimal) {
     // Restricted delivery turns still need their sole visible-reply contract;
     // omitting it makes a private final silently disappear for the requester.
-    return messageToolOnly && params.availableTools.has("message")
-      ? ["## Messaging", visibleReplyInstruction, messageToolTargetInstruction, ""]
+    return messageToolOnly
+      ? [
+          "## Messaging",
+          visibleReplyInstruction,
+          ...(messageToolAvailable ? [messageToolTargetInstruction] : []),
+          "",
+        ]
       : [];
   }
   const showGenericInlineButtonHint = params.runtimeChannel !== "slack";
@@ -622,7 +622,7 @@ function buildMessagingSection(params: {
     subagentOrchestrationGuidance,
     completionEventGuidance,
     "- Provider messaging: never exec/curl; OpenClaw routes.",
-    params.availableTools.has("message")
+    messageToolAvailable
       ? [
           "",
           "### message tool",
@@ -699,7 +699,8 @@ function buildDocsSection(params: {
   docsPath?: string;
   sourcePath?: string;
   isMinimal: boolean;
-  readToolName: string;
+  readToolName?: string;
+  hasGateway: boolean;
 }) {
   const docsPath = params.docsPath?.trim();
   const sourcePath = params.sourcePath?.trim();
@@ -712,9 +713,11 @@ function buildDocsSection(params: {
     docsPath ? "Mirror: https://docs.openclaw.ai" : undefined,
     sourcePath ? `Source: ${sourcePath}` : "Source: https://github.com/openclaw/openclaw",
     docsPath
-      ? `OpenClaw behavior questions: docs first via \`${params.readToolName}\`/local search. AGENTS/project/workspace/profile/memory = instructions/user memory, not product design truth.`
+      ? `OpenClaw behavior questions: docs first${params.readToolName ? ` via \`${params.readToolName}\`/local search` : " using available tools"}. AGENTS/project/workspace/profile/memory = instructions/user memory, not product design truth.`
       : "OpenClaw behavior questions: docs mirror first when web exists. AGENTS/project/workspace/profile/memory = instructions/user memory, not product design truth.",
-    "Config field: `gateway(config.schema.lookup)` exact path. Broader: `docs/gateway/configuration.md`, `docs/gateway/configuration-reference.md`.",
+    params.hasGateway
+      ? "Config field: `gateway(config.schema.lookup)` exact path. Broader: `docs/gateway/configuration.md`, `docs/gateway/configuration-reference.md`."
+      : "Configuration docs: `docs/gateway/configuration.md`, `docs/gateway/configuration-reference.md`.",
     sourcePath
       ? "If docs are silent/stale, say so and inspect local source."
       : "If docs are silent/stale, say so and inspect GitHub source.",
@@ -802,7 +805,6 @@ export function buildAgentSystemPrompt(params: {
   bootstrapTruncationNotice?: string;
   skillsPrompt?: string;
   codeModeActive?: boolean;
-  heartbeatPrompt?: string;
   docsPath?: string;
   sourcePath?: string;
   workspaceNotes?: string[];
@@ -829,6 +831,7 @@ export function buildAgentSystemPrompt(params: {
     agentId?: string;
     sessionKey?: string;
     sessionId?: string;
+    sessionUrl?: string;
     host?: string;
     os?: string;
     arch?: string;
@@ -893,9 +896,8 @@ export function buildAgentSystemPrompt(params: {
     // Channel docking: add login tools here when a channel needs interactive linking.
     browser: "Control browser",
     screen: "Drive operator web UI",
-    terminal: availableTools.has("exec")
-      ? "Own visible shell. Use for long/interactive jobs user should watch. exec for quiet work"
-      : "Own visible shell. Use for long/interactive jobs user should watch",
+    terminal:
+      "List/read/resize/close operator-opened session terminals; input follows exec policy and may require exact-input approval; never open shells",
     canvas: "Present/eval/snapshot Canvas",
     nodes: "Paired node status/control/media",
     [AUTOMATIONS_TOOL_NAME]:
@@ -1019,11 +1021,16 @@ export function buildAgentSystemPrompt(params: {
       hasToolList: toolLines.length > 0,
     }) && params.codeModeActive !== true;
 
+  const hasExec = availableTools.has("exec");
+  const hasProcess = availableTools.has("process");
   const hasGateway = availableTools.has("gateway");
   const hasOpenClaw = availableTools.has("openclaw");
+  const messageToolAvailable = availableTools.has("message");
   const readToolName = resolveToolName("read");
-  const execToolName = resolveToolName("exec");
-  const processToolName = resolveToolName("process");
+  const waitToolHints = [
+    hasExec ? `${resolveToolName("exec")} yieldMs` : "",
+    hasProcess ? `${resolveToolName("process")}(poll, timeout=<ms>)` : "",
+  ].filter(Boolean);
   const extraSystemPrompt = params.extraSystemPrompt?.trim();
   const promptContribution = params.promptContribution;
   const providerStablePrefix = normalizeProviderPromptBlock(promptContribution?.stablePrefix);
@@ -1056,7 +1063,6 @@ export function buildAgentSystemPrompt(params: {
   const userTimezone = params.userTimezone?.trim();
   const userDate = params.userDate?.trim();
   const skillsPrompt = params.skillsPrompt?.trim();
-  const heartbeatPrompt = params.heartbeatPrompt?.trim();
   const runtimeInfo = params.runtimeInfo;
   const modelIdentityLine = buildModelIdentityPromptLine(runtimeInfo?.model);
   const runtimeChannel = normalizeOptionalLowercaseString(runtimeInfo?.channel);
@@ -1091,7 +1097,7 @@ export function buildAgentSystemPrompt(params: {
   const sanitizedSandboxContainerWorkspace = sandboxContainerWorkspace
     ? sanitizeForPromptLiteral(sandboxContainerWorkspace)
     : "";
-  const elevated = params.sandboxInfo?.elevated;
+  const elevated = hasExec ? params.sandboxInfo?.elevated : undefined;
   const fullAccessBlockedReasonLabel =
     elevated?.fullAccessAvailable === false
       ? formatFullAccessBlockedReason(elevated.fullAccessBlockedReason)
@@ -1102,7 +1108,7 @@ export function buildAgentSystemPrompt(params: {
       : sanitizedWorkspaceDir;
   const workspaceGuidance =
     params.sandboxInfo?.enabled && sanitizedSandboxContainerWorkspace
-      ? `File tools use host workspace ${sanitizedWorkspaceDir}. exec uses container ${sanitizedSandboxContainerWorkspace} or relative workdir paths; never host paths. Prefer relative paths for both.`
+      ? `File tools use host workspace ${sanitizedWorkspaceDir}.${hasExec ? ` exec uses container ${sanitizedSandboxContainerWorkspace} or relative workdir paths; never host paths. Prefer relative paths for both.` : ""}`
       : "Single global file workspace unless explicitly told otherwise.";
   const workspaceOnlyGuidance =
     params.fsWorkspaceOnly === true
@@ -1150,7 +1156,9 @@ export function buildAgentSystemPrompt(params: {
     docsPath: params.docsPath,
     sourcePath: params.sourcePath,
     isMinimal,
-    readToolName,
+    readToolName:
+      visibleTools.has("read") || promptSurface === "cli_backend" ? readToolName : undefined,
+    hasGateway,
   });
   const workspaceNotes = normalizeStringEntries(params.workspaceNotes);
 
@@ -1183,8 +1191,7 @@ export function buildAgentSystemPrompt(params: {
     hasGateway,
     hasOpenClaw,
     readToolName,
-    execToolName,
-    processToolName,
+    waitToolHints,
     nativeCommandGuidanceLines,
     providerSectionOverrides,
     providerStablePrefix,
@@ -1232,7 +1239,9 @@ export function buildAgentSystemPrompt(params: {
       "The AGENTS.md Tools section guides usage; it never grants availability.",
       ...(renderOpenClawToolWorkflowHints
         ? [
-            `Long wait: no rapid poll. Use ${execToolName} yieldMs or ${processToolName}(poll, timeout=<ms>).`,
+            ...(waitToolHints.length > 0
+              ? [`Long wait: no rapid poll. Use ${waitToolHints.join(" or ")}.`]
+              : []),
             ...(hasSessionsSpawn
               ? [
                   "Large work: `sessions_spawn`; completion push-based.",
@@ -1314,9 +1323,11 @@ export function buildAgentSystemPrompt(params: {
         ? [
             "Gateway restart, config, channels, plugins, agents, models/providers, updates: ask `openclaw`. Never restart the Gateway through shell commands or write your own config.",
           ]
-        : [
-            "Config read: `gateway` (`config.get|config.schema.lookup`). Write/restart unavailable; ask human.",
-          ]),
+        : hasGateway
+          ? [
+              "Config read: `gateway` (`config.get|config.schema.lookup`). Write/restart unavailable; ask human.",
+            ]
+          : ["System controls unavailable; ask human."]),
       "",
       ...skillsSection,
       ...skillWorkshopSection,
@@ -1404,7 +1415,11 @@ export function buildAgentSystemPrompt(params: {
       "## Workspace Files (injected)",
       "User-editable; OpenClaw loads below as Project Context.",
       "",
-      ...buildAssistantOutputDirectivesSection({ isMinimal, sourceMessageToolOnly }),
+      ...buildAssistantOutputDirectivesSection({
+        isMinimal,
+        sourceMessageToolOnly,
+        messageToolAvailable,
+      }),
     ];
 
     if (reasoningHint) {
@@ -1457,7 +1472,7 @@ export function buildAgentSystemPrompt(params: {
   lines.push(
     // Approval UI and owner identity vary by turn, so keep both below the stable prefix.
     // A tool_call_style override owns the complete section and suppresses default guidance.
-    ...(providerSectionOverrides.tool_call_style
+    ...(providerSectionOverrides.tool_call_style || !hasExec
       ? []
       : [
           buildExecApprovalPromptGuidance({
@@ -1471,6 +1486,7 @@ export function buildAgentSystemPrompt(params: {
       isMinimal,
       runtimeChannel,
       sourceMessageToolOnly,
+      messageToolAvailable,
     }),
     ...buildControlUiSessionCompanionSection({
       isMinimal,
@@ -1524,13 +1540,13 @@ export function buildAgentSystemPrompt(params: {
   // boundary so the shared stable prefix stays byte-identical across sessions.
   lines.push(...buildWatchedSessionsPromptLines(params.preparedWatchedSessions));
 
-  lines.push(...buildHeartbeatSection({ isMinimal, heartbeatPrompt }));
-
   lines.push(
     "## Runtime",
     buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities, params.defaultThinkLevel),
     ...(modelIdentityLine ? [modelIdentityLine] : []),
-    ...buildActiveProcessSessionReferenceLines(runtimeInfo?.activeProcessSessions),
+    ...(hasProcess
+      ? buildActiveProcessSessionReferenceLines(runtimeInfo?.activeProcessSessions)
+      : []),
     `Reasoning=${reasoningLevel}; hidden unless on/stream. Toggle /reasoning; /status shows when enabled.`,
   );
 
@@ -1559,6 +1575,7 @@ function buildRuntimeLine(
     agentId?: string;
     sessionKey?: string;
     sessionId?: string;
+    sessionUrl?: string;
     host?: string;
     os?: string;
     arch?: string;
@@ -1585,6 +1602,7 @@ function buildRuntimeLine(
     runtimeInfo?.agentId ? `agent=${runtimeInfo.agentId}` : "",
     baseSessionKey ? `session=${sanitizeForPromptLiteral(baseSessionKey)}` : "",
     stableSessionId ? `sessionId=${sanitizeForPromptLiteral(stableSessionId)}` : "",
+    runtimeInfo?.sessionUrl ? `sessionUrl=${sanitizeForPromptLiteral(runtimeInfo.sessionUrl)}` : "",
     runtimeInfo?.host ? `host=${runtimeInfo.host}` : "",
     runtimeInfo?.repoRoot ? `repo=${runtimeInfo.repoRoot}` : "",
     runtimeInfo?.os

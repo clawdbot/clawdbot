@@ -375,6 +375,17 @@ function selectAgentHarnessDecision(
         });
       }
       if (support.fallbackRuntime === "openclaw") {
+        if (policy.forcedByEnvironment) {
+          log.info(
+            `agent harness selected requested=${runtime} selected=${forced.id} reason=private_qa_forced_runtime`,
+          );
+          return buildSelectionDecision({
+            harness: forced,
+            policy,
+            selectedReason: "forced_plugin",
+            candidates: listHarnessCandidates(pluginHarnesses),
+          });
+        }
         return buildSelectionDecision({
           harness: openClawHarness,
           policy: { ...policy, runtime: "openclaw" },
@@ -724,7 +735,10 @@ function withoutInternalHarnessAuthority(
     return {
       // The built-in harness is the internal owner of this authority. Only
       // plugin handoffs receive the projected public attempt shape below.
-      params: params as import("./types.js").AgentHarnessAttemptParamsV2,
+      params: {
+        ...params,
+        operationalRunInstance: params.admittedRunContext.operationalRunInstance,
+      } as import("./types.js").AgentHarnessAttemptParamsV2,
       closeHostCapabilities: () => {},
     };
   }

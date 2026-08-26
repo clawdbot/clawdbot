@@ -4,33 +4,22 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
-import { doctorCommand } from "../../commands/doctor.js";
-import {
-  assertConfigWriteAllowedInCurrentMode,
-  readConfigFileSnapshot,
-} from "../../config/config.js";
 import {
   createPluginInstallRecordMap,
   serializePluginInstallRecordMap,
   setPluginInstallRecordMapEntry,
 } from "../../config/plugin-install-record-map.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { hasErrnoCode } from "../../infra/errors.js";
 import { readJsonIfExists, writeJson } from "../../infra/json-files.js";
 import {
-  DEFAULT_PACKAGE_CHANNEL,
   EXTENDED_STABLE_TAG_UNSUPPORTED_REASON,
-  normalizeUpdateChannel,
   type UpdateChannel,
-  UPDATE_EFFECTIVE_CHANNEL_ENV,
 } from "../../infra/update-channels.js";
 import {
-  checkUpdateStatus,
   compareSemverStrings,
   type ExtendedStableFailureReason,
 } from "../../infra/update-check.js";
@@ -42,56 +31,29 @@ import {
 import {
   buildPostCoreHandoffEnv,
   POST_CORE_UPDATE_ENV,
-  POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV,
   type PreUpdateConfigRestoreInput,
 } from "../../infra/update-post-core-context.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { getWindowsSystem32ExePath } from "../../infra/windows-install-roots.js";
-import {
-  loadInstalledPluginIndexInstallRecords,
-  writePersistedInstalledPluginIndexInstallRecordsWithLease,
-} from "../../plugins/installed-plugin-index-records.js";
+import { writePersistedInstalledPluginIndexInstallRecordsWithLease } from "../../plugins/installed-plugin-index-records.js";
 import { restorePersistedInstalledPluginIndexIfCurrent } from "../../plugins/installed-plugin-index-store.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { runExec } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
-import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
 import { VERSION } from "../../version.js";
 import { printResult } from "./progress.js";
+import { readPackageVersion, resolveNodeRunner, type UpdateCommandOptions } from "./shared.js";
 import {
-  parseTimeoutMsOrExit,
-  readPackageVersion,
-  resolveNodeRunner,
-  resolveUpdateRoot,
-  tryWriteCompletionCache,
-  type UpdateCommandOptions,
-  type UpdateFinalizeOptions,
-} from "./shared.js";
-import { suppressDeprecations } from "./suppress-deprecations.js";
-import {
-  createUpdateConfigSnapshot,
   normalizePluginInstallRecordMap,
-  persistRequestedUpdateChannel,
-  readPostCorePreUpdateSourceConfig,
-  restoreDroppedPreUpdateChannels,
   writePostCoreSourceConfigFile,
 } from "./update-command-config.js";
-import {
-  completePostCorePluginUpdate,
-  withPrePluginUpdateDoctorEnv,
-} from "./update-command-fresh-doctor.js";
-import {
-  updatePluginsAfterCoreUpdate,
-  type PostCorePluginUpdateResult,
-} from "./update-command-plugins.js";
+import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
 import {
   disableUpdatedPackageCompileCacheEnv,
   isPackageManagerUpdateMode,
   stripGatewayServiceMarkerEnv,
 } from "./update-command-service.js";
 
-const DEFAULT_UPDATE_STEP_TIMEOUT_MS = 30 * 60_000;
 export { POST_CORE_UPDATE_ENV };
 export const POST_CORE_UPDATE_CHANNEL_ENV = "OPENCLAW_UPDATE_POST_CORE_CHANNEL";
 export const POST_CORE_UPDATE_RESULT_PATH_ENV = "OPENCLAW_UPDATE_POST_CORE_RESULT_PATH";
@@ -132,182 +94,6 @@ export async function reportPreMutationUpdateFailure(params: {
   }
   printResult(result, params.opts);
   defaultRuntime.exit(1);
-}
-
-type UpdateFinalizeResult = {
-  status: "ok" | "warning" | "error";
-  mode: "finalize";
-  root: string;
-  channel: UpdateChannel;
-  restart: false;
-  postUpdate: {
-    doctor: {
-      status: "ok";
-    };
-    plugins: PostCorePluginUpdateResult;
-  };
-};
-
-export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promise<void> {
-  suppressDeprecations();
-  const timeoutMs = parseTimeoutMsOrExit(opts.timeout);
-  if (timeoutMs === null) {
-    return;
-  }
-  const requestedChannel = normalizeUpdateChannel(opts.channel);
-  if (opts.channel !== undefined && !requestedChannel) {
-    defaultRuntime.error(
-      `--channel must be "stable", "extended-stable", "beta", or "dev" (got "${opts.channel}")`,
-    );
-    defaultRuntime.exit(1);
-    return;
-  }
-
-  assertConfigWriteAllowedInCurrentMode();
-  await assertOpenClawStateWriteAllowedAtPath({
-    databasePath: resolveOpenClawStateSqlitePath(process.env),
-  });
-
-  const root = await resolveUpdateRoot();
-  let configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
-  const preFinalizeConfig =
-    (await readPostCorePreUpdateSourceConfig({
-      sourceConfigPath: process.env[POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV],
-      currentSnapshot: configSnapshot,
-    })) ??
-    (configSnapshot.valid
-      ? {
-          sourceConfig: configSnapshot.sourceConfig,
-          authoredConfig: isRecord(configSnapshot.parsed)
-            ? (configSnapshot.parsed as OpenClawConfig)
-            : configSnapshot.sourceConfig,
-        }
-      : undefined);
-  if (requestedChannel === "extended-stable") {
-    const updateStatus = await checkUpdateStatus({
-      root,
-      timeoutMs: timeoutMs ?? 3500,
-      fetchGit: false,
-      includeRegistry: false,
-    });
-    if (updateStatus.installKind === "git") {
-      await reportPreMutationUpdateFailure({
-        root,
-        installKind: updateStatus.installKind,
-        reason: "unsupported_git_channel",
-        opts,
-        controlPlaneUpdateSentinelMeta: null,
-      });
-      return;
-    }
-  }
-  const storedChannel = configSnapshot.valid
-    ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
-    : null;
-  // Effective channel the core update actually ran on (e.g. git/dev for an
-  // unconfigured source update), passed by the caller via env. Used only as a
-  // convergence fallback; it is never persisted (that stays gated on
-  // `requestedChannel`), so a default source update does not write update.channel.
-  const effectiveChannel = normalizeUpdateChannel(
-    process.env[UPDATE_EFFECTIVE_CHANNEL_ENV]?.trim(),
-  );
-  const channel = requestedChannel ?? storedChannel ?? effectiveChannel ?? DEFAULT_PACKAGE_CHANNEL;
-  if (requestedChannel) {
-    configSnapshot = await persistRequestedUpdateChannel({
-      configSnapshot,
-      requestedChannel,
-    });
-  }
-
-  const completedPluginUpdate = await withPluginLifecycleLease({}, async () => {
-    const initialPluginUpdate = await withPrePluginUpdateDoctorEnv(async () => {
-      await createUpdateConfigSnapshot();
-      await doctorCommand(defaultRuntime, {
-        nonInteractive: true,
-        repair: true,
-        yes: opts.yes === true,
-      });
-      configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
-      if (requestedChannel) {
-        configSnapshot = await persistRequestedUpdateChannel({
-          configSnapshot,
-          requestedChannel,
-        });
-      }
-      const restoredConfig = restoreDroppedPreUpdateChannels(configSnapshot, preFinalizeConfig);
-      configSnapshot = restoredConfig.snapshot;
-      const postDoctorStoredChannel = configSnapshot.valid
-        ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
-        : null;
-      const postDoctorChannel =
-        requestedChannel ??
-        postDoctorStoredChannel ??
-        storedChannel ??
-        effectiveChannel ??
-        DEFAULT_PACKAGE_CHANNEL;
-      const pluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
-      return await updatePluginsAfterCoreUpdate({
-        root,
-        channel: postDoctorChannel,
-        configSnapshot,
-        configChanged: restoredConfig.changed,
-        restoredAuthoredChannels: restoredConfig.authoredChannels,
-        opts: {
-          json: opts.json,
-          timeout: opts.timeout,
-          yes: opts.yes,
-          restart: false,
-          acknowledgeClawHubRisk: opts.acknowledgeClawHubRisk,
-        },
-        timeoutMs: timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
-        pluginInstallRecords,
-      });
-    });
-    return await completePostCorePluginUpdate({
-      root,
-      pluginUpdate: initialPluginUpdate,
-      freshDoctorRequired: initialPluginUpdate.changed,
-      yes: opts.yes === true,
-      json: opts.json === true,
-      timeoutMs: timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
-    });
-  });
-  const pluginUpdate = completedPluginUpdate.pluginUpdate;
-  configSnapshot = completedPluginUpdate.configSnapshot;
-
-  const result: UpdateFinalizeResult = {
-    status:
-      pluginUpdate.status === "error"
-        ? "error"
-        : pluginUpdate.status === "warning"
-          ? "warning"
-          : "ok",
-    mode: "finalize",
-    root,
-    channel:
-      requestedChannel ??
-      (configSnapshot.valid
-        ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
-        : null) ??
-      channel,
-    restart: false,
-    postUpdate: {
-      doctor: {
-        status: "ok",
-      },
-      plugins: pluginUpdate,
-    },
-  };
-
-  await tryWriteCompletionCache(root, Boolean(opts.json));
-  if (opts.json) {
-    defaultRuntime.writeJson(result);
-  } else if (result.status === "ok") {
-    defaultRuntime.log(theme.muted("Update finalization completed."));
-  }
-  if (result.status === "error") {
-    defaultRuntime.exit(1);
-  }
 }
 
 export async function writePostCorePluginUpdateResultFile(

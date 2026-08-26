@@ -26,6 +26,7 @@ import {
   toDatabaseOptions,
   type ResolvedSqliteScope,
 } from "./session-accessor.sqlite-scope.js";
+import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import type {
   SessionBranchListParams,
@@ -38,7 +39,12 @@ import type {
 } from "./session-accessor.types.js";
 import { buildSessionCreationStamp } from "./session-entry-provenance.js";
 import { inheritSessionSelection } from "./session-entry-selection.js";
-import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
+import {
+  markSessionTranscriptIndexDirtyInTransaction,
+  reconcileSessionTranscriptIndexInTransaction,
+  SYNC_REBUILD_MAX_BYTES,
+  SYNC_REBUILD_MAX_ROWS,
+} from "./session-transcript-index.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import {
   isSessionTranscriptLeafControl,
@@ -325,8 +331,20 @@ function mutateSqliteSessionAtMessageInTransaction(
             targetId: params.mode === "switch" ? params.entryId : (cut?.parentId ?? null),
           },
         ];
+  let copiedBytes = 0;
+  const rebuildSynchronously =
+    params.mode !== "fork" &&
+    nextEvents.length <= SYNC_REBUILD_MAX_ROWS &&
+    nextEvents.every((event) => {
+      copiedBytes += JSON.stringify(event).length;
+      return copiedBytes <= SYNC_REBUILD_MAX_BYTES;
+    });
+  if (params.mode !== "fork" && !rebuildSynchronously) {
+    ensureTranscriptSessionRoot(database, targetScope, Date.parse(header.timestamp));
+    markSessionTranscriptIndexDirtyInTransaction(database.db, nextSessionId);
+  }
   appendTranscriptEventsInTransaction(database, targetScope, nextEvents);
-  if (params.mode !== "fork") {
+  if (rebuildSynchronously) {
     reconcileSessionTranscriptIndexInTransaction(database.db, nextSessionId);
   }
 
@@ -509,6 +527,7 @@ function cloneMessageCutSessionEntry(params: {
     systemSent: false,
     abortedLastRun: false,
     lifecycleRunId: undefined,
+    lastRunId: undefined,
     startedAt: undefined,
     endedAt: undefined,
     runtimeMs: undefined,

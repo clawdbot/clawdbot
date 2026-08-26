@@ -30,11 +30,25 @@ import type { CronServiceState } from "./state.js";
 import { findCronTaskRunRecoveryInDatabase } from "./task-runs.js";
 import { stopTimer } from "./timer.js";
 
-const { makeStorePath } = createCronStoreHarness({ prefix: "cron-owner-hardening-" });
 const children = new Set<ChildProcess>();
 let scriptRoot = "";
 let runnerScript = "";
+
+// Register this before the temp and store hooks because children can retain
+// both filesystem and SQLite ownership until their exit event is observed.
+afterEach(async () => {
+  const activeChildren = [...children].filter(
+    (child) => child.exitCode === null && child.signalCode === null,
+  );
+  for (const child of activeChildren) {
+    child.kill("SIGKILL");
+  }
+  await Promise.all(activeChildren.map(waitForExit));
+  children.clear();
+});
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const { makeStorePath } = createCronStoreHarness({ prefix: "cron-owner-hardening-" });
 
 beforeEach(async () => {
   scriptRoot = tempDirs.make("cron-owner-hardening-script-", os.tmpdir());
@@ -112,15 +126,6 @@ beforeEach(async () => {
   );
 });
 
-afterEach(async () => {
-  for (const child of children) {
-    if (child.exitCode === null && child.signalCode === null) {
-      child.kill("SIGKILL");
-    }
-  }
-  children.clear();
-});
-
 function makeCommandJob(id: string, nextRunAtMs: number, trigger = false): CronJob {
   return {
     id,
@@ -175,24 +180,59 @@ function spawnRunner(params: {
   return child;
 }
 
+// Wait on the child protocol itself; cold TypeScript imports are not part of
+// the cron ownership contract this fixture exercises.
 async function waitForLine(child: ChildProcess, expected: string): Promise<void> {
   let stdout = "";
   let stderr = "";
-  child.stdout?.on("data", (chunk) => {
-    stdout += String(chunk);
-  });
-  child.stderr?.on("data", (chunk) => {
+  let protocolFailure: Error | undefined;
+  const onStderr = (chunk: unknown) => {
     stderr += String(chunk);
-  });
-  await vi.waitFor(
-    () => {
-      if (child.exitCode !== null || child.signalCode !== null) {
-        throw new Error(`cron child exited before ${expected}: ${stderr || stdout}`);
+  };
+  if (!child.stdout) {
+    throw new Error(`cron child has no stdout while waiting for ${expected}`);
+  }
+  const failure = (reason: string, cause?: Error) =>
+    new Error(`cron child ${reason} before ${expected}: ${stderr || stdout}`, { cause });
+  const onExit = () => {
+    protocolFailure = failure("exited");
+    child.stdout?.destroy(protocolFailure);
+  };
+  const onChildError = (error: Error) => {
+    protocolFailure = failure("failed", error);
+    child.stdout?.destroy(protocolFailure);
+  };
+  const onStdoutClose = () => {
+    protocolFailure ??= failure("closed stdout");
+  };
+  const onStdoutError = (error: Error) => {
+    protocolFailure ??= failure("failed to read stdout", error);
+  };
+  if (child.exitCode !== null || child.signalCode !== null) {
+    throw failure("exited");
+  }
+  child.stderr?.on("data", onStderr);
+  child.once("exit", onExit);
+  child.once("error", onChildError);
+  child.stdout.once("close", onStdoutClose);
+  child.stdout.once("error", onStdoutError);
+  try {
+    for await (const chunk of child.stdout.iterator({ destroyOnReturn: false })) {
+      stdout += String(chunk);
+      if (stdout.split("\n").includes(expected)) {
+        return;
       }
-      expect(stdout.split("\n")).toContain(expected);
-    },
-    { timeout: 10_000, interval: 20 },
-  );
+    }
+    throw protocolFailure ?? failure("closed stdout");
+  } catch (error) {
+    throw protocolFailure ?? error;
+  } finally {
+    child.stderr?.off("data", onStderr);
+    child.off("exit", onExit);
+    child.off("error", onChildError);
+    child.stdout.off("close", onStdoutClose);
+    child.stdout.off("error", onStdoutError);
+  }
 }
 
 async function waitForExit(child: ChildProcess): Promise<void> {

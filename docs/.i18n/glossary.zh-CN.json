@@ -668,6 +668,10 @@
     "target": "Doctor"
   },
   {
+    "source": "Triage",
+    "target": "Triage"
+  },
+  {
     "source": "Config",
     "target": "配置"
   },
@@ -1782,5 +1786,49 @@
   {
     "source": "CLI Automation",
     "target": "CLI 自动化"
+  },
+  {
+    "source": "llama-server",
+    "target": "llama-server"
+  },
+  {
+    "source": "llama.cpp (managed or existing server)",
+    "target": "llama.cpp（托管或现有服务器）"
+  },
+  {
+    "source": "Local model services",
+    "target": "本地模型服务"
+  },
+  {
+    "source": "LM Studio",
+    "target": "LM Studio"
+  },
+  {
+    "source": "Widget panel",
+    "target": "小组件面板"
+  },
+  {
+    "source": "Show widget",
+    "target": "显示小组件"
+  },
+  {
+    "source": "Session dashboards",
+    "target": "会话仪表板"
+  },
+  {
+    "source": "macOS widget panel",
+    "target": "macOS 小组件面板"
+  },
+  {
+    "source": "Geolocation plugin",
+    "target": "地理位置插件"
+  },
+  {
+    "source": "Trusted proxy auth",
+    "target": "受信任代理认证"
+  },
+  {
+    "source": "geolocation",
+    "target": "geolocation"
   }
 ]

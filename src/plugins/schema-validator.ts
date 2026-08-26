@@ -129,17 +129,35 @@ function withPluginFormatSemantics<T>(callback: () => T): T {
   }
 }
 
-function checkSchema(validate: TypeBoxValidator, value: unknown): TypeBoxValidationError[] | null {
-  return withPluginFormatSemantics(() => {
-    if (validate.Check(value)) {
-      return null;
-    }
-    return [...validate.Errors(value)] as TypeBoxValidationError[];
-  });
+function checkSchemaWithCurrentFormats(
+  validate: TypeBoxValidator,
+  value: unknown,
+): TypeBoxValidationError[] | null {
+  if (validate.Check(value)) {
+    return null;
+  }
+  return [...validate.Errors(value)] as TypeBoxValidationError[];
 }
 
-function applyDefaultsWithPluginFormatSemantics(schema: JsonSchemaValue, value: unknown): unknown {
-  return withPluginFormatSemantics(() => applyJsonSchemaDefaults(schema, value));
+function checkSchema(validate: TypeBoxValidator, value: unknown): TypeBoxValidationError[] | null {
+  return withPluginFormatSemantics(() => checkSchemaWithCurrentFormats(validate, value));
+}
+
+function applyDefaultsAndCheckSchema(params: {
+  schema: JsonSchemaValue;
+  validate: TypeBoxValidator;
+  value: unknown;
+  applyDefaults: boolean;
+  hasDefaults: boolean;
+}): { value: unknown; errors: TypeBoxValidationError[] | null } {
+  if (!params.applyDefaults || !params.hasDefaults) {
+    return { value: params.value, errors: checkSchema(params.validate, params.value) };
+  }
+  const clonedValue = cloneValidationValue(params.value);
+  return withPluginFormatSemantics(() => {
+    const value = applyJsonSchemaDefaults(params.schema, clonedValue);
+    return { value, errors: checkSchemaWithCurrentFormats(params.validate, value) };
+  });
 }
 
 function isDefaultActivatedConditionalFailure(params: {
@@ -345,11 +363,13 @@ export function validateJsonSchemaValue(params: {
   const useCache = params.cache !== false;
   if (!useCache) {
     const validate = compileSchema(params.schema);
-    const value =
-      params.applyDefaults && schemaHasDefaults(params.schema)
-        ? applyDefaultsWithPluginFormatSemantics(params.schema, cloneValidationValue(params.value))
-        : params.value;
-    const errors = checkSchema(validate, value);
+    const { value, errors } = applyDefaultsAndCheckSchema({
+      schema: params.schema,
+      validate,
+      value: params.value,
+      applyDefaults: params.applyDefaults === true,
+      hasDefaults: params.applyDefaults === true && schemaHasDefaults(params.schema),
+    });
     if (!errors) {
       return { ok: true, value };
     }
@@ -389,11 +409,13 @@ export function validateJsonSchemaValue(params: {
     cached.schema = params.schema;
   }
 
-  const value =
-    params.applyDefaults && cached.hasDefaults
-      ? applyDefaultsWithPluginFormatSemantics(params.schema, cloneValidationValue(params.value))
-      : params.value;
-  const errors = checkSchema(cached.validate, value);
+  const { value, errors } = applyDefaultsAndCheckSchema({
+    schema: params.schema,
+    validate: cached.validate,
+    value: params.value,
+    applyDefaults: params.applyDefaults === true,
+    hasDefaults: cached.hasDefaults,
+  });
   if (!errors) {
     return { ok: true, value };
   }

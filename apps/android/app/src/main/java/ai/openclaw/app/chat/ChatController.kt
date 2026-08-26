@@ -63,6 +63,7 @@ private const val WEAR_AGENT_PULSE_SWARM_MAX_ROWS = 1_000
 private const val WEAR_AGENT_PULSE_SWARM_FETCH_LIMIT = WEAR_AGENT_PULSE_SWARM_MAX_ROWS + 1
 private const val WEAR_AGENT_PULSE_DIRECT_CHILDREN_GROUP = "__wear_agent_pulse_direct_children__"
 private const val SUBAGENT_ACTIVITY_RETENTION_MS = 60_000L
+private const val MAX_RETAINED_TERMINAL_SUBAGENT_TASKS = 100
 private const val SESSION_EDITOR_MAX_BASE64_CHARS = ((OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES + 2) / 3) * 4
 private val MANAGED_MEDIA_PATH_REGEX =
   Regex("^/api/chat/media/outgoing/[^/]+/([0-9a-fA-F-]{36})/full(?:\\?.*)?$")
@@ -101,6 +102,8 @@ private class MainSessionReadiness(
   var job: Job? = null
 }
 
+private class BranchListingUnsupportedException : IllegalStateException("sessions.branches.list is not supported by this gateway")
+
 class ChatController internal constructor(
   private val scope: CoroutineScope,
   private val json: Json,
@@ -109,7 +112,7 @@ class ChatController internal constructor(
     { method, paramsJson, _ -> requestGateway(method, paramsJson) },
   private val requestGatewayForGateway: suspend (gatewayId: String, method: String, paramsJson: String?) -> String =
     { _, method, paramsJson -> requestGateway(method, paramsJson) },
-  private val gatewayAdvertisesProgressCard: () -> Boolean? = { null },
+  private val gatewayAdvertisesMethod: (method: String) -> Boolean? = { null },
   private val captureSettingsRequestLease: (gatewayScope: ChatCacheScope?) -> GatewaySession.RequestLease? =
     { gatewayScope ->
       GatewaySession.RequestLease(endpointStableId = gatewayScope?.gatewayId.orEmpty()) { method, paramsJson, _ ->
@@ -152,7 +155,7 @@ class ChatController internal constructor(
     cacheScope: () -> ChatCacheScope? = { null },
     currentDefaultAgentId: () -> String? = { "main" },
     currentDefaultAgentRevision: () -> Long = { 0L },
-    gatewayAdvertisesProgressCard: () -> Boolean? = { null },
+    gatewayAdvertisesMethod: (method: String) -> Boolean? = { null },
     commandOutbox: ChatCommandOutbox? = null,
     recordModelRecent: (String) -> Unit = {},
     onSessionDeleted: (ChatSessionDeletion) -> Unit = {},
@@ -168,7 +171,7 @@ class ChatController internal constructor(
     requestGatewayForGateway = { gatewayId, method, paramsJson ->
       session.requestForEndpoint(gatewayId, method, paramsJson)
     },
-    gatewayAdvertisesProgressCard = gatewayAdvertisesProgressCard,
+    gatewayAdvertisesMethod = gatewayAdvertisesMethod,
     captureSettingsRequestLease = { gatewayScope ->
       session.captureRequestLease(gatewayScope?.gatewayId)
     },
@@ -341,7 +344,9 @@ class ChatController internal constructor(
   val pendingToolCalls: StateFlow<List<ChatPendingToolCall>> = _pendingToolCalls.asStateFlow()
 
   private val subagentActivityLock = Any()
-  private val subagentActivityExpiryJobs = mutableMapOf<String, Job>()
+
+  // A null job preserves an expired terminal observation without retaining its UI row.
+  private val subagentActivityExpiryJobs = mutableMapOf<String, Job?>()
   private val _subagentActivities = MutableStateFlow<Map<String, ChatSubagentActivity>>(emptyMap())
   val subagentActivities: StateFlow<Map<String, ChatSubagentActivity>> = _subagentActivities.asStateFlow()
 
@@ -1772,6 +1777,7 @@ class ChatController internal constructor(
     sessionKey: String,
     ownerAgentId: String,
   ): List<SessionBranch> {
+    if (gatewayAdvertisesMethod("sessions.branches.list") == false) throw BranchListingUnsupportedException()
     val params =
       buildJsonObject {
         put("sessionKey", JsonPrimitive(sessionKey))
@@ -1914,7 +1920,9 @@ class ChatController internal constructor(
     }
   }
 
-  private fun branchListingUnsupported(error: Throwable): Boolean = error.message?.contains("unknown method: sessions.branches.list", ignoreCase = true) == true
+  private fun branchListingUnsupported(error: Throwable): Boolean =
+    error is BranchListingUnsupportedException ||
+      error.message?.contains("unknown method: sessions.branches.list", ignoreCase = true) == true
 
   private suspend fun refreshHistoryForSessionAction(
     snapshot: SessionActionSnapshot,
@@ -3409,27 +3417,34 @@ class ChatController internal constructor(
     gatewayScope: ChatCacheScope?,
   ): Boolean {
     val response =
-      try {
-        requestGatewayBound(gatewayScope?.gatewayId, "question.list", "{}")
-      } catch (err: GatewayRequestRejected) {
-        val unavailable =
-          err.gatewayError.missingScope() == "operator.questions" ||
-            (
-              err.gatewayError.code == "INVALID_REQUEST" &&
-                err.gatewayError.message == "unknown method: question.list"
-            )
-        if (!unavailable) throw err
-        if (!questionRefreshIsCurrent(refreshGeneration, stateRevision, gatewayScope)) return false
-        return synchronized(questionStateLock) {
-          if (!questionRefreshIsCurrentLocked(refreshGeneration, stateRevision)) return@synchronized false
-          if (_questions.value.isNotEmpty()) {
-            _questions.value = emptyList()
-            questionStateRevision += 1
-          }
-          syncQuestionEvictionsLocked()
-          true
+      if (gatewayAdvertisesMethod("question.list") == false) {
+        null
+      } else {
+        try {
+          requestGatewayBound(gatewayScope?.gatewayId, "question.list", "{}")
+        } catch (err: GatewayRequestRejected) {
+          val unavailable =
+            err.gatewayError.missingScope() == "operator.questions" ||
+              (
+                err.gatewayError.code == "INVALID_REQUEST" &&
+                  err.gatewayError.message == "unknown method: question.list"
+              )
+          if (!unavailable) throw err
+          null
         }
       }
+    if (response == null) {
+      if (!questionRefreshIsCurrent(refreshGeneration, stateRevision, gatewayScope)) return false
+      return synchronized(questionStateLock) {
+        if (!questionRefreshIsCurrentLocked(refreshGeneration, stateRevision)) return@synchronized false
+        if (_questions.value.isNotEmpty()) {
+          _questions.value = emptyList()
+          questionStateRevision += 1
+        }
+        syncQuestionEvictionsLocked()
+        true
+      }
+    }
     if (!questionRefreshIsCurrent(refreshGeneration, stateRevision, gatewayScope)) return false
     val listedRecords = json.decodeFromString<QuestionListResult>(response).questions
     val listedIds = listedRecords.mapTo(mutableSetOf()) { it.id }
@@ -5889,7 +5904,7 @@ class ChatController internal constructor(
         // SUNSET 2026-10-18: this fallback is a fixed cutover window, not a permanent contract.
         // On that date delete it together with the Gateway's legacy stream:"plan" dual-emit and
         // the Apple twin in ChatViewModel+TransportEvents.swift. Tracked: #125639.
-        if (gatewayAdvertisesProgressCard() != false) return
+        if (gatewayAdvertisesMethod("progressCard.get") != false) return
         val planData = data ?: return
         if (planData["phase"].asStringOrNull() != "update") return
         val steps = parseChatPlanSteps(planData["steps"])
@@ -6018,6 +6033,7 @@ class ChatController internal constructor(
     val now = System.currentTimeMillis()
     synchronized(subagentActivityLock) {
       val existing = _subagentActivities.value[taskId]
+      if (terminal && existing == null && subagentActivityExpiryJobs.containsKey(taskId)) return@synchronized
       val lastActivity = task["lastActivity"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty)
       val fallback =
         task["progressSummary"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty)
@@ -6063,7 +6079,12 @@ class ChatController internal constructor(
             synchronized(subagentActivityLock) {
               if (subagentActivityExpiryJobs[taskId] !== coroutineContext[Job]) return@synchronized
               _subagentActivities.value = _subagentActivities.value - taskId
-              subagentActivityExpiryJobs.remove(taskId)
+              subagentActivityExpiryJobs[taskId] = null
+              if (subagentActivityExpiryJobs.count { it.value == null } > MAX_RETAINED_TERMINAL_SUBAGENT_TASKS) {
+                subagentActivityExpiryJobs.entries.firstOrNull { it.value == null }?.let {
+                  subagentActivityExpiryJobs.remove(it.key)
+                }
+              }
             }
           }
       }
@@ -6079,7 +6100,7 @@ class ChatController internal constructor(
 
   private fun clearSubagentActivities() {
     synchronized(subagentActivityLock) {
-      subagentActivityExpiryJobs.values.forEach(Job::cancel)
+      subagentActivityExpiryJobs.values.forEach { it?.cancel() }
       subagentActivityExpiryJobs.clear()
       _subagentActivities.value = emptyMap()
     }
@@ -6098,6 +6119,7 @@ class ChatController internal constructor(
   }
 
   private fun refreshProgressCard() {
+    if (gatewayAdvertisesMethod("progressCard.get") == false) return
     val sessionKey = normalizeRequestedSessionKey(_sessionKey.value)
     val gatewayScope = currentCacheScope()
     val generation = progressCardFetchGeneration.incrementAndGet()
@@ -6521,6 +6543,7 @@ class ChatController internal constructor(
           entryId = obj["__openclaw"].asObjectOrNull()?.get("id").asStringOrNull(),
           provenance = parseChatMessageProvenance(obj["provenance"]),
           transcriptMarker = parseChatTranscriptMarker(obj["__openclaw"]),
+          senderLabel = obj["senderLabel"].asJsonStringOrNull()?.trim()?.takeIf { role == "user" && it.isNotEmpty() },
         )
       }
 
@@ -6658,6 +6681,7 @@ class ChatController internal constructor(
           .asArrayOrNull()
           ?.mapNotNull { it.asStringOrNull()?.trim()?.takeIf(String::isNotEmpty) },
       hasActiveRunMetadata = "hasActiveRun" in obj || "activeRunIds" in obj,
+      hasActiveRunIdsMetadata = "activeRunIds" in obj,
       parentSessionKey = obj["parentSessionKey"].asStringOrNull()?.trim(),
       spawnedBy = obj["spawnedBy"].asStringOrNull()?.trim(),
       hasActiveSubagentRun = obj["hasActiveSubagentRun"].asBooleanOrNull(),
@@ -6877,6 +6901,7 @@ class ChatController internal constructor(
     upsertSessionEntry(
       info,
       preserveExistingContextUsageWithoutTotal = true,
+      replaceActiveRunIds = true,
       publishRunState = publishRunState,
     )
   }
@@ -6884,6 +6909,7 @@ class ChatController internal constructor(
   private fun upsertSessionEntry(
     entry: ChatSessionEntry,
     preserveExistingContextUsageWithoutTotal: Boolean = false,
+    replaceActiveRunIds: Boolean = false,
     clearedFields: Set<String> = emptySet(),
     publishRunState: Boolean = true,
   ) {
@@ -6898,6 +6924,7 @@ class ChatController internal constructor(
               existing = it[index],
               next = entry,
               preserveExistingContextUsageWithoutTotal = preserveExistingContextUsageWithoutTotal,
+              replaceActiveRunIds = replaceActiveRunIds,
             )
           if (clearedFields.isNotEmpty()) {
             applied =
@@ -7103,20 +7130,21 @@ internal fun parseChatMessageContent(el: JsonElement): ChatMessageContent? {
       )
     }
 
-    "attachment" -> {
-      val attachment = obj["attachment"].asObjectOrNull() ?: return null
+    "attachment", "file" -> {
+      val attachment = obj["attachment"].asObjectOrNull() ?: obj
       val mimeType = attachment["mimeType"].asStringOrNull()
       val type =
         when {
           attachment["kind"].asStringOrNull() == "audio" || mimeType?.startsWith("audio/") == true -> "audio"
           attachment["kind"].asStringOrNull() == "video" || mimeType?.startsWith("video/") == true -> "video"
+          attachment["kind"].asStringOrNull() == "document" || !attachment.containsKey("kind") -> "file"
           else -> return null
         }
       val url = attachment["url"].asStringOrNull()
       ChatMessageContent(
         type = type,
         mimeType = mimeType,
-        fileName = attachment["fileName"].asStringOrNull() ?: attachment["label"].asStringOrNull(),
+        fileName = attachment["fileName"].asStringOrNull() ?: (attachment["label"] ?: attachment["name"]).asStringOrNull(),
         artifactId = attachment["artifactId"].asStringOrNull() ?: managedMediaArtifactId(url),
         url = url,
         openUrl = attachment["openUrl"].asStringOrNull(),
@@ -7532,10 +7560,12 @@ internal fun mergeChatSessionEntry(
   existing: ChatSessionEntry,
   next: ChatSessionEntry,
   preserveExistingContextUsageWithoutTotal: Boolean = false,
+  replaceActiveRunIds: Boolean = false,
 ): ChatSessionEntry {
   val preserveExistingContextUsage = preserveExistingContextUsageWithoutTotal && next.totalTokens == null
   val hasActiveRun = if (next.hasActiveRunMetadata) next.hasActiveRun else existing.hasActiveRun
-  val activeRunIds = if (next.hasActiveRunMetadata) next.activeRunIds else existing.activeRunIds
+  val activeRunIds =
+    if (replaceActiveRunIds || next.hasActiveRunIdsMetadata) next.activeRunIds else existing.activeRunIds
   val observerDigest =
     reconcileSessionObserverDigest(
       existing = existing.observerDigest,
@@ -7600,6 +7630,12 @@ internal fun mergeChatSessionEntry(
     hasActiveRun = hasActiveRun,
     activeRunIds = activeRunIds,
     hasActiveRunMetadata = existing.hasActiveRunMetadata || next.hasActiveRunMetadata,
+    hasActiveRunIdsMetadata =
+      if (replaceActiveRunIds) {
+        next.hasActiveRunIdsMetadata
+      } else {
+        existing.hasActiveRunIdsMetadata || next.hasActiveRunIdsMetadata
+      },
     parentSessionKey = next.parentSessionKey ?: existing.parentSessionKey,
     spawnedBy = next.spawnedBy ?: existing.spawnedBy,
     hasActiveSubagentRun = next.hasActiveSubagentRun ?: existing.hasActiveSubagentRun,

@@ -99,18 +99,23 @@ suite.define(() => {
       );
       expect(await trigger.getAttribute("data-project-id")).toBeNull();
 
+      const permission = page.locator('[data-chat-permission-select="true"]');
+      await permission.click();
+      await page.locator('[data-chat-permission-option="read-only"]').click();
       await page.locator(".new-session-page__message").fill("inspect the cloned project");
       await page.getByRole("button", { name: "Start session" }).click();
       const addRequest = await gateway.waitForRequest("projects.add");
       expect(addRequest.params).toEqual({ gitUrl: "https://github.com/openclaw/openclaw.git" });
       await captureProjectUiProof(page, "project-cloning.png");
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+      expect(await permission.isDisabled()).toBe(true);
       await gateway.resolveDeferred("projects.add", clonedProject);
 
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
         agentId: "main",
         message: "inspect the cloned project",
+        permissionMode: "read-only",
         projectId: "openclaw",
       });
       expect(create.params).not.toHaveProperty("cwd");

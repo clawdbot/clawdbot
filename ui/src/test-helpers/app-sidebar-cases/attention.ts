@@ -184,6 +184,37 @@ describe("AppSidebar session attention", () => {
     expect(sidebar.querySelector('[data-session-attention="agent"]')).toBeNull();
   });
 
+  it("collapses hidden previews to one line without hiding attention", async () => {
+    const sessionsHarness = createSessionsHarness("main", [sessionKey]);
+    setRows(sessionsHarness, [
+      {
+        key: sessionKey,
+        kind: "direct",
+        label: "Deploy",
+        updatedAt: 2,
+        agentStatus: { note: "Deploying to staging", expiresAt: Date.now() + 60_000 },
+      },
+    ]);
+    const { sidebar } = await mountSidebar(
+      createGateway({} as GatewayBrowserClient),
+      sessionsHarness.sessions,
+    );
+
+    sidebar.sessionOrganizer.setSessionsShowPreview(false);
+    await sidebar.updateComplete;
+
+    const previewRow = sidebar.querySelector(`[data-session-key="${sessionKey}"]`);
+    expect(previewRow?.textContent).not.toContain("Deploying to staging");
+    expect(previewRow?.classList.contains("sidebar-recent-session--single-line")).toBe(true);
+
+    setRows(sessionsHarness, [failedRow()]);
+    await sidebar.updateComplete;
+
+    const attentionRow = sidebar.querySelector(`[data-session-key="${sessionKey}"]`);
+    expect(attentionRow?.textContent).toContain("Run failed: Provider credits exhausted");
+    expect(attentionRow?.classList.contains("sidebar-recent-session--single-line")).toBe(false);
+  });
+
   it("does not render an expired agent declaration", async () => {
     const sessionsHarness = createSessionsHarness("main", [sessionKey]);
     setRows(sessionsHarness, [
@@ -231,7 +262,7 @@ describe("AppSidebar session attention", () => {
     expect(sidebar.textContent).not.toContain("Run failed:");
   });
 
-  it("uses canonical Home attention and shared agent approval tooltips", async () => {
+  it("uses canonical Home attention without duplicating an agent approval badge", async () => {
     const mainKey = "agent:main:main";
     const approval = {
       id: "approval-main",
@@ -257,14 +288,9 @@ describe("AppSidebar session attention", () => {
         ?.content,
     ).toBe("Waiting for approval");
 
-    const agentBadge = sidebar.querySelector(".sidebar-agent-card__approval-count");
-    const agentLabel = agentBadge?.getAttribute("aria-label");
-    expect(agentLabel).toBeTruthy();
-    expect(agentBadge?.hasAttribute("title")).toBe(false);
     expect(
-      (agentBadge?.closest("openclaw-tooltip") as (HTMLElement & { content?: string }) | null)
-        ?.content,
-    ).toBe(agentLabel);
+      sidebar.querySelector(".sidebar-agent-card__main")?.getAttribute("aria-label"),
+    ).not.toContain("pending approval");
   });
 
   it("shows an error icon and reason for an unread failure", async () => {

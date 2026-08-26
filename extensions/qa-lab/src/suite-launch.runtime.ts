@@ -27,7 +27,10 @@ import {
   type QaSeedScenarioWithSource,
 } from "./scenario-catalog.js";
 import { expandQaScenarioExecutionCells, type QaScenarioExecutionCell } from "./scenario-lane.js";
-import { publishQaSuiteArtifactFiles } from "./suite-artifacts.js";
+import {
+  invalidateQaSuiteArtifactGeneration,
+  publishQaSuiteArtifactFiles,
+} from "./suite-artifacts.js";
 import {
   mapQaSuiteWithConcurrency,
   normalizeQaSuiteConcurrency,
@@ -415,15 +418,7 @@ async function runQaTestFileSuiteFromRuntime(params: {
   scenarios: readonly QaTestFileScenario[];
 }): Promise<QaTestFileScenarioRunResult> {
   const runParams = params.runParams;
-  if (runParams?.runtimePair) {
-    throw new Error("--runtime-pair requires execution.kind: flow scenarios.");
-  }
-  if (runParams?.forcedRuntime) {
-    throw new Error("forced runtime execution requires execution.kind: flow scenarios.");
-  }
-  if (runParams?.captureRuntimeParityCell) {
-    throw new Error("runtime parity capture requires execution.kind: flow scenarios.");
-  }
+  rejectFlowOnlySuiteOptionsForUnifiedRun(runParams);
   const repoRoot = path.resolve(runParams?.repoRoot ?? process.cwd());
   const outputDir = await resolveQaSuiteOutputDir(repoRoot, runParams?.outputDir);
   const providerMode = normalizeQaProviderMode(runParams?.providerMode ?? DEFAULT_QA_PROVIDER_MODE);
@@ -622,8 +617,9 @@ function testFileScenarioResultToSuiteScenario(
   result: QaTestFileScenarioRunResult["results"][number],
   repoRoot: string,
 ): QaSuiteScenarioResult {
-  const suiteStatus = result.status === "pass" ? "pass" : "fail";
-  const stepStatus = result.status === "skipped" ? "skip" : suiteStatus;
+  const suiteStatus =
+    result.status === "pass" ? "pass" : result.status === "skipped" ? "skip" : "fail";
+  const stepStatus = suiteStatus;
   const logPath = toRepoRelativePath(repoRoot, result.logPath);
   const details = [
     `execution.kind=${result.scenario.execution.kind}`,
@@ -731,6 +727,7 @@ async function runUnifiedQaSuite(params: {
   const startedAt = new Date();
   const repoRoot = path.resolve(params.runParams?.repoRoot ?? process.cwd());
   const outputDir = await resolveQaSuiteOutputDir(repoRoot, params.runParams?.outputDir);
+  await invalidateQaSuiteArtifactGeneration(outputDir);
   // Only an explicitly selected single flow may replace the unified suite's mock default.
   const [selectedScenario] = params.plan.scenarios;
   const selectedProviderMode =

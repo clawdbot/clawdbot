@@ -250,6 +250,8 @@ type OutboundSessionEntryParams = {
   channel: ChannelId;
   accountId?: string | null;
   route: OutboundSessionRoute;
+  /** Revalidates caller-owned route authority at the final persistence boundary. */
+  assertCommitAllowed?: () => void;
 };
 
 async function persistOutboundSessionEntry(
@@ -285,6 +287,7 @@ async function persistOutboundSessionEntry(
     accountId: params.accountId ?? undefined,
     threadId: params.route.threadId,
     ctx,
+    ...(params.assertCommitAllowed ? { assertCommitAllowed: params.assertCommitAllowed } : {}),
   });
 }
 

@@ -16,6 +16,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import { logVerbose } from "../../globals.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
+import { interruptSessionWorkAdmissions } from "../../sessions/session-lifecycle-admission.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import {
   formatThinkingLevels,
@@ -40,8 +41,9 @@ import { resolveQueueSettings } from "./queue/settings-runtime.js";
 import { getExistingFollowupQueue } from "./queue/state.js";
 import {
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
-  abortReplyRunBySessionId,
+  interruptReplyRunTarget,
   isReplyRunActiveForSessionId,
+  replyRunRegistry,
   resolveActiveReplyRunThreadId,
   resolveActiveReplyRunSessionId,
   waitForReplyRunEndBySessionId,
@@ -392,10 +394,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     (laneSize > 0 || activeSessionIdForInterrupt)
   ) {
     const cleared = clearCommandLane(sessionLaneKey);
-    const aborted = embeddedAgentRuntime?.abortEmbeddedAgentRun(
-      activeSessionIdForInterrupt ?? preparedSessionState.sessionId,
-    );
-    logVerbose(`Interrupting ${sessionLaneKey} (cleared ${cleared}, aborted=${aborted})`);
+    logVerbose(`Cleared ${cleared} queued command(s) before interrupting ${sessionLaneKey}`);
   }
   const agentHarnessPolicy = useFastReplyRuntime
     ? undefined
@@ -520,6 +519,10 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     }
   }
   const { activeSessionId, isActive } = resolveQueueBusyState();
+  const activeRunInterruptTarget =
+    activeRunQueueMode === "interrupt" && sessionKey
+      ? replyRunRegistry.resolveCurrentInterruptTarget(sessionKey)
+      : undefined;
   const pendingQueue = getExistingFollowupQueue(queueKey);
   const queueAdmissionState = !pendingQueue
     ? "empty"
@@ -559,11 +562,22 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       queueMode: activeRunQueueMode,
       sessionKey,
       sessionId: sessionIdFinal,
-      abortActiveRun: (activeRunSessionId) => {
-        const embeddedAborted =
-          embeddedAgentRuntime?.abortEmbeddedAgentRun(activeRunSessionId) ?? false;
-        const replyOperationAborted = abortReplyRunBySessionId(activeRunSessionId);
-        return embeddedAborted || replyOperationAborted;
+      interruptActiveRun: async () => {
+        if (activeRunInterruptTarget) {
+          return (
+            await interruptReplyRunTarget(
+              activeRunInterruptTarget,
+              REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+            )
+          ).settled;
+        }
+        return storePath
+          ? await interruptSessionWorkAdmissions({
+              scope: storePath,
+              identities: [sessionKey, activeSessionId, preparedSessionState.sessionId],
+              timeoutMs: REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+            })
+          : false;
       },
       waitForActiveRunEnd: (activeRunSessionId) =>
         isReplyRunActiveForSessionId(activeRunSessionId)

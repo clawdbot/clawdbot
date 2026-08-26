@@ -18,6 +18,10 @@ let gatewayConfig: {
 };
 let authCheckCalls = 0;
 let transcriptReadError: Error | undefined;
+let authenticatedUserProfile:
+  | { profileId: string; displayName: string | null; hasAvatar: boolean; updatedAt: number }
+  | undefined;
+let sessionVisibleToProfile = true;
 
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => ({
@@ -25,16 +29,22 @@ vi.mock("../config/config.js", () => ({
   }),
 }));
 
-vi.mock("../sessions/transcript-events.js", () => ({
-  onInternalSessionTranscriptUpdate: (cb: typeof transcriptUpdateHandler) => {
-    transcriptUpdateHandler = cb;
-    return () => {
-      if (transcriptUpdateHandler === cb) {
-        transcriptUpdateHandler = undefined;
-      }
-    };
-  },
-}));
+vi.mock("../sessions/transcript-events.js", async (importOriginal) => {
+  const { attachSessionTranscriptRunId, resolveTerminalAssistantTranscriptRunId } =
+    await importOriginal<typeof import("../sessions/transcript-events.js")>();
+  return {
+    attachSessionTranscriptRunId,
+    resolveTerminalAssistantTranscriptRunId,
+    onInternalSessionTranscriptUpdate: (cb: typeof transcriptUpdateHandler) => {
+      transcriptUpdateHandler = cb;
+      return () => {
+        if (transcriptUpdateHandler === cb) {
+          transcriptUpdateHandler = undefined;
+        }
+      };
+    },
+  };
+});
 
 vi.mock("./http-utils.js", () => ({
   getHeader: (req: IncomingMessage, name: string) => {
@@ -44,7 +54,10 @@ vi.mock("./http-utils.js", () => ({
   resolveSharedSecretHttpOperatorScopes: () => ["operator.read"],
   authorizeScopedGatewayHttpRequestOrReply: async () => ({
     cfg: { gateway: {} },
-    requestAuth: { trustDeclaredOperatorScopes: true },
+    requestAuth: {
+      trustDeclaredOperatorScopes: true,
+      ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
+    },
     operatorScopes: ["operator.read"],
   }),
   checkGatewayHttpRequestAuth: async (params: {
@@ -74,9 +87,22 @@ vi.mock("./http-utils.js", () => ({
     }
     return {
       ok: true as const,
-      requestAuth: { trustDeclaredOperatorScopes: true },
+      requestAuth: {
+        trustDeclaredOperatorScopes: true,
+        ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
+      },
     };
   },
+}));
+
+vi.mock("./session-sharing.js", () => ({
+  createSessionListEntryFilter: ({ client }: { client: unknown }) =>
+    client ? () => sessionVisibleToProfile : undefined,
+  resolveSessionSharingTarget: () => ({
+    canonicalKey: "agent:main",
+    agentId: "main",
+    entry: { sessionId: "session-1" },
+  }),
 }));
 
 vi.mock("./session-utils.js", () => ({
@@ -94,31 +120,17 @@ vi.mock("./session-utils.js", () => ({
   resolveSessionTranscriptCandidates: () => ["/tmp/session-1.jsonl"],
 }));
 
-vi.mock("./session-transcript-readers.js", () => ({
-  readRecentSessionMessagesWithStatsAsync: async () => {
-    if (transcriptReadError) {
-      throw transcriptReadError;
-    }
-    return { messages: [], totalMessages: 0 };
-  },
-  readSessionMessagesAsync: async () => [],
-  readSessionMessagesWithSourceAsync: async () => {
-    if (transcriptReadError) {
-      throw transcriptReadError;
-    }
-    return { messages: [] };
-  },
-}));
-
 vi.mock("./session-history-state.js", () => ({
   buildSessionHistorySnapshot: () => ({
     history: { items: [], nextCursor: null, messages: [] },
   }),
   resolveCursorSeq: (_cursor: string | undefined) => undefined,
-  resolveSessionHistoryTailReadOptions: (limit: number) => ({
-    maxMessages: limit * 20 + 20,
-    maxLines: limit * 20 + 20,
-  }),
+  readSessionHistoryRawSnapshotAsync: async () => {
+    if (transcriptReadError) {
+      throw transcriptReadError;
+    }
+    return { rawMessages: [] };
+  },
   SessionHistorySseState: {
     fromRawSnapshot: (_params: unknown) => ({
       snapshot: () => ({ items: [], nextCursor: null, messages: [] }),
@@ -350,6 +362,8 @@ afterEach(() => {
   authRevoked = false;
   authCheckCalls = 0;
   transcriptReadError = undefined;
+  authenticatedUserProfile = undefined;
+  sessionVisibleToProfile = true;
   gatewayConfig = {
     trustedProxies: ["10.0.0.1"],
     allowRealIpFallback: false,
@@ -357,6 +371,38 @@ afterEach(() => {
 });
 
 describe("session history SSE auth revocation", () => {
+  it("returns not found when a verified role cannot view the requested session", async () => {
+    authenticatedUserProfile = {
+      profileId: "profile-guest",
+      displayName: "Guest",
+      hasAvatar: false,
+      updatedAt: 1,
+    };
+    sessionVisibleToProfile = false;
+
+    const { res } = await openSessionHistoryStreamPair(TRUSTED_PROXY_STARTUP_OPTIONS, {
+      expectSubscribed: false,
+    });
+
+    expect(res.statusCode).toBe(404);
+    expect(res.writes.join("")).toContain("Session not found");
+  });
+
+  it("closes an existing stream before disclosure when profile access is revoked", async () => {
+    authenticatedUserProfile = {
+      profileId: "profile-guest",
+      displayName: "Guest",
+      hasAvatar: false,
+      updatedAt: 1,
+    };
+    const res = await openSessionHistoryStream(TRUSTED_PROXY_STARTUP_OPTIONS);
+    sessionVisibleToProfile = false;
+
+    emitTranscriptTextUpdate({ text: "role-revoked secret", messageId: "m-role" });
+
+    await expectStreamClosedWithoutMessage(res, "role-revoked secret");
+  });
+
   it("returns retryable HTTP unavailable while a dirty projection rebuilds", async () => {
     transcriptReadError = new SessionTranscriptProjectionUnavailableError("session-1");
 

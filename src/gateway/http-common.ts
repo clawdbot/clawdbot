@@ -105,7 +105,7 @@ export function sendInvalidRequest(res: ServerResponse, message: string) {
   });
 }
 
-export function buildMissingScopeForbiddenBody(
+function buildMissingScopeForbiddenBody(
   missingScope: string | undefined,
   requiredScopes?: readonly string[],
 ) {

@@ -14,11 +14,12 @@ import {
 } from "../command-execution-startup.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { applyResolvedCommandOutputMode } from "../json-output-mode.js";
+import { isModelsPlainMachineOutput } from "../models-output-mode.js";
 import {
   resolvePluginInstallInvalidConfigPolicy,
   resolvePluginInstallPreactionRequest,
 } from "../plugin-install-config-policy.js";
-import { getCommanderCommandPath, hasCommanderOptionValue } from "./commander-parse-facts.js";
+import { getCommanderCommandPath, hasCommanderOptionToken } from "./commander-parse-facts.js";
 import { isCommandJsonOutputMode } from "./json-mode.js";
 import { isParentDefaultHelpAction } from "./parent-default-help.js";
 
@@ -117,10 +118,11 @@ export function registerPreActionHooks(program: Command, programVersion: string)
   program.hook("preAction", async (_thisCommand, actionCommand) => {
     setProcessTitleForCommand(actionCommand);
     const argv = process.argv;
-    const helpOrVersionWasOptionValue = hasCommanderOptionValue(
+    const helpOrVersionWasOptionValue = hasCommanderOptionToken(
       actionCommand,
       argv,
       HELP_OR_VERSION_FLAGS,
+      "value",
     );
     if (
       (isHelpOrVersionInvocation(argv) && !helpOrVersionWasOptionValue) ||
@@ -129,11 +131,13 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       return;
     }
     const jsonOutputMode = isCommandJsonOutputMode(actionCommand, argv);
-    applyResolvedCommandOutputMode(jsonOutputMode);
+    const machineOutputMode = jsonOutputMode || isModelsPlainMachineOutput(argv);
+    applyResolvedCommandOutputMode(jsonOutputMode, machineOutputMode);
     const { commandPath, startupPolicy } = resolveCliExecutionStartupContext({
       argv,
       commandPath: getCommanderCommandPath(actionCommand),
       jsonOutputMode,
+      machineOutputMode,
       env: process.env,
     });
     await applyCliExecutionStartupPresentation({

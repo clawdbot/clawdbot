@@ -150,7 +150,7 @@ describe("createQaSmokeCiPart", () => {
     expect(primaryScenarioIds.every((ids) => ids.length > 0)).toBe(true);
   });
 
-  it("keeps real Gateway-hosted proof outside the Crabline smoke profile", () => {
+  it("keeps real Gateway-hosted proof outside the Crabline channel-driver profile", () => {
     const coverageId = "control-ui.gateway-hosted-ui-control";
     const smokeSelection = resolveQaProfileScenarios({
       profile: "smoke-ci",

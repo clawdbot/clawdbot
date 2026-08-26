@@ -41,8 +41,9 @@ export type CatalogSource = "openclaw" | "mcp" | "client";
 export type CatalogTool = AnyAgentTool | ToolDefinition;
 export type CatalogVisibilityOptions = {
   includeMcp?: boolean;
+  allowedIds?: { has(id: string): boolean };
 };
-export type UnknownToolRecoverySurface = "raw-tools" | "code-mode" | "tools";
+export type UnknownToolRecoverySurface = "raw-tools" | "code-mode" | "catalog";
 export type UnknownToolErrorOptions = {
   exactIdOnly?: boolean;
   recoverySurface?: UnknownToolRecoverySurface;
@@ -101,6 +102,8 @@ export type ToolSearchToolContext = {
   abortSignal?: AbortSignal;
   executeTool?: ToolSearchCatalogToolExecutor;
   forceRestartSafeTools?: boolean;
+  /** Set when the run executes only these tools; swarm globals gate on `sessions_spawn`. */
+  toolExecutionAllow?: readonly string[];
   codeModeSkills?: readonly CodeModeSkill[];
 };
 
@@ -128,6 +131,8 @@ export type ToolSearchCatalogSession = {
 
 export type ToolSearchCatalogRef = {
   current?: ToolSearchCatalogSession;
+  onChange?: () => void;
+  onDispose?: () => void;
 };
 
 export type CodeModeBridgeMethod = "search" | "describe" | "call";

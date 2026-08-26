@@ -4,6 +4,7 @@ import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { resolveSessionInfoModelSelection } from "../agents/model-selection-display.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { isAbortError } from "../infra/abort-signal.js";
 import {
   agentSessionKeysMatchByRequestKey,
   normalizeAgentId,
@@ -50,7 +51,7 @@ type SessionActionContext = {
   agentNames: Map<string, string>;
   initialSessionInput: string;
   initialSessionAgentId: string | null;
-  resolveSessionSelection: (raw?: string) => { key: string; agentId: string };
+  resolveSessionSelection: (raw?: string, agentId?: string) => { key: string; agentId: string };
   updateHeader: () => void;
   updateFooter: () => void;
   updateAutocompleteProvider: () => void;
@@ -87,6 +88,43 @@ export function createSessionActions(context: SessionActionContext) {
     sessionKey: state.currentSessionKey,
     agentId: state.currentAgentId,
   });
+
+  const applySessionSelection = (nextSelection: { key: string; agentId: string }) => {
+    const previousSelection = captureSessionSelection();
+    if (
+      nextSelection.agentId === previousSelection.agentId &&
+      agentSessionKeysMatchByRequestKey(nextSelection.key, previousSelection.sessionKey)
+    ) {
+      return false;
+    }
+
+    // Retire the previous session's runs before history can adopt a new
+    // in-flight owner; otherwise its completion can promote an old run.
+    invalidateRunOwnership?.();
+    reduceTuiSessionProjection(state, {
+      type: "sessionReset",
+      scope: readTuiSessionProjectionScope(state),
+    });
+    state.currentAgentId = nextSelection.agentId;
+    state.currentSessionKey = nextSelection.key;
+    state.activeChatRunId = null;
+    submit.clearPendingSubmit(state);
+    setActivityStatus("idle");
+    state.currentSessionId = null;
+    state.sessionInfo.displayName = undefined;
+    clearTuiSessionModeOverrides(state.sessionInfo);
+    // Session keys can move backwards in updatedAt ordering; drop previous session freshness
+    // so refresh data for the newly selected session isn't rejected as stale.
+    state.sessionInfo.updatedAt = null;
+    state.historyLoaded = false;
+    // Live prompt identities belong to the old selection, not its pending successor.
+    chatLog.clearAll();
+    clearLocalRunIds?.();
+    btw.clear();
+    updateHeader();
+    updateFooter();
+    return true;
+  };
 
   const isCurrentSessionSelection = (selection: { sessionKey: string; agentId: string }): boolean =>
     state.currentAgentId === selection.agentId &&
@@ -134,18 +172,22 @@ export function createSessionActions(context: SessionActionContext) {
       }
       state.initialSessionApplied = true;
     } else if (!state.agents.some((agent) => agent.id === state.currentAgentId)) {
-      state.currentAgentId =
+      const nextAgentId =
         state.agents[0]?.id ?? normalizeAgentId(result.defaultId ?? state.currentAgentId);
+      if (nextAgentId !== state.currentAgentId) {
+        applySessionSelection(resolveSessionSelection(undefined, nextAgentId));
+        return;
+      }
     }
     updateHeader();
     updateFooter();
   };
 
-  const refreshAgents = () =>
+  const refreshAgents = (ownsRefresh: () => boolean = () => true) =>
     refreshTuiAgentList({
       load: () => client.listAgents(),
-      apply: applyAgentsResult,
-      reportError: (message) => chatLog.addSystem(`agents list failed: ${message}`),
+      apply: (result) => ownsRefresh() && applyAgentsResult(result),
+      reportError: (error) => ownsRefresh() && chatLog.addSystem(`agents list failed: ${error}`),
     });
 
   const updateAgentFromSessionKey = (key: string) => {
@@ -535,15 +577,17 @@ export function createSessionActions(context: SessionActionContext) {
           const toolName = formatPrimitiveString(message.toolName, "tool");
           const component = chatLog.startTool(toolCallId, toolName, {});
           component.setResult(
-            {
-              content: Array.isArray(message.content)
-                ? (message.content as Record<string, unknown>[])
-                : [],
-              details:
-                typeof message.details === "object" && message.details
-                  ? (message.details as Record<string, unknown>)
-                  : undefined,
-            },
+            state.sessionInfo.verboseLevel === "full"
+              ? {
+                  content: Array.isArray(message.content)
+                    ? (message.content as Record<string, unknown>[])
+                    : [],
+                  details:
+                    typeof message.details === "object" && message.details
+                      ? (message.details as Record<string, unknown>)
+                      : undefined,
+                }
+              : { content: [] },
             { isError: Boolean(message.isError) },
           );
         }
@@ -589,55 +633,18 @@ export function createSessionActions(context: SessionActionContext) {
             : ({ state: "completed" } as const);
       return { loaded: true, runOutcome };
     } catch (err) {
-      if (!isCurrentLoad()) {
-        return { loaded: false };
+      if (isCurrentLoad() && !isAbortError(err)) {
+        chatLog.addSystem(`history failed: ${formatTuiErrorMessage(err)}`);
+        tui.requestRender(true);
       }
-      chatLog.addSystem(`history failed: ${formatTuiErrorMessage(err)}`);
-      tui.requestRender(true);
       return { loaded: false };
     }
   };
 
-  const setSession = async (rawKey: string) => {
-    const previousSelection = captureSessionSelection();
-    const nextSelection = resolveSessionSelection(rawKey);
-    const nextKey = nextSelection.key;
-    const selectionChanged = !(
-      nextSelection.agentId === previousSelection.agentId &&
-      agentSessionKeysMatchByRequestKey(nextKey, previousSelection.sessionKey)
-    );
-    if (selectionChanged) {
-      // Retire the previous session's runs before history can adopt a new
-      // in-flight owner; otherwise its completion can promote an old run.
-      invalidateRunOwnership?.();
-      reduceTuiSessionProjection(state, {
-        type: "sessionReset",
-        scope: readTuiSessionProjectionScope(state),
-      });
+  const setSession = async (rawKey: string, agentId?: string) => {
+    if (applySessionSelection(resolveSessionSelection(rawKey, agentId)) || !state.historyLoaded) {
+      await loadHistory();
     }
-    state.currentAgentId = nextSelection.agentId;
-    state.currentSessionKey = nextKey;
-    state.activeChatRunId = null;
-    submit.clearPendingSubmit(state);
-    setActivityStatus("idle");
-    if (selectionChanged) {
-      state.currentSessionId = null;
-      clearTuiSessionModeOverrides(state.sessionInfo);
-    }
-    // Session keys can move backwards in updatedAt ordering; drop previous session freshness
-    // so refresh data for the newly selected session isn't rejected as stale.
-    state.sessionInfo.updatedAt = null;
-    state.historyLoaded = false;
-    if (selectionChanged) {
-      // Live prompt identities belong to the old selection, not its pending successor.
-      chatLog.clearAll();
-    }
-    chatLog.clearPendingUsers();
-    clearLocalRunIds?.();
-    btw.clear();
-    updateHeader();
-    updateFooter();
-    await loadHistory();
   };
 
   const abortActive = async (params?: { preferActive?: boolean }) => {
@@ -652,8 +659,14 @@ export function createSessionActions(context: SessionActionContext) {
       return;
     }
     const selection = captureSessionSelection();
+    const sessionId = state.currentSessionId;
+    const sessionGeneration = state.sessionGeneration ?? 0;
     const pendingRunId = submit.getPendingSubmitAcceptedRunId(state);
     const activeRunId = state.activeChatRunId;
+    const isCurrentAbort = () =>
+      isCurrentSessionSelection(selection) &&
+      (state.sessionGeneration ?? 0) === sessionGeneration &&
+      (sessionId === null || state.currentSessionId === sessionId);
     const dropPendingRun = (runId: string) => {
       reduceTuiSessionProjection(state, {
         type: "sendFailed",
@@ -670,7 +683,7 @@ export function createSessionActions(context: SessionActionContext) {
         sessionKey: selection.sessionKey,
         ...(!parseAgentSessionKey(selection.sessionKey) ? { agentId: selection.agentId } : {}),
       });
-      if (!isCurrentSessionSelection(selection)) {
+      if (!isCurrentAbort()) {
         return;
       }
       if (!result.aborted) {
@@ -697,7 +710,7 @@ export function createSessionActions(context: SessionActionContext) {
       }
       setActivityStatus("aborted");
     } catch (err) {
-      if (!isCurrentSessionSelection(selection)) {
+      if (!isCurrentAbort()) {
         return;
       }
       chatLog.addSystem(`abort failed: ${formatTuiErrorMessage(err)}`);
