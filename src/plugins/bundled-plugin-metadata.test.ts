@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core/error-coercion";
-import { beforeAll, describe, expect, it } from "vitest";
+import { assert, beforeAll, describe, expect, it } from "vitest";
 import { expectNoReaddirSyncDuring } from "../test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, toRepoRelativePath } from "../test-utils/repo-files.js";
 import { collectBundledChannelConfigsCore } from "./bundled-channel-config-metadata.js";
@@ -565,13 +565,21 @@ describe("bundled plugin metadata", () => {
 
   it("keeps empty-config Gateway startup narrower than declared startup sidecars", () => {
     const manifestRegistry = createRepoBundledManifestRegistry();
+    const linuxOnlyPlugin = manifestRegistry.plugins[0];
+    assert(linuxOnlyPlugin, "expected bundled plugin manifest fixture");
+    manifestRegistry.plugins.push({
+      ...linuxOnlyPlugin,
+      id: "zz-linux-only-default-test",
+      enabledByDefault: undefined,
+      enabledByDefaultOnPlatforms: ["linux"],
+      activation: { ...linuxOnlyPlugin.activation, onStartup: true },
+    });
     const index = createInstalledPluginIndexForManifests(manifestRegistry);
     const expectedPluginIds = [
       ...manifestRegistry.plugins
         .filter(
           (plugin) =>
-            isPluginEnabledByDefaultForPlatform(plugin, "linux") &&
-            plugin.activation?.onStartup === true,
+            isPluginEnabledByDefaultForPlatform(plugin, "linux") && plugin.activation?.onStartup,
         )
         .map((plugin) => plugin.id),
       ...EXPECTED_EMPTY_CONFIG_GATEWAY_STARTUP_EXTRAS,
@@ -586,33 +594,6 @@ describe("bundled plugin metadata", () => {
         platform: "linux",
       }),
     ).toEqual(expectedPluginIds);
-  });
-
-  it("includes Linux-only default plugins in empty-config Gateway startup", () => {
-    const manifestRegistry = createRepoBundledManifestRegistry();
-    const seed = manifestRegistry.plugins[0];
-    if (!seed) {
-      throw new Error("expected bundled plugin manifest fixture");
-    }
-    manifestRegistry.plugins.push({
-      ...seed,
-      id: "linux-only-default-test",
-      name: "Linux-only default test",
-      enabledByDefault: undefined,
-      enabledByDefaultOnPlatforms: ["linux"],
-      activation: { ...seed.activation, onStartup: true },
-    });
-    const index = createInstalledPluginIndexForManifests(manifestRegistry);
-
-    expect(
-      resolveGatewayStartupPluginIdsFromRegistry({
-        config: {},
-        env: {},
-        index,
-        manifestRegistry,
-        platform: "linux",
-      }),
-    ).toContain("linux-only-default-test");
   });
 
   it("auto-starts Bonjour for empty-config macOS Gateway startup", () => {
