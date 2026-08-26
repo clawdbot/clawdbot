@@ -2113,7 +2113,7 @@
     "@types/web-push": "3.6.4",
     "@types/ws": "8.18.1",
     "@typescript/native-preview": "7.0.0-dev.20260707.2",
-    "@vitest/coverage-v8": "4.1.10",
+    "@vitest/coverage-v8": "4.1.11",
     "esbuild": "0.28.2",
     "ipaddr.js": "2.5.0",
     "jscpd": "5.0.16",
@@ -2138,7 +2138,7 @@
     "tsx": "4.23.12",
     "unrun": "0.3.1",
     "vite": "8.2.1",
-    "vitest": "4.1.10"
+    "vitest": "4.1.11"
   },
   "optionalDependencies": {
     "sqlite-vec": "0.1.9"

@@ -29,9 +29,9 @@ const controlUiPerformanceBudgets = {
   // 350 KiB maintainer-approved by Vyctor 2026-08-11 for #121686;
   // #121734 left main 6 B below the prior 319 KiB hard ceiling.
   startupJsGzipBytes: 350 * KIB,
-  // 46 KiB CSS ceiling includes the self-hosted Absolutely theme from #129885;
-  // headroom remains bounded above the ~45 KiB merged production bundle.
-  startupCssGzipBytes: 46 * KIB,
+  // The Absolutely theme and Inbox update styling landed concurrently within
+  // 45 KiB alone, but their merged main tree is 46,092 B. Keep 500 B headroom.
+  startupCssGzipBytes: 45 * KIB + 512,
   largestJsGzipBytes: 215 * KIB,
   // Composer multiline surface (stack #124301) legitimately grew boot CSS;
   // operator decision 2026-08-25 rejected boot splitting due to precedence risk.
