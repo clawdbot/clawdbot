@@ -225,4 +225,75 @@ describe("profile-bound appearance preferences", () => {
       }),
     ).toMatchObject({ provenance: "device-local", value: "knot" });
   });
+
+  it("targets reset at the gateway value so an explicit product-default choice persists", async () => {
+    // With an empty profile over a gateway theme of Dash, resetValue must be the
+    // deletion fallback ("dash"); a product-default resetValue would classify an
+    // explicit Claw selection as a reset and silently drop the user's choice.
+    const config = configWithPrefs({ theme: "dash" });
+    const request = vi.fn(async (method: string) =>
+      method === "users.prefs.get" ? { status: "ok" as const, entries: {} } : { status: "ok" as const },
+    );
+    const writer = createServerPrefsWriter(request, scope, true, { ok: true }, false);
+    await refreshProfileAppearancePrefs({
+      client: writer.state.client!,
+      profileId,
+      configObject: config,
+      scope,
+      onApplied: vi.fn(),
+    });
+
+    const state = resolveServerUiPrefState(config, "theme", scope, loadSettings(), { profileId });
+    expect(state).toMatchObject({ provenance: "synced", resetValue: "dash", value: "dash" });
+
+    // The explicit Claw choice is a profile write, never a null reset.
+    patchSettings({ theme: "claw" });
+    pushServerUiPrefs(writer, { theme: "claw" }, { profileId, canWrite: true });
+    await waitForFast(() =>
+      expect(request).toHaveBeenLastCalledWith("users.prefs.set", {
+        entries: { "ui.theme": "claw" },
+      }),
+    );
+
+    // Resetting from synced provenance with a profile bound lands on the
+    // gateway value locally, matching what the profile-key deletion resolves to.
+    const reset = resetServerUiPref("theme", state, scope);
+    expect(reset.theme).toBe("dash");
+  });
+
+  it("reapplies the returning profile's appearance after an identity switch", async () => {
+    // A→B→A in one browser: per-scope last-seen state must not skip re-applying
+    // A's values while the DOM still shows B's.
+    const config = configWithPrefs({});
+    const prefsByProfile: Record<string, Record<string, string>> = {
+      "profile-a": { "ui.theme": "knot" },
+      "profile-b": { "ui.theme": "dash", "ui.accent": "#123456" },
+    };
+    let activeProfile = "profile-a";
+    const request = vi.fn(async () => ({
+      status: "ok" as const,
+      entries: prefsByProfile[activeProfile],
+    }));
+    const writer = createServerPrefsWriter(request, scope, true, { ok: true }, false);
+    const refresh = (nextProfile: string) => {
+      activeProfile = nextProfile;
+      return refreshProfileAppearancePrefs({
+        client: writer.state.client!,
+        profileId: nextProfile,
+        configObject: config,
+        scope,
+        onApplied: vi.fn(),
+      });
+    };
+
+    await refresh("profile-a");
+    expect(loadSettings().theme).toBe("knot");
+    await refresh("profile-b");
+    expect(loadSettings().theme).toBe("dash");
+    expect(loadSettings().accent).toBe("#123456");
+    await refresh("profile-a");
+    expect(loadSettings().theme).toBe("knot");
+    // B's accent must not linger on A even though A's scope never recorded one.
+    expect(loadSettings().accent).toBeUndefined();
+  });
 });

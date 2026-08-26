@@ -16,6 +16,10 @@ import type { ThemeMode, ThemeName } from "./theme.ts";
 // Derived from the wire contract so a theme the profile store rejects can never
 // be offered here; new Set<ThemeName> makes an unknown protocol name a type error.
 const THEMES: ReadonlySet<ThemeName> = new Set<ThemeName>(UI_APPEARANCE_THEME_VALUES);
+
+export function isAppearancePref(key: string): key is "theme" | "themeMode" | "accent" {
+  return key === "theme" || key === "themeMode" || key === "accent";
+}
 const THEME_MODES: ReadonlySet<ThemeMode> = new Set(["light", "dark", "system"]);
 
 type SyncedPrefSpec<T> = {
@@ -193,7 +197,12 @@ export function resolveServerUiPrefStateFromSnapshot<K extends SyncedPrefKey>(
   const profileValue = profilePrefs?.[key] ?? undefined;
   const serverValue = profileValue ?? configValue;
   const isProfileValue = profileValue !== undefined;
-  const resetValue = isProfileValue ? (configValue ?? productDefault) : productDefault;
+  // With a profile active, reset deletes the profile key (even when none exists
+  // yet), so the reset target is what that deletion falls back to — the gateway
+  // value. Using the product default here misclassifies an explicit selection of
+  // the product default as a reset and silently drops the user's choice.
+  const resetsProfileKey = profilePrefs != null && isAppearancePref(key);
+  const resetValue = resetsProfileKey ? (configValue ?? productDefault) : productDefault;
   const canApplyServerValue =
     serverValue !== undefined &&
     (!specification.canApply ||

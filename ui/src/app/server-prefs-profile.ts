@@ -8,7 +8,7 @@ import type {
 } from "../../../packages/gateway-protocol/src/schema/users.ts";
 import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
 import type { RuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
-import type { ServerUiPrefs } from "./server-prefs-state.ts";
+import { isAppearancePref, type ServerUiPrefs } from "./server-prefs-state.ts";
 
 type ProfileAppearancePrefs = { profileId: string; scope: string; prefs: ServerUiPrefs };
 
@@ -37,10 +37,6 @@ export function resolveProfileAppearanceProfileId(scope: string): string | null 
 export function resetProfileAppearancePrefs(): void {
   profileAppearancePrefs = null;
   profilePreferencesRequestId += 1;
-}
-
-export function isAppearancePref(key: string): key is "theme" | "themeMode" | "accent" {
-  return key === "theme" || key === "themeMode" || key === "accent";
 }
 
 export async function loadProfileAppearancePrefs(

@@ -8,7 +8,6 @@ import type { RuntimeConfigCapability } from "../lib/config/runtime-config-capab
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
 import { hasOperatorWriteAccess } from "./operator-access.ts";
 import {
-  isAppearancePref,
   loadProfileAppearancePrefs,
   resetProfileAppearancePrefs,
   resolveProfileAppearanceProfileId,
@@ -18,6 +17,7 @@ import {
 } from "./server-prefs-profile.ts";
 import {
   extractServerUiPrefs,
+  isAppearancePref,
   prefValuesEqual,
   resolveServerUiPrefStateFromSnapshot,
   serverPrefsLocalPatch,
@@ -361,7 +361,10 @@ export function resetServerUiPref<K extends ResettableServerUiPrefKey>(
     return patchSettings(write(state.resetValue));
   }
   requestedServerUiPrefResets.add(key);
-  if (activeProfile && state?.provenance === "profile") {
+  // Profile-bound reset deletes the profile key and lands on the gateway value,
+  // so the local settings must move to state.resetValue (that fallback), not the
+  // product default the generic reset would apply.
+  if (activeProfile && state) {
     const write = specification.write as
       | ((value: SyncedPrefValue<K> | undefined) => Partial<UiSettings>)
       | undefined;
@@ -385,6 +388,13 @@ export function applyServerUiPrefs(
   if (scope === lastReconciledScope && configObject === lastReconciledConfigObject) {
     return false;
   }
+  // Last-seen state is per profile scope but the rendered settings are a
+  // singleton, so after an identity switch (A→B→A on a shared browser) an
+  // unchanged last-seen snapshot does not mean the DOM shows this profile's
+  // values — force a full reconcile on a switch between two known scopes.
+  // Boot (empty lastReconciledScope) keeps the shortcut: the mirror already
+  // holds this scope's last-rendered state.
+  const scopeChanged = lastReconciledScope !== "" && scope !== lastReconciledScope;
   const recordReconciledObject = () => {
     lastReconciledScope = scope;
     lastReconciledConfigObject = configObject;
@@ -398,7 +408,7 @@ export function applyServerUiPrefs(
   };
   const key = JSON.stringify(prefs);
   const lastSeenRaw = readStorage(LAST_SEEN_KEY, scope);
-  if (key === lastSeenRaw) {
+  if (!scopeChanged && key === lastSeenRaw) {
     if (retainedLocalKeys.size) {
       updateRetainedLocalKeys(scope, [...retainedLocalKeys], false);
     }
@@ -413,7 +423,7 @@ export function applyServerUiPrefs(
     if (
       !(shadowPrefs && prefKey in shadowPrefs) &&
       !retainedLocalKeys.has(prefKey) &&
-      (lastSeenRaw === null || !prefValuesEqual(prefs[prefKey], lastSeen[prefKey]))
+      (scopeChanged || lastSeenRaw === null || !prefValuesEqual(prefs[prefKey], lastSeen[prefKey]))
     ) {
       (changed as Record<string, unknown>)[prefKey] = prefs[prefKey];
     }
@@ -426,6 +436,22 @@ export function applyServerUiPrefs(
       SYNCED_PREFS[prefKey]?.clearable
     ) {
       (changed as Record<string, unknown>)[prefKey] = null;
+    }
+  }
+  if (scopeChanged) {
+    // The previous identity may have rendered appearance values this scope has
+    // never seen (absent from both prefs and this scope's last-seen); clear
+    // them back to defaults so the new identity never wears the old one's look.
+    for (const prefKey of SYNCED_PREF_KEYS) {
+      if (
+        isAppearancePref(prefKey) &&
+        !(prefKey in prefs) &&
+        !(shadowPrefs && prefKey in shadowPrefs) &&
+        !retainedLocalKeys.has(prefKey) &&
+        SYNCED_PREFS[prefKey].clearable
+      ) {
+        (changed as Record<string, unknown>)[prefKey] = null;
+      }
     }
   }
   writeStorage(LAST_SEEN_KEY, scope, key);
