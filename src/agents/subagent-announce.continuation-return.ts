@@ -21,7 +21,6 @@ import { parseContinuationChainHop } from "./subagent-announce.continuation.acco
 const continuationLog = createSubsystemLogger("continuation/announce");
 
 type RegistryReturnRuntime = {
-  listAncestorSessionKeys: (sessionKey: string) => string[];
   shouldIgnorePostCompletionAnnounceForSession: (sessionKey: string) => boolean;
 };
 
@@ -102,13 +101,11 @@ export async function routeSubagentContinuationReturn(params: {
     params.continuationFanoutMode,
   );
   if (hasTargeting) {
-    // Resolve the complete targeting set before applying the late-announcement
-    // guard.  Filtering tree ancestors before resolution makes an all-cleaned
-    // tree look empty and causes targeting.ts to fall back to the cleaned
-    // requester.  The same guard must apply to explicit and `all` targets.
+    // Tree recipients were frozen by spawn admission while ancestry was live.
+    // Never re-derive them after parent cleanup or registry retirement.
     const treeSessionKeys =
       !params.managedArtifactReturn && params.continuationFanoutMode === "tree"
-        ? params.registryRuntime?.listAncestorSessionKeys(params.targetRequesterSessionKey)
+        ? params.continuationTargetSessionKeys
         : undefined;
     const allSessionKeys =
       !params.managedArtifactReturn && params.continuationFanoutMode === "all"

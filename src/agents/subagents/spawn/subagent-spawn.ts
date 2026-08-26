@@ -30,6 +30,7 @@ import {
   persistInitialChildRuntimeState,
   type ContinuationSpawnParams,
 } from "../announce/subagent-announce.runtime.js";
+import { listAncestorSessionKeys } from "../registry/subagent-registry-read.js";
 import {
   recordAcceptedSubagentSpawnRollback,
   rollbackSubagentRunRegistration,
@@ -139,6 +140,12 @@ export async function spawnSubagentDirect(
     },
     childIdem: resolvedChildIdem,
   } = requestResolution.resolved;
+  // Tree membership is an admission fact. Freeze it before parent cleanup can
+  // retire registry ancestry, otherwise a completed grandchild can lose the root.
+  const continuationTreeTargetSessionKeys =
+    params.continuationFanoutMode === "tree"
+      ? listAncestorSessionKeys(ownership.completionRequesterSessionKey)
+      : undefined;
   const childIdem = params.continuationDelegateFlowId
     ? deriveContinuationDelegateChildRunId(params.continuationDelegateFlowId)
     : resolvedChildIdem;
@@ -586,8 +593,11 @@ export async function spawnSubagentDirect(
           ...(params.continuationTargetSessionKey
             ? { continuationTargetSessionKey: params.continuationTargetSessionKey }
             : {}),
-          ...(params.continuationTargetSessionKeys?.length
-            ? { continuationTargetSessionKeys: params.continuationTargetSessionKeys }
+          ...((continuationTreeTargetSessionKeys ?? params.continuationTargetSessionKeys)?.length
+            ? {
+                continuationTargetSessionKeys:
+                  continuationTreeTargetSessionKeys ?? params.continuationTargetSessionKeys,
+              }
             : {}),
           ...(params.continuationFanoutMode
             ? { continuationFanoutMode: params.continuationFanoutMode }

@@ -32,7 +32,6 @@ import {
   countPendingDescendantRuns,
   getLatestSubagentRunByChildSessionKey,
   isSubagentSessionRunActive,
-  listAncestorSessionKeys,
   listSubagentRunsForRequester,
   resolveRequesterForChildSession,
   shouldIgnorePostCompletionAnnounceForSession,
@@ -605,7 +604,6 @@ export async function runSubagentAnnounceFlow(params: {
       // read-module namespace on every announce, including flows that never
       // reach the continuation-return router.
       registryRuntime: {
-        listAncestorSessionKeys: (sessionKey: string) => listAncestorSessionKeys(sessionKey),
         shouldIgnorePostCompletionAnnounceForSession: (sessionKey: string) =>
           shouldIgnorePostCompletionAnnounceForSession(sessionKey),
       },

@@ -303,7 +303,7 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
     expect(hop2Run?.controllerSessionKey).toBe(hop1ChildSessionKey);
     expect(hop2Run?.cleanup).toBe("keep");
     expect(hop2Run?.continuationTargetSessionKey).toBeUndefined();
-    expect(hop2Run?.continuationTargetSessionKeys).toBeUndefined();
+    expect(hop2Run?.continuationTargetSessionKeys).toEqual([hop1ChildSessionKey, rootSessionKey]);
     expect(hop2Run?.continuationFanoutMode).toBe("tree");
 
     const hop2SessionKey = hop2Run?.childSessionKey as string;
@@ -327,7 +327,7 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
       peekSystemEventEntries(sessionKey).filter((entry) => entry.text.includes("GRANDCHILD-DONE"))
         .length;
     const rootReturnsBeforeHop2Lifecycle = countGrandchildReturns(rootSessionKey);
-    const cleanedHop1EventsBeforeHop2Lifecycle = peekSystemEventEntries(hop1ChildSessionKey).length;
+    const hop1ReturnsBeforeHop2Lifecycle = countGrandchildReturns(hop1ChildSessionKey);
     const countHop2RootReturnLogs = () =>
       logSpy.mock.calls.filter(
         ([message]: [unknown]) =>
@@ -360,12 +360,12 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
     });
 
     const rootReturnsAfterHop2Lifecycle = countGrandchildReturns(rootSessionKey);
-    const cleanedHop1EventsAfterHop2Lifecycle = peekSystemEventEntries(hop1ChildSessionKey).length;
+    const hop1ReturnsAfterHop2Lifecycle = countGrandchildReturns(hop1ChildSessionKey);
     const targetedReturnLogsAfterHop2Lifecycle = countHop2RootReturnLogs();
     expect(rootReturnsAfterHop2Lifecycle).toBe(rootReturnsBeforeHop2Lifecycle + 1);
+    expect(hop1ReturnsAfterHop2Lifecycle).toBe(hop1ReturnsBeforeHop2Lifecycle + 1);
     expect(targetedReturnLogsAfterHop2Lifecycle).toBe(targetedReturnLogsBeforeHop2Lifecycle + 1);
-    // Tree routing must survive a retired intermediate without reopening that
-    // completed run-mode session or duplicating the root return on lifecycle replay.
-    expect(cleanedHop1EventsAfterHop2Lifecycle).toBe(cleanedHop1EventsBeforeHop2Lifecycle);
+    // The frozen tree reaches every ancestor once and lifecycle replay does not
+    // duplicate either the stale intermediate or root delivery.
   });
 });

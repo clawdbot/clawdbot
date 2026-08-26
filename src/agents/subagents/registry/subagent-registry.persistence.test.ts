@@ -295,7 +295,7 @@ describe("subagent registry persistence", () => {
     expect(callGateway).not.toHaveBeenCalled();
   });
 
-  it("persists silent announce metadata and replays it after restart", async () => {
+  it("persists continuation return metadata and replays it after restart", async () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
     setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
     let releaseInitialWait:
@@ -322,6 +322,8 @@ describe("subagent registry persistence", () => {
       cleanup: "keep",
       silentAnnounce: true,
       wakeOnReturn: true,
+      continuationTargetSessionKeys: ["agent:main:subagent:silent-test", "agent:main:main"],
+      continuationFanoutMode: "tree",
       traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
     });
     await writeChildSessionEntry({
@@ -332,11 +334,15 @@ describe("subagent registry persistence", () => {
     const run = await readPersistedRun<{
       silentAnnounce?: boolean;
       wakeOnReturn?: boolean;
+      continuationTargetSessionKeys?: string[];
+      continuationFanoutMode?: "tree" | "all";
       traceparent?: string;
     }>(registryPath, "run-silent");
     expect(run).toMatchObject({
       silentAnnounce: true,
       wakeOnReturn: true,
+      continuationTargetSessionKeys: ["agent:main:subagent:silent-test", "agent:main:main"],
+      continuationFanoutMode: "tree",
       traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
     });
     restartRegistry();
@@ -351,6 +357,8 @@ describe("subagent registry persistence", () => {
           childRunId: "run-silent",
           silentAnnounce: true,
           wakeOnReturn: true,
+          continuationTargetSessionKeys: ["agent:main:subagent:silent-test", "agent:main:main"],
+          continuationFanoutMode: "tree",
           traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
         }),
       );
