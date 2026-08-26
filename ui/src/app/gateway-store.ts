@@ -276,16 +276,20 @@ export function createApplicationGateway(
   const recordGatewayEvent = (event: Parameters<GatewayEventListener>[0]) => {
     const eventClient = client;
     if (event.event === "shutdown") {
-      // Remote payload: non-numeric or hostile values fall to the timer clamp's floor.
+      // Only a restart-bearing shutdown arms the amber state; an ordinary stop
+      // (restartExpectedMs absent) flows through the normal offline pill so the
+      // retry action stays reachable. Hostile values fall to the timer clamp.
       const payload = event.payload;
       const expected =
         payload && typeof payload === "object" && "restartExpectedMs" in payload
           ? payload.restartExpectedMs
           : undefined;
-      scheduleRestartDeadline(typeof expected === "number" ? expected : undefined);
-      setSnapshot({ ...snapshot, restartPending: true });
-      if (!isCurrentClient(eventClient)) {
-        return;
+      if (typeof expected === "number") {
+        scheduleRestartDeadline(expected);
+        setSnapshot({ ...snapshot, restartPending: true });
+        if (!isCurrentClient(eventClient)) {
+          return;
+        }
       }
     } else if (event.event === "presence") {
       const entries = readPresenceEntries(event.payload);

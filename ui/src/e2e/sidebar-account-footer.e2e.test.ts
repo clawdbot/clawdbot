@@ -186,7 +186,10 @@ suite.define(() => {
       await expect
         .poll(() => footer.locator(".sidebar-footer-bar__status").count(), { timeout: 10_000 })
         .toBe(0);
-      await gateway.emitGatewayEvent("shutdown", { reason: "gateway restart" });
+      await gateway.emitGatewayEvent("shutdown", {
+        reason: "gateway restart",
+        restartExpectedMs: 5_000,
+      });
       const restarting = footer.locator(".sidebar-footer-bar__status--restarting");
       await restarting.waitFor({ state: "visible" });
       expect(await restarting.textContent()).toBe("Restarting…");

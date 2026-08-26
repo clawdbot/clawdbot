@@ -1,15 +1,13 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
-import type {
-  GatewayBrowserClient,
-  GatewayBrowserClientOptions,
-  GatewayEventFrame,
-  GatewayHelloOk,
-} from "../api/gateway.ts";
 import { resolveAvatar, setAvatarGatewayOrigin } from "../lib/identity-avatar.ts";
-import { createStorageMock } from "../test-helpers/storage.ts";
-import { createApplicationGateway } from "./gateway-store.ts";
+import {
+  createGatewayEvent,
+  createGatewayStoreTestStore as createStore,
+  GATEWAY_STORE_TEST_HELLO as HELLO,
+  stubGatewayStoreTestGlobals,
+} from "./gateway-store.test-support.ts";
 import { loadSettings } from "./settings.ts";
 
 const { scheduleStaleChunkReloadMock } = vi.hoisted(() => ({
@@ -43,95 +41,10 @@ vi.mock("../build-info.ts", () => ({
         : Boolean(identity.version && identity.version !== "2026.7.19"),
 }));
 
-const HELLO: GatewayHelloOk = {
-  type: "hello-ok",
-  protocol: 1,
-  auth: { role: "operator", scopes: [] },
-};
-
-function createGatewayEvent(event = "chat", payload: unknown = {}, seq = 1): GatewayEventFrame {
-  return {
-    type: "event",
-    event,
-    payload,
-    seq,
-    stateVersion: { presence: seq, health: seq },
-  };
-}
-
-class FakeGatewayClient {
-  started = 0;
-  stopped = 0;
-  readonly instanceId: string;
-
-  constructor(readonly opts: GatewayBrowserClientOptions) {
-    this.instanceId = opts.instanceId ?? "";
-  }
-
-  start() {
-    this.started += 1;
-  }
-
-  stop() {
-    this.stopped += 1;
-  }
-
-  request = vi.fn(
-    (_method: string, _params: unknown): Promise<unknown> =>
-      Promise.reject(new Error("unexpected gateway request")),
-  );
-
-  addEventListener() {
-    return () => {};
-  }
-}
-
-function createStore(
-  params: {
-    settings?: ReturnType<typeof loadSettings>;
-    persistDefaultConnectionSettings?: boolean;
-    resourceBasePath?: string;
-  } = {},
-) {
-  const clients: FakeGatewayClient[] = [];
-  const gateway = createApplicationGateway(
-    params.settings ?? loadSettings(),
-    "",
-    "",
-    (opts) => {
-      const client = new FakeGatewayClient(opts);
-      clients.push(client);
-      return client as unknown as GatewayBrowserClient;
-    },
-    {
-      persistDefaultConnectionSettings: params.persistDefaultConnectionSettings,
-      resourceBasePath: params.resourceBasePath,
-    },
-  );
-  const current = () => {
-    const client = clients.at(-1);
-    if (!client) {
-      throw new Error("expected a gateway client");
-    }
-    return client;
-  };
-  return { gateway, clients, current };
-}
-
 describe("createApplicationGateway connection phase", () => {
   beforeEach(() => {
     scheduleStaleChunkReloadMock.mockClear();
-    vi.stubGlobal("localStorage", createStorageMock());
-    vi.stubGlobal("sessionStorage", createStorageMock());
-    vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
-    vi.stubGlobal("location", {
-      protocol: "http:",
-      host: "127.0.0.1:18789",
-      hostname: "127.0.0.1",
-      origin: "http://127.0.0.1:18789",
-      pathname: "/",
-      href: "http://127.0.0.1:18789/",
-    } as Location);
+    stubGatewayStoreTestGlobals();
   });
 
   afterEach(() => {
@@ -528,71 +441,6 @@ describe("createApplicationGateway connection phase", () => {
     expect(gateway.snapshot.offlineStable).toBe(true);
   });
 
-  it("publishes shutdown immediately while connected and clears it after the next hello", () => {
-    const { gateway, current } = createStore();
-    gateway.start();
-    current().opts.onHello?.(HELLO);
-
-    current().opts.onEvent?.(
-      createGatewayEvent("shutdown", { reason: "gateway restart", restartExpectedMs: 8_000 }),
-    );
-
-    expect(gateway.snapshot.phase).toBe("connected");
-    expect(gateway.snapshot.restartPending).toBe(true);
-
-    current().opts.onClose?.({ code: 1012, reason: "gateway restarting", willRetry: true });
-    current().opts.onHello?.(HELLO);
-
-    expect(gateway.snapshot.restartPending).toBe(false);
-  });
-
-  it.each([
-    { restartExpectedMs: undefined, deadlineMs: 15_000 },
-    { restartExpectedMs: 8_000, deadlineMs: 24_000 },
-  ])(
-    "degrades an overdue restart to stable offline after $deadlineMs ms",
-    async ({ restartExpectedMs, deadlineMs }) => {
-      vi.useFakeTimers();
-      const { gateway, current } = createStore();
-      gateway.start();
-      current().opts.onHello?.(HELLO);
-      current().opts.onEvent?.(
-        createGatewayEvent("shutdown", {
-          reason: "gateway restart",
-          ...(restartExpectedMs === undefined ? {} : { restartExpectedMs }),
-        }),
-      );
-      current().opts.onClose?.({ code: 1012, reason: "gateway restarting", willRetry: true });
-
-      await vi.advanceTimersByTimeAsync(deadlineMs - 1);
-      expect(gateway.snapshot.restartPending).toBe(true);
-      expect(gateway.snapshot.offlineStable).toBe(true);
-
-      await vi.advanceTimersByTimeAsync(1);
-      expect(gateway.snapshot.restartPending).toBe(false);
-      expect(gateway.snapshot.offlineStable).toBe(true);
-    },
-  );
-
-  it("recognizes the structured restart rejection before the first successful hello", () => {
-    const { gateway, current } = createStore();
-    gateway.start();
-
-    current().opts.onClose?.({
-      code: 1013,
-      reason: "gateway restart in progress",
-      willRetry: true,
-      error: {
-        code: "UNAVAILABLE",
-        message: "connect unavailable during gateway restart",
-        details: { reason: "gateway-restarting" },
-      },
-    });
-
-    expect(gateway.snapshot.phase).toBe("connecting");
-    expect(gateway.snapshot.restartPending).toBe(true);
-  });
-
   it("does not publish offline before the gateway starts", async () => {
     vi.useFakeTimers();
     const { gateway } = createStore();
@@ -641,20 +489,6 @@ describe("createApplicationGateway connection phase", () => {
     await vi.advanceTimersByTimeAsync(2_000);
 
     expect(gateway.snapshot.offlineStable).toBe(false);
-  });
-
-  it("clears the pending restart deadline when stopped", async () => {
-    vi.useFakeTimers();
-    const { gateway, current } = createStore();
-    gateway.start();
-    current().opts.onHello?.(HELLO);
-    current().opts.onEvent?.(createGatewayEvent("shutdown", { reason: "gateway stopping" }));
-
-    gateway.stop();
-    await vi.advanceTimersByTimeAsync(15_000);
-
-    expect(gateway.snapshot.phase).toBe("stopped");
-    expect(gateway.snapshot.restartPending).toBe(false);
   });
 
   it("drops back to the gate when the client gives up (credential rejection)", () => {
