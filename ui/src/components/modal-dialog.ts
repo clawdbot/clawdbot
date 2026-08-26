@@ -62,6 +62,23 @@ export class OpenClawModalDialog extends OpenClawLitElement {
       max-height: calc(100dvh - 20px);
     }
 
+    :host(.viewport-edge-to-edge) wa-dialog {
+      --width: 100vw;
+    }
+
+    :host(.viewport-edge-to-edge) wa-dialog::part(dialog) {
+      width: 100vw;
+      height: 100dvh;
+      max-width: none;
+      max-height: none;
+      margin: 0;
+      border-radius: 0;
+    }
+
+    :host(.viewport-edge-to-edge) wa-dialog::part(body) {
+      height: 100%;
+    }
+
     :host(.palette) wa-dialog::part(dialog) {
       margin-block-start: min(20dvh, 160px);
       margin-block-end: auto;

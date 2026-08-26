@@ -308,7 +308,7 @@ class OpenClawImageLightbox extends OpenClawLitElement {
     const canZoom = this.imageReady && this.panzoom !== undefined;
     return html`
       <openclaw-modal-dialog
-        class="mobile-edge-to-edge"
+        class="mobile-edge-to-edge viewport-edge-to-edge"
         label=${t("chat.imageLightbox.label", { title })}
         @modal-cancel=${this.emitClose}
         @keydown=${this.handleKeydown}
