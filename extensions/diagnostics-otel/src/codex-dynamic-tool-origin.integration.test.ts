@@ -10,12 +10,9 @@ import {
   type ReadableSpan,
 } from "@opentelemetry/sdk-trace-base";
 import { ATTR_GEN_AI_TOOL_CALL_ID } from "@opentelemetry/semantic-conventions/incubating";
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
-import type {
-  AgentToolResult,
-  AnyAgentTool,
-  EmbeddedRunAttemptParams,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   emitTrustedDiagnosticEvent,
   parseDiagnosticTraceparent,
@@ -24,7 +21,7 @@ import {
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { runWithDiagnosticTraceContext } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { expect, test, vi } from "vitest";
+import { expect, test } from "vitest";
 import {
   cancelPendingDelegates,
   consumePendingDelegates,
@@ -104,8 +101,10 @@ function createTimeoutTool(): AnyAgentTool {
       signal?: AbortSignal,
     ): Promise<AgentToolResult<unknown>> =>
       await new Promise<AgentToolResult<unknown>>((_resolve, reject) => {
-        const rejectWithAbort = () =>
-          reject(signal?.reason ?? new Error("timeout probe aborted without a reason"));
+        const rejectWithAbort = () => {
+          const reason = signal?.reason;
+          reject(reason instanceof Error ? reason : new Error("timeout probe aborted"));
+        };
         if (signal?.aborted) {
           rejectWithAbort();
           return;
