@@ -80,7 +80,10 @@ import {
   getSubagentRunByChildSessionKey,
   listSubagentRunsForRequester,
 } from "./subagents/registry/subagent-registry-read.js";
-import { resetSubagentRegistryForTests } from "./subagents/registry/subagent-registry.test-helpers.js";
+import {
+  releaseSubagentRun,
+  resetSubagentRegistryForTests,
+} from "./subagents/registry/subagent-registry.test-helpers.js";
 import "./subagents/registry/subagent-registry.js";
 import { getSubagentDepthFromSessionStore } from "./subagents/spawn/subagent-depth.js";
 import { spawnSubagentDirect } from "./subagents/spawn/subagent-spawn.js";
@@ -182,7 +185,7 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
     stateDir = "";
   });
 
-  it("spawns hop-2 via tool delegate (fanout=tree) and delivers hop-2 completion by lifecycle targeted-return", async () => {
+  it("delivers one depth-2 tree return after the settled intermediate registry row retires", async () => {
     const hop1Spawn = await spawnSubagentDirect(
       {
         task: "[continuation:chain-hop:1] live proof hop-1",
@@ -275,6 +278,8 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
         "number",
       4_000,
     );
+    releaseSubagentRun(hop1RunId);
+    expect(getSubagentRunByChildSessionKey(hop1ChildSessionKey)).toBeNull();
 
     const requesterRuns = listSubagentRunsForRequester(hop1ChildSessionKey);
     const hop2Run = requesterRuns.find((entry) =>
@@ -318,44 +323,49 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
         content: "GRANDCHILD-DONE",
       },
     ]);
-    const rootEventsBeforeHop2Lifecycle = peekSystemEventEntries(rootSessionKey).length;
+    const countGrandchildReturns = (sessionKey: string) =>
+      peekSystemEventEntries(sessionKey).filter((entry) => entry.text.includes("GRANDCHILD-DONE"))
+        .length;
+    const rootReturnsBeforeHop2Lifecycle = countGrandchildReturns(rootSessionKey);
     const cleanedHop1EventsBeforeHop2Lifecycle = peekSystemEventEntries(hop1ChildSessionKey).length;
-    const targetedReturnLogsBeforeHop2Lifecycle = logSpy.mock.calls.filter(
-      ([message]: [unknown]) =>
-        typeof message === "string" && message.includes("[continuation:targeted-return]"),
-    ).length;
+    const countHop2RootReturnLogs = () =>
+      logSpy.mock.calls.filter(
+        ([message]: [unknown]) =>
+          typeof message === "string" &&
+          message.includes("[continuation:targeted-return]") &&
+          message.includes(rootSessionKey) &&
+          message.includes(hop2SessionKey),
+      ).length;
+    const targetedReturnLogsBeforeHop2Lifecycle = countHop2RootReturnLogs();
 
-    emitAgentEvent({
-      runId: hop2RunId,
-      stream: "lifecycle",
-      sessionKey: hop2SessionKey,
-      data: { phase: "end", startedAt: 30, endedAt: 40 },
-    });
+    const emitHop2Completion = () =>
+      emitAgentEvent({
+        runId: hop2RunId,
+        stream: "lifecycle",
+        sessionKey: hop2SessionKey,
+        data: { phase: "end", startedAt: 30, endedAt: 40 },
+      });
+    emitHop2Completion();
 
     await waitFor(
       () =>
-        logSpy.mock.calls.some(
-          ([message]: [unknown]) =>
-            typeof message === "string" &&
-            message.includes("[continuation:targeted-return]") &&
-            message.includes(rootSessionKey) &&
-            message.includes(hop2SessionKey),
-        ),
+        countGrandchildReturns(rootSessionKey) === rootReturnsBeforeHop2Lifecycle + 1 &&
+        countHop2RootReturnLogs() === targetedReturnLogsBeforeHop2Lifecycle + 1,
       4_000,
     );
 
-    const rootEventsAfterHop2Lifecycle = peekSystemEventEntries(rootSessionKey).length;
+    emitHop2Completion();
+    await new Promise<void>((resolveTurn) => {
+      setTimeout(resolveTurn, 50);
+    });
+
+    const rootReturnsAfterHop2Lifecycle = countGrandchildReturns(rootSessionKey);
     const cleanedHop1EventsAfterHop2Lifecycle = peekSystemEventEntries(hop1ChildSessionKey).length;
-    const targetedReturnLogsAfterHop2Lifecycle = logSpy.mock.calls.filter(
-      ([message]: [unknown]) =>
-        typeof message === "string" && message.includes("[continuation:targeted-return]"),
-    ).length;
-    expect(rootEventsAfterHop2Lifecycle).toBeGreaterThan(rootEventsBeforeHop2Lifecycle);
-    expect(targetedReturnLogsAfterHop2Lifecycle).toBeGreaterThan(
-      targetedReturnLogsBeforeHop2Lifecycle,
-    );
-    // Tree routing must traverse a cleaned intermediate to reach the live root,
-    // but must not reopen that completed run-mode session with a new event.
+    const targetedReturnLogsAfterHop2Lifecycle = countHop2RootReturnLogs();
+    expect(rootReturnsAfterHop2Lifecycle).toBe(rootReturnsBeforeHop2Lifecycle + 1);
+    expect(targetedReturnLogsAfterHop2Lifecycle).toBe(targetedReturnLogsBeforeHop2Lifecycle + 1);
+    // Tree routing must survive a retired intermediate without reopening that
+    // completed run-mode session or duplicating the root return on lifecycle replay.
     expect(cleanedHop1EventsAfterHop2Lifecycle).toBe(cleanedHop1EventsBeforeHop2Lifecycle);
   });
 });

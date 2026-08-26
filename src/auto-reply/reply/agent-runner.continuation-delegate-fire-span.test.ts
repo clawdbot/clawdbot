@@ -20,6 +20,7 @@ import {
   type Tracer,
 } from "../../infra/continuation-tracer.js";
 import { clearMemoryPluginState } from "../../plugins/memory-state.js";
+import { listTaskFlowsForOwnerKey } from "../../tasks/task-flow-runtime-internal.js";
 import {
   dispatchToolDelegates,
   resetDelegateDispatchHedgesForTests,
@@ -530,9 +531,21 @@ describe("runReplyAgent :: continuation.delegate.fire span", () => {
     await runDelegateTurn(run, { [sessionKey]: run.sessionEntry });
 
     expect(spawnSubagentDirectMock).toHaveBeenCalledOnce();
-    const spawnArgs = spawnSubagentDirectMock.mock.calls[0]?.[0] as { task?: string };
+    const flows = listTaskFlowsForOwnerKey(sessionKey);
+    expect(flows).toHaveLength(1);
+    const flow = flows[0];
+    expect(flow).toMatchObject({
+      ownerKey: sessionKey,
+      status: "succeeded",
+      currentStep: "Accepted by continuation subagent",
+    });
+    const spawnArgs = spawnSubagentDirectMock.mock.calls[0]?.[0] as {
+      task?: string;
+      continuationDelegateFlowId?: string;
+    };
     expect(spawnArgs.task).toContain("[continuation:chain-hop:1]");
     expect(spawnArgs.task).toContain("inspect sanitized followup");
+    expect(spawnArgs.continuationDelegateFlowId).toBe(flow?.flowId);
     expect(pendingDelegateCount(sessionKey)).toBe(0);
   });
 
