@@ -299,6 +299,17 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
         message: { role: "user", content: "Archived JSONL transcript text" },
       }),
     );
+    const resetArchivePath = path.join(
+      sessionsDir,
+      `${sessionId}.jsonl.reset.2026-06-25T12-02-00.000Z`,
+    );
+    fsSync.writeFileSync(
+      resetArchivePath,
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: "Retained pre-reset conversation fact" },
+      }),
+    );
 
     expect(fsSync.existsSync(path.join(sessionsDir, `${sessionId}.jsonl`))).toBe(false);
     const entries = await listSessionTranscriptCorpusEntriesForAgent("main");
@@ -322,6 +333,10 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
           sessionFile: archivePath,
           sessionId,
         }),
+        expect.objectContaining({
+          artifactKind: "archive-artifact",
+          sessionFile: resetArchivePath,
+        }),
       ]),
     );
 
@@ -342,6 +357,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       updatedAtMs: updatedAt,
     });
     const archiveEntry = requireSessionEntry(await buildSessionEntry(archivePath));
+    const resetArchiveEntry = requireSessionEntry(await buildSessionEntry(resetArchivePath));
 
     expect(liveEntry.path).toBe("sessions/main/sqlite-live.jsonl");
     expect(liveEntry.content).toBe("User: Live SQLite transcript text");
@@ -355,6 +371,10 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       "sessions/main/sqlite-live.jsonl.deleted.2026-06-25T12-01-00.000Z",
     );
     expect(archiveEntry.content).toBe("User: Archived JSONL transcript text");
+    expect(resetArchiveEntry.path).toBe(
+      "sessions/main/sqlite-live.jsonl.reset.2026-06-25T12-02-00.000Z",
+    );
+    expect(resetArchiveEntry.content).toBe("User: Retained pre-reset conversation fact");
   });
 
   it("exposes content revisions that change with SQLite appends and file replacement", async () => {

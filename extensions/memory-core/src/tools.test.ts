@@ -871,43 +871,73 @@ describe("memory_search corpus labels", () => {
     expect(details.results[2]?.score).toBeCloseTo(0.765);
   });
 
-  it.each(["sessions", "all"] as const)(
-    "does not let ordinary corpus=%s broaden implicitly indexed recall transcripts",
-    async (corpus) => {
-      let seenSources: readonly string[] | undefined;
-      setMemorySearchImpl(async (opts) => {
-        seenSources = opts?.sources;
-        return [
-          {
-            path: "sessions/private-group.jsonl",
-            startLine: 1,
-            endLine: 2,
-            score: 0.95,
-            snippet: "private transcript",
-            source: "sessions" as const,
-          },
-        ];
-      });
+  it("does not let corpus=all broaden implicitly indexed recall transcripts", async () => {
+    let seenSources: readonly string[] | undefined;
+    setMemorySearchImpl(async (opts) => {
+      seenSources = opts?.sources;
+      return [
+        {
+          path: "sessions/private-group.jsonl",
+          startLine: 1,
+          endLine: 2,
+          score: 0.95,
+          snippet: "private transcript",
+          source: "sessions" as const,
+        },
+      ];
+    });
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: {
+          defaults: {},
+          list: [{ id: "main", default: true }],
+        },
+        memory: {
+          citations: "off",
+          search: { rememberAcrossConversations: true },
+        },
+        tools: { sessions: { visibility: "all" } },
+      },
+      agentSessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("ordinary-search", {
+      query: "favorite food",
+      corpus: "all",
+    });
+    const details = result.details as { results: Array<{ source: string }> };
+
+    expect(seenSources).toEqual(["memory"]);
+    expect(details.results).toEqual([]);
+  });
+
+  it.each([
+    { name: "recall-only session indexing", rememberAcrossConversations: true },
+    { name: "disabled session indexing", rememberAcrossConversations: false },
+  ])(
+    "reports unavailable for corpus=sessions with $name instead of searching memory files",
+    async ({ rememberAcrossConversations }) => {
       const tool = createMemorySearchToolOrThrow({
         config: {
-          agents: {
-            defaults: {},
-            list: [{ id: "main", default: true }],
-          },
-          memory: {
-            citations: "off",
-            search: { rememberAcrossConversations: true },
-          },
+          agents: { list: [{ id: "main", default: true }] },
+          memory: { search: { rememberAcrossConversations } },
           tools: { sessions: { visibility: "all" } },
         },
         agentSessionKey: "agent:main:main",
       });
 
-      const result = await tool.execute("ordinary-search", { query: "favorite food", corpus });
-      const details = result.details as { results: Array<{ source: string }> };
+      const result = await tool.execute("sessions-unavailable", {
+        query: "favorite food",
+        corpus: "sessions",
+      });
 
-      expect(seenSources).toEqual(["memory"]);
-      expect(details.results).toEqual([]);
+      expectUnavailableMemorySearchDetails(result.details, {
+        error: "Session transcript search is not enabled.",
+        warning: "Session transcript search is unavailable for this agent.",
+        action:
+          'Enable memory.search.experimental.sessionMemory and add "sessions" to memory.search.sources, then retry memory_search.',
+      });
+      expect(getMemorySearchManagerMockCalls()).toBe(0);
     },
   );
 
@@ -940,6 +970,63 @@ describe("memory_search corpus labels", () => {
       await tool.execute("ordinary-search", { query: "favorite food", corpus });
 
       expect(seenSources).toEqual(["sessions"]);
+    },
+  );
+
+  it.each([
+    { visibility: "agent" as const, visible: true },
+    { visibility: "self" as const, visible: false },
+  ])(
+    "keeps migrated isolated-DM reset recall within visibility=$visibility",
+    async ({ visibility, visible }) => {
+      let seenSources: readonly string[] | undefined;
+      setMemorySearchImpl(async (opts) => {
+        seenSources = opts?.sources;
+        return [
+          {
+            path: "sessions/main/past-thread.jsonl.reset.2026-08-23T07-10-59.000Z",
+            startLine: 1,
+            endLine: 2,
+            score: 0.9,
+            snippet: "Retained pre-reset conversation fact",
+            source: "sessions" as const,
+          },
+        ];
+      });
+      const tool = createMemorySearchToolOrThrow({
+        config: {
+          agents: { list: [{ id: "main", default: true }] },
+          session: { dmScope: "per-channel-peer" },
+          memory: {
+            citations: "off",
+            search: {
+              rememberAcrossConversations: false,
+              experimental: { sessionMemory: true },
+              sources: ["memory", "sessions"],
+            },
+          },
+          tools: { sessions: { visibility } },
+        },
+        agentSessionKey: "agent:main:main",
+      });
+
+      const result = await tool.execute("isolated-session-search", {
+        query: "pre-reset conversation",
+        corpus: "sessions",
+      });
+      const details = result.details as { results: Array<{ corpus: string; snippet: string }> };
+
+      expect(seenSources).toEqual(["sessions"]);
+      expect(details.results).toEqual(
+        visible
+          ? [
+              expect.objectContaining({
+                corpus: "sessions",
+                snippet: "Retained pre-reset conversation fact",
+              }),
+            ]
+          : [],
+      );
     },
   );
 

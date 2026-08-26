@@ -91,11 +91,50 @@ function migrateRetiredQmdExternalPaths(params: {
   }
 }
 
+function migrateRetiredQmdSessionIndexing(
+  qmd: Record<string, unknown> | null,
+  scope: Record<string, unknown>,
+  sourcePath: string,
+  changes: string[],
+): void {
+  if (getRecord(qmd?.sessions)?.enabled !== true) {
+    return;
+  }
+  const search = ensureRecord(ensureRecord(scope, "memory"), "search");
+  const experimental = getRecord(search.experimental);
+  let changed = false;
+  if (
+    (experimental || search.experimental === undefined) &&
+    experimental?.sessionMemory === undefined
+  ) {
+    ensureRecord(search, "experimental").sessionMemory = true;
+    changed = true;
+  }
+  if (
+    search.sources === undefined ||
+    (Array.isArray(search.sources) && search.sources.length === 0)
+  ) {
+    search.sources = ["memory", "sessions"];
+    changed = true;
+  } else if (Array.isArray(search.sources) && !search.sources.includes("sessions")) {
+    search.sources.push("sessions");
+    changed = true;
+  }
+  if (changed) {
+    const targetPath = sourcePath === "memory.qmd" ? "memory.search" : sourcePath.slice(0, -4);
+    changes.push(
+      `Migrated ${sourcePath}.sessions.enabled → ${targetPath}.experimental.sessionMemory and ${targetPath}.sources.`,
+    );
+  }
+}
+
 function migrateRetiredMemoryQmd(raw: Record<string, unknown>, changes: string[]): void {
   const memory = getRecord(raw.memory);
   const search = getRecord(memory?.search);
   const qmd = getRecord(memory?.qmd);
   const searchQmd = getRecord(search?.qmd);
+  migrateRetiredQmdSessionIndexing(qmd, raw, "memory.qmd", changes);
+  migrateRetiredQmdSessionIndexing(searchQmd, raw, "memory.search.qmd", changes);
   migrateRetiredQmdExternalPaths({
     changes,
     entries: [
@@ -117,6 +156,12 @@ function migrateRetiredMemoryQmd(raw: Record<string, unknown>, changes: string[]
   visitAgentConfigScopes(raw, (scope, scopePath) => {
     const agentSearch = getRecord(getRecord(scope.memory)?.search);
     const agentSearchQmd = getRecord(agentSearch?.qmd);
+    migrateRetiredQmdSessionIndexing(
+      agentSearchQmd,
+      scope,
+      `${scopePath}.memory.search.qmd`,
+      changes,
+    );
     migrateRetiredQmdExternalPaths({
       changes,
       entries: readRetiredQmdExternalPaths(agentSearchQmd?.extraCollections),
