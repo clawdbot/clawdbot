@@ -50,10 +50,13 @@ provenance. In a workspace shared by several agents, the same reconciliation
 runs against every participating agent's origins, so any agent's later
 deletion request still finds the live entry.
 
-Entries with no origin rows are the **curated tier**: content the operator
-wrote by hand, or the agent edited directly on request. That absence is
-itself recorded state, not a gap — see
-[the admission boundary](#the-admission-boundary) below.
+Not every entry has origin rows. Operator-curated content and direct agent
+edits never receive entry lineage (their file-level authoring sessions are
+tracked separately — see
+[the admission boundary](#the-admission-boundary) below), and entries
+promoted before lineage recording existed have none either. All such entries
+remain searchable, are never deleted by an unrelated selector, and are
+listed as untargetable in a purge report rather than silently skipped.
 
 ## Admission: keeping sources out of memory
 
