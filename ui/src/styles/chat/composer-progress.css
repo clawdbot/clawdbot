@@ -1,4 +1,6 @@
 .session-progress-card--composer {
+  --session-progress-marker-size: var(--chat-stack-icon-size, 14px);
+
   position: relative;
   display: block;
   box-sizing: border-box;
@@ -91,7 +93,7 @@
 
 .session-progress-card__summary {
   display: grid;
-  grid-template-columns: 14px minmax(0, 1fr) auto auto;
+  grid-template-columns: var(--session-progress-marker-size) minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 12px;
   width: 100%;
@@ -134,7 +136,7 @@
 
 .session-progress-card__summary-expanded {
   display: none;
-  grid-column: 2 / 4;
+  grid-column: 1 / 4;
   justify-content: space-between;
   gap: 16px;
 }
@@ -190,16 +192,16 @@
 .session-progress-card__summary-indicator {
   position: relative;
   display: inline-grid;
-  width: 14px;
-  height: 14px;
+  width: var(--session-progress-marker-size);
+  height: var(--session-progress-marker-size);
   place-items: center;
-  flex: 0 0 14px;
+  flex: 0 0 var(--session-progress-marker-size);
   color: var(--muted);
 }
 
 .session-progress-card__summary-indicator > svg {
-  width: 14px;
-  height: 14px;
+  width: var(--session-progress-marker-size);
+  height: var(--session-progress-marker-size);
 }
 
 .session-progress-card__summary-indicator--complete {
@@ -208,8 +210,8 @@
 
 .session-progress-card__summary-indicator > .session-run-spinner {
   display: block;
-  width: 14px;
-  height: 14px;
+  width: var(--session-progress-marker-size);
+  height: var(--session-progress-marker-size);
   border-color: color-mix(in srgb, var(--muted) 24%, transparent);
   border-top-color: var(--muted);
   animation-duration: 1.8s;
@@ -233,6 +235,12 @@
   font-variant-numeric: tabular-nums;
   line-height: 18px;
   transition: color 140ms ease;
+}
+
+.session-progress-card__summary-count:is([data-outcome="failed"], [data-outcome="timeout"]),
+.session-progress-card__summary-indicator:is([data-outcome="failed"], [data-outcome="timeout"]),
+.session-progress-card__step-marker:is([data-outcome="failed"], [data-outcome="timeout"]) {
+  color: var(--danger);
 }
 
 .session-progress-card--composer .session-progress-card__body {
@@ -285,16 +293,23 @@
 }
 
 @media (hover: hover) and (pointer: fine) {
-  /* Collapsed, the visible card extends past the summary (underlap arcs beside
-     the composer's rounded corners), so the highlight lives on the container to
-     fill the whole shape; a summary-only fill leaves slivers of the resting
-     background at those corners. */
-  .session-progress-card--composer:not([open]):hover {
-    background: color-mix(
-      in srgb,
-      var(--text-strong) 5%,
-      var(--chat-composer-surface, var(--popover))
-    );
+  .session-progress-card__summary:hover
+    :is(.session-progress-card__summary-title, .session-progress-card__current) {
+    color: var(--text-strong);
+  }
+
+  .session-progress-card__summary:hover
+    :is(
+      .session-progress-card__heading-actions,
+      .session-progress-card__summary-count,
+      .session-progress-card__summary-chevron
+    ) {
+    color: color-mix(in srgb, var(--text) 78%, var(--muted));
+  }
+
+  .session-progress-card__summary:hover
+    .session-progress-card__summary-count:is([data-outcome="failed"], [data-outcome="timeout"]) {
+    color: var(--danger);
   }
 }
 

@@ -106,13 +106,13 @@ suite.define(() => {
           await expect
             .poll(() => timestamp.getAttribute("datetime"))
             .toBe(new Date(updatedAt).toISOString());
-          await expect.poll(() => timestamp.getAttribute("aria-label")).toMatch(/^Last activity: /);
-          await expect.poll(() => timestamp.textContent()).toMatch(/\d{1,2}:\d{2}:\d{2}/);
+          await expect.poll(() => timestamp.getAttribute("aria-label")).toMatch(/^Updated /);
+          await expect.poll(() => timestamp.textContent()).toMatch(/^Updated /);
           await expect.poll(() => timestamp.isVisible()).toBe(true);
           const accessibleCard = placement === "composer" ? card.locator("summary") : card;
           await expect
             .poll(() => accessibleCard.getAttribute("aria-label"))
-            .toContain("Last activity:");
+            .not.toContain("Updated");
           const timestampBounds = await timestamp.boundingBox();
           const cardBounds = await card.boundingBox();
           if (!timestampBounds || !cardBounds) {
