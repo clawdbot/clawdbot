@@ -374,7 +374,10 @@ describe("tui command handlers", () => {
 
       const olderPicker = harness.handleCommand("/models");
       expect(harness.pendingSystemNotices.size).toBe(1);
-      const [olderNoticeId] = harness.pendingSystemNotices.keys();
+      const olderNoticeId = expectDefined(
+        harness.pendingSystemNotices.keys().next().value,
+        "older model picker notice",
+      );
       await harness.handleCommand(newerCommand);
       expect(harness.pendingSystemNotices.has(olderNoticeId)).toBe(false);
       expect(harness.dismissPendingSystem).toHaveBeenCalledWith(olderNoticeId);
@@ -3167,9 +3170,15 @@ describe("tui command handlers", () => {
     });
 
     const olderPicker = harness.handleCommand("/models");
-    const [olderNoticeId] = harness.pendingSystemNotices.keys();
+    const olderNoticeId = expectDefined(
+      harness.pendingSystemNotices.keys().next().value,
+      "older model picker notice",
+    );
     const newerPicker = harness.handleCommand("/models");
-    const [newerNoticeId] = harness.pendingSystemNotices.keys();
+    const newerNoticeId = expectDefined(
+      harness.pendingSystemNotices.keys().next().value,
+      "newer model picker notice",
+    );
 
     expect(newerNoticeId).not.toBe(olderNoticeId);
     expect(harness.pendingSystemNotices.has(olderNoticeId)).toBe(false);
