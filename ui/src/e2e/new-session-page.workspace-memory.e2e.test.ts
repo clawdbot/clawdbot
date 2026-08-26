@@ -126,7 +126,7 @@ suite.define(() => {
       const footer = page.locator(".new-session-page__composer .agent-chat__composer-footer");
       const attach = page.getByRole("button", { name: "Add attachment" });
       const takePhoto = page.getByRole("menuitem", { name: "Take photo" });
-      const draft = page.locator('.new-session-page__draft-toggle[aria-label="Draft"]');
+      const draft = page.locator('.new-session-page__draft-toggle[aria-label^="Draft:"]');
       const incognito = page.getByRole("switch", { name: "Incognito" });
       const model = page.locator(".new-session-page__composer .chat-composer-model-control");
       await Promise.all([

@@ -48,7 +48,7 @@ export function renderNewSessionIncognitoControl(
                   ? "new-session-page__draft-toggle--active"
                   : ""}"
                 role="switch"
-                aria-label=${t("newSession.draft")}
+                aria-label=${`${t("newSession.draft")}: ${t("newSession.draftDescription")}`}
                 aria-checked=${String(draftActive)}
                 ?disabled=${submission.submitting ||
                 Boolean(submission.pendingPlacement.sessionKey)}
