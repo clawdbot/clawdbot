@@ -75,6 +75,21 @@ struct ExecAllowlistTests {
         try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
     }
 
+    @Test func `approval cwd snapshot rejects directory replacement`() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-approval-cwd-\(UUID().uuidString)", isDirectory: true)
+        let approved = root.appendingPathComponent("approved", isDirectory: true)
+        let moved = root.appendingPathComponent("moved", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: approved, withIntermediateDirectories: true)
+        let snapshot = try #require(ExecCommandResolution.captureApprovalCwdSnapshot(approved.path))
+
+        #expect(ExecCommandResolution.revalidateApprovalCwdSnapshot(snapshot))
+        try FileManager.default.moveItem(at: approved, to: moved)
+        try FileManager.default.createDirectory(at: approved, withIntermediateDirectories: false)
+        #expect(!ExecCommandResolution.revalidateApprovalCwdSnapshot(snapshot))
+    }
+
     @Test func `match uses resolved path`() {
         let entry = ExecAllowlistEntry(pattern: "/opt/homebrew/bin/rg")
         let resolution = Self.homebrewRGResolution()

@@ -11,12 +11,39 @@ struct ExecAllowAlwaysPattern: Sendable, Hashable {
     }
 }
 
+struct ExecApprovalCwdSnapshot: Sendable, Equatable {
+    let path: String
+    let device: UInt64
+    let inode: UInt64
+}
+
 struct ExecCommandResolution {
+    static let approvalCwdDriftDeniedMessage =
+        "SYSTEM_RUN_DENIED: approval cwd changed before execution"
+
     static func canonicalApprovalCwd(_ cwd: String?) -> String {
         URL(fileURLWithPath: cwd ?? FileManager.default.currentDirectoryPath)
             .standardizedFileURL
             .resolvingSymlinksInPath()
             .path
+    }
+
+    static func captureApprovalCwdSnapshot(_ cwd: String?) -> ExecApprovalCwdSnapshot? {
+        let canonicalPath = self.canonicalApprovalCwd(cwd)
+        guard self.canonicalApprovalCwd(canonicalPath) == canonicalPath,
+              let attributes = try? FileManager.default.attributesOfItem(atPath: canonicalPath),
+              attributes[.type] as? FileAttributeType == .typeDirectory,
+              let device = attributes[.systemNumber] as? NSNumber,
+              let inode = attributes[.systemFileNumber] as? NSNumber
+        else { return nil }
+        return ExecApprovalCwdSnapshot(
+            path: canonicalPath,
+            device: device.uint64Value,
+            inode: inode.uint64Value)
+    }
+
+    static func revalidateApprovalCwdSnapshot(_ snapshot: ExecApprovalCwdSnapshot) -> Bool {
+        self.captureApprovalCwdSnapshot(snapshot.path) == snapshot
     }
 
     let rawExecutable: String

@@ -773,6 +773,48 @@ describe("processGatewayAllowlist", () => {
     });
   });
 
+  it.runIf(process.platform !== "win32")(
+    "rejects a durable grant when its approved directory is replaced before execution",
+    async () => {
+      const { command, authorizationPlan, segments, enforcedCommand } =
+        await planAllowlistedNodeVersion();
+      evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
+        allowlistMatches: [{ pattern: "/usr/bin/node" }],
+        analysisOk: true,
+        allowlistSatisfied: true,
+        segments,
+        segmentAllowlistEntries: [{ pattern: "/usr/bin/node", source: "allow-always" }],
+        segmentSatisfiedBy: ["allowlist"],
+        authorizationPlan,
+      });
+      buildEnforcedShellCommandMock.mockReturnValue({ ok: true, command: enforcedCommand });
+      const approvedCwd = fs.realpathSync(
+        fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-cwd-approved-")),
+      );
+      const movedCwd = `${approvedCwd}-moved`;
+      try {
+        const result = await runGatewayAllowlist({ command, workdir: approvedCwd });
+        expect(result.deniedResult).toBeUndefined();
+        expect(result.revalidateBeforeExecution).toBeTypeOf("function");
+
+        fs.renameSync(approvedCwd, movedCwd);
+        fs.mkdirSync(approvedCwd);
+
+        const denied = await result.revalidateBeforeExecution?.();
+        expect(denied?.content[0]).toEqual(
+          expect.objectContaining({
+            text: expect.stringContaining(
+              "SYSTEM_RUN_DENIED: approval cwd changed before execution",
+            ),
+          }),
+        );
+      } finally {
+        fs.rmSync(approvedCwd, { recursive: true, force: true });
+        fs.rmSync(movedCwd, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("still requires approval for unavailable allowlist plans when ask is on-miss", async () => {
     resolveExecHostApprovalContextMock.mockReturnValue({
       approvals: { allowlist: [], file: { version: 1, agents: {} } },
@@ -991,6 +1033,7 @@ describe("processGatewayAllowlist", () => {
     expect(result!).toEqual({
       execCommandOverride: undefined,
       allowWithoutEnforcedCommand: true,
+      revalidateBeforeExecution: expect.any(Function),
     });
     expect(captured.events).toHaveLength(2);
     expect(captured.events[1]).toMatchObject({
@@ -1030,6 +1073,7 @@ describe("processGatewayAllowlist", () => {
     expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
     expect(result!).toEqual({
       execCommandOverride: `${resolvedPath} ok`,
+      revalidateBeforeExecution: expect.any(Function),
     });
     expect(captured.events).toHaveLength(1);
     expect(captured.events[0]).toMatchObject({
@@ -1438,6 +1482,7 @@ describe("processGatewayAllowlist", () => {
 
     expect(result).toEqual({
       execCommandOverride: `${resolvedExecutable} -c 16`,
+      revalidateBeforeExecution: expect.any(Function),
     });
     expect(commitExecAuthorizationMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1495,7 +1540,10 @@ describe("processGatewayAllowlist", () => {
     const result = await runGatewayAllowlist({ command });
 
     expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
-    expect(result).toEqual({ execCommandOverride: enforced.command });
+    expect(result).toEqual({
+      execCommandOverride: enforced.command,
+      revalidateBeforeExecution: expect.any(Function),
+    });
     expect(commitExecAuthorizationMock).toHaveBeenCalledWith(
       expect.objectContaining({
         authorization: expect.objectContaining({
@@ -1682,7 +1730,10 @@ describe("processGatewayAllowlist", () => {
     });
 
     expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
-    expect(result).toEqual({ execCommandOverride: undefined });
+    expect(result).toEqual({
+      execCommandOverride: undefined,
+      revalidateBeforeExecution: expect.any(Function),
+    });
     expect(commitExecAuthorizationMock).toHaveBeenCalledWith(
       expect.objectContaining({
         authorization: expect.objectContaining({
@@ -2331,7 +2382,10 @@ EOF`,
     const result = await runGatewayAllowlist({ command });
 
     expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
-    expect(result).toEqual({ execCommandOverride: undefined });
+    expect(result).toEqual({
+      execCommandOverride: undefined,
+      revalidateBeforeExecution: expect.any(Function),
+    });
     expect(commitExecAuthorizationMock).toHaveBeenCalledWith(
       expect.objectContaining({
         authorization: expect.objectContaining({
