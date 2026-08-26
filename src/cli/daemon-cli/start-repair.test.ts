@@ -52,6 +52,7 @@ const resolveOpenClawWrapperPathMock = vi.hoisted(() => vi.fn());
 const formatGatewayServiceStartRepairIssuesMock = vi.hoisted(() => vi.fn());
 const defaultRuntimeLogMock = vi.hoisted(() => vi.fn());
 const assertGatewayServiceMutationAllowedMock = vi.hoisted(() => vi.fn());
+const resolveBunRuntimeInfoMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../commands/daemon-install-helpers.js", () => ({
   buildGatewayInstallPlan: buildGatewayInstallPlanMock,
@@ -59,6 +60,8 @@ vi.mock("../../commands/daemon-install-helpers.js", () => ({
 
 vi.mock("../../commands/daemon-runtime.js", () => ({
   DEFAULT_GATEWAY_DAEMON_RUNTIME: "node",
+  resolveGatewayDaemonRuntime: (programArguments: string[] | undefined) =>
+    programArguments?.[0]?.endsWith("/bun") ? "bun" : "node",
 }));
 
 vi.mock("../../commands/gateway-install-token.js", () => ({
@@ -78,6 +81,10 @@ vi.mock("../../config/paths.js", () => ({
 vi.mock("../../daemon/program-args.js", () => ({
   OPENCLAW_WRAPPER_ENV_KEY: "OPENCLAW_WRAPPER",
   resolveOpenClawWrapperPath: resolveOpenClawWrapperPathMock,
+}));
+
+vi.mock("../../daemon/runtime-paths.js", () => ({
+  resolveBunRuntimeInfo: resolveBunRuntimeInfoMock,
 }));
 
 vi.mock("../../daemon/service.js", () => ({
@@ -118,6 +125,8 @@ describe("repairLoadedGatewayServiceForStart", () => {
     formatGatewayServiceStartRepairIssuesMock.mockReset();
     defaultRuntimeLogMock.mockClear();
     assertGatewayServiceMutationAllowedMock.mockReset();
+    resolveBunRuntimeInfoMock.mockReset();
+    resolveBunRuntimeInfoMock.mockResolvedValue({ supported: true });
 
     resolveGatewayInstallTokenMock.mockResolvedValue({
       tokenRefConfigured: false,
@@ -199,6 +208,50 @@ describe("repairLoadedGatewayServiceForStart", () => {
       }),
     );
   });
+
+  it.each([
+    { supported: true, expectedRuntime: "bun" },
+    { supported: false, expectedRuntime: "node" },
+  ])(
+    "$expectedRuntime is selected when repairing an installed Bun Gateway with supported=$supported",
+    async ({ supported, expectedRuntime }) => {
+      resolveBunRuntimeInfoMock.mockResolvedValue({ supported });
+      const service = {
+        install: vi.fn(async () => {}),
+        isLoaded: vi.fn(async () => true),
+      } as unknown as GatewayService;
+      const state: GatewayServiceState = {
+        installed: true,
+        loadState: { status: "loaded" },
+        running: false,
+        env: {},
+        command: {
+          programArguments: [
+            "/home/openclaw/.bun/bin/bun",
+            "/usr/lib/openclaw/dist/index.js",
+            "gateway",
+            "--port",
+            "18789",
+          ],
+          environment: { HOME: "/home/openclaw", OPENCLAW_GATEWAY_PORT: "18789" },
+        },
+      };
+
+      await repairLoadedGatewayServiceForStart({
+        service,
+        state,
+        issues: [{ code: "port-mismatch", message: "old port" }],
+        json: true,
+        stdout: process.stdout,
+      });
+
+      const plan = readFirstInstallPlanArg();
+      expect(plan.runtime).toBe(expectedRuntime);
+      expect(plan.runtimePath).toBe(
+        expectedRuntime === "bun" ? "/home/openclaw/.bun/bin/bun" : undefined,
+      );
+    },
+  );
 
   it.each([
     ["command", { launcher: "command" as const }, undefined],

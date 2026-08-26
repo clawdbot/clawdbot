@@ -4,7 +4,12 @@ import path from "node:path";
 import { runCommandBuffered } from "../process/exec.js";
 import { githubPublicationUnsafeConfigArgs } from "./github-publication-base.js";
 
-type GitCommandOptions = { cwd?: string; env?: NodeJS.ProcessEnv; input?: string };
+type GitCommandOptions = {
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  input?: string;
+  maxOutputBytes?: number;
+};
 type GitCommandResult = { code: number | null; stdout: Buffer };
 
 export async function runPublicationCommand(argv: string[], options: GitCommandOptions = {}) {
@@ -20,7 +25,7 @@ export async function runPublicationCommand(argv: string[], options: GitCommandO
     },
     ...(options.input !== undefined ? { input: options.input } : {}),
     timeoutMs: 60_000,
-    maxOutputBytes: 256 * 1024,
+    maxOutputBytes: options.maxOutputBytes ?? 256 * 1024,
   });
 }
 
@@ -34,6 +39,12 @@ export async function requirePublicationCommand(
   }
   return result.stdout.toString("utf8").trim();
 }
+
+// A recursive tree listing scales with repository size (openclaw itself is
+// ~3.3MB), far past the default per-command cap above. Without this explicit
+// bound the attribute scan dies as an output-limit "verification" failure on
+// any real repository.
+const TREE_LISTING_MAX_OUTPUT_BYTES = 64 * 1024 * 1024;
 
 export async function assertSafeGitPublicationWorkspace(
   cwd: string,
@@ -110,7 +121,10 @@ async function assertGitHubPublicationTreeHasNoFilters(
   workspaceTree: string,
   run: (argv: string[], options?: GitCommandOptions) => Promise<GitCommandResult>,
 ): Promise<void> {
-  const listing = await run(["git", "ls-tree", "-r", "-z", "--full-tree", workspaceTree], { cwd });
+  const listing = await run(["git", "ls-tree", "-r", "-z", "--full-tree", workspaceTree], {
+    cwd,
+    maxOutputBytes: TREE_LISTING_MAX_OUTPUT_BYTES,
+  });
   if (listing.code !== 0) {
     throw new Error("GitHub publication workspace attributes could not be verified.");
   }

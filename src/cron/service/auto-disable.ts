@@ -1,10 +1,9 @@
 /** Shared state and owner-notification policy for cron auto-disable transitions. */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { cronFailureDetailLines } from "../failure-notification-text.js";
 import type { CronJob, CronJobState } from "../types.js";
-import { normalizeOptionalAgentId } from "./normalize.js";
 import type { CronServiceState, DeferredCronNotifications } from "./state.js";
+import { enqueueCronNotification } from "./wake.js";
 
 type CronAutoDisableReason = NonNullable<CronJobState["autoDisabled"]>["reason"];
 
@@ -48,33 +47,7 @@ export function autoDisableCronJob(params: {
     ...cronFailureDetailLines(errorReason),
     `Fix the underlying cause, then run \`openclaw automations enable ${job.id}\` to re-enable it.`,
   ].join("\n");
-  const notify = () => {
-    const agentId =
-      normalizeOptionalAgentId(job.agentId) ??
-      normalizeOptionalAgentId(parseAgentSessionKey(job.sessionKey)?.agentId) ??
-      normalizeOptionalAgentId(state.deps.resolveDefaultAgentId?.()) ??
-      normalizeOptionalAgentId(state.deps.defaultAgentId);
-    const deliveryContext =
-      agentId || job.sessionKey
-        ? state.deps.resolveOriginDeliveryContext?.({
-            agentId,
-            sessionKey: job.sessionKey,
-          })
-        : undefined;
-    state.deps.enqueueSystemEvent(text, {
-      agentId,
-      sessionKey: job.sessionKey,
-      contextKey: `cron:${job.id}:auto-disabled`,
-      ...(deliveryContext ? { deliveryContext } : {}),
-    });
-    state.deps.requestHeartbeat({
-      source: "notifications-event",
-      intent: "immediate",
-      reason: "wake",
-      agentId,
-      sessionKey: job.sessionKey,
-    });
-  };
+  const notify = () => enqueueCronNotification(state, job, text, "auto-disabled");
 
   if (params.deferredNotifications) {
     params.deferredNotifications.push(notify);

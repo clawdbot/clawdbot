@@ -410,7 +410,6 @@ extensions/discord/src/monitor/provider.deploy.ts	4
 extensions/discord/src/monitor/provider.lifecycle.ts	2
 extensions/discord/src/monitor/provider.startup-log.ts	1
 extensions/discord/src/monitor/provider.startup.ts	2
-extensions/discord/src/monitor/provider.ts	1
 extensions/discord/src/monitor/reply-context.ts	1
 extensions/discord/src/monitor/reply-safety.ts	1
 extensions/discord/src/monitor/rest-fetch.ts	3
@@ -469,7 +468,7 @@ extensions/feishu/src/card-action.ts	1
 extensions/feishu/src/card-interaction.ts	1
 extensions/feishu/src/channel.ts	9
 extensions/feishu/src/chat.ts	2
-extensions/feishu/src/client.ts	5
+extensions/feishu/src/client.ts	4
 extensions/feishu/src/comment-handler.ts	2
 extensions/feishu/src/comment-reaction.ts	2
 extensions/feishu/src/comment-shared.ts	1
@@ -590,7 +589,7 @@ extensions/imessage/src/monitor/catchup-bridge.ts	1
 extensions/imessage/src/monitor/catchup.ts	2
 extensions/imessage/src/monitor/conversation-repair.ts	1
 extensions/imessage/src/monitor/inbound-processing.ts	2
-extensions/imessage/src/monitor/monitor-provider.ts	3
+extensions/imessage/src/monitor/monitor-provider.ts	2
 extensions/imessage/src/probe.ts	1
 extensions/imessage/src/remote-host.ts	1
 extensions/imessage/src/send.ts	5
@@ -922,7 +921,7 @@ extensions/ollama/src/provider-models.ts	1
 extensions/ollama/src/setup-pull.ts	1
 extensions/ollama/src/setup.runtime.ts	1
 extensions/ollama/src/stream-compat.ts	1
-extensions/ollama/src/stream.runtime.ts	7
+extensions/ollama/src/stream.runtime.ts	6
 extensions/onepassword/index.ts	2
 extensions/onepassword/src/op-client.ts	2
 extensions/onepassword/src/tool.ts	1
@@ -948,7 +947,6 @@ extensions/openai/realtime-voice-session-policy.ts	4
 extensions/openai/speech-provider.ts	2
 extensions/openai/tts.ts	2
 extensions/openai/video-generation-provider.ts	3
-extensions/opencode-go/provider-catalog.ts	1
 extensions/opencode-go/provider-policy-api.ts	1
 extensions/opencode-go/reasoning-sanitizer.ts	2
 extensions/opencode-go/stream-termination.ts	9
@@ -1291,7 +1289,7 @@ extensions/telegram/src/message-cache.ts	10
 extensions/telegram/src/miniapp/command.ts	1
 extensions/telegram/src/miniapp/init-data.ts	1
 extensions/telegram/src/miniapp/routes.ts	1
-extensions/telegram/src/monitor.ts	3
+extensions/telegram/src/monitor.ts	2
 extensions/telegram/src/network-config.ts	1
 extensions/telegram/src/network-errors.ts	8
 extensions/telegram/src/outbound-adapter.ts	5
@@ -1395,7 +1393,7 @@ extensions/whatsapp/src/approval-handler.runtime.ts	1
 extensions/whatsapp/src/approval-native.ts	1
 extensions/whatsapp/src/approval-reactions.ts	1
 extensions/whatsapp/src/auth-store.ts	3
-extensions/whatsapp/src/auto-reply/monitor.ts	3
+extensions/whatsapp/src/auto-reply/monitor.ts	2
 extensions/whatsapp/src/auto-reply/monitor/inbound-dispatch.ts	4
 extensions/whatsapp/src/auto-reply/monitor/process-message.ts	2
 extensions/whatsapp/src/channel-outbound.ts	1
@@ -1520,7 +1518,7 @@ packages/ai/src/providers/mistral.ts	6
 packages/ai/src/providers/openai-chatgpt-responses-protocol.ts	1
 packages/ai/src/providers/openai-chatgpt-responses.ts	27
 packages/ai/src/providers/openai-completions-tool-calls.ts	5
-packages/ai/src/providers/openai-completions.ts	16
+packages/ai/src/providers/openai-completions.ts	10
 packages/ai/src/providers/openai-reasoning-effort.ts	6
 packages/ai/src/providers/openai-responses-shared.ts	7
 packages/ai/src/providers/openai-responses-tools.ts	2
@@ -2540,7 +2538,7 @@ src/commands/doctor-session-incognito-key-repair.ts	4
 src/commands/doctor-session-snapshots.ts	5
 src/commands/doctor-session-sqlite-compact.ts	1
 src/commands/doctor-session-sqlite-migration-run.ts	8
-src/commands/doctor-session-sqlite-readers.ts	11
+src/commands/doctor-session-sqlite-readers.ts	9
 src/commands/doctor-session-sqlite-recover-report.ts	3
 src/commands/doctor-session-sqlite.ts	3
 src/commands/doctor-session-state-providers.ts	3
@@ -2828,7 +2826,6 @@ src/daemon/launchd-lifecycle.ts	4
 src/daemon/launchd-service-files.ts	1
 src/daemon/launchd-stop.ts	2
 src/daemon/launchd-system.ts	2
-src/daemon/runtime-paths.ts	1
 src/daemon/schtasks-control.ts	5
 src/daemon/schtasks-install.ts	2
 src/daemon/schtasks-process.ts	2
@@ -3816,7 +3813,7 @@ src/state/openclaw-state-db-readonly.ts	1
 src/state/openclaw-state-db-schema-additive.ts	1
 src/state/openclaw-state-db-schema-helpers.ts	4
 src/state/openclaw-state-db-schema-migration-required.ts	2
-src/state/openclaw-state-db-schema-repair.ts	7
+src/state/openclaw-state-db-schema-repair.ts	2
 src/state/openclaw-state-ownership.ts	1
 src/state/openclaw-state-snapshot-sanitizer.ts	1
 src/state/user-profiles-tailscale-avatar.ts	2

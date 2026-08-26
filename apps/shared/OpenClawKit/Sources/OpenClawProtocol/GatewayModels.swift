@@ -15549,6 +15549,8 @@ public struct SkillsCuratorStatusResult: Codable, Sendable {
     public let lastattemptatms: AnyCodable
     public let lastsuccessatms: AnyCodable
     public let lasterror: AnyCodable
+    public let collectionreview: [String: AnyCodable]?
+    public let experiencereview: [String: AnyCodable]?
     public let counts: [String: AnyCodable]
     public let skills: [SkillsCuratorActionResult]
     public let overlaps: [[String: AnyCodable]]
@@ -15557,6 +15559,8 @@ public struct SkillsCuratorStatusResult: Codable, Sendable {
         lastattemptatms: AnyCodable,
         lastsuccessatms: AnyCodable,
         lasterror: AnyCodable,
+        collectionreview: [String: AnyCodable]? = nil,
+        experiencereview: [String: AnyCodable]? = nil,
         counts: [String: AnyCodable],
         skills: [SkillsCuratorActionResult],
         overlaps: [[String: AnyCodable]])
@@ -15564,6 +15568,8 @@ public struct SkillsCuratorStatusResult: Codable, Sendable {
         self.lastattemptatms = lastattemptatms
         self.lastsuccessatms = lastsuccessatms
         self.lasterror = lasterror
+        self.collectionreview = collectionreview
+        self.experiencereview = experiencereview
         self.counts = counts
         self.skills = skills
         self.overlaps = overlaps
@@ -15573,6 +15579,8 @@ public struct SkillsCuratorStatusResult: Codable, Sendable {
         case lastattemptatms = "lastAttemptAtMs"
         case lastsuccessatms = "lastSuccessAtMs"
         case lasterror = "lastError"
+        case collectionreview = "collectionReview"
+        case experiencereview = "experienceReview"
         case counts
         case skills
         case overlaps

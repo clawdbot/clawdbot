@@ -226,6 +226,7 @@ suite.define(() => {
 
   it("pastes an image into the draft and forwards it with the initial turn", async () => {
     await withNewSessionPage(async (page) => {
+      await page.setViewportSize({ width: 393, height: 852 });
       const gateway = await installMockGateway(page, {
         methodResponses: {
           "sessions.create": { key: "agent:main:image-draft", runStarted: true },
@@ -237,6 +238,7 @@ suite.define(() => {
       await pastePng(message);
 
       await page.getByRole("img", { name: "pixel.png" }).waitFor();
+      await captureUiProof(page, "mobile-composer-new-session-attachment.png");
       await page.getByRole("button", { name: "Start session" }).click();
 
       const create = await gateway.waitForRequest("sessions.create");

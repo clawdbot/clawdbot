@@ -3,17 +3,9 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  GATEWAY_CLIENT_IDS,
-  GATEWAY_CLIENT_MODES,
-} from "../../../packages/gateway-protocol/src/client-info.js";
-import {
-  WORKER_PROTOCOL_FEATURES,
-  WORKER_RPC_SET_VERSION,
-} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { WORKER_RPC_SET_VERSION } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import { parseWorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import type { NodeWorkerSupervisorReceipt } from "../../worker/node-supervisor-protocol.js";
 import type { NodeWorkerWorkspaceExecInput } from "../../worker/node-workspace-protocol.js";
@@ -24,9 +16,15 @@ import {
 import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js";
 import type { createDeviceWorkerRuntime } from "./device-provider.js";
 import { createNodeWorkerTunnelManager } from "./node-worker-tunnel.js";
+import {
+  BUILD,
+  environment,
+  startRequest,
+  transport,
+  workspaceTransfer,
+} from "./node-worker-tunnel.test-support.js";
 import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import { sameWorkerSessionTurnClaim } from "./placement-record.js";
-import type { WorkerEnvironmentRecord } from "./store.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 
 const workspaceInfo = vi.hoisted(() => vi.fn());
@@ -45,44 +43,12 @@ vi.mock("../../logging/subsystem.js", async (importOriginal) => {
   };
 });
 
-const BUILD = {
-  bundleHash: "a".repeat(64),
-  openclawVersion: "2026.8.13",
-  protocolFeatures: [...WORKER_PROTOCOL_FEATURES],
-};
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 type NodeWorkerLaunch = ReturnType<typeof createDeviceWorkerRuntime>["launchNodeWorker"];
 type TerminalReceipt = Extract<
   NodeWorkerSupervisorReceipt,
   { state: "completed" | "failed" | "interrupted" | "cancelled" }
 >;
-
-function environment(): WorkerEnvironmentRecord {
-  return {
-    environmentId: "environment-1",
-    providerId: "device",
-    profileId: "device:node-1",
-    profileSnapshot: { settings: { device: "node-1" } },
-    provisionOperationId: "provision-1",
-    nodeSetupId: null,
-    nodeDeviceId: "node-1",
-    sharedHost: true,
-    desktop: null,
-    bootstrapReceipt: { ...BUILD, installKind: "bundle" },
-    ownerEpoch: 2,
-    teardownTerminalState: null,
-    attachedSessionIds: ["session-1"],
-    lastError: null,
-    createdAtMs: 1,
-    updatedAtMs: 2,
-    stateChangedAtMs: 2,
-    idleSinceAtMs: null,
-    destroyRequestedAtMs: null,
-    state: "attached",
-    leaseId: "device-lease",
-    sshEndpoint: null,
-  };
-}
 
 function plan() {
   return parseWorkerLaunchPlan({
@@ -122,44 +88,6 @@ function turnClaim() {
     placementGeneration: 4,
     owner: { kind: "worker" as const, environmentId: "environment-1", ownerEpoch: 2 },
   };
-}
-
-function transport(): NodeWorkerSupervisorTransport {
-  return {
-    hasCurrentRunner: () => true,
-    listCurrentNodes: async () => [
-      {
-        nodeId: "node-1",
-        connId: "conn-1",
-        pairingIdentity: "pairing-1",
-        pairingGeneration: "generation-1",
-        clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-        clientMode: GATEWAY_CLIENT_MODES.NODE,
-        protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-        workerHost: { enabled: true, capacity: { total: 2, available: 2 } },
-        commands: ["system.run"],
-      },
-    ],
-    isCurrent: () => true,
-    invoke: async () => ({ ok: false, error: { code: "UNAVAILABLE" } }),
-  };
-}
-
-function startRequest() {
-  return {
-    environmentId: "environment-1",
-    ownerEpoch: 2,
-    deviceId: "node-1",
-    sessionId: "session-1",
-    expectedBuild: BUILD,
-  };
-}
-
-function workspaceTransfer(): NodeWorkspaceTransferService {
-  return {
-    close: vi.fn(async () => {}),
-    revoke: vi.fn(),
-  } as unknown as NodeWorkspaceTransferService;
 }
 
 describe("node worker tunnel manager", () => {
@@ -427,6 +355,60 @@ describe("node worker tunnel manager", () => {
       workspaceBinding.resolve(undefined);
     },
   );
+
+  it("drains sibling node tunnels before reporting a workspace cleanup failure", async () => {
+    const cleanupError = new Error("first workspace cleanup failed");
+    const siblingCleanup = createDeferred();
+    const close = vi.fn(async (environmentId: string) => {
+      if (environmentId === "environment-1") {
+        throw cleanupError;
+      }
+      await siblingCleanup.promise;
+    });
+    const closeAll = vi.fn(async () => {});
+    const manager = createNodeWorkerTunnelManager({
+      gatewayDeviceId: "gateway-device-1",
+      getEnvironment: (environmentId) => ({
+        ...environment(),
+        environmentId,
+        attachedSessionIds: [environmentId === "environment-1" ? "session-1" : "session-2"],
+      }),
+      getTransport: transport,
+      launchNodeWorker: vi.fn(),
+      validateWorkerTurn: () => true,
+      workspaceTransfer: {
+        ...workspaceTransfer(),
+        close,
+        closeAll,
+      } as unknown as NodeWorkspaceTransferService,
+    });
+    await manager.start(startRequest());
+    await manager.start({
+      ...startRequest(),
+      environmentId: "environment-2",
+      sessionId: "session-2",
+    });
+
+    const stopping = manager.stopAll();
+    const settled = vi.fn();
+    void stopping.then(settled, settled);
+
+    try {
+      await vi.waitFor(() => expect(close).toHaveBeenCalledTimes(2));
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(settled).not.toHaveBeenCalled();
+      expect(closeAll).not.toHaveBeenCalled();
+
+      siblingCleanup.resolve();
+      await expect(stopping).rejects.toBe(cleanupError);
+      expect(closeAll).toHaveBeenCalledOnce();
+    } finally {
+      siblingCleanup.resolve();
+      await stopping.catch(() => undefined);
+    }
+  });
 
   it("reports a cleanup failure after workspace binding initialization fails", async () => {
     tunnelWarn.mockClear();

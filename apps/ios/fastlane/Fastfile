@@ -239,7 +239,7 @@ def install_ready_for_review_edit_state_lookup!
       return version if version
 
       # First public releases can leave the only version in READY_FOR_REVIEW.
-      # Fastlane 2.236.1 excludes that state and then tries to create an illegal
+      # Fastlane 2.238.0 excludes that state and then tries to create an illegal
       # second version; use the existing review-ready version as the edit target.
       client ||= Spaceship::ConnectAPI
       platform ||= Spaceship::ConnectAPI::Platform::IOS

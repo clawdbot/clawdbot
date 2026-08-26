@@ -1,5 +1,5 @@
-import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 // Codex plugin module implements conversation control behavior.
+import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import {
   applyModelOverrideWithAuthProfileCompatibility,
   ModelSelectionLockedError,
@@ -187,7 +187,6 @@ export async function setCodexConversationModel(params: {
   pluginConfig?: unknown;
   agentDir?: string;
   config?: CodexAppServerBindingLookup["config"];
-  session?: { agentId: string; sessionId: string; sessionKey: string };
 }): Promise<string> {
   const model = params.model.trim();
   if (!model) {
@@ -218,31 +217,27 @@ export async function setCodexConversationModel(params: {
   });
   const nextModel = modelSelection.model;
   const modelChanged = nextModel !== binding.model || nextModelProvider !== binding.modelProvider;
-  const session =
-    params.session ??
-    (params.identity.kind === "session" && params.identity.sessionKey
-      ? {
-          agentId: params.identity.agentId,
-          sessionId: params.identity.sessionId,
-          sessionKey: params.identity.sessionKey,
-        }
-      : undefined);
-  if (session) {
+  const projectionPatch =
+    modelChanged && binding.contextEngine?.projection
+      ? { contextEngine: { ...binding.contextEngine, projection: undefined } }
+      : {};
+  const identity = params.identity;
+  if (identity.kind === "session" && identity.sessionKey) {
+    // SessionEntry owns the desired model; retain the loaded binding until
+    // lifecycle reconciliation can rotate its native generation safely.
     const updated = await patchSessionEntry({
-      agentId: session.agentId,
-      storePath: resolveStorePath(params.config?.session?.store, { agentId: session.agentId }),
-      sessionKey: session.sessionKey,
+      agentId: identity.agentId,
+      storePath: resolveStorePath(params.config?.session?.store, { agentId: identity.agentId }),
+      sessionKey: identity.sessionKey,
       requireWriteSuccess: true,
-      // Model override helpers delete stale credentials and model metadata;
-      // replacing the snapshot is required because partial patches merge fields.
       replaceEntry: true,
       update: (entry) => {
-        if (entry.sessionId !== session.sessionId) {
+        if (entry.sessionId !== identity.sessionId) {
           throw new Error("Codex session changed while applying the model selection.");
         }
         applyModelOverrideWithAuthProfileCompatibility({
           cfg: params.config ?? {},
-          agentDir: params.agentDir ?? resolveAgentDir(params.config ?? {}, session.agentId),
+          agentDir: params.agentDir ?? resolveAgentDir(params.config ?? {}, identity.agentId),
           entry,
           currentProvider: binding.modelProvider ?? "openai",
           selection: { provider: nextModelProvider ?? "openai", model: nextModel },
@@ -254,28 +249,16 @@ export async function setCodexConversationModel(params: {
     if (!updated) {
       throw new Error("Codex session changed while applying the model selection.");
     }
-    // SessionEntry owns desired selection; the native binding remains the
-    // currently loaded model so generation transitions still rotate safely.
-    if (params.identity.kind === "conversation") {
-      await patchThreadBinding(params.bindingStore, params.identity, binding.threadId, {
-        model: nextModel,
-        modelProvider: nextModelProvider,
-        ...(modelChanged && binding.contextEngine?.projection
-          ? { contextEngine: { ...binding.contextEngine, projection: undefined } }
-          : {}),
-      });
-    } else if (modelChanged && binding.contextEngine?.projection) {
-      await patchThreadBinding(params.bindingStore, params.identity, binding.threadId, {
-        contextEngine: { ...binding.contextEngine, projection: undefined },
-      });
+    if (modelChanged && binding.contextEngine?.projection) {
+      await patchThreadBinding(params.bindingStore, identity, binding.threadId, projectionPatch);
     }
   } else {
+    // Conversation bindings and ephemeral sessions own native selection;
+    // ambient outer-session metadata must never redirect their runtime.
     await patchThreadBinding(params.bindingStore, params.identity, binding.threadId, {
       model: nextModel,
       modelProvider: nextModelProvider,
-      ...(modelChanged && binding.contextEngine?.projection
-        ? { contextEngine: { ...binding.contextEngine, projection: undefined } }
-        : {}),
+      ...projectionPatch,
     });
   }
   return `Codex model set to ${formatCodexDisplayText(nextModel)}.`;

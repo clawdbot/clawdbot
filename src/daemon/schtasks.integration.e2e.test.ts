@@ -13,7 +13,7 @@ import { execSchtasks } from "./schtasks-exec.js";
 import { resolveStartupEntryPaths, resolveTaskLauncherScriptPath } from "./schtasks-layout.js";
 import { readWindowsProcessSnapshot } from "./schtasks-process.js";
 import { probeScheduledTaskExists } from "./schtasks-runtime.js";
-import { type ProbeRunEvent, waitForExactProbeRun } from "./schtasks.integration.test-helpers.js";
+import * as proof from "./schtasks.integration.test-helpers.js";
 import { resolveTaskScriptPath } from "./schtasks.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type { GatewayServiceEnv } from "./service-types.js";
@@ -646,15 +646,13 @@ async function cleanupNativeTask(params: {
 }
 
 function expectProbeProcessAlive(pid: number): void {
-  expect(isProcessAlive(pid), `Expected Scheduled Task probe process ${pid} to remain alive`).toBe(
-    true,
-  );
+  expect(isProcessAlive(pid), `Scheduled Task probe ${pid} did not remain alive`).toBe(true);
 }
 
 function expectScheduledTaskProbeOrigin(params: {
   eventsPath: string;
   probePath: string;
-  run: ProbeRunEvent;
+  run: proof.ProbeRunEvent;
   scriptPath: string;
 }): void {
   expect(params.run.ppid).not.toBe(process.pid);
@@ -816,7 +814,6 @@ describe.runIf(nativeIntegrationEnabled)("schtasks Windows integration", () => {
       OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1",
       OPENCLAW_WINDOWS_TASK_NAME: undefined,
     };
-    const defaultTaskBefore = await readTaskDefinitionSnapshot("OpenClaw Gateway");
     const scriptPath = resolveTaskScriptPath(env);
     const launcherPath = resolveTaskLauncherScriptPath(env, scriptPath);
 
@@ -861,6 +858,8 @@ describe.runIf(nativeIntegrationEnabled)("schtasks Windows integration", () => {
     ];
     try {
       await withEnvAsync(env, async () => {
+        const startupFallbackProof = await proof.proveNativeStartupFallbackLaunch({ env, rootDir });
+        const defaultTaskBefore = await readTaskDefinitionSnapshot("OpenClaw Gateway");
         const service = resolveGatewayService();
         const readRuntime = () => service.readRuntime(env);
 
@@ -897,7 +896,7 @@ describe.runIf(nativeIntegrationEnabled)("schtasks Windows integration", () => {
         const command = await service.readCommand(env);
         expect(command?.programArguments).toEqual(programArguments);
         expect(command?.environment?.OPENCLAW_GATEWAY_PORT).toBe(String(gatewayPort));
-        const installedRun = await waitForExactProbeRun(eventsPath, 1);
+        const installedRun = await proof.waitForExactProbeRun(eventsPath, 1);
         const installedPid = installedRun.pid;
         expectProbeProcessAlive(installedPid);
         expectScheduledTaskProbeOrigin({
@@ -929,7 +928,7 @@ describe.runIf(nativeIntegrationEnabled)("schtasks Windows integration", () => {
           onMutation: (mutation) => startMutations.push(mutation.mode),
         });
         expect(startMutations).toEqual(["schtasks-start"]);
-        const startedRun = await waitForExactProbeRun(eventsPath, 2);
+        const startedRun = await proof.waitForExactProbeRun(eventsPath, 2);
         const startedPid = startedRun.pid;
         expect(startedPid).not.toBe(installedPid);
         expectProbeProcessAlive(startedPid);
@@ -950,7 +949,7 @@ describe.runIf(nativeIntegrationEnabled)("schtasks Windows integration", () => {
         });
         expect(restartResult).toEqual({ outcome: "completed" });
         expect(restartMutations).toEqual(["schtasks-end", "schtasks-restart"]);
-        const restartedRun = await waitForExactProbeRun(eventsPath, 3);
+        const restartedRun = await proof.waitForExactProbeRun(eventsPath, 3);
         const restartedPid = restartedRun.pid;
         lifecyclePids = [installedPid, startedPid, restartedPid];
         expect(restartedPid).not.toBe(startedPid);
@@ -978,7 +977,6 @@ describe.runIf(nativeIntegrationEnabled)("schtasks Windows integration", () => {
         await expect(fs.access(launcherPath)).rejects.toThrow();
         expect(await canBindLoopbackPort(gatewayPort)).toBe(true);
         expect(await readTaskDefinitionSnapshot("OpenClaw Gateway")).toEqual(defaultTaskBefore);
-
         const proofPath = process.env.CI_WINDOWS_SCHTASKS_PROOF_PATH?.trim();
         if (proofPath) {
           const proofHead = process.env.CI_WINDOWS_SCHTASKS_HEAD?.trim();
@@ -1001,6 +999,7 @@ describe.runIf(nativeIntegrationEnabled)("schtasks Windows integration", () => {
                 gatewayPort,
                 portReleaseRebind: true,
                 startupFallback: false,
+                startupFallbackProof,
                 defaultTaskUnchanged: true,
                 taskXml: {
                   interactiveToken: true,
