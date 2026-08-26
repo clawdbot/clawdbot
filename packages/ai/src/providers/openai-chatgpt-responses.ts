@@ -257,7 +257,10 @@ function classifyStreamFailure(
   if (signal?.aborted) {
     return "caller-abort";
   }
-  return error instanceof ResponsesStreamFailure ? "provider-failure" : "transport";
+  // CodexApiError carries a non-OK HTTP reply; both are provider decisions, not transport faults.
+  return error instanceof ResponsesStreamFailure || error instanceof CodexApiError
+    ? "provider-failure"
+    : "transport";
 }
 
 function formatRequestTimeoutError(timeoutMs: number, cause: unknown): Error {

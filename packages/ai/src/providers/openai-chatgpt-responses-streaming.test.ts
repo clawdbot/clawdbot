@@ -306,6 +306,36 @@ describe("OpenAI ChatGPT Responses inference streaming", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("classifies a direct HTTP rejection as a provider failure without logging its text", async () => {
+    const logWarn = vi.fn();
+    configureAiTransportHost({ logWarn });
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          error: { message: "hostile prompt echo in a 400 body", code: "invalid_request" },
+        }),
+        { status: 400, statusText: "Bad Request" },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await streamOpenAICodexResponses(model, context, {
+      apiKey: createJwt({
+        "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
+      }),
+      transport: "sse",
+    }).result();
+
+    expect(result.stopReason).toBe("error");
+    expect(logWarn).toHaveBeenCalledTimes(1);
+    const logged = logWarn.mock.calls[0]?.[2];
+    expect(logged).toMatchObject({ stopReason: "error", failureKind: "provider-failure" });
+    const serialized = JSON.stringify(logged);
+    for (const hostile of ["hostile", "invalid_request", "400 body"]) {
+      expect(serialized).not.toContain(hostile);
+    }
+  });
+
   it.each(["sse", "websocket"] as const)(
     "preserves failed response identity and provider error details over %s",
     async (transport) => {

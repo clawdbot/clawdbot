@@ -499,13 +499,13 @@ function budgetCompactionSummary(
 ) {
   const suffix = normalizeCompactionSuffix(suffixInput);
   const joined = `${summaryBody}${suffix.text}`;
-  // Source identifiers are audit facts the model may omit even when the body
-  // fits; the retention plan restores them, so an under-budget body only skips
-  // it when nothing is missing.
+  // A body that fits still goes through the retention plan when it omits an
+  // audited identifier or lets an audit section outgrow its cap; both would
+  // re-distill into the next summary otherwise.
   const retentionPlan = qualityRetention
     ? createSummaryQualityRetentionPlan(summaryBody, SUMMARY_TRUNCATED_MARKER, qualityRetention)
     : null;
-  if (maxChars <= 0 || (joined.length <= maxChars && !retentionPlan?.restoresIdentifiers)) {
+  if (maxChars <= 0 || (joined.length <= maxChars && !retentionPlan?.needsRebuild(maxChars))) {
     return {
       summary: joined,
       structuralSummary: summaryBody,

@@ -100,8 +100,11 @@ function hasRequiredSummarySections(summary: string): boolean {
 
 type SummaryQualityRetentionPlan = {
   minimumChars: number;
-  /** True when the body omits a strict source identifier that render() restores. */
-  restoresIdentifiers: boolean;
+  /**
+   * True when render() must rebuild even a body that fits: a strict source
+   * identifier is missing, or an audit-bearing section exceeds its share cap.
+   */
+  needsRebuild: (maxChars: number) => boolean;
   /** Null when even the protected facts cannot fit `maxChars`. */
   render: (maxChars: number) => { text: string; trimmed: boolean } | null;
 };
@@ -200,24 +203,35 @@ export function createSummaryQualityRetentionPlan(
     marker,
     ...minimumBlocks.slice(QUALITY_PROTECTED_SECTION_START),
   ].join("\n\n");
+  // Audit-bearing sections (pending asks, exact identifiers) are funded first so
+  // a runaway earlier section cannot starve them, but each is hard-capped: an
+  // uncapped identifier list re-distills into the whole budget — even while the
+  // artifact still fits — and leaves every other section as a bare heading.
+  const protectedCapFor = (maxChars: number) =>
+    Math.floor(Math.max(0, maxChars - minimumSummary.length) * MAX_PROTECTED_SECTION_CONTENT_SHARE);
+  const protectedWithinCap = (maxChars: number) =>
+    contents
+      .slice(QUALITY_PROTECTED_SECTION_START)
+      .every((content) => content.length <= protectedCapFor(maxChars));
 
   return {
     minimumChars: minimumSummary.length,
-    restoresIdentifiers: !bodyHasIdentifiers,
+    needsRebuild: (maxChars) => !bodyHasIdentifiers || !protectedWithinCap(maxChars),
     render(maxChars) {
       const bodyHasRequiredAskContext = !requiredAskContext || summary.includes(requiredAskContext);
-      if (summary.length <= maxChars && bodyHasRequiredAskContext && bodyHasIdentifiers) {
+      if (
+        summary.length <= maxChars &&
+        bodyHasRequiredAskContext &&
+        bodyHasIdentifiers &&
+        protectedWithinCap(maxChars)
+      ) {
         return { text: summary, trimmed: false };
       }
       if (maxChars < minimumSummary.length) {
         return null;
       }
       const contentBudget = maxChars - minimumSummary.length;
-      // Audit-bearing sections (pending asks, exact identifiers) are funded first
-      // so a runaway earlier section cannot starve them, but each is capped: an
-      // uncapped identifier list re-distills into the whole budget and leaves
-      // every other section as a bare heading.
-      const protectedCap = Math.floor(contentBudget * MAX_PROTECTED_SECTION_CONTENT_SHARE);
+      const protectedCap = protectedCapFor(maxChars);
       const allocations = contents.map((content, index) =>
         index >= QUALITY_PROTECTED_SECTION_START ? Math.min(content.length, protectedCap) : 0,
       );
@@ -231,8 +245,14 @@ export function createSummaryQualityRetentionPlan(
         allocations[index] =
           optionalTotal > 0 ? Math.floor((optionalBudget * content.length) / optionalTotal) : 0;
       }
-      let remainder = contentBudget - allocations.reduce((total, chars) => total + chars, 0);
-      for (const [index, content] of contents.entries()) {
+      // Surplus returns to the optional sections only; the protected caps stay
+      // hard so short decisions cannot hand the budget back to the identifier dump.
+      let remainder =
+        optionalBudget -
+        allocations
+          .slice(0, QUALITY_PROTECTED_SECTION_START)
+          .reduce((total, chars) => total + chars, 0);
+      for (const [index, content] of optionalContents.entries()) {
         const allocation = allocations[index] ?? 0;
         const extra = Math.min(remainder, Math.max(0, content.length - allocation));
         allocations[index] = allocation + extra;

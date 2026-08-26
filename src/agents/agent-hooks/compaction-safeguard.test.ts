@@ -2275,6 +2275,94 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(summary).toContain(identifier);
     expect(summary).toContain("run-0/output.log");
     expect(summary).not.toContain("run-399/output.log");
+    const identifiersSection = summary.slice(summary.indexOf("## Exact identifiers"));
+    expect(identifiersSection.length).toBeLessThanOrEqual(
+      MAX_COMPACTION_SUMMARY_CHARS * 0.25 + 200,
+    );
+    expect(consumeCompactionSafeguardCancelReason(sessionManager)).toBeNull();
+  });
+
+  it("keeps surplus budget out of the protected sections when trimming", () => {
+    const identifier = "/tmp/surplus-compaction-id.log";
+    const latestAsk = "preserve the pending deployment status";
+    // The re-distilled shape seen in production: every optional section is an
+    // empty heading, so all surplus would otherwise flow to the identifier list.
+    const body = [
+      "## Decisions",
+      "## Open TODOs",
+      "## Constraints/Rules",
+      "## Pending user asks",
+      latestAsk,
+      "## Exact identifiers",
+      [identifier, ...Array.from({ length: 300 }, (_, i) => `- /tmp/run-${i}/out.log`)].join("\n"),
+    ].join("\n");
+    const maxChars = 4_000;
+    expect(body.length).toBeGreaterThan(maxChars);
+
+    const finalized = budgetCompactionSummary(body, "", maxChars, {
+      identifiers: [identifier],
+      latestAsk,
+      identifierPolicy: "strict",
+    });
+
+    const structural = (finalized as { structuralSummary: string }).structuralSummary;
+    expect(structural.length).toBeLessThanOrEqual(maxChars);
+    expect(structural).toContain("## Decisions");
+    expect(structural).toContain(identifier);
+    const identifiersSection = structural.slice(structural.indexOf("## Exact identifiers"));
+    expect(identifiersSection.length).toBeLessThanOrEqual(maxChars * 0.25 + 100);
+  });
+
+  it("caps an identifier list that outgrew its share while the summary still fits", async () => {
+    mockSummarizeInStages.mockReset();
+    const latestAsk = "preserve the pending deployment status";
+    const identifier = "/tmp/source-only-compaction-id.log";
+    const hoardedIdentifiers = Array.from(
+      { length: 200 },
+      (_, index) => `- /home/vac/clawd/tmp/session-artifacts/run-${index}/output.log`,
+    ).join("\n");
+    const generatedSummary = [
+      "## Decisions",
+      "Deployment stays paused until the backup is verified.",
+      "## Open TODOs",
+      "Verify the backup.",
+      "## Constraints/Rules",
+      "Preserve exact context.",
+      "## Pending user asks",
+      latestAsk,
+      "## Exact identifiers",
+      `${identifier}\n${hoardedIdentifiers}`,
+    ].join("\n");
+    expect(generatedSummary.length).toBeLessThan(MAX_COMPACTION_SUMMARY_CHARS);
+    mockSummarizeInStages.mockResolvedValue(summaryResult(generatedSummary));
+
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model: createAnthropicModelFixture(),
+      recentTurnsPreserve: 0,
+      qualityGuardEnabled: true,
+      qualityGuardMaxRetries: 1,
+    });
+    const event = createCompactionEvent({
+      messageText: `${latestAsk} ${identifier}`,
+      tokensBefore: 1_500,
+    });
+    (event.preparation as { settings?: { reserveTokens: number } }).settings = {
+      reserveTokens: 4_000,
+    };
+
+    const { result } = await runCompactionScenario({ sessionManager, event, apiKey: "test-key" });
+
+    const summary = expectCompactionResult(result).summary;
+    expect(summary).toContain(
+      "## Decisions\nDeployment stays paused until the backup is verified.",
+    );
+    expect(summary).toContain(identifier);
+    expect(summary).not.toContain("run-199/output.log");
+    const identifiersSection = summary.slice(summary.indexOf("## Exact identifiers"));
+    expect(identifiersSection.length).toBeLessThanOrEqual(
+      MAX_COMPACTION_SUMMARY_CHARS * 0.25 + 200,
+    );
     expect(consumeCompactionSafeguardCancelReason(sessionManager)).toBeNull();
   });
 
