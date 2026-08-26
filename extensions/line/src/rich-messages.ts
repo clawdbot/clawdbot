@@ -17,14 +17,13 @@ import { Type } from "typebox";
 import { hasLineCredentials } from "./account-helpers.js";
 import { resolveLineAccount } from "./accounts.js";
 import { messageAction, postbackAction, type Action } from "./actions.js";
+import { createActionCard } from "./flex-templates/basic-cards.js";
 import {
-  createActionCard,
-  createAgendaCard,
   createAppleTvRemoteCard,
   createDeviceControlCard,
-  createEventCard,
   createMediaPlayerCard,
-} from "./flex-templates.js";
+} from "./flex-templates/media-control-cards.js";
+import { createAgendaCard, createEventCard } from "./flex-templates/schedule-cards.js";
 import type { LineQuickReplyItem, LineRichCard } from "./types.js";
 
 const nonempty = () => Type.String({ minLength: 1 });

@@ -631,6 +631,8 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   lastRunId?: string;
   /** Run admitted by the session lane; overwritten at admission and checked by transcript writes. */
   activeWriterRunId?: string;
+  /** Canonical remote repository awaiting preparation by this exact session generation. */
+  pendingProjectGitUrl?: string;
   /** Private per-generation ownership for the pre-runtime checkout baseline capture. */
   sessionDiffBaselineCapture?: import("./session-diff-baseline-capture.js").SessionDiffBaselineCapture;
   mainRestartRecovery?: MainRestartRecoveryState;

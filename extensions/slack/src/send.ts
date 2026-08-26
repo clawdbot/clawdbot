@@ -35,6 +35,7 @@ import { buildSlackCompleteBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
 import {
   postSlackMessageBestEffort,
+  rethrowSlackPermanentOutboundApiRejection,
   uploadSlackFile,
   withSlackDnsRequestRetry,
 } from "./client-delivery.js";
@@ -608,7 +609,7 @@ async function resolveChannelId(
   }
   const response = await withSlackDnsRequestRetry("conversations.open", () =>
     client.conversations.open({ users: recipient.id }),
-  );
+  ).catch(rethrowSlackPermanentOutboundApiRejection);
   const channelId = response.channel?.id;
   if (!channelId) {
     throw new Error("Failed to open Slack DM channel");

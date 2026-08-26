@@ -11,6 +11,7 @@ import { SessionManager } from "../../agents/sessions/index.js";
 import { getCanonicalSkillWorkspace } from "../../agents/skill-workshop-workspace-context.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
@@ -428,6 +429,17 @@ async function runSkillExperienceReviewInner(
   let outcome: "applied" | "proposed" | "nothing";
   let proposalId: string | undefined;
   let usage: { inputTokens: number; cachedInputTokens: number; outputTokens: number } | undefined;
+  // The warm review reuses the foreground session identity for prompt caching.
+  // Keep every review event and lifecycle transition out of that user-visible session.
+  registerAgentRunContext(runId, {
+    agentId: foregroundPromptContext.agentId,
+    sessionId,
+    sessionKey,
+    isControlUiVisible: false,
+    projectSessionActive: false,
+    projectSessionLifecycle: false,
+    projectSessionMessages: false,
+  });
   try {
     let embeddedResult: Awaited<ReturnType<typeof runEmbeddedAgent>>;
     try {
@@ -456,6 +468,9 @@ async function runSkillExperienceReviewInner(
             : {}),
           timeoutMs: EXPERIENCE_REVIEW_TIMEOUT_MS,
           runId,
+          silentExpected: true,
+          allowEmptyAssistantReplyAsSilent: true,
+          terminalReplyExpectation: "optional",
           toolExecutionAllow: ["skill_workshop"],
           disableTrajectory: true,
           skillWorkshopProposalOnly: true,
@@ -527,6 +542,8 @@ async function runSkillExperienceReviewInner(
       error: String(error).slice(0, 300),
     });
     throw error;
+  } finally {
+    clearAgentRunContext(runId);
   }
   recordSkillExperienceReviewOutcome(workspaceDir, {
     attemptedAtMs,

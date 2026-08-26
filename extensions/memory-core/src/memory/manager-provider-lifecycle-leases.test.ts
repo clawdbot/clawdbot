@@ -1,4 +1,5 @@
 // Memory Core tests cover manager provider lifecycle lease behavior.
+import fs from "node:fs/promises";
 import path from "node:path";
 import { hashText } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it, vi } from "vitest";
@@ -72,6 +73,8 @@ describe("memory index", () => {
     };
     const first = createEntry("fts-first");
     const second = createEntry("fts-second");
+    await fs.writeFile(first.absPath, first.content);
+    await fs.writeFile(second.absPath, second.content);
 
     fields.beginSyncProviderGeneration();
     try {

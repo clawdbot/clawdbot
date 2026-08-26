@@ -768,6 +768,14 @@ struct MacNodeHostWorkerTests {
                 configurationGeneration: 3))
             Issue.record("worker start unexpectedly succeeded")
         } catch {
+            let workerError = try #require(error as? MacNodeHostWorker.WorkerError)
+            guard case let .unavailable(reason, diagnostic) = workerError else {
+                Issue.record("worker start did not report an unavailable error")
+                return
+            }
+            #expect(reason.contains("exited"))
+            #expect(!reason.contains("state database"))
+            #expect(diagnostic?.contains("state database uses newer schema version") == true)
             #expect(error.localizedDescription.contains("state database uses newer schema version"))
         }
 

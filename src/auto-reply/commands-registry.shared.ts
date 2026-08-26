@@ -638,11 +638,16 @@ export function buildBuiltinChatCommands(
     }),
     defineBuiltinCommand(
       "model",
-      "Show or set the model; direct owner/admin selections request a default update.",
+      "Show or set the model; use -s, -a, or -g to choose scope.",
       "options",
       "essential",
       {
-        args: [defineCommandArgument("model", "Model id; add -s to change only this session")],
+        args: [
+          defineCommandArgument(
+            "model",
+            "Model id; add -s for session, -a for agent, or -g for global scope",
+          ),
+        ],
       },
     ),
     defineBuiltinCommand("models", "List model providers/models.", "options", "standard", {

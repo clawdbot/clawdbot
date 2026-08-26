@@ -1,5 +1,5 @@
 import type { ProgressCard } from "@openclaw/gateway-protocol";
-import { ReactiveElement, render } from "lit";
+import { nothing, ReactiveElement, render } from "lit";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { resolveControlUiAuthCandidates } from "../app/control-ui-auth.ts";
@@ -48,6 +48,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
   private applicationGateway: ApplicationGateway | null = null;
   private progressCards: SessionProgressCardStore | null = null;
   private stopProgressCardUpdates: (() => void) | null = null;
+  private stopSessionUpdates: (() => void) | null = null;
   private pullRequests: SessionPullRequestSnapshotStore | null = null;
   private stopPullRequestUpdates: (() => void) | null = null;
   private activeTarget: HTMLElement | null = null;
@@ -93,10 +94,13 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
   }
 
   set context(value: ApplicationContext | null) {
+    this.stopSessionUpdates?.();
+    this.stopSessionUpdates = null;
     this.applicationContext = value;
     this.sessionLinkTitler.context = value;
     if (this.isConnected) {
       this.sessionLinkTitler.refresh();
+      this.connectStore();
     }
   }
 
@@ -150,6 +154,11 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
   }
 
   private connectStore(): void {
+    if (this.applicationContext && !this.stopSessionUpdates) {
+      this.stopSessionUpdates = this.applicationContext.sessions.subscribe(
+        this.handleSessionUpdate,
+      );
+    }
     if (!this.applicationGateway || this.progressCards) {
       return;
     }
@@ -161,6 +170,8 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     this.progressCards?.unwatch(this);
     this.stopProgressCardUpdates?.();
     this.stopProgressCardUpdates = null;
+    this.stopSessionUpdates?.();
+    this.stopSessionUpdates = null;
     this.progressCards = null;
     this.releasePullRequestStore();
   }
@@ -175,6 +186,12 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
       this.lastProgressCard = card;
     }
     this.showCurrent();
+  };
+
+  private readonly handleSessionUpdate = () => {
+    if (this.open && this.hovercard.held) {
+      this.showCurrent();
+    }
   };
 
   private readonly handlePullRequestUpdate = () => {
@@ -415,7 +432,10 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
             participantCount: sidebarRow.participantCount,
             workContext: sidebarRow.workContext,
             createdAt: sidebarRow.createdAt,
+            startedAt: sidebarRow.startedAt,
             updatedAt: sidebarRow.updatedAt,
+            status: sidebarRow.status,
+            endedAt: sidebarRow.endedAt,
           }
         : null,
     });
@@ -493,7 +513,9 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     card.addEventListener("focusin", this.handleCardFocusIn);
     card.addEventListener("focusout", this.handleCardFocusOut);
     card.addEventListener("keydown", this.handleCardKeyDown);
-    this.hovercard.mount(target, card, sessionProgressHoverPlacementForTarget(target), false);
+    this.hovercard.mount(target, card, sessionProgressHoverPlacementForTarget(target), false, () =>
+      render(nothing, card),
+    );
     if (animateEntry) {
       void card.offsetWidth;
       window.setTimeout(() => {

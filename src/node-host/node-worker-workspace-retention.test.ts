@@ -13,6 +13,7 @@ import {
   testWorkerLaunchInput,
   writeNodeWorkerFixture,
 } from "./node-worker-supervisor.test-support.js";
+import * as workspaceTransfer from "./node-worker-transfer-client.js";
 import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -315,6 +316,77 @@ describe("node worker workspace retention", () => {
     expect(fs.existsSync(stale)).toBe(false);
     await supervisor.close();
   });
+
+  it.each(["upload", "download"] as const)(
+    "retains the latest %s manifest across command gaps until superseded or retired",
+    async (direction) => {
+      const root = fs.realpathSync.native(tempDirs.make("node-worker-workspace-transfer-retain-"));
+      const workspace = new NodeWorkerWorkspaceRuntime({ root });
+      const input = testWorkerLaunchInput("/unused", "transfer-retention");
+      const generation = input.descriptor.admission.ownerEpoch;
+      const workspaceDir = seedGeneration(root, input, generation);
+      const baseDigest = "b".repeat(64);
+      const baseManifest = seedManifest(root, input, baseDigest);
+      const retainedEntry = {
+        environmentId: input.descriptor.admission.environmentId,
+        sessionId: input.descriptor.admission.sessionId,
+        generation,
+        manifestRefs: [`sha256:${baseDigest}`],
+      };
+      const runTransfer = vi.spyOn(workspaceTransfer, "runNodeWorkerWorkspaceTransfer");
+      const transferManifest = async (digest: string) => {
+        const manifestRef = `sha256:${digest}`;
+        const manifest = seedManifest(root, input, digest);
+        runTransfer.mockResolvedValueOnce(manifestRef);
+        await workspace.exec(
+          {
+            gatewayNamespace: input.gatewayNamespace,
+            environmentId: retainedEntry.environmentId,
+            sessionId: retainedEntry.sessionId,
+            generation,
+            argv: ["node"],
+            transfer:
+              direction === "upload"
+                ? { direction, token: "test-token", baseManifestRef: `sha256:${baseDigest}` }
+                : { direction, token: "test-token", manifestRef },
+          },
+          undefined,
+          { url: "http://127.0.0.1:1" },
+        );
+        return manifest;
+      };
+
+      const first = await transferManifest("c".repeat(64));
+      const artifacts = [
+        `.${generation}.workspace-transfer-stale`,
+        `${generation}.previous-123-stale`,
+      ].map((name) => path.join(sessionRoot(root, input), name));
+      for (const artifact of artifacts) {
+        fs.mkdirSync(artifact);
+      }
+      await workspace.applyRetainSnapshot(retainInput(input, 1, [retainedEntry]), () => []);
+
+      expect(fs.existsSync(first)).toBe(true);
+      expect(artifacts.every((artifact) => !fs.existsSync(artifact))).toBe(true);
+
+      const latest = await transferManifest("d".repeat(64));
+      await workspace.applyRetainSnapshot(retainInput(input, 2, [retainedEntry]), () => []);
+
+      expect(fs.existsSync(first)).toBe(false);
+      expect(fs.existsSync(latest)).toBe(true);
+      expect(fs.existsSync(baseManifest)).toBe(true);
+
+      const sibling = seedGeneration(root, input, generation + 1);
+      await workspace.applyRetainSnapshot(
+        retainInput(input, 3, [{ ...retainedEntry, generation: generation + 1 }]),
+        () => [],
+      );
+
+      expect(fs.existsSync(workspaceDir)).toBe(false);
+      expect(fs.existsSync(latest)).toBe(false);
+      expect(fs.existsSync(sibling)).toBe(true);
+    },
+  );
 
   it("keeps a nonterminal launch until a later authoritative snapshot", async () => {
     const root = tempDirs.make("node-worker-workspace-retention-active-");

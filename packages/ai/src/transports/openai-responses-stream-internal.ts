@@ -27,7 +27,7 @@ import { encodeTextSignatureV1 } from "./openai-responses-replay-internal.js";
 import { adaptResponsesStream } from "./openai-responses-stream-observer-internal.js";
 import {
   appendResponsesPendingTextDelta,
-  createResponsesOutputContentIndex,
+  createResponsesOutputTracker,
   createResponsesOutputSlotTracker,
   readResponsesOutputIndex,
   type ResponsesStreamOutputSlot,
@@ -69,9 +69,7 @@ export async function processResponsesStream<TApi extends Api>(
   >;
   const streamingToolCalls = createResponsesToolCallTracker<StreamingToolCallState>();
   const outputSlots = createResponsesOutputSlotTracker<ResponsesOutputSlot>();
-  const reasoningBlocksById = new Map<string, ResponsesThinkingBlock>();
-  const outputItemContentIndexes = createResponsesOutputContentIndex();
-  const startedTextBlocksByItemId = new Map<string, TextBlockReference>();
+  const outputs = createResponsesOutputTracker();
   let terminalResponse: CompletedResponse | null | undefined;
   let lastTextBlock: TextBlockReference | null = null;
   const blocks = output.content;
@@ -87,10 +85,10 @@ export async function processResponsesStream<TApi extends Api>(
         item,
         block,
         contentIndex: blocks.length,
+        outputIndex: readResponsesOutputIndex(event),
       } satisfies ResponsesOutputSlot;
       blocks.push(block);
-      reasoningBlocksById.set(item.id, block);
-      outputItemContentIndexes.set(item, slot.contentIndex);
+      outputs.set(item, slot.contentIndex, slot.outputIndex);
       outputSlots.register(event, slot);
       stream.push({ type: "thinking_start", contentIndex: slot.contentIndex, partial: output });
       return slot;
@@ -112,17 +110,13 @@ export async function processResponsesStream<TApi extends Api>(
         item: messageItem,
         block,
         contentIndex: block ? blocks.length : undefined,
+        outputIndex: readResponsesOutputIndex(event),
         pendingText: collapseCandidate ? "" : null,
         collapseCandidate,
       } satisfies ResponsesOutputSlot;
       if (block) {
         blocks.push(block);
-        outputItemContentIndexes.set(messageItem, slot.contentIndex ?? blocks.length - 1);
-        startedTextBlocksByItemId.set(messageItem.id, {
-          block,
-          index: slot.contentIndex ?? blocks.length - 1,
-          phase: messageItem.phase ?? undefined,
-        });
+        outputs.set(messageItem, slot.contentIndex ?? blocks.length - 1, slot.outputIndex);
       }
       outputSlots.register(event, slot);
       if (slot.contentIndex !== undefined) {
@@ -144,12 +138,6 @@ export async function processResponsesStream<TApi extends Api>(
     }
     return readResponsesOutputIndex(event) === undefined ? undefined : outputSlots.get(event);
   };
-  const getOrCreateOutputSlot = (
-    event: object,
-    item: ResponseOutputItem | ResponsesStreamOutputMessage,
-  ): ResponsesOutputSlot | undefined => {
-    return resolveOutputItemSlot(event, item) ?? createOutputSlot(event, item);
-  };
   const materializeDeferredTextSlot = (
     slot: Extract<ResponsesOutputSlot, { type: "text" }>,
   ): void => {
@@ -166,12 +154,7 @@ export async function processResponsesStream<TApi extends Api>(
     };
     blocks.push(slot.block);
     slot.contentIndex = blocks.length - 1;
-    outputItemContentIndexes.set(slot.item, slot.contentIndex);
-    startedTextBlocksByItemId.set(slot.item.id, {
-      block: slot.block,
-      index: slot.contentIndex,
-      phase: slot.item.phase ?? undefined,
-    });
+    outputs.set(slot.item, slot.contentIndex, slot.outputIndex);
     stream.push({ type: "text_start", contentIndex: slot.contentIndex, partial: output });
     if (text) {
       stream.push({
@@ -199,9 +182,7 @@ export async function processResponsesStream<TApi extends Api>(
       stream,
       model,
       options,
-      reasoningBlocksById,
-      startedTextBlocksByItemId,
-      outputItemContentIndexes,
+      outputs,
       getLastTextBlock: () => lastTextBlock,
       setLastTextBlock: (block) => {
         lastTextBlock = block;
@@ -262,7 +243,7 @@ export async function processResponsesStream<TApi extends Api>(
             outputSlots.register(event, { type: "toolCall", toolCall: toolCallState });
           }
           output.content.push(toolCallBlock);
-          outputItemContentIndexes.set(item, contentIndex);
+          outputs.set(item, contentIndex, readResponsesOutputIndex(event));
           stream.push({ type: "toolcall_start", contentIndex, partial: output });
         }
       } else if (event.type === "response.reasoning_summary_part.added") {
@@ -455,13 +436,19 @@ export async function processResponsesStream<TApi extends Api>(
 
         const existingOutputSlot = resolveOutputItemSlot(event, item);
         materializeDeferredTextSlots(existingOutputSlot);
-        const outputSlot = existingOutputSlot ?? getOrCreateOutputSlot(event, item);
+        const outputSlot = existingOutputSlot ?? createOutputSlot(event, item);
         compactionTracker.completed(item, blocks.length);
         if (item.type === "reasoning" && outputSlot?.type === "thinking") {
           const summaryText = item.summary?.map((s) => s.text).join("\n\n") || "";
           const contentText = item.content?.map((c) => c.text).join("\n\n") || "";
           outputSlot.block.thinking = summaryText || contentText || outputSlot.block.thinking;
           outputSlot.block.thinkingSignature = JSON.stringify(item);
+          outputs.set(
+            item,
+            outputSlot.contentIndex,
+            readResponsesOutputIndex(event) ?? outputSlot.outputIndex,
+            true,
+          );
           if (item.encrypted_content && options?.reasoningReplayMetadata) {
             outputSlot.block[OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY] =
               options.reasoningReplayMetadata;
@@ -516,7 +503,12 @@ export async function processResponsesStream<TApi extends Api>(
               partial: output,
             });
             lastTextBlock = outputSlot.collapseCandidate;
-            outputItemContentIndexes.set(item, outputSlot.collapseCandidate.index);
+            outputs.set(
+              item,
+              outputSlot.collapseCandidate.index,
+              readResponsesOutputIndex(event) ?? outputSlot.outputIndex,
+              true,
+            );
           } else {
             if (!outputSlot.block) {
               // Deferred distinct message: open its block now, balanced with the
@@ -541,7 +533,12 @@ export async function processResponsesStream<TApi extends Api>(
               throw new Error("Responses stream finalized text without a content index");
             }
             lastTextBlock = { block: outputSlot.block, index: contentIndex, phase };
-            outputItemContentIndexes.set(item, contentIndex);
+            outputs.set(
+              item,
+              contentIndex,
+              readResponsesOutputIndex(event) ?? outputSlot.outputIndex,
+              true,
+            );
             stream.push({
               type: "text_end",
               contentIndex,
@@ -550,7 +547,6 @@ export async function processResponsesStream<TApi extends Api>(
             });
           }
           outputSlots.forget(outputSlot);
-          startedTextBlocksByItemId.delete(item.id);
         } else if (item.type === "function_call") {
           const streamingToolCall = streamingToolCalls.resolve(
             event,
@@ -624,7 +620,7 @@ export async function processResponsesStream<TApi extends Api>(
             toolCall,
             partial: output,
           });
-          outputItemContentIndexes.set(item, contentIndex);
+          outputs.set(item, contentIndex, readResponsesOutputIndex(event), true);
         }
       } else if (event.type === "response.completed" || event.type === "response.incomplete") {
         if (streamingToolCalls.hasActive()) {

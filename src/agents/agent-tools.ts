@@ -525,6 +525,8 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       options?.senderIsOwner === false || options?.isTurnTainted?.() === true
         ? "untrusted"
         : "agent",
+    sessionId: options?.sessionId,
+    sessionKey: options?.runSessionKey ?? options?.sessionKey,
   });
   const includeCoreTools = options?.includeCoreTools !== false;
   const toolConstructionPlan = options?.toolConstructionPlan ?? {
@@ -579,6 +581,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     skillInstructionPaths: options?.skillUsagePaths?.map((entry) => entry.readPath),
     modelContextWindowTokens: options?.modelContextWindowTokens,
     imageSanitization,
+    modelHasVision: options?.modelHasVision,
     memoryWriteProvenance,
     ...(includeBaseCodingTools
       ? { baseToolNames: createCodingTools(codingRoot).map((tool) => tool.name) }

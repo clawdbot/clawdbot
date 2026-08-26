@@ -117,6 +117,9 @@ Profiles live in the per-agent `openclaw-agent.sqlite` auth profile store.
 When a provider has multiple profiles, OpenClaw chooses an order like this:
 
 <Steps>
+  <Step title="Stored order override">
+    The per-agent order set with `openclaw models auth order set --provider <id> <profileIds...>`.
+  </Step>
   <Step title="Explicit config">
     `auth.order[provider]` (if set).
   </Step>

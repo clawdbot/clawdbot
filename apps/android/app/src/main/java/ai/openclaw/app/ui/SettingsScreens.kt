@@ -1079,7 +1079,7 @@ private fun NotificationSettingsScreen(
 
   val notificationPermissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-      viewModel.setNotificationForwardingEnabled(granted)
+      viewModel.setNotificationForwardingEnabled(granted && DeviceNotificationListenerService.isAccessEnabled(context))
     }
 
   fun setForwarding(checked: Boolean) {
@@ -1087,12 +1087,16 @@ private fun NotificationSettingsScreen(
       viewModel.setNotificationForwardingEnabled(false)
       return
     }
+    listenerEnabled = DeviceNotificationListenerService.isAccessEnabled(context)
+    if (!listenerEnabled) {
+      openNotificationListenerSettings(context)
+      return
+    }
     if (Build.VERSION.SDK_INT >= 33 && !hasPermission(context, Manifest.permission.POST_NOTIFICATIONS)) {
       notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
     } else {
       viewModel.setNotificationForwardingEnabled(true)
     }
-    listenerEnabled = DeviceNotificationListenerService.isAccessEnabled(context)
   }
 
   SettingsDetailFrame(title = nativeString("Notifications"), subtitle = nativeString("Choose what reaches OpenClaw."), icon = Icons.Default.Notifications, onBack = onBack) {

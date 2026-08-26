@@ -339,7 +339,7 @@ describe("Crabbox profile warm images", () => {
 
     await expect(
       provisionWarmProfile(provider, { ...PROFILE, setup: "install-node" }),
-    ).rejects.toThrow("Crabbox setup failed");
+    ).rejects.toThrow("Crabbox profile setup failed");
 
     expect(calls.some(({ argv }) => argv[1] === "checkpoint")).toBe(false);
     expect(calls.at(-1)?.argv[1]).toBe("stop");

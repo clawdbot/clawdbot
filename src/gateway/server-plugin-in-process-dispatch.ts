@@ -130,8 +130,7 @@ function resolveInProcessGatewayDispatch(
             ? undefined
             : (explicitSystemActor ?? { kind: "system" })))
     : (scopedRoleActor ?? explicitSystemActor);
-  const context =
-    options?.resolveGatewayContext?.() ?? scope?.resolveGatewayContext?.() ?? scope?.context;
+  const context = getInProcessGatewayRequestContext(options?.resolveGatewayContext);
   const isWebchatConnect = scope?.isWebchatConnect ?? (() => false);
   if (!context) {
     throw new Error(
@@ -299,8 +298,11 @@ export async function dispatchGatewayMethodInProcessRaw(
 export function getInProcessGatewayRequestContext(
   resolveGatewayContext?: GatewayContextResolver,
 ): GatewayRequestContext | undefined {
+  if (resolveGatewayContext) {
+    return resolveGatewayContext();
+  }
   const scope = getPluginRuntimeGatewayRequestScope();
-  return resolveGatewayContext?.() ?? scope?.resolveGatewayContext?.() ?? scope?.context;
+  return scope?.resolveGatewayContext?.() ?? scope?.context;
 }
 
 export async function dispatchGatewayMethodInProcess<T>(
@@ -311,9 +313,22 @@ export async function dispatchGatewayMethodInProcess<T>(
   if (method === "agent" || method === "agent.wait") {
     return await withInProcessGatewayDispatch(method, options, async (resolved) => {
       const { createInternalAgentTurnFacade } = await loadInternalAgentTurnFacade();
+      const assertContextCurrent = () => {
+        if (
+          getInProcessGatewayRequestContext(options?.resolveGatewayContext) !== resolved.context
+        ) {
+          throw new Error(
+            `In-process gateway dispatch requires a current gateway instance binding (method: ${method}).`,
+          );
+        }
+      };
       const facade = createInternalAgentTurnFacade({
+        assertContextCurrent,
         client: resolved.client,
-        getContext: () => resolved.context,
+        getContext: () => {
+          assertContextCurrent();
+          return resolved.context;
+        },
         ...(resolved.context.getGatewayMethodRegistry
           ? { getMethodRegistry: resolved.context.getGatewayMethodRegistry }
           : {}),

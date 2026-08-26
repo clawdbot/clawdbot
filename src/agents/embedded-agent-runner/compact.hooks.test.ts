@@ -49,6 +49,7 @@ import {
   resolveModelAsyncMock,
   resolveModelMock,
   resolveSandboxContextMock,
+  resolveSkillsPromptMock,
   resolveSessionAgentIdMock,
   resolveSessionAgentIdsMock,
   rotateTranscriptAfterCompactionMock,
@@ -389,6 +390,96 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     );
     expect(sessionManualCompactionMock).not.toHaveBeenCalled();
   });
+
+  it.each([
+    {
+      label: "unrestricted",
+      toolsAllow: undefined,
+      expectedPromptMode: "full",
+      expectedSkillsPrompt: "PRIVATE_SKILL_MARKER",
+      expectedToolNames: ["read", "exec"],
+    },
+    {
+      label: "wildcard",
+      toolsAllow: ["*"],
+      expectedPromptMode: "full",
+      expectedSkillsPrompt: "PRIVATE_SKILL_MARKER",
+      expectedToolNames: ["read", "exec"],
+    },
+    {
+      label: "finite",
+      toolsAllow: ["read"],
+      expectedPromptMode: "minimal",
+      expectedSkillsPrompt: null,
+      expectedToolNames: ["read"],
+    },
+  ])(
+    "projects the $label tool policy into the compact endpoint prompt",
+    async ({ toolsAllow, expectedPromptMode, expectedSkillsPrompt, expectedToolNames }) => {
+      resolveSkillsPromptMock.mockReturnValue("PRIVATE_SKILL_MARKER");
+      createOpenClawCodingToolsMock.mockReturnValue([
+        {
+          name: "read",
+          label: "Read",
+          description: "Read a file",
+          parameters: { type: "object", properties: {} },
+          execute: vi.fn(),
+        },
+        {
+          name: "exec",
+          label: "Exec",
+          description: "Run a command",
+          parameters: { type: "object", properties: {} },
+          execute: vi.fn(),
+        },
+      ]);
+      buildEmbeddedSystemPromptMock.mockImplementation((params) =>
+        JSON.stringify({
+          promptMode: params.promptMode,
+          skillsPrompt: params.skillsPrompt ?? null,
+          toolNames: params.tools.map((tool) => tool.name),
+        }),
+      );
+      let endpointSystemPrompt: string | undefined;
+      attemptServerEndpointCompactionMock.mockImplementationOnce(async (input: unknown) => {
+        endpointSystemPrompt = (input as { context: { systemPrompt: string } }).context
+          .systemPrompt;
+        return {
+          item: { type: "compaction", encrypted_content: "opaque" },
+          usage: { input_tokens: 1_000, output_tokens: 200 },
+        };
+      });
+
+      const result = await compactEmbeddedAgentSessionDirect(
+        wrappedCompactionArgs({
+          provider: "xai",
+          model: "grok-4.5",
+          config: {
+            models: {
+              providers: {
+                xai: {
+                  api: "openai-responses",
+                  baseUrl: "https://api.x.ai/v1",
+                  models: [],
+                },
+              },
+            },
+          },
+          customInstructions: undefined,
+          trigger: "manual",
+          toolsAllow,
+        }),
+      );
+
+      expect(result).toMatchObject({ compacted: true, compactionKind: "server-endpoint" });
+      expect(endpointSystemPrompt).toBeDefined();
+      expect(JSON.parse(endpointSystemPrompt ?? "{}")).toEqual({
+        promptMode: expectedPromptMode,
+        skillsPrompt: expectedSkillsPrompt,
+        toolNames: expectedToolNames,
+      });
+    },
+  );
 
   it("never calls the compact endpoint during overflow recovery", async () => {
     mockResolvedModel();

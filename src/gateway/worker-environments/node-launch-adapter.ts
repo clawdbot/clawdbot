@@ -26,6 +26,7 @@ const DEFAULT_CANCELLATION_TIMEOUT_MS = 30_000;
 const DEFAULT_AVAILABILITY_TIMEOUT_MS = 10_000;
 
 const RETRYABLE_TRANSPORT_CODES = new Set([
+  "AT_CAPACITY",
   "DISCONNECTED",
   "NOT_CONNECTED",
   "PAIRING_CHANGED",
@@ -224,16 +225,15 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
         "device worker node discovery is unavailable",
       );
     }
-    const node = nodes.find(
-      (candidate) =>
-        candidate.nodeId === params.deviceId &&
-        (!params.requireLaunchAvailability || candidate.workerHost.capacity.available > 0),
-    );
+    const node = nodes.find((candidate) => candidate.nodeId === params.deviceId);
     if (!node) {
       throw new NodeWorkerLaunchTransportError(
         "NOT_CONNECTED",
         "device worker node is not currently connected",
       );
+    }
+    if (params.requireLaunchAvailability && node.workerHost.capacity.available === 0) {
+      throw new NodeWorkerLaunchTransportError("AT_CAPACITY", "device worker capacity is full");
     }
     return node;
   };
@@ -422,6 +422,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
     let dispatchReady = false;
     let pollStatus = false;
     let delayMs = pollIntervalMs;
+    let availabilityCode: string | undefined;
     const markDispatchReady = () => {
       mayHaveLaunched = true;
       if (!dispatchReady) {
@@ -433,9 +434,6 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
       while (true) {
         if (deadline.signal.aborted) {
           throw signalError(deadline.signal, "node worker launch aborted");
-        }
-        if (!dispatchReady && availabilityDeadline.signal.aborted) {
-          throw new WorkerRunnerUnavailableError();
         }
         if (!stableRequest.isDispatchAuthorized()) {
           throw new Error("node worker launch authority closed");
@@ -472,11 +470,12 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
             delayMs = pollIntervalMs;
           }
         } catch (error) {
-          if (deadline.signal.aborted || !stableRequest.isDispatchAuthorized()) {
+          if (
+            deadline.signal.aborted ||
+            (!dispatchReady && availabilityDeadline.signal.aborted) ||
+            !stableRequest.isDispatchAuthorized()
+          ) {
             throw error;
-          }
-          if (!dispatchReady && availabilityDeadline.signal.aborted) {
-            throw new WorkerRunnerUnavailableError();
           }
           if (
             !(error instanceof NodeWorkerLaunchTransportError) ||
@@ -484,6 +483,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
           ) {
             throw error;
           }
+          availabilityCode = error.code;
           pollStatus = false;
         }
         delayMs = await waitBeforeRetry({
@@ -493,7 +493,11 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
       }
     } catch (error) {
       if (!dispatchReady && availabilityDeadline.signal.aborted && !deadline.signal.aborted) {
-        throw new WorkerRunnerUnavailableError();
+        // Keep the latest discovery reason through the grace; a connected full
+        // node is retryable capacity, not an instruction to reconnect the device.
+        throw availabilityCode === "AT_CAPACITY"
+          ? new WorkerRunnerCapacityError()
+          : new WorkerRunnerUnavailableError();
       }
       // The node authors this result only after its durable claim stayed absent.
       // Transport dispatch is therefore not launch ambiguity and needs no cancel.

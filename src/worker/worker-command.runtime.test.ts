@@ -1,12 +1,17 @@
+import { Console } from "node:console";
 import { PassThrough } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   WORKER_PROTOCOL_FEATURES,
   WORKER_RPC_SET_VERSION,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { setLoggerOverride } from "../logging/logger.js";
+import { loggingState } from "../logging/state.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { WorkerBrowserRuntime } from "./browser-runtime.js";
 import type { WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import { runWorkerCommand } from "./worker-command.runtime.js";
+import { runWorkerProcess } from "./worker-process.js";
 import { runWorkerDescriptor } from "./worker.runtime.js";
 
 vi.mock("./worker.runtime.js", () => ({
@@ -104,6 +109,53 @@ describe("worker command lifetime gate", () => {
     expect(JSON.parse(Buffer.concat(chunks).toString("utf8"))).toMatchObject({
       status: "completed",
     });
+  });
+
+  it("keeps worker process stdout valid JSON when runtime diagnostics are emitted", async () => {
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    const originalConsole = globalThis.console;
+    const previousLogging = { ...loggingState };
+    const originalStreams = {
+      stdin: Object.getOwnPropertyDescriptor(process, "stdin")!,
+      stdout: Object.getOwnPropertyDescriptor(process, "stdout")!,
+      stderr: Object.getOwnPropertyDescriptor(process, "stderr")!,
+    };
+    Object.defineProperties(process, {
+      stdin: { configurable: true, value: commandInput() },
+      stdout: { configurable: true, value: stdout },
+      stderr: { configurable: true, value: stderr },
+    });
+    globalThis.console = new Console({ stdout, stderr });
+    loggingState.consolePatched = false;
+    loggingState.forceConsoleToStderr = false;
+    loggingState.rawConsole = null;
+    loggingState.streamErrorHandlersInstalled = false;
+    setLoggerOverride({ level: "silent", consoleLevel: "info", consoleStyle: "compact" });
+    vi.mocked(runWorkerDescriptor).mockImplementationOnce(async () => {
+      createSubsystemLogger("state/db").info("worker state diagnostic");
+      return { status: "completed", transcriptLeafId: null, transcriptNextSeq: 1 };
+    });
+    let output = "";
+    let diagnostics = "";
+    try {
+      await runWorkerProcess();
+      output = String(stdout.read() ?? "");
+      diagnostics = String(stderr.read() ?? "");
+    } finally {
+      Object.defineProperties(process, originalStreams);
+      globalThis.console = originalConsole;
+      Object.assign(loggingState, previousLogging);
+      stdout.destroy();
+      stderr.destroy();
+    }
+
+    expect(JSON.parse(output)).toEqual({
+      status: "completed",
+      transcriptLeafId: null,
+      transcriptNextSeq: 1,
+    });
+    expect(diagnostics).toContain("worker state diagnostic");
   });
 
   it("passes the build-composed Browser runtime into the worker boundary", async () => {

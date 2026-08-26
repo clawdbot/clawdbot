@@ -3,7 +3,7 @@
   "version": "2026.8.1",
   "openclaw": {
     "schemaVersions": {
-      "state": 11,
+      "state": 12,
       "agent": 17
     }
   },
@@ -2027,7 +2027,7 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "1.3.0",
-    "@anthropic-ai/sdk": "0.117.1",
+    "@anthropic-ai/sdk": "0.118.0",
     "@clack/core": "1.4.3",
     "@clack/prompts": "1.7.0",
     "@earendil-works/pi-tui": "0.84.2",
@@ -2083,7 +2083,7 @@
     "tar": "7.5.22",
     "tree-sitter-bash": "0.25.1",
     "tslog": "4.11.0",
-    "typebox": "1.3.15",
+    "typebox": "1.3.16",
     "typescript": "6.0.3",
     "undici": "8.10.0",
     "web-push": "3.6.7",
@@ -2095,7 +2095,7 @@
   "devDependencies": {
     "@a2ui/lit": "0.10.3",
     "@a2ui/web_core": "0.10.6",
-    "@copilotkit/aimock": "1.38.0",
+    "@copilotkit/aimock": "1.39.0",
     "@lit-labs/signals": "0.3.0",
     "@lit/context": "1.1.6",
     "@lit/task": "1.0.3",

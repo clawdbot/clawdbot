@@ -4,7 +4,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
-import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../infra/node-runner-inventory.js";
+import {
+  NODE_WORKER_PORTAL_STREAM_VERSION,
+  NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+} from "../infra/node-runner-inventory.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createNodeDesktopStreamBroker } from "./desktop/node-stream-broker.js";
@@ -43,6 +46,7 @@ describe("gateway worker environment startup", () => {
       const startup = await loadGatewayWorkerEnvironmentStartupState();
       const runtime = await createGatewayWorkerEnvironmentRuntime({
         getPluginRegistry: () => ({ workerProviders: new Map() }),
+        getPortalRuntime: () => undefined,
         desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
         startup,
         log: { child: () => ({ warn: () => {} }) },
@@ -103,6 +107,7 @@ describe("gateway worker environment startup", () => {
 
         const runtime = await createGatewayWorkerEnvironmentRuntime({
           getPluginRegistry: () => ({ workerProviders: new Map() }),
+          getPortalRuntime: () => undefined,
           desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
           startup,
           log: { child: () => ({ warn: () => {} }) },
@@ -191,6 +196,7 @@ describe("gateway worker environment startup", () => {
       };
       const runtime = await createGatewayWorkerEnvironmentRuntime({
         getPluginRegistry: () => ({ workerProviders: new Map() }),
+        getPortalRuntime: () => undefined,
         desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
         nodeDesktopStreamBroker: createNodeDesktopStreamBroker(),
         startup,
@@ -202,6 +208,21 @@ describe("gateway worker environment startup", () => {
       }
       runtime.bindWorkerNodeDesktopControl(transport);
       try {
+        await expect(
+          service.supportsNodePortal(record.environmentId, record.ownerEpoch),
+        ).resolves.toBe(false);
+        runtime.bindDeviceNodeControl?.(transport);
+        await expect(
+          service.supportsNodePortal(record.environmentId, record.ownerEpoch),
+        ).resolves.toBe(false);
+        proof.workerHost.portalStream = NODE_WORKER_PORTAL_STREAM_VERSION;
+        await expect(
+          service.supportsNodePortal(record.environmentId, record.ownerEpoch),
+        ).resolves.toBe(true);
+        delete proof.workerHost.portalStream;
+        await expect(
+          service.supportsNodePortal(record.environmentId, record.ownerEpoch),
+        ).resolves.toBe(false);
         await expect(
           service.launchDesktopApp({ environmentId: record.environmentId, app: "terminal" }),
         ).resolves.toEqual({ app: "terminal", status: "ready" });

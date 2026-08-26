@@ -20,6 +20,7 @@ const listReactionsFeishuMock = vi.hoisted(() => vi.fn());
 const removeReactionFeishuMock = vi.hoisted(() => vi.fn());
 const sendCardFeishuMock = vi.hoisted(() => vi.fn());
 const sendMessageFeishuMock = vi.hoisted(() => vi.fn());
+const sendStickerFeishuMock = vi.hoisted(() => vi.fn());
 const getMessageFeishuMock = vi.hoisted(() => vi.fn());
 const editMessageFeishuMock = vi.hoisted(() => vi.fn());
 const createPinFeishuMock = vi.hoisted(() => vi.fn());
@@ -80,6 +81,7 @@ vi.mock("./channel.runtime.js", () => ({
     removeReactionFeishu: removeReactionFeishuMock,
     sendCardFeishu: sendCardFeishuMock,
     sendMessageFeishu: sendMessageFeishuMock,
+    sendStickerFeishu: sendStickerFeishuMock,
     feishuOutbound: {
       sendText: feishuOutboundSendTextMock,
       sendMedia: feishuOutboundSendMediaMock,
@@ -488,6 +490,144 @@ describe("feishuPlugin actions", () => {
     expect(details.messageId).toBe("om_sent");
     expect(details.chatId).toBe("oc_group_1");
   });
+
+  it("advertises stickers only for enabled, configured accounts that opt in", async () => {
+    const stickerCfg = {
+      channels: {
+        feishu: {
+          actions: { sticker: true },
+          accounts: {
+            work: { appId: "cli_work", appSecret: "secret_work" },
+            off: { appId: "cli_off", appSecret: "secret_off", actions: { sticker: false } },
+            disabled: { appId: "cli_disabled", appSecret: "secret_disabled", enabled: false },
+            unconfigured: {},
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    expect(getDescribedActions(cfg)).not.toContain("sticker");
+    expect(getDescribedActions(stickerCfg)).toContain("sticker");
+    expect(getDescribedActions(stickerCfg, "work")).toContain("sticker");
+    expect(
+      feishuPlugin.agentPrompt
+        ?.messageToolHints?.({ cfg: stickerCfg, accountId: "work" })
+        ?.join("\n"),
+    ).toContain("fileId");
+    for (const accountId of ["off", "disabled", "unconfigured"]) {
+      expect(getDescribedActions(stickerCfg, accountId)).not.toContain("sticker");
+      expect(
+        feishuPlugin.agentPrompt?.messageToolHints?.({ cfg: stickerCfg, accountId })?.join("\n"),
+      ).not.toContain("fileId");
+      await expect(
+        feishuPlugin.actions!.handleAction!({
+          channel: "feishu",
+          action: "sticker",
+          params: { to: "oc_group_1", fileId: "file_sticker" },
+          cfg: stickerCfg,
+          accountId,
+        }),
+      ).rejects.toThrow("actions.sticker");
+    }
+    expect(sendStickerFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { params: { fileId: " file_sticker " }, replyToMessageId: undefined, replyInThread: false },
+    {
+      params: { stickerId: ["file_sticker", "file_other"] },
+      replyToMessageId: undefined,
+      replyInThread: false,
+    },
+    {
+      params: { fileId: "file_sticker", replyTo: "om_parent" },
+      replyToMessageId: "om_parent",
+      replyInThread: false,
+    },
+    {
+      params: { fileId: "file_sticker", threadId: "om_thread", topLevel: true },
+      replyToMessageId: "om_thread",
+      replyInThread: true,
+    },
+    {
+      params: { fileId: "file_sticker", replyTo: "om_parent" },
+      sessionKey: "feishu:group:oc_group_1:topic:om_inbound",
+      replyToMessageId: "om_parent",
+      replyInThread: false,
+    },
+    {
+      params: { fileId: "file_sticker" },
+      sessionKey: "feishu:group:oc_group_1:topic:om_inbound",
+      replyToMessageId: "om_inbound",
+      replyInThread: true,
+    },
+  ])(
+    "sends received sticker keys with account and reply routing: %j",
+    async ({ params, sessionKey, replyToMessageId, replyInThread }) => {
+      const stickerCfg = {
+        channels: {
+          feishu: {
+            accounts: {
+              work: {
+                appId: "cli_work",
+                appSecret: "secret_work",
+                actions: { sticker: true },
+              },
+            },
+          },
+        },
+      } satisfies OpenClawConfig;
+      sendStickerFeishuMock.mockResolvedValueOnce({
+        messageId: "om_sticker",
+        chatId: "oc_group_1",
+      });
+      const result = await feishuPlugin.actions!.handleAction!({
+        channel: "feishu",
+        action: "sticker",
+        params,
+        cfg: stickerCfg,
+        accountId: "work",
+        sessionKey,
+        toolContext: { currentChannelId: "oc_group_1", currentMessageId: "om_inbound" },
+      });
+      expect(sendStickerFeishuMock).toHaveBeenCalledWith({
+        cfg: stickerCfg,
+        to: "oc_group_1",
+        fileKey: "file_sticker",
+        accountId: "work",
+        replyToMessageId,
+        replyInThread,
+      });
+      expect(resultDetails(result)).toMatchObject({
+        ok: true,
+        action: "sticker",
+        messageId: "om_sticker",
+      });
+    },
+  );
+
+  it.each([{}, { fileId: "../bad" }, { stickerId: [] }])(
+    "rejects a missing or invalid sticker key before dispatch: %j",
+    async (params) => {
+      const stickerCfg = {
+        channels: {
+          feishu: {
+            appId: "cli_main",
+            appSecret: "secret_main",
+            actions: { sticker: true },
+          },
+        },
+      } satisfies OpenClawConfig;
+      await expect(
+        feishuPlugin.actions!.handleAction!({
+          channel: "feishu",
+          action: "sticker",
+          params: { to: "oc_group_1", ...params },
+          cfg: stickerCfg,
+        }),
+      ).rejects.toThrow("previously received");
+      expect(sendStickerFeishuMock).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     {
@@ -2214,7 +2354,7 @@ describe("feishuPlugin actions", () => {
       cfg,
       accountId: undefined,
       sessionKey: "feishu:group:oc_group_1:topic:om_inbound",
-      toolContext: { currentMessageId: "om_inbound" },
+      toolContext: { currentMessageId: "om_inbound", currentChannelId: "oc_group_1" },
     } as never);
 
     expect(feishuOutboundSendTextMock).toHaveBeenCalledWith({
@@ -2225,6 +2365,84 @@ describe("feishuPlugin actions", () => {
       mediaLocalRoots: undefined,
       threadId: "om_inbound",
     });
+  });
+
+  it.each(["implicit", "explicit"] as const)(
+    "preserves topic routing with a prepared %s reply",
+    async (source) => {
+      mockFeishuOutboundTextDelivery("om_reply");
+      await feishuPlugin.actions!.handleAction!({
+        channel: "feishu",
+        action: "send",
+        cfg,
+        params: { to: "chat:oc_group_1", text: "reply", replyTo: "om_inbound" },
+        sessionKey: "feishu:group:oc_group_1:topic:om_inbound",
+        toolContext: { currentChannelId: "oc_group_1", currentMessageId: "om_inbound" },
+        reply:
+          source === "explicit"
+            ? { source, replyToId: "om_inbound" }
+            : { source, replyToId: "om_inbound", mode: "all" },
+      });
+      expect(feishuOutboundSendTextMock).toHaveBeenCalledWith(
+        expect.objectContaining(
+          source === "implicit" ? { threadId: "om_inbound" } : { replyToId: "om_inbound" },
+        ),
+      );
+    },
+  );
+
+  it.each([
+    { name: "destination changes", params: { to: "chat:oc_other" } },
+    { name: "top-level send requested", params: { to: "chat:oc_group_1", topLevel: true } },
+    { name: "thread inheritance suppressed", params: { to: "chat:oc_group_1", threadId: null } },
+    {
+      name: "requesting account differs",
+      params: { to: "chat:oc_group_1" },
+      requesterAccountId: "other",
+    },
+  ])("does not inherit the source topic when $name", async ({ params, requesterAccountId }) => {
+    const stickerCfg = {
+      channels: {
+        feishu: {
+          appId: "cli_main",
+          appSecret: "secret_main",
+          actions: { sticker: true },
+        },
+      },
+    } satisfies OpenClawConfig;
+    for (const action of ["send", "sticker"] as const) {
+      if (action === "send") {
+        mockFeishuOutboundTextDelivery("om_sent");
+      } else {
+        sendStickerFeishuMock.mockResolvedValueOnce({ messageId: "om_sent", chatId: "oc_group_1" });
+      }
+      await feishuPlugin.actions!.handleAction!({
+        channel: "feishu",
+        action,
+        cfg: stickerCfg,
+        requesterAccountId,
+        params: { ...params, text: "hello", fileId: "file_sticker" },
+        sessionKey: "feishu:group:oc_group_1:topic:om_inbound",
+        toolContext: { currentMessageId: "om_inbound", currentChannelId: "oc_group_1" },
+      });
+      if (action === "sticker") {
+        expect(sendStickerFeishuMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            to: params.to,
+            replyToMessageId: undefined,
+            replyInThread: false,
+          }),
+        );
+      } else {
+        expect(feishuOutboundSendTextMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            to: params.to,
+            replyToId: undefined,
+          }),
+        );
+        expect(feishuOutboundSendTextMock.mock.calls[0]?.[0]).not.toHaveProperty("threadId");
+      }
+    }
   });
 
   it("auto-threads `send` cards against the inbound trigger in group_topic sessions", async () => {
@@ -2242,7 +2460,7 @@ describe("feishuPlugin actions", () => {
       cfg,
       accountId: undefined,
       sessionKey: "feishu:group:oc_group_1:topic:om_inbound",
-      toolContext: { currentMessageId: "om_inbound" },
+      toolContext: { currentMessageId: "om_inbound", currentChannelId: "oc_group_1" },
     } as never);
 
     const sendCardArgs = requireRecord(
@@ -2270,7 +2488,7 @@ describe("feishuPlugin actions", () => {
       cfg,
       accountId: undefined,
       sessionKey: "feishu:group:oc_group_1:topic:om_inbound",
-      toolContext: { currentMessageId: "om_inbound" },
+      toolContext: { currentMessageId: "om_inbound", currentChannelId: "oc_group_1" },
       mediaLocalRoots: ["/tmp"],
     } as never);
 
@@ -2291,7 +2509,7 @@ describe("feishuPlugin actions", () => {
       cfg,
       accountId: undefined,
       sessionKey: "feishu:group:oc_group_1:topic:om_inbound:sender:ou_user",
-      toolContext: { currentMessageId: "om_inbound" },
+      toolContext: { currentMessageId: "om_inbound", currentChannelId: "oc_group_1" },
     } as never);
 
     const sendArgs = requireRecord(

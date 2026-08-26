@@ -1403,6 +1403,9 @@ function installControlUiMockGateway(
       patch.lastReadAt = sessionPatchTimestamp;
       patch.markedUnreadAt = undefined;
     }
+    if (hasOwn(params, "model")) {
+      patch.modelOverrideSource = params.model == null ? null : "user";
+    }
     if (scenario.sessionArchiveFiltering && hasOwn(params, "archived")) {
       patch.archived = params.archived;
     }
@@ -1578,6 +1581,7 @@ function installControlUiMockGateway(
       label: "Main",
       model: "gpt-5.5",
       modelProvider: "openai",
+      modelOverrideSource: null,
       status: "done",
       totalTokens: 0,
       updatedAt: Date.now(),

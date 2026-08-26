@@ -12,6 +12,7 @@ const RETIRED_NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURES = [
 ] as const;
 export const NODE_WORKER_BUNDLE_RETENTION_VERSION = 1;
 export const NODE_WORKER_BUNDLE_STATUS_VERSION = 1;
+export const NODE_WORKER_PORTAL_STREAM_VERSION = 1;
 export const NODE_WORKER_CAPACITY_MAX = 1_024;
 
 export const NODE_RUNNER_UPDATE_REQUIRED_ISSUE = {
@@ -35,6 +36,7 @@ export type NodeWorkerHostDeclaration =
       bundlePrewarm?: typeof WORKER_BUNDLE_PREWARM_VERSION;
       bundleRetention?: typeof NODE_WORKER_BUNDLE_RETENTION_VERSION;
       bundleStatus?: typeof NODE_WORKER_BUNDLE_STATUS_VERSION;
+      portalStream?: typeof NODE_WORKER_PORTAL_STREAM_VERSION;
     };
 
 export type NodeRunnerInventoryDeclaration =
@@ -83,7 +85,7 @@ function parseWorkerHostDeclaration(value: unknown): NodeWorkerHostDeclaration |
   if (
     !capacity ||
     keys.length < 2 ||
-    keys.length > 5 ||
+    keys.length > 6 ||
     !keys.includes("enabled") ||
     !keys.includes("capacity") ||
     keys.some(
@@ -92,13 +94,16 @@ function parseWorkerHostDeclaration(value: unknown): NodeWorkerHostDeclaration |
         key !== "capacity" &&
         key !== "bundlePrewarm" &&
         key !== "bundleRetention" &&
-        key !== "bundleStatus",
+        key !== "bundleStatus" &&
+        key !== "portalStream",
     ) ||
     (value.bundlePrewarm !== undefined && value.bundlePrewarm !== WORKER_BUNDLE_PREWARM_VERSION) ||
     (value.bundleRetention !== undefined &&
       value.bundleRetention !== NODE_WORKER_BUNDLE_RETENTION_VERSION) ||
     (value.bundleStatus !== undefined &&
       value.bundleStatus !== NODE_WORKER_BUNDLE_STATUS_VERSION) ||
+    (value.portalStream !== undefined &&
+      value.portalStream !== NODE_WORKER_PORTAL_STREAM_VERSION) ||
     (value.bundleStatus !== undefined && value.bundleRetention === undefined)
   ) {
     return null;
@@ -114,6 +119,9 @@ function parseWorkerHostDeclaration(value: unknown): NodeWorkerHostDeclaration |
       : {}),
     ...(value.bundleStatus === NODE_WORKER_BUNDLE_STATUS_VERSION
       ? { bundleStatus: NODE_WORKER_BUNDLE_STATUS_VERSION }
+      : {}),
+    ...(value.portalStream === NODE_WORKER_PORTAL_STREAM_VERSION
+      ? { portalStream: NODE_WORKER_PORTAL_STREAM_VERSION }
       : {}),
   };
 }

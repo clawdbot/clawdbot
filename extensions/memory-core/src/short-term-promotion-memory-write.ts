@@ -3,6 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 
+export function buildPromotionMarker(candidateKey: string): string {
+  return `<!-- openclaw-memory-promotion:${candidateKey} -->`;
+}
+
 export class MemoryWriteConflictError extends Error {
   constructor() {
     super("MEMORY.md changed before the dreaming write could commit");

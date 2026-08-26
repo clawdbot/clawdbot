@@ -39,7 +39,7 @@ type WorkerConnectionAttemptOptions = {
   onAdmitting: () => void;
   onReady: (hello: WorkerHelloOk) => void;
   onReadyFrame: (frame: unknown, socket: WebSocket) => void;
-  onSocketClosed: () => WorkerConnectionInterruptedError;
+  onSocketClosed: () => void;
   onReadyClose: (reason: WorkerProtocolCloseReason | undefined) => void;
 };
 
@@ -87,6 +87,7 @@ export function connectWorkerConnectionAttempt(
   options.onSocket(socket);
   const admissionId = randomUUID();
   let admitted = false;
+  let opened = false;
   let attemptSettled = false;
 
   return new Promise<WorkerHelloOk>((resolve, reject) => {
@@ -103,14 +104,23 @@ export function connectWorkerConnectionAttempt(
       reject(error);
     };
     attemptTimeout = setTimeout(() => {
-      rejectAttempt(new WorkerConnectionInterruptedError("worker admission timed out"));
+      rejectAttempt(
+        new WorkerConnectionInterruptedError(
+          opened ? "no hello within deadline" : "connect failed: opening handshake timed out",
+        ),
+      );
       socket.terminate();
     }, options.attemptTimeoutMs);
     attemptTimeout.unref?.();
 
     socket.on("error", (error) => {
       if (!admitted) {
-        rejectAttempt(new WorkerConnectionInterruptedError(toWorkerConnectionError(error).message));
+        const kind = opened ? "admission interrupted" : "connect failed";
+        rejectAttempt(
+          new WorkerConnectionInterruptedError(
+            `${kind}: ${toWorkerConnectionError(error).message}`,
+          ),
+        );
       }
     });
     socket.on("open", () => {
@@ -125,6 +135,7 @@ export function connectWorkerConnectionAttempt(
         return;
       }
       options.onAdmitting();
+      opened = true;
       const frame: WorkerConnectRequestFrame = {
         type: "req",
         id: admissionId,
@@ -137,7 +148,9 @@ export function connectWorkerConnectionAttempt(
       };
       socket.send(JSON.stringify(frame), (error) => {
         if (error) {
-          rejectAttempt(new WorkerConnectionInterruptedError(error.message));
+          rejectAttempt(
+            new WorkerConnectionInterruptedError(`admission send failed: ${error.message}`),
+          );
           socket.terminate();
         }
       });
@@ -190,17 +203,19 @@ export function connectWorkerConnectionAttempt(
       }
       options.onReadyFrame(frame, socket);
     });
-    socket.on("close", (_code, reason) => {
+    socket.on("close", (code, reason) => {
       if (!options.isCurrentGeneration()) {
         return;
       }
-      const interrupted = options.onSocketClosed();
+      options.onSocketClosed();
       const closeReason = parseCloseReason(reason);
       if (!admitted) {
         rejectAttempt(
           closeReason
             ? new WorkerAdmissionError(closeReason, isRetryableWorkerCloseReason(closeReason))
-            : interrupted,
+            : new WorkerConnectionInterruptedError(
+                `${opened ? "admission interrupted" : "connect failed"}: socket closed (${code}) before hello`,
+              ),
         );
         return;
       }

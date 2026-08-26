@@ -43,7 +43,10 @@ import {
 } from "../agent-runtime-identity-token.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
-import { bindWorkerTurnExecutionIdentity } from "./placement-turn-claim-events.js";
+import {
+  bindWorkerTurnAdmissionContinuation,
+  bindWorkerTurnExecutionIdentity,
+} from "./placement-turn-claim-events.js";
 
 type WorkerInitialMessagePlan =
   | { kind: "complete"; messages: WorkerTranscriptMessage[] }
@@ -114,6 +117,11 @@ export async function prepareWorkerAgentRuntimeIdentity(
       { agentId: params.agentId, sessionKey: params.sessionKey },
     );
   }
+  bindWorkerTurnAdmissionContinuation(
+    params.placements,
+    params.turnClaim,
+    admittedRunContext.operationalRunInstance,
+  );
   return {
     operationalRunInstance: admittedRunContext.operationalRunInstance,
     runtimeIdentity,

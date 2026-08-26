@@ -68,6 +68,7 @@ export type MemoryIndexEntry = {
   contentText?: string;
   lineMap?: number[];
   lineProvenance?: MemoryEntryProvenance[];
+  sessionId?: string;
 };
 
 export type MemoryIndexWorkItem = {

@@ -57,8 +57,12 @@ NODE
 
   mkdir -p "$registry_root"
   local port_file="$registry_root/port" log_file="$registry_root/server.log"
+  local dist_tags="beta=$candidate_version"
+  if [[ "$candidate_version" =~ -(alpha|beta)\.[1-9][0-9]*$ ]]; then
+    dist_tags="latest=0.0.0,$dist_tags"
+  fi
   rm -f "$port_file"
-  OPENCLAW_NPM_REGISTRY_DIST_TAGS="latest=0.0.0,beta=$candidate_version" \
+  OPENCLAW_NPM_REGISTRY_DIST_TAGS="$dist_tags" \
     OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org \
     node "$server_script" "$port_file" "${registry_args[@]}" >"$log_file" 2>&1 &
   local server_pid="$!"

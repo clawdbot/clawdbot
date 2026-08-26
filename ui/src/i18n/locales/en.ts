@@ -242,12 +242,25 @@ export const en: TranslationMap = {
     widgetUnavailable: "Session progress is unavailable.",
     widgetAccessDenied: "Select a session you can access or change sharing for this session.",
     countLabel: "{completed} of {total} completed",
-    lastActivity: "Last activity: {time}",
+    activity: {
+      updated: "Updated {time}",
+      completed: "Completed {time}",
+      failed: "Failed {time}",
+      stopped: "Stopped {time}",
+    },
+    outcome: {
+      completed: "Completed",
+      failed: "Failed",
+      stopped: "Stopped",
+    },
     stepLabel: "{step}, {status}",
     status: {
       completed: "completed",
+      failed: "failed",
       inProgress: "in progress",
+      paused: "paused",
       pending: "pending",
+      stopped: "stopped",
     },
     receipt: {
       updating: "Updating progress",
@@ -1820,6 +1833,18 @@ export const en: TranslationMap = {
       absolutely: {
         label: "Absolutely",
         description: "Clay on graphite",
+      },
+      tide: {
+        label: "Tide",
+        description: "Slate & steel",
+      },
+      beacon: {
+        label: "Beacon",
+        description: "Maximum contrast",
+      },
+      phosphor: {
+        label: "Phosphor",
+        description: "Green on glass",
       },
     },
     textSizes: {
@@ -4251,6 +4276,7 @@ export const en: TranslationMap = {
     eventStale: "Stale session",
   },
   connection: {
+    disconnectedTitle: "Disconnected",
     queuedCount: "{count} queued",
     reconnecting: "Reconnecting…",
     restarting: "Restarting…",
@@ -5784,9 +5810,8 @@ export const en: TranslationMap = {
       fastMode: "Fast mode",
       searchModels: "Search models",
       noMatchingModels: "No models match your search",
-      sessionOverride: "Session override",
-      resetToDefault: "Reset to default ({model})",
-      useDefault: "Use default",
+      onlyForSession: "Only for this session",
+      useDefaultModel: "Use default ({model})",
       defaultWithModel: "Default ({model})",
       defaultWithLevel: "Default ({level})",
       fastHelp: "Faster responses, higher usage of limits.",

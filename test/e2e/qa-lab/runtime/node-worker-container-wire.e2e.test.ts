@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { startQaMockOpenAiServer } from "../../../../extensions/qa-lab/api.js";
 import { NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND } from "../../../../src/infra/node-commands.js";
 import { resolveNodeWorkerContainerEngine } from "../../../../src/node-host/node-worker-container-engine.js";
+import { createDeferred } from "../../../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import { MODEL_REF, PROOF_TIMEOUT_MS } from "./cloud-worker-midturn-loss-fixture.js";
 import {
@@ -35,6 +36,12 @@ const EXEC_MARKER = "NODE_WORKER_CONTAINER_YOLO_OK";
 const EXEC_FILE = "node-worker-container-yolo.txt";
 const EXEC_COMMAND = `test -f /.dockerenv && printf ${EXEC_MARKER} > ${EXEC_FILE} && sleep 1`;
 const PROMPT = `Tool progress QA check: call the exec tool exactly once with this exact command before answering: \`${EXEC_COMMAND}\`. After that exec command completes or fails, reply exactly \`${EXEC_MARKER}\`.`;
+const CANCEL_STARTED_FILE = "node-worker-container-cancel-started.txt";
+const CANCEL_LATE_FILE = "node-worker-container-cancel-late.txt";
+const CANCEL_COMMAND = `test -f /.dockerenv && printf started > ${CANCEL_STARTED_FILE} && sleep 30 && printf escaped > ${CANCEL_LATE_FILE}`;
+const CANCEL_PROMPT = `Tool progress QA check: call the exec tool exactly once with this exact command before answering: \`${CANCEL_COMMAND}\`. After that exec command completes or fails, reply exactly \`NODE_WORKER_CANCELLED\`.`;
+const RECOVERY_MARKER = "NODE_WORKER_CONTAINER_CANCEL_RECOVERED";
+const RECOVERY_PROMPT = `Reply with only this exact marker: ${RECOVERY_MARKER}`;
 const CONTAINER_INSPECT_FORMAT =
   '{"mounts":{{json .Mounts}},"image":{{json .Config.Image}},"state":{{json .State.Status}},"labels":{{json .Config.Labels}}}';
 
@@ -59,6 +66,8 @@ type ControlUiProof = {
       deviceId?: string;
       message?: string;
       idempotencyKey?: string;
+      runId?: string;
+      sessionKey?: string;
     };
   }>;
   fullAccessPatch: {
@@ -173,12 +182,16 @@ async function startControlUiProof(gateway: WireGateway): Promise<ControlUiProof
           message?: string;
           idempotencyKey?: string;
           permissionMode?: string;
+          runId?: string;
+          sessionKey?: string;
         };
       };
       if (
         request.method === "sessions.create" ||
         request.method === "sessions.dispatch" ||
-        request.method === "sessions.send"
+        request.method === "sessions.send" ||
+        request.method === "chat.send" ||
+        request.method === "chat.abort"
       ) {
         requests.push({ method: request.method, params: request.params });
       }
@@ -242,6 +255,7 @@ describe.runIf(CONTAINER_WIRE_ENABLED)("node worker real Docker wire", () => {
       let browserRunId: string | undefined;
       let launchId: string | undefined;
       let inspectLaunchedContainer = !CONTROL_UI_PROOF_ENABLED;
+      let releasePendingCancellation: (() => void) | undefined;
       let sessionKey = SESSION_KEY;
 
       try {
@@ -544,6 +558,134 @@ describe.runIf(CONTAINER_WIRE_ENABLED)("node worker real Docker wire", () => {
               wireMessageText(message).includes(EXEC_MARKER),
           ),
         ).toBe(true);
+        if (controlUiProof) {
+          const cancellationEntered = createDeferred();
+          const continueCancellation = createDeferred();
+          releasePendingCancellation = () => continueCancellation.resolve();
+          const originalCancel = workerNode.supervisor.cancel.bind(workerNode.supervisor);
+          vi.spyOn(workerNode.supervisor, "cancel").mockImplementation(async (...args) => {
+            cancellationEntered.resolve();
+            await continueCancellation.promise;
+            return await originalCancel(...args);
+          });
+
+          const previousLaunchId = launchId;
+          browserRunId = undefined;
+          await controlUiProof.page
+            .locator(".agent-chat__composer-combobox textarea")
+            .fill(CANCEL_PROMPT);
+          await controlUiProof.page.getByRole("button", { name: "Send message" }).click();
+          await vi.waitFor(
+            () => {
+              expect(launchId).toBeTruthy();
+              expect(launchId).not.toBe(previousLaunchId);
+              expect(browserRunId).toBeTruthy();
+            },
+            { timeout: PROOF_TIMEOUT_MS, interval: 100 },
+          );
+          const cancelledLaunchId = launchId!;
+          const cancelledRunId = browserRunId!;
+          const cancelledContainer = await observedContainer!;
+          await vi.waitFor(
+            async () =>
+              expect(
+                await fs.readFile(path.join(remoteWorkspaceDir!, CANCEL_STARTED_FILE), "utf8"),
+              ).toBe("started"),
+            { timeout: PROOF_TIMEOUT_MS, interval: 100 },
+          );
+
+          await controlUiProof.page.getByRole("button", { name: "Stop generating" }).click();
+          await cancellationEntered.promise;
+          expect(controlUiProof.requests.at(-1)).toMatchObject({
+            method: "chat.abort",
+            params: { sessionKey, runId: cancelledRunId },
+          });
+          await expect(workerNode.supervisor.status(cancelledLaunchId)).resolves.toMatchObject({
+            state: "running",
+          });
+
+          await controlUiProof.page
+            .locator(".agent-chat__composer-combobox textarea")
+            .fill(RECOVERY_PROMPT);
+          await controlUiProof.page.getByRole("button", { name: "Send message" }).click();
+          const recoveryRequest = controlUiProof.requests.at(-1);
+          expect(recoveryRequest).toMatchObject({
+            method: "chat.send",
+            params: { sessionKey, message: RECOVERY_PROMPT },
+          });
+          const recoveryRunId = recoveryRequest?.params?.idempotencyKey;
+          expect(recoveryRunId).toBeTruthy();
+          await controlUiProof.page.getByRole("button", { name: "Stop generating" }).waitFor();
+          releasePendingCancellation();
+          releasePendingCancellation = undefined;
+          const recovered = await operator.request<{
+            status?: string;
+            error?: string;
+            summary?: string;
+            stopReason?: string;
+          }>(
+            "agent.wait",
+            { runId: recoveryRunId, timeoutMs: PROOF_TIMEOUT_MS },
+            { timeoutMs: PROOF_TIMEOUT_MS + 5_000 },
+          );
+          if (recovered.status !== "ok") {
+            const recoveryPlacement = (await gateway.call("sessions.describe", {
+              key: sessionKey,
+            })) as {
+              session?: {
+                status?: string;
+                lastRunError?: string;
+                placement?: { state?: string; recoveryError?: string };
+              };
+            };
+            const cancelled = await workerNode.supervisor.status(cancelledLaunchId);
+            throw new Error(
+              `replacement worker turn failed: ${JSON.stringify({
+                result: recovered,
+                sessionStatus: recoveryPlacement.session?.status,
+                lastRunError: recoveryPlacement.session?.lastRunError,
+                placement: recoveryPlacement.session?.placement,
+                cancelledState: cancelled?.state,
+                cancelledError: cancelled?.errorText,
+              })}\n${gateway.logs().slice(-12_000)}`,
+            );
+          }
+          await workerNode.waitForWorkersIdle();
+          await expect(workerNode.supervisor.status(cancelledLaunchId)).resolves.toMatchObject({
+            state: "cancelled",
+          });
+          await expect(
+            dockerOutput([
+              "ps",
+              "--all",
+              "--filter",
+              `id=${cancelledContainer.id}`,
+              "--format",
+              "{{.ID}}",
+            ]),
+          ).resolves.toBe("");
+          await expect(fs.stat(path.join(remoteWorkspaceDir!, CANCEL_LATE_FILE))).rejects.toThrow();
+          const recoveryHistory = await operator.request<{ messages?: unknown[] }>("chat.history", {
+            sessionKey,
+            limit: 20,
+          });
+          expect(
+            recoveryHistory.messages?.some(
+              (message) =>
+                (message as { role?: unknown }).role === "assistant" &&
+                wireMessageText(message).includes(RECOVERY_MARKER),
+            ),
+          ).toBe(true);
+          expect(
+            await controlUiProof.page
+              .locator("[data-approval-id], .exec-approval-modal-stack")
+              .count(),
+          ).toBe(0);
+          await captureControlUiProof(
+            controlUiProof,
+            "05-cancelled-worker-continues-without-alerts",
+          );
+        }
         await expect(operator.request("exec.approval.list", {})).resolves.toEqual([]);
         expect(approvalEvents).toEqual([]);
         await workerNode.waitForInvokes();
@@ -553,6 +695,7 @@ describe.runIf(CONTAINER_WIRE_ENABLED)("node worker real Docker wire", () => {
           dockerOutput(["ps", "--all", "--filter", `id=${container.id}`, "--format", "{{.ID}}"]),
         ).resolves.toBe("");
       } finally {
+        releasePendingCancellation?.();
         if (controlUiProof) {
           controlUiProof.fullAccessPatch.release();
           await controlUiProof.context.close();

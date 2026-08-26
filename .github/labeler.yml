@@ -66,6 +66,11 @@
       - any-glob-to-any-file:
           - "extensions/logbook/**"
           - "docs/plugins/logbook.md"
+"plugin: imap":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/imap/**"
+          - "docs/automation/imap.md"
 "plugin: google-meet":
   - changed-files:
       - any-glob-to-any-file:

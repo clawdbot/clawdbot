@@ -9,15 +9,16 @@ import {
   validateExecApprovalResolveParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveExecCommandHighlighting } from "../../config/exec-command-highlighting.js";
+import { sanitizeApprovalScope, type ApprovalScope } from "../../infra/approval-scope.js";
 import { resolveCommandAnalysisSummaryForDisplay } from "../../infra/command-analysis/explain.js";
 import { lookupCronRunExecSource } from "../../infra/cron-run-exec-source.js";
+import { resolveExecApprovalCommandDisplay } from "../../infra/exec-approval-command-display.js";
+import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import {
-  resolveExecApprovalCommandDisplay,
   sanitizeExecApprovalDisplayText,
   sanitizeExecApprovalDisplayTextWithStatus,
   sanitizeExecApprovalWarningText,
-} from "../../infra/exec-approval-command-display.js";
-import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
+} from "../../infra/exec-approval-text-sanitize.js";
 import { normalizeExecAsk, normalizeExecSecurity } from "../../infra/exec-approvals-core.js";
 import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
@@ -170,6 +171,7 @@ export function createExecApprovalHandlers(
         security?: string;
         ask?: string;
         warningText?: string | null;
+        scope?: ApprovalScope;
         unavailableDecisions?: string[];
         commandSpans?: {
           startIndex: number;
@@ -367,6 +369,7 @@ export function createExecApprovalHandlers(
         security: normalizeExecSecurity(p.security) ?? null,
         ask: normalizeExecAsk(p.ask) ?? null,
         warningText: warningText ? sanitizeExecApprovalWarningText(warningText) : null,
+        scope: p.scope ? sanitizeApprovalScope(p.scope) : null,
         commandAnalysis,
         commandSpans,
         unavailableDecisions: unavailableDecisions.length > 0 ? unavailableDecisions : undefined,

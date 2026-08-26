@@ -116,6 +116,17 @@ created by an authenticated person with that role, even when the agent's
 sandbox mode is `"off"`. The example lets maintainers use host execution on
 `roboclaw` while guest-created sessions on the same agent remain sandboxed.
 
+Required sandboxes are isolated per authenticated session creator, not merely
+per agent or per session. Different guests using the same agent receive separate
+sandbox environments and workspaces; multiple sessions created by the same guest
+reuse that guest's environment and workspace. This per-guest boundary applies
+regardless of the configured sandbox scope. If the agent configures
+`workspaceAccess: "rw"`, OpenClaw reduces access to `"ro"` for role-required
+sessions and logs an `agent/sandbox` warning, preventing the shared agent
+workspace from becoming a writable bridge between guests. Maintainer sessions
+and other sessions without a role-required sandbox keep their configured scope
+and workspace access.
+
 The Gateway records the creator's sandbox requirement once when the session is
 created. Existing sessions are unaffected, and role changes, session sharing,
 maintainer participation, and `sessions.patch` cannot remove or replace the

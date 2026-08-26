@@ -5,7 +5,7 @@ import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { ref } from "lit/directives/ref.js";
 import type { SessionsSearchHit } from "../../../packages/gateway-protocol/src/index.js";
-import type { RouteId } from "../app-route-paths.ts";
+import { pathForAgentPanel, type RouteId } from "../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { hasOperatorAdminAccess } from "../app/operator-access.ts";
 import { t } from "../i18n/index.ts";
@@ -54,6 +54,7 @@ const SESSION_TRANSCRIPT_MAX_SESSION_KEYS = 200;
 const CATALOG_CACHE_TTL_MS = 30_000;
 
 type CommandPaletteProps = {
+  basePath: string;
   open: boolean;
   query: string;
   activeIndex: number;
@@ -65,7 +66,7 @@ type CommandPaletteProps = {
   onToggle: () => void;
   onQueryChange: (query: string) => void;
   onActiveIndexChange: (index: number) => void;
-  onNavigate: (routeId: RouteId) => void;
+  onNavigate?: ApplicationContext<RouteId>["navigate"];
   onSelectSession?: (sessionKey: string) => void;
   onSlashCommand?: (command: string) => void;
   desktopAvailable: boolean;
@@ -73,22 +74,14 @@ type CommandPaletteProps = {
   onInputRef: (element: Element | undefined) => void;
 };
 
-function filteredItems(
-  query: string,
-  includeSlashCommands = true,
-  sessionItems: readonly PaletteItem[] = [],
-  catalogItems: readonly PaletteItem[] = [],
-  desktopAvailable = false,
-  custodianAvailable = false,
-): PaletteItem[] {
-  return filterCommandPaletteItems({
-    query,
-    includeSlashCommands,
-    sessionItems,
-    catalogItems,
-    desktopAvailable,
-    custodianAvailable,
-  });
+function filteredItems(props: CommandPaletteProps): PaletteItem[] {
+  // Keyboard selection and ARIA focus follow the same category order as the visible rows.
+  return groupItems(
+    filterCommandPaletteItems({
+      ...props,
+      includeSlashCommands: Boolean(props.onSlashCommand),
+    }),
+  ).flatMap(([, items]) => items);
 }
 
 function groupItems(items: PaletteItem[]): Array<[string, PaletteItem[]]> {
@@ -107,7 +100,14 @@ const paletteListboxId = "cmd-palette-listbox";
 
 function selectItem(item: PaletteItem, props: CommandPaletteProps) {
   if (item.action.startsWith("nav:")) {
-    props.onNavigate(item.action.slice(4) as RouteId);
+    const routeId = item.action.slice(4) as RouteId;
+    if (item.agentId) {
+      props.onNavigate?.(routeId, {
+        pathname: pathForAgentPanel(item.agentId, null, props.basePath),
+      });
+    } else {
+      props.onNavigate?.(routeId);
+    }
   } else if (item.action.startsWith(SESSION_ACTION_PREFIX)) {
     props.onSelectSession?.(item.action.slice(SESSION_ACTION_PREFIX.length));
   } else if (item.action === "panel:desktop") {
@@ -132,14 +132,7 @@ function scrollActiveIntoView() {
 }
 
 function handleKeydown(e: KeyboardEvent, props: CommandPaletteProps) {
-  const items = filteredItems(
-    props.query,
-    Boolean(props.onSlashCommand),
-    props.sessionItems,
-    props.catalogItems,
-    props.desktopAvailable,
-    props.custodianAvailable,
-  );
+  const items = filteredItems(props);
   if (items.length === 0 && (e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "Enter")) {
     return;
   }
@@ -171,8 +164,8 @@ function handleKeydown(e: KeyboardEvent, props: CommandPaletteProps) {
   }
 }
 
-function getOptionId(item: PaletteItem): string {
-  return `cmd-palette-option-${item.id.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+function getOptionId(index: number): string {
+  return `cmd-palette-option-${index}`;
 }
 
 function focusInput(el: Element | undefined) {
@@ -189,17 +182,10 @@ function renderCommandPalette(props: CommandPaletteProps) {
   if (!props.open) {
     return nothing;
   }
-  const items = filteredItems(
-    props.query,
-    Boolean(props.onSlashCommand),
-    props.sessionItems,
-    props.catalogItems,
-    props.desktopAvailable,
-    props.custodianAvailable,
-  );
+  const items = filteredItems(props);
   const grouped = groupItems(items);
   const activeItem = items[props.activeIndex];
-  const activeOptionId = activeItem ? getOptionId(activeItem) : nothing;
+  const activeOptionId = activeItem ? getOptionId(props.activeIndex) : nothing;
   const paletteLabel = t("palette.placeholder");
 
   return html`
@@ -265,7 +251,7 @@ function renderCommandPalette(props: CommandPaletteProps) {
                     const isActive = globalIndex === props.activeIndex;
                     return html`
                       <div
-                        id=${getOptionId(item)}
+                        id=${getOptionId(globalIndex)}
                         class="cmd-palette__item ${isActive ? "cmd-palette__item--active" : ""}"
                         role="option"
                         aria-selected=${isActive ? "true" : "false"}
@@ -299,7 +285,7 @@ function renderCommandPalette(props: CommandPaletteProps) {
 }
 
 export class CommandPalette extends OpenClawLightDomContentsElement {
-  @property({ attribute: false }) onNavigate?: (routeId: RouteId) => void;
+  @property({ attribute: false }) onNavigate?: ApplicationContext<RouteId>["navigate"];
   @property({ attribute: false }) onSelectSession?: (sessionKey: string) => void;
   @property({ attribute: false }) onSlashCommand?: (command: string) => void;
   @property({ attribute: false }) desktopAvailable = false;
@@ -654,6 +640,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
 
   override render() {
     return renderCommandPalette({
+      basePath: this.context?.basePath ?? "",
       open: this.open,
       query: this.query,
       activeIndex: this.activeIndex,
@@ -680,7 +667,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       onActiveIndexChange: (index) => {
         this.activeIndex = index;
       },
-      onNavigate: (routeId) => this.onNavigate?.(routeId),
+      onNavigate: this.onNavigate,
       onSelectSession: this.onSelectSession,
       onSlashCommand: this.onSlashCommand,
       onInputRef: this.handleInputRef,

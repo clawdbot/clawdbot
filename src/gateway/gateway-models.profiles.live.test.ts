@@ -19,7 +19,7 @@ import {
   type Model,
   type ModelThinkingLevel,
 } from "openclaw/plugin-sdk/llm";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { renderCatNoncePngBase64 } from "../../test/helpers/live-image-probe.js";
 import { discoverAuthStorage, discoverModels } from "../agents/agent-model-discovery.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
@@ -2891,6 +2891,52 @@ function buildLiveGatewayAuthProfileStore(params: {
   };
 }
 
+function materializeGatewayLiveDiscoveryAuth(params: {
+  env: NodeJS.ProcessEnv;
+  providerList: readonly string[] | undefined;
+  store: AuthProfileStore;
+}): AuthProfileStore {
+  const includesOpenAi =
+    !params.providerList ||
+    params.providerList.some((provider) => normalizeProviderId(provider) === "openai");
+  const apiKey = includesOpenAi ? params.env.OPENAI_API_KEY?.trim() : undefined;
+  if (!apiKey) {
+    return params.store;
+  }
+  return buildLiveGatewayAuthProfileStore({
+    store: params.store,
+    candidates: [
+      {
+        model: createGatewayLiveTestModel("openai", "gpt-5.6-sol"),
+        auth: { apiKey, mode: "api-key", source: "env: OPENAI_API_KEY" },
+      },
+    ],
+  });
+}
+
+function resolveGatewayLivePreparedProfileId(
+  store: AuthProfileStore,
+  provider: string,
+): string | undefined {
+  return normalizeProviderId(provider) === "openai" && store.profiles["openai:live"]
+    ? "openai:live"
+    : undefined;
+}
+
+async function enterIsolatedGatewayLiveDiscoveryState(): Promise<() => Promise<void>> {
+  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+  const tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-discovery-state-"));
+  setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
+  return async () => {
+    if (previousStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    }
+    await fs.rm(tempStateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  };
+}
+
 function createGatewayLiveModelSession(params: {
   agentId: string;
   credentialAttempt: number;
@@ -3052,6 +3098,90 @@ describe("buildLiveGatewayAuthProfileStore", () => {
     });
     expect(isolated.order?.openai).toEqual(["openai:live"]);
     expect(store.profiles).toEqual({});
+  });
+
+  it("materializes the OpenAI live secret before profile-first discovery", () => {
+    const store: AuthProfileStore = { version: 1, profiles: {} };
+
+    const prepared = materializeGatewayLiveDiscoveryAuth({
+      env: { OPENAI_API_KEY: "prepared-openai-test-key" },
+      providerList: ["openai"],
+      store,
+    });
+
+    expect(prepared.profiles["openai:live"]).toEqual({
+      type: "api_key",
+      provider: "openai",
+      key: "prepared-openai-test-key",
+    });
+    expect(prepared.order?.openai).toEqual(["openai:live"]);
+    expect(store.profiles).toEqual({});
+  });
+
+  it("does not materialize OpenAI auth for another provider's focused sweep", () => {
+    const store: AuthProfileStore = { version: 1, profiles: {} };
+
+    expect(
+      materializeGatewayLiveDiscoveryAuth({
+        env: { OPENAI_API_KEY: "prepared-openai-test-key" },
+        providerList: ["anthropic"],
+        store,
+      }),
+    ).toBe(store);
+  });
+
+  it("carries the materialized OpenAI profile into profile-first lookup", () => {
+    const store = materializeGatewayLiveDiscoveryAuth({
+      env: { OPENAI_API_KEY: "prepared-openai-test-key" },
+      providerList: ["openai"],
+      store: { version: 1, profiles: {} },
+    });
+
+    expect(resolveGatewayLivePreparedProfileId(store, "openai")).toBe("openai:live");
+    expect(resolveGatewayLivePreparedProfileId(store, "anthropic")).toBeUndefined();
+  });
+
+  it("keeps prepared discovery credentials out of the ambient auth store", async () => {
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const ambientStateDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-live-ambient-state-"),
+    );
+    process.env.OPENCLAW_STATE_DIR = ambientStateDir;
+    const ambientAgentDir = resolveDefaultAgentDir({});
+    const ambientStore: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:ambient": { type: "api_key", provider: "openai", key: "ambient-test-key" },
+      },
+    };
+    saveAuthProfileStore(ambientStore, ambientAgentDir);
+
+    try {
+      const leaveDiscoveryState = await enterIsolatedGatewayLiveDiscoveryState();
+      try {
+        const discoveryAgentDir = resolveDefaultAgentDir({});
+        expect(discoveryAgentDir).not.toBe(ambientAgentDir);
+        const prepared = materializeGatewayLiveDiscoveryAuth({
+          env: { OPENAI_API_KEY: "prepared-openai-test-key" },
+          providerList: ["openai"],
+          store: ensureAuthProfileStore(discoveryAgentDir, { allowKeychainPrompt: false }),
+        });
+        saveAuthProfileStore(prepared, discoveryAgentDir);
+      } finally {
+        await leaveDiscoveryState();
+      }
+
+      expect(
+        ensureAuthProfileStore(ambientAgentDir, { allowKeychainPrompt: false }).profiles,
+      ).toEqual(ambientStore.profiles);
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      await fs.rm(ambientStateDir, { recursive: true, force: true });
+    }
   });
 
   it("keeps an env-first provider on its prepared direct credential", () => {
@@ -5755,6 +5885,17 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
 }
 
 describeLive("gateway live (dev agent, profile keys)", () => {
+  let leaveDiscoveryState: (() => Promise<void>) | undefined;
+
+  beforeEach(async () => {
+    leaveDiscoveryState = await enterIsolatedGatewayLiveDiscoveryState();
+  });
+
+  afterEach(async () => {
+    await leaveDiscoveryState?.();
+    leaveDiscoveryState = undefined;
+  });
+
   it(
     "runs meaningful prompts across models with available keys",
     async () =>
@@ -5797,6 +5938,18 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           env: process.env,
         });
         const workspaceDir = resolveAgentWorkspaceDir(cfg, DEFAULT_AGENT_ID);
+        const discoveryAgentDir = resolveDefaultAgentDir(cfg);
+        const discoveryAuthProfileStore = ensureAuthProfileStore(discoveryAgentDir, {
+          allowKeychainPrompt: false,
+        });
+        const preparedDiscoveryAuthProfileStore = materializeGatewayLiveDiscoveryAuth({
+          env: process.env,
+          providerList,
+          store: discoveryAuthProfileStore,
+        });
+        if (preparedDiscoveryAuthProfileStore !== discoveryAuthProfileStore) {
+          saveAuthProfileStore(preparedDiscoveryAuthProfileStore, discoveryAgentDir);
+        }
         logProgress("[all-models] preparing models.json");
         const modelsJsonResult = await withGatewayLiveSetupTimeout(
           ensureOpenClawModelsJson(cfg, undefined, {
@@ -5842,7 +5995,11 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           }
         } else {
           logProgress("[all-models] loading auth profiles");
-          const authBacked = await loadAuthBackedLiveModelRegistry({ agentDir, cfg, providerList });
+          const authBacked = await loadAuthBackedLiveModelRegistry({
+            agentDir,
+            cfg,
+            providerList,
+          });
           authProfileStore = authBacked.authProfileStore;
           modelRegistry = authBacked.modelRegistry;
           all = authBacked.all;
@@ -5935,6 +6092,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
                 store: authProfileStore,
                 agentDir,
                 workspaceDir,
+                profileId: resolveGatewayLivePreparedProfileId(authProfileStore, model.provider),
                 credentialPrecedence: resolveLiveCredentialPrecedence(
                   model.provider,
                   REQUIRE_PROFILE_KEYS,

@@ -136,7 +136,7 @@ describe("configured model manifest workspace scope", () => {
 
   it("builds configured catalog facts once when resolving allowed models", async () => {
     getCurrentPluginMetadataSnapshotMock.mockReturnValue({ plugins: [] });
-    const { buildAllowedModelSetWithFallbacks } = await import("./model-selection-shared.js");
+    const { buildAllowedModelSet } = await import("./model-selection-shared.js");
     const cfg = {
       models: {
         providers: {
@@ -146,11 +146,10 @@ describe("configured model manifest workspace scope", () => {
     } as unknown as OpenClawConfig;
 
     expect(
-      buildAllowedModelSetWithFallbacks({
+      buildAllowedModelSet({
         cfg,
         catalog: [],
         defaultProvider: "custom",
-        fallbackModels: [],
       }).allowedCatalog,
     ).toMatchObject([{ provider: "custom", id: "fast-model" }]);
     expect(getCurrentPluginMetadataSnapshotMock).toHaveBeenCalledTimes(1);

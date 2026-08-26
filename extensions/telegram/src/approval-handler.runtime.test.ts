@@ -96,6 +96,51 @@ describe("telegramApprovalNativeRuntime", () => {
       "tga1:e:o:req-1",
       "tga1:e:d:req-1",
     ]);
+    expect(payload.text).not.toContain("Scope:");
+  });
+
+  it("renders owner-declared plugin approval scope in pending text", async () => {
+    const scope = {
+      kind: "message-send" as const,
+      target: "email",
+      recipientCount: 3,
+      recipients: ["alice@example.com"],
+      audience: "external" as const,
+    };
+    const payload = (await telegramApprovalNativeRuntime.presentation.buildPendingPayload({
+      cfg: {} as never,
+      accountId: "default",
+      context: { token: "tg-token" },
+      request: {
+        approvalKind: "plugin",
+        id: "plugin:req-1",
+        request: {
+          title: "Send email",
+          description: "Deliver the requested announcement.",
+          scope,
+        },
+        createdAtMs: 0,
+        expiresAtMs: 60_000,
+      },
+      approvalKind: "plugin",
+      nowMs: 0,
+      view: {
+        approvalKind: "plugin",
+        phase: "pending",
+        approvalId: "plugin:req-1",
+        title: "Send email",
+        description: "Deliver the requested announcement.",
+        severity: "warning",
+        scope,
+        metadata: [],
+        actions: [],
+        expiresAtMs: 60_000,
+      },
+    })) as TelegramPayload;
+
+    expect(payload.text).toContain(
+      "Scope: Send to 3 recipients via email (external): alice@example.com, +2 more",
+    );
   });
 
   it("renders resolved and expired events as visible terminal receipts", async () => {

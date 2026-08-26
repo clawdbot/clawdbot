@@ -91,6 +91,8 @@ vi.mock("../../agents/tools/scoped-session-access.js", () => ({
 
 vi.mock("../../agents/tools/in-process-gateway.js", () => ({
   callAgentToolGatewayRequest: (request: unknown) => gatewayRequest(request),
+  callInProcessGatewayTool: (method: string, params: Record<string, unknown>) =>
+    gatewayRequest({ method, params }),
   callInProcessGatewayToolWithCreation: (
     method: string,
     params: Record<string, unknown>,
@@ -247,6 +249,11 @@ describe("worker session tool topology", () => {
       placements,
       dispatchChild,
       githubPublication: { requestForClaim: githubPublicationRequest },
+      portals: {
+        getService: () => undefined,
+        carrier: { open: vi.fn() },
+        onChanged: vi.fn(),
+      },
       environments: {
         get: (environmentId: string) => {
           if (environmentId === SOURCE.environmentId) {

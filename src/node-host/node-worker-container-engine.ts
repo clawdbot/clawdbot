@@ -26,6 +26,9 @@ type NodeWorkerContainerExpectedOwner = {
 };
 
 const DEFAULT_NODE_WORKER_CONTAINER_IMAGE = "node:22-slim";
+// Burst launches can delay a healthy daemon's identity response; keep revalidation
+// fail-closed without treating temporary daemon contention as an unavailable engine.
+const CONTAINER_REVALIDATION_TIMEOUT_MS = 30_000;
 
 const HOST_LABEL = "openclaw.node-worker.host";
 const GATEWAY_LABEL = "openclaw.node-worker.gateway";
@@ -95,6 +98,7 @@ async function resolveContainerEngineTarget(
   options: { pinned?: boolean } = {},
 ): Promise<Pick<NodeWorkerContainerEngine, "target" | "env">> {
   const env = engine.env ?? process.env;
+  const timeoutMs = options.pinned ? CONTAINER_REVALIDATION_TIMEOUT_MS : 5_000;
   if (engine.id === "docker") {
     const endpoint =
       env.DOCKER_HOST?.trim() ||
@@ -114,7 +118,7 @@ async function resolveContainerEngineTarget(
     const daemonId = await runContainerCommand(
       { ...engine, env: frozenEnv },
       ["info", "--format", "{{.ID}}"],
-      5_000,
+      timeoutMs,
     );
     if (!daemonId || daemonId === "<no value>") {
       throw new Error("Docker daemon did not report a stable identity");
@@ -128,7 +132,7 @@ async function resolveContainerEngineTarget(
   const info = await runContainerCommand(
     engine,
     ["info", "--format", "{{.Host.Hostname}}\t{{.Store.GraphRoot}}\t{{.Host.RemoteSocket.Path}}"],
-    5_000,
+    timeoutMs,
   );
   const [hostname, graphRoot, remoteSocket = "", extra] = info.split("\t");
   if (extra !== undefined || !hostname || !graphRoot || hostname === "<no value>") {

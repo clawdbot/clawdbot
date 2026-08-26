@@ -158,6 +158,40 @@ describe("typed in-process agent authorization", () => {
     });
   });
 
+  it("does not fall back to ambient scope when an explicit Gateway binding is retired", async () => {
+    const ambient = createContext();
+    ambient.getGatewayMethodRegistry = () =>
+      createGatewayMethodRegistry([
+        {
+          name: "sessions.list",
+          scope: "operator.read",
+          owner: { kind: "core", area: "sessions" },
+          handler: ({ respond }: GatewayRequestHandlerOptions) => {
+            respond(true, { sessions: [] });
+          },
+        },
+      ]);
+
+    await withPluginRuntimeGatewayRequestScope(
+      {
+        context: ambient,
+        isWebchatConnect: () => false,
+      },
+      async () =>
+        await expect(
+          dispatchGatewayMethodInProcess(
+            "sessions.list",
+            {},
+            {
+              forceSyntheticClient: true,
+              resolveGatewayContext: () => undefined,
+              syntheticScopes: ["operator.read"],
+            },
+          ),
+        ).rejects.toThrow("instance binding"),
+    );
+  });
+
   it("preserves the scoped operator identity across synthetic model-initiated session creation", async () => {
     const owner = createOperatorClient({
       profileId: "model-spawn-owner",

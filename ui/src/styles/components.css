@@ -1487,13 +1487,6 @@ select.input {
   color: var(--text);
 }
 
-:root[data-theme-mode="light"] .chat-controls .btn--icon.active {
-  border-color: var(--accent);
-  background: var(--accent-subtle);
-  color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent-subtle);
-}
-
 /* Ghost stays chromeless in light mode too: without the border-color reset,
    the higher-specificity light .btn--icon override above re-adds a 1px border
    that dark mode never shows. Chrome appears on hover only. */
@@ -2012,9 +2005,10 @@ openclaw-chat-session-rail {
   overscroll-behavior-y: contain;
 }
 
-/* No digest means no digest block, so the thread would otherwise stack its own
-   border directly under the header's and open with a hanging 12px gap. */
-.chat-session-rail__header + .chat-session-rail__thread {
+/* No digest or embedded header means the thread would otherwise open with a
+   hanging divider and 12px gap. */
+.chat-session-rail__header + .chat-session-rail__thread,
+.chat-session-rail--embedded > .chat-session-rail__thread {
   margin-top: 0;
   border-top: 0;
 }
@@ -2121,16 +2115,6 @@ openclaw-chat-session-rail {
   50% {
     opacity: 0.45;
   }
-}
-
-.chat-session-rail__composer {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 0 0 auto;
-  padding: 10px 10px 11px 14px;
-  border-top: 1px solid var(--border);
-  background: color-mix(in srgb, var(--secondary) 40%, transparent);
 }
 
 .chat-session-rail__prompt {
