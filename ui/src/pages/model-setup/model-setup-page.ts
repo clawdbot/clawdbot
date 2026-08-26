@@ -49,6 +49,7 @@ import { ModelSetupWizardRunner } from "./wizard-runner.ts";
 import type { ModelSetupWizardCompletion, ModelSetupWizardStartMethod } from "./wizard-runner.ts";
 
 export type { ModelSetupRouteData } from "./first-run-auto-setup.ts";
+export { resumeFirstRunActivation } from "./first-run-activation-receipt.ts";
 
 const MODEL_SETUP_DOCS_URL = "https://docs.openclaw.ai/concepts/model-providers";
 
@@ -353,9 +354,6 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     this.pendingPrepareOption = null;
     void this.wizard.cancel();
     this.pageState = { phase: "loading" };
-    if (!connection.connected || !connection.client) {
-      return;
-    }
     if (this.canUseSetup(connection.client)) {
       void this.detect();
     }

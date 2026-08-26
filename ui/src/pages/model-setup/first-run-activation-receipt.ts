@@ -27,10 +27,10 @@ function activationOwner(
   storage: Storage,
 ): string | null {
   try {
-    const identity = JSON.parse(storage.getItem(DEVICE_IDENTITY_KEY) ?? "null") as {
+    const identity: {
       version?: unknown;
       privateKey?: unknown;
-    } | null;
+    } | null = JSON.parse(storage.getItem(DEVICE_IDENTITY_KEY) ?? "null");
     if (
       identity?.version !== 1 ||
       typeof identity.privateKey !== "string" ||
@@ -88,24 +88,23 @@ export function readFirstRunActivationReceipt(
     if (!raw) {
       return null;
     }
-    const parsed = JSON.parse(raw) as Partial<FirstRunActivationReceipt>;
+    const receipt: FirstRunActivationReceipt = JSON.parse(raw);
     if (
-      parsed?.version !== 1 ||
-      typeof parsed.gatewayUrl !== "string" ||
-      typeof parsed.agentId !== "string" ||
-      typeof parsed.modelRef !== "string" ||
-      typeof parsed.kind !== "string" ||
-      typeof parsed.deadlineMs !== "number" ||
-      !Number.isFinite(parsed.deadlineMs) ||
-      parsed.deadlineMs <= Date.now() ||
-      typeof parsed.owner !== "string" ||
-      parsed.gatewayUrl !== gatewayCredentialScope(context.gateway.connection.gatewayUrl) ||
-      parsed.agentId !== (context.agentSelection.state.selectedId ?? "")
+      receipt?.version !== 1 ||
+      typeof receipt.gatewayUrl !== "string" ||
+      typeof receipt.agentId !== "string" ||
+      typeof receipt.modelRef !== "string" ||
+      typeof receipt.kind !== "string" ||
+      typeof receipt.deadlineMs !== "number" ||
+      !Number.isFinite(receipt.deadlineMs) ||
+      receipt.deadlineMs <= Date.now() ||
+      typeof receipt.owner !== "string" ||
+      receipt.gatewayUrl !== gatewayCredentialScope(context.gateway.connection.gatewayUrl) ||
+      receipt.agentId !== (context.agentSelection.state.selectedId ?? "")
     ) {
       clearReceipt(storage);
       return null;
     }
-    const receipt = parsed as FirstRunActivationReceipt;
     const { owner, ...identity } = receipt;
     if (activationOwner(context, identity, storage) !== owner) {
       clearReceipt(storage);

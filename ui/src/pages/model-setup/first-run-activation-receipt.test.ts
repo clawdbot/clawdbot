@@ -17,9 +17,7 @@ function createContext(options: { token?: string; deviceToken?: string } = {}): 
       snapshot: {
         phase: "connected",
         hello: {
-          auth: {
-            ...(options.deviceToken ? { deviceToken: options.deviceToken } : {}),
-          },
+          auth: options.deviceToken ? { deviceToken: options.deviceToken } : {},
         },
       },
       connection: {
