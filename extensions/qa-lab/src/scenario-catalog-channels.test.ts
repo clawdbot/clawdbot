@@ -22,6 +22,52 @@ function requireFlowScenario(scenario: CatalogScenario): FlowCatalogScenario {
   return scenario as FlowCatalogScenario;
 }
 
+const telegramStreamingFinalScenarios = [
+  {
+    scenarioId: "telegram-stream-final-single-message",
+    finalTexts: ["QA-TELEGRAM-STREAM-SINGLE-OK"],
+  },
+  {
+    scenarioId: "telegram-long-final-reuses-preview",
+    finalTexts: ["TELEGRAM-LONG-FINAL-BEGIN first", "second TELEGRAM-LONG-FINAL-END"],
+  },
+  {
+    scenarioId: "telegram-long-final-three-chunks",
+    finalTexts: [
+      "TELEGRAM-LONG-FINAL-3CHUNK-BEGIN first",
+      "second final chunk",
+      "third TELEGRAM-LONG-FINAL-3CHUNK-END",
+    ],
+  },
+] as const;
+
+function runTelegramStreamingFinalScenario(params: {
+  scenarioId: string;
+  finalTexts: readonly string[];
+  deletedPreview: boolean;
+}) {
+  return runLoadedScenarioFlow(params.scenarioId, {
+    state: createQaBusState(),
+    onWaitForOutboundMessage: ({ state }) => {
+      if (params.deletedPreview) {
+        const preview = state.addOutboundMessage({
+          accountId: "qa-channel",
+          to: "channel:telegram-stream-room",
+          text: "deleted streaming preview",
+        });
+        state.deleteMessage({ accountId: "qa-channel", messageId: preview.id });
+      }
+      for (const text of params.finalTexts) {
+        state.addOutboundMessage({
+          accountId: "qa-channel",
+          to: "channel:telegram-stream-room",
+          text,
+        });
+      }
+    },
+  });
+}
+
 describe("qa scenario catalog channel contracts", () => {
   const agentRuntime = "agent-runtime";
 
@@ -262,6 +308,33 @@ describe("qa scenario catalog channel contracts", () => {
       channels: { telegram: { streaming: { mode: "partial" } } },
     });
     expect(scenario.gatewayConfigPatch).not.toHaveProperty("channels.telegram.groups");
+  });
+
+  it.each(
+    telegramStreamingFinalScenarios.flatMap((scenario) => [
+      { ...scenario, deletedPreview: false },
+      { ...scenario, deletedPreview: true },
+    ]),
+  )(
+    "counts only visible Telegram finals for $scenarioId (deleted preview: $deletedPreview)",
+    async (scenario) => {
+      await expect(runTelegramStreamingFinalScenario(scenario)).resolves.toMatchObject({
+        status: "pass",
+      });
+    },
+  );
+
+  it("rejects a deleted Telegram preview standing in for a missing final chunk", async () => {
+    await expect(
+      runTelegramStreamingFinalScenario({
+        scenarioId: "telegram-long-final-three-chunks",
+        finalTexts: [
+          "TELEGRAM-LONG-FINAL-3CHUNK-BEGIN first",
+          "second TELEGRAM-LONG-FINAL-3CHUNK-END",
+        ],
+        deletedPreview: true,
+      }),
+    ).rejects.toThrow("expected three complete final chunks; saw 2");
   });
 
   it("keeps the shared channel canary eligible for its supported channels", () => {
