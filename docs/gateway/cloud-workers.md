@@ -138,15 +138,16 @@ OpenClaw derives one canonical `cbx_...` lease ID from the durable provision ope
 
 `settings.setup` runs on the leased box after Crabbox reports it ready and before ephemeral node enrollment. It runs on **every** provision attempt, including replay after an interrupted dispatch, so it must be idempotent — guard installs with a `command -v`/`test -x` check as in the example. At minimum, the resulting machine needs Node.js and `npx`. If setup or enrollment fails, the provider stops the lease and the dispatch fails closed; no half-configured paid box is hidden behind terminal state.
 
-The example profile above prepares OpenClaw worker turns only. To make the same profile Codex-ready, run the following on the Gateway host. It captures the Gateway version, installs that exact OpenClaw release on each cloud node, and installs the matching Codex plugin through the trusted official npm path:
+The example profile above prepares OpenClaw worker turns only. To make the same profile Codex-ready, run the following on the Gateway host. It preserves the existing setup, captures the Gateway version, installs that exact OpenClaw release on each cloud node, and installs the matching Codex plugin through the trusted official npm path:
 
 ```bash
 gateway_version="$(openclaw --version | awk '{print $2}')"
+existing_setup="$(openclaw config get cloudWorkers.profiles.aws.settings.setup)"
 openclaw config set cloudWorkers.profiles.aws.settings.setup \
-  "test -x /usr/bin/node || (curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs); sudo npm install -g openclaw@${gateway_version}; openclaw plugins install npm:@openclaw/codex@${gateway_version} --pin --force"
+  "${existing_setup}; sudo npm install -g openclaw@${gateway_version}; openclaw plugins install npm:@openclaw/codex@${gateway_version} --pin --force"
 ```
 
-`--force` allows setup replay to converge when the plugin is already installed. Rerun the command after upgrading the Gateway so both packages remain pinned to its current version. Unreleased source builds require exact locally packed packages instead of registry versions.
+`--force` allows setup replay to converge when the plugin is already installed. After upgrading the Gateway, update both appended package versions to match it while preserving the rest of the setup. Unreleased source builds require exact locally packed packages instead of registry versions.
 
 ### Bundle installation
 
