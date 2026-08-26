@@ -632,6 +632,17 @@ openclaw-chat-page {
   text-align: center;
 }
 
+/* Failed refresh with cached history keeps the transcript and shows a compact
+   banner instead; displacing content would hide the stale-but-useful messages. */
+.chat-history-error--inline {
+  flex: 0 0 auto;
+  flex-direction: row;
+  justify-content: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-block-end: 1px solid var(--border);
+}
+
 .chat-history-available {
   position: absolute;
   z-index: 10;

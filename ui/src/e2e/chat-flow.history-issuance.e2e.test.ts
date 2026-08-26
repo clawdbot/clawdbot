@@ -119,4 +119,54 @@ suite.define(() => {
       await suite.closeBrowserContext(context);
     }
   });
+  it("keeps cached history visible and actionable when a refresh fails", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      historyMessages: [
+        {
+          content: [{ text: "Cached transcript stays visible.", type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+      ],
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const cachedMessage = page
+        .locator(".chat-thread")
+        .getByText("Cached transcript stays visible.");
+      await cachedMessage.waitFor({ state: "visible" });
+
+      await gateway.deferNext("chat.startup");
+      await gateway.setOnline(false);
+      await gateway.setOnline(true);
+      await gateway.waitForRequest("chat.startup", { after: 1 });
+      await gateway.rejectDeferred("chat.startup", {
+        code: "GATEWAY_ERROR",
+        message: "History refresh failed.",
+        retryable: false,
+      });
+
+      const inlineError = page.locator(".chat-history-error--inline");
+      await inlineError.waitFor({ state: "visible", timeout: 5_000 });
+      expect(await inlineError.textContent()).toContain("History refresh failed.");
+      // The stale transcript must not be displaced by the failure surface.
+      await cachedMessage.waitFor({ state: "visible" });
+      await captureHistoryIssuanceProof(page, "04-history-refresh-failed-cached");
+
+      const startupCount = (await gateway.getRequests("chat.startup")).length;
+      await inlineError.getByRole("button", { name: "Retry" }).click();
+      await gateway.waitForRequest("chat.startup", { after: startupCount });
+      await inlineError.waitFor({ state: "hidden", timeout: 5_000 });
+      await cachedMessage.waitFor({ state: "visible" });
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
 });

@@ -536,26 +536,35 @@ export function renderChat(props: ChatProps) {
     : nothing;
   const historyState = props.historyState;
   const historyLoadState = historyState ? getChatHistoryLoadState(historyState) : undefined;
-  const historyError =
-    historyState &&
+  const historyFailed =
+    historyState !== undefined &&
     historyLoadState?.phase === "failed" &&
-    historyLoadState.sessionKey === props.sessionKey &&
+    historyLoadState.sessionKey === props.sessionKey;
+  const transcriptEmpty =
     props.messages.length === 0 &&
     props.toolMessages.length === 0 &&
     props.streamSegments.length === 0 &&
     !props.stream &&
-    props.queue.length === 0
-      ? html`<div class="chat-history-error" role="alert">
-          <span>${historyLoadState.message}</span>
-          <button
-            class="btn btn--sm"
-            type="button"
-            @click=${() => retryChatHistoryLoad(historyState)}
-          >
-            ${t("common.retry")}
-          </button>
-        </div>`
-      : nothing;
+    props.queue.length === 0;
+  // A failed load with cached content must stay visible without displacing the
+  // transcript; only an empty pane may replace the thread with the error panel.
+  const renderHistoryFailure = (inline: boolean) =>
+    html`<div
+      class="chat-history-error${inline ? " chat-history-error--inline" : ""}"
+      role=${inline ? "status" : "alert"}
+    >
+      <span>${historyLoadState?.phase === "failed" ? historyLoadState.message : ""}</span>
+      <button
+        class="btn btn--sm"
+        type="button"
+        @click=${() => historyState && retryChatHistoryLoad(historyState)}
+      >
+        ${t("common.retry")}
+      </button>
+    </div>`;
+  const historyError = historyFailed && transcriptEmpty ? renderHistoryFailure(false) : nothing;
+  const historyRefreshNotice =
+    historyFailed && !transcriptEmpty ? renderHistoryFailure(true) : nothing;
 
   return html`
     <section
@@ -610,8 +619,8 @@ export function renderChat(props: ChatProps) {
                 })}
                 ${renderTranscriptSearch(props.paneId, requestUpdate)}
                 <div class="chat-main__conversation">
-                  ${historyError === nothing ? thread : historyError} ${earlierHistoryButton}
-                  ${scrollToBottomButton}
+                  ${historyRefreshNotice} ${historyError === nothing ? thread : historyError}
+                  ${earlierHistoryButton} ${scrollToBottomButton}
                   ${props.inlineApproval && props.onApprovalDecision
                     ? html`<div class="chat-inline-approval">
                         ${renderExecApprovalCard({
