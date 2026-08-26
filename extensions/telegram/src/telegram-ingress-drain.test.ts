@@ -199,6 +199,9 @@ describe("createTelegramIngressMonitor", () => {
       await queue.enqueue(eventId, payload, { laneKey: "telegram:-9003" });
 
       const dispatch = vi.fn(async (_update, lifecycle) => {
+        expect(await queue.listClaims()).toEqual([
+          expect.objectContaining({ laneKey: "telegram:-9003:topic:1" }),
+        ]);
         await lifecycle.onAdopted();
         return { kind: "completed" as const };
       });
