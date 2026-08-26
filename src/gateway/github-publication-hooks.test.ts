@@ -3,8 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runCommandBuffered } from "../process/exec.js";
-import { captureGitHubPublicationWorkspaceSnapshot } from "./github-publication-executor.js";
-import { assertSafeGitPublicationWorkspace } from "./github-publication-git-transport.js";
+import {
+  assertSafeGitPublicationWorkspace,
+  captureGitHubPublicationWorkspaceSnapshot,
+} from "./github-publication-git-transport.js";
 
 let root: string;
 
@@ -48,7 +50,7 @@ describe("GitHub publication Git hooks", () => {
     const hooks = path.join(root, "git-hooks");
     const sentinel = path.join(root, ".hook-ran");
     await fs.mkdir(hooks);
-    for (const hook of ["reference-transaction", "pre-push"]) {
+    for (const hook of ["reference-transaction", "pre-push", "post-index-change"]) {
       await fs.writeFile(path.join(hooks, hook), `#!/bin/sh\nprintf hook > '${sentinel}'\n`, {
         mode: 0o755,
       });
