@@ -40,6 +40,9 @@ describe("GENERIC_MODEL_NOT_FOUND_RE (#19 bare-unavailable RCA)", () => {
     expect(GENERIC_MODEL_NOT_FOUND_RE.test("The model service is temporarily unavailable")).toBe(
       false,
     );
+    // "service", not the model itself, is the subject that is unavailable —
+    // must not match even though "model" and "is unavailable" both appear.
+    expect(GENERIC_MODEL_NOT_FOUND_RE.test("The model service is unavailable.")).toBe(false);
   });
 });
 
@@ -75,10 +78,15 @@ describe("classify.ts full pipeline: A-F required cases (#130389 ClawSweeper re-
   });
 
   it("F: unrelated service/provider-unavailable wording is not model_not_found", () => {
+    // "The model service is unavailable." previously matched: the old
+    // "model" ... ".{0,60}?" ... "is unavailable" alternative tolerated
+    // arbitrary intervening text, so "service" between "model" and "is
+    // unavailable" still satisfied it (#130389 ClawSweeper re-review).
     expect(classifyFailoverReason("503 service unavailable")).not.toBe("model_not_found");
     expect(classifyFailoverReason("The model service is temporarily unavailable")).not.toBe(
       "model_not_found",
     );
+    expect(classifyFailoverReason("The model service is unavailable.")).not.toBe("model_not_found");
   });
 });
 

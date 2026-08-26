@@ -72,13 +72,17 @@ const RATE_LIMIT_429_RE =
   /^\s*429\b|\b(?:https?|status(?:[ _-]?code)?|response(?:[ _-]?code)?|http(?:[ _-]?status)?)\b[\s:=#"'(]{0,6}429\b|["'](?:status|code)["']\s*:\s*429\b|\b429\b[\s:)\].,-]*(?:rate[_ -]?limit(?:ed|ing)?|too many requests|resource has been exhausted|quota(?:\s+(?:exceeded|exhausted|depleted|reached))?)\b/i;
 // Catches provider "model X not found" wording; the legacy provider table
 // only covers Groq's deactivated-model forms.
-// Runs after billing/plan classification in classify.ts, so bare "is
-// unavailable" wording (e.g. OpenCode Zen's "Model is unavailable.") is safe
-// to catch here without shadowing billing/plan-entitlement text — unlike the
-// earlier-run isModelNotFoundErrorMessage(), which billing has not yet had a
-// chance to classify.
+// Runs after billing/plan classification in classify.ts, so the direct
+// "model is unavailable" phrase (e.g. OpenCode Zen's "Model is unavailable.")
+// is safe to catch here without shadowing billing/plan-entitlement text —
+// unlike the earlier-run isModelNotFoundErrorMessage(), which billing has
+// not yet had a chance to classify. The bare-unavailable alternative is
+// anchored to the direct adjacent phrase (only whitespace between "model"
+// and "is unavailable") rather than a wildcard gap, so text like "The model
+// service is unavailable." — a different subject ("service"), not the model
+// itself — does not match (#130389 ClawSweeper re-review).
 export const GENERIC_MODEL_NOT_FOUND_RE =
-  /\bmodel\b.{0,60}?\b(?:not (?:found|available)|is unavailable)\b/i;
+  /\bmodel\b.{0,60}?\bnot (?:found|available)\b|\bmodel\s+is\s+unavailable\b/i;
 const ZAI_AUTH_ERROR_PATTERNS = [
   // Z.ai: error 1113 = wrong endpoint or invalid credentials (#48988)
   ZAI_AUTH_CODE_1113_RE,
