@@ -259,7 +259,12 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
   const compactionStatus = renderCompactionIndicator(props.compactionStatus);
   const progressCard = props.progressCard
     ? html`<div class="agent-chat__progress-float">
-        ${renderSessionProgressCard(props.progressCard, "composer", props.onDismissProgressCard)}
+        ${renderSessionProgressCard(
+          props.progressCard,
+          "composer",
+          props.onDismissProgressCard,
+          props.progressCardHasActiveRun,
+        )}
       </div>`
     : nothing;
   const queue = renderChatQueue({

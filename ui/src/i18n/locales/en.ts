@@ -247,6 +247,7 @@ export const en: TranslationMap = {
     status: {
       completed: "completed",
       inProgress: "in progress",
+      paused: "paused",
       pending: "pending",
     },
     receipt: {

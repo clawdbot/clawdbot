@@ -113,6 +113,19 @@ describe("renderSessionProgressCard", () => {
     ).not.toBeNull();
   });
 
+  it("presents durable in-progress work as paused without an active run", () => {
+    const container = document.createElement("div");
+    render(renderSessionProgressCard(progressCard, "composer", undefined, false), container);
+
+    expect(container.querySelector(".session-run-spinner")).toBeNull();
+    expect(
+      container.querySelector('.session-progress-card__current-marker[data-status="paused"]'),
+    ).not.toBeNull();
+    const pausedStep = container.querySelector(".session-progress-card__step--paused");
+    expect(pausedStep?.getAttribute("aria-label")).toBe("Wire the checklist, paused");
+    expect(pausedStep?.querySelector("polyline")).not.toBeNull();
+  });
+
   it("keeps a disclosure affordance beside a completed dismissible composer card", () => {
     const container = document.createElement("div");
     const completed = {
