@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { chromium, type BrowserContext } from "playwright-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   chromeProductRoots,
   generateChromeExtensionIdForPath,
@@ -14,6 +14,7 @@ import {
 } from "../src/browser/extension-install-layout.js";
 import { installChromeExtensionBootstrap } from "../src/browser/extension-install.js";
 import { handleGatewayExtensionUpgrade } from "../src/browser/extension-relay/gateway-relay-route.js";
+import { getPageForTargetId } from "../src/browser/pw-session.js";
 import { createBrowserRouteDispatcher } from "../src/browser/routes/dispatcher.js";
 import { createBrowserRouteContext } from "../src/browser/server-context.js";
 import { getFreePort } from "../src/browser/test-port.js";
@@ -494,6 +495,15 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
         expect(selectedTab.targetId).not.toBe(unrelatedTab.targetId);
         const previousSsrfPolicy = browserState.resolved.ssrfPolicy;
         browserState.resolved.ssrfPolicy = { allowPrivateNetwork: true };
+        const extensionCdpUrl = routeContext.forProfile("e2e").profile.cdpUrl;
+        const actedPage = await getPageForTargetId({
+          cdpUrl: extensionCdpUrl,
+          targetId: selectedTab.targetId,
+          ssrfPolicy: browserState.resolved.ssrfPolicy,
+        });
+        const detachedNavigation = vi
+          .spyOn(actedPage, "goto")
+          .mockRejectedValueOnce(new Error("page.goto: Frame has been detached"));
         try {
           const navigationResponse = await dispatcher.dispatch({
             method: "POST",
@@ -510,11 +520,19 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
             targetId: selectedTab.targetId,
             url: `http://127.0.0.1:${gatewayPort}/browser-owner-proof`,
           });
+          expect(detachedNavigation).toHaveBeenCalledTimes(1);
+          const recoveredPage = await getPageForTargetId({
+            cdpUrl: extensionCdpUrl,
+            targetId: selectedTab.targetId,
+            ssrfPolicy: browserState.resolved.ssrfPolicy,
+          });
+          expect(recoveredPage).not.toBe(actedPage);
           expect(distractingPage.url()).toBe(distractingUrl);
           process.stderr.write(
-            "[browser-extension-e2e] owner-bound navigation ignored unrelated tab\n",
+            "[browser-extension-e2e] injected-detach=1 production-reconnect=1 owner-target-preserved=1 unrelated-tab-unchanged=1 status=200\n",
           );
         } finally {
+          detachedNavigation.mockRestore();
           browserState.resolved.ssrfPolicy = previousSsrfPolicy;
         }
 
