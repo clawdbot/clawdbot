@@ -2279,7 +2279,15 @@ describe("handleDiscordMessagingAction", () => {
       expect(post).toBeDefined();
       const body = JSON.parse(post?.body ?? "{}") as Record<string, unknown>;
       expect(body.flags).toBe(MessageFlags.IsComponentsV2);
-      expect(body.components).toEqual([{ type: 10, content: "Gateway proof" }]);
+      expect(body.components).toEqual([
+        {
+          type: 17,
+          components: [
+            { type: 10, content: "fallback text" },
+            { type: 10, content: "Gateway proof" },
+          ],
+        },
+      ]);
     } finally {
       await loopback.close();
     }
