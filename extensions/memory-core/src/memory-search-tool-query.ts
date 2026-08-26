@@ -2,6 +2,7 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   MemorySearchManager,
+  MemorySearchResult,
   MemorySearchRuntimeDebug,
   MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -131,7 +132,7 @@ export async function executeMemorySearchToolQuery(params: {
   if (pausedIndexIdentityReason) {
     return {
       status,
-      rawResults: [],
+      rawResults: [] as MemorySearchResult[],
       pausedIndexIdentityReason,
       searchMode: undefined,
       debug: undefined,
