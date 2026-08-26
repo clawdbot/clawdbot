@@ -11,6 +11,7 @@ function getNativeHookRelaySharedState(): NativeHookRelaySharedState {
     relays: new Map(),
     relayBridges: new Map(),
     invocations: [],
+    approvalOwners: new WeakMap(),
     pendingPermissionApprovals: new Map(),
     pendingPreToolUseApprovals: new Map(),
     permissionApprovalWindows: new Map(),

@@ -19,6 +19,7 @@ export async function prepareCodexAttemptRoute(
     trajectoryRecorder,
     releaseCurrentRoute,
     registerNativeSubagentMonitor,
+    bindNativeTurn,
     activateNativePreToolUseFailureFallback,
     releaseSandboxExecEnvironment,
     releaseSharedClientLeaseOnce,
@@ -85,6 +86,7 @@ export async function prepareCodexAttemptRoute(
       }
       resourceState.detachRouteAbort = attachRouteAbort(resourceState.turnRoute);
       await resourceState.turnRoute.activate({
+        onTurnStarted: bindNativeTurn,
         onNotificationReceived: noteNotificationReceived,
         onNotification: enqueueNotification,
         onRequest: handleServerRequest,

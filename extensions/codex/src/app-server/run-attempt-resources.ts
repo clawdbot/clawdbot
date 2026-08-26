@@ -194,6 +194,10 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
   };
   const registerNativeSubagentMonitor = (parentThreadId: string) => {
     unregisterNativeSubagentMonitor();
+    // Child recovery outlives this attempt's mutable state. Capture the relay
+    // that admitted the child so a successor foreground turn cannot renew or
+    // release the child under the successor's policy.
+    const nativeHookRelay = state.nativeHookRelay;
     state.nativeSubagentMonitor = codexNativeSubagentMonitorRuntime.register({
       client: state.client,
       parentThreadId,
@@ -203,9 +207,16 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       retainClient: () => retainSharedCodexAppServerClientIfCurrent(state.client),
       retainParentThread: (protectedThreadId) =>
         protectCodexAppServerLiveThread(state.client, protectedThreadId),
-      claimDirectChild: (childThreadId) => state.nativeHookRelay?.claimDirectChild(childThreadId),
-      rejectPendingDirectChild: (childThreadId, reason) =>
-        state.nativeHookRelay?.rejectPendingDirectChild(childThreadId, reason),
+      ...(nativeHookRelay
+        ? {
+            claimDirectChild: (childThreadId: string) =>
+              nativeHookRelay.claimDirectChild(childThreadId),
+            renewDirectChild: (childThreadId: string) =>
+              nativeHookRelay.renewDirectChild(childThreadId),
+            rejectPendingDirectChild: (childThreadId: string, reason: string) =>
+              nativeHookRelay.rejectPendingDirectChild(childThreadId, reason),
+          }
+        : {}),
       ...(params.sessionKey && params.agentHarnessTaskRuntimeScope
         ? {
             onDirectChildAccepted: () => {
@@ -214,6 +225,10 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
           }
         : {}),
     });
+  };
+  const bindNativeTurn = (turnId: string) => {
+    state.nativeHookRelay?.bindForegroundTurn(turnId);
+    state.nativeSubagentMonitor?.bindTurn(turnId);
   };
   const releaseCurrentRoute = () => {
     state.detachRouteAbort();
@@ -230,8 +245,12 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
   const requesterChannel = params.messageChannel ?? params.messageProvider;
   const requester = buildCodexHookRequester(params);
   const buildNativeHookRelayFinalConfigPatch = (
-    decision: { action: "resume"; binding: CodexAppServerThreadBinding } | { action: "start" },
+    decision:
+      | { action: "resume"; binding: CodexAppServerThreadBinding }
+      | { action: "start"; preserveExistingBinding: boolean },
   ) => {
+    const composeWithExistingRoute =
+      decision.action === "resume" || decision.preserveExistingBinding;
     state.nativeHookRelay?.unregister();
     if (params.pluginHarnessToolPolicyRestricted === true) {
       state.nativeHookRelay = undefined;
@@ -242,6 +261,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     }
     state.nativeHookRelay = createCodexNativeHookRelay({
       options: options.nativeHookRelay,
+      composeWithExistingRoute,
       generation:
         decision.action === "resume" ? decision.binding.nativeHookRelayGeneration : undefined,
       generationMismatchGraceMs:
@@ -282,6 +302,9 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       },
     });
     return {
+      ...(composeWithExistingRoute && state.nativeHookRelay
+        ? { activateThreadBinding: state.nativeHookRelay.activateForegroundBinding }
+        : {}),
       configPatch: state.nativeHookRelay
         ? buildCodexNativeHookRelayConfig({
             relay: state.nativeHookRelay,
@@ -309,6 +332,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     releaseSandboxExecEnvironment,
     runCleanupStep,
     registerNativeSubagentMonitor,
+    bindNativeTurn,
     releaseCurrentRoute,
     startupTimeoutMs,
     buildNativeHookRelayFinalConfigPatch,

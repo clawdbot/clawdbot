@@ -8,17 +8,16 @@ import {
   resolveModelAuthMode,
   resolveSandboxContext,
   resolveSessionAgentIds,
-  registerNativeHookRelay,
   supportsModelTools,
   type AnyAgentTool,
   type AgentHarnessSideQuestionParamsV2,
   type AgentHarnessSideQuestionResult,
   type EmbeddedRunAttemptParamsV2,
   type NativeHookRelayEvent,
-  type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
+import { registerNativeHookRelayForBundledRuntime } from "openclaw/plugin-sdk/native-hook-relay-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
@@ -469,7 +468,7 @@ export async function runCodexAppServerSideQuestion(
   let sandboxEnvironment: CodexSandboxExecEnvironment | undefined;
   let sandboxEnvironmentClient: CodexAppServerClient | undefined;
   let removeRequestHandler: (() => void) | undefined;
-  let nativeHookRelay: NativeHookRelayRegistrationHandle | undefined;
+  let nativeHookRelay: ReturnType<typeof registerNativeHookRelayForBundledRuntime> | undefined;
   const activeDynamicToolCalls = new Set<Promise<unknown>>();
   const releaseSandboxEnvironment = async () => {
     if (!sandboxEnvironment) {
@@ -951,11 +950,11 @@ function registerCodexSideNativeHookRelay(params: {
   signal: AbortSignal;
   hostCapabilities: EmbeddedRunAttemptParamsV2["hostCapabilities"];
   onPreToolUseFailure: (failure: CodexNativePreToolUseFailure) => void;
-}): NativeHookRelayRegistrationHandle | undefined {
+}): ReturnType<typeof registerNativeHookRelayForBundledRuntime> | undefined {
   if (params.options.enabled === false) {
     return undefined;
   }
-  return registerNativeHookRelay({
+  return registerNativeHookRelayForBundledRuntime({
     provider: "codex",
     ...(params.agentId ? { agentId: params.agentId } : {}),
     sessionId: params.sessionId,

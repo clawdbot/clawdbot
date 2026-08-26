@@ -7,7 +7,6 @@ import {
   buildAgentHookContextChannelFields,
   hasNativeHookRelayInvocation,
   invokeNativeHookRelay,
-  resolveNativeHookRelayDeferredToolApproval,
   runBeforeToolCallHook,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -28,7 +27,6 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => (
   callGatewayTool: vi.fn(),
   hasNativeHookRelayInvocation: vi.fn(() => false),
   invokeNativeHookRelay: vi.fn(),
-  resolveNativeHookRelayDeferredToolApproval: vi.fn(),
   runBeforeToolCallHook: vi.fn(async ({ params }: { params: unknown }) => ({
     blocked: false,
     params,
@@ -45,14 +43,27 @@ vi.mock("openclaw/plugin-sdk/agent-harness-exec-review-runtime", async (importOr
 const mockCallGatewayTool = vi.mocked(callGatewayTool);
 const mockHasNativeHookRelayInvocation = vi.mocked(hasNativeHookRelayInvocation);
 const mockInvokeNativeHookRelay = vi.mocked(invokeNativeHookRelay);
-const mockResolveNativeHookRelayDeferredToolApproval = vi.mocked(
-  resolveNativeHookRelayDeferredToolApproval,
-);
+const mockResolveNativeHookRelayDeferredToolApproval = vi.fn();
 const mockReviewExecRequestWithConfiguredModel = vi.mocked(reviewExecRequestWithConfiguredModel);
 const mockRunBeforeToolCallHook = vi.mocked(runBeforeToolCallHook);
 
 const requireRecord = createRequireRecord("record", "expected-label-capitalized");
 type AgentHarnessHostCapabilities = EmbeddedRunAttemptParams["hostCapabilities"];
+type NativeApprovalRelay = NonNullable<
+  Parameters<typeof handleCodexAppServerApprovalRequest>[0]["nativeHookRelay"]
+>;
+
+function createNativeApprovalRelay(
+  overrides: Partial<NativeApprovalRelay> = {},
+): NativeApprovalRelay {
+  return {
+    relayId: "relay-1",
+    generation: "generation-1",
+    allowedEvents: ["pre_tool_use"],
+    resolveDeferredToolApproval: mockResolveNativeHookRelayDeferredToolApproval,
+    ...overrides,
+  };
+}
 
 const prepareApprovalWithoutMutableFile: AgentHarnessHostCapabilities["prepareMutableFileApproval"] =
   async () => ({
@@ -1591,11 +1602,7 @@ describe("Codex app-server approval bridge", () => {
       paramsForRun: params,
       ...codexTestTurnIds(),
       autoApprove: true,
-      nativeHookRelay: {
-        relayId: "relay-1",
-        generation: "generation-1",
-        allowedEvents: ["pre_tool_use"],
-      },
+      nativeHookRelay: createNativeApprovalRelay(),
     });
 
     expect(result).toEqual({ decision: "decline" });
@@ -1660,11 +1667,10 @@ describe("Codex app-server approval bridge", () => {
       paramsForRun: params,
       ...codexTestTurnIds(),
       autoApprove: true,
-      nativeHookRelay: {
+      nativeHookRelay: createNativeApprovalRelay({
         relayId: "relay-late",
         generation: "generation-late",
-        allowedEvents: ["pre_tool_use"],
-      },
+      }),
     });
 
     expect(result).toEqual({ decision: "decline" });
@@ -1698,10 +1704,7 @@ describe("Codex app-server approval bridge", () => {
       },
       paramsForRun: params,
       ...codexTestTurnIds(),
-      nativeHookRelay: {
-        relayId: "relay-deferred-late",
-        allowedEvents: ["pre_tool_use"],
-      },
+      nativeHookRelay: createNativeApprovalRelay({ relayId: "relay-deferred-late" }),
     });
 
     expect(result).toEqual({ decision: "decline" });
@@ -1727,11 +1730,7 @@ describe("Codex app-server approval bridge", () => {
       .mockResolvedValueOnce({ id: "plugin:approval-execve-1", decision: "allow-once" })
       .mockResolvedValueOnce({ id: "plugin:approval-execve-2", status: "accepted" })
       .mockResolvedValueOnce({ id: "plugin:approval-execve-2", decision: "allow-once" });
-    const nativeHookRelay = {
-      relayId: "relay-1",
-      generation: "generation-1",
-      allowedEvents: ["pre_tool_use" as const],
-    };
+    const nativeHookRelay = createNativeApprovalRelay();
 
     for (const [approvalId, command] of [
       ["execve-approval-1", "git status"],
@@ -1761,11 +1760,13 @@ describe("Codex app-server approval bridge", () => {
     expect(mockHasNativeHookRelayInvocation).toHaveBeenNthCalledWith(1, {
       relayId: "relay-1",
       event: "pre_tool_use",
+      turnId: "turn-1",
       toolUseId: "execve-approval-1",
     });
     expect(mockHasNativeHookRelayInvocation).toHaveBeenNthCalledWith(2, {
       relayId: "relay-1",
       event: "pre_tool_use",
+      turnId: "turn-1",
       toolUseId: "execve-approval-2",
     });
   });
@@ -1791,18 +1792,14 @@ describe("Codex app-server approval bridge", () => {
       },
       paramsForRun: params,
       ...codexTestTurnIds(),
-      nativeHookRelay: {
-        relayId: "relay-1",
-        generation: "generation-1",
-        allowedEvents: ["pre_tool_use"],
-      },
+      nativeHookRelay: createNativeApprovalRelay(),
     });
 
     expect(result).toEqual({ decision: "accept" });
     expect(mockRunBeforeToolCallHook).not.toHaveBeenCalled();
     expect(mockInvokeNativeHookRelay).toHaveBeenCalledTimes(1);
     expect(mockResolveNativeHookRelayDeferredToolApproval).toHaveBeenCalledWith({
-      relayId: "relay-1",
+      turnId: "turn-1",
       toolUseId: "cmd-native-relay-noop",
       signal: undefined,
     });
@@ -1837,11 +1834,7 @@ describe("Codex app-server approval bridge", () => {
       },
       paramsForRun: params,
       ...codexTestTurnIds(),
-      nativeHookRelay: {
-        relayId: "relay-1",
-        generation: "generation-1",
-        allowedEvents: ["pre_tool_use"],
-      },
+      nativeHookRelay: createNativeApprovalRelay(),
     });
 
     expect(result).toEqual({ decision: "accept" });
@@ -1849,10 +1842,11 @@ describe("Codex app-server approval bridge", () => {
     expect(mockHasNativeHookRelayInvocation).toHaveBeenCalledWith({
       relayId: "relay-1",
       event: "pre_tool_use",
+      turnId: "turn-1",
       toolUseId: "cmd-native-relay-observed",
     });
     expect(mockResolveNativeHookRelayDeferredToolApproval).toHaveBeenCalledWith({
-      relayId: "relay-1",
+      turnId: "turn-1",
       toolUseId: "cmd-native-relay-observed",
       signal: undefined,
     });
@@ -1880,10 +1874,7 @@ describe("Codex app-server approval bridge", () => {
       },
       paramsForRun: params,
       ...codexTestTurnIds(),
-      nativeHookRelay: {
-        relayId: "relay-1",
-        allowedEvents: ["pre_tool_use"],
-      },
+      nativeHookRelay: createNativeApprovalRelay(),
     });
 
     expect(result).toEqual({ decision: "accept" });
@@ -1917,10 +1908,7 @@ describe("Codex app-server approval bridge", () => {
       },
       paramsForRun: params,
       ...codexTestTurnIds(),
-      nativeHookRelay: {
-        relayId: "relay-1",
-        allowedEvents: ["pre_tool_use"],
-      },
+      nativeHookRelay: createNativeApprovalRelay(),
       onNativeToolFailureDisposition,
     });
 
@@ -1950,11 +1938,7 @@ describe("Codex app-server approval bridge", () => {
       paramsForRun: params,
       ...codexTestTurnIds(),
       autoApprove: true,
-      nativeHookRelay: {
-        relayId: "relay-1",
-        generation: "generation-1",
-        allowedEvents: ["pre_tool_use"],
-      },
+      nativeHookRelay: createNativeApprovalRelay(),
     });
 
     expect(result).toEqual({ decision: "decline" });
@@ -1992,11 +1976,7 @@ describe("Codex app-server approval bridge", () => {
       },
       paramsForRun: params,
       ...codexTestTurnIds(),
-      nativeHookRelay: {
-        relayId: "relay-1",
-        generation: "generation-1",
-        allowedEvents: ["pre_tool_use"],
-      },
+      nativeHookRelay: createNativeApprovalRelay(),
     });
 
     expect(result).toEqual({ decision: "decline" });
@@ -2027,11 +2007,7 @@ describe("Codex app-server approval bridge", () => {
       },
       paramsForRun: params,
       ...codexTestTurnIds(),
-      nativeHookRelay: {
-        relayId: "relay-1",
-        generation: "generation-1",
-        allowedEvents: ["pre_tool_use"],
-      },
+      nativeHookRelay: createNativeApprovalRelay(),
     });
 
     expect(result).toEqual({ decision: "decline" });
@@ -2057,11 +2033,7 @@ describe("Codex app-server approval bridge", () => {
       },
       paramsForRun: params,
       ...codexTestTurnIds(),
-      nativeHookRelay: {
-        relayId: "relay-missing",
-        generation: "generation-1",
-        allowedEvents: ["pre_tool_use"],
-      },
+      nativeHookRelay: createNativeApprovalRelay({ relayId: "relay-missing" }),
     });
 
     expect(result).toEqual({ decision: "decline" });
@@ -2089,11 +2061,7 @@ describe("Codex app-server approval bridge", () => {
       paramsForRun: params,
       ...codexTestTurnIds(),
       autoApprove: true,
-      nativeHookRelay: {
-        relayId: "relay-missing",
-        generation: "generation-1",
-        allowedEvents: ["pre_tool_use"],
-      },
+      nativeHookRelay: createNativeApprovalRelay({ relayId: "relay-missing" }),
     });
 
     expect(result).toEqual({ decision: "acceptForSession" });
@@ -2121,11 +2089,7 @@ describe("Codex app-server approval bridge", () => {
       paramsForRun: params,
       ...codexTestTurnIds(),
       autoApprove: true,
-      nativeHookRelay: {
-        relayId: "relay-1",
-        generation: "generation-1",
-        allowedEvents: ["pre_tool_use"],
-      },
+      nativeHookRelay: createNativeApprovalRelay(),
     });
 
     expect(result).toEqual({ decision: "decline" });
@@ -2145,11 +2109,7 @@ describe("Codex app-server approval bridge", () => {
       .mockResolvedValueOnce({ id: "plugin:file-approval", decision: "allow-once" })
       .mockResolvedValueOnce({ id: "plugin:permission-approval", status: "accepted" })
       .mockResolvedValueOnce({ id: "plugin:permission-approval", decision: "deny" });
-    const nativeHookRelay = {
-      relayId: "relay-1",
-      generation: "generation-1",
-      allowedEvents: ["pre_tool_use" as const],
-    };
+    const nativeHookRelay = createNativeApprovalRelay();
 
     await handleCodexAppServerApprovalRequest({
       method: "item/fileChange/requestApproval",

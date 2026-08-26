@@ -1,11 +1,15 @@
 import type { RegisterNativeHookRelayParams } from "../agents/harness/native-hook-relay-types.js";
-// Private retained native-hook relay capability for bundled runtime owners.
+// Private native-hook relay capabilities for bundled runtime owners.
 import {
+  registerNativeHookRelayForBundledRuntime,
   registerRetainedNativeHookRelay,
   type NativeHookRelayRetention,
 } from "../agents/harness/native-hook-relay.js";
 
+export { registerNativeHookRelayForBundledRuntime };
+
 export type RetainedNativeHookRelayParams = RegisterNativeHookRelayParams & {
+  composeWithExistingRoute?: boolean;
   retention: NativeHookRelayRetention;
 };
 

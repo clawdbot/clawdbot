@@ -573,7 +573,8 @@ describe("CodexNativeSubagentMonitor", () => {
     const client = createClient();
     const runtime = createRuntime();
     const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
-    const claimDirectChild = vi.fn(() => () => undefined);
+    const releaseDirectChild = vi.fn();
+    const claimDirectChild = vi.fn(() => releaseDirectChild);
     const owner = monitor.registerParent({
       parentThreadId: "parent-thread",
       requesterSessionKey: "agent:main:main",
@@ -613,6 +614,21 @@ describe("CodexNativeSubagentMonitor", () => {
       },
     });
     expect(claimDirectChild).toHaveBeenCalledOnce();
+    await client.notify({
+      method: "item/completed",
+      params: {
+        threadId: "parent-thread",
+        turnId: "turn-1",
+        item: {
+          type: "subAgentActivity",
+          id: "activity-interrupted",
+          kind: "interrupted",
+          agentThreadId: "child-v2",
+          agentPath: "/root/researcher",
+        },
+      },
+    });
+    expect(releaseDirectChild).toHaveBeenCalledOnce();
     await client.notify(
       nativeCompletionNotification({
         agentPath: "/root/researcher",
@@ -1642,6 +1658,68 @@ describe("CodexNativeSubagentMonitor", () => {
     await expect(monitor.reconcileChildThread("child-thread")).resolves.toBe(false);
 
     expect(runtime.deliverAgentHarnessTaskCompletion).not.toHaveBeenCalled();
+    client.close();
+  });
+
+  it.each([
+    {
+      name: "the child remains actively claimed",
+      claim: true,
+      threadStatus: "active",
+      status: "inProgress",
+      expectedRenewals: 1,
+      expectedReleases: 0,
+    },
+    {
+      name: "the active child was never claimed",
+      claim: false,
+      threadStatus: "active",
+      status: "inProgress",
+      expectedRenewals: 0,
+      expectedReleases: 0,
+    },
+    {
+      name: "the claimed child is resumable",
+      claim: true,
+      threadStatus: "idle",
+      status: "interrupted",
+      expectedRenewals: 0,
+      expectedReleases: 1,
+    },
+  ] as const)("renews only when $name after an authoritative read", async (testCase) => {
+    const client = createClient();
+    client.setThreadRead(
+      "child-thread",
+      threadRead({ threadStatus: testCase.threadStatus, status: testCase.status }),
+    );
+    const releaseDirectChild = vi.fn();
+    const renewDirectChild = vi.fn();
+    const monitor = new CodexNativeSubagentMonitor(client as never, createRuntime());
+    const owner = monitor.registerParent({
+      parentThreadId: "parent-thread",
+      claimDirectChild: () => releaseDirectChild,
+      renewDirectChild,
+    });
+    owner.bindTurn("turn-1");
+    await notifyChildStarted(client);
+    if (testCase.claim) {
+      await client.notify({
+        method: "item/completed",
+        params: {
+          threadId: "parent-thread",
+          turnId: "turn-1",
+          item: directSpawnItem("v1", "parent-thread", "child-thread"),
+        },
+      });
+    }
+
+    await expect(monitor.reconcileChildThread("child-thread")).resolves.toBe(false);
+
+    expect(renewDirectChild).toHaveBeenCalledTimes(testCase.expectedRenewals);
+    expect(releaseDirectChild).toHaveBeenCalledTimes(testCase.expectedReleases);
+    if (testCase.expectedRenewals === 1) {
+      expect(renewDirectChild).toHaveBeenCalledWith("child-thread");
+    }
     client.close();
   });
 

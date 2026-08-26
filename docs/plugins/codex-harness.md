@@ -1594,12 +1594,13 @@ and unsupported; prefer managed stdio or the local Unix control socket.
 unavailable`:** the Codex thread is still trying to use a native hook relay
 id that OpenClaw no longer has registered. This is a native Codex hook
 transport problem, not an ACP backend, provider, GitHub, or shell-command
-failure. Start a fresh session in the affected chat with `/new` or `/reset`,
-then retry a harmless command. If that works once but the next native tool
-call fails again, treat `/new` as a temporary workaround only: copy the
-prompt into a fresh session after restarting the Codex app-server or
-OpenClaw Gateway so old threads are dropped and native hook registrations
-are recreated.
+failure. Same-process child agents stay bound to the policy of the turn that
+spawned them, including after that parent turn yields. Restarting the Codex
+app-server or OpenClaw Gateway intentionally drops this process-local authority;
+those child tasks must be dispatched again. For an unavailable relay, start a
+fresh session in the affected chat with `/new` or `/reset`, then retry a harmless
+command. If it fails again without a restart, inspect the gateway logs for the
+specific relay transport error rather than assuming the process restarted.
 
 **Codex tool calls create too many short-lived hook processes:** set
 `plugins.entries.codex.config.appServer.loopDetectionPreToolUseRelay: false`

@@ -121,6 +121,20 @@ describe("Codex native hook relay config", () => {
           ],
         },
       ],
+      "hooks.SubagentStop": [
+        {
+          hooks: [
+            {
+              type: "command",
+              command:
+                "openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event before_agent_finalize --timeout 6000",
+              timeout: 7,
+              async: false,
+              statusMessage: "OpenClaw native hook relay",
+            },
+          ],
+        },
+      ],
       "hooks.state": {
         "/<session-flags>/config.toml:pre_tool_use:0:0": {
           enabled: true,
@@ -154,10 +168,26 @@ describe("Codex native hook relay config", () => {
           enabled: true,
           trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
         },
+        "/<session-flags>/config.toml:subagent_stop:0:0": {
+          enabled: true,
+          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        },
+        "<session-flags>/config.toml:subagent_stop:0:0": {
+          enabled: true,
+          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        },
       },
     });
     expect(JSON.stringify(config)).not.toContain("timeoutSec");
     expect(JSON.stringify(config)).not.toContain('"matcher":null');
+    expect(config["hooks.SubagentStop"]).toEqual(config["hooks.Stop"]);
+    const hookState = config["hooks.state"] as Record<string, { trusted_hash?: string }>;
+    const stopTrustedHash = hookState["/<session-flags>/config.toml:stop:0:0"]?.trusted_hash;
+    const subagentStopTrustedHash =
+      hookState["/<session-flags>/config.toml:subagent_stop:0:0"]?.trusted_hash;
+    expect(stopTrustedHash).toMatch(/^sha256:[a-f0-9]{64}$/);
+    expect(subagentStopTrustedHash).toMatch(/^sha256:[a-f0-9]{64}$/);
+    expect(subagentStopTrustedHash).not.toBe(stopTrustedHash);
     expect(config).not.toHaveProperty("hooks.SessionStart");
     expect(config).not.toHaveProperty("hooks.UserPromptSubmit");
   });
@@ -221,6 +251,7 @@ describe("Codex native hook relay config", () => {
       ],
       "hooks.PostToolUse": [],
       "hooks.Stop": [],
+      "hooks.SubagentStop": [],
       "hooks.state": {
         "/<session-flags>/config.toml:pre_tool_use:0:0": {
           enabled: true,
@@ -273,6 +304,7 @@ describe("Codex native hook relay config", () => {
         },
       ],
       "hooks.Stop": [],
+      "hooks.SubagentStop": [],
       "hooks.state": {
         "/<session-flags>/config.toml:pre_tool_use:0:0": { enabled: false },
         "<session-flags>/config.toml:pre_tool_use:0:0": { enabled: false },
@@ -288,6 +320,8 @@ describe("Codex native hook relay config", () => {
         },
         "/<session-flags>/config.toml:stop:0:0": { enabled: false },
         "<session-flags>/config.toml:stop:0:0": { enabled: false },
+        "/<session-flags>/config.toml:subagent_stop:0:0": { enabled: false },
+        "<session-flags>/config.toml:subagent_stop:0:0": { enabled: false },
       },
     });
   });
@@ -363,6 +397,7 @@ describe("Codex native hook relay config", () => {
       "hooks.PostToolUse": [],
       "hooks.PermissionRequest": [],
       "hooks.Stop": [],
+      "hooks.SubagentStop": [],
     });
   });
 

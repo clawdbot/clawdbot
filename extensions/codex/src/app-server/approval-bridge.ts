@@ -8,10 +8,8 @@ import {
   formatApprovalDisplayPath,
   hasNativeHookRelayInvocation,
   invokeNativeHookRelay,
-  resolveNativeHookRelayDeferredToolApproval,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   type NativeHookRelayProcessResponse,
-  type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -21,6 +19,7 @@ import {
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { formatCodexDisplayText } from "../command-formatters.js";
 import { resolveCodexToolAbortTerminalReason } from "./dynamic-tool-execution.js";
+import type { CodexNativeHookRelay } from "./native-hook-relay.js";
 import {
   approvalRequestExplicitlyUnavailable,
   codexApprovalTimeoutText,
@@ -39,6 +38,10 @@ import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
 const PERMISSION_DESCRIPTION_MAX_LENGTH = 700;
 const PERMISSION_SAMPLE_LIMIT = 2;
 const PERMISSION_VALUE_MAX_LENGTH = 48;
+type NativeApprovalRelay = Pick<
+  CodexNativeHookRelay,
+  "allowedEvents" | "generation" | "relayId" | "resolveDeferredToolApproval"
+>;
 const COMMAND_PREVIEW_WITH_DETAILS_MAX_LENGTH = 80;
 const APPROVAL_PREVIEW_SCAN_MAX_LENGTH = 4096;
 const APPROVAL_PREVIEW_OMITTED = "[preview truncated or unsafe content omitted]";
@@ -69,10 +72,7 @@ export async function handleCodexAppServerApprovalRequest(params: {
   paramsForRun: EmbeddedRunAttemptParams;
   threadId: string;
   turnId: string;
-  nativeHookRelay?: Pick<
-    NativeHookRelayRegistrationHandle,
-    "allowedEvents" | "generation" | "relayId"
-  >;
+  nativeHookRelay?: NativeApprovalRelay;
   autoApprove?: boolean;
   signal?: AbortSignal;
   onNativeToolFailureDisposition?: (
@@ -482,10 +482,7 @@ async function runOpenClawToolPolicyForApprovalRequest(params: {
   requestParams: JsonObject | undefined;
   paramsForRun: EmbeddedRunAttemptParams;
   context: ApprovalContext;
-  nativeHookRelay?: Pick<
-    NativeHookRelayRegistrationHandle,
-    "allowedEvents" | "generation" | "relayId"
-  >;
+  nativeHookRelay?: NativeApprovalRelay;
   autoApprove?: boolean;
   signal?: AbortSignal;
 }): Promise<ApprovalPolicyOutcome | undefined> {
@@ -561,10 +558,7 @@ async function runNativeRelayToolPolicyForApprovalRequest(params: {
   requestParams: JsonObject | undefined;
   context: ApprovalContext;
   policyRequest: { toolName: string; params: JsonObject };
-  nativeHookRelay?: Pick<
-    NativeHookRelayRegistrationHandle,
-    "allowedEvents" | "generation" | "relayId"
-  >;
+  nativeHookRelay?: NativeApprovalRelay;
   autoApprove?: boolean;
   assertActive: () => void;
   cwd?: string;
@@ -601,9 +595,11 @@ async function runNativeRelayToolPolicyForApprovalRequest(params: {
   if (!payload) {
     return undefined;
   }
+  const turnId = readString(params.requestParams, "turnId");
   const resolveDeferredApproval = async () => {
-    const approvalOutcome = await resolveNativeHookRelayDeferredToolApproval({
-      relayId: nativeHookRelay.relayId,
+    params.assertActive();
+    const approvalOutcome = await nativeHookRelay.resolveDeferredToolApproval({
+      turnId,
       toolUseId: params.context.approvalId,
       signal: params.signal,
     });
@@ -626,6 +622,7 @@ async function runNativeRelayToolPolicyForApprovalRequest(params: {
     hasNativeHookRelayInvocation({
       relayId: nativeHookRelay.relayId,
       event: "pre_tool_use",
+      turnId,
       toolUseId: params.context.approvalId,
     })
   ) {
@@ -658,6 +655,7 @@ async function runNativeRelayToolPolicyForApprovalRequest(params: {
       !hasNativeHookRelayInvocation({
         relayId: nativeHookRelay.relayId,
         event: "pre_tool_use",
+        turnId,
         toolUseId: params.context.approvalId,
       })
     ) {
