@@ -476,18 +476,21 @@ export function createCrabboxWorkerProvider(
   });
   const resolveLeaseContext = (
     lease: Parameters<WorkerProvider["inspect"]>[0],
-  ): LeaseHeartbeatContext => {
-    const parsed = parseCrabboxProfile(lease.profile);
+  ): { context: LeaseHeartbeatContext; profile: CrabboxProfile } => {
+    const profile = parseCrabboxProfile(lease.profile);
     if (!LEASE_ID_PATTERN.test(lease.leaseId)) {
       throw new Error("Crabbox lease id is invalid");
     }
     return {
-      binary: resolveBinary(parsed.binary),
-      heartbeatIntervalMs: parsed.heartbeatIntervalMs,
-      heartbeatTimeoutMs: parsed.heartbeatTimeoutMs,
-      id: lease.leaseId,
-      idleTimeout: parsed.idleTimeout,
-      provider: parsed.provider,
+      context: {
+        binary: resolveBinary(profile.binary),
+        heartbeatIntervalMs: profile.heartbeatIntervalMs,
+        heartbeatTimeoutMs: profile.heartbeatTimeoutMs,
+        id: lease.leaseId,
+        idleTimeout: profile.idleTimeout,
+        provider: profile.provider,
+      },
+      profile,
     };
   };
 
@@ -689,7 +692,7 @@ export function createCrabboxWorkerProvider(
       };
     },
     async inspect(lease): Promise<WorkerLeaseStatus> {
-      const context = resolveLeaseContext(lease);
+      const { context } = resolveLeaseContext(lease);
       const inspected = await inspectWithContext({
         context,
         expectedLeaseId: context.id,
@@ -709,10 +712,9 @@ export function createCrabboxWorkerProvider(
       return { status: "active" };
     },
     async destroy(lease): Promise<void> {
-      const context = resolveLeaseContext(lease);
+      const { context, profile } = resolveLeaseContext(lease);
       // Fence the provider keepalive before teardown so an in-flight touch cannot reschedule.
       const heartbeat = heartbeats.stop(context.id);
-      const profile = parseCrabboxProfile(lease.profile);
       if (profile.warmImage) {
         // Lifecycle profiles omit placement class overrides; only successful
         // provisioning can attest which class owns this reusable image.

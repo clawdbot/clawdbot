@@ -48,7 +48,7 @@ fi
 rm -rf "$worker_root"
 `;
 
-export function crabboxWarmImageKey(profile: CrabboxProfile): string {
+function crabboxWarmImageKey(profile: CrabboxProfile): string {
   return createHash("sha256")
     .update(
       JSON.stringify({
@@ -328,7 +328,9 @@ export function createCrabboxWarmImageManager(dependencies: {
       if (context.profile.warmImage && (await forkImage(context))) {
         return;
       }
-      // Warmup replay adopts the same fixed lease if a failed fork already created it.
+      // Fork failure before create-intent permits cold warmup on the same fixed lease.
+      // After a fork creates its checkpoint-bound intent, warmup fails closed;
+      // provisioning surfaces the conflict and provider cleanup stops the partial lease.
       const result = await runCrabboxCommand({
         action: "warmup",
         args: buildCrabboxWarmupArgs(context.profile, context.id, context.slug),

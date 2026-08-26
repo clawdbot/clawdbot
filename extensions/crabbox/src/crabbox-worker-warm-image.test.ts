@@ -3,13 +3,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { WorkerProfile, WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
-import { createPluginStateSyncKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { operationLeaseId, operationSlug, parseCrabboxProfile } from "./crabbox-worker-profile.js";
 import { createCrabboxWorkerProvider } from "./crabbox-worker-provider.js";
-import { crabboxWarmImageKey } from "./crabbox-worker-warm-image.js";
 
 const OPERATION_ID = `provision:v2:${"0".repeat(64)}`;
 const LEASE_ID = operationLeaseId(OPERATION_ID);
@@ -25,15 +23,11 @@ const WALLPAPER_PATH = fileURLToPath(
   new URL("../assets/openclaw-worker-wallpaper.png", import.meta.url),
 );
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+});
 
-type WarmImageRecord = {
-  checkpointId: string;
-  kind: string;
-  state: "pending" | "available";
-  createdAtMs: number;
-  lastUsedAtMs: number;
-};
 type CommandRunner = NonNullable<Parameters<typeof createCrabboxWorkerProvider>[0]["runCommand"]>;
 type CommandCall = { argv: string[]; options: Parameters<CommandRunner>[1] };
 
@@ -49,32 +43,11 @@ function commandResult(overrides: Partial<SpawnResult> = {}): SpawnResult {
   };
 }
 
-function createWarmImageStore() {
-  return createPluginStateSyncKeyedStoreForTests<WarmImageRecord>("crabbox", {
-    namespace: "warm-images",
-    maxEntries: 128,
-    overflowPolicy: "evict-oldest",
-  });
-}
-
-function seedWarmImage(profile: WorkerProfile = PROFILE, overrides: Partial<WarmImageRecord> = {}) {
-  const key = crabboxWarmImageKey(parseCrabboxProfile(profile));
-  const now = Date.now();
-  createWarmImageStore().register(key, {
-    checkpointId: CHECKPOINT_ID,
-    kind: "aws-ebs-snapshot",
-    state: "available",
-    createdAtMs: now,
-    lastUsedAtMs: now,
-    ...overrides,
-  });
-  return key;
-}
-
 function createWarmProvider(
   command?: (call: CommandCall) => SpawnResult | Promise<SpawnResult | undefined> | undefined,
+  stateDir = tempDirs.make("openclaw-crabbox-warm-image-"),
 ) {
-  vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-crabbox-warm-image-"));
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   const calls: CommandCall[] = [];
   const warn = vi.fn();
   const provider = createCrabboxWorkerProvider({
@@ -138,7 +111,7 @@ function createWarmProvider(
       return commandResult();
     },
   });
-  return { provider, calls, warn };
+  return { provider, calls, stateDir, warn };
 }
 
 async function provisionWarmProfile(
@@ -161,27 +134,59 @@ async function provisionWarmProfile(
   });
 }
 
+async function captureWarmImage(
+  provider: WorkerProvider,
+  profile: WorkerProfile = PROFILE,
+  operationId = OPERATION_ID,
+  machineClass?: string,
+) {
+  const lease = await provisionWarmProfile(provider, profile, operationId, machineClass);
+  await provider.destroy({ leaseId: lease.leaseId, profile });
+}
+
 describe("Crabbox profile warm images", () => {
-  it("keys identical profile state consistently without including setup environment values", () => {
+  it("reuses captured images across managers, setup environment values, and setup environment order", async () => {
     const profile = { ...PROFILE, setup: "install-node", setupEnv: ["WARM_B", "WARM_A"] };
     vi.stubEnv("WARM_A", "first-secret");
     vi.stubEnv("WARM_B", "second-secret");
-    const key = crabboxWarmImageKey(parseCrabboxProfile(profile));
+    const initial = createWarmProvider();
+    await captureWarmImage(initial.provider, profile);
+    expect(initial.calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(1);
+
+    const identical = createWarmProvider(undefined, initial.stateDir);
+    await captureWarmImage(identical.provider, {
+      ...profile,
+      setupEnv: [...profile.setupEnv],
+    });
+    expect(identical.calls.some(({ argv }) => argv[2] === "create")).toBe(false);
 
     vi.stubEnv("WARM_A", "changed-secret");
-    expect(crabboxWarmImageKey(parseCrabboxProfile(profile))).toBe(key);
-    expect(
-      crabboxWarmImageKey(parseCrabboxProfile({ ...profile, setupEnv: ["WARM_A", "WARM_B"] })),
-    ).toBe(key);
-    expect(key).toMatch(/^[a-f0-9]{64}$/u);
-    for (const changed of [
+    const changedValues = createWarmProvider(undefined, initial.stateDir);
+    await captureWarmImage(changedValues.provider, profile);
+    expect(changedValues.calls.some(({ argv }) => argv[2] === "create")).toBe(false);
+
+    const reordered = createWarmProvider(undefined, initial.stateDir);
+    await captureWarmImage(reordered.provider, { ...profile, setupEnv: ["WARM_A", "WARM_B"] });
+    expect(reordered.calls.some(({ argv }) => argv[2] === "create")).toBe(false);
+  });
+
+  it("captures distinct images when setup, machine class, desktop, provider, or setup environment names change", async () => {
+    const profile = { ...PROFILE, setup: "install-node", setupEnv: ["WARM_B", "WARM_A"] };
+    vi.stubEnv("WARM_A", "first-secret");
+    vi.stubEnv("WARM_B", "second-secret");
+    const { provider, calls } = createWarmProvider();
+    await captureWarmImage(provider, profile);
+
+    for (const [index, changed] of [
       { ...profile, setup: "install-other-node" },
       { ...profile, class: "fast" },
       { ...profile, desktop: true },
       { ...profile, provider: "hetzner" },
       { ...profile, setupEnv: ["WARM_A"] },
-    ]) {
-      expect(crabboxWarmImageKey(parseCrabboxProfile(changed))).not.toBe(key);
+    ].entries()) {
+      calls.length = 0;
+      await captureWarmImage(provider, changed, `provision:v2:${String(index + 1).repeat(64)}`);
+      expect(calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(1);
     }
   });
 
@@ -261,13 +266,11 @@ describe("Crabbox profile warm images", () => {
       "--wait=false",
       "--json",
     ]);
-    expect(
-      createWarmImageStore().lookup(crabboxWarmImageKey(parseCrabboxProfile(PROFILE))),
-    ).toMatchObject({
-      checkpointId: CHECKPOINT_ID,
-      kind: "aws-ebs-snapshot",
-      state: "pending",
-    });
+    calls.length = 0;
+    await provisionWarmProfile(provider, PROFILE, `provision:v2:${"2".repeat(64)}`);
+    expect(calls.some(({ argv }) => argv[2] === "inspect")).toBe(true);
+    expect(calls.find(({ argv }) => argv[2] === "fork")?.argv[3]).toBe(CHECKPOINT_ID);
+    expect(calls.some(({ argv }) => argv[1] === "warmup")).toBe(false);
   });
 
   it.each([
@@ -306,9 +309,12 @@ describe("Crabbox profile warm images", () => {
 
     expect(warn).toHaveBeenCalledOnce();
     expect(calls.at(-1)?.argv[1]).toBe("stop");
-    expect(
-      createWarmImageStore().lookup(crabboxWarmImageKey(parseCrabboxProfile(PROFILE))),
-    ).toBeUndefined();
+
+    tearingDown = false;
+    calls.length = 0;
+    await captureWarmImage(provider);
+    expect(calls.some(({ argv }) => argv[1] === "warmup")).toBe(true);
+    expect(calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(1);
   });
 
   it("never captures a half-configured lease during failed provisioning cleanup", async () => {
@@ -328,19 +334,15 @@ describe("Crabbox profile warm images", () => {
 
   it("captures and restores placement overrides under their actual machine-class image key", async () => {
     const { provider, calls } = createWarmProvider();
-    const lease = await provisionWarmProfile(provider, PROFILE, OPERATION_ID, "fast");
+    await captureWarmImage(provider, PROFILE, OPERATION_ID, "fast");
 
-    await provider.destroy({ leaseId: lease.leaseId, profile: PROFILE });
-
-    const defaultKey = crabboxWarmImageKey(parseCrabboxProfile(PROFILE));
-    const fastKey = crabboxWarmImageKey(parseCrabboxProfile({ ...PROFILE, class: "fast" }));
-    expect(createWarmImageStore().lookup(defaultKey)).toBeUndefined();
-    expect(createWarmImageStore().lookup(fastKey)).toMatchObject({
-      checkpointId: CHECKPOINT_ID,
-      state: "pending",
-    });
+    calls.length = 0;
+    await provisionWarmProfile(provider, PROFILE, `provision:v2:${"1".repeat(64)}`);
+    expect(calls.some(({ argv }) => argv[1] === "warmup")).toBe(true);
+    expect(calls.some(({ argv }) => argv[2] === "fork")).toBe(false);
 
     const nextOperation = `provision:v2:${"2".repeat(64)}`;
+    calls.length = 0;
     await provisionWarmProfile(provider, PROFILE, nextOperation, "fast");
     const fork = calls.find(({ argv }) => argv[2] === "fork")?.argv;
     expect(fork?.[fork.indexOf("--lease-id") + 1]).toBe(operationLeaseId(nextOperation));
@@ -360,7 +362,8 @@ describe("Crabbox profile warm images", () => {
 
   it("forks an available image into the exact operation-owned lease before normal enrollment", async () => {
     const { provider, calls } = createWarmProvider();
-    seedWarmImage();
+    await captureWarmImage(provider);
+    calls.length = 0;
 
     await expect(provisionWarmProfile(provider)).resolves.toMatchObject({
       leaseId: LEASE_ID,
@@ -397,7 +400,8 @@ describe("Crabbox profile warm images", () => {
     const { provider, calls, warn } = createWarmProvider(({ argv }) =>
       argv[2] === "fork" ? commandResult(result) : undefined,
     );
-    seedWarmImage();
+    await captureWarmImage(provider);
+    calls.length = 0;
 
     await expect(provisionWarmProfile(provider)).resolves.toMatchObject({ leaseId: LEASE_ID });
 
@@ -426,27 +430,31 @@ describe("Crabbox profile warm images", () => {
             })
           : undefined,
       );
-      const key = seedWarmImage(PROFILE, { state: "pending" });
+      await captureWarmImage(provider);
+      calls.length = 0;
 
-      await provisionWarmProfile(provider);
+      const lease = await provisionWarmProfile(provider);
 
       expect(
         calls.some(({ argv }) => argv[1] === expectedCommand || argv[2] === expectedCommand),
       ).toBe(true);
       if (retained) {
-        expect(createWarmImageStore().lookup(key)?.state).toBe("available");
+        await provider.destroy({ leaseId: lease.leaseId, profile: PROFILE });
+        expect(calls.some(({ argv }) => argv[2] === "create")).toBe(false);
       } else {
         expect(calls.some(({ argv }) => argv[2] === "delete")).toBe(true);
-        expect(createWarmImageStore().lookup(key)).toBeUndefined();
+        await provider.destroy({ leaseId: lease.leaseId, profile: PROFILE });
+        expect(calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(1);
       }
     },
   );
 
   it("deletes the provider snapshot before forgetting an image unused for fourteen days", async () => {
     const { provider, calls } = createWarmProvider();
-    const key = seedWarmImage(PROFILE, {
-      lastUsedAtMs: Date.now() - 14 * 24 * 60 * 60 * 1_000,
-    });
+    await captureWarmImage(provider);
+    const expiredAt = Date.now() + 14 * 24 * 60 * 60 * 1_000;
+    vi.spyOn(Date, "now").mockReturnValue(expiredAt);
+    calls.length = 0;
 
     await provisionWarmProfile(provider);
 
@@ -456,7 +464,7 @@ describe("Crabbox profile warm images", () => {
       CHECKPOINT_ID,
     ]);
     expect(calls.some(({ argv }) => argv[1] === "warmup")).toBe(true);
-    expect(createWarmImageStore().lookup(key)).toBeUndefined();
+    expect(calls.some(({ argv }) => argv[2] === "fork")).toBe(false);
   });
 
   it("reserves one capture when enrolled leases with the same profile stop concurrently", async () => {
