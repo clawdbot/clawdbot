@@ -215,17 +215,19 @@ describe("browser control server", () => {
     async () => {
       const base = await startServerAndBase();
 
-      const select = await postJson<{ ok: boolean }>(`${base}/act`, {
-        kind: "select",
-        ref: "5",
-        values: ["a", "b"],
-      });
-      expect(select.ok).toBe(true);
-      expectBrowserCallFields(requirePwMock("selectOptionViaPlaywright"), {
-        targetId: "abcd1234",
-        ref: "5",
-        values: ["a", "b"],
-      });
+      for (const values of [["a", "b"], [""], ["  spaced  "], ["", "  spaced  "]]) {
+        const select = await postJson<{ ok: boolean }>(`${base}/act`, {
+          kind: "select",
+          ref: "5",
+          values,
+        });
+        expect(select.ok).toBe(true);
+        expectBrowserCallFields(
+          requirePwMock("selectOptionViaPlaywright"),
+          { targetId: "abcd1234", ref: "5", values },
+          requirePwMock("selectOptionViaPlaywright").mock.calls.length - 1,
+        );
+      }
 
       const fillCases: Array<{
         input: Record<string, unknown>;
@@ -368,7 +370,7 @@ describe("browser control server", () => {
   );
 
   it(
-    "preserves exact type text in batch normalization",
+    "preserves exact type text and select values in batch normalization",
     async () => {
       const base = await startServerAndBase();
 
@@ -377,6 +379,7 @@ describe("browser control server", () => {
         actions: [
           { kind: "type", selector: "input.name", text: "  padded  " },
           { kind: "type", selector: "input.clearable", text: "" },
+          { kind: "select", selector: "select.choice", values: ["", "  spaced  "] },
         ],
       });
 
@@ -393,6 +396,7 @@ describe("browser control server", () => {
             selector: "input.clearable",
             text: "",
           },
+          { kind: "select", selector: "select.choice", values: ["", "  spaced  "] },
         ],
       });
     },
