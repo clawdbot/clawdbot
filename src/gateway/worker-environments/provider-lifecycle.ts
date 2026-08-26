@@ -136,7 +136,9 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     const failureLabel =
       failureCode === "invalid_profile"
         ? "Worker provider returned an incompatible lease"
-        : "Worker bootstrap failed";
+        : leasePatch?.nodeDeviceId
+          ? "Worker node bootstrap failed"
+          : "Worker bootstrap failed";
     const requested = store.requestDestroy({
       environmentId: record.environmentId,
       state: record.state,
@@ -184,18 +186,10 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
   };
 
   const finishNodeProvisioning = createWorkerNodeProvisioning({
-    store,
-    tunnels,
     ensureNodeWorkerBundle: options.ensureNodeWorkerBundle,
     commitReady,
-    move,
-    destroyProviderLease: async (record, leaseId, provider) =>
-      await callProvider(record.environmentId, () =>
-        provider.destroy(lifecycleLease(record, leaseId)),
-      ),
-    finishProvenDestroy,
-    saveError,
-    serviceError,
+    failBootstrap: async (record, leaseId, provider, error, patch) =>
+      await failBootstrap(record, leaseId, provider, error, "bootstrap_failure", patch),
   });
 
   const finishBootstrap = async (
