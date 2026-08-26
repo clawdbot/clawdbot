@@ -116,7 +116,7 @@ describe("runEmbeddedAttempt skill policy projections", () => {
                 disableTrajectory: true,
                 verboseLevel: "off" as const,
                 suppressToolErrorWarnings: true,
-                trigger: "manual" as const,
+                trigger: "user" as const,
               }
             : {}),
         },

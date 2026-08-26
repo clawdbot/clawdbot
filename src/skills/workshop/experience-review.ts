@@ -52,6 +52,7 @@ type ExperienceReviewAgentContext = {
   modelProviderId?: string;
   modelId?: string;
   modelContextWindowTokens?: number;
+  promptCacheKey?: string;
   reasoningLevel?: ReasoningLevel;
   authProfileId?: string;
   modelIterations?: number;
@@ -349,6 +350,7 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
             modelProviderId: params.ctx.modelProviderId,
             modelId: params.ctx.modelId,
             modelContextWindowTokens: params.ctx.modelContextWindowTokens,
+            promptCacheKey: params.ctx.promptCacheKey,
             reasoningLevel: params.ctx.reasoningLevel,
             authProfileId: params.ctx.authProfileId,
             skillWorkshopAvailable: params.ctx.skillWorkshopAvailable,
@@ -459,13 +461,13 @@ async function runSkillExperienceReviewInner(
         sessionId,
         sessionKey,
         sessionTarget,
-        promptCacheKey: sessionKey,
+        ...(candidate.ctx.promptCacheKey ? { promptCacheKey: candidate.ctx.promptCacheKey } : {}),
         sandboxSessionKey: sessionKey,
         sessionManager: detachedSession,
         sessionPersistence: "detached",
         ...(candidate.ctx.agentId ? { agentId: candidate.ctx.agentId } : {}),
-        // A user trigger claims heartbeat outcomes; heartbeat-outcome and media-task additions are the only prompt bytes that may differ.
-        trigger: "manual",
+        // Preserve the foreground trigger because provider prompt contributions receive it.
+        trigger: candidate.ctx.trigger === "manual" ? "manual" : "user",
         // Never occupy the foreground agent lane after the idle gate opens.
         lane: CommandLane.SkillWorkshopReview,
         messageChannel: candidate.ctx.messageChannel ?? undefined,
@@ -551,7 +553,8 @@ async function runSkillExperienceReviewInner(
     const agentUsage = embeddedResult.meta?.agentMeta?.usage;
     usage = agentUsage
       ? {
-          inputTokens: agentUsage.input ?? 0,
+          inputTokens:
+            (agentUsage.input ?? 0) + (agentUsage.cacheRead ?? 0) + (agentUsage.cacheWrite ?? 0),
           cachedInputTokens: agentUsage.cacheRead ?? 0,
           outputTokens: agentUsage.output ?? 0,
         }
