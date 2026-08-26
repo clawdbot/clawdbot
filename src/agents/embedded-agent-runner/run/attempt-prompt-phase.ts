@@ -235,8 +235,10 @@ export async function runEmbeddedAttemptPromptPhase(input: {
   input.lifecycle.setPromptCacheChangesForTurn(promptAssembly.promptCacheChangesForTurn);
 
   try {
+    const canClaimHeartbeatOutcome =
+      attempt.trigger === "user" && attempt.sessionPersistence !== "detached";
     const heartbeatOutcomeContext =
-      attempt.trigger === "user" && attempt.sessionKey
+      canClaimHeartbeatOutcome && attempt.sessionKey
         ? buildHeartbeatOutcomeContext(
             claimHeartbeatOutcomeForRun({
               agentId: input.context.sessionAgentId,
