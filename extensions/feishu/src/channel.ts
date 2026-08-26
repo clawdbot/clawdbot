@@ -114,14 +114,6 @@ import { feishuSetupWizard, runFeishuLogin } from "./setup-surface.js";
 import { looksLikeFeishuId, normalizeFeishuTarget, resolveReceiveIdType } from "./targets.js";
 import type { FeishuConfig, FeishuProbeResult, ResolvedFeishuAccount } from "./types.js";
 
-function readFeishuMediaParam(params: Record<string, unknown>): string | undefined {
-  const media = params.media;
-  if (typeof media !== "string") {
-    return undefined;
-  }
-  return media.trim() ? media : undefined;
-}
-
 // Path-shaped attachment param aliases the message-tool schema declares. A
 // direct Gateway `message.action send` may arrive with any of these instead of
 // the canonical `media` field the Feishu handler reads; collect them so an
@@ -1353,14 +1345,9 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
               responsePrefix: resolveFeishuMessageActionResponsePrefix(ctx),
             });
             const { interactive, presentation } = resolveFeishuRichReply(ctx.params);
-            // send promotes every attachment alias (path/filePath/mediaUrl/fileUrl/
-            // image/mediaUrls/attachments[]) to a canonical mediaUrl and rejects
-            // unsupported buffer/base64 payloads or multiple attachments instead
-            // of silently dropping them on the text-only success branch (#112244).
-            const mediaUrl =
-              ctx.action === "send"
-                ? resolveFeishuSendAttachmentMedia(ctx.params)
-                : readFeishuMediaParam(ctx.params);
+            // Thread replies share send's validated attachment boundary so aliases
+            // and unsupported payloads cannot silently become text-only delivery.
+            const mediaUrl = resolveFeishuSendAttachmentMedia(ctx.params);
             const audioAsVoice = readBooleanParam(ctx.params, ["asVoice", "audioAsVoice"]);
             if (textCard && !presentation) {
               assertFeishuCardWithinEnvelope(textCard, "Feishu native card");
