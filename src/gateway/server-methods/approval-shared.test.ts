@@ -975,6 +975,7 @@ describe("handlePendingApprovalRequest", () => {
         expiresAtMs: record.expiresAtMs,
       },
       twoPhase: true,
+      approvalKind: "exec",
       suppressDelivery: true,
       deliverRequest,
     });
@@ -1028,6 +1029,7 @@ describe("handlePendingApprovalRequest", () => {
         expiresAtMs: record.expiresAtMs,
       },
       twoPhase: true,
+      approvalKind: "exec",
       deliverToApprovalClientsOnly: true,
       deliverRequest,
     });
@@ -1086,6 +1088,7 @@ describe("handlePendingApprovalRequest", () => {
         expiresAtMs: record.expiresAtMs,
       },
       twoPhase: true,
+      approvalKind: "exec",
       deliverToApprovalClientsOnly: true,
       deliverRequest,
     });
