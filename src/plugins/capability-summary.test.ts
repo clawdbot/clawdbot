@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { PluginEntryConfig } from "../config/types.plugins.js";
 import { buildPluginCapabilitySummary } from "./capability-summary.js";
+import type { PluginManifestContracts } from "./manifest-types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 
 describe("plugin capability summaries", () => {
@@ -101,6 +102,7 @@ describe("plugin capability summaries", () => {
       channels: ["alpha", "zeta"],
       providers: ["beta", "zulu"],
       tools: ["alpha-tool", "shared", "zeta-tool"],
+      contracts: ["tools: shared", "tools: zeta-tool"],
       hooks: ["alpha-hook", "zeta-hook"],
       mcpServers: ["alpha", "zulu"],
       cliCommands: ["alpha", "zulu"],
@@ -119,6 +121,44 @@ describe("plugin capability summaries", () => {
       allowModelOverride: false,
       allowedModels: ["alpha/model", "zulu/model"],
     });
+  });
+
+  it("includes every manifest contract family in the reviewed capability surface", () => {
+    const contracts = {
+      embeddedExtensionFactories: ["embedded"],
+      agentToolResultMiddleware: ["middleware"],
+      trustedToolPolicies: ["trusted-policy"],
+      externalAuthProviders: ["external-auth"],
+      embeddingProviders: ["embedding"],
+      speechProviders: ["speech"],
+      realtimeTranscriptionProviders: ["transcription"],
+      realtimeVoiceProviders: ["voice"],
+      mediaUnderstandingProviders: ["media"],
+      transcriptSourceProviders: ["transcript"],
+      documentExtractors: ["document"],
+      imageGenerationProviders: ["image"],
+      videoGenerationProviders: ["video"],
+      musicGenerationProviders: ["music"],
+      webContentExtractors: ["web-content"],
+      webFetchProviders: ["web-fetch"],
+      webSearchProviders: ["web-search"],
+      workerProviders: ["worker"],
+      usageProviders: ["usage"],
+      migrationProviders: ["migration"],
+      gatewayMethodDispatch: ["gateway-method"],
+      tools: ["tool"],
+    } satisfies Required<PluginManifestContracts>;
+
+    const summary = buildPluginCapabilitySummary({
+      manifest: { contracts },
+      origin: "global",
+    });
+
+    expect(summary.declared.contracts).toEqual(
+      Object.entries(contracts)
+        .flatMap(([family, ids]) => ids.map((id) => `${family}: ${id}`))
+        .toSorted(),
+    );
   });
 
   it("reads channel and provider identities from official catalog manifests", () => {

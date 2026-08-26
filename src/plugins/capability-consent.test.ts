@@ -38,6 +38,7 @@ function createDeclaredSurface(
     channels: [],
     providers: [],
     tools: [],
+    contracts: [],
     hooks: [],
     mcpServers: [],
     cliCommands: [],
@@ -90,6 +91,7 @@ describe("plugin capability consent", () => {
       createDeclaredSurface({
         channels: ["chat"],
         tools: ["read", "write"],
+        contracts: ["tools: read", "tools: write"],
         skills: ["child-skill"],
       }),
     );
@@ -101,6 +103,38 @@ describe("plugin capability consent", () => {
     });
 
     expect(resolvePluginArtifactDeclaredSurface(rootDir).skills).toEqual(["./bundle-skills"]);
+  });
+
+  it("reviews native package extensions before a competing bundle manifest, like runtime discovery", () => {
+    const rootDir = createArtifactFixture({
+      "package.json": { openclaw: { extensions: ["./index.js"] } },
+      "index.js": "export {};",
+      "openclaw.plugin.json": {
+        id: "native",
+        contracts: { gatewayMethodDispatch: ["dangerous.gateway"] },
+        configSchema: { type: "object" },
+      },
+      ".claude-plugin/plugin.json": { name: "bundle", skills: ["./misleading-safe-skill"] },
+    });
+
+    expect(resolvePluginArtifactDeclaredSurface(rootDir)).toEqual(
+      createDeclaredSurface({ contracts: ["gatewayMethodDispatch: dangerous.gateway"] }),
+    );
+  });
+
+  it("reviews a competing bundle before native fallback when the package declares no extensions", () => {
+    const rootDir = createArtifactFixture({
+      "openclaw.plugin.json": {
+        id: "native",
+        contracts: { gatewayMethodDispatch: ["native.gateway"] },
+        configSchema: { type: "object" },
+      },
+      ".claude-plugin/plugin.json": { name: "bundle", skills: ["./bundle-skills"] },
+    });
+
+    expect(resolvePluginArtifactDeclaredSurface(rootDir)).toEqual(
+      createDeclaredSurface({ skills: ["./bundle-skills"] }),
+    );
   });
 
   it("rejects package extension entries that escape the installed artifact", () => {
@@ -124,6 +158,7 @@ describe("plugin capability consent", () => {
       cliCommands: [],
       mcpServers: [],
       hooks: [],
+      contracts: [],
       tools: ["read", "write"],
       providers: [],
       channels: ["alpha", "zulu"],
@@ -240,12 +275,21 @@ describe("plugin capability consent", () => {
         clawpackSha256: "clawpack",
         gitCommit: "commit",
       }),
-    ).toBe("primary");
-    expect(resolvePluginInstallRecordIntegrity({ npmIntegrity: "npm", gitCommit: "commit" })).toBe(
-      "npm",
-    );
-    expect(resolvePluginInstallRecordIntegrity({ clawpackSha256: "clawpack" })).toBe("clawpack");
-    expect(resolvePluginInstallRecordIntegrity({ gitCommit: "commit" })).toBe("commit");
+    ).toEqual({ integrity: "primary", integrityKind: "ssri" });
+    expect(
+      resolvePluginInstallRecordIntegrity({ npmIntegrity: "npm", gitCommit: "commit" }),
+    ).toEqual({
+      integrity: "npm",
+      integrityKind: "ssri",
+    });
+    expect(resolvePluginInstallRecordIntegrity({ clawpackSha256: "clawpack" })).toEqual({
+      integrity: "clawpack",
+      integrityKind: "sha256",
+    });
+    expect(resolvePluginInstallRecordIntegrity({ gitCommit: "commit" })).toEqual({
+      integrity: "commit",
+      integrityKind: "git-commit",
+    });
     expect(resolvePluginInstallRecordIntegrity({})).toBeUndefined();
   });
 });

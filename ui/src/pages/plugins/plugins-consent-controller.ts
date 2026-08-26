@@ -189,10 +189,10 @@ export class PluginsConsentController {
     this.host.closeDetails();
     this.inspection = null;
     this.inspectionError = null;
-    this.inspectionLoading = Boolean(pluginId && !details);
+    this.inspectionLoading = Boolean(pluginId);
     this.consent = { intent, pluginId, fallback, ...(details ? { details } : {}) };
     this.host.requestUpdate();
-    if (pluginId && !details) {
+    if (pluginId) {
       void this.inspect();
     }
   }
@@ -206,8 +206,8 @@ export class PluginsConsentController {
       intent,
       details.pluginId,
       {
-        name: details.name,
-        ...(details.version ? { version: details.version } : {}),
+        name: plugin?.name ?? details.pluginId,
+        ...(plugin?.version ? { version: plugin.version } : {}),
         ...(plugin?.origin === "official" ? { official: true } : {}),
       },
       details,
@@ -238,10 +238,12 @@ export class PluginsConsentController {
       }
     } catch (error) {
       if (this.host.gateway.isCurrent(scope) && this.consent === consent) {
-        this.inspectionError =
-          error instanceof GatewayRequestError && error.code === "INVALID_REQUEST"
-            ? null
-            : formatUiError(error);
+        const unavailableBeforeInstall =
+          consent.intent.kind === "install" &&
+          !consent.details &&
+          error instanceof GatewayRequestError &&
+          error.code === "INVALID_REQUEST";
+        this.inspectionError = unavailableBeforeInstall ? null : formatUiError(error);
       }
     } finally {
       if (this.host.gateway.isCurrent(scope) && this.consent === consent) {
@@ -253,18 +255,27 @@ export class PluginsConsentController {
 
   confirm(): void {
     const intent = this.consent?.intent;
-    if (!intent || this.inspectionLoading || this.inspectionError) {
+    const reviewToken = this.inspection?.reviewToken;
+    if (
+      !intent ||
+      this.inspectionLoading ||
+      this.inspectionError ||
+      (!reviewToken && (intent.kind === "enable" || Boolean(this.consent?.details)))
+    ) {
       return;
     }
     this.close();
     if (intent.kind === "install") {
       void this.install(
-        { ...intent.request, acknowledgeCapabilities: true },
+        {
+          ...intent.request,
+          ...(reviewToken ? { acknowledgeCapabilities: { reviewToken } } : {}),
+        },
         intent.installIdentity,
       );
-    } else {
+    } else if (reviewToken) {
       void this.setEnabled(intent.pluginId, true, intent.rowKey, {
-        acknowledgeCapabilities: true,
+        acknowledgeCapabilities: { reviewToken },
       });
     }
   }
@@ -287,7 +298,7 @@ export class PluginsConsentController {
       },
       (error) => {
         const consentDetails = readPluginCapabilityConsentError(error);
-        if (consentDetails && !request.acknowledgeCapabilities) {
+        if (consentDetails) {
           this.openServerConsent({ kind: "install", request, installIdentity }, consentDetails);
           return;
         }
@@ -341,7 +352,7 @@ export class PluginsConsentController {
     pluginId: string,
     enabled: boolean,
     key: string,
-    options: { acknowledgeCapabilities?: true } = {},
+    options: Parameters<typeof setPluginEnabled>[3] = {},
   ): Promise<void> {
     await this.runMutation(
       key,
@@ -363,7 +374,7 @@ export class PluginsConsentController {
       },
       (error) => {
         const details = readPluginCapabilityConsentError(error);
-        if (enabled && details && !options.acknowledgeCapabilities) {
+        if (enabled && details) {
           this.openServerConsent({ kind: "enable", pluginId, rowKey: key }, details);
           return;
         }

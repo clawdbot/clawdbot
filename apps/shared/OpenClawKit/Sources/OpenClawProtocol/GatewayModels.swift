@@ -18864,35 +18864,20 @@ public struct QuestionListResult: Codable, Sendable {
 public struct CapabilityConsentErrorDetails: Codable, Sendable {
     public let capabilityconsentcode: String
     public let pluginid: String
-    public let name: String
-    public let version: String?
-    public let declared: PluginDeclaredSurface
-    public let grants: PluginOperatorGrants
-    public let source: PluginInspectSource?
-    public let trust: PluginInstallTrust?
+    public let reviewtoken: String
     public let widened: PluginDeclaredSurfaceWidening?
     public let acceptedat: String?
 
     public init(
         capabilityconsentcode: String,
         pluginid: String,
-        name: String,
-        version: String? = nil,
-        declared: PluginDeclaredSurface,
-        grants: PluginOperatorGrants,
-        source: PluginInspectSource? = nil,
-        trust: PluginInstallTrust? = nil,
+        reviewtoken: String,
         widened: PluginDeclaredSurfaceWidening? = nil,
         acceptedat: String? = nil)
     {
         self.capabilityconsentcode = capabilityconsentcode
         self.pluginid = pluginid
-        self.name = name
-        self.version = version
-        self.declared = declared
-        self.grants = grants
-        self.source = source
-        self.trust = trust
+        self.reviewtoken = reviewtoken
         self.widened = widened
         self.acceptedat = acceptedat
     }
@@ -18900,12 +18885,7 @@ public struct CapabilityConsentErrorDetails: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case capabilityconsentcode = "capabilityConsentCode"
         case pluginid = "pluginId"
-        case name
-        case version
-        case declared
-        case grants
-        case source
-        case trust
+        case reviewtoken = "reviewToken"
         case widened
         case acceptedat = "acceptedAt"
     }
@@ -19191,6 +19171,7 @@ public struct PluginDeclaredSurface: Codable, Sendable {
     public let channels: [String]
     public let providers: [String]
     public let tools: [String]
+    public let contracts: [String]
     public let hooks: [String]
     public let mcpservers: [String]
     public let clicommands: [String]
@@ -19202,6 +19183,7 @@ public struct PluginDeclaredSurface: Codable, Sendable {
         channels: [String],
         providers: [String],
         tools: [String],
+        contracts: [String],
         hooks: [String],
         mcpservers: [String],
         clicommands: [String],
@@ -19212,6 +19194,7 @@ public struct PluginDeclaredSurface: Codable, Sendable {
         self.channels = channels
         self.providers = providers
         self.tools = tools
+        self.contracts = contracts
         self.hooks = hooks
         self.mcpservers = mcpservers
         self.clicommands = clicommands
@@ -19224,6 +19207,7 @@ public struct PluginDeclaredSurface: Codable, Sendable {
         case channels
         case providers
         case tools
+        case contracts
         case hooks
         case mcpservers = "mcpServers"
         case clicommands = "cliCommands"
@@ -19237,6 +19221,7 @@ public struct PluginDeclaredSurfaceWidening: Codable, Sendable {
     public let channels: [String]?
     public let providers: [String]?
     public let tools: [String]?
+    public let contracts: [String]?
     public let hooks: [String]?
     public let mcpservers: [String]?
     public let clicommands: [String]?
@@ -19248,6 +19233,7 @@ public struct PluginDeclaredSurfaceWidening: Codable, Sendable {
         channels: [String]? = nil,
         providers: [String]? = nil,
         tools: [String]? = nil,
+        contracts: [String]? = nil,
         hooks: [String]? = nil,
         mcpservers: [String]? = nil,
         clicommands: [String]? = nil,
@@ -19258,6 +19244,7 @@ public struct PluginDeclaredSurfaceWidening: Codable, Sendable {
         self.channels = channels
         self.providers = providers
         self.tools = tools
+        self.contracts = contracts
         self.hooks = hooks
         self.mcpservers = mcpservers
         self.clicommands = clicommands
@@ -19270,6 +19257,7 @@ public struct PluginDeclaredSurfaceWidening: Codable, Sendable {
         case channels
         case providers
         case tools
+        case contracts
         case hooks
         case mcpservers = "mcpServers"
         case clicommands = "cliCommands"
@@ -19454,6 +19442,7 @@ public struct PluginsInspectResult: Codable, Sendable {
     public let plugin: [String: AnyCodable]
     public let source: PluginInspectSource?
     public let declared: PluginDeclaredSurface
+    public let reviewtoken: String
     public let grants: PluginOperatorGrants
     public let trust: PluginInstallTrust?
 
@@ -19462,6 +19451,7 @@ public struct PluginsInspectResult: Codable, Sendable {
         plugin: [String: AnyCodable],
         source: PluginInspectSource? = nil,
         declared: PluginDeclaredSurface,
+        reviewtoken: String,
         grants: PluginOperatorGrants,
         trust: PluginInstallTrust? = nil)
     {
@@ -19469,8 +19459,19 @@ public struct PluginsInspectResult: Codable, Sendable {
         self.plugin = plugin
         self.source = source
         self.declared = declared
+        self.reviewtoken = reviewtoken
         self.grants = grants
         self.trust = trust
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case plugin
+        case source
+        case declared
+        case reviewtoken = "reviewToken"
+        case grants
+        case trust
     }
 }
 
@@ -19716,12 +19717,12 @@ public struct PluginsSessionActionSuccessResult: Codable, Sendable {
 public struct PluginsSetEnabledParams: Codable, Sendable {
     public let pluginid: String
     public let enabled: Bool
-    public let acknowledgecapabilities: Bool?
+    public let acknowledgecapabilities: [String: AnyCodable]?
 
     public init(
         pluginid: String,
         enabled: Bool,
-        acknowledgecapabilities: Bool? = nil)
+        acknowledgecapabilities: [String: AnyCodable]? = nil)
     {
         self.pluginid = pluginid
         self.enabled = enabled

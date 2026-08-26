@@ -70,6 +70,7 @@ describe("renderPluginConsentDialog", () => {
         channels: ["calendar-channel"],
         providers: ["calendar-provider"],
         tools: ["calendar_create"],
+        contracts: ["gatewayMethodDispatch: calendar.dispatch"],
         hooks: ["before_prompt_build"],
         mcpServers: ["calendar-mcp"],
         cliCommands: ["calendar"],
@@ -119,6 +120,7 @@ describe("renderPluginConsentDialog", () => {
       "calendar-channel",
       "calendar-provider",
       "calendar_create",
+      "Contracts gatewayMethodDispatch: calendar.dispatch",
       "before_prompt_build",
       "calendar-mcp",
       "calendar-cli",
@@ -145,13 +147,24 @@ describe("renderPluginConsentDialog", () => {
     const text = normalizedText(container.querySelector('[data-plugin-consent="enable"]'));
 
     expect(text).toContain("No channels, providers, or tools declared in the manifest.");
+    expect(text).toContain(
+      "Code plugins may register hooks at runtime; their hook names are not declared in the manifest.",
+    );
     expect(text).toContain("Your grants");
     expect(text).toContain("Enable Workboard");
     expect(text).not.toContain("What changed");
   });
 
   it("highlights newly declared capability groups since the previous acceptance", () => {
-    const inspection = createInspectResult();
+    const inspection = createInspectResult({
+      declared: {
+        ...createInspectResult().declared,
+        tools: ["workboard_review"],
+        contracts: ["gatewayMethodDispatch: workboard.dispatch"],
+        providers: ["workboard-provider"],
+        dangerousConfigFlags: ["workboard.allowShell"],
+      },
+    });
     const container = mount({
       consent: {
         intent: { kind: "enable", pluginId: "workboard", rowKey: "plugin:workboard" },
@@ -159,23 +172,17 @@ describe("renderPluginConsentDialog", () => {
         fallback: { name: "Workboard" },
         details: buildCapabilityConsentErrorDetails({
           pluginId: "workboard",
-          name: "Workboard",
-          declared: {
-            ...inspection.declared,
-            tools: ["workboard_review"],
-            providers: ["workboard-provider"],
-            dangerousConfigFlags: ["workboard.allowShell"],
-          },
-          grants: inspection.grants,
+          reviewToken: inspection.reviewToken,
           widened: {
             tools: ["workboard_review"],
+            contracts: ["gatewayMethodDispatch: workboard.dispatch"],
             providers: ["workboard-provider"],
             dangerousConfigFlags: ["workboard.allowShell"],
           },
           acceptedAt: "2026-08-20T14:03:00Z",
         }),
       },
-      inspection: null,
+      inspection,
     });
 
     const dialog = container.querySelector('[data-plugin-consent="enable"]');
@@ -184,10 +191,11 @@ describe("renderPluginConsentDialog", () => {
     expect(text).toContain("New since your last acceptance");
     expect(text).toContain("2026-08-20T14:03:00Z");
     expect(text).toContain("Tools workboard_review");
+    expect(text).toContain("Contracts gatewayMethodDispatch: workboard.dispatch");
     expect(text).toContain("Model providers workboard-provider");
     expect(text).toContain("Dangerous config flags workboard.allowShell");
     expect(text.indexOf("What changed")).toBeLessThan(text.indexOf("Declared capabilities"));
-    expect(dialog?.querySelectorAll(".plugins-consent__row--warning")).toHaveLength(4);
+    expect(dialog?.querySelectorAll(".plugins-consent__row--warning")).toHaveLength(5);
   });
 
   it("explains integrity and review protection when a package cannot be inspected yet", () => {
@@ -213,7 +221,7 @@ describe("renderPluginConsentDialog", () => {
     expect(normalizedText(dialog)).toContain("Community Calendar");
     expect(normalizedText(dialog)).toContain("Verified source");
     expect(normalizedText(dialog)).toContain(
-      "Capability declarations are verified during install. The download is integrity-pinned, and risky findings pause the install for review.",
+      "Capability declarations are verified against the installed artifact before approval. The install pauses if additional review is required.",
     );
     expect(dialog?.querySelector<HTMLButtonElement>(".btn.primary")?.disabled).toBe(false);
   });

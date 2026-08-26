@@ -222,8 +222,10 @@ async function runPluginsEnableCommandUnlocked(
     return defaultRuntime.exit(1);
   }
   if (!plugin.enabled) {
-    const { ManagedPluginLifecycleError, resolvePluginCapabilityConsent } =
-      await import("../plugins/management-service.js");
+    const { resolvePendingPluginCapabilityReview, resolvePluginCapabilityConsent } =
+      await import("../plugins/capability-consent.js");
+    const { ManagedPluginLifecycleError } =
+      await import("../plugins/management-lifecycle-error.js");
     const consent = resolvePluginCapabilityConsentCliOptions({
       acceptCapabilities: opts.acceptCapabilities,
       action: "enable",
@@ -232,20 +234,30 @@ async function runPluginsEnableCommandUnlocked(
       await resolvePluginCapabilityConsent({
         config: cfg,
         pluginId: id,
-        acknowledge: consent.acknowledgeCapabilities,
       });
     } catch (error) {
       if (!(error instanceof ManagedPluginLifecycleError) || !error.capabilityConsent) {
         throw error;
       }
-      if (
-        !consent.onCapabilityConsent ||
-        !(await consent.onCapabilityConsent(error.capabilityConsent))
-      ) {
+      if (!consent.onCapabilityConsent) {
         defaultRuntime.error(error.message);
         return defaultRuntime.exit(1);
       }
-      await resolvePluginCapabilityConsent({ config: cfg, pluginId: id, acknowledge: true });
+      const review = resolvePendingPluginCapabilityReview(id);
+      if (!review || review.reviewToken !== error.capabilityConsent.reviewToken) {
+        await resolvePluginCapabilityConsent({ config: cfg, pluginId: id });
+      } else {
+        const acknowledgment = await consent.onCapabilityConsent(review);
+        if (!acknowledgment) {
+          defaultRuntime.error(error.message);
+          return defaultRuntime.exit(1);
+        }
+        await resolvePluginCapabilityConsent({
+          config: cfg,
+          pluginId: id,
+          acknowledge: acknowledgment,
+        });
+      }
     }
   }
 

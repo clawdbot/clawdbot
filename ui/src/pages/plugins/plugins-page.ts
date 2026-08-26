@@ -100,7 +100,7 @@ class PluginsPage extends OpenClawLightDomElement {
   @state() private pendingRemoval: Record<string, boolean> = {};
   @state() private detailPluginId: string | null = null;
   @state() private detailInspection: PluginsInspectResult | null = null;
-  @state() private detailInspectionLoading = false;
+  @state() private detailInspectionError: string | null = null;
   @state() private iconUrls: Record<string, string> = {};
   @state() private pageNotice: PluginRowMessage | null = null;
   @state() private mcpServers: McpServerSummary[] | null = null;
@@ -126,7 +126,7 @@ class PluginsPage extends OpenClawLightDomElement {
       this.pendingRemoval = {};
       this.detailPluginId = null;
       this.detailInspection = null;
-      this.detailInspectionLoading = false;
+      this.detailInspectionError = null;
       this.consentController.reset();
       this.pageNotice = null;
       this.mcpMessage = null;
@@ -708,7 +708,7 @@ class PluginsPage extends OpenClawLightDomElement {
   private showDetails(pluginId: string | null) {
     this.detailPluginId = pluginId;
     this.detailInspection = null;
-    this.detailInspectionLoading = false;
+    this.detailInspectionError = null;
     const plugin = pluginId
       ? this.result?.plugins.find((entry) => entry.id === pluginId)
       : undefined;
@@ -719,17 +719,15 @@ class PluginsPage extends OpenClawLightDomElement {
     if (!scope) {
       return;
     }
-    this.detailInspectionLoading = true;
     void inspectPlugin(scope.client, plugin.id)
       .then((inspection) => {
         if (this.gateway.isCurrent(scope) && this.detailPluginId === plugin.id) {
           this.detailInspection = inspection;
         }
       })
-      .catch(() => undefined)
-      .finally(() => {
+      .catch((error) => {
         if (this.gateway.isCurrent(scope) && this.detailPluginId === plugin.id) {
-          this.detailInspectionLoading = false;
+          this.detailInspectionError = formatUiError(error);
         }
       });
   }
@@ -900,7 +898,7 @@ class PluginsPage extends OpenClawLightDomElement {
           pendingRemoval: this.pendingRemoval,
           detailPluginId: this.detailPluginId,
           detailInspection: this.detailInspection,
-          detailInspectionLoading: this.detailInspectionLoading,
+          detailInspectionError: this.detailInspectionError,
           consent: this.consentController.consent,
           consentInspection: this.consentController.inspection,
           consentInspectionLoading: this.consentController.inspectionLoading,

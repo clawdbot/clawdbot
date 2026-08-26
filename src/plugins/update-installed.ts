@@ -8,6 +8,7 @@ import {
 import type { UpdateChannel } from "../infra/update-channels.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveBundledPluginSources } from "./bundled-sources.js";
+import type { PluginCapabilityConsentHandler } from "./capability-consent.js";
 import { buildClawHubPluginInstallRecordFields } from "./clawhub-install-records.js";
 import type { ClawHubRiskAcknowledgementRequest } from "./clawhub.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
@@ -42,10 +43,7 @@ import {
   type MarketplacePluginUpdateSuccess,
   type NpmPluginUpdateSuccess,
 } from "./update-attempt.js";
-import {
-  preparePluginUpdateCapabilityConsent,
-  type PluginUpdateCapabilityConsentHandler,
-} from "./update-capability-consent.js";
+import { preparePluginUpdateCapabilityConsent } from "./update-capability-consent.js";
 import {
   createTrackedNpmUpdateInstaller,
   resolveClawHubRiskAcknowledgementOptions,
@@ -107,8 +105,7 @@ export async function updateNpmInstalledPlugins(params: {
   onIntegrityDrift?: (params: PluginUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
   acknowledgeClawHubRisk?: boolean;
   onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
-  acknowledgeCapabilities?: boolean;
-  onCapabilityConsent?: PluginUpdateCapabilityConsentHandler;
+  onCapabilityConsent?: PluginCapabilityConsentHandler;
   packagePluginIds?: Readonly<Record<string, readonly string[]>>;
 }): Promise<PluginUpdateSummary> {
   const logger = params.logger ?? {};
@@ -511,7 +508,7 @@ export async function updateNpmInstalledPlugins(params: {
       record,
       installPath,
       packagePluginIds: params.packagePluginIds?.[pluginId],
-      acknowledgeCapabilities: params.acknowledgeCapabilities,
+      expectedIntegrity,
       onCapabilityConsent: params.onCapabilityConsent,
     });
     const runAttempt = () =>

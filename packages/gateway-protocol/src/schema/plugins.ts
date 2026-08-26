@@ -171,6 +171,8 @@ export const PluginDeclaredSurfaceSchema = closedObject({
   channels: Type.Array(NonEmptyString),
   providers: Type.Array(NonEmptyString),
   tools: Type.Array(NonEmptyString),
+  /** Manifest contract families and identifiers, rendered as `family: id`. */
+  contracts: Type.Array(NonEmptyString),
   /** Bundle-format hook names; code plugins register hooks at runtime and list nothing here. */
   hooks: Type.Array(NonEmptyString),
   mcpServers: Type.Array(NonEmptyString),
@@ -228,12 +230,7 @@ export const PluginDeclaredSurfaceWideningSchema = Type.Partial(PluginDeclaredSu
 export const CapabilityConsentErrorDetailsSchema = closedObject({
   capabilityConsentCode: Type.Literal("PLUGIN_CAPABILITY_CONSENT_REQUIRED"),
   pluginId: NonEmptyString,
-  name: NonEmptyString,
-  version: Type.Optional(NonEmptyString),
-  declared: PluginDeclaredSurfaceSchema,
-  grants: PluginOperatorGrantsSchema,
-  source: Type.Optional(PluginInspectSourceSchema),
-  trust: Type.Optional(PluginInstallTrustSchema),
+  reviewToken: NonEmptyString,
   widened: Type.Optional(PluginDeclaredSurfaceWideningSchema),
   acceptedAt: Type.Optional(NonEmptyString),
 });
@@ -252,8 +249,13 @@ export const PluginsInspectResultSchema = closedObject({
   }),
   source: Type.Optional(PluginInspectSourceSchema),
   declared: PluginDeclaredSurfaceSchema,
+  reviewToken: NonEmptyString,
   grants: PluginOperatorGrantsSchema,
   trust: Type.Optional(PluginInstallTrustSchema),
+});
+
+const PluginCapabilityAcknowledgmentSchema = closedObject({
+  reviewToken: NonEmptyString,
 });
 
 /** Request payload for searching installable ClawHub plugin families. */
@@ -299,13 +301,13 @@ export const PluginsInstallParamsSchema = Type.Union([
     version: Type.Optional(NonEmptyString),
     acknowledgeClawHubRisk: Type.Optional(Type.Boolean()),
     acknowledgeInstallPolicyWarning: Type.Optional(Type.Literal(true)),
-    acknowledgeCapabilities: Type.Optional(Type.Literal(true)),
+    acknowledgeCapabilities: Type.Optional(PluginCapabilityAcknowledgmentSchema),
   }),
   closedObject({
     source: Type.Literal("official"),
     pluginId: NonEmptyString,
     acknowledgeInstallPolicyWarning: Type.Optional(Type.Literal(true)),
-    acknowledgeCapabilities: Type.Optional(Type.Literal(true)),
+    acknowledgeCapabilities: Type.Optional(PluginCapabilityAcknowledgmentSchema),
   }),
 ]);
 
@@ -343,7 +345,7 @@ export const PluginsUninstallResultSchema = closedObject({
 export const PluginsSetEnabledParamsSchema = closedObject({
   pluginId: NonEmptyString,
   enabled: Type.Boolean(),
-  acknowledgeCapabilities: Type.Optional(Type.Literal(true)),
+  acknowledgeCapabilities: Type.Optional(PluginCapabilityAcknowledgmentSchema),
 });
 
 /** Successful plugin enablement policy update. */

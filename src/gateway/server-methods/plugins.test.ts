@@ -6,59 +6,18 @@ import {
   readCapabilityConsentErrorDetails,
   type CapabilityConsentErrorDetails,
 } from "../../../packages/gateway-protocol/src/capability-consent-error-details.js";
+import { ManagedPluginLifecycleError } from "../../plugins/management-lifecycle-error.js";
 
-const managementMocks = vi.hoisted(() => {
-  class ManagedPluginLifecycleError extends Error {
-    readonly kind: "invalid-request" | "unavailable";
-    readonly code?: string;
-    readonly version?: string;
-    readonly warning?: string;
-    readonly installPolicyWarning?: {
-      targetName: string;
-      targetType: "skill" | "plugin";
-      requestMode: "install" | "update";
-      reason: string;
-      findings?: Array<{
-        ruleId: string;
-        severity: "info" | "warn" | "critical";
-        message: string;
-      }>;
-    };
-    readonly capabilityConsent?: Omit<CapabilityConsentErrorDetails, "capabilityConsentCode">;
-
-    constructor(
-      message: string,
-      details?: {
-        kind?: "invalid-request" | "unavailable";
-        code?: string;
-        version?: string;
-        warning?: string;
-        installPolicyWarning?: ManagedPluginLifecycleError["installPolicyWarning"];
-        capabilityConsent?: ManagedPluginLifecycleError["capabilityConsent"];
-      },
-    ) {
-      super(message);
-      this.kind = details?.kind ?? "invalid-request";
-      this.code = details?.code;
-      this.version = details?.version;
-      this.warning = details?.warning;
-      this.installPolicyWarning = details?.installPolicyWarning;
-      this.capabilityConsent = details?.capabilityConsent;
-    }
-  }
-  return {
-    ManagedPluginLifecycleError,
-    inspect: vi.fn(),
-    install: vi.fn(),
-    list: vi.fn(),
-    setEnabled: vi.fn(),
-    uninstall: vi.fn(),
-  };
-});
+const managementMocks = vi.hoisted(() => ({
+  inspect: vi.fn(),
+  install: vi.fn(),
+  list: vi.fn(),
+  setEnabled: vi.fn(),
+  uninstall: vi.fn(),
+}));
 const searchMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../plugins/management-service.js", () => ({
-  ManagedPluginLifecycleError: managementMocks.ManagedPluginLifecycleError,
   inspectManagedPlugin: (...args: unknown[]) => managementMocks.inspect(...args),
   installManagedPlugin: (...args: unknown[]) => managementMocks.install(...args),
   listManagedPlugins: (...args: unknown[]) => managementMocks.list(...args),
@@ -113,28 +72,11 @@ const workboard = {
   order: 10,
 };
 
+const reviewToken = "a".repeat(64);
+
 const capabilityConsent = {
   pluginId: "workboard",
-  name: "Workboard",
-  version: "1.2.3",
-  declared: {
-    channels: [],
-    providers: [],
-    tools: ["workboard_read"],
-    hooks: [],
-    mcpServers: [],
-    cliCommands: [],
-    cliBackends: [],
-    skills: [],
-    dangerousConfigFlags: [],
-  },
-  grants: {
-    hooks: {
-      allowPromptInjection: { effective: true },
-      allowConversationAccess: { effective: false },
-    },
-  },
-  source: { kind: "npm" as const, integrity: "sha512-pinned", integrityKind: "ssri" as const },
+  reviewToken,
   widened: { tools: ["workboard_read"] },
   acceptedAt: "2026-08-25T00:00:00.000Z",
 } satisfies Omit<CapabilityConsentErrorDetails, "capabilityConsentCode">;
@@ -178,6 +120,7 @@ describe("plugin management Gateway handlers", () => {
       label: "bundled installed plugin",
       inspection: {
         ok: true,
+        reviewToken,
         plugin: {
           id: "workboard",
           name: "Workboard",
@@ -198,6 +141,7 @@ describe("plugin management Gateway handlers", () => {
       label: "external plugin with explicit grants, integrity, and trust",
       inspection: {
         ok: true,
+        reviewToken,
         plugin: {
           id: "community-plugin",
           name: "Community Plugin",
@@ -231,6 +175,7 @@ describe("plugin management Gateway handlers", () => {
       label: "not-installed official catalog plugin",
       inspection: {
         ok: true,
+        reviewToken,
         plugin: {
           id: "diffs",
           name: "Diffs",
@@ -267,7 +212,7 @@ describe("plugin management Gateway handlers", () => {
 
   it("classifies unknown plugin inspections as invalid requests", async () => {
     managementMocks.inspect.mockRejectedValue(
-      new managementMocks.ManagedPluginLifecycleError('Plugin "unknown" not found.'),
+      new ManagedPluginLifecycleError('Plugin "unknown" not found.'),
     );
 
     const result = await callHandler("plugins.inspect", { pluginId: "unknown" });
@@ -378,7 +323,7 @@ describe("plugin management Gateway handlers", () => {
     });
   });
 
-  it("forwards explicit capability acknowledgement when enabling a plugin", async () => {
+  it("forwards the exact reviewed-surface token when enabling a plugin", async () => {
     managementMocks.setEnabled.mockResolvedValue({
       plugin: { ...workboard, enabled: true, state: "enabled" },
       changedPaths: ["plugins.entries.workboard.enabled"],
@@ -387,31 +332,92 @@ describe("plugin management Gateway handlers", () => {
     const result = await callHandler("plugins.setEnabled", {
       pluginId: "workboard",
       enabled: true,
-      acknowledgeCapabilities: true,
+      acknowledgeCapabilities: { reviewToken },
     });
 
     expect(result.ok).toBe(true);
     expect(managementMocks.setEnabled).toHaveBeenCalledWith({
       pluginId: "workboard",
       enabled: true,
-      acknowledgeCapabilities: true,
+      acknowledgeCapabilities: { reviewToken },
     });
+  });
+
+  it.each(
+    [
+      {
+        method: "plugins.setEnabled",
+        params: { pluginId: "workboard", enabled: true },
+        mock: managementMocks.setEnabled,
+      },
+      {
+        method: "plugins.install",
+        params: { source: "official", pluginId: "workboard" },
+        mock: managementMocks.install,
+      },
+      {
+        method: "plugins.install",
+        params: { source: "clawhub", packageName: "community/workboard" },
+        mock: managementMocks.install,
+      },
+    ].flatMap((testCase) =>
+      [
+        { label: "obsolete blind acknowledgement", acknowledgement: true },
+        { label: "missing review token", acknowledgement: {} },
+        { label: "empty review token", acknowledgement: { reviewToken: "" } },
+        {
+          label: "extra acknowledgement properties",
+          acknowledgement: { reviewToken, unexpected: true },
+        },
+      ].map((invalid) => ({ ...testCase, ...invalid })),
+    ),
+  )("rejects $label before dispatching $method", async (testCase) => {
+    const result = await callHandler(testCase.method, {
+      ...testCase.params,
+      acknowledgeCapabilities: testCase.acknowledgement,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatchObject({ code: "INVALID_REQUEST" });
+    expect(testCase.mock).not.toHaveBeenCalled();
   });
 
   it.each([
     {
+      label: "an initial enable request",
       method: "plugins.setEnabled",
       params: { pluginId: "workboard", enabled: true },
       mock: managementMocks.setEnabled,
     },
     {
+      label: "an enable request with a stale review token",
+      method: "plugins.setEnabled",
+      params: {
+        pluginId: "workboard",
+        enabled: true,
+        acknowledgeCapabilities: { reviewToken: "b".repeat(64) },
+      },
+      mock: managementMocks.setEnabled,
+    },
+    {
+      label: "an initial install request",
       method: "plugins.install",
       params: { source: "official", pluginId: "workboard" },
       mock: managementMocks.install,
     },
-  ])("returns readable server-authoritative consent details from $method", async (testCase) => {
+    {
+      label: "an install request with a stale review token",
+      method: "plugins.install",
+      params: {
+        source: "official",
+        pluginId: "workboard",
+        acknowledgeCapabilities: { reviewToken: "b".repeat(64) },
+      },
+      mock: managementMocks.install,
+    },
+  ])("returns fresh server-authoritative consent details for $label", async (testCase) => {
     testCase.mock.mockRejectedValue(
-      new managementMocks.ManagedPluginLifecycleError("Plugin capability consent required", {
+      new ManagedPluginLifecycleError("Plugin capability consent required", {
         capabilityConsent,
       }),
     );
@@ -450,7 +456,7 @@ describe("plugin management Gateway handlers", () => {
 
   it("classifies known enablement policy failures as invalid requests", async () => {
     managementMocks.setEnabled.mockRejectedValue(
-      new managementMocks.ManagedPluginLifecycleError("Plugin is blocked"),
+      new ManagedPluginLifecycleError("Plugin is blocked"),
     );
 
     const result = await callHandler("plugins.setEnabled", {
@@ -478,7 +484,7 @@ describe("plugin management Gateway handlers", () => {
     });
   });
 
-  it("forwards explicit ClawHub risk acknowledgement", async () => {
+  it("forwards ClawHub risk acknowledgement and the reviewed-surface token", async () => {
     managementMocks.install.mockResolvedValue({
       plugin: { ...workboard, id: "diffs", name: "Diffs", enabled: true, state: "enabled" },
     });
@@ -488,6 +494,7 @@ describe("plugin management Gateway handlers", () => {
       packageName: "@openclaw/diffs",
       version: "1.2.3",
       acknowledgeClawHubRisk: true,
+      acknowledgeCapabilities: { reviewToken },
     });
 
     expect(managementMocks.install).toHaveBeenCalledWith({
@@ -496,11 +503,12 @@ describe("plugin management Gateway handlers", () => {
         packageName: "@openclaw/diffs",
         version: "1.2.3",
         acknowledgeClawHubRisk: true,
+        acknowledgeCapabilities: { reviewToken },
       },
     });
   });
 
-  it("forwards explicit install policy and capability acknowledgement", async () => {
+  it("forwards install-policy acknowledgement and the exact reviewed-surface token", async () => {
     managementMocks.install.mockResolvedValue({
       plugin: { ...workboard, id: "diffs", name: "Diffs", enabled: true, state: "enabled" },
     });
@@ -509,7 +517,7 @@ describe("plugin management Gateway handlers", () => {
       source: "official",
       pluginId: "diffs",
       acknowledgeInstallPolicyWarning: true,
-      acknowledgeCapabilities: true,
+      acknowledgeCapabilities: { reviewToken },
     });
 
     expect(managementMocks.install).toHaveBeenCalledWith({
@@ -517,14 +525,14 @@ describe("plugin management Gateway handlers", () => {
         source: "official",
         pluginId: "diffs",
         acknowledgeInstallPolicyWarning: true,
-        acknowledgeCapabilities: true,
+        acknowledgeCapabilities: { reviewToken },
       },
     });
   });
 
   it("returns tokenless structured install policy warning details", async () => {
     managementMocks.install.mockRejectedValue(
-      new managementMocks.ManagedPluginLifecycleError("Review required", {
+      new ManagedPluginLifecycleError("Review required", {
         installPolicyWarning: {
           targetName: "diffs",
           targetType: "plugin",
@@ -568,7 +576,7 @@ describe("plugin management Gateway handlers", () => {
 
   it("returns structured ClawHub acknowledgement details", async () => {
     managementMocks.install.mockRejectedValue(
-      new managementMocks.ManagedPluginLifecycleError("Review required", {
+      new ManagedPluginLifecycleError("Review required", {
         kind: "invalid-request",
         code: "clawhub_risk_acknowledgement_required",
         version: "1.2.3",
@@ -595,7 +603,7 @@ describe("plugin management Gateway handlers", () => {
 
   it("classifies ClawHub security outages as unavailable", async () => {
     managementMocks.install.mockRejectedValue(
-      new managementMocks.ManagedPluginLifecycleError("Security service unavailable", {
+      new ManagedPluginLifecycleError("Security service unavailable", {
         kind: "unavailable",
         code: "clawhub_security_unavailable",
       }),
@@ -651,7 +659,7 @@ describe("plugin management Gateway handlers", () => {
 
   it("classifies bundled uninstall refusals as invalid requests", async () => {
     managementMocks.uninstall.mockRejectedValue(
-      new managementMocks.ManagedPluginLifecycleError(
+      new ManagedPluginLifecycleError(
         "bundled plugin cannot be uninstalled: workboard; disable it instead",
       ),
     );

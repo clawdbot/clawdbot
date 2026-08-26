@@ -87,6 +87,7 @@ export function createInspectResult(
 ): PluginsInspectResult {
   return {
     ok: true,
+    reviewToken: "review-token-workboard",
     plugin: {
       id: "workboard",
       name: "Workboard",
@@ -99,6 +100,7 @@ export function createInspectResult(
       channels: [],
       providers: [],
       tools: [],
+      contracts: [],
       hooks: [],
       mcpServers: [],
       cliCommands: [],

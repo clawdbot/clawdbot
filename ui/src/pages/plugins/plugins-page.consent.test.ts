@@ -98,7 +98,7 @@ describe("PluginsPage consent", () => {
       expect(request).toHaveBeenCalledWith("plugins.install", {
         source: "official",
         pluginId: "calendar-runtime",
-        acknowledgeCapabilities: true,
+        acknowledgeCapabilities: { reviewToken: "review-token-workboard" },
       }),
     );
     await page.updateComplete;
@@ -158,7 +158,7 @@ describe("PluginsPage consent", () => {
       expect(request).toHaveBeenCalledWith("plugins.install", {
         source: "official",
         pluginId: "calendar-runtime",
-        acknowledgeCapabilities: true,
+        acknowledgeCapabilities: { reviewToken: "review-token-workboard" },
         acknowledgeInstallPolicyWarning: true,
       }),
     );
@@ -222,7 +222,9 @@ describe("PluginsPage consent", () => {
         expect(request).toHaveBeenCalledWith("plugins.setEnabled", {
           pluginId: "workboard",
           enabled: !initiallyEnabled,
-          ...(expectsConsent ? { acknowledgeCapabilities: true } : {}),
+          ...(expectsConsent
+            ? { acknowledgeCapabilities: { reviewToken: "review-token-workboard" } }
+            : {}),
         }),
       );
       expect(request.mock.calls.filter(([method]) => method === "plugins.inspect")).toHaveLength(
@@ -231,21 +233,46 @@ describe("PluginsPage consent", () => {
     },
   );
 
-  it("keeps installation available when a plugin is not yet inspectable", async () => {
+  it("reviews staged capabilities before acknowledging a previously uninspectable install", async () => {
     const installed = createPlugin({
       ...createAvailablePlugin(),
       installed: true,
       enabled: true,
       state: "enabled",
     });
-    const { page, request } = await mountDiscover(async (method) => {
+    const inspection = createInspectResult({
+      plugin: {
+        id: "calendar-runtime",
+        name: "Calendar Plus",
+        origin: "official",
+        installed: false,
+        enabled: false,
+      },
+      declared: { ...createInspectResult().declared, tools: ["calendar_review"] },
+    });
+    let inspectionAttempts = 0;
+    const { page, request } = await mountDiscover(async (method, params) => {
       if (method === "plugins.inspect") {
-        throw new GatewayRequestError({
-          code: "INVALID_REQUEST",
-          message: "plugin not found: calendar-runtime",
-        });
+        inspectionAttempts += 1;
+        if (inspectionAttempts === 1) {
+          throw new GatewayRequestError({
+            code: "INVALID_REQUEST",
+            message: "plugin not found: calendar-runtime",
+          });
+        }
+        return inspection;
       }
       if (method === "plugins.install") {
+        if (typeof params !== "object" || !params || !("acknowledgeCapabilities" in params)) {
+          throw new GatewayRequestError({
+            code: "INVALID_REQUEST",
+            message: "Capability consent required",
+            details: buildCapabilityConsentErrorDetails({
+              pluginId: "calendar-runtime",
+              reviewToken: inspection.reviewToken,
+            }),
+          });
+        }
         return { ok: true, plugin: installed, restartRequired: true };
       }
       if (method === "plugins.list") {
@@ -257,7 +284,7 @@ describe("PluginsPage consent", () => {
     await clickRowAction(page, '[data-plugin-id="calendar-runtime"]', "Install");
     await waitForFast(() =>
       expect(page.querySelector('[data-plugin-consent="install"]')?.textContent).toContain(
-        "Capability declarations are verified during install.",
+        "Capability declarations are verified against the installed artifact before approval.",
       ),
     );
     const confirm = page.querySelector<HTMLButtonElement>(
@@ -271,25 +298,49 @@ describe("PluginsPage consent", () => {
       expect(request).toHaveBeenCalledWith("plugins.install", {
         source: "official",
         pluginId: "calendar-runtime",
-        acknowledgeCapabilities: true,
       }),
     );
+    await waitForFast(() =>
+      expect(page.querySelector('[data-plugin-consent="install"]')?.textContent).toContain(
+        "calendar_review",
+      ),
+    );
+
+    page.querySelector<HTMLButtonElement>('[data-plugin-consent="install"] .btn.primary')?.click();
+
+    await waitForFast(() =>
+      expect(request).toHaveBeenCalledWith("plugins.install", {
+        source: "official",
+        pluginId: "calendar-runtime",
+        acknowledgeCapabilities: { reviewToken: inspection.reviewToken },
+      }),
+    );
+    expect(inspectionAttempts).toBe(2);
   });
 
-  it("uses authoritative consent details without inspecting again and acknowledges its retry", async () => {
+  it("hydrates a compact consent error through inspection and acknowledges its reviewed token", async () => {
     const plugin = createPlugin({ origin: "bundled", enabled: false, state: "disabled" });
     const updated = createPlugin({ ...plugin, enabled: true, state: "enabled" });
-    const inspection = createInspectResult();
+    const inspection = createInspectResult({
+      plugin: {
+        id: "workboard",
+        name: "Authoritative Workboard",
+        origin: "global",
+        installed: true,
+        enabled: false,
+      },
+      declared: { ...createInspectResult().declared, tools: ["workboard_review"] },
+    });
     const details = buildCapabilityConsentErrorDetails({
       pluginId: "workboard",
-      name: "Authoritative Workboard",
-      declared: { ...inspection.declared, tools: ["workboard_review"] },
-      grants: inspection.grants,
-      source: { kind: "npm", packageName: "@openclaw/workboard" },
+      reviewToken: inspection.reviewToken,
       widened: { tools: ["workboard_review"] },
       acceptedAt: "2026-08-20T14:03:00Z",
     });
     const { client, request } = createClient(async (method, params) => {
+      if (method === "plugins.inspect") {
+        return inspection;
+      }
       if (method === "plugins.setEnabled") {
         if (typeof params !== "object" || !params || !("acknowledgeCapabilities" in params)) {
           throw new GatewayRequestError({
@@ -317,7 +368,7 @@ describe("PluginsPage consent", () => {
       expect(dialog?.textContent).toContain("Authoritative Workboard");
       expect(dialog?.textContent).toContain("workboard_review");
     });
-    expect(request.mock.calls.some(([method]) => method === "plugins.inspect")).toBe(false);
+    expect(request).toHaveBeenCalledWith("plugins.inspect", { pluginId: "workboard" });
 
     page.querySelector<HTMLButtonElement>('[data-plugin-consent="enable"] .btn.primary')?.click();
 
@@ -325,23 +376,26 @@ describe("PluginsPage consent", () => {
       expect(request).toHaveBeenCalledWith("plugins.setEnabled", {
         pluginId: "workboard",
         enabled: true,
-        acknowledgeCapabilities: true,
+        acknowledgeCapabilities: { reviewToken: inspection.reviewToken },
       }),
     );
     await page.updateComplete;
     expect(page.querySelector('[data-plugin-consent="enable"]')).toBeNull();
   });
 
-  it("does not reopen consent when an acknowledged enable retry remains rejected", async () => {
+  it("reopens consent with a fresh inspection when an acknowledged surface changes", async () => {
     const plugin = createPlugin({ origin: "bundled", enabled: false, state: "disabled" });
     const inspection = createInspectResult();
     const details = buildCapabilityConsentErrorDetails({
       pluginId: "workboard",
-      name: "Workboard",
-      declared: inspection.declared,
-      grants: inspection.grants,
+      reviewToken: inspection.reviewToken,
     });
+    let inspectionAttempts = 0;
     const { client, request } = createClient(async (method) => {
+      if (method === "plugins.inspect") {
+        inspectionAttempts += 1;
+        return createInspectResult({ reviewToken: `review-token-${inspectionAttempts}` });
+      }
       if (method === "plugins.setEnabled") {
         throw new GatewayRequestError({
           code: "INVALID_REQUEST",
@@ -359,7 +413,10 @@ describe("PluginsPage consent", () => {
 
     await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
     await waitForFast(() =>
-      expect(page.querySelector('[data-plugin-consent="enable"]')).not.toBeNull(),
+      expect(
+        page.querySelector<HTMLButtonElement>('[data-plugin-consent="enable"] .btn.primary')
+          ?.disabled,
+      ).toBe(false),
     );
     page.querySelector<HTMLButtonElement>('[data-plugin-consent="enable"] .btn.primary')?.click();
 
@@ -368,10 +425,13 @@ describe("PluginsPage consent", () => {
         2,
       ),
     );
-    await waitForFast(() =>
-      expect(page.textContent).toContain("Capability consent remains invalid"),
-    );
-    expect(page.querySelector('[data-plugin-consent="enable"]')).toBeNull();
+    await waitForFast(() => expect(inspectionAttempts).toBe(2));
+    expect(page.querySelector('[data-plugin-consent="enable"]')).not.toBeNull();
+    expect(request).toHaveBeenCalledWith("plugins.setEnabled", {
+      pluginId: "workboard",
+      enabled: true,
+      acknowledgeCapabilities: { reviewToken: "review-token-1" },
+    });
   });
 
   it("keeps hard inspection failures visible and retries before enabling the action", async () => {
@@ -445,5 +505,46 @@ describe("PluginsPage consent", () => {
     );
     expect(request).toHaveBeenCalledOnce();
     expect(request).toHaveBeenCalledWith("plugins.inspect", { pluginId: "workboard" });
+  });
+
+  it("keeps detail inspection failures visible and retries in the same overlay", async () => {
+    let attempts = 0;
+    const { client, request } = createClient(async (method) => {
+      if (method === "plugins.inspect") {
+        attempts += 1;
+        if (attempts === 1) {
+          throw new GatewayRequestError({ code: "UNAVAILABLE", message: "Inspection unavailable" });
+        }
+        return createInspectResult({
+          declared: { ...createInspectResult().declared, tools: ["workboard_create"] },
+        });
+      }
+      throw new Error(`Unexpected method ${method}`);
+    });
+    const harness = createGateway(client);
+    const { page } = await mountPage(
+      createContext(harness.gateway),
+      createPluginsRouteData(harness.gateway),
+    );
+
+    page
+      .querySelector<HTMLButtonElement>('[data-plugin-id="workboard"] .plugins-item__detail-button')
+      ?.click();
+
+    await waitForFast(() =>
+      expect(
+        page.querySelector('.plugins-detail__capabilities [role="alert"]')?.textContent,
+      ).toContain("Inspection unavailable"),
+    );
+    page
+      .querySelector<HTMLButtonElement>('.plugins-detail__capabilities [role="alert"] button')
+      ?.click();
+
+    await waitForFast(() =>
+      expect(page.querySelector(".plugins-detail__capabilities")?.textContent).toContain(
+        "workboard_create",
+      ),
+    );
+    expect(request.mock.calls.filter(([method]) => method === "plugins.inspect")).toHaveLength(2);
   });
 });

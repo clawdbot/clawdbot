@@ -51,7 +51,7 @@ function createProps(overrides: Partial<PluginsViewProps> = {}): PluginsViewProp
     pendingRemoval: {},
     detailPluginId: null,
     detailInspection: null,
-    detailInspectionLoading: false,
+    detailInspectionError: null,
     consent: null,
     consentInspection: null,
     consentInspectionLoading: false,
@@ -397,13 +397,29 @@ describe("renderPlugins", () => {
   });
 
   it("shows the inspection loading state in installed plugin details", () => {
-    const container = mount(
-      createProps({ detailPluginId: "workboard", detailInspectionLoading: true }),
-    );
+    const container = mount(createProps({ detailPluginId: "workboard" }));
 
     expect(normalizedText(container.querySelector(".plugins-detail__capabilities"))).toContain(
       "Loading capability details…",
     );
+  });
+
+  it("shows an inspection error and retries from installed plugin details", () => {
+    const onShowDetails = vi.fn();
+    const container = mount(
+      createProps({
+        detailPluginId: "workboard",
+        detailInspectionError: "Inspection unavailable",
+        onShowDetails,
+      }),
+    );
+
+    const details = container.querySelector(".plugins-detail__capabilities");
+    expect(normalizedText(details?.querySelector('[role="alert"]') ?? null)).toContain(
+      "Inspection unavailable",
+    );
+    details?.querySelector<HTMLButtonElement>('[role="alert"] button')?.click();
+    expect(onShowDetails).toHaveBeenCalledWith("workboard");
   });
 
   it("lists MCP servers with direct toggle and remove plus the add form", () => {

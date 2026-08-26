@@ -12,7 +12,10 @@ const enPluginConsent = {
     declaredDescription:
       "From the plugin manifest. OpenClaw validates the plugin against these declarations when it loads.",
     declaredEmpty: "No channels, providers, or tools declared in the manifest.",
+    contracts: "Contracts",
     hooks: "Hooks",
+    runtimeHooks:
+      "Code plugins may register hooks at runtime; their hook names are not declared in the manifest.",
     mcpServers: "MCP servers",
     cliCommands: "CLI commands",
     cliBackends: "CLI backends",
@@ -40,7 +43,7 @@ const enPluginConsent = {
     noOverrides: "No overrides configured",
     loading: "Loading capability details…",
     fallback:
-      "Capability declarations are verified during install. The download is integrity-pinned, and risky findings pause the install for review.",
+      "Capability declarations are verified against the installed artifact before approval. The install pauses if additional review is required.",
     verifiedClean: "Verified clean",
     reviewRecommended: "Review recommended",
     reviewRequired: "Review required",

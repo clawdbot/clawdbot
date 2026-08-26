@@ -1,4 +1,3 @@
-import type { CapabilityConsentErrorDetails } from "../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   PluginAcceptedDeclaredSurface,
@@ -6,98 +5,17 @@ import type {
 } from "../config/types.plugins.js";
 import { readInstalledPackageManifest } from "../infra/package-update-utils.js";
 import {
+  buildPluginCapabilityConsentReview,
   computeDeclaredSurfaceHash,
   diffDeclaredSurfaceWidening,
+  resolveAcceptedSurfaceCurrent,
   resolvePluginArtifactDeclaredSurface,
   resolvePluginInstallRecordIntegrity,
+  type PluginCapabilityConsentHandler,
 } from "./capability-consent.js";
-import { buildPluginCapabilitySummary } from "./capability-summary.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import type { PluginInstallArtifactConsentHandler } from "./install-types.js";
 import { loadPluginManifest } from "./manifest.js";
-
-type PluginUpdateCapabilityConsentDetails = Omit<
-  CapabilityConsentErrorDetails,
-  "capabilityConsentCode"
->;
-
-export type PluginUpdateCapabilityConsentHandler = (
-  details: PluginUpdateCapabilityConsentDetails,
-) => boolean | Promise<boolean>;
-
-function buildPluginUpdateCapabilityConsentDetails(params: {
-  config: OpenClawConfig;
-  pluginId: string;
-  record: PluginInstallRecord;
-  stagedArtifactDir: string;
-  declared: PluginAcceptedDeclaredSurface;
-  widened: Partial<PluginAcceptedDeclaredSurface>;
-}): PluginUpdateCapabilityConsentDetails {
-  const manifest = loadPluginManifest(params.stagedArtifactDir);
-  const packageManifest = readInstalledPackageManifest(params.stagedArtifactDir);
-  const name =
-    (manifest.ok ? manifest.manifest.name : undefined) ??
-    (typeof packageManifest?.name === "string" ? packageManifest.name : undefined) ??
-    params.pluginId;
-  const version =
-    (manifest.ok ? manifest.manifest.version : undefined) ??
-    (typeof packageManifest?.version === "string" ? packageManifest.version : undefined);
-  const spec = params.record.resolvedSpec ?? params.record.spec;
-  const packageName = params.record.clawhubPackage ?? params.record.resolvedName;
-  const integrity = resolvePluginInstallRecordIntegrity(params.record);
-  const summary = buildPluginCapabilitySummary({
-    manifest: manifest.ok ? manifest.manifest : {},
-    origin: "global",
-    entryConfig: params.config.plugins?.entries?.[params.pluginId],
-  });
-  return {
-    pluginId: params.pluginId,
-    name,
-    ...(version ? { version } : {}),
-    declared: params.declared,
-    grants: summary.grants,
-    source: {
-      kind: params.record.source,
-      ...(spec ? { spec } : {}),
-      ...(packageName ? { packageName } : {}),
-      ...(integrity
-        ? {
-            integrity,
-            integrityKind:
-              params.record.integrity || params.record.npmIntegrity
-                ? ("ssri" as const)
-                : params.record.clawpackSha256
-                  ? ("sha256" as const)
-                  : ("git-commit" as const),
-          }
-        : {}),
-    },
-    widened: params.widened,
-    ...(params.record.clawhubTrustDisposition
-      ? {
-          trust: {
-            disposition: params.record.clawhubTrustDisposition,
-            ...(params.record.clawhubTrustReasons
-              ? { reasons: params.record.clawhubTrustReasons }
-              : {}),
-            ...(params.record.clawhubTrustCheckedAt
-              ? { checkedAt: params.record.clawhubTrustCheckedAt }
-              : {}),
-            ...(params.record.clawhubTrustAcknowledgedAt
-              ? { acknowledgedAt: params.record.clawhubTrustAcknowledgedAt }
-              : {}),
-            ...(params.record.clawhubTrustPending !== undefined
-              ? { pending: params.record.clawhubTrustPending }
-              : {}),
-            ...(params.record.clawhubTrustStale !== undefined
-              ? { stale: params.record.clawhubTrustStale }
-              : {}),
-          },
-        }
-      : {}),
-    ...(params.record.acceptedSurfaceAt ? { acceptedAt: params.record.acceptedSurfaceAt } : {}),
-  };
-}
 
 export function preparePluginUpdateCapabilityConsent(params: {
   config: OpenClawConfig;
@@ -105,8 +23,8 @@ export function preparePluginUpdateCapabilityConsent(params: {
   record: PluginInstallRecord;
   installPath: string;
   packagePluginIds?: readonly string[];
-  acknowledgeCapabilities?: boolean;
-  onCapabilityConsent?: PluginUpdateCapabilityConsentHandler;
+  expectedIntegrity?: string;
+  onCapabilityConsent?: PluginCapabilityConsentHandler;
 }): {
   onBeforePluginArtifactCommit: PluginInstallArtifactConsentHandler;
   acceptInstallRecord: <T extends PluginInstallRecord>(record: T) => T;
@@ -134,6 +52,8 @@ export function preparePluginUpdateCapabilityConsent(params: {
       const declared = resolvePluginArtifactDeclaredSurface(stagedArtifactDir);
       artifactReviewed = true;
       const { widened, hasWidening } = diffDeclaredSurfaceWidening(previousDeclared, declared);
+      const priorAcceptanceCurrent = resolveAcceptedSurfaceCurrent(params.record, previousDeclared);
+      const priorIntegrity = resolvePluginInstallRecordIntegrity(params.record);
       // Unknown package ownership must not let a disabled owner hide an enabled sibling.
       const enabled =
         !params.packagePluginIds?.length ||
@@ -147,26 +67,57 @@ export function preparePluginUpdateCapabilityConsent(params: {
             }).enabled,
         );
 
-      if (hasWidening && enabled) {
-        const details = buildPluginUpdateCapabilityConsentDetails({
-          ...params,
-          stagedArtifactDir,
+      const requiresAcceptance =
+        hasWidening ||
+        (params.record.acceptedSurface !== undefined &&
+          (!priorAcceptanceCurrent || !priorIntegrity));
+      if (requiresAcceptance && enabled) {
+        const loadedManifest = loadPluginManifest(stagedArtifactDir);
+        const packageManifest = readInstalledPackageManifest(stagedArtifactDir);
+        const packageName =
+          typeof packageManifest?.name === "string" ? packageManifest.name : undefined;
+        const packageVersion =
+          typeof packageManifest?.version === "string" ? packageManifest.version : undefined;
+        const manifest = {
+          ...(loadedManifest.ok ? loadedManifest.manifest : {}),
+          name:
+            (loadedManifest.ok ? loadedManifest.manifest.name : undefined) ??
+            packageName ??
+            params.pluginId,
+          version:
+            (loadedManifest.ok ? loadedManifest.manifest.version : undefined) ?? packageVersion,
+        };
+        const {
+          integrity: _previousIntegrity,
+          npmIntegrity: _previousNpmIntegrity,
+          clawpackSha256: _previousClawpackIntegrity,
+          gitCommit: _previousGitCommit,
+          ...previousRecordWithoutIntegrity
+        } = params.record;
+        const review = buildPluginCapabilityConsentReview({
+          config: params.config,
+          pluginId: params.pluginId,
+          record: {
+            ...previousRecordWithoutIntegrity,
+            ...(params.expectedIntegrity ? { integrity: params.expectedIntegrity } : {}),
+          },
+          manifest,
           declared,
           widened,
         });
-        const accepted =
-          params.acknowledgeCapabilities === true ||
-          (params.onCapabilityConsent ? await params.onCapabilityConsent(details) : false);
-        if (!accepted) {
+        const acknowledgment = await params.onCapabilityConsent?.(review);
+        // The prompt can yield while staged files change; bind approval to the final artifact.
+        const finalDeclared = resolvePluginArtifactDeclaredSurface(stagedArtifactDir);
+        if (acknowledgment?.reviewToken !== computeDeclaredSurfaceHash(finalDeclared)) {
           throw new Error(
-            `Plugin "${params.pluginId}" declares new capabilities; rerun with --accept-capabilities.`,
+            `Plugin "${params.pluginId}" requires capability consent; rerun with --accept-capabilities.`,
           );
         }
-        acceptedSurface = declared;
+        acceptedSurface = finalDeclared;
         acceptedSurfaceAt = new Date().toISOString();
         return;
       }
-      if (!hasWidening && params.record.acceptedSurface) {
+      if (!hasWidening && priorAcceptanceCurrent && priorIntegrity) {
         acceptedSurface = declared;
         acceptedSurfaceAt = new Date().toISOString();
       }
@@ -180,7 +131,7 @@ export function preparePluginUpdateCapabilityConsent(params: {
       if (!acceptedSurface || !acceptedSurfaceAt) {
         return record;
       }
-      const integrity = resolvePluginInstallRecordIntegrity(record);
+      const integrity = resolvePluginInstallRecordIntegrity(record)?.integrity;
       return {
         ...record,
         acceptedSurface,

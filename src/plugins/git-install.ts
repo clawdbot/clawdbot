@@ -294,7 +294,18 @@ async function replaceManagedGitRepo(params: {
   stagedRepoDir: string;
   persistentRepoDir: string;
   deferCommit?: boolean;
+  onBeforePublish?: (stagedRepoDir: string) => Promise<void>;
 }): Promise<{ ok: true; transaction?: PluginInstallTransaction } | { ok: false; error: string }> {
+  let artifactConsentFailure: { error: unknown } | undefined;
+  const reviewFinalArtifact = async (stagedRepoDir: string) => {
+    try {
+      await params.onBeforePublish?.(stagedRepoDir);
+      return { ok: true as const };
+    } catch (error) {
+      artifactConsentFailure = { error };
+      throw error;
+    }
+  };
   try {
     if (params.deferCommit) {
       const result = await installPackageDir(
@@ -306,11 +317,17 @@ async function replaceManagedGitRepo(params: {
           copyErrorPrefix: "failed to replace managed git plugin repository",
           hasDeps: false,
           depsLogMessage: "",
+          // Deferred publication copies the clone again; review that final copy.
+          afterInstall: reviewFinalArtifact,
         }),
       );
+      if (artifactConsentFailure) {
+        throw artifactConsentFailure.error;
+      }
       const transaction = result.ok ? resolvePackageDirInstallTransaction(result) : undefined;
       return result.ok ? { ok: true, ...(transaction ? { transaction } : {}) } : result;
     }
+    await reviewFinalArtifact(params.stagedRepoDir);
     await replaceDirectoryAtomic({
       stagedDir: params.stagedRepoDir,
       targetDir: params.persistentRepoDir,
@@ -318,6 +335,9 @@ async function replaceManagedGitRepo(params: {
     });
     return { ok: true };
   } catch (err) {
+    if (artifactConsentFailure) {
+      throw artifactConsentFailure.error;
+    }
     return {
       ok: false,
       error: `failed to replace managed git plugin repository: ${String(err)}`,
@@ -527,16 +547,18 @@ export async function installPluginFromGitSpec(
     }
     let transaction: PluginInstallTransaction | undefined;
     if (!params.dryRun) {
-      await params.onBeforePluginArtifactCommit?.({
-        pluginId: result.pluginId,
-        ...(effectiveMode === "update" ? { currentArtifactDir: persistentRepoDir } : {}),
-        stagedArtifactDir: repoDir,
-        mode: effectiveMode,
-      });
       const replaceResult = await replaceManagedGitRepo({
         stagedRepoDir: repoDir,
         persistentRepoDir,
         deferCommit: isPluginInstallCommitDeferred(params),
+        onBeforePublish: async (stagedArtifactDir) => {
+          await params.onBeforePluginArtifactCommit?.({
+            pluginId: result.pluginId,
+            ...(effectiveMode === "update" ? { currentArtifactDir: persistentRepoDir } : {}),
+            stagedArtifactDir,
+            mode: effectiveMode,
+          });
+        },
       });
       if (!replaceResult.ok) {
         return replaceResult;

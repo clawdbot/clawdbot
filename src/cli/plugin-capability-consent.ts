@@ -1,20 +1,21 @@
-import type { CapabilityConsentErrorDetails } from "../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
+import type {
+  PluginCapabilityConsentHandler,
+  PluginCapabilityConsentReview,
+} from "../plugins/capability-consent.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { promptYesNo } from "./prompt.js";
 
-type PluginCapabilityConsentDetails = Omit<CapabilityConsentErrorDetails, "capabilityConsentCode">;
-
 export type PluginCapabilityConsentCliOptions = {
-  acknowledgeCapabilities?: true;
-  onCapabilityConsent?: (details: PluginCapabilityConsentDetails) => Promise<boolean>;
+  onCapabilityConsent?: PluginCapabilityConsentHandler;
 };
 
 const CAPABILITY_GROUP_LABELS = [
   ["channels", "Channels"],
   ["providers", "Providers"],
   ["tools", "Tools"],
+  ["contracts", "Contracts"],
   ["hooks", "Hooks"],
   ["mcpServers", "MCP servers"],
   ["cliCommands", "CLI commands"],
@@ -22,14 +23,14 @@ const CAPABILITY_GROUP_LABELS = [
   ["skills", "Skills"],
   ["dangerousConfigFlags", "Dangerous configuration flags"],
 ] as const satisfies ReadonlyArray<
-  readonly [keyof PluginCapabilityConsentDetails["declared"], string]
+  readonly [keyof PluginCapabilityConsentReview["declared"], string]
 >;
 
 function sanitizeCapabilityValues(values: readonly string[]): string {
   return values.map((value) => sanitizeTerminalText(value)).join(", ");
 }
 
-function formatPluginCapabilityConsentLines(details: PluginCapabilityConsentDetails): string[] {
+function formatPluginCapabilityConsentLines(details: PluginCapabilityConsentReview): string[] {
   const name = sanitizeTerminalText(details.name);
   const pluginId = sanitizeTerminalText(details.pluginId);
   const version = details.version ? ` @ ${sanitizeTerminalText(details.version)}` : "";
@@ -90,7 +91,9 @@ export function resolvePluginCapabilityConsentCliOptions(params: {
   runtime?: RuntimeEnv;
 }): PluginCapabilityConsentCliOptions {
   if (params.acceptCapabilities) {
-    return { acknowledgeCapabilities: true };
+    return {
+      onCapabilityConsent: async (details) => ({ reviewToken: details.reviewToken }),
+    };
   }
   if (params.allowPrompt === false || !process.stdin.isTTY || !process.stdout.isTTY) {
     return {};
@@ -101,9 +104,11 @@ export function resolvePluginCapabilityConsentCliOptions(params: {
       for (const line of formatPluginCapabilityConsentLines(details)) {
         runtime.log(theme.warn(line));
       }
-      return await promptYesNo(
+      return (await promptYesNo(
         `Accept these capabilities and ${params.action} "${sanitizeTerminalText(details.pluginId)}"?`,
-      );
+      ))
+        ? { reviewToken: details.reviewToken }
+        : undefined;
     },
   };
 }

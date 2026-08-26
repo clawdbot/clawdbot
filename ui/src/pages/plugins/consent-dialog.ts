@@ -103,6 +103,7 @@ function capabilityGroups(): ReadonlyArray<readonly [keyof PluginDeclaredSurface
     ["channels", t("pluginsPage.categoryChannels")],
     ["providers", t("pluginsPage.categoryProviders")],
     ["tools", t("pluginsPage.categoryTools")],
+    ["contracts", t("pluginConsent.contracts")],
     ["hooks", t("pluginConsent.hooks")],
     ["mcpServers", t("pluginConsent.mcpServers")],
     ["cliCommands", t("pluginConsent.cliCommands")],
@@ -125,6 +126,9 @@ export function renderPluginDeclaredCapabilities(declared: PluginDeclaredSurface
       ${rows.length > 0
         ? html`<div class="plugins-consent__rows">${rows}</div>`
         : html`<p class="plugins-consent__hint">${t("pluginConsent.declaredEmpty")}</p>`}
+      ${declared.hooks.length === 0
+        ? capabilityRow(t("pluginConsent.hooks"), t("pluginConsent.runtimeHooks"))
+        : nothing}
       ${declared.dangerousConfigFlags.length > 0
         ? capabilityRow(
             t("pluginConsent.dangerousFlags"),
@@ -358,17 +362,16 @@ function renderTrust(trust: PluginsInspectResult["trust"]) {
 export function renderPluginConsentDialog(props: PluginConsentDialogProps): TemplateResult {
   const { consent, inspection } = props;
   const details = consent.details;
-  const capabilities = details ?? inspection;
   const plugin = inspection?.plugin;
   const fallback = consent.fallback;
   const packageName =
-    capabilities?.source?.packageName ??
+    inspection?.source?.packageName ??
     (consent.intent.kind === "install" && consent.intent.request.source === "clawhub"
       ? consent.intent.request.packageName
       : null);
   const slug = consent.pluginId ?? packageName ?? fallback?.name ?? "plugin";
-  const name = details?.name ?? plugin?.name ?? fallback?.name ?? slug;
-  const version = details?.version ?? plugin?.version ?? fallback?.version;
+  const name = plugin?.name ?? fallback?.name ?? slug;
+  const version = plugin?.version ?? fallback?.version;
   const origin = originLabel(plugin?.origin, fallback?.official);
   const verification =
     fallback?.verificationTier === "source-linked"
@@ -409,12 +412,12 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): Temp
                   ${t("pluginsPage.tryAgain")}
                 </button>
               </div>`
-            : capabilities
+            : inspection
               ? html`
-                  ${renderProvenance(capabilities.source)} ${renderTrust(capabilities.trust)}
+                  ${renderProvenance(inspection.source)} ${renderTrust(inspection.trust)}
                   ${details ? renderWidenedCapabilities(details) : nothing}
-                  ${renderPluginDeclaredCapabilities(capabilities.declared)}
-                  ${renderPluginGrants(capabilities.grants, plugin?.origin)}
+                  ${renderPluginDeclaredCapabilities(inspection.declared)}
+                  ${renderPluginGrants(inspection.grants, plugin?.origin)}
                 `
               : html`<p class="plugins-consent__description">${t("pluginConsent.fallback")}</p>`}
         <footer class="plugins-consent__actions">
@@ -425,7 +428,11 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): Temp
             type="button"
             class="btn primary"
             title=${props.mutationBlockedReason ?? ""}
-            ?disabled=${!props.canMutate || props.busy || props.loading || Boolean(props.error)}
+            ?disabled=${!props.canMutate ||
+            props.busy ||
+            props.loading ||
+            Boolean(props.error) ||
+            (!inspection && (consent.intent.kind === "enable" || Boolean(details)))}
             @click=${props.onConfirm}
           >
             ${action}

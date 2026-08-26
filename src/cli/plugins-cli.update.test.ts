@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ClawHubTrustErrorCode } from "../infra/clawhub-install-trust.js";
 import { resolveRegistryUpdateChannel } from "../infra/update-channels.js";
+import type { PluginCapabilityConsentReview } from "../plugins/capability-consent.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "../plugins/clawhub-error-codes.js";
 import {
   attachPluginInstallOwnerMigrations,
@@ -81,6 +82,36 @@ function createTrackedPluginConfig(params: {
       },
     },
   } as OpenClawConfig;
+}
+
+function createCapabilityConsentReview(): PluginCapabilityConsentReview {
+  return {
+    pluginId: "alpha",
+    name: "Alpha plugin",
+    version: "2.0.0",
+    source: { kind: "npm", spec: "@acme/alpha", integrity: "sha512-alpha" },
+    declared: {
+      channels: [],
+      providers: [],
+      tools: ["read", "write"],
+      contracts: ["gatewayMethodDispatch: alpha.run"],
+      hooks: [],
+      mcpServers: [],
+      cliCommands: [],
+      cliBackends: [],
+      skills: [],
+      dangerousConfigFlags: [],
+    },
+    grants: {
+      hooks: {
+        allowPromptInjection: { effective: true },
+        allowConversationAccess: { effective: false },
+      },
+    },
+    widened: { tools: ["write"] },
+    trust: { disposition: "review-recommended", reasons: ["Community maintained"] },
+    reviewToken: "reviewed-alpha-surface",
+  };
 }
 
 function expectRestartNoticeLogged() {
@@ -1490,7 +1521,7 @@ describe("plugins cli update", () => {
     );
   });
 
-  it("passes explicit capability acceptance to plugin updates", async () => {
+  it("binds explicit update acceptance to the reviewed capability surface", async () => {
     setTty(false);
     const config = createTrackedPluginConfig({ pluginId: "alpha", spec: "@acme/alpha" });
     pluginCliConfigMock.mockReturnValue(config);
@@ -1499,9 +1530,17 @@ describe("plugins cli update", () => {
 
     await runPluginsCommand(["plugins", "update", "alpha", "--accept-capabilities"]);
 
-    expect(updateNpmInstalledPluginsMock).toHaveBeenCalledWith(
-      expect.objectContaining({ pluginIds: ["alpha"], acknowledgeCapabilities: true }),
-    );
+    const updateParams = expectSingleCallParams(updateNpmInstalledPluginsMock);
+    expect(updateParams.pluginIds).toEqual(["alpha"]);
+    expect(updateParams).not.toHaveProperty("acknowledgeCapabilities");
+    const consent = updateParams.onCapabilityConsent;
+    if (typeof consent !== "function") {
+      throw new Error("expected explicit plugin capability consent callback");
+    }
+    await expect(consent(createCapabilityConsentReview())).resolves.toEqual({
+      reviewToken: "reviewed-alpha-surface",
+    });
+    expect(promptYesNoMock).not.toHaveBeenCalled();
   });
 
   it("shows widened capabilities and requests consent for interactive plugin updates", async () => {
@@ -1517,38 +1556,15 @@ describe("plugins cli update", () => {
     if (typeof consent !== "function") {
       throw new Error("expected interactive plugin capability consent callback");
     }
-    await expect(
-      consent({
-        pluginId: "alpha",
-        name: "Alpha plugin",
-        version: "2.0.0",
-        source: { kind: "npm", spec: "@acme/alpha", integrity: "sha512-alpha" },
-        declared: {
-          channels: [],
-          providers: [],
-          tools: ["read", "write"],
-          hooks: [],
-          mcpServers: [],
-          cliCommands: [],
-          cliBackends: [],
-          skills: [],
-          dangerousConfigFlags: [],
-        },
-        grants: {
-          hooks: {
-            allowPromptInjection: { effective: true },
-            allowConversationAccess: { effective: false },
-          },
-        },
-        widened: { tools: ["write"] },
-        trust: { disposition: "review-recommended", reasons: ["Community maintained"] },
-      }),
-    ).resolves.toBe(true);
+    await expect(consent(createCapabilityConsentReview())).resolves.toEqual({
+      reviewToken: "reviewed-alpha-surface",
+    });
 
     expect(pluginsCliRuntimeLogs).toEqual(
       expect.arrayContaining([
         expect.stringContaining("Alpha plugin (alpha) @ 2.0.0"),
         expect.stringContaining("Integrity: sha512-alpha"),
+        expect.stringContaining("Contracts: gatewayMethodDispatch: alpha.run"),
         expect.stringContaining("New tools: write"),
         expect.stringContaining("Conversation access: denied"),
         expect.stringContaining("Trust: review-recommended"),

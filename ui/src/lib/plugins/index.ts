@@ -15,6 +15,7 @@ import type {
   PluginsInstallResult,
   PluginsListResult as ProtocolPluginsListResult,
   PluginsSearchResult as ProtocolPluginsSearchResult,
+  PluginsSetEnabledParams,
   PluginsSetEnabledResult,
   PluginsUninstallResult,
 } from "../../../../packages/gateway-protocol/src/schema/plugins.js";
@@ -77,12 +78,12 @@ export function setPluginEnabled(
   client: GatewayBrowserClient,
   pluginId: string,
   enabled: boolean,
-  options?: { acknowledgeCapabilities?: true },
+  options?: Pick<PluginsSetEnabledParams, "acknowledgeCapabilities">,
 ): Promise<PluginMutationResult> {
   return client.request<PluginMutationResult>("plugins.setEnabled", {
     pluginId,
     enabled,
-    ...(options?.acknowledgeCapabilities ? { acknowledgeCapabilities: true } : {}),
+    ...options,
   });
 }
 

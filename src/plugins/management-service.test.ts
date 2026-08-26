@@ -1,5 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { computeDeclaredSurfaceHash } from "./capability-consent.js";
+import { buildPluginCapabilitySummary } from "./capability-summary.js";
 import {
   configSnapshot,
   emptyMetadataSnapshot,
@@ -126,6 +128,11 @@ function mockHostedOfficialCatalog(entries: unknown[]) {
 }
 
 const trackedArtifactDirs: string[] = [];
+const emptyArtifactAcknowledgment = {
+  reviewToken: computeDeclaredSurfaceHash(
+    buildPluginCapabilitySummary({ manifest: {}, origin: "global" }).declared,
+  ),
+};
 
 function mockClawHubInstall(pluginId: string, packageName: string, targetDir?: string) {
   mocks.clawhubInstall.mockImplementation(async (params) => {
@@ -656,7 +663,7 @@ describe("plugin management service", () => {
       request: {
         source: "clawhub",
         packageName: "@openclaw/bluebubbles",
-        acknowledgeCapabilities: true,
+        acknowledgeCapabilities: emptyArtifactAcknowledgment,
       },
       env: {},
     });
@@ -711,7 +718,11 @@ describe("plugin management service", () => {
     );
 
     await installManagedPlugin({
-      request: { source: "official", pluginId: "diffs", acknowledgeCapabilities: true },
+      request: {
+        source: "official",
+        pluginId: "diffs",
+        acknowledgeCapabilities: emptyArtifactAcknowledgment,
+      },
       env: {},
     });
 
@@ -786,7 +797,7 @@ describe("plugin management service", () => {
         source: "official",
         pluginId: "diffs",
         acknowledgeInstallPolicyWarning: true,
-        acknowledgeCapabilities: true,
+        acknowledgeCapabilities: emptyArtifactAcknowledgment,
       },
       env: {},
     });
@@ -812,7 +823,7 @@ describe("plugin management service", () => {
       request: {
         source: "clawhub",
         packageName: "community/demo",
-        acknowledgeCapabilities: true,
+        acknowledgeCapabilities: emptyArtifactAcknowledgment,
       },
       env: {},
     });

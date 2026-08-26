@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { computeDeclaredSurfaceHash } from "./capability-consent.js";
+import { buildPluginCapabilitySummary } from "./capability-summary.js";
 import { recordInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
 import { recordPluginManifestInstallOwner } from "./manifest-install-owner.js";
 import { createColdPluginFixture } from "./test-helpers/cold-plugin-fixtures.js";
@@ -72,6 +74,11 @@ const installSnapshot = {
 };
 
 const trackedArtifactDirs: string[] = [];
+const emptyArtifactAcknowledgment = {
+  reviewToken: computeDeclaredSurfaceHash(
+    buildPluginCapabilitySummary({ manifest: {}, origin: "global" }).declared,
+  ),
+};
 
 function mockClawHubWorkboardInstall() {
   mocks.clawhubInstall.mockImplementation(
@@ -230,7 +237,7 @@ describe("plugin management registry refresh", () => {
       request: {
         source: "clawhub",
         packageName: "community/workboard",
-        acknowledgeCapabilities: true,
+        acknowledgeCapabilities: emptyArtifactAcknowledgment,
       },
       env: {},
     });
@@ -269,7 +276,7 @@ describe("plugin management registry refresh", () => {
       request: {
         source: "clawhub",
         packageName: "community/workboard",
-        acknowledgeCapabilities: true,
+        acknowledgeCapabilities: emptyArtifactAcknowledgment,
       },
       env: {},
     });
@@ -297,7 +304,7 @@ describe("plugin management registry refresh", () => {
       snapshot: installSnapshot,
       env: {},
       logger,
-      acknowledgeCapabilities: true,
+      acknowledgeCapabilities: emptyArtifactAcknowledgment,
     });
 
     expect(mocks.clawhubInstall).toHaveBeenCalledWith(expect.objectContaining({ logger }));

@@ -1,4 +1,9 @@
 // Plugin-catalog fixtures for the Control UI mock dev harness.
+import { createHash } from "node:crypto";
+import type {
+  PluginDeclaredSurface,
+  PluginsInspectResult,
+} from "../packages/gateway-protocol/src/schema/plugins.js";
 
 export function buildPluginCatalogMock() {
   const entry = (params: {
@@ -79,10 +84,11 @@ export function buildPluginCatalogMock() {
 
 /** Parameterized plugins.inspect fixtures for the consent dialog and detail overlay. */
 export function buildPluginInspectMock() {
-  const emptyDeclared = {
+  const emptyDeclared: PluginDeclaredSurface = {
     channels: [],
     providers: [],
     tools: [],
+    contracts: [],
     hooks: [],
     mcpServers: [],
     cliCommands: [],
@@ -90,146 +96,102 @@ export function buildPluginInspectMock() {
     skills: [],
     dangerousConfigFlags: [],
   };
-  const grants = (params: { bundled: boolean; conversationConfigured?: boolean }) => ({
-    hooks: {
-      allowPromptInjection: { effective: true },
-      allowConversationAccess: {
-        effective: params.bundled || params.conversationConfigured === true,
-        ...(params.conversationConfigured !== undefined
-          ? { configured: params.conversationConfigured }
-          : {}),
-      },
-    },
-  });
-  return {
-    cases: [
+  const fixtures = new Map<
+    string,
+    {
+      source: NonNullable<PluginsInspectResult["source"]>;
+      declared: Partial<PluginDeclaredSurface>;
+      trust?: PluginsInspectResult["trust"];
+    }
+  >([
+    [
+      "telegram",
       {
-        match: { pluginId: "telegram" },
-        response: {
-          ok: true,
-          plugin: {
-            id: "telegram",
-            name: "Telegram",
-            version: "1.4.0",
-            description: "Chat with your agent from Telegram DMs and groups.",
-            origin: "bundled",
-            installed: true,
-            enabled: true,
-          },
-          source: { kind: "bundled" },
-          declared: {
-            ...emptyDeclared,
-            channels: ["telegram"],
-            cliCommands: ["telegram"],
-          },
-          grants: grants({ bundled: true }),
-        },
-      },
-      {
-        match: { pluginId: "discord" },
-        response: {
-          ok: true,
-          plugin: {
-            id: "discord",
-            name: "Discord",
-            version: "1.4.0",
-            description: "Bridge agents into Discord servers and DMs.",
-            origin: "global",
-            installed: true,
-            enabled: false,
-          },
-          source: {
-            kind: "npm",
-            spec: "@openclaw/discord@1.4.0",
-            packageName: "@openclaw/discord",
-            integrity: "sha512-Zt8FjB1uT0mMyF5b0z0aH4dKq7wVn0m8rW3o5cQx1JYb1sB4kQ2u5w9c1p6nEo3q",
-            integrityKind: "ssri",
-          },
-          declared: {
-            ...emptyDeclared,
-            channels: ["discord"],
-            tools: ["discord_actions"],
-            skills: ["discord"],
-          },
-          grants: grants({ bundled: false }),
-          trust: {
-            disposition: "clean",
-            checkedAt: "2026-08-20T14:03:00Z",
-          },
-        },
-      },
-      {
-        match: { pluginId: "memory-wiki" },
-        response: {
-          ok: true,
-          plugin: {
-            id: "memory-wiki",
-            name: "Memory Wiki",
-            version: "1.4.0",
-            origin: "bundled",
-            installed: true,
-            enabled: true,
-          },
-          source: { kind: "bundled" },
-          declared: {
-            ...emptyDeclared,
-            tools: ["memory_search", "memory_write"],
-          },
-          grants: grants({ bundled: true }),
-        },
-      },
-      {
-        match: { pluginId: "browser" },
-        response: {
-          ok: true,
-          plugin: {
-            id: "browser",
-            name: "Browser",
-            version: "1.4.0",
-            description: "Drive a managed browser profile for research and automation.",
-            origin: "official",
-            installed: false,
-            enabled: false,
-          },
-          source: {
-            kind: "official-catalog",
-            spec: "clawhub:openclaw/browser@1.4.0",
-            packageName: "openclaw/browser",
-            integrity: "2f7c1a9be03d5c44a8a14a4e9d0d5375f4f3f0f5f7f1b9f2c3d4e5f60718293a",
-            integrityKind: "sha256",
-          },
-          declared: {
-            ...emptyDeclared,
-            tools: ["browser_navigate", "browser_screenshot", "browser_click"],
-            cliCommands: ["browser"],
-            dangerousConfigFlags: ["allowHostControl"],
-          },
-          grants: grants({ bundled: false }),
-          trust: {
-            disposition: "clean",
-            checkedAt: "2026-08-22T09:41:00Z",
-          },
-        },
-      },
-      {
-        match: { pluginId: "canvas" },
-        response: {
-          ok: true,
-          plugin: {
-            id: "canvas",
-            name: "Canvas",
-            version: "1.4.0",
-            origin: "official",
-            installed: false,
-            enabled: false,
-          },
-          source: { kind: "official-catalog", packageName: "openclaw/canvas" },
-          declared: { ...emptyDeclared, tools: ["canvas_render"] },
-          grants: grants({ bundled: false }),
-        },
+        source: { kind: "bundled" },
+        declared: { channels: ["telegram"], cliCommands: ["telegram"] },
       },
     ],
-  };
+    [
+      "discord",
+      {
+        source: {
+          kind: "npm",
+          spec: "@openclaw/discord@1.4.0",
+          packageName: "@openclaw/discord",
+          integrity: "sha512-Zt8FjB1uT0mMyF5b0z0aH4dKq7wVn0m8rW3o5cQx1JYb1sB4kQ2u5w9c1p6nEo3q",
+          integrityKind: "ssri",
+        },
+        declared: {
+          channels: ["discord"],
+          providers: ["discord-intelligence"],
+          tools: ["discord_actions", "discord_moderate"],
+          contracts: ["tools: discord_actions", "tools: discord_moderate"],
+          skills: ["discord"],
+        },
+        trust: { disposition: "clean", checkedAt: "2026-08-20T14:03:00Z" },
+      },
+    ],
+    [
+      "memory-wiki",
+      { source: { kind: "bundled" }, declared: { tools: ["memory_search", "memory_write"] } },
+    ],
+    [
+      "browser",
+      {
+        source: {
+          kind: "official-catalog",
+          spec: "clawhub:openclaw/browser@1.4.0",
+          packageName: "openclaw/browser",
+          integrity: "2f7c1a9be03d5c44a8a14a4e9d0d5375f4f3f0f5f7f1b9f2c3d4e5f60718293a",
+          integrityKind: "sha256",
+        },
+        declared: {
+          tools: ["browser_click", "browser_navigate", "browser_screenshot"],
+          cliCommands: ["browser"],
+          dangerousConfigFlags: ["allowHostControl"],
+        },
+        trust: { disposition: "clean", checkedAt: "2026-08-22T09:41:00Z" },
+      },
+    ],
+    [
+      "canvas",
+      {
+        source: { kind: "official-catalog", packageName: "openclaw/canvas" },
+        declared: { tools: ["canvas_render"] },
+      },
+    ],
+  ]);
+  const cases = buildPluginCatalogMock().plugins.map((plugin) => {
+    const fixture = fixtures.get(plugin.id);
+    if (!fixture) {
+      throw new Error(`Mock inspection is missing for plugin "${plugin.id}".`);
+    }
+    const declared = { ...emptyDeclared, ...fixture.declared };
+    const response = {
+      ok: true,
+      plugin: {
+        id: plugin.id,
+        name: plugin.name,
+        version: plugin.version,
+        description: plugin.description,
+        origin: plugin.origin,
+        installed: plugin.installed,
+        enabled: plugin.enabled,
+      },
+      source: fixture.source,
+      declared,
+      reviewToken: createHash("sha256").update(JSON.stringify(declared)).digest("hex"),
+      grants: {
+        hooks: {
+          allowPromptInjection: { effective: true },
+          allowConversationAccess: { effective: plugin.origin === "bundled" },
+        },
+      },
+      ...(fixture.trust ? { trust: fixture.trust } : {}),
+    } satisfies PluginsInspectResult;
+    return { match: { pluginId: plugin.id }, response };
+  });
+  return { cases };
 }
 
 export function buildPluginSetEnabledMock() {
@@ -241,15 +203,14 @@ export function buildPluginSetEnabledMock() {
     throw new Error("Discord mock plugin fixtures are missing");
   }
 
-  const declared = {
-    ...inspection.declared,
-    providers: ["discord-intelligence"],
-    tools: [...inspection.declared.tools, "discord_moderate"],
-  };
   return {
     cases: [
       {
-        match: { pluginId: plugin.id, enabled: true, acknowledgeCapabilities: true },
+        match: {
+          pluginId: plugin.id,
+          enabled: true,
+          acknowledgeCapabilities: { reviewToken: inspection.reviewToken },
+        },
         response: {
           ok: true,
           plugin: { ...plugin, enabled: true, state: "enabled" },
@@ -265,15 +226,11 @@ export function buildPluginSetEnabledMock() {
             details: {
               capabilityConsentCode: "PLUGIN_CAPABILITY_CONSENT_REQUIRED",
               pluginId: plugin.id,
-              name: plugin.name,
-              version: plugin.version,
-              declared,
-              grants: inspection.grants,
-              source: inspection.source,
-              ...(inspection.trust ? { trust: inspection.trust } : {}),
+              reviewToken: inspection.reviewToken,
               widened: {
                 providers: ["discord-intelligence"],
                 tools: ["discord_moderate"],
+                contracts: ["tools: discord_moderate"],
               },
               acceptedAt: "2026-08-20T14:03:00Z",
             },

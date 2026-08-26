@@ -2,10 +2,8 @@
 import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import type { CapabilityConsentErrorDetails } from "../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import type {
   PluginInspectSource,
-  PluginInstallTrust,
   PluginsInspectResult,
 } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
@@ -26,17 +24,20 @@ import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { normalizeUpdateChannel, resolveRegistryUpdateChannel } from "../infra/update-channels.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { VERSION } from "../version.js";
-import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
 import { installBundledPluginSource } from "./bundled-install.js";
 import type { BundledPluginSource } from "./bundled-sources.js";
 import {
   computeDeclaredSurfaceHash,
-  diffDeclaredSurfaceWidening,
+  createManagedPluginArtifactConsentHandler,
   formatPluginCapabilityConsentRequired,
   mergePluginDeclaredSurfaces,
   resolveAcceptedSurfaceCurrent,
-  resolvePluginArtifactDeclaredSurface,
+  resolvePendingPluginCapabilityReview,
+  resolvePluginCapabilityConsent,
   resolvePluginInstallRecordIntegrity,
+  resolvePluginInstallRecordTrust,
+  type PluginCapabilityConsentAcknowledgment,
+  type PluginCapabilityConsentHandler,
 } from "./capability-consent.js";
 import { buildPluginCapabilitySummary } from "./capability-summary.js";
 import { CLAWHUB_INSTALL_ERROR_CODE, isUnavailableClawHubTarget } from "./clawhub-error-codes.js";
@@ -73,8 +74,6 @@ import {
 import {
   isUnavailableNpmTarget,
   PLUGIN_INSTALL_ERROR_CODE,
-  type PluginInstallArtifactConsentHandler,
-  type PluginInstallArtifactConsentRequest,
   type PluginInstallLogger,
 } from "./install-types.js";
 import {
@@ -88,13 +87,11 @@ import {
   removePluginInstallRecordFromRecords,
   withPluginInstallRecords,
   withoutPluginInstallRecords,
-  writePersistedInstalledPluginIndexInstallRecordsWithLease,
 } from "./installed-plugin-index-records.js";
-import type { InstalledPluginInstallRecordInfo } from "./installed-plugin-index-types.js";
 import { resolveInstalledPluginPackageOwnership } from "./installed-plugin-package-ownership.js";
+import { ManagedPluginLifecycleError } from "./management-lifecycle-error.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
-import { loadPluginManifest } from "./manifest.js";
 import {
   resolveTrustedOfficialClawHubPackageName,
   resolveTrustedSourceLinkedOfficialClawHubSpec,
@@ -176,23 +173,14 @@ type ManagedPluginInstallRequest =
       version?: string;
       acknowledgeClawHubRisk?: boolean;
       acknowledgeInstallPolicyWarning?: true;
-      acknowledgeCapabilities?: true;
+      acknowledgeCapabilities?: PluginCapabilityConsentAcknowledgment;
     }
   | {
       source: "official";
       pluginId: string;
       acknowledgeInstallPolicyWarning?: true;
-      acknowledgeCapabilities?: true;
+      acknowledgeCapabilities?: PluginCapabilityConsentAcknowledgment;
     };
-
-type ManagedPluginCapabilityConsentDetails = Omit<
-  CapabilityConsentErrorDetails,
-  "capabilityConsentCode"
->;
-
-type ManagedPluginCapabilityConsentHandler = (
-  details: ManagedPluginCapabilityConsentDetails,
-) => boolean | Promise<boolean>;
 
 export type ManagedPluginSourceInstallRequest =
   | {
@@ -288,37 +276,6 @@ type SourceInstallerResult =
       version?: string;
       npmResolution?: NpmSpecResolution;
     };
-
-export class ManagedPluginLifecycleError extends Error {
-  readonly kind: "invalid-request" | "unavailable";
-  readonly code?: string;
-  readonly version?: string;
-  readonly warning?: string;
-  readonly installPolicyWarning?: InstallPolicyWarningDetails;
-  readonly capabilityConsent?: ManagedPluginCapabilityConsentDetails;
-
-  constructor(
-    message: string,
-    details?: {
-      kind?: "invalid-request" | "unavailable";
-      code?: string;
-      version?: string;
-      warning?: string;
-      installPolicyWarning?: InstallPolicyWarningDetails;
-      capabilityConsent?: ManagedPluginCapabilityConsentDetails;
-      cause?: unknown;
-    },
-  ) {
-    super(message, details?.cause !== undefined ? { cause: details.cause } : undefined);
-    this.name = "ManagedPluginLifecycleError";
-    this.kind = details?.kind ?? "invalid-request";
-    this.code = details?.code;
-    this.version = details?.version;
-    this.warning = details?.warning;
-    this.installPolicyWarning = details?.installPolicyWarning;
-    this.capabilityConsent = details?.capabilityConsent;
-  }
-}
 
 type OfficialCatalogResult = Pick<HostedOfficialExternalPluginCatalogLoadResult, "entries"> & {
   error?: string;
@@ -1072,344 +1029,6 @@ export async function listManagedPlugins(params: {
   };
 }
 
-function resolveInstalledPluginIntegrity(
-  record: InstalledPluginInstallRecordInfo,
-): Pick<PluginInspectSource, "integrity" | "integrityKind"> {
-  const npmIntegrity = record.integrity ?? record.npmIntegrity;
-  if (npmIntegrity) {
-    return { integrity: npmIntegrity, integrityKind: "ssri" };
-  }
-  if (record.clawpackSha256) {
-    return { integrity: record.clawpackSha256, integrityKind: "sha256" };
-  }
-  if (record.gitCommit) {
-    return { integrity: record.gitCommit, integrityKind: "git-commit" };
-  }
-  const shasum = record.shasum ?? record.npmShasum;
-  return shasum ? { integrity: shasum, integrityKind: "sha256" } : {};
-}
-
-function resolveInstalledPluginTrust(
-  record: InstalledPluginInstallRecordInfo | undefined,
-): PluginInstallTrust | undefined {
-  if (!record?.clawhubTrustDisposition) {
-    return undefined;
-  }
-  return {
-    disposition: record.clawhubTrustDisposition,
-    ...(record.clawhubTrustReasons ? { reasons: [...record.clawhubTrustReasons] } : {}),
-    ...(record.clawhubTrustCheckedAt ? { checkedAt: record.clawhubTrustCheckedAt } : {}),
-    ...(record.clawhubTrustAcknowledgedAt
-      ? { acknowledgedAt: record.clawhubTrustAcknowledgedAt }
-      : {}),
-    ...(record.clawhubTrustPending !== undefined ? { pending: record.clawhubTrustPending } : {}),
-    ...(record.clawhubTrustStale !== undefined ? { stale: record.clawhubTrustStale } : {}),
-  };
-}
-
-function acceptManagedPluginDeclaredSurface(
-  record: PluginInstallRecord,
-  declared: ManagedPluginCapabilityConsentDetails["declared"],
-): PluginInstallRecord {
-  const { acceptedSurfaceIntegrity: _previousIntegrity, ...unanchoredRecord } = record;
-  const integrity = resolvePluginInstallRecordIntegrity(record);
-  return {
-    ...unanchoredRecord,
-    acceptedSurface: declared,
-    acceptedSurfaceHash: computeDeclaredSurfaceHash(declared),
-    acceptedSurfaceAt: new Date().toISOString(),
-    ...(integrity ? { acceptedSurfaceIntegrity: integrity } : {}),
-  };
-}
-
-function buildManagedPluginCapabilityConsentDetails(params: {
-  pluginId: string;
-  manifest: Parameters<typeof buildPluginCapabilitySummary>[0]["manifest"] & {
-    name?: string;
-    version?: string;
-  };
-  record: PluginInstallRecord;
-  config: OpenClawConfig;
-  declared?: ManagedPluginCapabilityConsentDetails["declared"];
-  previousDeclared?: ManagedPluginCapabilityConsentDetails["declared"];
-}): ManagedPluginCapabilityConsentDetails {
-  const { pluginId, manifest, record } = params;
-  const summary = buildPluginCapabilitySummary({
-    manifest,
-    origin: "global",
-    entryConfig: params.config.plugins?.entries?.[pluginId],
-  });
-  const declared = params.declared ?? summary.declared;
-  const spec = record.resolvedSpec ?? record.spec;
-  const packageName = record.clawhubPackage ?? record.resolvedName;
-  const previousDeclared = params.previousDeclared ?? record.acceptedSurface;
-  const widened = previousDeclared
-    ? diffDeclaredSurfaceWidening(previousDeclared, declared).widened
-    : undefined;
-  const trust = resolveInstalledPluginTrust(record);
-  return {
-    pluginId,
-    name: manifest.name ?? pluginId,
-    ...((manifest.version ?? record.version)
-      ? { version: manifest.version ?? record.version }
-      : {}),
-    ...summary,
-    declared,
-    source: {
-      kind: record.source,
-      ...(spec ? { spec } : {}),
-      ...(packageName ? { packageName } : {}),
-      ...resolveInstalledPluginIntegrity(record),
-    },
-    ...(trust ? { trust } : {}),
-    ...(widened && Object.keys(widened).length > 0 ? { widened } : {}),
-    ...(record.acceptedSurfaceAt ? { acceptedAt: record.acceptedSurfaceAt } : {}),
-  };
-}
-
-function throwManagedPluginCapabilityConsentRequired(
-  details: ManagedPluginCapabilityConsentDetails,
-): never {
-  throw new ManagedPluginLifecycleError(
-    `Plugin "${details.pluginId}" requires capability consent; rerun with --accept-capabilities.`,
-    { capabilityConsent: details },
-  );
-}
-
-/** Enforce and durably acknowledge consent before an installed plugin is enabled. */
-export async function resolvePluginCapabilityConsent(params: {
-  config: OpenClawConfig;
-  pluginId: string;
-  env?: NodeJS.ProcessEnv;
-  acknowledge?: boolean;
-  metadata?: PluginMetadataSnapshot;
-}): Promise<void> {
-  const env = params.env ?? process.env;
-  return await withPluginLifecycleLease({ env }, async (lease) => {
-    const metadata =
-      params.metadata ??
-      resolvePluginMetadataSnapshot(resolveManagedPluginMetadataParams(params.config, env));
-    const pluginId = metadata.normalizePluginId(params.pluginId);
-    const plugin = metadata.index.plugins.find((candidate) => candidate.pluginId === pluginId);
-    // Bundled code ships with the release; development plugins have no durable acceptance owner.
-    if (
-      !plugin ||
-      plugin.origin === "bundled" ||
-      !resolveInstalledPluginIndexInstallOwner(plugin)
-    ) {
-      return;
-    }
-    const ownership = resolveInstalledPluginPackageOwnership(metadata.index, pluginId, env);
-    if (!ownership.ok) {
-      throw new ManagedPluginLifecycleError(ownership.error);
-    }
-    const { installOwner, installRecord } = ownership.value;
-    const manifest = metadata.byPluginId.get(pluginId);
-    if (!manifest) {
-      throw new ManagedPluginLifecycleError(`Plugin "${pluginId}" has no installed manifest.`);
-    }
-    const declared = mergePluginDeclaredSurfaces(
-      ownership.value.pluginIds.map((ownedPluginId) => {
-        const ownedManifest = metadata.byPluginId.get(ownedPluginId);
-        if (!ownedManifest) {
-          throw new ManagedPluginLifecycleError(
-            `Plugin package "${installOwner}" is missing the manifest for "${ownedPluginId}".`,
-          );
-        }
-        return buildPluginCapabilitySummary({
-          manifest: ownedManifest,
-          origin: ownedManifest.origin,
-          entryConfig: params.config.plugins?.entries?.[ownedPluginId],
-        }).declared;
-      }),
-    );
-    const details = buildManagedPluginCapabilityConsentDetails({
-      pluginId,
-      manifest,
-      record: installRecord,
-      config: params.config,
-      declared,
-    });
-    if (resolveAcceptedSurfaceCurrent(installRecord, details.declared)) {
-      return;
-    }
-    if (!params.acknowledge) {
-      return throwManagedPluginCapabilityConsentRequired(details);
-    }
-    const records = await loadInstalledPluginIndexInstallRecords({ env });
-    const persistedRecord = records[installOwner];
-    if (!persistedRecord) {
-      throw new ManagedPluginLifecycleError(
-        `Plugin "${pluginId}" no longer has an installed package record.`,
-      );
-    }
-    await writePersistedInstalledPluginIndexInstallRecordsWithLease(
-      {
-        ...records,
-        [installOwner]: acceptManagedPluginDeclaredSurface(persistedRecord, details.declared),
-      },
-      { env, config: params.config, lease },
-    );
-  });
-}
-
-/** Review an extracted artifact and return its acceptance-bearing install record. */
-async function resolvePluginArtifactCapabilityConsent(params: {
-  config: OpenClawConfig;
-  pluginId: string;
-  record: PluginInstallRecord;
-  artifactDir: string;
-  env?: NodeJS.ProcessEnv;
-  acknowledgeCapabilities?: boolean;
-  onCapabilityConsent?: ManagedPluginCapabilityConsentHandler;
-  previousDeclared?: ManagedPluginCapabilityConsentDetails["declared"];
-  previousRecord?: PluginInstallRecord;
-  previouslyEnabled?: boolean;
-  mode?: "install" | "update";
-}): Promise<PluginInstallRecord> {
-  const declared = resolvePluginArtifactDeclaredSurface(params.artifactDir);
-  const bundleFormat = detectBundleManifestFormat(params.artifactDir);
-  const loaded = bundleFormat
-    ? loadBundleManifest({ rootDir: params.artifactDir, bundleFormat })
-    : loadPluginManifest(params.artifactDir);
-  const details = buildManagedPluginCapabilityConsentDetails({
-    pluginId: params.pluginId,
-    manifest: loaded.ok ? loaded.manifest : { name: params.pluginId },
-    record: params.record,
-    config: params.config,
-    declared,
-    ...(params.previousDeclared ? { previousDeclared: params.previousDeclared } : {}),
-  });
-  if (params.mode === "update" && params.previousDeclared) {
-    const { hasWidening } = diffDeclaredSurfaceWidening(params.previousDeclared, details.declared);
-    if (!hasWidening) {
-      return params.previousRecord?.acceptedSurface
-        ? acceptManagedPluginDeclaredSurface(params.record, details.declared)
-        : params.record;
-    }
-    if (
-      params.previouslyEnabled === false ||
-      (params.previouslyEnabled === undefined &&
-        params.config.plugins?.entries?.[params.pluginId]?.enabled === false)
-    ) {
-      return params.record;
-    }
-  }
-  const accepted =
-    params.acknowledgeCapabilities === true ||
-    (params.onCapabilityConsent ? await params.onCapabilityConsent(details) : false);
-  if (!accepted) {
-    return throwManagedPluginCapabilityConsentRequired(details);
-  }
-  return acceptManagedPluginDeclaredSurface(params.record, details.declared);
-}
-
-/** Bind artifact consent to verified staged bytes and carry acceptance into the record commit. */
-export function createManagedPluginArtifactConsentHandler(params: {
-  config: OpenClawConfig;
-  source: PluginInstallRecord["source"];
-  env?: NodeJS.ProcessEnv;
-  spec?: string;
-  expectedIntegrity?: string;
-  acknowledgeCapabilities?: boolean;
-  onCapabilityConsent?: ManagedPluginCapabilityConsentHandler;
-  previousRecords?: Record<string, PluginInstallRecord>;
-  previousPluginOwners?: ReadonlyMap<string, string>;
-  previouslyEnabledInstallOwners?: ReadonlySet<string>;
-}): {
-  onBeforePluginArtifactCommit: PluginInstallArtifactConsentHandler;
-  applyAcceptedSurface: (pluginId: string, record: PluginInstallRecord) => PluginInstallRecord;
-} {
-  const previousDeclaredByOwner = new Map<
-    string,
-    { declared: ManagedPluginCapabilityConsentDetails["declared"] } | { error: unknown }
-  >();
-  for (const [installOwner, record] of Object.entries(params.previousRecords ?? {})) {
-    if (record.installPath) {
-      // Compare verified old and staged artifacts; an update cannot forge its prior declaration.
-      try {
-        previousDeclaredByOwner.set(installOwner, {
-          declared: resolvePluginArtifactDeclaredSurface(record.installPath),
-        });
-      } catch (error) {
-        previousDeclaredByOwner.set(installOwner, { error });
-      }
-    }
-  }
-  const pendingAcceptedSurfaces = new Map<
-    string,
-    ManagedPluginCapabilityConsentDetails["declared"]
-  >();
-  const reviewedPluginIds = new Set<string>();
-  return {
-    onBeforePluginArtifactCommit: async (
-      artifact: PluginInstallArtifactConsentRequest,
-    ): Promise<void> => {
-      const matchingOwners = Object.entries(params.previousRecords ?? {}).filter(
-        ([installOwner, record]) =>
-          installOwner === artifact.pluginId ||
-          installOwner === params.previousPluginOwners?.get(artifact.pluginId) ||
-          Boolean(
-            artifact.currentArtifactDir &&
-            record.installPath &&
-            path.resolve(artifact.currentArtifactDir) === path.resolve(record.installPath),
-          ),
-      );
-      if (matchingOwners.length > 1) {
-        throw new ManagedPluginLifecycleError(
-          `Plugin "${artifact.pluginId}" matches multiple installed package owners.`,
-        );
-      }
-      const [installOwner, previousRecord] = matchingOwners[0] ?? [];
-      const previousArtifact = installOwner ? previousDeclaredByOwner.get(installOwner) : undefined;
-      if (previousArtifact && "error" in previousArtifact) {
-        throw new ManagedPluginLifecycleError(
-          `Plugin "${artifact.pluginId}" has no verifiable previous installed artifact.`,
-          { cause: previousArtifact.error },
-        );
-      }
-      const previousDeclared = previousArtifact?.declared;
-      const record = await resolvePluginArtifactCapabilityConsent({
-        config: params.config,
-        env: params.env,
-        pluginId: artifact.pluginId,
-        artifactDir: artifact.stagedArtifactDir,
-        record: {
-          source: params.source,
-          installPath: artifact.stagedArtifactDir,
-          ...(params.spec ? { spec: params.spec } : {}),
-          ...(params.expectedIntegrity ? { integrity: params.expectedIntegrity } : {}),
-        },
-        acknowledgeCapabilities: params.acknowledgeCapabilities,
-        onCapabilityConsent: params.onCapabilityConsent,
-        ...(previousRecord ? { previousRecord } : {}),
-        ...(previousDeclared ? { previousDeclared } : {}),
-        ...(params.previouslyEnabledInstallOwners
-          ? {
-              previouslyEnabled: params.previouslyEnabledInstallOwners.has(
-                installOwner ?? artifact.pluginId,
-              ),
-            }
-          : {}),
-        mode: artifact.mode,
-      });
-      if (record.acceptedSurface) {
-        pendingAcceptedSurfaces.set(artifact.pluginId, record.acceptedSurface);
-      }
-      reviewedPluginIds.add(artifact.pluginId);
-    },
-    applyAcceptedSurface: (pluginId, record) => {
-      if (!reviewedPluginIds.has(pluginId)) {
-        throw new ManagedPluginLifecycleError(
-          `Plugin "${pluginId}" did not expose its verified artifact for capability review.`,
-        );
-      }
-      const declared = pendingAcceptedSurfaces.get(pluginId);
-      return declared ? acceptManagedPluginDeclaredSurface(record, declared) : record;
-    },
-  };
-}
-
 /** Inspect one plugin's manifest, operator grants, and recorded install provenance. */
 export async function inspectManagedPlugin(params: {
   config: OpenClawConfig;
@@ -1421,8 +1040,27 @@ export async function inspectManagedPlugin(params: {
     resolveManagedPluginMetadataParams(params.config, env),
   );
   const pluginId = metadata.normalizePluginId(params.pluginId);
-  const officialCatalog = await loadOfficialCatalog();
   const record = metadata.index.plugins.find((candidate) => candidate.pluginId === pluginId);
+  const pendingReview = resolvePendingPluginCapabilityReview(pluginId);
+  if (pendingReview) {
+    return {
+      ok: true,
+      plugin: {
+        id: pluginId,
+        name: pendingReview.name,
+        ...(pendingReview.version ? { version: pendingReview.version } : {}),
+        ...(record?.origin ? { origin: record.origin } : {}),
+        installed: Boolean(record),
+        enabled: record?.enabled ?? false,
+      },
+      declared: pendingReview.declared,
+      grants: pendingReview.grants,
+      reviewToken: pendingReview.reviewToken,
+      ...(pendingReview.source ? { source: pendingReview.source } : {}),
+      ...(pendingReview.trust ? { trust: pendingReview.trust } : {}),
+    };
+  }
+  const officialCatalog = await loadOfficialCatalog();
 
   if (record) {
     const manifest = metadata.byPluginId.get(pluginId);
@@ -1443,12 +1081,17 @@ export async function inspectManagedPlugin(params: {
           kind: installRecord.source,
           ...(spec ? { spec } : {}),
           ...(packageName ? { packageName } : {}),
-          ...resolveInstalledPluginIntegrity(installRecord),
+          ...resolvePluginInstallRecordIntegrity(installRecord),
         }
       : record.origin === "bundled"
         ? { kind: "bundled" }
         : undefined;
-    const trust = resolveInstalledPluginTrust(installRecord);
+    const trust = resolvePluginInstallRecordTrust(installRecord);
+    const summary = buildPluginCapabilitySummary({
+      manifest: manifest ?? {},
+      origin: record.origin,
+      entryConfig: params.config.plugins?.entries?.[pluginId],
+    });
     return {
       ok: true,
       plugin: {
@@ -1465,11 +1108,8 @@ export async function inspectManagedPlugin(params: {
         enabled: record.enabled,
       },
       ...(source ? { source } : {}),
-      ...buildPluginCapabilitySummary({
-        manifest: manifest ?? {},
-        origin: record.origin,
-        entryConfig: params.config.plugins?.entries?.[pluginId],
-      }),
+      ...summary,
+      reviewToken: computeDeclaredSurfaceHash(summary.declared),
       ...(trust ? { trust } : {}),
     };
   }
@@ -1486,6 +1126,11 @@ export async function inspectManagedPlugin(params: {
   const spec = install?.clawhubSpec ?? install?.npmSpec;
   const description = normalizeOptionalString(entry.description);
   const version = normalizeOptionalString(entry.version);
+  const summary = buildPluginCapabilitySummary({
+    manifest: manifest ?? {},
+    origin: "official",
+    entryConfig: params.config.plugins?.entries?.[pluginId],
+  });
   return {
     ok: true,
     plugin: {
@@ -1508,11 +1153,8 @@ export async function inspectManagedPlugin(params: {
           }
         : {}),
     },
-    ...buildPluginCapabilitySummary({
-      manifest: manifest ?? {},
-      origin: "official",
-      entryConfig: params.config.plugins?.entries?.[pluginId],
-    }),
+    ...summary,
+    reviewToken: computeDeclaredSurfaceHash(summary.declared),
   };
 }
 
@@ -1751,8 +1393,8 @@ type ManagedPluginSourceInstallParams = {
   safetyOverrides?: InstallSafetyOverrides;
   runtime?: RuntimeEnv;
   invalidateRuntimeCache?: boolean;
-  acknowledgeCapabilities?: boolean;
-  onCapabilityConsent?: ManagedPluginCapabilityConsentHandler;
+  acknowledgeCapabilities?: PluginCapabilityConsentAcknowledgment;
+  onCapabilityConsent?: PluginCapabilityConsentHandler;
 };
 
 /**
@@ -2162,7 +1804,9 @@ export async function installManagedPlugin(params: {
       snapshot,
       env,
       logger: installLogger,
-      ...(params.request.acknowledgeCapabilities ? { acknowledgeCapabilities: true } : {}),
+      ...(params.request.acknowledgeCapabilities
+        ? { acknowledgeCapabilities: params.request.acknowledgeCapabilities }
+        : {}),
       ...(params.request.acknowledgeInstallPolicyWarning
         ? {
             safetyOverrides: {
@@ -2227,7 +1871,7 @@ export async function installManagedPlugin(params: {
 export async function setManagedPluginEnabled(params: {
   pluginId: string;
   enabled: boolean;
-  acknowledgeCapabilities?: true;
+  acknowledgeCapabilities?: PluginCapabilityConsentAcknowledgment;
   env?: NodeJS.ProcessEnv;
 }): Promise<{
   plugin: ManagedPluginCatalogEntry;

@@ -10,6 +10,7 @@ import type {
   PluginCatalogItem,
   PluginListResult,
   PluginMutationResult,
+  PluginsInspectResult,
 } from "../../lib/plugins/index.ts";
 import {
   canRunPlaywrightChromium,
@@ -31,6 +32,7 @@ const desktopViewport = { height: 1000, width: 1440 };
 const mobileViewport = { height: 852, width: 393 };
 const pluginMethods = [
   "plugins.list",
+  "plugins.inspect",
   "plugins.search",
   "plugins.install",
   "plugins.setEnabled",
@@ -215,6 +217,50 @@ const enableWorkboardResult = {
   restartRequired: false,
 } satisfies PluginMutationResult;
 
+const workboardInspection = {
+  ok: true,
+  reviewToken: "a".repeat(64),
+  plugin: {
+    id: workboardDisabled.id,
+    name: workboardDisabled.name,
+    origin: workboardDisabled.origin,
+    installed: true,
+    enabled: false,
+  },
+  source: { kind: "npm", packageName: workboardDisabled.packageName },
+  declared: {
+    channels: [],
+    providers: [],
+    tools: [],
+    contracts: [],
+    hooks: [],
+    mcpServers: [],
+    cliCommands: [],
+    cliBackends: [],
+    skills: [],
+    dangerousConfigFlags: [],
+  },
+  grants: {
+    hooks: {
+      allowPromptInjection: { effective: true },
+      allowConversationAccess: { effective: true },
+    },
+  },
+} satisfies PluginsInspectResult;
+
+const lobsterInspection = {
+  ...workboardInspection,
+  reviewToken: "b".repeat(64),
+  plugin: {
+    id: lobsterPlugin.id,
+    name: lobsterPlugin.name,
+    origin: lobsterPlugin.origin,
+    installed: false,
+    enabled: false,
+  },
+  source: { kind: "npm", packageName: "@openclaw/lobster" },
+} satisfies PluginsInspectResult;
+
 let browser: Browser;
 let server: ControlUiE2eServer;
 
@@ -317,6 +363,14 @@ async function clickRowAction(page: Page, rowSelector: string, buttonName: strin
   await page.locator(rowSelector).getByRole("button", { name: buttonName, exact: true }).click();
 }
 
+async function confirmPluginConsent(page: Page, buttonName: string): Promise<void> {
+  const confirm = page
+    .locator("[data-plugin-consent]")
+    .getByRole("button", { name: buttonName, exact: true });
+  await expect.poll(() => confirm.isEnabled()).toBe(true);
+  await confirm.click();
+}
+
 async function captureScreenshot(page: Page, name: string): Promise<void> {
   if (!updateScreenshots) {
     return;
@@ -341,6 +395,12 @@ function pluginMethodResponses() {
   return {
     "config.get": configSnapshot(false),
     "plugins.list": initialInventory,
+    "plugins.inspect": {
+      cases: [
+        { match: { pluginId: "workboard" }, response: workboardInspection },
+        { match: { pluginId: "lobster" }, response: lobsterInspection },
+      ],
+    },
     "plugins.search": {
       cases: [
         {
@@ -532,6 +592,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
 
       await gateway.deferNext("plugins.install");
       await searchRow.getByRole("button", { name: "Install Calendar Plus", exact: true }).click();
+      await confirmPluginConsent(page, "Install Calendar Plus");
       const firstInstallRequest = await gateway.waitForRequest("plugins.install");
       expect(requestParams(firstInstallRequest)).toEqual({
         source: "clawhub",
@@ -691,6 +752,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await reinstallRow
         .getByRole("button", { name: "Install Calendar Plus", exact: true })
         .click();
+      await confirmPluginConsent(page, "Install Calendar Plus");
       const reinstallRequest = await waitForNextRequest(
         gateway,
         "plugins.install",
@@ -774,9 +836,11 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
 
       await gateway.deferNext("plugins.install");
       await row.getByRole("button", { name: "Install Lobster", exact: true }).click();
+      await confirmPluginConsent(page, "Install Lobster");
       expect(requestParams(await gateway.waitForRequest("plugins.install"))).toEqual({
         source: "clawhub",
         packageName: "@openclaw/lobster",
+        acknowledgeCapabilities: { reviewToken: lobsterInspection.reviewToken },
       });
       await gateway.rejectDeferred("plugins.install", {
         code: "INVALID_REQUEST",
@@ -831,6 +895,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       const installCountBeforeSecondAttempt = (await gateway.getRequests("plugins.install")).length;
       await gateway.deferNext("plugins.install");
       await row.getByRole("button", { name: "Install Lobster", exact: true }).click();
+      await confirmPluginConsent(page, "Install Lobster");
       await waitForNextRequest(gateway, "plugins.install", installCountBeforeSecondAttempt);
       await gateway.rejectDeferred("plugins.install", {
         code: "INVALID_REQUEST",
@@ -846,6 +911,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       expect(requestParams(retry)).toEqual({
         source: "clawhub",
         packageName: "@openclaw/lobster",
+        acknowledgeCapabilities: { reviewToken: lobsterInspection.reviewToken },
         acknowledgeInstallPolicyWarning: true,
       });
       const pendingRetry = review.getByRole("button", { name: "Installing…", exact: true });
@@ -877,6 +943,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       expect(requestParams(secondRetry)).toEqual({
         source: "clawhub",
         packageName: "@openclaw/lobster",
+        acknowledgeCapabilities: { reviewToken: lobsterInspection.reviewToken },
         acknowledgeInstallPolicyWarning: true,
       });
 

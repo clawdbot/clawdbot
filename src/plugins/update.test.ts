@@ -816,7 +816,8 @@ describe("updateNpmInstalledPlugins", () => {
     {
       label: "rejects widened sibling capabilities before replacing the installed artifact",
       nextProviders: ["existing-child-provider", "new-child-provider"],
-      acknowledgeCapabilities: false,
+      review: "none",
+      priorAcceptance: "valid",
       rejected: true,
       ownerEnabled: false,
       childEnabled: true,
@@ -824,7 +825,8 @@ describe("updateNpmInstalledPlugins", () => {
     {
       label: "accepts widened sibling capabilities and refreshes the artifact-bound acceptance",
       nextProviders: ["existing-child-provider", "new-child-provider"],
-      acknowledgeCapabilities: true,
+      review: "accept",
+      priorAcceptance: "valid",
       rejected: false,
       ownerEnabled: true,
       childEnabled: false,
@@ -832,14 +834,70 @@ describe("updateNpmInstalledPlugins", () => {
     {
       label: "silently refreshes existing acceptance when package capabilities are unchanged",
       nextProviders: ["existing-child-provider"],
-      acknowledgeCapabilities: false,
+      review: "none",
+      priorAcceptance: "valid",
       rejected: false,
+      ownerEnabled: true,
+      childEnabled: false,
+    },
+    {
+      label: "rejects an unchanged update when the saved acceptance hash is forged",
+      nextProviders: ["existing-child-provider"],
+      review: "none",
+      priorAcceptance: "forged-hash",
+      rejected: true,
+      ownerEnabled: true,
+      childEnabled: false,
+    },
+    {
+      label:
+        "rejects an unchanged update when the saved surface differs from the installed artifact",
+      nextProviders: ["existing-child-provider"],
+      review: "none",
+      priorAcceptance: "forged-surface",
+      rejected: true,
+      ownerEnabled: true,
+      childEnabled: false,
+    },
+    {
+      label: "rejects an unchanged replacement when prior acceptance has no artifact integrity",
+      nextProviders: ["existing-child-provider"],
+      review: "none",
+      priorAcceptance: "unanchored",
+      rejected: true,
+      ownerEnabled: true,
+      childEnabled: false,
+    },
+    {
+      label: "accepts an unchanged unanchored replacement only after reviewing its token",
+      nextProviders: ["existing-child-provider"],
+      review: "accept",
+      priorAcceptance: "unanchored",
+      rejected: false,
+      ownerEnabled: true,
+      childEnabled: false,
+    },
+    {
+      label: "rejects an acknowledgment token for a different reviewed surface",
+      nextProviders: ["existing-child-provider", "new-child-provider"],
+      review: "stale",
+      priorAcceptance: "valid",
+      rejected: true,
+      ownerEnabled: true,
+      childEnabled: false,
+    },
+    {
+      label: "rejects staged capabilities changed while the operator reviews the artifact",
+      nextProviders: ["existing-child-provider", "new-child-provider"],
+      review: "mutate",
+      priorAcceptance: "valid",
+      rejected: true,
       ownerEnabled: true,
       childEnabled: false,
     },
   ])(
     "$label",
-    async ({ nextProviders, acknowledgeCapabilities, rejected, ownerEnabled, childEnabled }) => {
+    async ({ nextProviders, review, priorAcceptance, rejected, ownerEnabled, childEnabled }) => {
       const pluginId = "consent-fixture";
       const packageName = `@acme/${pluginId}`;
       const installedDir = createCapabilityConsentPackage({
@@ -853,6 +911,10 @@ describe("updateNpmInstalledPlugins", () => {
         childProviders: nextProviders,
       });
       const previousDeclared = resolvePluginArtifactDeclaredSurface(installedDir);
+      const previousAcceptedSurface =
+        priorAcceptance === "forged-surface"
+          ? { ...previousDeclared, providers: ["forged-provider"] }
+          : previousDeclared;
       const previousAcceptedAt = "2026-01-01T00:00:00.000Z";
       const childManifestPath = path.join(
         installedDir,
@@ -872,11 +934,16 @@ describe("updateNpmInstalledPlugins", () => {
               source: "npm" as const,
               spec: packageName,
               installPath: installedDir,
-              integrity: "sha512-previous",
-              acceptedSurface: previousDeclared,
-              acceptedSurfaceHash: computeDeclaredSurfaceHash(previousDeclared),
+              ...(priorAcceptance !== "unanchored" ? { integrity: "sha512-previous" } : {}),
+              acceptedSurface: previousAcceptedSurface,
+              acceptedSurfaceHash:
+                priorAcceptance === "forged-hash"
+                  ? "0".repeat(64)
+                  : computeDeclaredSurfaceHash(previousAcceptedSurface),
               acceptedSurfaceAt: previousAcceptedAt,
-              acceptedSurfaceIntegrity: "sha512-previous",
+              ...(priorAcceptance !== "unanchored"
+                ? { acceptedSurfaceIntegrity: "sha512-previous" }
+                : {}),
             },
           },
         },
@@ -917,8 +984,28 @@ describe("updateNpmInstalledPlugins", () => {
         },
       );
 
+      const onCapabilityConsent: UpdateInstalledPluginParams["onCapabilityConsent"] =
+        review === "none"
+          ? undefined
+          : async (details) => {
+              expect(details.reviewToken).toBe(computeDeclaredSurfaceHash(details.declared));
+              expect(details.source?.integrity).not.toBe("sha512-previous");
+              if (review === "mutate") {
+                fs.writeFileSync(
+                  path.join(stagedDir, "children", "addon", "openclaw.plugin.json"),
+                  JSON.stringify({
+                    id: `${pluginId}-addon`,
+                    providers: [...nextProviders, "changed-during-review"],
+                    configSchema: { type: "object" },
+                  }),
+                );
+              }
+              return {
+                reviewToken: review === "stale" ? "0".repeat(64) : details.reviewToken,
+              };
+            };
       const result = await updatePlugin(config, pluginId, {
-        acknowledgeCapabilities,
+        onCapabilityConsent,
         packagePluginIds: { [pluginId]: [pluginId, `${pluginId}-addon`] },
       });
 

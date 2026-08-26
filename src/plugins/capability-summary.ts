@@ -9,7 +9,42 @@ import {
   resolvePromptInjectionAllowed,
 } from "./hook-policy-decisions.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import type { PluginManifestContracts } from "./manifest-types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
+
+const MANIFEST_CONTRACT_FAMILIES = [
+  "embeddedExtensionFactories",
+  "agentToolResultMiddleware",
+  "trustedToolPolicies",
+  "externalAuthProviders",
+  "embeddingProviders",
+  "speechProviders",
+  "realtimeTranscriptionProviders",
+  "realtimeVoiceProviders",
+  "mediaUnderstandingProviders",
+  "transcriptSourceProviders",
+  "documentExtractors",
+  "imageGenerationProviders",
+  "videoGenerationProviders",
+  "musicGenerationProviders",
+  "webContentExtractors",
+  "webFetchProviders",
+  "webSearchProviders",
+  "workerProviders",
+  "usageProviders",
+  "migrationProviders",
+  "gatewayMethodDispatch",
+  "tools",
+] as const satisfies readonly (keyof PluginManifestContracts)[];
+
+type MissingManifestContractFamilies = Exclude<
+  keyof PluginManifestContracts,
+  (typeof MANIFEST_CONTRACT_FAMILIES)[number]
+>;
+
+const REVIEWED_MANIFEST_CONTRACT_FAMILIES: MissingManifestContractFamilies extends never
+  ? typeof MANIFEST_CONTRACT_FAMILIES
+  : never = MANIFEST_CONTRACT_FAMILIES;
 
 type PluginCapabilityManifest = {
   channels?: readonly string[];
@@ -56,6 +91,13 @@ export function buildPluginCapabilitySummary(params: {
           ...(manifest.contracts?.tools ?? []),
           ...Object.keys(manifest.toolMetadata ?? {}),
         ]),
+      ].toSorted(),
+      contracts: [
+        ...new Set(
+          REVIEWED_MANIFEST_CONTRACT_FAMILIES.flatMap((family) =>
+            (manifest.contracts?.[family] ?? []).map((id) => `${family}: ${id}`),
+          ),
+        ),
       ].toSorted(),
       hooks: (manifest.hooks ?? []).toSorted(),
       mcpServers: Object.keys(manifest.mcpServers ?? {}).toSorted(),

@@ -20,11 +20,11 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { searchInstallablePluginPackages } from "../../plugins/catalog-search.js";
+import { ManagedPluginLifecycleError } from "../../plugins/management-lifecycle-error.js";
 import {
   inspectManagedPlugin,
   installManagedPlugin,
   listManagedPlugins,
-  ManagedPluginLifecycleError,
   setManagedPluginEnabled,
   uninstallManagedPlugin,
 } from "../../plugins/management-service.js";
@@ -232,7 +232,9 @@ export const pluginsHandlers: GatewayRequestHandlers = {
       const result = await setManagedPluginEnabled({
         pluginId: params.pluginId,
         enabled: params.enabled,
-        ...(params.acknowledgeCapabilities ? { acknowledgeCapabilities: true } : {}),
+        ...(params.acknowledgeCapabilities
+          ? { acknowledgeCapabilities: params.acknowledgeCapabilities }
+          : {}),
       });
       respond(
         true,

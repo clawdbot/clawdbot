@@ -63,6 +63,7 @@ export type PluginAcceptedDeclaredSurface = {
   channels: string[];
   providers: string[];
   tools: string[];
+  contracts: string[];
   hooks: string[];
   mcpServers: string[];
   cliCommands: string[];

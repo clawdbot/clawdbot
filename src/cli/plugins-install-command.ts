@@ -4,14 +4,12 @@ import { assertConfigWriteAllowedInCurrentMode } from "../config/config.js";
 import { reportClawHubPluginInstallTelemetry } from "../infra/clawhub-packages.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { createManagedPluginArtifactConsentHandler } from "../plugins/capability-consent.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "../plugins/clawhub.js";
 import { resolveDefaultPluginExtensionsDir } from "../plugins/install-paths.js";
 import { persistPluginInstall } from "../plugins/install-persistence.js";
 import { loadInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
-import {
-  createManagedPluginArtifactConsentHandler,
-  installManagedPluginSource,
-} from "../plugins/management-service.js";
+import { installManagedPluginSource } from "../plugins/management-service.js";
 import { installPluginFromMarketplace } from "../plugins/marketplace.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";

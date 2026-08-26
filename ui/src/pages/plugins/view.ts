@@ -95,7 +95,7 @@ type PluginsViewProps = {
   pendingRemoval: Readonly<Record<string, boolean>>;
   detailPluginId: string | null;
   detailInspection: PluginsInspectResult | null;
-  detailInspectionLoading: boolean;
+  detailInspectionError: string | null;
   consent: PluginConsentState | null;
   consentInspection: PluginsInspectResult | null;
   consentInspectionLoading: boolean;
@@ -1309,18 +1309,29 @@ function renderDetailOverlay(props: PluginsViewProps) {
               : nothing}
             ${detailMetaRow(t("pluginsPage.detailPluginId"), html`<code>${plugin.id}</code>`)}
           </div>
-          ${plugin.installed && (props.detailInspection || props.detailInspectionLoading)
+          ${plugin.installed
             ? html`<section class="plugins-detail__capabilities">
                 <h3>${t("pluginsPage.capabilities")}</h3>
-                ${props.detailInspection
-                  ? html`
-                      ${renderPluginDeclaredCapabilities(props.detailInspection.declared)}
-                      ${renderPluginGrants(
-                        props.detailInspection.grants,
-                        props.detailInspection.plugin.origin,
-                      )}
-                    `
-                  : html`<p class="plugins-consent__hint">${t("pluginConsent.loading")}</p>`}
+                ${props.detailInspectionError
+                  ? html`<div class="plugins-consent__error" role="alert">
+                      <span>${props.detailInspectionError}</span>
+                      <button
+                        type="button"
+                        class="btn btn--sm"
+                        @click=${() => props.onShowDetails(plugin.id)}
+                      >
+                        ${t("pluginsPage.tryAgain")}
+                      </button>
+                    </div>`
+                  : props.detailInspection
+                    ? html`
+                        ${renderPluginDeclaredCapabilities(props.detailInspection.declared)}
+                        ${renderPluginGrants(
+                          props.detailInspection.grants,
+                          props.detailInspection.plugin.origin,
+                        )}
+                      `
+                    : html`<p class="plugins-consent__hint">${t("pluginConsent.loading")}</p>`}
               </section>`
             : nothing}
         </div>

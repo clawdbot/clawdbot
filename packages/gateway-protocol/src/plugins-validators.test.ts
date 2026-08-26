@@ -1,7 +1,9 @@
+import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
   INSTALL_POLICY_WARNING_ACKNOWLEDGEMENT_REQUIRED,
   PLUGIN_CAPABILITY_CONSENT_REQUIRED,
+  PluginsInspectResultSchema,
   buildCapabilityConsentErrorDetails,
   readCapabilityConsentErrorDetails,
   readInstallPolicyWarningErrorDetails,
@@ -32,28 +34,8 @@ describe("plugin lifecycle protocol validators", () => {
   it("round-trips closed capability consent details through the public package boundary", () => {
     const details = buildCapabilityConsentErrorDetails({
       pluginId: "memory-plus",
-      name: "Memory Plus",
-      version: "2.1.0",
-      declared: {
-        channels: [],
-        providers: [],
-        tools: ["memory_search"],
-        hooks: [],
-        mcpServers: [],
-        cliCommands: [],
-        cliBackends: [],
-        skills: [],
-        dangerousConfigFlags: [],
-      },
-      grants: {
-        hooks: {
-          allowPromptInjection: { effective: false },
-          allowConversationAccess: { effective: true, configured: true },
-        },
-      },
-      source: { kind: "npm", integrity: "sha512-example", integrityKind: "ssri" },
-      trust: { disposition: "clean" },
-      widened: { tools: ["memory_search"] },
+      reviewToken: "surface-sha256",
+      widened: { tools: ["memory_search"], contracts: ["workerProviders: worker"] },
       acceptedAt: "2026-08-25T00:00:00.000Z",
     });
 
@@ -63,12 +45,26 @@ describe("plugin lifecycle protocol validators", () => {
 
     for (const invalidDetails of [
       { ...details, capabilityConsentCode: "incorrect" },
-      { ...details, declared: { ...details.declared, tools: [""] } },
+      { ...details, pluginId: "" },
+      { ...details, reviewToken: "" },
+      { ...details, widened: { tools: [""] } },
       { ...details, widened: { unexpected: ["tool"] } },
+      { ...details, acceptedAt: "" },
+      { ...details, name: "Memory Plus" },
       { ...details, unexpected: true },
     ]) {
+      expect(validateCapabilityConsentErrorDetails(invalidDetails)).toBe(false);
       expect(readCapabilityConsentErrorDetails(invalidDetails)).toBeUndefined();
     }
+
+    const whitespaceDetails = buildCapabilityConsentErrorDetails({
+      pluginId: " memory-plus ",
+      reviewToken: " surface-sha256 ",
+      widened: { contracts: [" workerProviders: worker "] },
+      acceptedAt: " 2026-08-25T00:00:00.000Z ",
+    });
+    expect(validateCapabilityConsentErrorDetails(whitespaceDetails)).toBe(true);
+    expect(readCapabilityConsentErrorDetails(whitespaceDetails)).toEqual(whitespaceDetails);
   });
 
   it("validates plugin metadata refresh params", () => {
@@ -88,6 +84,41 @@ describe("plugin lifecycle protocol validators", () => {
     expect(validatePluginsInspectParams({ pluginId: "workboard", unexpected: true })).toBe(false);
   });
 
+  it("requires inspection review tokens and complete declared contract surfaces", () => {
+    const result = {
+      ok: true,
+      plugin: { id: "workboard", name: "Workboard", installed: true, enabled: false },
+      reviewToken: "surface-sha256",
+      declared: {
+        channels: [],
+        providers: [],
+        tools: [],
+        contracts: ["workerProviders: worker"],
+        hooks: [],
+        mcpServers: [],
+        cliCommands: [],
+        cliBackends: [],
+        skills: [],
+        dangerousConfigFlags: [],
+      },
+      grants: {
+        hooks: {
+          allowPromptInjection: { effective: true },
+          allowConversationAccess: { effective: false },
+        },
+      },
+    };
+
+    expect(Value.Check(PluginsInspectResultSchema, result)).toBe(true);
+    expect(Value.Check(PluginsInspectResultSchema, { ...result, reviewToken: "" })).toBe(false);
+    const { reviewToken: _reviewToken, ...withoutReviewToken } = result;
+    expect(Value.Check(PluginsInspectResultSchema, withoutReviewToken)).toBe(false);
+    const { contracts: _contracts, ...withoutContracts } = result.declared;
+    expect(Value.Check(PluginsInspectResultSchema, { ...result, declared: withoutContracts })).toBe(
+      false,
+    );
+  });
+
   it("validates bounded plugin search requests", () => {
     expect(validatePluginsSearchParams({ query: "memory", limit: 20 })).toBe(true);
     expect(validatePluginsSearchParams({ query: "memory", limit: 101 })).toBe(false);
@@ -101,7 +132,7 @@ describe("plugin lifecycle protocol validators", () => {
         version: "2.1.0",
         acknowledgeClawHubRisk: true,
         acknowledgeInstallPolicyWarning: true,
-        acknowledgeCapabilities: true,
+        acknowledgeCapabilities: { reviewToken: "surface-sha256" },
       }),
     ).toBe(true);
     expect(
@@ -109,7 +140,7 @@ describe("plugin lifecycle protocol validators", () => {
         source: "official",
         pluginId: "workboard",
         acknowledgeInstallPolicyWarning: true,
-        acknowledgeCapabilities: true,
+        acknowledgeCapabilities: { reviewToken: "surface-sha256" },
       }),
     ).toBe(true);
     expect(
@@ -120,7 +151,20 @@ describe("plugin lifecycle protocol validators", () => {
       }),
     ).toBe(false);
     for (const request of [
+      { source: "official", pluginId: "workboard", acknowledgeCapabilities: true },
       { source: "official", pluginId: "workboard", acknowledgeCapabilities: false },
+      { source: "official", pluginId: "workboard", acknowledgeCapabilities: {} },
+      {
+        source: "official",
+        pluginId: "workboard",
+        acknowledgeCapabilities: { reviewToken: "" },
+      },
+      {
+        source: "official",
+        pluginId: "workboard",
+        acknowledgeCapabilities: { reviewToken: "surface-sha256", unexpected: true },
+      },
+      { source: "clawhub", packageName: "memory-plus", acknowledgeCapabilities: true },
       { source: "clawhub", packageName: "memory-plus", acknowledgeCapabilities: false },
     ]) {
       expect(validatePluginsInstallParams(request)).toBe(false);
@@ -146,16 +190,24 @@ describe("plugin lifecycle protocol validators", () => {
       validatePluginsSetEnabledParams({
         pluginId: "workboard",
         enabled: true,
-        acknowledgeCapabilities: true,
+        acknowledgeCapabilities: { reviewToken: "surface-sha256" },
       }),
     ).toBe(true);
-    expect(
-      validatePluginsSetEnabledParams({
-        pluginId: "workboard",
-        enabled: true,
-        acknowledgeCapabilities: false,
-      }),
-    ).toBe(false);
+    for (const acknowledgment of [
+      true,
+      false,
+      {},
+      { reviewToken: "" },
+      { reviewToken: "surface-sha256", unexpected: true },
+    ]) {
+      expect(
+        validatePluginsSetEnabledParams({
+          pluginId: "workboard",
+          enabled: true,
+          acknowledgeCapabilities: acknowledgment,
+        }),
+      ).toBe(false);
+    }
     expect(validatePluginsSetEnabledParams({ pluginId: "workboard", enabled: "yes" })).toBe(false);
   });
 });

@@ -71,6 +71,7 @@ export const PluginInstallRecordShape = {
       channels: z.array(z.string().min(1)),
       providers: z.array(z.string().min(1)),
       tools: z.array(z.string().min(1)),
+      contracts: z.array(z.string().min(1)),
       hooks: z.array(z.string().min(1)),
       mcpServers: z.array(z.string().min(1)),
       cliCommands: z.array(z.string().min(1)),

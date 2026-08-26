@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { computeDeclaredSurfaceHash } from "./capability-consent.js";
 import {
   emptyMetadataSnapshot,
   hostedFeedDiffsEntry,
@@ -49,6 +50,7 @@ describe("managed plugin inspection", () => {
         enabled: true,
       },
       source: { kind: "bundled" },
+      reviewToken: expect.stringMatching(/^[a-f\d]{64}$/),
       grants: {
         hooks: {
           allowPromptInjection: { effective: true },
@@ -56,6 +58,7 @@ describe("managed plugin inspection", () => {
         },
       },
     });
+    expect(inspection.reviewToken).toBe(computeDeclaredSurfaceHash(inspection.declared));
     expect(inspection).not.toHaveProperty("trust");
   });
 
@@ -125,6 +128,35 @@ describe("managed plugin inspection", () => {
         stale: true,
       },
     });
+    expect(inspection.reviewToken).toBe(computeDeclaredSurfaceHash(inspection.declared));
+  });
+
+  it("does not misrepresent an npm SHA-1 shasum as pinned SHA-256 integrity", async () => {
+    mocks.metadata.mockReturnValue(
+      metadataSnapshot({
+        id: "community-plugin",
+        name: "Community Plugin",
+        enabled: false,
+        origin: "global",
+        installRecord: {
+          source: "npm",
+          installPath: "/tmp/community-plugin",
+          shasum: "0123456789abcdef0123456789abcdef01234567",
+          npmShasum: "fedcba9876543210fedcba9876543210fedcba987",
+        },
+      }),
+    );
+
+    const inspection = await inspectManagedPlugin({
+      config: {},
+      env: {},
+      pluginId: "community-plugin",
+    });
+
+    expect(inspection.source).toEqual({
+      kind: "npm",
+      packageName: "@openclaw/community-plugin",
+    });
   });
 
   it("inspects official catalog manifests and their actual pinned install candidate", async () => {
@@ -148,6 +180,7 @@ describe("managed plugin inspection", () => {
         },
       },
     });
+    expect(inspection.reviewToken).toBe(computeDeclaredSurfaceHash(inspection.declared));
   });
 
   it("rejects inspection ids absent from installed metadata and the official catalog", async () => {

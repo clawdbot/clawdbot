@@ -64,6 +64,7 @@ describe("installed plugin index install-record persistence", () => {
       channels: [],
       providers: [],
       tools: ["read"],
+      contracts: ["tools: read"],
       hooks: [],
       mcpServers: [],
       cliCommands: [],
