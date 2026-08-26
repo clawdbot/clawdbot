@@ -340,15 +340,17 @@ describe("rewindChatHistory", () => {
     expect(state.handleChatDraftChange).not.toHaveBeenCalled();
   });
 
-  it("does not overwrite composer state after a same-client reconnect", async () => {
+  it("reconciles committed rewind history without overwriting a replacement draft", async () => {
     let resolveRewind!: (result: { editorText?: string }) => void;
     const rewind = new Promise<{ editorText?: string }>((resolve) => {
       resolveRewind = resolve;
     });
-    const state = createState({ messages: [] }) as TestState & {
+    const canonical = { role: "assistant", content: "canonical history after rewind" };
+    const state = createState({ messages: [canonical] }) as TestState & {
       handleChatDraftChange: ReturnType<typeof vi.fn>;
       sessions: { rewind: ReturnType<typeof vi.fn> };
     };
+    state.chatMessages = [{ role: "assistant", content: "stale replacement history" }];
     state.handleChatDraftChange = vi.fn((next: string) => {
       state.chatMessage = next;
     });
@@ -373,6 +375,7 @@ describe("rewindChatHistory", () => {
     expect(state.chatAttachments).toEqual([
       { id: "new", mimeType: "image/jpeg", dataUrl: "data:image/jpeg;base64,bmV3" },
     ]);
+    expect(state.chatMessages).toEqual([canonical]);
     expect(state.handleChatDraftChange).not.toHaveBeenCalled();
     expect(result).toBeNull();
   });
@@ -525,17 +528,19 @@ describe("switchChatHistoryBranch", () => {
     expect(state.chatMessages).toEqual([selected]);
   });
 
-  it("does not apply a branch switch after a same-client reconnect", async () => {
+  it("reconciles a committed branch switch after a same-client reconnect", async () => {
     let resolveSwitch!: () => void;
     const switched = new Promise<object>((resolve) => {
       resolveSwitch = () => resolve({});
     });
-    const state = createState({ messages: [] }) as TestState & {
+    const selected = { role: "assistant", content: "selected branch after reconnect" };
+    const state = createState({ messages: [selected] }) as TestState & {
       sessions: {
         listBranches: ReturnType<typeof vi.fn>;
         switchBranch: ReturnType<typeof vi.fn>;
       };
     };
+    state.chatMessages = [{ role: "assistant", content: "stale branch after reconnect" }];
     state.sessions = {
       listBranches: vi.fn().mockResolvedValue([]),
       switchBranch: vi.fn(() => switched),
@@ -550,7 +555,8 @@ describe("switchChatHistoryBranch", () => {
     resolveSwitch();
 
     await expect(pending).resolves.toBe(false);
-    expect(state.sessions.listBranches).not.toHaveBeenCalled();
+    expect(state.chatMessages).toEqual([selected]);
+    expect(state.sessions.listBranches).toHaveBeenCalledWith(state.sessionKey, expect.any(Object));
   });
 });
 

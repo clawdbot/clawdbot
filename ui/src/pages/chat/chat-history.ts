@@ -1376,13 +1376,10 @@ export async function rewindChatHistory(
   const connectionEpoch = state.connectionEpoch;
   const connectionIsCurrent = () =>
     state.connected && state.client === client && state.connectionEpoch === connectionEpoch;
-  const viewIsCurrent = () =>
-    connectionIsCurrent() && visibleSessionMatches(state, sessionKey, agentParams.agentId);
+  const viewMatches = () => visibleSessionMatches(state, sessionKey, agentParams.agentId);
+  const viewIsCurrent = () => connectionIsCurrent() && viewMatches();
   try {
     const result = await state.sessions.rewind(sessionKey, entryId, agentParams);
-    if (!connectionIsCurrent()) {
-      return null;
-    }
     const editorText = result.editorText ?? "";
     if (state.chatMessagesBySession) {
       clearChatMessagesFromCache(state.chatMessagesBySession, state, {
@@ -1390,11 +1387,13 @@ export async function rewindChatHistory(
         agentId: agentParams.agentId,
       });
     }
-    persistChatComposerState(state, sessionKey, {
-      agentId: agentParams.agentId,
-      draft: editorText,
-    });
-    if (!viewIsCurrent()) {
+    if (connectionIsCurrent()) {
+      persistChatComposerState(state, sessionKey, {
+        agentId: agentParams.agentId,
+        draft: editorText,
+      });
+    }
+    if (!viewMatches()) {
       return null;
     }
     resetChatHistoryProjection(state, agentParams.agentId);
@@ -1432,20 +1431,17 @@ export async function switchChatHistoryBranch(
   const connectionEpoch = state.connectionEpoch;
   const connectionIsCurrent = () =>
     state.connected && state.client === client && state.connectionEpoch === connectionEpoch;
-  const viewIsCurrent = () =>
-    connectionIsCurrent() && visibleSessionMatches(state, sessionKey, agentParams.agentId);
+  const viewMatches = () => visibleSessionMatches(state, sessionKey, agentParams.agentId);
+  const viewIsCurrent = () => connectionIsCurrent() && viewMatches();
   try {
     await state.sessions.switchBranch(sessionKey, leafEntryId, agentParams);
-    if (!connectionIsCurrent()) {
-      return false;
-    }
     if (state.chatMessagesBySession) {
       clearChatMessagesFromCache(state.chatMessagesBySession, state, {
         sessionKey,
         agentId: agentParams.agentId,
       });
     }
-    if (!viewIsCurrent()) {
+    if (!viewMatches()) {
       return false;
     }
     resetChatHistoryProjection(state, agentParams.agentId);
