@@ -39,6 +39,7 @@ import {
 } from "../../../src/auto-reply/continuation/work-dispatch.js";
 import { decodeWorkState } from "../../../src/auto-reply/continuation/work-flow-state.js";
 import { consumePendingWork } from "../../../src/auto-reply/continuation/work-store.js";
+import type { DiagnosticTracePropagationBridge } from "../../../src/infra/diagnostic-trace-propagation.js";
 import { resetSystemEventsForTest } from "../../../src/infra/system-events.js";
 import { listTaskFlowsForOwnerKey } from "../../../src/tasks/task-flow-runtime-internal.js";
 import { resetTaskFlowRegistryForTests } from "../../../src/tasks/task-runtime.test-helpers.js";
@@ -46,6 +47,8 @@ import {
   parseDiagnosticTraceparent,
   resetContinuationTracer,
   setContinuationTracer,
+  type DiagnosticEventMetadata,
+  type DiagnosticEventPayload,
   type DiagnosticTraceContext,
 } from "../api.js";
 import { createContinuationOtelTracerAdapter } from "./continuation-tracer-adapter.js";
@@ -251,7 +254,10 @@ function installProductionDiagnostics(provider: BasicTracerProvider) {
     recordSecurityEvent: undefined,
   });
   const unsubscribe = onTrustedInternalDiagnosticEvent(handler);
-  const unregisterTracePropagationBridge = registerDiagnosticTracePropagationBridge({
+  const tracePropagationBridge: DiagnosticTracePropagationBridge<
+    DiagnosticEventPayload,
+    DiagnosticEventMetadata
+  > = {
     shouldPrepareEvent(event) {
       return event.type === "model.call.started" || event.type === "tool.execution.started";
     },
@@ -272,7 +278,9 @@ function installProductionDiagnostics(provider: BasicTracerProvider) {
           }
         : undefined;
     },
-  });
+  };
+  const unregisterTracePropagationBridge =
+    registerDiagnosticTracePropagationBridge(tracePropagationBridge);
   const continuationTracer = createContinuationOtelTracerAdapter({
     tracerProvider: provider,
     resolveSpanContext: traces.resolveTrustedSpanContext,
