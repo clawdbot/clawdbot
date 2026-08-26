@@ -107,7 +107,8 @@ export function renderAgentOverview(params: {
   const identityAvatarUrl =
     identityDraft.avatar ?? resolveAgentAvatarUrl(agent, params.agentIdentity);
   const identityAvatarText =
-    resolveAgentTextAvatar(agent) ?? (deriveAvatarInitial(identityName || agent.id) || "?");
+    resolveAgentTextAvatar(agent, params.agentIdentity) ??
+    (deriveAvatarInitial(identityName || agent.id) || "?");
   const identityDirty =
     identityDraft.name !== null || identityDraft.emoji !== null || identityDraft.avatar !== null;
   const identityInvalid =
