@@ -1,5 +1,4 @@
 // @vitest-environment node
-import { GATEWAY_SERVER_CAPS } from "@openclaw/gateway-protocol";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createSessionCapability } from "./index.ts";
@@ -10,30 +9,16 @@ const key = "agent:main:unread-contract";
 describe("session unread mutation capability", () => {
   it.each([
     {
-      name: "current Gateway automatic acknowledgement",
-      capabilities: [GATEWAY_SERVER_CAPS.SESSION_UNREAD_ACK_CONTRACT],
+      name: "automatic acknowledgement",
       options: { expectedMarkedUnreadAt: 42 },
       expected: { expectedMarkedUnreadAt: 42 },
     },
     {
-      name: "legacy Gateway automatic acknowledgement",
-      capabilities: [],
-      options: { expectedMarkedUnreadAt: 42 },
-      expected: {},
-    },
-    {
-      name: "current Gateway explicit read",
-      capabilities: [GATEWAY_SERVER_CAPS.SESSION_UNREAD_ACK_CONTRACT],
+      name: "explicit read",
       options: {},
       expected: {},
     },
-    {
-      name: "legacy Gateway explicit read",
-      capabilities: [],
-      options: {},
-      expected: {},
-    },
-  ])("uses the compatible payload for $name", async ({ capabilities, expected, options }) => {
+  ])("sends the current payload for $name", async ({ expected, options }) => {
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.patch") {
         return { ok: true, path: "", key, entry: {} };
@@ -41,7 +26,7 @@ describe("session unread mutation capability", () => {
       throw new Error(`Unexpected request: ${method}`);
     });
     const client = { request } as unknown as GatewayBrowserClient;
-    const { gateway } = createGatewayHarness(client, ["sessions.patch"], capabilities);
+    const { gateway } = createGatewayHarness(client, ["sessions.patch"]);
     const sessions = createSessionCapability(gateway);
 
     await sessions.patch(key, { unread: false }, { ...options, deferListRefresh: true });

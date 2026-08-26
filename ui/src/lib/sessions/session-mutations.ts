@@ -45,7 +45,6 @@ type ConfirmedArchiveState = Pick<GatewaySessionRow, "archivedAt" | "archivedBy"
 
 type SessionMutationsHost = {
   connection: SessionConnectionOwner;
-  supportsSessionUnreadAckContract: () => boolean;
   readState: () => SessionState;
   publish: (state: SessionState, errorSource?: "session-observer" | "operation") => void;
   refreshReplacement: (agentId?: string | null) => Promise<void>;
@@ -380,12 +379,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
         }
       }
       startOptimisticPatch();
-      // Older Gateways validate a closed payload and reject both new fields.
-      // Their legacy unread=false behavior remains the only compatible path.
-      const requestOptions = host.supportsSessionUnreadAckContract()
-        ? options
-        : { ...options, expectedMarkedUnreadAt: undefined };
-      const result = await requestSessionPatch(scope.client, key, patchParams, requestOptions);
+      const result = await requestSessionPatch(scope.client, key, patchParams, options);
       if (!host.connection.isCurrent(scope)) {
         settleOptimisticPatch(false);
         return (await reconcileConfirmedPreviousConnection(scope, options.agentId)) ? result : null;

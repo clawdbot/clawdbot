@@ -33,12 +33,6 @@ export function isGatewayCapabilityAdvertised(
   return capabilities.includes(capability);
 }
 
-export function supportsSessionUnreadAckContract(
-  host: Parameters<typeof isGatewayCapabilityAdvertised>[0],
-): boolean {
-  return isGatewayCapabilityAdvertised(host, "session-unread-ack-contract") === true;
-}
-
 /** Combines the active connection, advertised method catalog, and operator scopes. */
 export function canCallGatewayMethod(
   snapshot: Pick<ApplicationGatewaySnapshot, "client" | "hello" | "phase"> | null | undefined,
