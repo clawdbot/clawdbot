@@ -2363,8 +2363,9 @@ describe("gateway hot reload commit policy", () => {
 
     const first = await applyActiveTransform();
     expect(first?.ok).toBe(true);
-    if (first?.ok && first.action?.kind === "wake") {
-      expect(first.action.text).toBe("accepted");
+    const firstAction = first?.ok ? first.actions[0] : undefined;
+    if (firstAction?.kind === "wake") {
+      expect(firstAction.text).toBe("accepted");
     }
 
     const { applyHotReload } = createReloadHandlersForTest();
@@ -2396,8 +2397,9 @@ describe("gateway hot reload commit policy", () => {
 
     const afterRejectedReload = await applyActiveTransform();
     expect(afterRejectedReload?.ok).toBe(true);
-    if (afterRejectedReload?.ok && afterRejectedReload.action?.kind === "wake") {
-      expect(afterRejectedReload.action.text).toBe("accepted");
+    const rejectedAction = afterRejectedReload?.ok ? afterRejectedReload.actions[0] : undefined;
+    if (rejectedAction?.kind === "wake") {
+      expect(rejectedAction.text).toBe("accepted");
     }
 
     await applyHotReload(
@@ -2414,8 +2416,9 @@ describe("gateway hot reload commit policy", () => {
 
     const afterPolicyReload = await applyActiveTransform();
     expect(afterPolicyReload?.ok).toBe(true);
-    if (afterPolicyReload?.ok && afterPolicyReload.action?.kind === "wake") {
-      expect(afterPolicyReload.action.text).toBe("accepted");
+    const policyAction = afterPolicyReload?.ok ? afterPolicyReload.actions[0] : undefined;
+    if (policyAction?.kind === "wake") {
+      expect(policyAction.text).toBe("accepted");
     }
   });
 });

@@ -4,6 +4,7 @@ import {
   resolveActiveEmbeddedRunSessionId,
   resolveSandboxContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
@@ -216,6 +217,12 @@ async function resolveConversationAppServerRuntime(params: {
   }
   const permissionMode = entry?.permissionMode;
   const sessionRoot = permissionMode ? entry?.sessionRoot : undefined;
+  // The rootless permission boundary comes from agent config only. A bound
+  // thread's requested cwd (/codex bind --cwd) must never widen or become it.
+  const agentWorkspaceDir =
+    params.config && agentId
+      ? resolveAgentWorkspaceDir(params.config, agentId)
+      : resolveCodexDefaultWorkspaceDir(params.pluginConfig);
   const execPolicy = resolveOpenClawExecPolicyForCodexAppServer({
     config: params.config,
     agentId,
@@ -230,7 +237,7 @@ async function resolveConversationAppServerRuntime(params: {
       ? await resolveSandboxContext({
           config: params.config,
           sessionKey,
-          workspaceDir: params.workspaceDir,
+          workspaceDir: agentWorkspaceDir,
         })
       : undefined;
   const configuredRuntime = resolveCodexAppServerRuntimeOptions({
@@ -253,6 +260,7 @@ async function resolveConversationAppServerRuntime(params: {
     appServer: configuredRuntime,
     permissionMode,
     sessionRoot,
+    defaultRoot: agentWorkspaceDir,
     pluginConfig: readCodexPluginConfig(params.pluginConfig),
     canUseAutoReview,
     requirementsToml: readCodexRequirementsToml({}),
@@ -263,6 +271,7 @@ async function resolveConversationAppServerRuntime(params: {
     workspaceDir: resolveCodexSessionPermissionCwd({
       permissionMode,
       sessionRoot,
+      defaultRoot: agentWorkspaceDir,
       requestedCwd: params.workspaceDir,
       fallbackCwd: params.workspaceDir,
     }),

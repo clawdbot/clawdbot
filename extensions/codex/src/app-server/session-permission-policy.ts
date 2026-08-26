@@ -178,6 +178,7 @@ export function applyCodexSessionPermissionPolicy(params: {
   appServer: CodexAppServerRuntimeOptions;
   permissionMode?: SessionPermissionMode;
   sessionRoot?: string;
+  defaultRoot: string;
   pluginConfig: CodexPluginConfig;
   canUseAutoReview: boolean;
   requirementsToml?: string;
@@ -188,10 +189,7 @@ export function applyCodexSessionPermissionPolicy(params: {
   if (!params.permissionMode) {
     return params.appServer;
   }
-  const sessionRoot = params.sessionRoot?.trim();
-  if (!sessionRoot) {
-    throw new Error("Codex session permission mode requires a recorded session root");
-  }
+  const sessionRoot = params.sessionRoot?.trim() || params.defaultRoot;
   if (params.policyLocked) {
     return { ...params.appServer, sessionRoot };
   }
@@ -232,14 +230,12 @@ export function resolveCodexEffectiveSessionPermissionPolicy(params: {
   appServer: CodexAppServerRuntimeOptions;
   permissionMode?: SessionPermissionMode;
   sessionRoot?: string;
+  defaultRoot: string;
 }): CodexEffectiveSessionPermissionPolicy | undefined {
   if (!params.permissionMode) {
     return undefined;
   }
-  const root = params.sessionRoot?.trim();
-  if (!root) {
-    throw new Error("Codex session permission mode requires a recorded session root");
-  }
+  const root = params.sessionRoot?.trim() || params.defaultRoot;
   const { sandbox, approvalPolicy, approvalsReviewer } = params.appServer;
   const fullAccess =
     params.permissionMode === "full" &&
@@ -265,16 +261,14 @@ export function resolveCodexEffectiveSessionPermissionPolicy(params: {
 export function resolveCodexSessionPermissionCwd(params: {
   permissionMode?: SessionPermissionMode;
   sessionRoot?: string;
+  defaultRoot: string;
   requestedCwd?: string;
   fallbackCwd: string;
 }): string {
   if (!params.permissionMode) {
     return params.requestedCwd ?? params.fallbackCwd;
   }
-  const sessionRoot = params.sessionRoot?.trim();
-  if (!sessionRoot) {
-    throw new Error("Codex session permission mode requires a recorded session root");
-  }
+  const sessionRoot = params.sessionRoot?.trim() || params.defaultRoot;
   const requestedCwd = params.requestedCwd?.trim();
   return requestedCwd && isPathInside(sessionRoot, requestedCwd) ? requestedCwd : sessionRoot;
 }

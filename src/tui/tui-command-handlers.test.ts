@@ -24,7 +24,7 @@ import {
   type TuiPendingSubmit,
 } from "./tui-submit-state.js";
 import { createEditorSubmitHandler, createSubmitBurstCoalescer } from "./tui-submit.js";
-import type { SessionInfo } from "./tui-types.js";
+import type { SessionInfo, TuiOptions } from "./tui-types.js";
 
 type LoadHistoryMock = ReturnType<typeof vi.fn> & (() => Promise<void>);
 type RunAuthFlow = NonNullable<Parameters<typeof createCommandHandlers>[0]["runAuthFlow"]>;
@@ -115,7 +115,7 @@ function createHarness(params?: {
   activeChatRunId?: string | null;
   pendingSubmit?: TuiPendingSubmit | null;
   activityStatus?: string;
-  opts?: { local?: boolean };
+  opts?: Pick<TuiOptions, "local" | "timeoutMs">;
   currentSessionId?: string | null;
   sessionGeneration?: number;
   currentAgentId?: string;
@@ -161,6 +161,11 @@ function createHarness(params?: {
   const dropPendingUser = vi.fn();
   const rekeyPendingUser = vi.fn();
   const addSystem = vi.fn();
+  const pendingSystemNotices = new Map<string, string>();
+  const addPendingSystem = vi.fn((runId: string, text: string) => {
+    pendingSystemNotices.set(runId, text);
+  });
+  const dismissPendingSystem = vi.fn((runId: string) => pendingSystemNotices.delete(runId));
   const clearTools = vi.fn();
   const reserveAssistantSlot = vi.fn();
   const requestRender = vi.fn();
@@ -228,6 +233,8 @@ function createHarness(params?: {
       dropPendingUser,
       rekeyPendingUser,
       addSystem,
+      addPendingSystem,
+      dismissPendingSystem,
       clearTools,
       reserveAssistantSlot,
     } as never,
@@ -282,6 +289,9 @@ function createHarness(params?: {
     dropPendingUser,
     rekeyPendingUser,
     addSystem,
+    addPendingSystem,
+    dismissPendingSystem,
+    pendingSystemNotices,
     clearTools,
     reserveAssistantSlot,
     requestRender,
@@ -363,7 +373,14 @@ describe("tui command handlers", () => {
       });
 
       const olderPicker = harness.handleCommand("/models");
+      expect(harness.pendingSystemNotices.size).toBe(1);
+      const olderNoticeId = expectDefined(
+        harness.pendingSystemNotices.keys().next().value,
+        "older model picker notice",
+      );
       await harness.handleCommand(newerCommand);
+      expect(harness.pendingSystemNotices.has(olderNoticeId)).toBe(false);
+      expect(harness.dismissPendingSystem).toHaveBeenCalledWith(olderNoticeId);
       olderModels.resolve([{ provider: "openai", id: "obsolete-model" }]);
       await olderPicker;
 
@@ -563,6 +580,23 @@ describe("tui command handlers", () => {
       message: "/unregistered-command",
     });
     expect(requestRender).toHaveBeenCalled();
+  });
+
+  it("scopes an explicit timeout override to one message", async () => {
+    const { handleCommand, sendMessage, sendChat, state } = createHarness();
+
+    await sendMessage("automatic hatch", 300_000);
+    state.pendingSubmit = null;
+    await handleCommand("later interactive turn");
+
+    expect(sendChat).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ message: "automatic hatch", timeoutMs: 300_000 }),
+    );
+    expect(sendChat).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ message: "later interactive turn", timeoutMs: undefined }),
+    );
   });
 
   it("projects the canonical pending user before chat.send is acknowledged", async () => {
@@ -2381,13 +2415,10 @@ describe("tui command handlers", () => {
   it.each([
     { mode: "gateway", local: false, command: "/think default", field: "thinkingLevel" },
     { mode: "gateway", local: false, command: "/fast default", field: "fastMode" },
-    { mode: "gateway", local: false, command: "/model default", field: "model" },
     { mode: "embedded", local: true, command: "/think default", field: "thinkingLevel" },
     { mode: "embedded", local: true, command: "/fast default", field: "fastMode" },
-    { mode: "embedded", local: true, command: "/model default", field: "model" },
     { mode: "gateway", local: false, command: "/think inherit", field: "thinkingLevel" },
     { mode: "embedded", local: true, command: "/fast reset", field: "fastMode" },
-    { mode: "gateway", local: false, command: "/model DEFAULT", field: "model" },
   ])(
     "clears the $field session override for $command in $mode mode",
     async ({ local, command, field }) => {
@@ -2471,6 +2502,93 @@ describe("tui command handlers", () => {
     );
     expect(addSystem).toHaveBeenNthCalledWith(2, "usage: /think <off|max|default>");
   });
+
+  it.each([
+    {
+      name: "provider-specific binary on",
+      local: false,
+      levels: [
+        { id: "off", label: "off" },
+        { id: "high", label: "on" },
+      ],
+      input: "on",
+      expected: "high",
+    },
+    {
+      name: "case-insensitive binary on in embedded mode",
+      local: true,
+      levels: [{ id: "high", label: "on" }],
+      input: "ON",
+      expected: "high",
+    },
+    {
+      name: "always-on high profile",
+      local: false,
+      levels: [{ id: "high", label: "always on" }],
+      input: "always on",
+      expected: "high",
+    },
+    {
+      name: "always-on off profile",
+      local: false,
+      levels: [{ id: "off", label: "always on" }],
+      input: "always on",
+      expected: "off",
+    },
+    {
+      name: "Moonshot binary on",
+      local: false,
+      levels: [{ id: "low", label: "on" }],
+      input: "on",
+      expected: "low",
+    },
+    {
+      name: "canonical id ahead of another option's label",
+      local: false,
+      levels: [
+        { id: "low", label: "high" },
+        { id: "high", label: "turbo" },
+      ],
+      input: "high",
+      expected: "high",
+    },
+  ])(
+    "resolves $name to its canonical thinking level",
+    async ({ local, levels, input, expected }) => {
+      const { handleCommand, patchSession, addSystem } = createHarness({
+        opts: { local },
+        sessionInfo: { thinkingLevels: levels },
+      });
+
+      await handleCommand(`/think ${input}`);
+
+      expect(patchSession).toHaveBeenCalledWith({
+        key: "agent:main:main",
+        thinkingLevel: expected,
+      });
+      expect(addSystem).toHaveBeenCalledWith(`thinking set to ${input}`);
+    },
+  );
+
+  it.each([undefined, []])(
+    "resolves thinking labels from the provider policy when session levels are %j",
+    async (thinkingLevels) => {
+      const { handleCommand, patchSession } = createHarness({
+        sessionInfo: {
+          modelProvider: "opencode-go",
+          model: "minimax-m3",
+          thinkingLevels,
+        },
+      });
+
+      await handleCommand("/think on");
+
+      expect(patchSession).toHaveBeenCalledWith({
+        key: "agent:main:main",
+        thinkingLevel: "high",
+      });
+    },
+  );
 
   it.each([
     { command: "verbose", usage: "usage: /verbose <on|off|full>" },
@@ -2994,13 +3112,24 @@ describe("tui command handlers", () => {
     expect(closeOverlay).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["codex", "openclaw"])(
-    "forwards model/runtime transactions through the server directive path for %s",
-    async (runtime) => {
+  it.each([
+    { local: false, command: "/model default" },
+    { local: true, command: "/model default" },
+    { local: false, command: "/model DEFAULT" },
+    {
+      local: false,
+      command: "/model openai/gpt-5.6-luna --runtime codex continue with this model",
+    },
+    {
+      local: false,
+      command: "/model openai/gpt-5.6-luna --runtime openclaw continue with this model",
+    },
+  ])(
+    "forwards $command through the server directive path (local: $local)",
+    async ({ command, local }) => {
       const sendChat = vi.fn().mockResolvedValue({ status: "ok" });
       const patchSession = vi.fn();
-      const command = `/model openai/gpt-5.6-luna --runtime ${runtime} continue with this model`;
-      const { handleCommand } = createHarness({ sendChat, patchSession });
+      const { handleCommand } = createHarness({ sendChat, patchSession, opts: { local } });
 
       await handleCommand(command);
 
@@ -3085,15 +3214,17 @@ describe("tui command handlers", () => {
       },
     );
     const listModels = vi.fn(() => listModelsPromise);
-    const { handleCommand, addSystem, openOverlay, requestRender } = createHarness({ listModels });
+    const { handleCommand, addPendingSystem, openOverlay, requestRender } = createHarness({
+      listModels,
+    });
 
     const pending = handleCommand("/models");
     await Promise.resolve();
 
     expect(listModels).toHaveBeenCalledTimes(1);
-    expect(addSystem).toHaveBeenCalledWith("loading models...");
+    expect(addPendingSystem).toHaveBeenCalledWith(expect.any(String), "loading models...");
     expect(openOverlay).not.toHaveBeenCalled();
-    const feedbackOrder = addSystem.mock.invocationCallOrder[0] ?? 0;
+    const feedbackOrder = addPendingSystem.mock.invocationCallOrder[0] ?? 0;
     const renderOrders = requestRender.mock.invocationCallOrder;
     expect(renderOrders.filter((order) => order > feedbackOrder)).not.toEqual([]);
 
@@ -3101,6 +3232,70 @@ describe("tui command handlers", () => {
     await pending;
 
     expect(openOverlay).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    {
+      name: "successful listing",
+      listModels: vi.fn().mockResolvedValue([{ provider: "openai", id: "picker-model" }]),
+      terminalNotice: undefined,
+    },
+    {
+      name: "empty listing",
+      listModels: vi.fn().mockResolvedValue([]),
+      terminalNotice: "no models available",
+    },
+    {
+      name: "failed listing",
+      listModels: vi.fn().mockRejectedValue(new Error("fixture backend unavailable")),
+      terminalNotice: "model list failed: fixture backend unavailable",
+    },
+  ])("removes temporary model feedback after $name", async ({ listModels, terminalNotice }) => {
+    const harness = createHarness({ listModels });
+
+    await harness.handleCommand("/models");
+
+    expect(harness.addPendingSystem).toHaveBeenCalledWith(expect.any(String), "loading models...");
+    expect(harness.pendingSystemNotices.size).toBe(0);
+    expect(harness.dismissPendingSystem).toHaveBeenCalledOnce();
+    if (terminalNotice) {
+      expect(harness.addSystem).toHaveBeenCalledWith(terminalNotice);
+    }
+  });
+
+  it("does not let an older model request remove the newer request's notice", async () => {
+    const olderModels = createDeferred<Array<{ provider: string; id: string }>>();
+    const newerModels = createDeferred<Array<{ provider: string; id: string }>>();
+    const harness = createHarness({
+      listModels: vi
+        .fn()
+        .mockReturnValueOnce(olderModels.promise)
+        .mockReturnValueOnce(newerModels.promise),
+    });
+
+    const olderPicker = harness.handleCommand("/models");
+    const olderNoticeId = expectDefined(
+      harness.pendingSystemNotices.keys().next().value,
+      "older model picker notice",
+    );
+    const newerPicker = harness.handleCommand("/models");
+    const newerNoticeId = expectDefined(
+      harness.pendingSystemNotices.keys().next().value,
+      "newer model picker notice",
+    );
+
+    expect(newerNoticeId).not.toBe(olderNoticeId);
+    expect(harness.pendingSystemNotices.has(olderNoticeId)).toBe(false);
+    expect(harness.pendingSystemNotices.has(newerNoticeId)).toBe(true);
+
+    olderModels.resolve([{ provider: "openai", id: "obsolete-model" }]);
+    await olderPicker;
+    expect(harness.pendingSystemNotices.has(newerNoticeId)).toBe(true);
+
+    newerModels.resolve([{ provider: "openai", id: "current-model" }]);
+    await newerPicker;
+    expect(harness.pendingSystemNotices.size).toBe(0);
+    expect(harness.openOverlay).toHaveBeenCalledOnce();
   });
 
   it("does not open a stale model selector after switching sessions", async () => {
@@ -3111,14 +3306,14 @@ describe("tui command handlers", () => {
     });
 
     const pending = harness.handleCommand("/models");
-    expect(harness.addSystem).toHaveBeenCalledWith("loading models...");
-    harness.addSystem.mockClear();
+    expect(harness.addPendingSystem).toHaveBeenCalledWith(expect.any(String), "loading models...");
     harness.state.currentSessionKey = "agent:main:second";
     deferred.resolve([{ provider: "openai", id: "gpt-5.6-luna" }]);
     await pending;
 
     expect(harness.openOverlay).not.toHaveBeenCalled();
     expect(harness.addSystem).not.toHaveBeenCalled();
+    expect(harness.pendingSystemNotices.size).toBe(0);
   });
 
   it.each([

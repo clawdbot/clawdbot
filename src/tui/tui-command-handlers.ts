@@ -8,8 +8,8 @@ import { modelKey } from "../agents/model-ref-shared.js";
 import { shouldForwardModelCommandToServer } from "../auto-reply/commands-registry.shared.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
-  formatThinkingLevels,
   isSessionDefaultDirectiveValue,
+  listThinkingLevelOptions,
   normalizeUsageDisplay,
   resolveResponseUsageMode,
 } from "../auto-reply/thinking.js";
@@ -152,7 +152,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     boundary: null as "new" | "reset" | null,
     epoch: 0,
   };
-  let pickerRequest: { overlay?: OverlayHandle } | null = null;
+  let pickerRequest: { overlay?: OverlayHandle; noticeId: string } | null = null;
 
   // Hold one owner through the full identity transition so later input cannot
   // target the session being retired while create/reset awaits the backend.
@@ -223,11 +223,14 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     chatLog.addSystem(`agent set to ${state.currentAgentId}; use /openclaw to return`);
   };
 
-  const beginPickerRequest = (): { overlay?: OverlayHandle } => {
+  const beginPickerRequest = (): { overlay?: OverlayHandle; noticeId: string } => {
+    if (pickerRequest && chatLog.dismissPendingSystem(pickerRequest.noticeId)) {
+      tui.requestRender();
+    }
     if (pickerRequest?.overlay) {
       closeOverlayAndRender(pickerRequest.overlay);
     }
-    return (pickerRequest = {});
+    return (pickerRequest = { noticeId: randomUUID() });
   };
 
   const closeOverlayAndRender = (handle: OverlayHandle) => {
@@ -349,7 +352,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     const request = beginPickerRequest();
     const selection = captureSessionSelection();
     try {
-      chatLog.addSystem("loading models...");
+      chatLog.addPendingSystem(request.noticeId, "loading models...");
       tui.requestRender();
       const models = await client.listModels({ agentId: selection.agentId });
       if (request !== pickerRequest || !isCurrentSessionSelection(selection)) {
@@ -357,7 +360,6 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       }
       if (models.length === 0) {
         chatLog.addSystem("no models available");
-        tui.requestRender();
         return;
       }
       const items = models.map((model) => {
@@ -379,7 +381,10 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         return;
       }
       chatLog.addSystem(`model list failed: ${formatTuiErrorMessage(err)}`);
-      tui.requestRender();
+    } finally {
+      if (request === pickerRequest && chatLog.dismissPendingSystem(request.noticeId)) {
+        tui.requestRender();
+      }
     }
   };
 
@@ -632,20 +637,20 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     },
     models: async () => await openModelSelector(),
     think: async (args) => {
+      const { thinkingLevels, modelProvider, model, agentRuntime } = state.sessionInfo;
+      const levels = thinkingLevels?.length
+        ? thinkingLevels
+        : listThinkingLevelOptions(modelProvider, model, undefined, agentRuntime?.id);
       if (!args) {
-        const levels =
-          state.sessionInfo.thinkingLevels?.map((level) => level.label).join("|") ||
-          formatThinkingLevels(
-            state.sessionInfo.modelProvider,
-            state.sessionInfo.model,
-            "|",
-            undefined,
-            state.sessionInfo.agentRuntime?.id,
-          );
-        chatLog.addSystem(`usage: /think <${levels}|default>`);
+        chatLog.addSystem(`usage: /think <${levels.map(({ label }) => label).join("|")}|default>`);
         return;
       }
-      const thinkingLevel = isSessionDefaultDirectiveValue(args) ? null : args;
+      const normalized = args.toLowerCase();
+      const thinkingLevel = isSessionDefaultDirectiveValue(args)
+        ? null
+        : (levels.find(({ id }) => id.toLowerCase() === normalized)?.id ??
+          levels.find(({ label }) => label.toLowerCase() === normalized)?.id ??
+          args);
       await applySessionSetting({ thinkingLevel }, `thinking set to ${args}`, "think failed");
     },
     verbose: async (args) => {
@@ -881,7 +886,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     tui.requestRender();
   };
 
-  const sendMessage = async (text: string) => {
+  const sendMessage = async (text: string, timeoutMs = opts.timeoutMs) => {
     const admission = resolveMessageAdmission(text);
     if (admission.status === "blocked") {
       reportBlockedMessageSubmit(text, admission);
@@ -937,7 +942,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         message: text,
         thinking: opts.thinking,
         deliver: deliverDefault,
-        timeoutMs: opts.timeoutMs,
+        timeoutMs,
         runId,
       });
       const acceptedRunId = sendResult.runId || runId;

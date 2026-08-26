@@ -471,11 +471,13 @@ metadata:
       (Homebrew's `bin` on a fresh install, else `~/.local/bin`) rather than
       your configured `GOBIN` — your own `GOBIN`, `GOPATH`, and `GOTOOLCHAIN`
       env vars are read but never overwritten.
-    - **Download:** `url` (required), `archive` (`tar.gz` | `tar.bz2` | `zip`),
-      `extract` (default: auto when archive detected), `stripComponents`,
-      `targetDir` (default: `~/.openclaw/tools/<skillKey>`). Response bodies
-      are capped at 256 MiB; larger transfers are aborted while streaming,
-      and partial staging data is removed.
+    - **Download:** `url` (required), `sha256` (optional 64-character hexadecimal
+      digest, verified after download and before the file is installed or extracted),
+      `archive` (`tar.gz` | `tar.bz2` | `zip`), `extract` (default: auto when
+      archive detected), `stripComponents`, `targetDir` (default:
+      `~/.openclaw/tools/<skillKey>`). Existing specs without `sha256` keep the
+      previous download behavior. Response bodies are capped at 256 MiB; larger
+      transfers are aborted while streaming, and partial staging data is removed.
   </Accordion>
   <Accordion title="Sandboxing notes">
     `requires.bins` is checked on the **host** at skill load time. If an agent

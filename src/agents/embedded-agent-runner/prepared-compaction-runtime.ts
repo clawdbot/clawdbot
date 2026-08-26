@@ -2,6 +2,7 @@
  * Builds the skills, tools, capability profile, and system prompt used by one
  * prepared direct compaction attempt.
  */
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
@@ -112,7 +113,9 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
     ? permissionModes[params.execOverrides.mode]
     : (params.permissionMode ?? params.sessionEntry?.permissionMode);
   const root = params.sessionRoot ?? params.sessionEntry?.sessionRoot;
-  const sessionPermissionPolicy = mode && root ? { mode, root } : undefined;
+  const sessionPermissionPolicy = mode
+    ? { mode, root: root ?? (await fs.realpath(resolvedWorkspace)) }
+    : undefined;
   const execOverrides = sessionPermissionPolicy
     ? { ...params.execOverrides, mode: resolveSessionPermissionExecMode(sessionPermissionPolicy) }
     : params.execOverrides;

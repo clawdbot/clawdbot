@@ -318,7 +318,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     const resumedHistory =
       !wasConnected && state.connected ? resumePendingChatHistoryLoad(state) : undefined;
     if (sourceChanged) {
-      retireSessionWorkspaceCheckout(state, this.presented);
+      retireSessionWorkspaceCheckout(state);
     }
     if (!sourceChanged && previousMediaAuthToken !== resolveAssistantAttachmentAuthToken(state)) {
       releaseChatMediaResourceSubscriber(state.requestUpdate);

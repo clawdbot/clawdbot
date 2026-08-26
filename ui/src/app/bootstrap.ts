@@ -4,7 +4,6 @@ import {
 } from "@openclaw/session-url-contract";
 import type { RouteLocation } from "@openclaw/uirouter";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import { sessionRouteNamespaceFromPath } from "../app-route-paths.ts";
 import {
   createApplicationRouter,
   locationForRoute,
@@ -71,7 +70,7 @@ import {
   resolveApplicationStartupSettings,
 } from "./startup-settings.ts";
 import { startThemeTransition } from "./theme-transition.ts";
-import { resolveTheme, type ThemeMode } from "./theme.ts";
+import { resolveTheme, syncThemeFontStylesheet, type ThemeMode } from "./theme.ts";
 import { createWebPushCapability } from "./web-push.ts";
 
 function applyThemePresentation(settings: ReturnType<typeof loadSettings>): void {
@@ -89,6 +88,7 @@ function applyThemePresentation(settings: ReturnType<typeof loadSettings>): void
   root.classList.toggle("wa-dark", root.dataset.themeMode === "dark");
   root.style.colorScheme = root.dataset.themeMode;
   root.style.setProperty("--control-ui-text-scale", `${(settings.textScale ?? 100) / 100}`);
+  syncThemeFontStylesheet(settings.theme);
   syncCustomThemeStyleTag(settings.customTheme);
   applyControlUiAccent(settings.accent);
   const background = getComputedStyle(root).getPropertyValue("--bg").trim();
@@ -209,19 +209,20 @@ function createApplicationNavigationPreferences(
     },
     update(patch) {
       const nextSnapshot = { ...snapshot, ...patch };
-      if (
-        nextSnapshot.navCollapsed === snapshot.navCollapsed &&
-        nextSnapshot.navWidth === snapshot.navWidth &&
-        nextSnapshot.sidebarEntries === snapshot.sidebarEntries &&
-        nextSnapshot.pinnedAgentIds === snapshot.pinnedAgentIds
-      ) {
+      const persistedChanged =
+        nextSnapshot.navWidth !== snapshot.navWidth ||
+        nextSnapshot.sidebarEntries !== snapshot.sidebarEntries ||
+        nextSnapshot.pinnedAgentIds !== snapshot.pinnedAgentIds;
+      if (!persistedChanged && nextSnapshot.navCollapsed === snapshot.navCollapsed) {
         return;
       }
-      patchSettings({
-        navWidth: nextSnapshot.navWidth,
-        sidebarEntries: [...nextSnapshot.sidebarEntries],
-        pinnedAgentIds: [...nextSnapshot.pinnedAgentIds],
-      });
+      if (persistedChanged) {
+        patchSettings({
+          navWidth: nextSnapshot.navWidth,
+          sidebarEntries: [...nextSnapshot.sidebarEntries],
+          pinnedAgentIds: [...nextSnapshot.pinnedAgentIds],
+        });
+      }
       snapshot = nextSnapshot;
       for (const listener of listeners) {
         listener(snapshot);
@@ -303,11 +304,11 @@ export function bootstrapApplication(
     history.replace(applicationLocation);
   }
   const focusLocation = parseControlUiFocusLocation(applicationLocation, basePath);
+  // Focus documents render before the shell; starting the application router
+  // would rewrite their reserved presentation route into an ordinary page.
+  const startsApplicationRouter = documentMode === null && focusLocation === null;
   const firstRunDefaultLanding =
-    documentMode === null &&
-    focusLocation === null &&
-    isDefaultChatLanding(applicationLocation, basePath, routeIdFromPath);
-  const firstRunRedirectEnabled = firstRunDefaultLanding;
+    startsApplicationRouter && isDefaultChatLanding(applicationLocation, basePath, routeIdFromPath);
   const sessionPathBuilderReady =
     dependencies.sessionPathBuilderReady ??
     (documentMode ||
@@ -333,16 +334,8 @@ export function bootstrapApplication(
   );
   const agents = createAgentCapability(gateway);
   const startupLifecycle = createStartupLifecycle();
-  const startupRouteId = routeIdFromPath(applicationLocation.pathname, basePath);
-  const releasedSessionQuery =
-    (startupRouteId === "chat" || startupRouteId === "dashboard") &&
-    sessionRouteNamespaceFromPath(applicationLocation.pathname, basePath) === null &&
-    new URLSearchParams(applicationLocation.search).has("session");
   const deferInitialLocationUntilGateway =
-    documentMode === null &&
-    !releasedSessionQuery &&
-    firstRunDefaultLanding &&
-    !parseAgentSessionKey(settings.sessionKey);
+    firstRunDefaultLanding && !parseAgentSessionKey(settings.sessionKey);
   let resolveInitialFirstRunDecision: (() => void) | null = null;
   const initialFirstRunDecision = deferInitialLocationUntilGateway
     ? new Promise<void>((resolve) => {
@@ -422,9 +415,6 @@ export function bootstrapApplication(
   const chatAttachmentHandoff = createChatAttachmentHandoff();
   applyThemePresentation(settings);
   const router = createApplicationRouter();
-  // Focus documents render before the shell; starting the application router
-  // would rewrite their reserved presentation route into an ordinary page.
-  const startsApplicationRouter = documentMode === null && focusLocation === null;
   let routerStarted = false;
   // Pre-start navigations are invisible to history; retain the latest request so
   // router.start() cannot resolve the stale browser URL over the user's route.
@@ -588,7 +578,7 @@ export function bootstrapApplication(
       steps.push(() =>
         startModelSetupFirstRunRedirectAfterLocation({
           context,
-          enabled: firstRunRedirectEnabled,
+          enabled: firstRunDefaultLanding,
           history,
           initialLocationReady: deferInitialLocationUntilGateway
             ? Promise.resolve(applicationLocation)

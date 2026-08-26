@@ -87,14 +87,16 @@ describe("reconcileHeartbeatMonitorJobs", () => {
     // Declarative matching is scoped to real monitors so a colliding user job
     // is never adopted by the system upsert.
     for (const call of add.mock.calls) {
+      const input = call[0] as { agentId: string };
       const opts = call[1];
       if (!opts) {
         throw new Error("expected system-owned add options");
       }
-      expect(opts.matchesExisting?.(monitorJob("x"))).toBe(true);
+      expect(opts.matchesExisting?.(monitorJob(input.agentId))).toBe(true);
+      expect(opts.matchesExisting?.(monitorJob("another-agent"))).toBe(false);
       expect(
         opts.matchesExisting?.({
-          ...monitorJob("x"),
+          ...monitorJob(input.agentId),
           payload: { kind: "systemEvent", text: "user" },
         } as CronJob),
       ).toBe(false);

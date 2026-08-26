@@ -853,6 +853,8 @@ Each `dangerousFlags` entry supports:
 | `bundledDefaultEnabled` | No       | `boolean`  | Override bundled-plugin default enablement when deciding whether this SecretRef surface is active. Use this when the plugin is bundled but the surface should stay inactive until explicitly enabled in config.                                                                                                                                            |
 | `paths`                 | Yes      | `object[]` | Secret-shaped config paths, each with `path` (dot-separated, relative to `plugins.entries.<id>.config`, supports `*` wildcards), optional `expected` (currently only `"string"`), and optional `ownerKind` (currently only `"route"`). A declared owner isolates only that exact matched path when resolution fails; its owner id is the full config path. |
 
+Concrete paths preserve literal record keys and array indices: `headers["X.Trace"]` remains distinct from `headers.X.Trace`, and record key `["0"]` remains distinct from array index `[0]`. Plugin IDs containing dots are quoted the same way, such as `plugins.entries["example.plugin"].config.headers["X.Trace"]`.
+
 ## mediaUnderstandingProviderMetadata reference
 
 Use `mediaUnderstandingProviderMetadata` when a media-understanding provider has default models, auto-auth fallback priority, or native document support that generic core helpers need before runtime loads. Keys must also be declared in `contracts.mediaUnderstandingProviders`.

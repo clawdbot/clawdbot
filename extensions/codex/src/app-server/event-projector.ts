@@ -27,7 +27,7 @@ import {
   buildCodexAttemptResult,
   type CodexAppServerToolTelemetry,
 } from "./event-projector-result.js";
-import { buildCodexMessagesSnapshot } from "./event-projector-snapshot.js";
+import { buildCodexSteeringMessagesSnapshot } from "./event-projector-snapshot.js";
 import { CodexToolProgressProjection } from "./event-projector-tool-progress.js";
 import { CodexToolTranscriptProjection } from "./event-projector-tool-transcript.js";
 import {
@@ -91,6 +91,7 @@ export class CodexAppServerEventProjector {
   private readonly responseCompletions = new CodexResponseCompletionProjection();
   private completedCompactionCount = 0;
   private lastTranscriptTimestamp = 0;
+  private pendingSteeringAssistantBoundaryItemId: string | undefined;
 
   constructor(
     private readonly params: EmbeddedRunAttemptParams,
@@ -167,25 +168,24 @@ export class CodexAppServerEventProjector {
   }
 
   buildSteeringTranscriptPrefix(): AgentMessage[] {
-    const asyncMessages = this.assistantProjection
-      .collectAsyncMessages()
-      .filter(({ itemId }) => this.completedItemIds.has(itemId));
-    const commentaryMessages = this.assistantProjection
-      .collectCommentaryMessages()
-      .filter(({ itemId }) => this.completedItemIds.has(itemId));
-    return buildCodexMessagesSnapshot({
+    const snapshot = buildCodexSteeringMessagesSnapshot({
       runParams: this.params,
       turnId: this.turnId,
       upstreamUserText: this.options.upstreamUserText,
-      reasoningText: undefined,
-      planText: undefined,
-      asyncMessages,
-      commentaryMessages,
+      completedItemIds: this.completedItemIds,
+      assistantProjection: this.assistantProjection,
       toolMessages: this.toolTranscriptProjection.transcriptMessages,
-      lastAssistant: undefined,
-      createAssistantMirrorMessage: (title, text) =>
-        this.assistantProjection.createAssistantMirrorMessage(title, text),
-    }).filter((message) => message.role !== "user");
+    });
+    this.pendingSteeringAssistantBoundaryItemId = snapshot.assistantBoundaryItemId;
+    return snapshot.messages;
+  }
+
+  markSteeringTranscriptPersisted(): void {
+    const itemId = this.pendingSteeringAssistantBoundaryItemId;
+    if (itemId) {
+      this.assistantProjection.markAssistantBoundaryPersisted(itemId);
+      this.pendingSteeringAssistantBoundaryItemId = undefined;
+    }
   }
 
   hasCompletedTerminalAssistantText(): boolean {

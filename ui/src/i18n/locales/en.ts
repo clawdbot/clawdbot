@@ -497,11 +497,9 @@ export const en: TranslationMap = {
       commitsBehind: "{count} commits behind",
     },
     sidebar: {
-      action: "Update",
       campaignTarget: "{status} · {target}",
       updating: "Updating Gateway…",
       availableTitle: "Update available",
-      dismissUntilRestartOrVersion: "Hide until next restart or update",
       availableSummary: "A newer revision is ready.",
       blockedTitle: "Update blocked",
       blockedSummary: "The selected revision could not be applied to this checkout.",
@@ -1821,6 +1819,10 @@ export const en: TranslationMap = {
         label: "Dash",
         description: "Chocolate blueprint",
       },
+      absolutely: {
+        label: "Absolutely",
+        description: "Clay on graphite",
+      },
     },
     textSizes: {
       small: "Small",
@@ -2584,7 +2586,7 @@ export const en: TranslationMap = {
     intro: "Run agent sessions on ephemeral cloud machines instead of this gateway.",
     documentation: "Cloud worker documentation",
     sectionTitle: "Profiles",
-    sectionDescription: "Each profile defines how Crabbox provisions and retires a worker.",
+    sectionDescription: "Each profile defines how its provider provisions and retires a worker.",
     empty: "No cloud worker profiles are configured.",
     addProfile: "Add profile",
     editProfile: "Edit profile",
@@ -5197,6 +5199,7 @@ export const en: TranslationMap = {
       stoppingCurrentRun: "Stopping current run...",
       chatHistoryCleared: "Chat history cleared.",
       exportingThread: "Exporting session...",
+      emptyExport: "There are no messages to export yet.",
       unknownCommand: "Unknown command: `{command}`",
       options: "Options: {options}.",
       sessionUnavailable: "Session capability is unavailable",
@@ -5789,7 +5792,6 @@ export const en: TranslationMap = {
       chatOnlyHelp:
         "This model can chat, but it cannot use tools. Choose another model for files, commands, web, or media tasks.",
       loadingModels: "Loading models…",
-      refreshingModels: "Refreshing models…",
       modelsUnavailable: "Models unavailable",
       noModelsAvailable: "No models available",
       emptyModelsAction: "Manage models",
@@ -5802,8 +5804,6 @@ export const en: TranslationMap = {
       nextRun: "New permissions apply to the next run.",
       default: "Default",
       defaultDescription: "Follow the agent's configured policy.",
-      rootLabel: "Root",
-      sessionRoot: "Session root: {root}",
       fullRequiresAdmin: "Full access requires operator.admin access.",
       updateFailed: "Failed to update permissions: {error}",
       modes: {

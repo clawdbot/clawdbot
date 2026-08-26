@@ -1083,6 +1083,10 @@ describe("session startup catch-up", () => {
   it.each([
     "thread.jsonl.bak.2026-06-23T10-00-00.000Z",
     "thread.trajectory.jsonl",
+    "thread.trajectory.jsonl.deleted.2026-06-23T10-00-00.000Z",
+    "thread.trajectory.jsonl.reset.2026-06-23T10-00-00.000Z.zst",
+    "thread.checkpoint.11111111-1111-4111-8111-111111111111.jsonl.deleted.2026-06-23T10-00-00.000Z",
+    "thread.checkpoint.11111111-1111-4111-8111-111111111111.jsonl.reset.2026-06-23T10-00-00.000Z.zst",
     "sessions.json",
   ])("ignores non-corpus session artifact updates for %s", async (fileName) => {
     vi.useFakeTimers();
@@ -1096,10 +1100,8 @@ describe("session startup catch-up", () => {
       await vi.advanceTimersByTimeAsync(6000);
       await harness.waitForSessionSync();
 
-      expect(harness.getPendingArchiveFiles()).toEqual([]);
-      expect(harness.getDirtyArchiveFiles()).toEqual([]);
-      expect(harness.syncCalls).toEqual([]);
-      expect(harness.indexedPaths).toEqual([]);
+      expect([harness.getPendingArchiveFiles(), harness.getDirtyArchiveFiles()]).toEqual([[], []]);
+      expect([harness.syncCalls, harness.indexedPaths]).toEqual([[], []]);
     } finally {
       harness.stopTranscriptListener();
     }
@@ -1119,8 +1121,7 @@ describe("session startup catch-up", () => {
       await harness.waitForSessionSync();
 
       expect(harness.getDirtyArchiveFiles()).toEqual([]);
-      expect(harness.syncCalls).toEqual([]);
-      expect(harness.indexedPaths).toEqual([]);
+      expect([harness.syncCalls, harness.indexedPaths]).toEqual([[], []]);
     } finally {
       harness.stopTranscriptListener();
     }

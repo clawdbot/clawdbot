@@ -1096,7 +1096,7 @@ class GatewaySession(
         } else {
           ticketedPath
         }
-      val url = "$scheme://${formatGatewayAuthority(endpoint.host, endpoint.port)}$playbackPath"
+      val url = "$scheme://${formatGatewayAuthority(endpoint.host, endpoint.port)}${endpoint.contextPath}$playbackPath"
       val headers = mediaTransportHeaders()
       return TicketedMediaRequest(url = url, headers = headers)
     }

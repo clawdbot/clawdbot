@@ -516,9 +516,9 @@ describe("cron service timer seam coverage", () => {
       contextKey: "cron:script-job:script",
     });
     expect(requestHeartbeat).toHaveBeenCalledExactlyOnceWith({
-      source: "cron",
+      source: wake === "now" ? "notifications-event" : "cron",
       intent,
-      reason: "cron:script-job:script",
+      reason: wake === "now" ? "wake" : "cron:script-job:script",
       agentId: "finn",
     });
   });
@@ -659,9 +659,9 @@ describe("cron service timer seam coverage", () => {
     }
     if ("expectedIntent" in testCase) {
       expect(requestHeartbeat).toHaveBeenCalledExactlyOnceWith({
-        source: "cron",
+        source: wake === "now" ? "notifications-event" : "cron",
         intent: testCase.expectedIntent,
-        reason: "cron:script-job:script",
+        reason: wake === "now" ? "wake" : "cron:script-job:script",
         agentId: testCase.expectedAgentId,
       });
     } else {

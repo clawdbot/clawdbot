@@ -1,18 +1,11 @@
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  GATEWAY_CLIENT_IDS,
-  GATEWAY_CLIENT_MODES,
-} from "../../../packages/gateway-protocol/src/client-info.js";
-import {
-  WORKER_PROTOCOL_FEATURES,
-  WORKER_RPC_SET_VERSION,
-} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { WORKER_RPC_SET_VERSION } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import { parseWorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import type { NodeWorkerSupervisorReceipt } from "../../worker/node-supervisor-protocol.js";
 import type { NodeWorkerWorkspaceExecInput } from "../../worker/node-workspace-protocol.js";
@@ -23,9 +16,15 @@ import {
 import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js";
 import type { createDeviceWorkerRuntime } from "./device-provider.js";
 import { createNodeWorkerTunnelManager } from "./node-worker-tunnel.js";
+import {
+  BUILD,
+  environment,
+  startRequest,
+  transport,
+  workspaceTransfer,
+} from "./node-worker-tunnel.test-support.js";
 import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import { sameWorkerSessionTurnClaim } from "./placement-record.js";
-import type { WorkerEnvironmentRecord } from "./store.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 
 const workspaceInfo = vi.hoisted(() => vi.fn());
@@ -44,44 +43,12 @@ vi.mock("../../logging/subsystem.js", async (importOriginal) => {
   };
 });
 
-const BUILD = {
-  bundleHash: "a".repeat(64),
-  openclawVersion: "2026.8.13",
-  protocolFeatures: [...WORKER_PROTOCOL_FEATURES],
-};
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 type NodeWorkerLaunch = ReturnType<typeof createDeviceWorkerRuntime>["launchNodeWorker"];
 type TerminalReceipt = Extract<
   NodeWorkerSupervisorReceipt,
   { state: "completed" | "failed" | "interrupted" | "cancelled" }
 >;
-
-function environment(): WorkerEnvironmentRecord {
-  return {
-    environmentId: "environment-1",
-    providerId: "device",
-    profileId: "device:node-1",
-    profileSnapshot: { settings: { device: "node-1" } },
-    provisionOperationId: "provision-1",
-    nodeSetupId: null,
-    nodeDeviceId: "node-1",
-    sharedHost: true,
-    desktop: null,
-    bootstrapReceipt: { ...BUILD, installKind: "bundle" },
-    ownerEpoch: 2,
-    teardownTerminalState: null,
-    attachedSessionIds: ["session-1"],
-    lastError: null,
-    createdAtMs: 1,
-    updatedAtMs: 2,
-    stateChangedAtMs: 2,
-    idleSinceAtMs: null,
-    destroyRequestedAtMs: null,
-    state: "attached",
-    leaseId: "device-lease",
-    sshEndpoint: null,
-  };
-}
 
 function plan() {
   return parseWorkerLaunchPlan({
@@ -123,45 +90,127 @@ function turnClaim() {
   };
 }
 
-function transport(): NodeWorkerSupervisorTransport {
-  return {
-    hasCurrentRunner: () => true,
-    listCurrentNodes: async () => [
-      {
-        nodeId: "node-1",
-        connId: "conn-1",
-        pairingIdentity: "pairing-1",
-        pairingGeneration: "generation-1",
-        clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-        clientMode: GATEWAY_CLIENT_MODES.NODE,
-        protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-        workerHost: { enabled: true, capacity: { total: 2, available: 2 } },
-        commands: ["system.run"],
-      },
-    ],
-    isCurrent: () => true,
-    invoke: async () => ({ ok: false, error: { code: "UNAVAILABLE" } }),
-  };
-}
-
-function startRequest() {
-  return {
-    environmentId: "environment-1",
-    ownerEpoch: 2,
-    deviceId: "node-1",
-    sessionId: "session-1",
-    expectedBuild: BUILD,
-  };
-}
-
-function workspaceTransfer(): NodeWorkspaceTransferService {
-  return {
-    close: vi.fn(async () => {}),
-    revoke: vi.fn(),
-  } as unknown as NodeWorkspaceTransferService;
-}
-
 describe("node worker tunnel manager", () => {
+  it.each([
+    ["gateway-push", true],
+    ["published-origin", false],
+  ])("preserves the Gateway Git author through %s workspaces", async (_, dirty) => {
+    const localPath = tempDirs.make("node-worker-git-author-gateway-");
+    const remoteWorkspaceDir = path.join(tempDirs.make("node-worker-git-author-remote-"), "worker");
+    const gitEnv: NodeJS.ProcessEnv = {
+      ...process.env,
+      GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+      GIT_CONFIG_NOSYSTEM: "1",
+    };
+    delete gitEnv.GIT_AUTHOR_NAME;
+    delete gitEnv.GIT_AUTHOR_EMAIL;
+    delete gitEnv.GIT_COMMITTER_NAME;
+    delete gitEnv.GIT_COMMITTER_EMAIL;
+    const localGit = (args: string[]) =>
+      execFileSync("git", ["-C", localPath, ...args], { encoding: "utf8", env: gitEnv }).trim();
+    localGit(["init", "--quiet"]);
+    localGit(["config", "user.name", "Gateway Repository Author"]);
+    localGit(["config", "user.email", "gateway-author@example.invalid"]);
+    await fs.writeFile(path.join(localPath, "tracked.txt"), "base\n");
+    localGit(["add", "tracked.txt"]);
+    localGit(["commit", "--quiet", "-m", "base"]);
+    localGit(["remote", "add", "origin", "https://example.invalid/repository.git"]);
+    if (dirty) {
+      await fs.writeFile(path.join(localPath, "tracked.txt"), "gateway change\n");
+    }
+    const baseCommit = localGit(["rev-parse", "HEAD"]);
+    const manifest = { version: 1 as const, baseCommit, entries: [] };
+    const rawManifest = serializeWorkerWorkspaceManifest(manifest);
+    const manifestRef = `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`;
+    const nodeTransport = transport();
+    nodeTransport.invoke = vi.fn(async ({ params }) => {
+      const input = params as NodeWorkerWorkspaceExecInput;
+      let stdout = "";
+      let stderr = "";
+      let code = 0;
+      if (input.transfer || input.argv.includes("clone")) {
+        const clone = ["clone", "--quiet", "--no-checkout", localPath, remoteWorkspaceDir];
+        execFileSync("git", clone, { env: gitEnv });
+        if (input.transfer) {
+          execFileSync("git", ["-C", remoteWorkspaceDir, "checkout", "--quiet", baseCommit], {
+            env: gitEnv,
+          });
+          stdout = `${manifestRef}\n`;
+        }
+      } else if (input.argv[0] === "git") {
+        const result = spawnSync("git", ["-C", remoteWorkspaceDir, ...input.argv.slice(1)], {
+          encoding: "utf8",
+          env: gitEnv,
+        });
+        stdout = result.stdout;
+        stderr = result.stderr;
+        code = result.status ?? 1;
+      } else {
+        stdout = `${manifestRef}\n`;
+      }
+      return {
+        ok: true,
+        payloadJSON: JSON.stringify({
+          workspaceDir: remoteWorkspaceDir,
+          stdout,
+          stderr,
+          code,
+          signal: null,
+          killed: false,
+          termination: "exit",
+        }),
+      };
+    });
+    const transfer = {
+      prepareSync: vi.fn(async () => ({
+        snapshot: { manifest, manifestRef, rawManifest, root: localPath },
+        token: "download-token",
+      })),
+      close: vi.fn(async () => {}),
+      revoke: vi.fn(),
+    } as unknown as NodeWorkspaceTransferService;
+    const handle = await createNodeWorkerTunnelManager({
+      gatewayDeviceId: "gateway-device-1",
+      getEnvironment: environment,
+      getTransport: () => nodeTransport,
+      launchNodeWorker: vi.fn(),
+      validateWorkerTurn: () => true,
+      workspaceTransfer: transfer,
+    }).start(startRequest());
+
+    await expect(
+      handle.syncWorkspace({
+        localPath,
+        sessionId: "session-1",
+        generation: 1,
+        gitAuthor: { name: "Configured Gateway Author" },
+      }),
+    ).resolves.toEqual({ mode: "git", remoteWorkspaceDir, manifestRef });
+
+    const commitArgs = [
+      "-c",
+      "user.useConfigOnly=true",
+      "commit",
+      "--allow-empty",
+      "-m",
+      "worker result",
+    ];
+    const commit = spawnSync("git", ["-C", remoteWorkspaceDir, ...commitArgs], {
+      encoding: "utf8",
+      env: gitEnv,
+    });
+    expect(commit.stderr).not.toContain("Author identity unknown");
+    expect(commit.status).toBe(0);
+    expect(
+      execFileSync("git", ["-C", remoteWorkspaceDir, "show", "-s", "--format=%an <%ae>"], {
+        encoding: "utf8",
+        env: gitEnv,
+      }).trim(),
+    ).toBe("Configured Gateway Author <gateway-author@example.invalid>");
+
+    await handle.stop();
+  });
+
   it("revalidates the exact claim when a same-run replacement launches", async () => {
     const record = environment();
     let currentClaim = turnClaim();
@@ -306,6 +355,60 @@ describe("node worker tunnel manager", () => {
       workspaceBinding.resolve(undefined);
     },
   );
+
+  it("drains sibling node tunnels before reporting a workspace cleanup failure", async () => {
+    const cleanupError = new Error("first workspace cleanup failed");
+    const siblingCleanup = createDeferred();
+    const close = vi.fn(async (environmentId: string) => {
+      if (environmentId === "environment-1") {
+        throw cleanupError;
+      }
+      await siblingCleanup.promise;
+    });
+    const closeAll = vi.fn(async () => {});
+    const manager = createNodeWorkerTunnelManager({
+      gatewayDeviceId: "gateway-device-1",
+      getEnvironment: (environmentId) => ({
+        ...environment(),
+        environmentId,
+        attachedSessionIds: [environmentId === "environment-1" ? "session-1" : "session-2"],
+      }),
+      getTransport: transport,
+      launchNodeWorker: vi.fn(),
+      validateWorkerTurn: () => true,
+      workspaceTransfer: {
+        ...workspaceTransfer(),
+        close,
+        closeAll,
+      } as unknown as NodeWorkspaceTransferService,
+    });
+    await manager.start(startRequest());
+    await manager.start({
+      ...startRequest(),
+      environmentId: "environment-2",
+      sessionId: "session-2",
+    });
+
+    const stopping = manager.stopAll();
+    const settled = vi.fn();
+    void stopping.then(settled, settled);
+
+    try {
+      await vi.waitFor(() => expect(close).toHaveBeenCalledTimes(2));
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(settled).not.toHaveBeenCalled();
+      expect(closeAll).not.toHaveBeenCalled();
+
+      siblingCleanup.resolve();
+      await expect(stopping).rejects.toBe(cleanupError);
+      expect(closeAll).toHaveBeenCalledOnce();
+    } finally {
+      siblingCleanup.resolve();
+      await stopping.catch(() => undefined);
+    }
+  });
 
   it("reports a cleanup failure after workspace binding initialization fails", async () => {
     tunnelWarn.mockClear();

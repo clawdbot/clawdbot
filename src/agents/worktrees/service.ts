@@ -6,11 +6,6 @@ import path from "node:path";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../../config/paths.js";
 import { isMissingPathError, formatErrorMessage } from "../../infra/errors.js";
-import {
-  executeGitCommand as runGit,
-  requireGitCommand as requireGit,
-  requireGitCommandBuffer as requireGitBuffer,
-} from "../../infra/git-exec.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { withOpenClawStateLease } from "../../state/openclaw-state-lease.js";
@@ -23,6 +18,9 @@ import {
   listGitWorktrees,
   worktreePathExists,
   removeEmptyParents,
+  requireGit,
+  requireGitBuffer,
+  runGit,
   type GitResult,
 } from "./git.js";
 import { worktreeNameAllocationFamily } from "./name.js";
@@ -483,19 +481,13 @@ async function snapshotWorktree(
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-worktree-index-"));
   const indexPath = path.join(tempDir, "index");
   const snapshotRef = `${SNAPSHOT_REF_PREFIX}/${record.id}`;
+  const filemodeArgs = process.platform === "win32" ? [] : ["-c", "core.filemode=true"];
   const env: NodeJS.ProcessEnv = {
     GIT_INDEX_FILE: indexPath,
     GIT_AUTHOR_NAME: "OpenClaw",
     GIT_AUTHOR_EMAIL: "openclaw@localhost",
     GIT_COMMITTER_NAME: "OpenClaw",
     GIT_COMMITTER_EMAIL: "openclaw@localhost",
-    ...(process.platform === "win32"
-      ? {}
-      : {
-          GIT_CONFIG_COUNT: "1",
-          GIT_CONFIG_KEY_0: "core.filemode",
-          GIT_CONFIG_VALUE_0: "true",
-        }),
   };
   try {
     const provisioned = new Set(provisionedPaths.map((entry) => gitPathKey(Buffer.from(entry))));
@@ -555,17 +547,23 @@ async function snapshotWorktree(
     if (await containsSnapshotGitMarker(record.path, snapshotPaths.values())) {
       throw new Error("nested git repositories cannot be snapshotted losslessly");
     }
-    await requireGit(record.path, ["read-tree", "HEAD"], { env });
+    await requireGit(record.path, [...filemodeArgs, "read-tree", "HEAD"], { env });
     // This index came from a tree, so it has no checkout-local skip-worktree
     // bits and update-index is independent of the source worktree's sparse cone.
-    await requireGit(record.path, ["update-index", "--add", "--remove", "-z", "--stdin"], {
-      env,
-      input:
-        snapshotPaths.size > 0
-          ? Buffer.concat([...snapshotPaths.values()].flatMap((entry) => [entry, Buffer.from([0])]))
-          : Buffer.alloc(0),
-    });
-    const tree = await requireGit(record.path, ["write-tree"], { env });
+    await requireGit(
+      record.path,
+      [...filemodeArgs, "update-index", "--add", "--remove", "-z", "--stdin"],
+      {
+        env,
+        input:
+          snapshotPaths.size > 0
+            ? Buffer.concat(
+                [...snapshotPaths.values()].flatMap((entry) => [entry, Buffer.from([0])]),
+              )
+            : Buffer.alloc(0),
+      },
+    );
+    const tree = await requireGit(record.path, [...filemodeArgs, "write-tree"], { env });
     for (const provisionedPath of provisionedPaths) {
       const overlap = await requireGit(record.path, [
         "--literal-pathspecs",
@@ -588,7 +586,15 @@ async function snapshotWorktree(
     const parent = await requireGit(record.path, ["rev-parse", "HEAD"]);
     const commit = await requireGit(
       record.path,
-      ["commit-tree", tree, "-p", parent, "-m", `OpenClaw worktree snapshot: ${reason}`],
+      [
+        ...filemodeArgs,
+        "commit-tree",
+        tree,
+        "-p",
+        parent,
+        "-m",
+        `OpenClaw worktree snapshot: ${reason}`,
+      ],
       { env },
     );
     await requireGit(record.repoRoot, ["update-ref", snapshotRef, commit]);
@@ -732,16 +738,7 @@ export class ManagedWorktreeService {
     let gitBase = base.gitOperand;
     let recordBase = base.recordRef;
     const runRepositorySetup = params.runSetupScript !== false;
-    const worktreeAddArgs = () => [
-      ...(runRepositorySetup ? [] : ["-c", `core.hooksPath=${os.devNull}`]),
-      "worktree",
-      "add",
-      "-b",
-      branch,
-      "--",
-      worktreePath,
-      gitBase,
-    ];
+    const worktreeAddArgs = () => ["worktree", "add", "-b", branch, "--", worktreePath, gitBase];
     let added = await runGit(repository.repoRoot, worktreeAddArgs());
     if (added.code !== 0 && base.remote) {
       if (!(await canResetFailedWorktreeAdd(repository.repoRoot, worktreePath, branch, added))) {

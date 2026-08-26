@@ -82,7 +82,7 @@ import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snaps
 import type { ProviderSyntheticAuthResult } from "../../plugins/provider-external-auth.types.js";
 import { resolveProviderSyntheticAuthWithPlugin } from "../../plugins/provider-runtime.js";
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../../plugins/synthetic-auth.runtime.js";
-import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { type RuntimeEnv, writeRuntimeJson, writeRuntimeStdout } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveUserPath, shortenHomePath } from "../../utils.js";
 import {
@@ -1384,7 +1384,7 @@ export async function modelsStatusCommand(
     }
 
     if (opts.plain) {
-      runtime.log(resolvedLabel);
+      writeRuntimeStdout(runtime, resolvedLabel);
       finishModelsStatusOutput(runtime, opts.check, checkStatus);
       return;
     }
