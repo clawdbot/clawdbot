@@ -77,7 +77,6 @@ describe("startHeartbeatRunner targeted unscheduled wake dispatch", () => {
           agents: { defaults: { heartbeat: { every: "0m" } }, list: [{ id: "main" }] },
         } as OpenClawConfig,
         runOnce: runSpy,
-        stableSchedulerSeed: TEST_SCHEDULER_SEED,
       });
       const enqueueSystemEvent = vi.fn();
       const state = {
@@ -140,7 +139,6 @@ describe("startHeartbeatRunner targeted unscheduled wake dispatch", () => {
         agents: { defaults: { heartbeat: { every: "0m" } }, list: [{ id: "main" }] },
       } as OpenClawConfig,
       runOnce: runSpy,
-      stableSchedulerSeed: TEST_SCHEDULER_SEED,
     });
 
     requestHeartbeat({
@@ -165,7 +163,6 @@ describe("startHeartbeatRunner targeted unscheduled wake dispatch", () => {
         agents: { defaults: { heartbeat: { every: "0m" } }, list: [{ id: "main" }] },
       } as OpenClawConfig,
       runOnce: runSpy,
-      stableSchedulerSeed: TEST_SCHEDULER_SEED,
     });
 
     requestHeartbeat({
