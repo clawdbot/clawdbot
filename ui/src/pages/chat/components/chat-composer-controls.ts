@@ -480,8 +480,8 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
         <span class="chat-mobile-dictation-action">
           ${renderComposerVoiceButton({
             connected: props.connected,
-            sending: false,
-            isBusy: false,
+            sending: props.sending,
+            isBusy: props.isBusy,
             dictation: props.dictation,
             idleLabel: t("chat.composer.dictationCapability"),
           })}
@@ -500,7 +500,7 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
               type="button"
               @pointerdown=${props.onPrimaryActionPointerDown}
               @click=${props.onToggleVoice}
-              ?disabled=${!props.connected}
+              ?disabled=${!props.connected || props.sending || props.isBusy}
               aria-label=${t("chat.composer.realtimeTalkCapability")}
             >
               ${icons.audioLines}
@@ -564,6 +564,15 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
         : props.onToggleVoice
           ? mobileTalkAction
           : sendAction;
+  const primaryActions =
+    mobilePrimaryAction === desktopPrimaryAction
+      ? html`<span class="chat-mobile-primary-action chat-desktop-primary-action"
+          >${desktopPrimaryAction}</span
+        >`
+      : html`
+          <span class="chat-mobile-primary-action">${mobilePrimaryAction}</span>
+          <span class="chat-desktop-primary-action">${desktopPrimaryAction}</span>
+        `;
   return html`
     ${props.voiceActive && props.onToggleVoice
       ? html`
@@ -626,13 +635,8 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
                 </openclaw-tooltip>
               `
             : nothing}
-          <span class="chat-desktop-primary-action">${abortAction}</span>
+          <span class="chat-mobile-primary-action chat-desktop-primary-action">${abortAction}</span>
         `
-      : html`
-          ${voiceControl}
-          ${mobileDictationControl}
-          <span class="chat-mobile-primary-action">${mobilePrimaryAction}</span>
-          <span class="chat-desktop-primary-action">${desktopPrimaryAction}</span>
-        `}
+      : html` ${voiceControl} ${mobileDictationControl} ${primaryActions} `}
   `;
 }

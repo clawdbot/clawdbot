@@ -43,26 +43,26 @@ openclaw-new-session-page {
 }
 
 :is(
-    .new-session-page__draft-toggle,
-    .new-session-page__incognito-toggle
-  ).shell-chrome-controls__button:hover:not(:disabled) {
+  .new-session-page__draft-toggle,
+  .new-session-page__incognito-toggle
+).shell-chrome-controls__button:hover:not(:disabled) {
   border-color: color-mix(in srgb, var(--text-strong) 18%, transparent);
   background: color-mix(in srgb, var(--text-strong) 7%, var(--panel));
 }
 
 :is(
-  .new-session-page__draft-toggle,
-  .new-session-page__incognito-toggle
-).shell-chrome-controls__button svg {
+    .new-session-page__draft-toggle,
+    .new-session-page__incognito-toggle
+  ).shell-chrome-controls__button
+  svg {
   width: 19px;
   height: 19px;
 }
 
 :is(.new-session-page__draft-toggle--active, .new-session-page__incognito-toggle--active),
-:is(
-    .new-session-page__draft-toggle--active,
-    .new-session-page__incognito-toggle--active
-  ):hover:not(:disabled) {
+:is(.new-session-page__draft-toggle--active, .new-session-page__incognito-toggle--active):hover:not(
+  :disabled
+) {
   border-color: color-mix(in srgb, var(--accent) 42%, transparent);
   background: color-mix(in srgb, var(--accent) 18%, var(--bg-elevated));
   color: var(--accent);
@@ -1194,9 +1194,7 @@ wa-popover.new-session-page__project-popover::part(body) {
     max-width: 100%;
   }
 
-  .new-session-page__triggers
-    > span.new-session-page__select
-    ~ span.new-session-page__select {
+  .new-session-page__triggers > span.new-session-page__select ~ span.new-session-page__select {
     margin-block-start: 6px;
   }
 
@@ -1258,18 +1256,12 @@ wa-popover.new-session-page__project-popover::part(body) {
     max-height: 48px;
   }
 
-  .new-session-page .agent-chat__welcome-secondary:has(.agent-chat__recents) {
-    display: none;
-  }
-
   .new-session-page__composer .chat-controls__model-settings {
     width: 100%;
     min-width: 0;
   }
 
-  .new-session-page__composer
-    .agent-chat__input--mobile-toolbar
-    .chat-composer-model-control {
+  .new-session-page__composer .agent-chat__input--mobile-toolbar .chat-composer-model-control {
     flex: 1 1 auto;
     width: auto;
     min-width: 0;
@@ -1286,9 +1278,7 @@ wa-popover.new-session-page__project-popover::part(body) {
     max-width: 100%;
   }
 
-  .new-session-page__composer
-    .chat-controls__model-trigger
-    .chat-controls__inline-select-label {
+  .new-session-page__composer .chat-controls__model-trigger .chat-controls__inline-select-label {
     min-width: 0;
     max-width: 100%;
     overflow: hidden;

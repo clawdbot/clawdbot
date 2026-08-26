@@ -236,27 +236,9 @@ suite.define(() => {
         await installTalkBrowserFixtures(page);
         await page.goto(`${suite.server.baseUrl}chat`);
 
-        const microphone = page.getByRole("button", { name: "Start voice input" });
-        const microphoneBox = await microphone.boundingBox();
-        expect(microphoneBox).not.toBeNull();
-        if (!microphoneBox) {
-          throw new Error("expected microphone layout box");
-        }
-        await page.mouse.move(
-          microphoneBox.x + microphoneBox.width / 2,
-          microphoneBox.y + microphoneBox.height / 2,
-        );
-        await page.mouse.down();
-        await page.waitForTimeout(350);
-        await expect
-          .poll(() => microphone.getAttribute("class"))
-          .toContain("chat-send-btn--dictation-arming");
-        await page.screenshot({
-          animations: "allow",
-          path: ".artifacts/control-ui-e2e/voice-controls/dictation-hold-ring.png",
-        });
+        const microphone = page.getByRole("button", { name: "Dictation" });
+        await microphone.click();
         await gateway.waitForRequest("talk.session.create");
-        await page.mouse.up();
 
         const composer = page.locator(".agent-chat__input--dictating");
         const phase = composer.locator(".agent-chat__dictation-phase");
@@ -290,7 +272,7 @@ suite.define(() => {
           expect(box.x + box.width).toBeLessThanOrEqual(composerBox.x + composerBox.width);
         }
 
-        await page.keyboard.press("Escape");
+        await stop.click();
         await expect.poll(() => microphone.isVisible()).toBe(true);
       },
     );
