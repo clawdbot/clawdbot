@@ -45,6 +45,7 @@ export function buildGatewaySessionEventFields(params: {
     pinnedAt: sessionRow.pinnedAt ?? null,
     unread: sessionRow.unread ?? false,
     lastReadAt: sessionRow.lastReadAt,
+    markedUnreadAt: sessionRow.markedUnreadAt ?? null,
     agentStatus: sessionRow.agentStatus ?? null,
     observerDigest: sessionRow.observerDigest ?? null,
     lastActivityAt: sessionRow.lastActivityAt,

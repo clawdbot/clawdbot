@@ -1872,6 +1872,33 @@ openclaw-session-discussion {
   border-top: 1px solid var(--border);
 }
 
+.sidebar-attachment-preview {
+  display: grid;
+  width: 100%;
+  min-height: 0;
+}
+
+.sidebar-attachment-preview__image {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  object-fit: contain;
+}
+
+.sidebar-attachment-preview__unavailable {
+  display: flex;
+  min-height: 180px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 12px;
+  color: var(--muted);
+}
+
 .sidebar-markdown-shell {
   display: grid;
   gap: 14px;

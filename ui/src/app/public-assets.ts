@@ -7,6 +7,7 @@ type ControlUiPublicAsset =
   | ControlUiRootPublicAsset
   | `fonts/${string}.css`
   | `provider-icons/ProviderIcon-${string}.svg`
+  | `file-icons/${string}.svg`
   | `plugin-art/${string}.webp`
   | `app-art/${string}.webp`;
 

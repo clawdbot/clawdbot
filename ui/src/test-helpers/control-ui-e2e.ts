@@ -1059,6 +1059,7 @@ function installControlUiMockGateway(
   const requests: BrowserRequest[] = [];
   const methodResponseSequenceIndexes = new Map<string, number>();
   const sessionPatches = new Map<string, Record<string, unknown>>();
+  let sessionPatchTimestamp = 1_800_000_000_000;
   const createdSessions = new Map<string, Record<string, unknown>>();
   const terminalSessions = new Map<string, MockTerminalSession>();
   let terminalSessionSequence = 0;
@@ -1389,6 +1390,14 @@ function installControlUiMockGateway(
       if (hasOwn(params, key)) {
         patch[key] = params[key];
       }
+    }
+    if (params.unread === true) {
+      sessionPatchTimestamp += 1;
+      patch.markedUnreadAt = sessionPatchTimestamp;
+    } else if (params.unread === false) {
+      sessionPatchTimestamp += 1;
+      patch.lastReadAt = sessionPatchTimestamp;
+      patch.markedUnreadAt = undefined;
     }
     if (scenario.sessionArchiveFiltering && hasOwn(params, "archived")) {
       patch.archived = params.archived;

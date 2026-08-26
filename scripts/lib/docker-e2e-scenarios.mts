@@ -532,6 +532,11 @@ export const mainLanes: DockerE2eLane[] = [
       weight: 3,
     },
   ),
+  serviceLane(
+    "gateway-concurrency",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 bash scripts/e2e/gateway-concurrency-docker.sh",
+    { timeoutMs: 10 * 60 * 1000, weight: 3 },
+  ),
   serviceLane("gateway-network", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:gateway-network"),
   serviceLane("browser-cdp-snapshot", "pnpm test:docker:browser-cdp-snapshot", {
     stateScenario: "empty",

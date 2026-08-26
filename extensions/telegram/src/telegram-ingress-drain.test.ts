@@ -336,10 +336,10 @@ describe("createTelegramIngressMonitor", () => {
             {
               id: eventId,
               attempts: 0,
-              lastError: "turn-abandoned",
             },
           ]),
         );
+        expect((await queue.listPending({ limit: "all" }))[0]?.lastError).toBeUndefined();
         expect((await queue.enqueue(eventId, payload, { laneKey })).kind).not.toBe("completed");
       });
     },
@@ -378,9 +378,10 @@ describe("createTelegramIngressMonitor", () => {
 
       await vi.waitFor(async () =>
         expect(await queue.listPending({ limit: "all" })).toMatchObject([
-          { id: eventId, attempts: 0, lastError: "turn-abandoned" },
+          { id: eventId, attempts: 0 },
         ]),
       );
+      expect((await queue.listPending({ limit: "all" }))[0]?.lastError).toBeUndefined();
       expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
     });
   });
@@ -396,6 +397,15 @@ describe("createTelegramIngressMonitor", () => {
       const payload = updatePayload(8);
       const laneKey = telegramSpooledUpdateLaneKey(payload.update);
       await queue.enqueue(eventId, payload, { laneKey });
+      const priorClaim = await queue.claim(eventId, { ownerId: "prior-owner" });
+      if (!priorClaim) {
+        throw new Error("Expected the prior Telegram ingress claim.");
+      }
+      const priorAttemptAt = Date.now() - 10_000;
+      await queue.release(priorClaim, {
+        releasedAt: priorAttemptAt,
+        lastError: "previous delivery failed",
+      });
       let finishDispatch!: () => void;
       const dispatchGate = new Promise<void>((resolve) => {
         finishDispatch = resolve;
@@ -426,8 +436,9 @@ describe("createTelegramIngressMonitor", () => {
         expect(await queue.listPending({ limit: "all" })).toMatchObject([
           {
             id: eventId,
-            attempts: 0,
-            lastError: "turn-abandoned",
+            attempts: 1,
+            lastAttemptAt: priorAttemptAt,
+            lastError: "previous delivery failed",
           },
         ]),
       );

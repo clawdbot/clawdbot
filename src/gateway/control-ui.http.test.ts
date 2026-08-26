@@ -30,6 +30,7 @@ import {
   type AuthRateLimiter,
 } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
+import type { ControlUiAssetRetention } from "./control-ui-asset-retention.js";
 import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
   type ControlUiPluginFrameGrantAck,
@@ -208,6 +209,7 @@ describe("handleControlUiHttpRequest", () => {
     rootPath: string;
     basePath?: string;
     rootKind?: "resolved" | "bundled";
+    retainedAssets?: ControlUiAssetRetention;
     headers?: IncomingMessage["headers"];
   }) {
     const { res, end, setHeader } = makeMockHttpResponse();
@@ -216,7 +218,14 @@ describe("handleControlUiHttpRequest", () => {
       res,
       {
         ...(params.basePath ? { basePath: params.basePath } : {}),
-        root: { kind: params.rootKind ?? "resolved", path: params.rootPath },
+        root:
+          params.rootKind === "bundled"
+            ? {
+                kind: "bundled",
+                path: params.rootPath,
+                ...(params.retainedAssets ? { retainedAssets: params.retainedAssets } : {}),
+              }
+            : { kind: "resolved", path: params.rootPath },
       },
     );
     return { res, end, setHeader, handled };
@@ -3334,6 +3343,42 @@ describe("handleControlUiHttpRequest", () => {
 
         expect(setHeader).toHaveBeenCalledWith("Content-Encoding", "gzip");
         expect(gunzipSync(end.mock.calls[0]?.[0] as Buffer).toString()).toBe(source);
+      },
+    });
+  });
+
+  it("serves a missing bundled asset from an exact retained generation", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const retainedRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-retained-"));
+        try {
+          const source = "console.log('retained');\n".repeat(200);
+          const { filePath } = await writeAssetFile(retainedRoot, "panel-OldBuild.js", source);
+          await fs.writeFile(`${filePath}.br`, brotliCompressSync(source));
+          const retainedAssets = {
+            prepare: vi.fn(async () => {}),
+            resolveAsset: vi.fn(() => ({
+              filePath,
+              rootPath: retainedRoot,
+              rootRealPath: fsSync.realpathSync(retainedRoot),
+            })),
+          } satisfies ControlUiAssetRetention;
+
+          const { end, setHeader } = await runControlUiRequest({
+            url: "/assets/panel-OldBuild.js",
+            method: "GET",
+            rootPath: tmp,
+            rootKind: "bundled",
+            retainedAssets,
+            headers: { "accept-encoding": "br, identity;q=0" },
+          });
+
+          expect(retainedAssets.resolveAsset).toHaveBeenCalledWith("assets/panel-OldBuild.js");
+          expect(setHeader).toHaveBeenCalledWith("Content-Encoding", "br");
+          expect(brotliDecompressSync(end.mock.calls[0]?.[0] as Buffer).toString()).toBe(source);
+        } finally {
+          await fs.rm(retainedRoot, { recursive: true, force: true });
+        }
       },
     });
   });

@@ -10,6 +10,7 @@ import type { SubagentRegistryDeps } from "../../agents/subagents/registry/subag
 import { resetSubagentRegistryForTests } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { SessionTranscriptStats } from "../../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
 import {
   resetDetachedTaskLifecycleRuntimeForTests,
@@ -58,7 +59,7 @@ const mocks = vi.hoisted(() => ({
   resolveAgentExplicitRecipientSession: vi.fn(async () => ({})),
   readAcpSessionMeta: vi.fn<typeof readAcpSessionMeta>(() => undefined),
   listAgentIds: vi.fn(() => ["main"]),
-  loadConfigReturn: {} as Record<string, unknown>,
+  loadConfigReturn: {} as OpenClawConfig,
   loadVoiceWakeRoutingConfig: vi.fn(),
   resolveVoiceWakeRouteByTrigger: vi.fn(),
   getChannelPlugin: vi.fn(),
@@ -78,11 +79,35 @@ export function getAgentTestMocks() {
   return mocks;
 }
 
+function resolveAgentTestConfig(cfg: OpenClawConfig = mocks.loadConfigReturn): OpenClawConfig {
+  if (cfg.agents?.list) {
+    return cfg;
+  }
+  const agentIds = mocks.listAgentIds();
+  if (agentIds.length === 1 && agentIds[0] === "main") {
+    return cfg;
+  }
+  const resolved = {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      list: agentIds.map((id) => ({ id })),
+    },
+  };
+  if (cfg === mocks.loadConfigReturn) {
+    mocks.loadConfigReturn = resolved;
+  }
+  return resolved;
+}
+
 vi.mock("../session-utils.js", async () => {
   const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
   return {
     ...actual,
-    loadSessionEntry: mocks.loadSessionEntry,
+    loadSessionEntry: (...args: Parameters<typeof actual.loadSessionEntry>) => {
+      const loaded = mocks.loadSessionEntry(...args) as ReturnType<typeof actual.loadSessionEntry>;
+      return { ...loaded, cfg: resolveAgentTestConfig(loaded.cfg) };
+    },
     loadGatewaySessionRow: mocks.loadGatewaySessionRow,
   };
 });
@@ -170,7 +195,7 @@ vi.mock("../../agents/prepared-model-runtime.js", () => ({
   // that production publishes before admitting agent RPCs.
   loadPublishedGatewayReplyDispatchRuntime: async ({ agentId }: { agentId: string }) => ({
     agentId,
-    config: mocks.loadConfigReturn,
+    config: resolveAgentTestConfig(),
     pluginGeneration: { pluginMetadataSnapshot: {} },
   }),
 }));
@@ -190,7 +215,7 @@ vi.mock("../../config/config.js", async () => {
     await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
   return {
     ...actual,
-    getRuntimeConfig: () => mocks.loadConfigReturn,
+    getRuntimeConfig: () => resolveAgentTestConfig(),
   };
 });
 
@@ -367,7 +392,7 @@ export const makeContext = (): GatewayRequestContext =>
     logGateway: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     broadcastToConnIds: vi.fn(),
     getSessionEventSubscriberConnIds: () => new Set(),
-    getRuntimeConfig: () => mocks.loadConfigReturn,
+    getRuntimeConfig: () => resolveAgentTestConfig(),
   }) as unknown as GatewayRequestContext;
 
 type AgentHandler = NonNullable<typeof agentHandlers.agent>;

@@ -36,7 +36,6 @@ import {
 } from "../session-utils.js";
 import { prepareSessionWorkspaceIcon } from "../workspace-icon-http.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
-import { scheduleChatHistoryManagedMediaCleanup } from "./chat-assistant-content.js";
 import {
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
   createChatHistoryByteCounter,
@@ -335,12 +334,6 @@ async function handleChatHistoryRequest({
     byteCounter,
     messages: normalized,
     maxSingleMessageBytes: perMessageHardCap,
-  });
-  scheduleChatHistoryManagedMediaCleanup({
-    sessionKey,
-    ...(selectedAgent.agentId ? { agentId: selectedAgent.agentId } : {}),
-    cfg,
-    context,
   });
   const capped = messageId
     ? (capChatHistoryAroundMessage({

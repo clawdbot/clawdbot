@@ -308,6 +308,87 @@ test("sessions.changed applies reassignment and invalidates the complete owner f
   expect(reconciled.result?.owners).toBeUndefined();
 });
 
+test("ownerless raw-global events invalidate without contaminating the selected agent row", () => {
+  const researchOwner = { type: "agent" as const, id: "research", label: "Research" };
+  const result = buildResult([
+    {
+      key: "global",
+      kind: "global",
+      updatedAt: 1,
+      owner: { actor: researchOwner },
+      model: "research-model",
+      status: "done",
+      hasActiveRun: false,
+      activeRunIds: [],
+    },
+  ]);
+  const payload = {
+    sessionKey: "global",
+    reason: "updated",
+    updatedAt: 2,
+    owner: { actor: { type: "agent", id: "ops", label: "Ops" } },
+    model: "ops-model",
+    status: "running",
+    hasActiveRun: true,
+    activeRunIds: ["ops-run"],
+    inputTokens: 42,
+  };
+
+  const invalidated = reconcileSessionChanged(result, payload, {
+    resultAgentId: "research",
+    selectedGlobalAgentId: "research",
+  });
+
+  expect(invalidated.applied).toBe(false);
+  expect(invalidated.result).toBe(result);
+  expect(invalidated.row).toBeUndefined();
+
+  const mainResult = buildResult([{ key: "main", kind: "direct", updatedAt: 1, status: "done" }]);
+  const invalidatedMain = reconcileSessionChanged(
+    mainResult,
+    { sessionKey: "main", reason: "delete", ts: 2 },
+    { resultAgentId: "main", selectedGlobalAgentId: "main" },
+  );
+  expect(invalidatedMain.applied).toBe(false);
+  expect(invalidatedMain.result).toBe(mainResult);
+
+  const ownerlessMain = reconcileSessionChanged(
+    mainResult,
+    {
+      sessionKey: "main",
+      activeRunIds: ["main-run"],
+      hasActiveRun: true,
+      status: "running",
+      updatedAt: 2,
+    },
+    { resultAgentId: "main", selectedGlobalAgentId: "main" },
+  );
+  expect(ownerlessMain.applied).toBe(true);
+  expect(ownerlessMain.row).toMatchObject({
+    key: "main",
+    activeRunIds: ["main-run"],
+    hasActiveRun: true,
+    status: "running",
+  });
+  expect(ownerlessMain.row).not.toHaveProperty("agentId");
+
+  const explicit = reconcileSessionChanged(
+    result,
+    { ...payload, agentId: "research" },
+    {
+      resultAgentId: "research",
+      selectedGlobalAgentId: "research",
+    },
+  );
+  expect(explicit.applied).toBe(true);
+  expect(explicit.row).toMatchObject({
+    owner: { actor: { id: "ops" } },
+    model: "ops-model",
+    status: "running",
+    activeRunIds: ["ops-run"],
+  });
+});
+
 describe("reconcileSessionChanged", () => {
   it("drops a cleared category from the merged row", () => {
     const key = "agent:main:discord:channel:1";

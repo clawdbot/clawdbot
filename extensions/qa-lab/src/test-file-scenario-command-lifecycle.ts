@@ -8,6 +8,7 @@ export type QaScenarioCommandExecution = {
   command: string;
   cwd: string;
   env: NodeJS.ProcessEnv;
+  onOutput?: (stream: "stderr" | "stdout", chunk: Buffer) => void;
   timeoutMs?: number;
 };
 
@@ -112,8 +113,16 @@ export function runQaScenarioCommandLifecycle(
             : {}),
         });
       },
-      onStderrData: (chunk) => stderr.push(Buffer.from(chunk)),
-      onStdoutData: (chunk) => stdout.push(Buffer.from(chunk)),
+      onStderrData: (chunk) => {
+        const buffered = Buffer.from(chunk);
+        stderr.push(buffered);
+        execution.onOutput?.("stderr", buffered);
+      },
+      onStdoutData: (chunk) => {
+        const buffered = Buffer.from(chunk);
+        stdout.push(buffered);
+        execution.onOutput?.("stdout", buffered);
+      },
       processGroupId: isWindows ? undefined : child.pid,
       verifyAfterMs: timeoutForceSettleMs,
     });

@@ -507,8 +507,6 @@ export function createChannelIngressDrain<
         await releaseUnadopted(state, { recordAttempt: false });
       },
       onAbandoned: async () => {
-        // Abandonment is a failed delivery attempt, unlike cancellation before
-        // delivery ownership. Counting it preserves backoff and dead-letter bounds.
         await releaseUnadopted(state, { lastError: "turn-abandoned" });
       },
     };

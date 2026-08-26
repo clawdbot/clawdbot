@@ -13,7 +13,10 @@ import {
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { createSessionObserverAudience } from "./session-observer-audience.js";
+import {
+  createSessionObserverAudience,
+  createSessionObserverAudienceLifecycle,
+} from "./session-observer-audience.js";
 import { createSessionObserverCompanionSnapshotReader } from "./session-observer-companion.js";
 import { createSessionObserverCompletion } from "./session-observer-completion.js";
 import type { SessionObserverEvent, SessionObserverService } from "./session-observer-contract.js";
@@ -86,6 +89,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     isVisible: (connId) => visibleConnections.has(connId),
     getConfig: deps.getConfig,
   });
+  type ObservedAudience = ReturnType<typeof audience.classify>;
   // Narrow run-identity guard shared by persist paths: a digest may still land
   // while its session is unwatched, but never after a newer run replaces it.
   const runStillCurrent = (runId: string, sessionKey: string, agentId: string) => () =>
@@ -113,7 +117,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     now,
     setTimeoutFn,
     clearTimeoutFn,
-    isCurrent: stateIsCurrent,
+    isCurrent: (state) => audienceLifecycle.stateIsCurrent(state),
     publish: (state, digest) => {
       deps.broadcastToConnIds(
         "session.observer",
@@ -237,34 +241,20 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     demoteUtilityModel(state);
   };
 
-  const suspendStatesWithoutAudience = () => {
-    // Map iteration tolerates suspendState deleting the current entry.
-    for (const state of states.values()) {
-      if (!audience.has(state.sessionKey, state.agentId)) {
-        suspendState(state);
-      }
-    }
-  };
-
-  const unsubscribeChanges = deps.subscribers.onChange(() => suspendStatesWithoutAudience());
-
-  function stateIsCurrent(state: SessionObserverState): boolean {
-    return (
+  const audienceLifecycle = createSessionObserverAudienceLifecycle({
+    audience,
+    states,
+    subscribers: deps.subscribers,
+    isCurrent: (state) =>
       !disposed &&
       stateIsTracked(state) &&
-      audience.has(state.sessionKey, state.agentId) &&
-      deps.getConfig().gateway?.controlUi?.sessionObserver !== false
-    );
-  }
+      deps.getConfig().gateway?.controlUi?.sessionObserver !== false,
+    resolveUtilityModelRef: (agentId) => resolveUtilityModelRef({ cfg: deps.getConfig(), agentId }),
+    suspend: suspendState,
+    demote: demoteUtilityModel,
+  });
 
-  function modelStateIsCurrent(state: SessionObserverState): boolean {
-    return (
-      stateIsCurrent(state) &&
-      Boolean(state.utilityModelRef) &&
-      resolveUtilityModelRef({ cfg: deps.getConfig(), agentId: state.agentId }) ===
-        state.utilityModelRef
-    );
-  }
+  const { modelStateIsCurrent } = audienceLifecycle;
 
   const requestModelDigest = createSessionObserverCompletion({
     getConfig: deps.getConfig,
@@ -282,13 +272,15 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
   const schedule = (
     state: SessionObserverState,
     run: (state: SessionObserverState, final: boolean) => void,
+    observedAudience?: ObservedAudience,
   ) => {
-    if (!stateIsCurrent(state)) {
+    const currentAudience = observedAudience ?? audience.classify(state.sessionKey, state.agentId);
+    if (!audienceLifecycle.stateIsCurrent(state, currentAudience)) {
       retireInactiveState(state);
       return;
     }
     if (
-      !modelStateIsCurrent(state) ||
+      !modelStateIsCurrent(state, currentAudience) ||
       state.inFlight ||
       state.timer ||
       state.terminalHealth ||
@@ -309,11 +301,12 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
   };
 
   const runDigest = (state: SessionObserverState, final: boolean) => {
-    if (!stateIsCurrent(state)) {
+    const currentAudience = audience.classify(state.sessionKey, state.agentId);
+    if (!audienceLifecycle.stateIsCurrent(state, currentAudience)) {
       retireInactiveState(state);
       return;
     }
-    if (!modelStateIsCurrent(state)) {
+    if (!modelStateIsCurrent(state, currentAudience)) {
       if (final) {
         retireTerminalState(state);
       }
@@ -455,9 +448,10 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     event: SessionObserverEvent,
     allowPreambleOnly: boolean,
     sessionKey: string,
-    agentId: string | undefined,
+    agentId: string,
+    observedAudience: ObservedAudience,
   ): SessionObserverState | undefined => {
-    if (!agentId || !audience.has(sessionKey, agentId)) {
+    if (observedAudience === "none") {
       return undefined;
     }
     const scopeKey = resolveSessionSubscriptionKey(sessionKey, agentId);
@@ -465,7 +459,10 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     if (cfg.gateway?.controlUi?.sessionObserver === false) {
       return undefined;
     }
-    const utilityModelRef = disabledRuns.has(event.runId) ? undefined : modelSlots.claim(agentId);
+    const utilityModelRef =
+      disabledRuns.has(event.runId) || observedAudience !== "direct"
+        ? undefined
+        : modelSlots.claim(agentId);
     if (!utilityModelRef && !allowPreambleOnly) {
       return undefined;
     }
@@ -586,6 +583,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       }
       return;
     }
+    const currentAudience = audience.classify(sessionKey, agentId);
     const scopeKey = resolveSessionSubscriptionKey(sessionKey, agentId);
     if (terminal && audience.recipients(sessionKey, agentId).size === 0) {
       void synthesizeTerminalDigest({ event, state: states.get(scopeKey) });
@@ -643,14 +641,13 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     }
     if (
       state &&
-      (!audience.has(sessionKey, agentId) ||
-        deps.getConfig().gateway?.controlUi?.sessionObserver === false)
+      (currentAudience === "none" || deps.getConfig().gateway?.controlUi?.sessionObserver === false)
     ) {
       suspendState(state);
       state = undefined;
     }
     if (!state) {
-      state = admitState(event, isPreamble, sessionKey, agentId);
+      state = admitState(event, isPreamble, sessionKey, agentId, currentAudience);
     }
     if (!state) {
       if (terminal) {
@@ -668,9 +665,10 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       state.previousDigest = revisionFloor.previousDigest;
     }
     revisionFloors.delete(scopeKey);
-    const utilityModelRef = disabledRuns.has(state.runId)
-      ? undefined
-      : modelSlots.claim(state.agentId, state);
+    const utilityModelRef =
+      disabledRuns.has(state.runId) || currentAudience !== "direct"
+        ? undefined
+        : modelSlots.claim(state.agentId, state);
     if (state.utilityModelRef !== utilityModelRef) {
       modelSlots.invalidateRequest(state);
       state.preparedPromise = undefined;
@@ -704,7 +702,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       runDigest(state, true);
       return;
     }
-    schedule(state, runDigest);
+    schedule(state, runDigest, currentAudience);
   };
 
   return {
@@ -715,11 +713,11 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
         return;
       }
       visibleConnections.delete(connId);
-      suspendStatesWithoutAudience();
+      audienceLifecycle.reconcileAll();
     },
     removeConnection(connId) {
       if (visibleConnections.delete(connId)) {
-        suspendStatesWithoutAudience();
+        audienceLifecycle.reconcileAll();
       }
     },
     getCompanionSnapshot,
@@ -727,7 +725,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       disposed = true;
       pendingTerminalErrors.forEach((_timer, runId) => clearPendingTerminalError(runId));
       preamblePublisher.dispose();
-      unsubscribeChanges();
+      audienceLifecycle.unsubscribe();
       for (const state of states.values()) {
         dropState(state);
       }

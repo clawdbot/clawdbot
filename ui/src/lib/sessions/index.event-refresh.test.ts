@@ -46,6 +46,59 @@ function installPageLifecycle() {
 }
 
 describe("event-driven session list refresh", () => {
+  it("refreshes the canonical roster without merging an ownerless raw-global snapshot", async () => {
+    vi.useFakeTimers();
+    const researchRow = {
+      key: "global",
+      kind: "global" as const,
+      updatedAt: 1,
+      owner: { actor: { type: "agent" as const, id: "research", label: "Research" } },
+      model: "research-model",
+      status: "done" as const,
+    };
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      return sessionsResult([researchRow], 1);
+    });
+    const { sessions, emitEvent } = createSessionCapabilityHarness(
+      request as unknown as GatewayBrowserClient["request"],
+    );
+
+    try {
+      await sessions.refresh({ agentId: "main", force: true });
+      const before = sessions.state.result;
+      request.mockClear();
+
+      emitEvent({
+        type: "event",
+        event: "sessions.changed",
+        payload: {
+          sessionKey: "global",
+          reason: "updated",
+          updatedAt: 2,
+          owner: { actor: { type: "agent", id: "ops", label: "Ops" } },
+          model: "ops-model",
+          status: "running",
+          hasActiveRun: true,
+          activeRunIds: ["ops-run"],
+        },
+      });
+
+      expect(sessions.state.result).toBe(before);
+      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+      expect(request).toHaveBeenCalledExactlyOnceWith(
+        "sessions.list",
+        expect.objectContaining({ agentId: "main" }),
+      );
+      expect(sessions.state.result?.sessions).toEqual([researchRow]);
+    } finally {
+      sessions.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("does not admit an active message for a session absent from the canonical roster", async () => {
     const visibleKey = "agent:main:visible";
     const unrelatedKey = "agent:main:unrelated";

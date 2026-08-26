@@ -14,6 +14,7 @@ import { retryReconnectableQueuedChatSends } from "./chat-send-actions.ts";
 import { setChatError } from "./chat-send-queue-state.ts";
 import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import { invalidateImageLightbox } from "./chat-state-page.ts";
+import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { dismissConfirmedActionPopovers } from "./components/chat-message.ts";
 import { resetTaskDetail } from "./components/chat-task-detail-state.ts";
 import { resetTranscriptSession } from "./components/chat-thread-interactions.ts";
@@ -49,7 +50,13 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       this.consumeSessionHandoff(this.sessionKey);
       this.syncActiveBindings();
       const state = this.state;
+      if (state) {
+        this.unreadPatchGuard.beginActivation(state.sessionKey);
+      }
       const deferredHydrationActive = this.resumeDeferredSessionHydration();
+      if (state && !deferredHydrationActive) {
+        this.markSessionRead(selectedChatSessionRow(state));
+      }
       if (
         state &&
         !deferredHydrationActive &&
@@ -84,6 +91,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       // so the transcript loader's timer/fetch loop must be stopped here.
       resetTaskDetail(state);
       state.sidebarContent = null;
+      state.attachmentSidebarContent = null;
       state.requestUpdate?.();
     }
     this.querySelector(".chat-transcript-announcement")?.setAttribute("aria-live", "off");

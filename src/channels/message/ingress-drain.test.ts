@@ -157,8 +157,7 @@ describe("channel ingress drain", () => {
       expect(await queue.listClaims()).toHaveLength(1);
       expect(await queue.listPending()).toEqual([]);
 
-      // Abandon releases for retry and spends an attempt; cancellation is the
-      // pre-delivery path that requeues without retry accounting.
+      // Abandon releases for retry (attempts increment).
       await expectDefined(capturedLifecycles[0], "deferred lifecycle").onAbandoned();
       await drain.waitForIdle();
       await vi.waitFor(async () => {
@@ -462,7 +461,7 @@ describe("channel ingress drain", () => {
     });
   });
 
-  it("abandoned via turnAdoptionLifecycle releases claim with an attempt", async () => {
+  it("abandoned reply ownership releases claim with attempt increment", async () => {
     await withTempState(async (stateDir) => {
       const queue = createTestIngressQueue(stateDir);
       await queue.enqueue("evt-q", { text: "x" }, { laneKey: "l1" });
