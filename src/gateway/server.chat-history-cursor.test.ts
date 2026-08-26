@@ -158,6 +158,42 @@ describe("chat.history cursor catch-up", () => {
     });
   });
 
+  test.each(["chat.history", "chat.startup"] as const)(
+    "%s returns the active run snapshot with an empty cached delta",
+    async (method) => {
+      const { context } = await createCursorSession();
+      context.chatAbortControllers.set("run-active", {
+        controller: new AbortController(),
+        sessionId,
+        sessionKey: "main",
+        startedAtMs: 1_000,
+        expiresAtMs: Date.now() + 60_000,
+        projectSessionActive: true,
+      });
+      context.chatRunState.getOrCreate("run-active").buffer = "still working";
+      const page = await callChat<{ deltaCursor?: string }>(context, method);
+
+      const delta = await callChat<{
+        inFlightRun?: unknown;
+        kind?: string;
+        messages?: unknown[];
+      }>(context, method, { cursor: page.payload?.deltaCursor });
+
+      expect(delta).toMatchObject({
+        ok: true,
+        payload: {
+          kind: "delta",
+          messages: [],
+          inFlightRun: {
+            runId: "run-active",
+            text: "still working",
+            startedAt: 1_000,
+          },
+        },
+      });
+    },
+  );
+
   test("does not advance a cursor past messages appended after the projection check", async () => {
     const { context, storePath } = await createCursorSession();
     const scope = currentScope(storePath);

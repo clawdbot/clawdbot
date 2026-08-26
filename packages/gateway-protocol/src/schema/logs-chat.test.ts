@@ -58,6 +58,12 @@ describe("ChatHistoryCursorResultSchema", () => {
       sessionInfo,
     };
     expect(Value.Check(ChatHistoryCursorResultSchema, delta)).toBe(true);
+    expect(
+      Value.Check(ChatHistoryCursorResultSchema, {
+        ...delta,
+        inFlightRun: { runId: "run-live", text: "still working" },
+      }),
+    ).toBe(true);
     expect(Value.Check(ChatHistoryCursorResultSchema, { kind: "reset" })).toBe(true);
     expect(Value.Check(ChatHistoryCursorResultSchema, { ...delta, extra: true })).toBe(false);
     expect(Value.Check(ChatHistoryCursorResultSchema, { kind: "reset", messages: [] })).toBe(false);

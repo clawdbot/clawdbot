@@ -341,7 +341,7 @@ describe("Apple app i18n catalogs", () => {
       "utf8",
     );
     const agentDetailComponents = await readFile(
-      "apps/ios/Sources/Design/AgentProTab+DetailComponents.swift",
+      "apps/ios/Sources/Design/AgentProDetailComponents.swift",
       "utf8",
     );
     const agentDreaming = await readFile(
@@ -391,22 +391,23 @@ describe("Apple app i18n catalogs", () => {
       "func metricTile(\n        icon: String,\n        title: OpenClawTextValue,\n        value: String,\n        detail: OpenClawTextValue",
     );
     expect(agentDetailComponents).toContain(
-      "func detailMetric(label: OpenClawTextValue, value: String)",
+      "func agentProDetailMetric(label: OpenClawTextValue, value: String)",
     );
     expect(agentDetailComponents).toContain("Text(verbatim: value)");
     expect(agentDetailComponents).toContain(
-      "func emptyDetailRow(\n        icon: String,\n        title: OpenClawTextValue,\n        detail: OpenClawTextValue)",
+      "func agentProEmptyDetailRow(\n    icon: String,\n    title: OpenClawTextValue,\n    detail: OpenClawTextValue)",
     );
     expect(agentDetailComponents).toContain("title.text");
     expect(agentDetailComponents).toContain("detail.text");
-    expect(agentDetailComponents).not.toContain("func detailMetric(label: String");
-    expect(agentDetailComponents).not.toContain("func emptyDetailRow(icon: String, title: String");
-    expect(agentDreaming).toContain(
-      "private func detailMetric(label: OpenClawTextValue, value: String)",
+    expect(agentDetailComponents).not.toContain("func agentProDetailMetric(label: String");
+    expect(agentDetailComponents).not.toContain(
+      "func agentProEmptyDetailRow(icon: String, title: String",
     );
-    expect(agentDreaming).toContain("label.text");
-    expect(agentDreaming).toContain("Text(verbatim: value)");
+    expect(agentDreaming).toContain("agentProDetailMetric(");
+    expect(agentDreaming).toContain("agentProEmptyDetailRow(");
     expect(agentDreaming).not.toContain("private func detailMetric(label: String");
+    expect(agentDreaming).not.toContain("private func detailMetric(");
+    expect(agentDreaming).not.toContain("private func emptyDetailRow(");
     expect(settingsActions).toContain(
       "func diagnosticCheckRow(\n        icon: String,\n        title: OpenClawTextValue,\n        detail: OpenClawTextValue,\n        value: OpenClawTextValue",
     );

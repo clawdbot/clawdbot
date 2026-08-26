@@ -695,7 +695,7 @@ final class TalkModeManager: NSObject {
         let micOk = if self.allowSimulatorCapture {
             true
         } else {
-            await Self.requestMicrophonePermission()
+            await VoicePermissionSupport.requestMicrophonePermission(timeoutErrorDomain: "TalkMode")
         }
         GatewayDiagnostics.log(
             "talk.timeline microphone permission ok=\(micOk) "
@@ -734,13 +734,13 @@ final class TalkModeManager: NSObject {
         let speechOk = if self.allowSimulatorCapture {
             true
         } else {
-            await Self.requestSpeechPermission()
+            await VoicePermissionSupport.requestSpeechPermission(timeoutErrorDomain: "TalkMode")
         }
         guard speechOk else {
             self.logger.warning("start blocked: speech permission denied")
             self.stopNativeCaptureAndDiscardTranscript()
             deactivateAudioSession()
-            let status = Self.permissionMessage(
+            let status = VoicePermissionSupport.speechPermissionMessage(
                 kind: String(localized: "Speech recognition"),
                 status: SFSpeechRecognizer.authorizationStatus())
             self.setStatus(
@@ -1278,7 +1278,7 @@ final class TalkModeManager: NSObject {
     {
         guard !self.allowSimulatorCapture else { return }
 
-        let micOk = await Self.requestMicrophonePermission()
+        let micOk = await VoicePermissionSupport.requestMicrophonePermission(timeoutErrorDomain: "TalkMode")
         try self.ensurePushToTalkStartCurrent(captureId: captureId, canStartCapture: canStartCapture)
         guard micOk else {
             self.setStatus(
@@ -1290,10 +1290,10 @@ final class TalkModeManager: NSObject {
             ])
         }
 
-        let speechOk = await Self.requestSpeechPermission()
+        let speechOk = await VoicePermissionSupport.requestSpeechPermission(timeoutErrorDomain: "TalkMode")
         try self.ensurePushToTalkStartCurrent(captureId: captureId, canStartCapture: canStartCapture)
         guard speechOk else {
-            let status = Self.permissionMessage(
+            let status = VoicePermissionSupport.speechPermissionMessage(
                 kind: String(localized: "Speech recognition"),
                 status: SFSpeechRecognizer.authorizationStatus())
             self.setStatus(
