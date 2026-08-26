@@ -28,15 +28,7 @@ export async function scheduleReplyContinuation(context: {
   continuation: ReplyContinuationController;
   getActiveSessionEntry: () => SessionEntry | undefined;
 }): Promise<void> {
-  const {
-    cfg,
-    sessionKey,
-    followupRun,
-    usage,
-    effectiveContinuationSignal,
-    continuation,
-    getActiveSessionEntry,
-  } = context;
+  const { cfg, sessionKey, followupRun, usage, continuation, getActiveSessionEntry } = context;
   const { activeSessionEntry: activeSessionEntryAfterSignal, bracketTokensAccumulated } =
     await handleContinuationSignal(context);
   let activeSessionEntry = activeSessionEntryAfterSignal;
@@ -76,11 +68,6 @@ export async function scheduleReplyContinuation(context: {
       },
       maxChainLength: liveContinuationRuntimeConfig.maxChainLength,
       config: liveContinuationRuntimeConfig,
-      reservedDelegateSlots:
-        effectiveContinuationSignal?.kind === "delegate" &&
-        (effectiveContinuationSignal.delayMs ?? 0) <= 0
-          ? 1
-          : 0,
       // Pass a fresh-loader so the hedge timer re-loads the chain state
       // from the persisted session entry at fire time.
       loadFreshChainState: () => loadContinuationChainState(activeSessionEntry, 0),

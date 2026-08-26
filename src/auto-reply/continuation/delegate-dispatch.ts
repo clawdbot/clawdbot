@@ -217,10 +217,7 @@ export async function dispatchToolDelegates(
       defer: deferManagedDelegate,
     },
   );
-  const delegateSlotsAvailable = Math.max(
-    0,
-    maxDelegatesPerTurn - (params.reservedDelegateSlots ?? 0) - acceptedDelegates.length,
-  );
+  const delegateSlotsAvailable = Math.max(0, maxDelegatesPerTurn - acceptedDelegates.length);
   const delegatesWithinLimit = acceptedDelegates.concat(
     dispatchableDelegates.slice(0, delegateSlotsAvailable),
   );

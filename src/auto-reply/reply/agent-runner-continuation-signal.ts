@@ -1,10 +1,5 @@
-import { spawnSubagentDirect } from "../../agents/subagents/spawn/subagent-spawn.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import {
-  emitContinuationDisabledSpan,
-  resolveContinuationTraceparent,
-  startContinuationDelegateSpan,
-} from "../../infra/continuation-tracer.js";
+import { emitContinuationDisabledSpan } from "../../infra/continuation-tracer.js";
 import { generateChainId } from "../../infra/secure-random.js";
 import { enqueueSystemEventRaw as enqueueSystemEvent } from "../../infra/system-events.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -27,10 +22,8 @@ function formatDelegateEchoForSystemEvent(value: string): string {
 
 type ContinuationUsage = { input?: number; output?: number } | undefined;
 
-// Ports the monolith's continuation-signal handling (CONTINUE_WORK /
-// CONTINUE_DELEGATE bracket + tool forms). Split out of
-// agent-runner-continuation-schedule.ts to keep each module within the
-// max-lines budget. Behavior/order is identical to the monolith.
+// Owns CONTINUE_WORK / CONTINUE_DELEGATE response-signal admission.
+// Bracket delegates enter the same durable TaskFlow dispatch path as tool calls.
 export async function handleContinuationSignal(context: {
   cfg: Parameters<typeof resolveLiveContinuationRuntimeConfig>[0];
   sessionKey: string | undefined;
@@ -204,223 +197,46 @@ export async function handleContinuationSignal(context: {
             bracketTokensAccumulated = false;
             return true;
           };
-          const doSpawn = async (
-            plannedHop: number,
-            task: string,
-            options?: {
-              timerTriggered?: boolean;
-              silent?: boolean;
-              silentWake?: boolean;
-              startedAt?: number;
-              targetSessionKey?: string;
-              targetSessionKeys?: string[];
-              fanoutMode?: "tree" | "all";
-              traceparent?: string;
-              model?: string;
-            },
-          ) => {
-            let dispatchSpan: ReturnType<typeof startContinuationDelegateSpan> | undefined;
-            try {
-              if (
-                rejectCrossSessionTargeting(
-                  {
-                    ...(options?.targetSessionKey
-                      ? { targetSessionKey: options.targetSessionKey }
-                      : {}),
-                    ...(options?.targetSessionKeys && options.targetSessionKeys.length > 0
-                      ? { targetSessionKeys: options.targetSessionKeys }
-                      : {}),
-                    ...(options?.fanoutMode ? { fanoutMode: options.fanoutMode } : {}),
-                  },
-                  {
-                    plannedHop,
-                    task,
-                    delegateDelivery: options?.timerTriggered ? "timer" : "immediate",
-                    ...(options?.silent ? { silent: options.silent } : {}),
-                    ...(options?.silentWake ? { silentWake: options.silentWake } : {}),
-                  },
-                )
-              ) {
-                return false;
-              }
-              const outboundTraceparent = resolveContinuationTraceparent(options?.traceparent);
-              const delegateMode = options?.silentWake
-                ? "silent-wake"
-                : options?.silent
-                  ? "silent"
-                  : "normal";
-              if (!options?.timerTriggered) {
-                dispatchSpan = startContinuationDelegateSpan({
-                  chainId: undefined,
-                  chainStepRemaining: maxChainLength - plannedHop,
-                  delayMs: 0,
-                  delivery: "immediate",
-                  delegateMode,
-                  traceparent: outboundTraceparent,
-                  log: (message) => defaultRuntime.log(message),
-                });
-              }
-              const spawnTraceparent = dispatchSpan?.traceparent?.() ?? outboundTraceparent;
-              const dispatchChainId = activeSessionEntry?.continuationChainId ?? generateChainId();
-              const spawnResult = await spawnSubagentDirect(
-                {
-                  task: `[continuation:chain-hop:${plannedHop}] Delegated task (turn ${plannedHop}/${maxChainLength}): ${task}`,
-                  ...(options?.silent ? { silentAnnounce: true } : {}),
-                  ...(options?.silentWake ? { silentAnnounce: true, wakeOnReturn: true } : {}),
-                  drainsContinuationDelegateQueue: true,
-                  continuationChainState: {
-                    count: plannedHop,
-                    startedAt: options?.startedAt ?? chainStartedAt,
-                    tokens: Math.max(
-                      accumulatedChainTokens,
-                      activeSessionEntry?.continuationChainTokens ?? 0,
-                    ),
-                    chainId: dispatchChainId,
-                  },
-                  ...(options?.targetSessionKey
-                    ? { continuationTargetSessionKey: options.targetSessionKey }
-                    : {}),
-                  ...(options?.targetSessionKeys && options.targetSessionKeys.length > 0
-                    ? { continuationTargetSessionKeys: options.targetSessionKeys }
-                    : {}),
-                  ...(options?.fanoutMode ? { continuationFanoutMode: options.fanoutMode } : {}),
-                  ...(options?.model ? { model: options.model } : {}),
-                  ...(spawnTraceparent ? { traceparent: spawnTraceparent } : {}),
-                },
-                {
-                  agentSessionKey: sessionKey,
-                  agentChannel: followupRun.originatingChannel ?? undefined,
-                  agentAccountId: followupRun.originatingAccountId ?? undefined,
-                  agentTo: followupRun.originatingTo ?? undefined,
-                  agentThreadId: followupRun.originatingThreadId ?? undefined,
-                },
-              );
-              if (spawnResult.status === "accepted") {
-                if (options?.timerTriggered) {
-                  defaultRuntime.log(
-                    `DELEGATE timer fired and spawned turn ${plannedHop}/${maxChainLength} for session ${sessionKey}: ${task}`,
-                  );
-                }
-                const { chainId: persistedChainId } = await persistContinuationChainState({
-                  count: Math.max(activeSessionEntry?.continuationChainCount ?? 0, plannedHop),
-                  startedAt: options?.startedAt ?? chainStartedAt,
-                  tokens: Math.max(
-                    accumulatedChainTokens,
-                    activeSessionEntry?.continuationChainTokens ?? 0,
-                  ),
-                  chainId: dispatchChainId,
-                });
-                if (dispatchSpan) {
-                  if (persistedChainId !== undefined) {
-                    dispatchSpan.setAttributes({ "chain.id": persistedChainId });
-                  }
-                  dispatchSpan.setStatus("OK");
-                }
-                const taskEcho = formatDelegateEchoForSystemEvent(task);
-                enqueueSystemEvent(
-                  `[continuation:delegate-spawned] Spawned turn ${plannedHop}/${maxChainLength}: ${taskEcho}`,
-                  { sessionKey, trusted: true },
-                );
-                return true;
-              }
-              const reasonText = spawnResult.error ?? "delegation was not accepted.";
-              const reasonEcho = formatDelegateEchoForSystemEvent(reasonText);
-              const taskEcho = formatDelegateEchoForSystemEvent(task);
-              defaultRuntime.log(
-                `DELEGATE spawn rejected (${spawnResult.status}) for session ${sessionKey} reason=${reasonText}`,
-              );
-              dispatchSpan?.setStatus("ERROR", reasonText);
-              enqueueSystemEvent(
-                `[continuation] DELEGATE spawn ${spawnResult.status}: ${reasonEcho} Use sessions_spawn manually. Original task: ${taskEcho}`,
-                { sessionKey, trusted: true },
-              );
-              return false;
-            } catch (err) {
-              const errorMessage = String(err);
-              const errorEcho = formatDelegateEchoForSystemEvent(errorMessage);
-              const taskEcho = formatDelegateEchoForSystemEvent(task);
-              dispatchSpan?.recordException(err);
-              dispatchSpan?.setStatus("ERROR", errorMessage);
-              defaultRuntime.log(
-                `DELEGATE spawn failed for session ${sessionKey}: ${errorMessage}`,
-              );
-              enqueueSystemEvent(
-                `[continuation] DELEGATE spawn failed: ${errorEcho}. Original task: ${taskEcho}`,
-                { sessionKey, trusted: true },
-              );
-              return false;
-            } finally {
-              dispatchSpan?.end();
-            }
-          };
-
-          if (delegateDelayMs && delegateDelayMs > 0) {
-            const rejectedDelayedTarget = rejectCrossSessionTargeting(
-              {
-                ...(effectiveContinuationSignal.targetSessionKey
-                  ? { targetSessionKey: effectiveContinuationSignal.targetSessionKey }
-                  : {}),
-                ...(effectiveContinuationSignal.targetSessionKeys &&
-                effectiveContinuationSignal.targetSessionKeys.length > 0
-                  ? { targetSessionKeys: effectiveContinuationSignal.targetSessionKeys }
-                  : {}),
-                ...(effectiveContinuationSignal.fanoutMode
-                  ? { fanoutMode: effectiveContinuationSignal.fanoutMode }
-                  : {}),
-              },
-              {
-                plannedHop: nextChainCount,
-                task: delegateTask,
-                delegateDelivery: "timer",
-                ...(effectiveContinuationSignal.silent
-                  ? { silent: effectiveContinuationSignal.silent }
-                  : {}),
-                ...(effectiveContinuationSignal.silentWake
-                  ? { silentWake: effectiveContinuationSignal.silentWake }
-                  : {}),
-              },
-            );
-            if (!rejectedDelayedTarget) {
-              const clampedDelay = Math.max(minDelayMs, Math.min(maxDelayMs, delegateDelayMs));
-              const outboundTraceparent = internalBracketTraceparent;
-              const delegateMode = effectiveContinuationSignal.silentWake
-                ? "silent-wake"
-                : effectiveContinuationSignal.silent
-                  ? "silent"
-                  : "normal";
-              enqueuePendingDelegate(sessionKey, {
-                task: delegateTask,
-                delayMs: clampedDelay,
-                ...(delegateMode !== "normal" ? { mode: delegateMode } : {}),
-                ...(effectiveContinuationSignal.targetSessionKey
-                  ? { targetSessionKey: effectiveContinuationSignal.targetSessionKey }
-                  : {}),
-                ...(effectiveContinuationSignal.targetSessionKeys &&
-                effectiveContinuationSignal.targetSessionKeys.length > 0
-                  ? { targetSessionKeys: effectiveContinuationSignal.targetSessionKeys }
-                  : {}),
-                ...(effectiveContinuationSignal.fanoutMode
-                  ? { fanoutMode: effectiveContinuationSignal.fanoutMode }
-                  : {}),
-                ...(outboundTraceparent ? { traceparent: outboundTraceparent } : {}),
-                ...(effectiveContinuationSignal.model
-                  ? { model: effectiveContinuationSignal.model }
-                  : {}),
-              });
-              await persistContinuationChainState({
-                count: currentChainCount,
-                startedAt: chainStartedAt,
-                tokens: accumulatedChainTokens,
-              });
-            }
-          } else {
-            await doSpawn(nextChainCount, delegateTask, {
-              silent: effectiveContinuationSignal.silent,
-              silentWake: effectiveContinuationSignal.silentWake,
-              startedAt: chainStartedAt,
-              ...(effectiveContinuationSignal.model
-                ? { model: effectiveContinuationSignal.model }
+          const delegateDelivery = delegateDelayMs && delegateDelayMs > 0 ? "timer" : "immediate";
+          const rejectedTarget = rejectCrossSessionTargeting(
+            {
+              ...(effectiveContinuationSignal.targetSessionKey
+                ? { targetSessionKey: effectiveContinuationSignal.targetSessionKey }
                 : {}),
+              ...(effectiveContinuationSignal.targetSessionKeys &&
+              effectiveContinuationSignal.targetSessionKeys.length > 0
+                ? { targetSessionKeys: effectiveContinuationSignal.targetSessionKeys }
+                : {}),
+              ...(effectiveContinuationSignal.fanoutMode
+                ? { fanoutMode: effectiveContinuationSignal.fanoutMode }
+                : {}),
+            },
+            {
+              plannedHop: nextChainCount,
+              task: delegateTask,
+              delegateDelivery,
+              ...(effectiveContinuationSignal.silent
+                ? { silent: effectiveContinuationSignal.silent }
+                : {}),
+              ...(effectiveContinuationSignal.silentWake
+                ? { silentWake: effectiveContinuationSignal.silentWake }
+                : {}),
+            },
+          );
+          if (!rejectedTarget) {
+            const delayMs =
+              delegateDelivery === "timer"
+                ? Math.max(minDelayMs, Math.min(maxDelayMs, delegateDelayMs ?? 0))
+                : 0;
+            const delegateMode = effectiveContinuationSignal.silentWake
+              ? "silent-wake"
+              : effectiveContinuationSignal.silent
+                ? "silent"
+                : "normal";
+            enqueuePendingDelegate(sessionKey, {
+              task: delegateTask,
+              ...(delayMs > 0 ? { delayMs } : {}),
+              ...(delegateMode !== "normal" ? { mode: delegateMode } : {}),
               ...(effectiveContinuationSignal.targetSessionKey
                 ? { targetSessionKey: effectiveContinuationSignal.targetSessionKey }
                 : {}),
@@ -432,6 +248,14 @@ export async function handleContinuationSignal(context: {
                 ? { fanoutMode: effectiveContinuationSignal.fanoutMode }
                 : {}),
               ...(internalBracketTraceparent ? { traceparent: internalBracketTraceparent } : {}),
+              ...(effectiveContinuationSignal.model
+                ? { model: effectiveContinuationSignal.model }
+                : {}),
+            });
+            await persistContinuationChainState({
+              count: currentChainCount,
+              startedAt: chainStartedAt,
+              tokens: accumulatedChainTokens,
             });
           }
         } else {

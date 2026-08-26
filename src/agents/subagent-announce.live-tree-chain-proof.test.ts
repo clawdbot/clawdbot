@@ -62,11 +62,18 @@ import {
   pendingDelegateCount,
   resetDelegateStoreForTests,
 } from "../auto-reply/continuation/delegate-store.js";
+import { accountFollowupTurn } from "../auto-reply/reply/agent-runner-result-accounting.js";
+import type {
+  AdmittedFollowupTurn,
+  FollowupRunnerParams,
+} from "../auto-reply/reply/followup-turn-admission.js";
+import type { FollowupExecutionResult } from "../auto-reply/reply/followup-turn-execution.js";
 import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfig,
   setRuntimeConfigSnapshot,
 } from "../config/config.js";
+import type { SessionEntry } from "../config/sessions.js";
 import { resolveSessionStorePathCore } from "../config/sessions.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -75,12 +82,17 @@ import { peekSystemEventEntries, resetSystemEventsForTest } from "../infra/syste
 import { defaultRuntime } from "../runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { listTaskFlowsForOwnerKey } from "../tasks/task-flow-runtime-internal.js";
+import { resetTaskFlowRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
 import { loadSessionEntryByKey } from "./subagents/announce/subagent-announce-delivery.js";
 import {
   getSubagentRunByChildSessionKey,
   listSubagentRunsForRequester,
 } from "./subagents/registry/subagent-registry-read.js";
-import { resetSubagentRegistryForTests } from "./subagents/registry/subagent-registry.test-helpers.js";
+import {
+  releaseSubagentRun,
+  resetSubagentRegistryForTests,
+} from "./subagents/registry/subagent-registry.test-helpers.js";
 import "./subagents/registry/subagent-registry.js";
 import { getSubagentDepthFromSessionStore } from "./subagents/spawn/subagent-depth.js";
 import { spawnSubagentDirect } from "./subagents/spawn/subagent-spawn.js";
@@ -110,6 +122,111 @@ function makeConfig(): OpenClawConfig {
         },
       },
     },
+  };
+}
+
+function createRawTokenTurn(params: {
+  cfg: OpenClawConfig;
+  sessionEntry: SessionEntry;
+  storePath: string;
+}): {
+  turn: AdmittedFollowupTurn;
+  defaults: FollowupRunnerParams;
+  execution: FollowupExecutionResult;
+} {
+  let currentEntry: SessionEntry | undefined = params.sessionEntry;
+  const sessionStore: Record<string, SessionEntry> = {
+    [rootSessionKey]: params.sessionEntry,
+  };
+  const turn: AdmittedFollowupTurn = {
+    runId: "raw-token-origin-run",
+    queued: {
+      prompt: "emit one raw-final delegate",
+      enqueuedAt: Date.now(),
+      originatingChannel: "discord",
+      originatingAccountId: "acct-root",
+      originatingTo: "chan-root",
+      run: {
+        agentId: "main",
+        agentDir: process.cwd(),
+        sessionId: params.sessionEntry.sessionId,
+        sessionKey: rootSessionKey,
+        sessionFile: rootSessionKey,
+        workspaceDir: process.cwd(),
+        config: params.cfg,
+        provider: "anthropic",
+        model: "sonnet-4.6",
+        messageProvider: "discord",
+        timeoutMs: 1_000,
+        blockReplyBreak: "message_end",
+      },
+    },
+    operation: {} as AdmittedFollowupTurn["operation"],
+    config: params.cfg,
+    sessionStore,
+    session: {
+      kind: "session",
+      key: rootSessionKey,
+      storePath: params.storePath,
+      current: () => currentEntry,
+      publish: (entry) => {
+        currentEntry = entry;
+        if (entry) {
+          sessionStore[rootSessionKey] = entry;
+        }
+      },
+      adopt: (entry) => {
+        currentEntry = entry;
+        sessionStore[rootSessionKey] = entry;
+      },
+    },
+    sendPolicy: "allow",
+    preflightCompactionApplied: false,
+    noOpRearmWakeClass: undefined,
+  };
+  return {
+    turn,
+    defaults: {
+      typing: {} as FollowupRunnerParams["typing"],
+      typingMode: "never",
+      defaultModel: "anthropic/sonnet-4.6",
+    },
+    execution: {
+      commentaryPayloadsEnabled: false,
+      execution: {
+        runId: "raw-token-origin-run",
+        outcome: {
+          kind: "settled",
+          status: "ok",
+          result: {
+            payloads: [{ text: "Origin turn complete." }],
+            meta: {
+              durationMs: 1,
+              agentMeta: {
+                provider: "anthropic",
+                model: "sonnet-4.6",
+                sessionId: params.sessionEntry.sessionId,
+                usage: { input: 3, output: 4, cacheRead: 0, cacheWrite: 0 },
+              },
+            },
+          },
+          continueWorkRequests: [],
+          rawContinuationText:
+            "Origin turn complete.\n[[CONTINUE_DELEGATE: reply exactly RAW-TOKEN-CHILD-DONE | silent-wake]]",
+          resolved: { provider: "anthropic", model: "sonnet-4.6" },
+          fallback: { exhausted: false, attempts: [] },
+          autoCompactionCount: 0,
+          didLogHeartbeatStrip: false,
+        },
+      },
+      runStartedAt: Date.now() - 10,
+      sessionCtx: {},
+      pendingToolTasks: new Set(),
+      progress: {
+        drain: vi.fn(async () => {}),
+        visibleToolErrorObserved: () => false,
+      },
+    } as FollowupExecutionResult,
   };
 }
 
@@ -152,6 +269,7 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
 
     resetAgentEventsForTest();
     resetSubagentRegistryForTests();
+    resetTaskFlowRegistryForTests({ persist: false });
     resetDelegateStoreForTests();
     resetSystemEventsForTest();
     setRuntimeConfigSnapshot(makeConfig());
@@ -169,6 +287,7 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
     clearRuntimeConfigSnapshot();
     resetSystemEventsForTest();
     resetDelegateStoreForTests();
+    resetTaskFlowRegistryForTests({ persist: false });
     resetSubagentRegistryForTests();
     resetAgentEventsForTest();
     vi.unstubAllEnvs();
@@ -182,7 +301,7 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
     stateDir = "";
   });
 
-  it("spawns hop-2 via tool delegate (fanout=tree) and delivers hop-2 completion by lifecycle targeted-return", async () => {
+  it("delivers one depth-2 tree return after the settled intermediate registry row retires", async () => {
     const hop1Spawn = await spawnSubagentDirect(
       {
         task: "[continuation:chain-hop:1] live proof hop-1",
@@ -275,6 +394,8 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
         "number",
       4_000,
     );
+    releaseSubagentRun(hop1RunId);
+    expect(getSubagentRunByChildSessionKey(hop1ChildSessionKey)).toBeNull();
 
     const requesterRuns = listSubagentRunsForRequester(hop1ChildSessionKey);
     const hop2Run = requesterRuns.find((entry) =>
@@ -298,7 +419,7 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
     expect(hop2Run?.controllerSessionKey).toBe(hop1ChildSessionKey);
     expect(hop2Run?.cleanup).toBe("keep");
     expect(hop2Run?.continuationTargetSessionKey).toBeUndefined();
-    expect(hop2Run?.continuationTargetSessionKeys).toBeUndefined();
+    expect(hop2Run?.continuationTargetSessionKeys).toEqual([hop1ChildSessionKey, rootSessionKey]);
     expect(hop2Run?.continuationFanoutMode).toBe("tree");
 
     const hop2SessionKey = hop2Run?.childSessionKey as string;
@@ -318,44 +439,120 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
         content: "GRANDCHILD-DONE",
       },
     ]);
-    const rootEventsBeforeHop2Lifecycle = peekSystemEventEntries(rootSessionKey).length;
-    const cleanedHop1EventsBeforeHop2Lifecycle = peekSystemEventEntries(hop1ChildSessionKey).length;
-    const targetedReturnLogsBeforeHop2Lifecycle = logSpy.mock.calls.filter(
-      ([message]: [unknown]) =>
-        typeof message === "string" && message.includes("[continuation:targeted-return]"),
-    ).length;
+    const countGrandchildReturns = (sessionKey: string) =>
+      peekSystemEventEntries(sessionKey).filter((entry) => entry.text.includes("GRANDCHILD-DONE"))
+        .length;
+    const rootReturnsBeforeHop2Lifecycle = countGrandchildReturns(rootSessionKey);
+    const hop1ReturnsBeforeHop2Lifecycle = countGrandchildReturns(hop1ChildSessionKey);
+    const countHop2RootReturnLogs = () =>
+      logSpy.mock.calls.filter(
+        ([message]: [unknown]) =>
+          typeof message === "string" &&
+          message.includes("[continuation:targeted-return]") &&
+          message.includes(rootSessionKey) &&
+          message.includes(hop2SessionKey),
+      ).length;
+    const targetedReturnLogsBeforeHop2Lifecycle = countHop2RootReturnLogs();
 
-    emitAgentEvent({
-      runId: hop2RunId,
-      stream: "lifecycle",
-      sessionKey: hop2SessionKey,
-      data: { phase: "end", startedAt: 30, endedAt: 40 },
-    });
+    const emitHop2Completion = () =>
+      emitAgentEvent({
+        runId: hop2RunId,
+        stream: "lifecycle",
+        sessionKey: hop2SessionKey,
+        data: { phase: "end", startedAt: 30, endedAt: 40 },
+      });
+    emitHop2Completion();
 
     await waitFor(
       () =>
-        logSpy.mock.calls.some(
-          ([message]: [unknown]) =>
-            typeof message === "string" &&
-            message.includes("[continuation:targeted-return]") &&
-            message.includes(rootSessionKey) &&
-            message.includes(hop2SessionKey),
-        ),
+        countGrandchildReturns(rootSessionKey) === rootReturnsBeforeHop2Lifecycle + 1 &&
+        countHop2RootReturnLogs() === targetedReturnLogsBeforeHop2Lifecycle + 1,
       4_000,
     );
 
-    const rootEventsAfterHop2Lifecycle = peekSystemEventEntries(rootSessionKey).length;
-    const cleanedHop1EventsAfterHop2Lifecycle = peekSystemEventEntries(hop1ChildSessionKey).length;
-    const targetedReturnLogsAfterHop2Lifecycle = logSpy.mock.calls.filter(
-      ([message]: [unknown]) =>
-        typeof message === "string" && message.includes("[continuation:targeted-return]"),
-    ).length;
-    expect(rootEventsAfterHop2Lifecycle).toBeGreaterThan(rootEventsBeforeHop2Lifecycle);
-    expect(targetedReturnLogsAfterHop2Lifecycle).toBeGreaterThan(
-      targetedReturnLogsBeforeHop2Lifecycle,
+    emitHop2Completion();
+    await new Promise<void>((resolveTurn) => {
+      setTimeout(resolveTurn, 50);
+    });
+
+    const rootReturnsAfterHop2Lifecycle = countGrandchildReturns(rootSessionKey);
+    const hop1ReturnsAfterHop2Lifecycle = countGrandchildReturns(hop1ChildSessionKey);
+    const targetedReturnLogsAfterHop2Lifecycle = countHop2RootReturnLogs();
+    expect(rootReturnsAfterHop2Lifecycle).toBe(rootReturnsBeforeHop2Lifecycle + 1);
+    expect(hop1ReturnsAfterHop2Lifecycle).toBe(hop1ReturnsBeforeHop2Lifecycle + 1);
+    expect(targetedReturnLogsAfterHop2Lifecycle).toBe(targetedReturnLogsBeforeHop2Lifecycle + 1);
+    // The frozen tree reaches every ancestor once and lifecycle replay does not
+    // duplicate either the stale intermediate or root delivery.
+  });
+
+  it("binds a raw-final token delegate through durable task completion to its origin", async () => {
+    const cfg = makeConfig();
+    const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
+    const sessionEntry: SessionEntry = {
+      sessionId: "sess-root",
+      updatedAt: Date.now(),
+    };
+    const { turn, defaults, execution } = createRawTokenTurn({
+      cfg,
+      sessionEntry,
+      storePath,
+    });
+
+    await accountFollowupTurn({ turn, defaults, execution });
+
+    const flows = listTaskFlowsForOwnerKey(rootSessionKey);
+    expect(flows).toHaveLength(1);
+    const flow = flows[0];
+    expect(flow).toMatchObject({
+      ownerKey: rootSessionKey,
+      status: "succeeded",
+      currentStep: "Accepted by continuation subagent",
+    });
+    const childRun = listSubagentRunsForRequester(rootSessionKey).find((entry) =>
+      entry.task.includes("RAW-TOKEN-CHILD-DONE"),
     );
-    // Tree routing must traverse a cleaned intermediate to reach the live root,
-    // but must not reopen that completed run-mode session with a new event.
-    expect(cleanedHop1EventsAfterHop2Lifecycle).toBe(cleanedHop1EventsBeforeHop2Lifecycle);
+    expect(childRun).toBeDefined();
+    expect(childRun?.childSessionKey).toBeTruthy();
+    expect(childRun?.runId).toBeTruthy();
+    expect(flow?.stateJson).toMatchObject({
+      childSessionKey: childRun?.childSessionKey,
+    });
+
+    const childSessionKey = childRun?.childSessionKey as string;
+    const childRunId = childRun?.runId as string;
+    gatewayState.waitResults.set(childRunId, { status: "ok", startedAt: 50, endedAt: 60 });
+    gatewayState.chatHistoryBySessionKey.set(childSessionKey, [
+      {
+        role: "assistant",
+        content: "RAW-TOKEN-CHILD-DONE",
+      },
+    ]);
+    const countOriginReturns = () =>
+      peekSystemEventEntries(rootSessionKey).filter((entry) =>
+        entry.text.includes("RAW-TOKEN-CHILD-DONE"),
+      ).length;
+    const before = countOriginReturns();
+    const completeChild = () =>
+      emitAgentEvent({
+        runId: childRunId,
+        stream: "lifecycle",
+        sessionKey: childSessionKey,
+        data: { phase: "end", startedAt: 50, endedAt: 60 },
+      });
+
+    completeChild();
+    await waitFor(() => countOriginReturns() === before + 1, 4_000);
+    completeChild();
+    await new Promise<void>((resolveTurn) => {
+      setTimeout(resolveTurn, 50);
+    });
+
+    expect(countOriginReturns()).toBe(before + 1);
+    expect(listTaskFlowsForOwnerKey(rootSessionKey)).toEqual([
+      expect.objectContaining({
+        flowId: flow?.flowId,
+        status: "succeeded",
+      }),
+    ]);
   });
 });
