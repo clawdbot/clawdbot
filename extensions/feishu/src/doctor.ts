@@ -7,6 +7,7 @@ import type {
   ChannelDoctorSequenceResult,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { isPathStrictlyInside } from "openclaw/plugin-sdk/file-access-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import {
   isValidAgentHarnessSessionStoreEntry,
@@ -131,13 +132,6 @@ function safeReadDir(dir: string): fs.Dirent[] {
   } catch {
     return [];
   }
-}
-
-function isPathWithinRoot(targetPath: string, rootPath: string): boolean {
-  const resolvedTarget = path.resolve(targetPath);
-  const resolvedRoot = path.resolve(rootPath);
-  const relative = path.relative(resolvedRoot, resolvedTarget);
-  return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
 }
 
 function formatDisplayPath(filePath: string): string {
@@ -327,8 +321,8 @@ function resolveSessionTranscriptCandidates(params: {
     const resolved = path.isAbsolute(candidate)
       ? path.resolve(candidate)
       : path.resolve(sessionsDir, candidate);
-    const isStoreCandidate = isPathWithinRoot(resolved, sessionsDir);
-    const isAgentSessionCandidate = isPathWithinRoot(resolved, agentSessionsDir);
+    const isStoreCandidate = isPathStrictlyInside(sessionsDir, resolved);
+    const isAgentSessionCandidate = isPathStrictlyInside(agentSessionsDir, resolved);
     if (
       resolved === sessionsDir ||
       resolved === agentSessionsDir ||

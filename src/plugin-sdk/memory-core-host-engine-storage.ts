@@ -21,6 +21,8 @@ export {
   ensureMemoryPathFtsTriggers,
   hashText,
   INVALID_PROJECT_ANNOTATION_KEY,
+  isAutomaticMemoryEntryEligible,
+  isMemoryOriginEligibleForAutomaticInjection,
   isFileMissingError,
   isTransientMemoryReadError,
   listMemoryFiles,
@@ -80,6 +82,7 @@ export type MemoryEmbeddingProbeResult = {
 export type {
   MemoryChunk,
   MemoryFileEntry,
+  LegacyMemoryReadResult,
   MemoryProviderStatus,
   MemoryReadResult,
   MemorySearchManager,

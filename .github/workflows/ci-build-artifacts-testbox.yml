@@ -42,14 +42,16 @@ jobs:
           testbox_id: ${{ inputs.testbox_id }}
 
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: ${{ github.event_name == 'pull_request' && '2' || '0' }}
           persist-credentials: false
 
       - name: Setup Node environment
+        id: setup-node-env
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: ${{ github.event_name == 'workflow_dispatch' && 'read-write' || 'restore' }}
           install-bun: "false"
           install-trufflehog: "true"
 
@@ -105,7 +107,7 @@ jobs:
 
       - name: Restore dist build cache
         id: dist-cache
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             .artifacts/build-all-cache/
@@ -143,8 +145,8 @@ jobs:
           test -f dist/control-ui/index.html
 
       - name: Save dist build cache
-        if: steps.dist-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        if: steps.setup-node-env.outputs.cache-mode == 'read-write' && steps.dist-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             .artifacts/build-all-cache/

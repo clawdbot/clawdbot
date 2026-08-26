@@ -12,6 +12,9 @@ import { requireValidConfig, requireValidConfigFileSnapshot } from "../config-va
 
 export type ChatChannel = ChannelId;
 
+export const NO_CONFIGURED_CHAT_CHANNELS_LINE =
+  "- no configured chat channels (run `openclaw channels list --all` to see installable channels)";
+
 export { requireValidConfigFileSnapshot };
 
 /** Load valid channel command config with read-only secret resolution applied. */

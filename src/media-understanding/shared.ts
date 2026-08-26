@@ -20,7 +20,6 @@ import {
   buildProviderRequestDispatcherPolicy,
   resolveProviderRequestPolicyConfig,
   type ModelProviderRequestTransportOverrides,
-  type ResolvedProviderRequestConfig,
 } from "../agents/provider-request-config.js";
 import type { GuardedFetchMode, GuardedFetchResult } from "../infra/net/fetch-guard.js";
 import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "../infra/net/fetch-guard.js";
@@ -386,7 +385,6 @@ type ResolvedProviderHttpRequestConfig = {
   allowPrivateNetwork: boolean;
   headers: Headers;
   dispatcherPolicy?: PinnedDispatcherPolicy;
-  requestConfig: ResolvedProviderRequestConfig;
 };
 
 type ResolvedProviderHttpRequestConfigWithOriginTrust = ResolvedProviderHttpRequestConfig & {
@@ -430,11 +428,7 @@ function resolveProviderHttpRequestConfigWithOriginTrustInternal(params: {
     allowPrivateNetwork: requestConfig.allowPrivateNetwork,
     headers,
     dispatcherPolicy: buildProviderRequestDispatcherPolicy(requestConfig),
-    requestConfig,
-    trustConfiguredBaseUrlOrigin:
-      !requestConfig.privateNetworkExplicitlyDenied &&
-      (requestConfig.policy.endpointClass === "custom" ||
-        requestConfig.policy.endpointClass === "local"),
+    trustConfiguredBaseUrlOrigin: requestConfig.trustConfiguredBaseUrlOrigin,
   };
 }
 
@@ -447,7 +441,6 @@ export function resolveProviderHttpRequestConfig(
     allowPrivateNetwork: resolved.allowPrivateNetwork,
     headers: resolved.headers,
     dispatcherPolicy: resolved.dispatcherPolicy,
-    requestConfig: resolved.requestConfig,
   };
 }
 

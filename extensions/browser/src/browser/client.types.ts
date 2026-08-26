@@ -135,6 +135,11 @@ export type BrowserTab = {
   type?: string;
 };
 
+/** Availability and page enumeration returned by the tab-list boundary. */
+export type BrowserTabsResult =
+  | { running: true; tabs: BrowserTab[] }
+  | { running: false; tabs: [] };
+
 /** Internal tab-open result. Browser tools must remove internal metadata before model output. */
 export type BrowserOpenResult = BrowserTab & {
   ownership?: BrowserTabOwnership;

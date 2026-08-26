@@ -1,4 +1,4 @@
-import { safeParseJson } from "@openclaw/normalization-core";
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import {
   inspectPluginInstallRecordMap,
   type PluginInstallRecordMapState,

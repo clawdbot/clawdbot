@@ -30,7 +30,6 @@ export {
   readPositiveIntegerParam,
   readStringArrayParam,
   readStringParam,
-  resolvePollMaxSelections,
 } from "openclaw/plugin-sdk/channel-actions";
 export type { ActionGate } from "openclaw/plugin-sdk/channel-actions";
 export { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";

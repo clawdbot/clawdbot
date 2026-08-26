@@ -1,13 +1,14 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import path from "node:path";
 import { createQaPosixCommandSettlement } from "./posix-command-settlement.js";
-import { resolveQaWindowsSystem32ExePath } from "./windows-system-tools.js";
+import { runQaWindowsTaskkill } from "./windows-system-tools.js";
 
 export type QaScenarioCommandExecution = {
   args: string[];
   command: string;
   cwd: string;
   env: NodeJS.ProcessEnv;
+  onOutput?: (stream: "stderr" | "stdout", chunk: Buffer) => void;
   timeoutMs?: number;
 };
 
@@ -24,32 +25,10 @@ type QaScenarioCommandTerminalResult = Pick<
   "exitCode" | "failureMessage" | "signal"
 >;
 
-type QaScenarioTaskkillRunner = typeof spawnSync;
-
 const QA_SCENARIO_COMMAND_TIMEOUT_KILL_GRACE_MS = 2_000;
 const QA_SCENARIO_COMMAND_TIMEOUT_FORCE_SETTLE_MS = 500;
 let timeoutKillGraceMs = QA_SCENARIO_COMMAND_TIMEOUT_KILL_GRACE_MS;
 let timeoutForceSettleMs = QA_SCENARIO_COMMAND_TIMEOUT_FORCE_SETTLE_MS;
-
-export function killQaScenarioWindowsProcessTree(
-  pid: number | undefined,
-  signal: NodeJS.Signals,
-  runTaskkill: QaScenarioTaskkillRunner = spawnSync,
-) {
-  if (pid === undefined) {
-    return false;
-  }
-  const taskkillPath = resolveQaWindowsSystem32ExePath("taskkill.exe");
-  const args = ["/pid", String(pid), "/T"];
-  const run = (force: boolean) => {
-    const result = runTaskkill(taskkillPath, force ? [...args, "/F"] : args, {
-      stdio: "ignore",
-      windowsHide: true,
-    });
-    return !result.error && result.status === 0;
-  };
-  return signal === "SIGKILL" ? run(true) : run(false) || run(true);
-}
 
 export function runQaScenarioCommandLifecycle(
   execution: QaScenarioCommandExecution,
@@ -72,10 +51,12 @@ export function runQaScenarioCommandLifecycle(
       ...(isWindows
         ? {
             windowsCleanup: {
-              alive: () => child.pid !== undefined,
               signal: (signal: NodeJS.Signals) => {
                 try {
-                  if (!killQaScenarioWindowsProcessTree(child.pid, signal)) {
+                  if (
+                    child.pid === undefined ||
+                    !runQaWindowsTaskkill({ pid: child.pid, signal })
+                  ) {
                     child.kill(signal);
                   }
                   return undefined;
@@ -132,8 +113,16 @@ export function runQaScenarioCommandLifecycle(
             : {}),
         });
       },
-      onStderrData: (chunk) => stderr.push(Buffer.from(chunk)),
-      onStdoutData: (chunk) => stdout.push(Buffer.from(chunk)),
+      onStderrData: (chunk) => {
+        const buffered = Buffer.from(chunk);
+        stderr.push(buffered);
+        execution.onOutput?.("stderr", buffered);
+      },
+      onStdoutData: (chunk) => {
+        const buffered = Buffer.from(chunk);
+        stdout.push(buffered);
+        execution.onOutput?.("stdout", buffered);
+      },
       processGroupId: isWindows ? undefined : child.pid,
       verifyAfterMs: timeoutForceSettleMs,
     });

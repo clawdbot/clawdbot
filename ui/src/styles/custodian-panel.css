@@ -30,59 +30,20 @@ openclaw-custodian-panel {
 .cp-resizer {
   position: absolute;
   z-index: 2;
-  background: transparent;
-}
-
-.cp-resizer::after {
-  position: absolute;
-  content: "";
-  background: var(--rail-divider-color);
-  transition:
-    background 150ms ease-out,
-    width 150ms ease-out,
-    height 150ms ease-out;
 }
 
 .cp-resizer--bottom {
+  --resize-handle-line-block: 0;
   top: 0;
   right: 0;
   left: 0;
-  height: var(--rail-resizer-size);
-  cursor: ns-resize;
-}
-
-.cp-resizer--bottom::after {
-  top: 50%;
-  right: 0;
-  left: 0;
-  height: var(--rail-divider-size);
-  transform: translateY(-50%);
 }
 
 .cp-resizer--right {
+  --resize-handle-line-inline: 0;
   top: 0;
   bottom: 0;
   left: 0;
-  width: var(--rail-resizer-size);
-  cursor: ew-resize;
-}
-
-.cp-resizer--right::after {
-  top: 0;
-  bottom: 0;
-  left: 50%;
-  width: var(--rail-divider-size);
-  transform: translateX(-50%);
-}
-
-.cp-resizer--bottom:hover::after {
-  height: var(--rail-divider-active-size);
-  background: var(--accent);
-}
-
-.cp-resizer--right:hover::after {
-  width: var(--rail-divider-active-size);
-  background: var(--accent);
 }
 
 .cp-title,

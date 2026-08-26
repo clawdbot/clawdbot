@@ -137,6 +137,7 @@ export async function runReplyAgent(
     });
   const effectiveShouldSteer = !isHeartbeat && !effectiveResetTriggered && shouldSteer;
   const effectiveShouldFollowup = !effectiveResetTriggered && shouldFollowup;
+  const messageInjectionDisposition = opts?.messageInjectionDisposition ?? "none";
   const incomingToolAuthorityFingerprint = resolveFollowupRunToolAuthorityFingerprint(followupRun);
   const activeReplyOperation = sessionKey
     ? (replyRunRegistry.get(sessionKey) ?? providedReplyOperation)
@@ -251,11 +252,20 @@ export async function runReplyAgent(
     toolProgressDetail,
   });
 
+  if (messageInjectionDisposition === "accepted") {
+    if (replyOperationRunState) {
+      replyOperationRunState.admission = { status: "accepted", mode: "steer" };
+    }
+    releaseAdmissionTicket();
+    typing.cleanup();
+    return undefined;
+  }
+
   if (
     effectiveShouldSteer &&
     isActive &&
     !shouldQueueAuthorityMismatch &&
-    opts?.messageInjectionAttempted !== true
+    messageInjectionDisposition === "none"
   ) {
     replyRunState.bindQueueDispositionToRunState(followupRun, replyOperationRunState);
     await runActiveReplySteer({
@@ -535,8 +545,6 @@ export async function runReplyAgent(
       activeSessionEntry,
       activeSessionStore,
       storePath,
-      messageThreadId:
-        typeof sessionCtx.MessageThreadId === "string" ? sessionCtx.MessageThreadId : undefined,
       followupRun,
       onActiveSessionEntry: (nextEntry) => {
         activeSessionEntry = nextEntry;
@@ -611,7 +619,11 @@ export async function runReplyAgent(
   } catch (error) {
     recordReplyOperationAgentTurn(
       replyOperationRunState,
-      isReplyOperationSuperseded(replyOperation) ? "superseded" : "failed",
+      isReplyOperationSuperseded(replyOperation)
+        ? "superseded"
+        : replyOperation.result?.kind === "aborted"
+          ? "cancelled"
+          : "failed",
       replyOperation,
     );
     return await handleReplyAgentRunError(error, {

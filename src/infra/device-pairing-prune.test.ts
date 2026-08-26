@@ -5,6 +5,7 @@ import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { approveBootstrapDevicePairing, approveDevicePairing } from "./device-pairing-approval.js";
 import {
   getPairedDevice,
+  hasPairedCardRenderer,
   listDevicePairing,
   pruneSupersededSilentPairedDevices,
   requestDevicePairing,
@@ -45,6 +46,7 @@ async function pairDevice(params: {
   clientId?: string;
   clientMode?: string;
   displayName?: string;
+  platform?: string;
   roles?: string[];
 }) {
   const request = await requestDevicePairing(
@@ -54,6 +56,7 @@ async function pairDevice(params: {
       clientId: params.clientId ?? "cli",
       clientMode: params.clientMode ?? "cli",
       displayName: params.displayName,
+      platform: params.platform,
       role: params.roles?.[0] ?? "operator",
       roles: params.roles ?? ["operator"],
       scopes: [],
@@ -277,5 +280,30 @@ describe("pruneSupersededSilentPairedDevices", () => {
 
     expect(removed).toEqual([]);
     expect(await getPairedDevice("legacy", baseDir)).not.toBeNull();
+  });
+
+  test("invalidates the card renderer cache after pruning the last renderer", async () => {
+    const baseDir = await makeBaseDir();
+    await pairDevice({
+      baseDir,
+      deviceId: "stale-renderer",
+      approvedVia: "silent",
+      platform: "ios",
+    });
+    const anchor = await pairDevice({
+      baseDir,
+      deviceId: "anchor",
+      approvedVia: "silent",
+      platform: "linux",
+    });
+    await expect(hasPairedCardRenderer(baseDir)).resolves.toBe(true);
+
+    await pruneSupersededSilentPairedDevices({
+      deviceId: anchor.deviceId,
+      baseDir,
+      nowMs: agedNowMs(),
+    });
+
+    await expect(hasPairedCardRenderer(baseDir)).resolves.toBe(false);
   });
 });

@@ -91,7 +91,7 @@ function classifyOpenAiFailoverCode(code: string | undefined) {
 const OPENAI_MODELS_ENDPOINT = "https://api.openai.com/v1/models";
 // Keep synchronized with extensions/codex's exact @openai/codex dependency;
 // the provider contract test fails when that managed-runtime pin changes.
-const OPENAI_CODEX_CLIENT_VERSION = "0.147.0";
+const OPENAI_CODEX_CLIENT_VERSION = "0.149.1";
 const OPENAI_CODEX_MODELS_ENDPOINT = `${OPENAI_CODEX_RESPONSES_BASE_URL}/models?client_version=${OPENAI_CODEX_CLIENT_VERSION}`;
 const OPENAI_MODELS_CACHE_TTL_MS = 60_000;
 const OPENAI_CODEX_MODELS_CACHE_TTL_MS = 60_000;
@@ -875,6 +875,17 @@ const OPENAI_GPT_FORWARD_COMPAT_CASES = [
 ] satisfies Parameters<typeof resolveFamilyForwardCompatModel>[0]["cases"];
 
 function resolveOpenAIGptForwardCompatModel(ctx: ProviderResolveDynamicModelContext) {
+  const modelId = normalizeLowercaseStringOrEmpty(ctx.modelId);
+  if (
+    modelId === OPENAI_GPT_56_SOL_MODEL_ID ||
+    modelId === OPENAI_GPT_56_TERRA_MODEL_ID ||
+    modelId === OPENAI_GPT_56_LUNA_MODEL_ID
+  ) {
+    const exactModel = ctx.modelRegistry.find(PROVIDER_ID, ctx.modelId);
+    if (exactModel) {
+      return exactModel;
+    }
+  }
   return resolveFamilyForwardCompatModel({
     providerId: PROVIDER_ID,
     ctx,
@@ -935,6 +946,9 @@ export function buildOpenAIProvider(): ProviderPlugin {
     catalog: {
       order: "simple",
       run: async (ctx) => {
+        if (ctx.providerIds && !ctx.providerIds.includes(PROVIDER_ID)) {
+          return null;
+        }
         const auth = ctx.resolveProviderAuth(PROVIDER_ID);
         try {
           const { resolveApiKeyForProvider, resolveProviderAuthProfileMetadata } =

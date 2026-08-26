@@ -137,6 +137,11 @@ export function runTailscaleRouteOwner(
 if (process.argv[2] === TAILSCALE_ROUTE_OWNER_ARG) {
   try {
     const owner = runTailscaleRouteOwner(parseStart(process.argv[3]));
+    // Terminal signals reach this worker with the Gateway process group. Drain the
+    // detached route child first or the HTTPS port remains claimed after Gateway exit.
+    for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+      process.once(signal, owner.stop);
+    }
     process.once("disconnect", owner.stop);
     process.once("message", (message: unknown) => {
       if (isRecord(message) && message.type === "stop") {

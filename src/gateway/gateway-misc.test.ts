@@ -55,6 +55,7 @@ const wsMockState = vi.hoisted(() => ({
 
 vi.mock("ws", () => ({
   WebSocket: class MockWebSocket {
+    static readonly OPEN = 1;
     on = vi.fn();
     close = vi.fn();
     send = vi.fn();
@@ -272,9 +273,11 @@ describe("GatewayClient", () => {
 });
 
 type TestSocket = {
+  readyState: number;
   bufferedAmount: number;
   send: (payload: string) => void;
   close: (code: number, reason: string) => void;
+  terminate: () => void;
 };
 
 type EventFrame = {
@@ -291,11 +294,13 @@ type RecordingSocket = TestSocket & {
 function makeRecordingSocket(): RecordingSocket {
   const sent: EventFrame[] = [];
   return {
+    readyState: 1,
     bufferedAmount: 0,
     send: vi.fn((payload: string) => {
       sent.push(JSON.parse(payload) as EventFrame);
     }),
     close: vi.fn(),
+    terminate: vi.fn(),
     sent,
   };
 }
@@ -432,6 +437,7 @@ describe("gateway broadcaster", () => {
     broadcastToConnIds("session.message", payload, new Set(["slow-session", "healthy-session"]));
 
     expect(slowSocket.close).toHaveBeenCalledWith(1008, "slow consumer");
+    expect(slowSocket.terminate).toHaveBeenCalledOnce();
     expect(slowSocket.send).not.toHaveBeenCalled();
     expect(healthySocket.sent).toEqual([
       { type: "event", event: "session.message", payload, seq: 1 },
@@ -450,6 +456,8 @@ describe("gateway broadcaster", () => {
     // number: the next delivered frame exposes the loss to gap detection.
     socket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
     broadcastToConnIds("tick", { ts: 3 }, new Set(["c-seq"]), { dropIfSlow: true });
+    expect(socket.close).not.toHaveBeenCalled();
+    expect(socket.terminate).not.toHaveBeenCalled();
     socket.bufferedAmount = 0;
     broadcastToConnIds("tick", { ts: 4 }, new Set(["c-seq"]));
 
@@ -530,42 +538,35 @@ describe("gateway broadcaster", () => {
   });
 
   it("filters approval and pairing events by scope", () => {
-    const approvalsSocket: TestSocket = {
-      bufferedAmount: 0,
-      send: vi.fn(),
-      close: vi.fn(),
-    };
-    const pairingSocket: TestSocket = {
-      bufferedAmount: 0,
-      send: vi.fn(),
-      close: vi.fn(),
-    };
-    const readSocket: TestSocket = {
-      bufferedAmount: 0,
-      send: vi.fn(),
-      close: vi.fn(),
-    };
+    const approvalsSocket = makeRecordingSocket();
+    const pairingSocket = makeRecordingSocket();
+    const readSocket = makeRecordingSocket();
+    const adminSocket = makeRecordingSocket();
 
     const clients = new Set<GatewayWsClient>([
       makeOperatorWsClient("c-approvals", approvalsSocket, ["operator.approvals"]),
       makeOperatorWsClient("c-pairing", pairingSocket, ["operator.pairing"]),
       makeOperatorWsClient("c-read", readSocket, ["operator.read"]),
+      makeOperatorWsClient("c-admin", adminSocket, ["operator.admin"]),
     ]);
 
     const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({ clients });
 
     broadcast("exec.approval.requested", { id: "1" });
     broadcast("device.pair.requested", { requestId: "r1" });
+    broadcast("device.pair.changed", {});
 
     expect(approvalsSocket.send).toHaveBeenCalledTimes(1);
-    expect(pairingSocket.send).toHaveBeenCalledTimes(1);
+    expect(pairingSocket.send).toHaveBeenCalledTimes(2);
     expect(readSocket.send).toHaveBeenCalledTimes(0);
+    expect(adminSocket.send).toHaveBeenCalledTimes(3);
 
     broadcastToConnIds("tick", { ts: 1 }, new Set(["c-read"]));
     broadcastToConnIds("talk.event", { type: "session.ready" }, new Set(["c-read"]));
     expect(readSocket.send).toHaveBeenCalledTimes(2);
     expect(approvalsSocket.send).toHaveBeenCalledTimes(1);
-    expect(pairingSocket.send).toHaveBeenCalledTimes(1);
+    expect(pairingSocket.send).toHaveBeenCalledTimes(2);
+    expect(adminSocket.send).toHaveBeenCalledTimes(3);
   });
 
   it("requires operator.read for chat-class broadcast events", () => {
@@ -599,8 +600,8 @@ describe("gateway broadcaster", () => {
   });
 
   it("requires operator.questions for question broadcasts", () => {
-    const questionSocket: TestSocket = { bufferedAmount: 0, send: vi.fn(), close: vi.fn() };
-    const readSocket: TestSocket = { bufferedAmount: 0, send: vi.fn(), close: vi.fn() };
+    const questionSocket = makeRecordingSocket();
+    const readSocket = makeRecordingSocket();
     const clients = new Set<GatewayWsClient>([
       makeOperatorWsClient("c-questions", questionSocket, ["operator.questions"]),
       makeOperatorWsClient("c-read", readSocket, ["operator.read"]),

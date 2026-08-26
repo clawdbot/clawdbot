@@ -17,6 +17,7 @@ import {
 } from "../embedded-agent-runner/run-state.js";
 import { resolveAgentSessionDirs } from "../session-dirs.js";
 import {
+  isMainRestartRecoveryAggregateTerminalOnly,
   isMainRestartRecoveryCandidate,
   normalizeMainSessionRecoveryRunFences,
   transitionMainSessionRecovery,
@@ -35,7 +36,10 @@ async function markRecoveryStore(params: {
   plan: (
     entry: SessionEntry,
     sessionKey: string,
-  ) => { replaceRuns?: boolean; resetRuntime?: boolean; runs?: RestartRecoveryRun[] } | undefined;
+  ) =>
+    | { action: "mark"; replaceRuns?: boolean; resetRuntime?: boolean; runs?: RestartRecoveryRun[] }
+    | { action: "retire_terminal" }
+    | undefined;
 }) {
   return await applySessionEntryReplacements<{ marked: number; skipped: number }>({
     storePath: params.storePath,
@@ -50,6 +54,17 @@ async function markRecoveryStore(params: {
           continue;
         }
         if (!isMainRestartRecoveryCandidate(entry, sessionKey)) {
+          counts.skipped++;
+          continue;
+        }
+        if (plan.action === "retire_terminal") {
+          transitionMainSessionRecovery(entry, {
+            kind: "observe",
+            cycleId: randomUUID(),
+            lifecycleGeneration: getAgentEventLifecycleGeneration(),
+            sessionKey,
+          });
+          replacements.push({ sessionKey, entry });
           counts.skipped++;
           continue;
         }
@@ -197,7 +212,7 @@ export async function markRestartAbortedMainSessions(params: {
             lifecycleGeneration,
           })),
         ]);
-        return { replaceRuns: true, resetRuntime: !wasRunning, runs };
+        return { action: "mark", replaceRuns: true, resetRuntime: !wasRunning, runs };
       },
     });
     result.marked += storeResult.marked;
@@ -219,6 +234,7 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
   stateDir?: string;
   activeSessionIds?: Iterable<string>;
   activeSessionKeys?: Iterable<string>;
+  startupCheckedStorePaths?: Set<string>;
   updatedBeforeMs?: number;
 }): Promise<{ marked: number; skipped: number }> {
   const result = { marked: 0, skipped: 0 };
@@ -237,7 +253,12 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
   const resolveActiveSessionKeys = () =>
     providedActiveSessionKeys ?? normalizeStringSet(listActiveEmbeddedRunSessionKeys());
 
-  for (const storePath of await resolveRestartRecoveryStorePaths(params)) {
+  // Check each store path once at startup so rows added later in that same path remain current.
+  // Add paths only after every marking write succeeds so a failed scan retries safely.
+  const storePaths = (await resolveRestartRecoveryStorePaths(params)).filter(
+    (storePath) => !params.startupCheckedStorePaths?.has(storePath),
+  );
+  for (const storePath of storePaths) {
     const storeResult = await markRecoveryStore({
       storePath,
       statuses: ["running"],
@@ -263,12 +284,15 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
         ) {
           return undefined;
         }
-        return {};
+        return isMainRestartRecoveryAggregateTerminalOnly(entry)
+          ? { action: "retire_terminal" }
+          : { action: "mark" };
       },
     });
     result.marked += storeResult.marked;
     result.skipped += storeResult.skipped;
   }
+  storePaths.forEach((storePath) => params.startupCheckedStorePaths?.add(storePath));
 
   if (result.marked > 0) {
     mainSessionRecoveryLog.warn(

@@ -144,6 +144,7 @@ export async function compactNativeCliSession(params: {
       ...(params.compactParams.sessionEntry
         ? { sessionEntry: params.compactParams.sessionEntry }
         : {}),
+      contextWindow: params.compactParams.sessionEntry?.contextWindow,
       trigger: "manual",
       controlOperation: "compact",
       disableCliLiveSession: true,
@@ -309,6 +310,7 @@ export async function compactEmbeddedAgentSessionDirect(
   });
   const pluginPlanCandidates = resolveModelCandidateChain({
     cfg: requestedParams.config,
+    agentId: requestedAgentIds.sessionAgentId,
     manifestPlugins: currentPluginMetadataSnapshot?.plugins ?? [],
     provider: pluginPlanCompactionTarget.provider ?? DEFAULT_PROVIDER,
     model: pluginPlanCompactionTarget.model ?? DEFAULT_MODEL,
@@ -410,19 +412,20 @@ export async function compactEmbeddedAgentSessionDirect(
         [primaryProvider, requestedPrimaryProvider].map(resolveAuthProvider),
       );
       const fallbacksOverride = resolveCompactionFallbacksOverride(params);
+      const fallbackAgentId = resolveSessionAgentIds({
+        sessionKey: params.sandboxSessionKey ?? params.sessionKey,
+        config: params.config,
+        agentId: params.agentId,
+      }).sessionAgentId;
       const resolvedPrimaryCandidate = resolveModelCandidateChain({
         cfg: params.config,
+        agentId: fallbackAgentId,
         manifestPlugins: preparedModelRuntime.metadataSnapshot.plugins,
         provider: primaryProvider,
         model: primaryModel,
         requestedRouteResolution: "resolved",
         fallbacksOverride,
       })[0];
-      const fallbackAgentId = resolveSessionAgentIds({
-        sessionKey: params.sandboxSessionKey ?? params.sessionKey,
-        config: params.config,
-        agentId: params.agentId,
-      }).sessionAgentId;
       const fallbackSessionKey = params.sandboxSessionKey ?? params.sessionKey ?? params.sessionId;
       const fallbackResult = await runWithModelFallback<EmbeddedAgentCompactResult>({
         cfg: params.config,

@@ -23,6 +23,8 @@ import {
   validateBoardWidgetGrantParams,
   validateBoardWidgetPutParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveAgentConfig, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveExecDefaults } from "../../agents/exec-defaults.js";
 import {
   boardWidgetHasGrantedTool,
   normalizeBoardWidgetDeclared,
@@ -32,6 +34,16 @@ import { appendBoardEventNotice, BoardEventPayloadError } from "../../boards/boa
 import type { BoardStore } from "../../boards/board-store.js";
 import { readCanvasDocumentHtmlSource } from "../../canvas/documents.js";
 import { buildWidgetDocument } from "../../canvas/wrap.js";
+import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.entry.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { loadExecApprovalsReadOnly } from "../../infra/exec-approvals.js";
+import { resolveExecAutoReviewDecision } from "../../infra/exec-auto-review.js";
+import {
+  resolveBoardWidgetContentKind,
+  resolveBoardWidgetContentKindByPluginKind,
+  resolveBoardWidgetContentKindResourceUrls,
+} from "../../plugins/board-widget-content-kinds.js";
+import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   readBoardDataBinding,
   runBoardActionVerb,
@@ -135,6 +147,40 @@ function assertCapabilityParamsSize(
   }
 }
 
+async function resolveBoardWidgetApproval(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  name: string;
+  declared: NonNullable<BoardWidgetMaterializedPutParams["declared"]>;
+}): Promise<"granted" | "rejected" | undefined> {
+  const { cfg, sessionKey, name, declared } = params;
+  const agentId = resolveSessionAgentId({ sessionKey, config: cfg });
+  const mode = resolveExecDefaults({
+    cfg,
+    agentId,
+    sessionKey,
+    sessionEntry: loadSessionEntryReadOnly({ sessionKey, agentId }),
+    execApprovals: loadExecApprovalsReadOnly(),
+  }).mode;
+  if (mode === "ask") {
+    return undefined;
+  }
+  if (mode !== "auto") {
+    return mode === "full" ? "granted" : "rejected";
+  }
+  const { createModelExecAutoReviewer } = await import("../../agents/exec-auto-reviewer.js");
+  const review = await resolveExecAutoReviewDecision(
+    createModelExecAutoReviewer({
+      cfg,
+      agentId,
+      reviewer:
+        resolveAgentConfig(cfg, agentId)?.tools?.exec?.reviewer ?? cfg.tools?.exec?.reviewer,
+    }),
+    { kind: "board-widget", name, declared, agent: { id: agentId, sessionKey } },
+  );
+  return review.decision === "allow-once" && review.risk === "low" ? "granted" : "rejected";
+}
+
 export function createBoardHandlers(
   store: BoardStore,
   appendNotice: NoticeAppender = appendBoardEventNotice,
@@ -153,7 +199,7 @@ export function createBoardHandlers(
   const runActionVerb = dependencies.runActionVerb ?? runBoardActionVerb;
   const triggerCronJob = dependencies.triggerCronJob ?? triggerBoardCronJob;
   return {
-    "board.get": async ({ params, respond, context }) => {
+    "board.get": async ({ params, respond, context, client }) => {
       if (!validateBoardGetParams(params)) {
         invalidParams("board.get", validateBoardGetParams.errors, respond);
         return;
@@ -175,6 +221,22 @@ export function createBoardHandlers(
         if (!viewMetadata || viewMetadata.revision !== widget.revision) {
           continue;
         }
+        const registration = widget.pluginKind
+          ? resolveBoardWidgetContentKindByPluginKind(getActivePluginRegistry(), widget.pluginKind)
+          : undefined;
+        const scopedHostUrl = registration
+          ? client?.pluginSurfaceUrls?.[registration.definition.resources.surface]
+          : undefined;
+        const resourceUrls =
+          registration && scopedHostUrl
+            ? resolveBoardWidgetContentKindResourceUrls(registration, scopedHostUrl)
+            : undefined;
+        if (widget.contentKind === "plugin" && (!registration || !resourceUrls || !scopedHostUrl)) {
+          continue;
+        }
+        const resourceOrigins = resourceUrls
+          ? [...new Set(Object.values(resourceUrls).map((url) => new URL(url).origin))]
+          : undefined;
         if (sandboxPort === undefined && context.ensureSandboxHostPort) {
           try {
             sandboxPort = await context.ensureSandboxHostPort();
@@ -188,7 +250,18 @@ export function createBoardHandlers(
           name: widget.name,
           revision: widget.revision,
           viewGeneration: viewMetadata.viewGeneration,
+          ...(registration && scopedHostUrl
+            ? {
+                pluginFrame: {
+                  pluginKind: registration.pluginKind,
+                  scopedHostUrl,
+                },
+              }
+            : {}),
         });
+        if (registration) {
+          widget.kindLabel = registration.definition.label;
+        }
         widget.frameUrl = buildBoardWidgetFrameUrl({
           sessionKey: snapshot.sessionKey,
           name: widget.name,
@@ -198,7 +271,10 @@ export function createBoardHandlers(
         widget.viewTicketTtlMs = BOARD_VIEW_TICKET_TTL_MS;
         widget.viewGeneration = viewMetadata.viewGeneration;
         if (sandboxPort !== undefined) {
-          widget.sandboxUrl = buildBoardWidgetSandboxPath(viewMetadata);
+          widget.sandboxUrl = buildBoardWidgetSandboxPath({
+            ...viewMetadata,
+            ...(resourceOrigins ? { resourceOrigins } : {}),
+          });
           widget.sandboxPort = sandboxPort;
           if (!sandboxOriginResolved) {
             const configuredOrigin = context.getRuntimeConfig?.().mcp?.apps?.sandboxOrigin;
@@ -284,6 +360,13 @@ export function createBoardHandlers(
             // Reconstructed or revoked source leases may be pinned only as read-only content.
           }
           const allowedTools = interactive ? await mcpApp.resolveAllowedToolNames(active) : [];
+          if (interactive) {
+            try {
+              await requireMcpAppInteraction(view);
+            } catch {
+              interactive = false;
+            }
+          }
           content = {
             kind: "mcp-app",
             descriptor: {
@@ -294,14 +377,43 @@ export function createBoardHandlers(
             },
             interactive,
           };
-          declared = allowedTools.length > 0 ? { tools: allowedTools } : undefined;
+          declared = interactive && allowedTools.length > 0 ? { tools: allowedTools } : undefined;
+        } else if (requestParams.content.kind === "registered") {
+          const registration = resolveBoardWidgetContentKind(
+            getActivePluginRegistry(),
+            requestParams.content.contentKind,
+          );
+          if (!registration) {
+            throw new BoardValidationError(
+              "invalid_operation",
+              `widget kind ${JSON.stringify(requestParams.content.contentKind)} is unavailable; enable the plugin that provides it and retry`,
+            );
+          }
+          try {
+            registration.definition.validateSource(requestParams.content.source);
+          } catch (error) {
+            throw new BoardValidationError(
+              "invalid_operation",
+              `invalid ${requestParams.content.contentKind} widget source: ${String(error)}`,
+            );
+          }
+          content = {
+            ...requestParams.content,
+            pluginKind: registration.pluginKind,
+          };
         } else {
           content = requestParams.content;
         }
         const persistedContent =
           content.kind === "mcp-app"
             ? { kind: content.kind, descriptor: content.descriptor }
-            : content;
+            : content.kind === "registered"
+              ? {
+                  kind: content.kind,
+                  contentKind: content.contentKind,
+                  source: content.source,
+                }
+              : content;
         if (!validateBoardWidgetContent(persistedContent)) {
           invalidParams("board.widget.put content", validateBoardWidgetContent.errors, respond);
           return;
@@ -326,7 +438,30 @@ export function createBoardHandlers(
           content: materializedContent,
           ...(declared ? { declared } : {}),
         };
-        const snapshot = store.putWidget(boardParams);
+        let snapshot = store.putWidget(boardParams);
+        const widget = snapshot.widgets.find(
+          (candidate) => candidate.name === snapshot.resolvedWidgetName,
+        );
+        if (widget?.grantState === "pending") {
+          const decision = await resolveBoardWidgetApproval({
+            cfg: context.getRuntimeConfig(),
+            sessionKey: snapshot.sessionKey,
+            name: snapshot.resolvedWidgetName,
+            declared: declared ?? {},
+          });
+          if (decision) {
+            snapshot = {
+              ...store.grant(
+                snapshot.sessionKey,
+                snapshot.resolvedWidgetName,
+                decision,
+                widget.revision,
+                widget.instanceId,
+              ),
+              resolvedWidgetName: snapshot.resolvedWidgetName,
+            };
+          }
+        }
         context.broadcast("board.changed", {
           sessionKey: snapshot.sessionKey,
           revision: snapshot.revision,

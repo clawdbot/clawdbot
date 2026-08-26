@@ -18,6 +18,7 @@ import { basename, dirname, join, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { parse as parseYaml } from "yaml";
 import {
   booleanFlag,
   parseFlagArgs,
@@ -1205,6 +1206,47 @@ export function requireRunIdFromDispatchOutput(output: string, workflowFile: str
   return runId;
 }
 
+export function fullReleaseTrustedWorkflowFields({
+  workflowRef,
+  workflowSha,
+  workflowSource,
+}: {
+  workflowRef: string;
+  workflowSha: string;
+  workflowSource: string;
+}) {
+  const workflow: unknown = parseYaml(workflowSource);
+  const env = isRecord(workflow) && isRecord(workflow.env) ? workflow.env : undefined;
+  const contract = String(env?.RELEASE_ISOLATION_TOOLING_CONTRACT ?? "");
+  if (contract === "1") {
+    return {};
+  }
+  if (contract !== "2") {
+    throw new Error(
+      "Full Release Validation does not declare a supported release tooling contract",
+    );
+  }
+  const workflowDispatch =
+    isRecord(workflow) && isRecord(workflow.on) && isRecord(workflow.on.workflow_dispatch)
+      ? workflow.on.workflow_dispatch
+      : undefined;
+  const inputs =
+    workflowDispatch && isRecord(workflowDispatch.inputs) ? workflowDispatch.inputs : undefined;
+  if (!inputs || !Object.hasOwn(inputs, "trusted_workflow_json")) {
+    throw new Error(`Full Release Validation contract ${contract} requires trusted_workflow_json`);
+  }
+  if (!/^[a-f0-9]{40}$/u.test(workflowSha)) {
+    throw new Error("Full Release Validation trusted workflow SHA must be a full lowercase SHA");
+  }
+  return {
+    trusted_workflow_json: JSON.stringify({
+      ref: workflowRef,
+      fullRef: `refs/heads/${workflowRef}`,
+      sha: workflowSha,
+    }),
+  };
+}
+
 async function wait(ms: number) {
   await new Promise<void>((resolve) => {
     setTimeout(resolve, ms);
@@ -1819,9 +1861,18 @@ async function main() {
   if (!options.fullReleaseRunId && !options.skipDispatch) {
     const workflowFile = "full-release-validation.yml";
     const targetContextRef = releaseBranchForTag(options.tag);
+    const trustedWorkflowFields = fullReleaseTrustedWorkflowFields({
+      workflowRef: options.workflowRef,
+      workflowSha: toolingSha,
+      workflowSource: readFileSync(
+        join(TOOLING_ROOT, ".github", "workflows", workflowFile),
+        "utf8",
+      ),
+    });
     options.fullReleaseRunId = dispatchWorkflow(options.repo, workflowFile, options.workflowRef, {
       ref: targetSha,
       ...(targetContextRef ? { target_context_ref: targetContextRef } : {}),
+      ...trustedWorkflowFields,
       provider: options.provider,
       mode: options.mode,
       release_profile: options.releaseProfile,

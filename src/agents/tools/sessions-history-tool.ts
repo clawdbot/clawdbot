@@ -338,17 +338,15 @@ function resolveSessionsHistoryPaginationMetadata(params: {
     };
   }
 
-  // Gateway offsets count newest transcript rows already returned. Recompute
-  // from the oldest surviving seq after this tool's own filter/cap passes.
-  const oldestSeq = params.messages
+  // Respect Gateway replay cursors and this tool's own byte cap while always advancing.
+  const seq = params.messages
     .map((message) => readHistoryMessageSeq(message))
-    .find((seq): seq is number => typeof seq === "number");
+    .find((value): value is number => typeof value === "number");
+  const gatewayOffset = result?.nextOffset;
   const nextOffset =
-    oldestSeq !== undefined
-      ? Math.max(offset, totalMessages - oldestSeq + 1)
-      : typeof result?.nextOffset === "number"
-        ? result.nextOffset
-        : undefined;
+    seq === undefined
+      ? gatewayOffset
+      : Math.max(offset + 1, Math.min(gatewayOffset ?? totalMessages, totalMessages - seq + 1));
   const hasMore =
     nextOffset !== undefined
       ? nextOffset < totalMessages

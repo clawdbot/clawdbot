@@ -52,9 +52,9 @@ describe("createChatRunState", () => {
     expect(state.registry.shift("run-b")?.clientRunId).toBe("client-b-2");
   });
 
-  it("keeps bounded active progress ordered and removes completed tools", () => {
+  it("keeps completed owners and standalone notices reconstructable until bounded eviction", () => {
     const state = createChatRunState();
-    const event = (seq: number, stream: "item" | "tool", data: Record<string, unknown>) =>
+    const event = (seq: number, stream: string, data: Record<string, unknown>) =>
       state.recordProgressEvent("run-1", {
         runId: "run-1",
         seq,
@@ -83,19 +83,34 @@ describe("createChatRunState", () => {
       toolCallId: "active",
       partialResult: "halfway",
     });
-    event(5, "tool", { phase: "start", name: "exec", toolCallId: "done", args: {} });
+    event(5, "tool", {
+      phase: "review",
+      toolCallId: "active",
+      review: { id: "review-1", label: "Guardian", status: "in_progress" },
+    });
     event(6, "tool", {
+      phase: "review",
+      toolCallId: "active",
+      review: { id: "review-1", label: "Guardian", status: "approved" },
+    });
+    event(7, "tool", {
+      phase: "review",
+      toolCallId: "active",
+      review: { id: "review-2", label: "Guardian", status: "denied" },
+    });
+    event(8, "tool", { phase: "start", name: "exec", toolCallId: "done", args: {} });
+    event(9, "tool", {
       phase: "result",
       name: "exec",
       toolCallId: "done",
       result: "x".repeat(256_000),
     });
-    event(7, "item", {
+    event(10, "item", {
       kind: "preamble",
       itemId: "p-1",
       progressText: "Inspection complete",
     });
-    event(8, "item", {
+    event(11, "item", {
       kind: "preamble",
       itemId: "p-2",
       progressText: "Running autoreview",
@@ -111,15 +126,64 @@ describe("createChatRunState", () => {
       },
       { seq: 4, stream: "tool", data: { phase: "update", toolCallId: "active" } },
       {
+        seq: 6,
+        stream: "tool",
+        data: {
+          phase: "review",
+          toolCallId: "active",
+          review: { id: "review-1", status: "approved" },
+        },
+      },
+      {
         seq: 7,
+        stream: "tool",
+        data: {
+          phase: "review",
+          toolCallId: "active",
+          review: { id: "review-2", status: "denied" },
+        },
+      },
+      { seq: 8, stream: "tool", data: { phase: "start", toolCallId: "done" } },
+      { seq: 9, stream: "tool", data: { phase: "result", toolCallId: "done" } },
+      {
+        seq: 10,
         stream: "item",
         ts: 1_001,
         data: { itemId: "p-1", progressText: "Inspection complete" },
       },
-      { seq: 8, stream: "item", data: { itemId: "p-2", progressText: "Running autoreview" } },
+      { seq: 11, stream: "item", data: { itemId: "p-2", progressText: "Running autoreview" } },
     ]);
 
-    for (let seq = 9; seq <= 71; seq += 1) {
+    event(12, "tool", { phase: "result", name: "read", toolCallId: "active" });
+    expect(
+      state.runs
+        .get("run-1")
+        ?.progressSnapshot?.events.filter((candidate) => candidate.data.toolCallId === "active")
+        .map((candidate) => candidate.data.phase),
+    ).toEqual(["start", "input_delta", "update", "review", "review", "result"]);
+
+    event(13, "codex_app_server.guardian", {
+      phase: "completed",
+      reviewId: "targeted-review",
+      targetItemId: "active",
+      status: "approved",
+    });
+    event(14, "codex_app_server.guardian", {
+      phase: "warning",
+      message: "Guardian rejection limit reached; ending turn as interrupted.",
+    });
+    event(15, "codex_app_server.guardian", {
+      phase: "completed",
+      reviewId: "network-review",
+      targetItemId: null,
+      status: "denied",
+    });
+    expect(state.runs.get("run-1")?.progressSnapshot?.events.slice(-2)).toMatchObject([
+      { seq: 14, data: { phase: "warning" } },
+      { seq: 15, data: { reviewId: "network-review", targetItemId: null } },
+    ]);
+
+    for (let seq = 16; seq <= 78; seq += 1) {
       event(seq, "tool", {
         phase: "start",
         name: "read",
@@ -133,8 +197,59 @@ describe("createChatRunState", () => {
     expect(snapshot?.events.at(-1)?.data).toEqual({
       phase: "start",
       name: "read",
-      toolCallId: "tool-71",
+      toolCallId: "tool-78",
     });
+  });
+
+  it("keeps a review-heavy reconnect bounded, adverse, and attached to its owner", () => {
+    const state = createChatRunState();
+    const event = (seq: number, data: Record<string, unknown>) =>
+      state.recordProgressEvent("run-1", {
+        runId: "run-1",
+        seq,
+        stream: "tool",
+        ts: 1_000 + seq,
+        data,
+      });
+    event(1, {
+      phase: "start",
+      name: "exec",
+      toolCallId: "reviewed",
+      args: { command: "printf reviewed" },
+    });
+    for (let index = 0; index < 60; index += 1) {
+      event(index + 2, {
+        phase: "review",
+        toolCallId: "reviewed",
+        approvalReviewOutcome: "denied",
+        review: {
+          id: `review-${index}`,
+          label: "Guardian",
+          status: index === 0 ? "denied" : "approved",
+        },
+      });
+    }
+
+    const events = state.runs.get("run-1")?.progressSnapshot?.events ?? [];
+    expect(events[0]?.data).toMatchObject({ phase: "start", toolCallId: "reviewed" });
+    const reviews = events.filter((candidate) => candidate.data.phase === "review");
+    expect(reviews).toHaveLength(16);
+    expect(reviews.map((candidate) => candidate.data.review)).toEqual(
+      Array.from({ length: 16 }, (_, index) =>
+        expect.objectContaining({ id: `review-${index + 44}` }),
+      ),
+    );
+    expect(reviews.at(-1)?.data.approvalReviewOutcome).toBe("denied");
+    expect(
+      events.every(
+        (candidate) =>
+          candidate.data.phase === "start" ||
+          events.some(
+            (owner) =>
+              owner.data.phase === "start" && owner.data.toolCallId === candidate.data.toolCallId,
+          ),
+      ),
+    ).toBe(true);
   });
 });
 

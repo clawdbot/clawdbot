@@ -1,4 +1,5 @@
 import type { Event, Filter, Relay } from "nostr-tools";
+import { chunkItems } from "openclaw/plugin-sdk/text-chunking";
 import {
   BUZZ_PROFILE_KIND,
   BUZZ_PROFILE_QUERY_CHUNK_SIZE,
@@ -22,14 +23,6 @@ type ProfileSubscriptionGeneration = {
   opening: boolean;
   readyTimeout?: ReturnType<typeof setTimeout>;
 };
-
-function chunkValues<T>(values: readonly T[], size: number): T[][] {
-  const chunks: T[][] = [];
-  for (let index = 0; index < values.length; index += size) {
-    chunks.push(values.slice(index, index + size));
-  }
-  return chunks;
-}
 
 async function queryBuzzDirectoryBatch(params: {
   relay: Relay;
@@ -112,7 +105,7 @@ export async function queryBuzzDirectoryProfiles(params: {
   onTimeout?: (error: Error) => void;
   signal?: AbortSignal;
 }): Promise<void> {
-  for (const authors of chunkValues(params.publicKeys, BUZZ_PROFILE_QUERY_CHUNK_SIZE)) {
+  for (const authors of chunkItems(params.publicKeys, BUZZ_PROFILE_QUERY_CHUNK_SIZE)) {
     await queryBuzzDirectoryBatch({
       relay: params.relay,
       filter: {
@@ -138,7 +131,7 @@ export async function queryBuzzDirectoryRooms(params: {
   onTimeout?: (error: Error) => void;
   signal?: AbortSignal;
 }): Promise<void> {
-  for (const roomIds of chunkValues(params.channelIds, BUZZ_ROOM_QUERY_CHUNK_SIZE)) {
+  for (const roomIds of chunkItems(params.channelIds, BUZZ_ROOM_QUERY_CHUNK_SIZE)) {
     await queryBuzzDirectoryBatch({
       relay: params.relay,
       filter: {
@@ -228,7 +221,7 @@ export function startBuzzDirectoryRelay(params: {
     const publicKeys = queuedProfilePublicKeys;
     queuedProfilePublicKeys = undefined;
     closeProfileGeneration(PROFILE_SUBSCRIPTION_REPLACED_REASON);
-    const authorChunks = chunkValues(publicKeys, BUZZ_PROFILE_QUERY_CHUNK_SIZE);
+    const authorChunks = chunkItems(publicKeys, BUZZ_PROFILE_QUERY_CHUNK_SIZE);
     if (authorChunks.length === 0) {
       return;
     }

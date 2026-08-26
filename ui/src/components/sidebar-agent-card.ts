@@ -1,10 +1,10 @@
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
+import type { ControlUiEnvironment } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { t } from "../i18n/index.ts";
 import { AuthenticatedAvatarRouteLoader } from "../lib/authenticated-avatar-route.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { icons } from "./icons.ts";
-import "./tooltip.ts";
 
 /** Sidebar identity row: who you're talking to. The whole body opens the
     agent menu (switcher + utilities) — the conversation itself lives on the
@@ -16,13 +16,16 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) avatarAuthReady = false;
   @property({ attribute: false }) avatarText = "";
   @property({ attribute: false }) subtitle = "";
+  @property({ attribute: false }) environment: ControlUiEnvironment | null = null;
   @property({ attribute: false }) menuOpen = false;
   /** Unread sessions exist on non-active agents; surfaces next to the name. */
   @property({ attribute: false }) menuUnread = false;
-  @property({ attribute: false }) approvalCount = 0;
   /** More than one agent is configured; labels the menu as a switcher. */
   @property({ attribute: false }) switcherAvailable = false;
   @property({ attribute: false }) onToggleMenu?: (trigger: HTMLElement) => void;
+  @property({ attribute: false })
+  onMenuPointerEnter?: (trigger: HTMLElement, event: PointerEvent) => void;
+  @property({ attribute: false }) onMenuPointerLeave?: () => void;
 
   private readonly avatarLoader = new AuthenticatedAvatarRouteLoader(() => {
     if (this.isConnected) {
@@ -48,10 +51,6 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
     const menuLabel = this.switcherAvailable
       ? t("agentChip.switchAgent")
       : t("agentChip.menuLabel");
-    const approvalLabel = t(
-      this.approvalCount === 1 ? "execApproval.agentPendingOne" : "execApproval.agentPending",
-      { count: String(this.approvalCount) },
-    );
     return html`
       <div class="sidebar-agent-card ${this.menuOpen ? "sidebar-agent-card--open" : ""}">
         <button
@@ -59,12 +58,30 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
           class="sidebar-agent-card__main"
           aria-haspopup="menu"
           aria-expanded=${String(this.menuOpen)}
-          aria-label="${this.agentName} · ${menuLabel}${this.approvalCount > 0
-            ? ` · ${approvalLabel}`
-            : ""}"
-          @click=${(event: MouseEvent) => this.onToggleMenu?.(event.currentTarget as HTMLElement)}
+          aria-label="${this.agentName} · ${menuLabel}"
+          @pointerenter=${(event: PointerEvent) => {
+            if (this.switcherAvailable && event.currentTarget instanceof HTMLElement) {
+              this.onMenuPointerEnter?.(event.currentTarget, event);
+            }
+          }}
+          @pointerleave=${() => this.onMenuPointerLeave?.()}
+          @pointerdown=${(event: PointerEvent) => {
+            // The portaled menu has a hidden trigger; keep its outside-click
+            // handler from dismissing hover-open state before click can pin it.
+            event.stopPropagation();
+          }}
+          @click=${(event: MouseEvent) => {
+            event.stopPropagation();
+            if (event.currentTarget instanceof HTMLElement) {
+              this.onToggleMenu?.(event.currentTarget);
+            }
+          }}
         >
-          <span class="sidebar-agent-card__avatar">
+          <span
+            class="sidebar-agent-card__avatar ${this.environment
+              ? "sidebar-agent-card__avatar--environment"
+              : ""}"
+          >
             ${avatarUrl
               ? html`<img
                   src=${avatarUrl}
@@ -84,19 +101,19 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
                 >${icons.chevronDown}</span
               >
             </span>
-            ${this.subtitle
-              ? html`<span class="sidebar-agent-card__subtitle">${this.subtitle}</span>`
+            ${this.subtitle || this.environment
+              ? html`<span class="sidebar-agent-card__subtitle-row">
+                  ${this.subtitle
+                    ? html`<span class="sidebar-agent-card__subtitle">${this.subtitle}</span>`
+                    : nothing}
+                  ${this.environment
+                    ? html`<span class="control-ui-environment-pill"
+                        >${this.environment.label}</span
+                      >`
+                    : nothing}
+                </span>`
               : nothing}
           </span>
-          ${this.approvalCount > 0
-            ? html`<openclaw-tooltip .content=${approvalLabel}>
-                <span
-                  class="sidebar-agent-approval-count sidebar-agent-card__approval-count"
-                  aria-label=${approvalLabel}
-                  >${this.approvalCount}</span
-                >
-              </openclaw-tooltip>`
-            : nothing}
           ${this.menuUnread && !this.menuOpen
             ? html`<span
                 class="session-unread-dot sidebar-agent-card__menu-unread"

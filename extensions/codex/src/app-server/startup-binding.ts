@@ -9,7 +9,10 @@ import {
   embeddedAgentLog,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { root as openSafeFilesystemRoot } from "openclaw/plugin-sdk/file-access-runtime";
+import {
+  isPathStrictlyInside,
+  root as openSafeFilesystemRoot,
+} from "openclaw/plugin-sdk/file-access-runtime";
 import { parseSqliteSessionFileMarker } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveCodexAppServerHomeDir } from "./auth-bridge.js";
 import { isJsonObject, type JsonValue } from "./protocol.js";
@@ -96,15 +99,7 @@ async function listCodexAppServerRolloutFilesForThread(
     path.join(path.dirname(resolvedAgentDir), "codex-home", "sessions"),
   ];
   const rolloutRoot = rolloutPath
-    ? roots.find((root) => {
-        const relativePath = path.relative(root, rolloutPath);
-        return (
-          relativePath !== "" &&
-          relativePath !== ".." &&
-          !relativePath.startsWith(`..${path.sep}`) &&
-          !path.isAbsolute(relativePath)
-        );
-      })
+    ? roots.find((root) => isPathStrictlyInside(root, rolloutPath))
     : undefined;
   if (
     rolloutPath &&

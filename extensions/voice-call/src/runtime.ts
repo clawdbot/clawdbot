@@ -374,7 +374,6 @@ export async function createVoiceCallRuntime(params: {
     const realtimeHandler = new RealtimeCallHandler(
       realtimeConfig,
       manager,
-      provider,
       resolveCallRegistration,
       config.serve.path,
       webhookServer.getStreamDisconnectLifecycle(),
@@ -483,6 +482,7 @@ export async function createVoiceCallRuntime(params: {
         const nextTunnelResult = await startTunnel({
           provider: config.tunnel.provider,
           port: config.serve.port,
+          tailscalePort: config.tailscale.port,
           path: config.serve.path,
           streamPaths: resolveVoiceCallStreamExposurePaths(config, {
             publicWebhookPath: config.serve.path,

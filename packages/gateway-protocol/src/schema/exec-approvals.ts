@@ -77,6 +77,7 @@ export const ExecApprovalsSnapshotSchema = closedObject({
   exists: Type.Boolean(),
   hash: NonEmptyString,
   file: ExecApprovalsFileSchema,
+  resolvedDefaults: Type.Optional(ExecApprovalsResolvedDefaultsSchema),
 });
 
 const NativeExecApprovalActionSchema = Type.Union([
@@ -304,6 +305,7 @@ export const ExecApprovalRequestParamsSchema = closedObject({
   ),
   requireDeliveryRoute: Type.Optional(Type.Boolean()),
   suppressDelivery: Type.Optional(Type.Boolean()),
+  deliverToApprovalClientsOnly: Type.Optional(Type.Boolean()),
   timeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
   twoPhase: Type.Optional(Type.Boolean()),
 });

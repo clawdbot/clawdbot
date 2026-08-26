@@ -29,7 +29,11 @@ import {
   type AnthropicCompactionBlock,
 } from "../transports/anthropic-compaction-replay.js";
 import { applyAnthropicCacheControlToMessages } from "../transports/anthropic-payload-policy.js";
-import { transportAbortError } from "../transports/transport-stream-shared.js";
+import {
+  finalizeTerminalToolCallArguments,
+  notifyProviderHttpResponse,
+  transportAbortError,
+} from "../transports/transport-stream-shared.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../transports/transport-utils.js";
 import type {
   AnthropicMessagesCompat,
@@ -49,8 +53,12 @@ import type {
 } from "../types.js";
 import { createDeferredEventBuffer } from "../utils/deferred-event-buffer.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
-import { headersToRecord } from "../utils/headers.js";
-import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse.js";
+import {
+  createToolArgumentPreviewSchedule,
+  parseJsonWithRepair,
+  parseStreamingJson,
+  type ToolArgumentPreviewSchedule,
+} from "../utils/json-parse.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { projectProviderError } from "../utils/provider-error.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
@@ -283,7 +291,6 @@ async function* iterateAnthropicEvents(
     throw new Error("Attempted to iterate over an Anthropic response with no body");
   }
 
-  let sawMessageStart = false;
   let sawMessageEnd = false;
 
   for await (const sse of Stream.rawEvents(response)) {
@@ -297,9 +304,7 @@ async function* iterateAnthropicEvents(
 
     try {
       const event = parseJsonWithRepair(sse.data) as RawMessageStreamEvent;
-      if (event.type === "message_start") {
-        sawMessageStart = true;
-      } else if (event.type === "message_stop") {
+      if (event.type === "message_stop") {
         sawMessageEnd = true;
       }
       yield event;
@@ -313,7 +318,7 @@ async function* iterateAnthropicEvents(
     }
   }
 
-  if ((sawMessageStart || requireMessageStop) && !sawMessageEnd) {
+  if (requireMessageStop && !sawMessageEnd) {
     throw new Error("Anthropic stream ended before message_stop");
   }
 }
@@ -422,19 +427,28 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
       const response = await client.messages
         .create({ ...params, stream: true }, sdkRequestOptions)
         .asResponse();
-      await requestOptions?.onResponse?.(
-        { status: response.status, headers: headersToRecord(response.headers) },
-        model,
-      );
+      await notifyProviderHttpResponse({ options: requestOptions, response, model });
 
-      type Block = (ThinkingContent | TextContent | (ToolCall & { partialJson: string })) & {
+      type Block = (ThinkingContent | TextContent | (ToolCall & { partialJson?: string })) & {
         index: number;
       };
       const blocks = output.content as Block[];
       const blockIndexes = new Map<number, number>();
+      // Preview schedules are per active tool call; WeakMap keys die with the block.
+      const toolArgumentPreviewSchedules = new WeakMap<
+        Extract<Block, { type: "toolCall" }>,
+        ToolArgumentPreviewSchedule
+      >();
+      const sealedToolCalls: Array<{
+        block: Extract<Block, { type: "toolCall" }>;
+        contentIndex: number;
+      }> = [];
       const compactionCapture = createCompactionCapture(output, model, requestOptions);
+      const requireMessageStop =
+        refusalBuffer !== undefined ||
+        (model.provider === "anthropic" && isAnthropicPublicEndpoint(model.baseUrl));
 
-      for await (const event of iterateAnthropicEvents(response, refusalBuffer !== undefined)) {
+      for await (const event of iterateAnthropicEvents(response, requireMessageStop)) {
         if (event.type === "message_start") {
           output.responseId = event.message.id;
           output.responseModel = event.message.model;
@@ -465,6 +479,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
             // reference them, so rebuild the deferred timeline from the
             // surviving text prefix the fallback model continued from.
             refusalBuffer?.discard();
+            sealedToolCalls.length = 0;
             blockIndexes.clear();
             applyAnthropicFallbackBoundary({
               output,
@@ -560,6 +575,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
             };
             output.content.push(block);
             blockIndexes.set(event.index, output.content.length - 1);
+            toolArgumentPreviewSchedules.set(block, createToolArgumentPreviewSchedule());
             eventSink.push({
               type: "toolcall_start",
               contentIndex: output.content.length - 1,
@@ -598,8 +614,12 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
             const index = blockIndexes.get(event.index);
             const block = index === undefined ? undefined : blocks[index];
             if (index !== undefined && block?.type === "toolCall") {
-              block.partialJson += event.delta.partial_json;
-              block.arguments = parseStreamingJson(block.partialJson);
+              block.partialJson = (block.partialJson ?? "") + event.delta.partial_json;
+              // Preview refresh is scheduled geometrically; the terminal
+              // finalize re-parses the full buffer authoritatively either way.
+              if (toolArgumentPreviewSchedules.get(block)?.(block.partialJson.length)) {
+                block.arguments = parseStreamingJson(block.partialJson);
+              }
               eventSink.push({
                 type: "toolcall_delta",
                 contentIndex: index,
@@ -639,16 +659,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
                 partial: output,
               });
             } else if (block.type === "toolCall") {
-              block.arguments = parseStreamingJson(block.partialJson);
-              // Finalize in-place and strip the scratch buffer so replay only
-              // carries parsed arguments.
-              delete (block as { partialJson?: string }).partialJson;
-              eventSink.push({
-                type: "toolcall_end",
-                contentIndex: index,
-                toolCall: block,
-                partial: output,
-              });
+              sealedToolCalls.push({ block, contentIndex: index });
             }
           }
         } else if (event.type === "message_delta") {
@@ -675,11 +686,29 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
       if (output.stopReason === "aborted" || output.stopReason === "error") {
         throw new Error(output.errorMessage ?? "An unknown error occurred");
       }
+      if ([...blockIndexes.values()].some((index) => blocks[index]?.type === "toolCall")) {
+        throw new Error("Provider completed stream with an incomplete tool call");
+      }
+      finalizeTerminalToolCallArguments(
+        sealedToolCalls.map(({ block }) => block),
+        (block) =>
+          block.partialJson && block.partialJson.length > 0 ? block.partialJson : block.arguments,
+      );
+      for (const sealed of sealedToolCalls) {
+        delete sealed.block.partialJson;
+        eventSink.push({
+          type: "toolcall_end",
+          contentIndex: sealed.contentIndex,
+          toolCall: sealed.block,
+          partial: output,
+        });
+      }
 
       refusalBuffer?.flush();
       stream.push({ type: "done", reason: output.stopReason, message: output });
       stream.end();
     } catch (error) {
+      output.content = output.content.filter((block) => block.type !== "toolCall");
       for (const block of output.content) {
         delete (block as { index?: number }).index;
         // partialJson is only a streaming scratch buffer; never persist it.

@@ -4,10 +4,6 @@ import {
   createAccountScopedAllowlistNameResolver,
   createNestedAllowlistOverrideResolver,
 } from "openclaw/plugin-sdk/allowlist-config-edit";
-import type {
-  ChannelMessageActionAdapter,
-  ChannelMessageToolDiscovery,
-} from "openclaw/plugin-sdk/channel-contract";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-outbound";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
@@ -31,7 +27,7 @@ import {
 } from "./accounts.js";
 import { getDiscordApprovalCapability } from "./approval-native.js";
 import { resolveRequiredDiscordChannelPermissions } from "./audit-core.js";
-import { discordMessageActions as discordMessageActionsImpl } from "./channel-actions.js";
+import { discordMessageActions } from "./channel-actions.js";
 import {
   buildTokenChannelStatusSummary,
   DEFAULT_ACCOUNT_ID,
@@ -63,6 +59,7 @@ import {
   probeDiscordStatusAccount,
 } from "./channel.loaders.js";
 import { openDiscordCommandDeployHashStore } from "./command-deploy-store.js";
+import { inspectDiscordConversationRouteOwner } from "./conversation-route-owner.js";
 import { shouldSuppressLocalDiscordExecApprovalPrompt } from "./exec-approvals.js";
 import {
   resolveDiscordGroupRequireMention,
@@ -177,60 +174,6 @@ function shouldTreatDiscordDeliveredTextAsVisible(params: {
   );
 }
 
-function resolveRuntimeDiscordMessageActions() {
-  try {
-    return getDiscordRuntime().channel?.discord?.messageActions ?? null;
-  } catch {
-    return null;
-  }
-}
-
-const discordMessageActions: ChannelMessageActionAdapter = {
-  providerOwnedReadGates: true,
-  resolveExecutionMode: (
-    ctx: Parameters<NonNullable<ChannelMessageActionAdapter["resolveExecutionMode"]>>[0],
-  ) =>
-    resolveRuntimeDiscordMessageActions()?.resolveExecutionMode?.(ctx) ??
-    discordMessageActionsImpl.resolveExecutionMode?.(ctx) ??
-    "local",
-  describeMessageTool: (
-    ctx: Parameters<NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>>[0],
-  ): ChannelMessageToolDiscovery | null =>
-    resolveRuntimeDiscordMessageActions()?.describeMessageTool?.(ctx) ??
-    discordMessageActionsImpl.describeMessageTool?.(ctx) ??
-    null,
-  requiresTrustedRequesterSender: (
-    ctx: Parameters<NonNullable<ChannelMessageActionAdapter["requiresTrustedRequesterSender"]>>[0],
-  ) =>
-    resolveRuntimeDiscordMessageActions()?.requiresTrustedRequesterSender?.(ctx) ??
-    discordMessageActionsImpl.requiresTrustedRequesterSender?.(ctx) ??
-    false,
-  extractToolSend: (
-    ctx: Parameters<NonNullable<ChannelMessageActionAdapter["extractToolSend"]>>[0],
-  ) =>
-    resolveRuntimeDiscordMessageActions()?.extractToolSend?.(ctx) ??
-    discordMessageActionsImpl.extractToolSend?.(ctx) ??
-    null,
-  prepareSendPayload: (
-    ctx: Parameters<NonNullable<ChannelMessageActionAdapter["prepareSendPayload"]>>[0],
-  ) =>
-    resolveRuntimeDiscordMessageActions()?.prepareSendPayload?.(ctx) ??
-    discordMessageActionsImpl.prepareSendPayload?.(ctx) ??
-    null,
-  handleAction: async (
-    ctx: Parameters<NonNullable<ChannelMessageActionAdapter["handleAction"]>>[0],
-  ) => {
-    const runtimeHandleAction = resolveRuntimeDiscordMessageActions()?.handleAction;
-    if (runtimeHandleAction) {
-      return await runtimeHandleAction(ctx);
-    }
-    if (!discordMessageActionsImpl.handleAction) {
-      throw new Error("Discord message actions not available");
-    }
-    return await discordMessageActionsImpl.handleAction(ctx);
-  },
-};
-
 function resolveDiscordStartupDelayMs(cfg: OpenClawConfig, accountId: string): number {
   const startupAccountIds = listDiscordStartupAccountIds(cfg);
   const startupIndex = startupAccountIds.findIndex((candidateId) => candidateId === accountId);
@@ -317,6 +260,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
         ],
       },
       messaging: {
+        resolveConversationRouteOwner: inspectDiscordConversationRouteOwner,
         targetPrefixes: ["discord"],
         directTargetStyle: "user-prefixed",
         targetIdComparison: "lowercase",
@@ -482,6 +426,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
       },
       conversationBindings: {
         supportsCurrentConversationBinding: true,
+        bindingStore: "adapter",
         defaultTopLevelPlacement,
         createManager: async ({ cfg, accountId }) =>
           (await loadDiscordThreadBindingsManagerModule()).createThreadBindingManager({

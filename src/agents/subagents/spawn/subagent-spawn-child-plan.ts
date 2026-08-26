@@ -4,7 +4,12 @@ import { isIncognitoSessionKey } from "../../../routing/session-key.js";
 import { resolveUserPath } from "../../../utils.js";
 import { resolveAgentDir } from "../../agent-scope-config.js";
 import { findModelCatalogEntry } from "../../model-catalog-lookup.js";
-import { resolveDefaultModelForAgent } from "../../model-selection.js";
+import type { ModelCatalogEntry } from "../../model-catalog.types.js";
+import {
+  findNormalizedProviderValue,
+  resolveAllowedModelRef,
+  resolveDefaultModelForAgent,
+} from "../../model-selection.js";
 import { supportsModelTools } from "../../model-tool-support.js";
 import { summarizeSpawnError } from "../../spawn-pipeline.js";
 import { resolveSpawnSandboxError, mintSpawnSessionKey } from "../../spawn-plan.js";
@@ -26,7 +31,6 @@ import {
   readRequesterThinkingLevel,
 } from "./subagent-spawn-requester-prefs.js";
 import {
-  loadPreparedModelCatalog,
   normalizeDeliveryContext,
   resolveAgentConfig,
   resolveSandboxRuntimeStatus,
@@ -47,24 +51,23 @@ function buildResolvedSubagentModelMetadata(resolvedModel?: string): {
   };
 }
 
-async function resolveCollectorOutputModelError(params: {
+async function resolveSpawnModelError(params: {
   cfg: OpenClawConfig;
   targetAgentId: string;
   targetAgentDir: string;
   workspaceDir?: string;
+  request: SpawnSubagentParams;
   resolvedModel?: string;
 }): Promise<string | undefined> {
-  const selected = splitModelRef(params.resolvedModel);
-  const fallback = resolveDefaultModelForAgent({
-    cfg: params.cfg,
-    agentId: params.targetAgentId,
-  });
-  const provider = selected.provider ?? fallback.provider;
-  const model = selected.model ?? fallback.model;
-  if (!provider || !model) {
+  const { cfg, targetAgentId } = params;
+  const requestedModel = normalizeOptionalString(params.request.model);
+  if (!requestedModel && !params.request.outputSchema) {
     return undefined;
   }
-  let catalog: Awaited<ReturnType<typeof loadPreparedModelCatalog>>;
+  const defaults = resolveDefaultModelForAgent({ cfg, agentId: targetAgentId });
+  const selected = splitModelRef(params.resolvedModel);
+  const provider = selected.provider ?? defaults.provider;
+  let catalog: ModelCatalogEntry[];
   try {
     catalog = await getSubagentSpawnDeps().loadPreparedModelCatalog({
       config: params.cfg,
@@ -75,13 +78,53 @@ async function resolveCollectorOutputModelError(params: {
       scopedLiveProviderDiscovery: true,
     });
   } catch (error) {
-    return `sessions_spawn could not verify outputSchema model capabilities: ${summarizeSpawnError(error)}`;
+    return `sessions_spawn could not verify ${requestedModel ? "the requested model" : "outputSchema model capabilities"}: ${summarizeSpawnError(error)}`;
   }
-  const entry = findModelCatalogEntry(catalog, { provider, modelId: model });
-  if (!entry || supportsModelTools(entry)) {
-    return undefined;
+
+  if (!requestedModel) {
+    const model = selected.model ?? defaults.model;
+    const entry = model && findModelCatalogEntry(catalog, { provider, modelId: model });
+    return entry && !supportsModelTools(entry)
+      ? `sessions_spawn outputSchema requires a tool-capable target model; "${provider}/${model}" declares compat.supportsTools=false.`
+      : undefined;
   }
-  return `sessions_spawn outputSchema requires a tool-capable target model; "${provider}/${model}" declares compat.supportsTools=false.`;
+  const selection = {
+    cfg,
+    catalog,
+    defaultProvider: defaults.provider,
+    defaultModel: defaults.model,
+    agentId: targetAgentId,
+  };
+  const resolved = resolveAllowedModelRef({
+    ...selection,
+    raw: requestedModel,
+  });
+  if ("error" in resolved) {
+    return `sessions_spawn model "${requestedModel}" is not usable: ${resolved.error}`;
+  }
+
+  const entry = findModelCatalogEntry(catalog, {
+    provider: resolved.ref.provider,
+    modelId: resolved.ref.model,
+  });
+  if (!entry) {
+    const resolvedProvider = resolved.ref.provider;
+    const knownProvider =
+      findNormalizedProviderValue(cfg.models?.providers, resolvedProvider) ||
+      catalog.some((catalogEntry) => catalogEntry.provider === resolvedProvider) ||
+      getSubagentSpawnDeps().resolveProviderRefOwnership({
+        provider: resolvedProvider,
+        config: cfg,
+        workspaceDir: params.workspaceDir,
+      }).status === "owned";
+    if (!knownProvider) {
+      return `sessions_spawn model "${requestedModel}" is not usable: unknown model provider "${resolvedProvider}"`;
+    }
+  }
+  if (params.request.outputSchema && entry && !supportsModelTools(entry)) {
+    return `sessions_spawn outputSchema requires a tool-capable target model; "${resolved.ref.provider}/${resolved.ref.model}" declares compat.supportsTools=false.`;
+  }
+  return undefined;
 }
 
 type ResolvedSubagentChildPlan = {
@@ -221,6 +264,24 @@ export async function resolveSubagentChildPlan(params: {
     };
   }
   const { resolvedModel } = modelPlan;
+  const modelError = await resolveSpawnModelError({
+    cfg: params.cfg,
+    targetAgentId: params.targetAgentId,
+    targetAgentDir,
+    workspaceDir: spawnedWorkspaceDir,
+    request: params.request,
+    resolvedModel,
+  });
+  if (modelError) {
+    return {
+      ok: false,
+      result: {
+        status: "error",
+        error: modelError,
+        ...(params.request.outputSchema ? { childSessionKey } : {}),
+      },
+    };
+  }
   const resolvedLaunchModel = splitModelRef(resolvedModel);
   const launchAuthorization: SubagentLaunchAuthorization | undefined =
     params.request.model?.trim() && resolvedLaunchModel.model
@@ -231,21 +292,6 @@ export async function resolveSubagentChildPlan(params: {
           },
         }
       : undefined;
-  if (params.request.outputSchema) {
-    const outputModelError = await resolveCollectorOutputModelError({
-      cfg: params.cfg,
-      targetAgentId: params.targetAgentId,
-      targetAgentDir,
-      workspaceDir: spawnedWorkspaceDir,
-      resolvedModel,
-    });
-    if (outputModelError) {
-      return {
-        ok: false,
-        result: { status: "error", error: outputModelError, childSessionKey },
-      };
-    }
-  }
   return {
     ok: true,
     resolved: {

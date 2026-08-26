@@ -976,6 +976,16 @@ describe("state migrations", () => {
     const cfg: OpenClawConfig = {
       agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } },
     };
+    runOpenClawAgentWriteTransaction(
+      (database) =>
+        writeSessionEntry(
+          database,
+          "agent:main:chat",
+          { sessionId: "legacy-main-session", updatedAt: 100 },
+          { allowStoredAliases: true, previousEntry: null },
+        ),
+      { agentId: "main", env },
+    );
 
     const result = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
 
@@ -983,6 +993,22 @@ describe("state migrations", () => {
     expect(result.notices).toEqual([
       expect.stringContaining("legacy main rows have no unambiguous configured owner"),
     ]);
+  });
+
+  it("starts a new explicit-ownership fleet without a legacy-main owner notice", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg: OpenClawConfig = {
+      agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } },
+    };
+
+    const result = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.notices ?? []).not.toContainEqual(
+      expect.stringContaining("legacy main rows have no unambiguous configured owner"),
+    );
   });
 
   it("ignores a schema-only legacy agent database without selecting an owner", async () => {
@@ -1101,29 +1127,15 @@ describe("state migrations", () => {
     },
   );
 
-  it.each([
-    {
-      label: "the configured system agent",
-      targetAgentId: "main",
-      cfg: {
-        agents: {
-          ownership: "explicit",
-          defaults: { systemAgent: { agentId: "main" } },
-          entries: { main: {}, blocker: {}, digest: {} },
-        },
-      } as OpenClawConfig,
-    },
-    {
-      label: "the legacy compatibility owner before the configured system agent",
-      targetAgentId: "legacy",
-      cfg: {
-        agents: {
-          defaults: { systemAgent: { agentId: "main" } },
-          entries: { legacy: { default: true }, main: {} },
-        },
-      } as OpenClawConfig,
-    },
-  ])("migrates legacy shared agent and session state to $label", async ({ cfg, targetAgentId }) => {
+  it("migrates legacy shared agent and session state to the configured system agent", async () => {
+    const targetAgentId = "main";
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: targetAgentId } },
+        entries: { main: {}, blocker: {}, digest: {} },
+      },
+    } satisfies OpenClawConfig;
     const root = await createTempDir();
     const stateDir = path.join(root, ".openclaw");
     const env = createEnv(stateDir);
@@ -1218,9 +1230,12 @@ describe("state migrations", () => {
     try {
       const databasePath = resolveOpenClawStateSqlitePath(env);
       const database = new DatabaseSync(databasePath, { readOnly: true });
+      expect(database.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+      });
       expect(
-        database.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name").all(),
-      ).toEqual([{ name: "schema_meta" }, { name: "state_leases" }]);
+        database.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get(),
+      ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
       database.close();
 
       const detected = await detectLegacyStateMigrations({

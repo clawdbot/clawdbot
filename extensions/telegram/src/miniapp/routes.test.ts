@@ -484,6 +484,8 @@ describe("registerTelegramMiniAppRoutes", () => {
 
       expect(res.statusCode).toBe(408);
       expect(res.body).toBe("Request body timeout");
+      expect(req.destroyed).toBe(false);
+      res.emit("close");
       expect(req.destroyed).toBe(true);
       expectBodyReadListenersCleaned(req);
       expect(issueDeviceBootstrapToken).not.toHaveBeenCalled();

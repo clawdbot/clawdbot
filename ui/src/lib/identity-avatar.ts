@@ -1,4 +1,7 @@
-import { AVATAR_MAX_BYTES } from "../../../src/shared/avatar-limits.js";
+import {
+  buildControlUiUserAvatarPath,
+  canonicalizeControlUiUserAvatarPath,
+} from "../../../src/gateway/control-ui-user-avatar-route.js";
 import { normalizeBasePath } from "../app-route-paths.ts";
 import { formatSenderLabel, type SenderIdentity } from "./chat/sender-label.ts";
 import { fnv1aUtf16 } from "./fnv1a.ts";
@@ -13,48 +16,23 @@ export type IdentityAvatarInput = SenderIdentity & {
 const ORIGIN_PROBE = "https://origin-probe.invalid";
 
 let appGatewayOrigin: string | null = null;
-let appGatewayBasePath = "";
+let appGatewayResourceBasePath = "";
 let appGatewayAuthHeader: string | null = null;
+// More than one cache is keyed by the Gateway HTTP context (avatars,
+// geolocation), so every subscriber must be notified on a switch. A single slot
+// would silently drop whichever registered first.
+const gatewayContextResets = new Set<() => void>();
 
-const IDENTITY_AVATAR_CACHE_MAX_ENTRIES = 128;
-const IDENTITY_AVATAR_FETCH_TIMEOUT_MS = 30_000;
-const IDENTITY_AVATAR_MIME_TYPES = new Set(["image/gif", "image/jpeg", "image/png", "image/webp"]);
-
-type CachedIdentityAvatar = {
-  blobUrl: string | null;
-  loaded: boolean;
-  promise: Promise<string | null>;
-};
-
-const identityAvatarCache = new Map<string, CachedIdentityAvatar>();
-
-function clearIdentityAvatarCache(): void {
-  for (const entry of identityAvatarCache.values()) {
-    if (entry.blobUrl) {
-      URL.revokeObjectURL(entry.blobUrl);
-    }
-  }
-  identityAvatarCache.clear();
+export function registerAvatarGatewayReset(reset: () => void): void {
+  gatewayContextResets.add(reset);
 }
 
-function trimIdentityAvatarCache(protectedEntry?: CachedIdentityAvatar): void {
-  while (identityAvatarCache.size > IDENTITY_AVATAR_CACHE_MAX_ENTRIES) {
-    let evicted = false;
-    for (const [key, entry] of identityAvatarCache) {
-      // Pending consumers still need their eventual blob. Only completed LRU
-      // entries may be evicted; the request currently resolving stays valid.
-      if (!entry.blobUrl || !entry.loaded || entry === protectedEntry) {
-        continue;
-      }
-      identityAvatarCache.delete(key);
-      URL.revokeObjectURL(entry.blobUrl);
-      evicted = true;
-      break;
-    }
-    if (!evicted) {
-      break;
-    }
-  }
+export function readAvatarGatewayContext() {
+  return {
+    origin: appGatewayOrigin,
+    resourceBasePath: appGatewayResourceBasePath,
+    authHeader: appGatewayAuthHeader,
+  };
 }
 
 function toHttpOrigin(url: string | null | undefined): string | null {
@@ -75,28 +53,26 @@ function toHttpOrigin(url: string | null | undefined): string | null {
 export function setAvatarGatewayOrigin(
   gatewayUrl: string | null | undefined,
   authHeader: string | null = null,
-  controlUiBasePath = "",
+  resourceBasePath = "",
 ): void {
   const nextOrigin = toHttpOrigin(gatewayUrl);
   const documentOrigin = globalThis.location?.origin;
-  const nextBasePath =
-    nextOrigin && documentOrigin === nextOrigin ? normalizeBasePath(controlUiBasePath) : "";
+  const nextResourceBasePath =
+    nextOrigin && documentOrigin === nextOrigin ? normalizeBasePath(resourceBasePath) : "";
   const nextAuthHeader = authHeader?.trim() || null;
   if (
     appGatewayOrigin !== nextOrigin ||
-    appGatewayBasePath !== nextBasePath ||
+    appGatewayResourceBasePath !== nextResourceBasePath ||
     appGatewayAuthHeader !== nextAuthHeader
   ) {
-    clearIdentityAvatarCache();
+    for (const reset of gatewayContextResets) {
+      reset();
+    }
   }
   appGatewayOrigin = nextOrigin;
-  appGatewayBasePath = nextBasePath;
+  appGatewayResourceBasePath = nextResourceBasePath;
   appGatewayAuthHeader = nextAuthHeader;
 }
-
-// Mirrors the server's user-profiles-http-path matcher. Sender metadata may
-// point only at this image route, never another gateway endpoint.
-const USER_AVATAR_PATHNAME = /^\/api\/users\/[^/]+\/avatar$/u;
 
 /**
  * Returns a browser-safe avatar URL, or null. Only the canonical
@@ -106,114 +82,28 @@ const USER_AVATAR_PATHNAME = /^\/api\/users\/[^/]+\/avatar$/u;
  * Relative paths resolve against the trusted gateway origin; absolute URLs
  * must match that origin.
  */
-function toTrustedAvatarUrl(value: string, gatewayOrigin: string | null): string | null {
+export function resolveTrustedAvatarUrl(
+  value: string,
+  gatewayOrigin: string | null,
+  resourceBasePath = appGatewayResourceBasePath,
+): string | null {
   try {
     const parsed = new URL(value, ORIGIN_PROBE);
     const relativeRoute = parsed.origin === ORIGIN_PROBE;
-    const canonicalPathname = relativeRoute
-      ? parsed.pathname
-      : appGatewayBasePath && parsed.pathname.startsWith(`${appGatewayBasePath}/`)
-        ? parsed.pathname.slice(appGatewayBasePath.length)
-        : parsed.pathname;
-    if (!USER_AVATAR_PATHNAME.test(canonicalPathname)) {
+    const canonicalPathname = canonicalizeControlUiUserAvatarPath(
+      parsed.pathname,
+      relativeRoute ? "" : resourceBasePath,
+    );
+    if (!canonicalPathname) {
       return null;
     }
-    const suffix = `${appGatewayBasePath}${canonicalPathname}${parsed.search}`;
+    const suffix = `${resourceBasePath}${canonicalPathname}${parsed.search}`;
     if (relativeRoute) {
       return gatewayOrigin ? new URL(suffix, gatewayOrigin).toString() : suffix;
     }
     return gatewayOrigin && parsed.origin === gatewayOrigin ? gatewayOrigin + suffix : null;
   } catch {
     return null;
-  }
-}
-
-function loadIdentityAvatar(url: string): string | Promise<string | null> {
-  const cacheKey = url;
-  const cached = identityAvatarCache.get(cacheKey);
-  if (cached) {
-    // Map order is the LRU order; concurrent roster, profile, and chat views
-    // must share both the authenticated request and its resulting blob.
-    identityAvatarCache.delete(cacheKey);
-    identityAvatarCache.set(cacheKey, cached);
-    return cached.loaded && cached.blobUrl ? cached.blobUrl : cached.promise;
-  }
-
-  const entry: CachedIdentityAvatar = {
-    blobUrl: null,
-    loaded: false,
-    promise: Promise.resolve(null),
-  };
-  const authHeader = appGatewayAuthHeader;
-  entry.promise = (async () => {
-    try {
-      const response = await fetch(url, {
-        credentials: "include",
-        ...(authHeader ? { headers: { Authorization: authHeader } } : {}),
-        signal: AbortSignal.timeout(IDENTITY_AVATAR_FETCH_TIMEOUT_MS),
-      });
-      if (!response.ok) {
-        return null;
-      }
-      const blob = await response.blob();
-      if (
-        blob.size === 0 ||
-        blob.size > AVATAR_MAX_BYTES ||
-        !IDENTITY_AVATAR_MIME_TYPES.has(blob.type.toLowerCase())
-      ) {
-        return null;
-      }
-      const blobUrl = URL.createObjectURL(blob);
-      // A gateway or credential change can finish while its old request is in
-      // flight. Never publish an image into the replacement security context.
-      if (identityAvatarCache.get(cacheKey) !== entry) {
-        URL.revokeObjectURL(blobUrl);
-        return null;
-      }
-      entry.blobUrl = blobUrl;
-      trimIdentityAvatarCache(entry);
-      return blobUrl;
-    } catch {
-      return null;
-    } finally {
-      if (!entry.blobUrl && identityAvatarCache.get(cacheKey) === entry) {
-        // Transient failures and uncached 404s must not hide a later upload.
-        identityAvatarCache.delete(cacheKey);
-      }
-    }
-  })();
-  identityAvatarCache.set(cacheKey, entry);
-  trimIdentityAvatarCache(entry);
-
-  return entry.promise;
-}
-
-/** Fetch connected-gateway profile images once and render CSP-safe blobs. */
-export function resolveAvatarImageUrl(value: string): string | Promise<string | null> | null {
-  const trusted = toTrustedAvatarUrl(value, appGatewayOrigin);
-  if (!trusted) {
-    return null;
-  }
-  // Connected same-origin routes need the loader too: it resolves a missing
-  // avatar before Lit can reconcile an <img> error back over its initials.
-  const pageOrigin = globalThis.location?.origin;
-  const crossOrigin = pageOrigin ? new URL(trusted, pageOrigin).origin !== pageOrigin : false;
-  return appGatewayOrigin || appGatewayAuthHeader || crossOrigin
-    ? loadIdentityAvatar(trusted)
-    : trusted;
-}
-
-/** A blob stays live until its image has finished loading or definitively failed. */
-export function settleAvatarImageUrl(value: string | null): void {
-  if (!value?.startsWith("blob:")) {
-    return;
-  }
-  for (const entry of identityAvatarCache.values()) {
-    if (entry.blobUrl === value) {
-      entry.loaded = true;
-      trimIdentityAvatarCache();
-      return;
-    }
   }
 }
 
@@ -265,7 +155,7 @@ export function resolveAvatar(input: IdentityAvatarInput): ResolvedIdentityAvata
 
   const profileAvatarUrl = input.profileAvatarUrl?.trim();
   if (profileAvatarUrl) {
-    const trusted = toTrustedAvatarUrl(profileAvatarUrl, gatewayOrigin);
+    const trusted = resolveTrustedAvatarUrl(profileAvatarUrl, gatewayOrigin);
     if (trusted) {
       return { kind: "profile", url: trusted };
     }
@@ -275,10 +165,7 @@ export function resolveAvatar(input: IdentityAvatarInput): ResolvedIdentityAvata
   // canonical gateway avatar (upload → Gravatar proxy → 404-to-initials).
   const id = input.id?.trim();
   if (id && PROFILE_ID_RE.test(id)) {
-    const trusted = toTrustedAvatarUrl(
-      `/api/users/${encodeURIComponent(id)}/avatar`,
-      gatewayOrigin,
-    );
+    const trusted = resolveTrustedAvatarUrl(buildControlUiUserAvatarPath(id), gatewayOrigin);
     if (trusted) {
       return { kind: "profile", url: trusted };
     }

@@ -4,8 +4,8 @@ import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DEFAULT_SECRET_FILE_MAX_BYTES, tryReadSecretFileSync } from "@openclaw/fs-safe/secret";
-import { execa } from "execa";
 import { coerceErrorMessage as errorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
 import { resolveTrustedOnePasswordCli } from "./onepassword-op-path.js";
 import { resolveOnePasswordSecretReference } from "./onepassword-secret-id.js";
 
@@ -89,7 +89,7 @@ function resolveOpenClawHome() {
     return resolveOsHome();
   }
   if (explicit === "~" || explicit.startsWith("~/") || explicit.startsWith("~\\")) {
-    return path.resolve(explicit.replace(/^~(?=$|[\\/])/u, resolveOsHome()));
+    return path.resolve(explicit.replace(/^~(?=$|[\\/])/u, () => resolveOsHome()));
   }
   return path.resolve(explicit);
 }
@@ -98,7 +98,7 @@ function resolveStateDir() {
   const override = process.env.OPENCLAW_STATE_DIR?.trim();
   if (override) {
     if (override === "~" || override.startsWith("~/") || override.startsWith("~\\")) {
-      return path.resolve(override.replace(/^~(?=$|[\\/])/u, resolveOpenClawHome()));
+      return path.resolve(override.replace(/^~(?=$|[\\/])/u, () => resolveOpenClawHome()));
     }
     return path.resolve(override);
   }
@@ -180,54 +180,32 @@ function opEnvironment(token) {
 }
 
 async function runOpRead(opCommand, token, secretReference) {
-  // Keep execa's default utf8 encoding: secrets are decoded as utf8 anyway, and
-  // Bun's spawn rejects execa's "buffer" encoding option (oven-sh/bun#36049),
-  // surfacing as a masked "Attempted to assign to readonly property." TypeError.
-  const subprocess = execa(opCommand, ["read", "--cache=false", "--no-newline", secretReference], {
-    cleanup: true,
-    env: opEnvironment(token),
-    extendEnv: false,
-    killDescendants: true,
-    killSignal: "SIGKILL",
-    reject: false,
-    stripFinalNewline: false,
-  });
-  let outputBytes = 0;
-  let terminationReason;
-  const terminate = (reason) => {
-    if (terminationReason) {
-      return;
-    }
-    terminationReason = reason;
-    subprocess.kill("SIGKILL");
-  };
-  subprocess.stdout?.on("data", (chunk) => {
-    outputBytes += chunk.byteLength;
-    if (outputBytes > MAX_SECRET_VALUE_BYTES) {
-      terminate("output-limit");
-    }
-  });
-  const timeout = setTimeout(() => terminate("timeout"), OP_READ_TIMEOUT_MS);
-  timeout.unref?.();
-  const result = await subprocess.finally(() => clearTimeout(timeout));
-  if (result.code === "ENOENT") {
+  const result = await runCommandBuffered(
+    [opCommand, "read", "--cache=false", "--no-newline", secretReference],
+    {
+      baseEnv: {},
+      discardOutput: { stderr: true },
+      env: opEnvironment(token),
+      maxOutputBytes: { stdout: MAX_SECRET_VALUE_BYTES },
+      timeoutMs: OP_READ_TIMEOUT_MS,
+    },
+  );
+  if (result.termination === "error" && result.error?.code === "ENOENT") {
     throw new Error(opMissingMessage(opCommand));
   }
-  if (terminationReason === "timeout") {
+  if (result.termination === "timeout") {
     throw new Error(`op read timed out after ${OP_READ_TIMEOUT_MS}ms.`);
   }
-  if (terminationReason === "output-limit") {
+  if (result.termination === "output-limit") {
     throw new Error("op read output exceeded the secret value limit.");
   }
-  if (result.exitCode !== 0) {
-    throw new Error(`op read failed with exit code ${String(result.exitCode)}.`);
-  }
-  // A missing stdout string means the subprocess never produced output streams
-  // (spawn-level failure with reject:false), not an empty secret.
-  if (typeof result.stdout !== "string") {
+  if (result.termination === "error") {
     throw new Error("op read could not be started.");
   }
-  return result.stdout;
+  if (result.code !== 0) {
+    throw new Error(`op read failed with exit code ${String(result.code)}.`);
+  }
+  return result.stdout.toString("utf8");
 }
 
 async function runWithConcurrency(values, limit, task) {

@@ -142,6 +142,57 @@ defineDiscordVoiceTests(
       expect(player.stop).toHaveBeenCalledTimes(stopCallsAfterControl + 1);
     });
 
+    it("keeps concurrent final transcripts bound to their original speakers", async () => {
+      let resolveGuestControl: ((result: RealtimeVoiceAgentControlResult) => void) | undefined;
+      controlRealtimeVoiceAgentRunMock.mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveGuestControl = resolve;
+        }),
+      );
+      agentCommandMock.mockResolvedValue({ payloads: [{ text: "talkback answer" }] });
+      const { bridgeParams, entry } = await createJoinedAgentProxyFixture({
+        config: {
+          voice: { realtime: { debounceMs: 1, requireWakeName: false, toolPolicy: "none" } },
+        },
+      });
+
+      beginSpeakerTurn(entry, {
+        senderIsOwner: false,
+        speakerLabel: "Alice",
+        userId: "u-alice",
+      });
+      bridgeParams?.onTranscript?.("user", "OpenClaw, cancel that", true);
+      await vi.waitFor(() => expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledTimes(1));
+
+      beginSpeakerTurn(entry, {
+        senderIsOwner: true,
+        speakerLabel: "Bob",
+        userId: "u-bob",
+      });
+      bridgeParams?.onTranscript?.("user", "OpenClaw, stop that", true);
+      await vi.waitFor(() => expect(agentCommandMock).toHaveBeenCalledTimes(1));
+
+      resolveGuestControl?.({
+        ok: false,
+        mode: "cancel",
+        sessionKey: "discord:g1:c1",
+        active: false,
+        queued: false,
+        reason: "no_active_run",
+        message: "There is no active OpenClaw run to cancel.",
+        speak: true,
+        show: true,
+        suppress: false,
+      });
+      await vi.waitFor(() => expect(agentCommandMock).toHaveBeenCalledTimes(2));
+
+      const commandCalls = [agentCommandArgsAt(0), agentCommandArgsAt(1)];
+      const aliceCall = commandCalls.find((args) => String(args.message).includes("cancel that"));
+      const bobCall = commandCalls.find((args) => String(args.message).includes("stop that"));
+      expect(aliceCall?.senderIsOwner).toBe(false);
+      expect(bobCall?.senderIsOwner).toBe(true);
+    });
+
     it("drops stale active-run control after provider continuity reset", async () => {
       let resolveOldControl: ((result: RealtimeVoiceAgentControlResult) => void) | undefined;
       controlRealtimeVoiceAgentRunMock

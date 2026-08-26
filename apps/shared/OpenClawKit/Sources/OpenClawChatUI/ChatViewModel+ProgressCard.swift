@@ -25,7 +25,14 @@ extension OpenClawChatViewModel {
         let requestID = self.lastIssuedProgressCardRequestID
         let generation = self.progressCardGeneration
         Task { [weak self] in
-            await self?.fetchProgressCard(
+            guard let self else { return }
+            let storeAvailable = await self.transport.gatewayAdvertisesMethod("progressCard.get")
+            self.progressCardStoreAvailable = storeAvailable
+            // Gateways without the durable store reject the fetch outright
+            // (2026.7.x: "missing scope: operator.admin"); the legacy
+            // stream:"plan" fallback owns the card there.
+            guard storeAvailable != false else { return }
+            await self.fetchProgressCard(
                 for: session,
                 generation: generation,
                 requestID: requestID)
@@ -75,7 +82,7 @@ extension OpenClawChatViewModel {
             self.isCurrentSession(session)
     }
 
-    private func applyProgressCard(_ card: ProgressCard?) {
+    func applyProgressCard(_ card: ProgressCard?) {
         let normalized = Self.normalizedProgressCard(card)
         let previousPresentation = Self.progressCardPresentation(self.progressCard)
         let presentation = Self.progressCardPresentation(normalized)
@@ -100,6 +107,71 @@ extension OpenClawChatViewModel {
         guard let card else { return nil }
         return [card.markdown == nil ? "0" : "1", card.markdown ?? ""] +
             (card.steps ?? []).flatMap { [$0.step, $0.status.rawValue] }
+    }
+
+    static func parseLegacyProgressCardSteps(_ value: AnyCodable?) -> [ProgressCardStep] {
+        guard let value else { return [] }
+        let rawItems: [Any]
+        switch value.value {
+        case let items as [AnyCodable]:
+            rawItems = items.map(\.value)
+        case let items as [Any]:
+            rawItems = items
+        case let items as NSArray:
+            rawItems = items.map(\.self)
+        default:
+            return []
+        }
+        var hasInProgressStep = false
+        return rawItems.compactMap { rawItem in
+            guard let step = Self.parseLegacyProgressCardStep(rawItem) else { return nil }
+            if case .inProgress = step.status {
+                guard !hasInProgressStep else { return nil }
+                hasInProgressStep = true
+            }
+            return step
+        }
+    }
+
+    private static func parseLegacyProgressCardStep(_ rawValue: Any) -> ProgressCardStep? {
+        let value = (rawValue as? AnyCodable)?.value ?? rawValue
+        if let legacyStep = value as? String {
+            return self.makeLegacyProgressCardStep(text: legacyStep, status: .pending)
+        }
+
+        let fields: [String: Any]
+        switch value {
+        case let dictionary as [String: AnyCodable]:
+            fields = dictionary.mapValues(\.value)
+        case let dictionary as [String: String]:
+            fields = dictionary
+        case let dictionary as [String: Any]:
+            fields = dictionary
+        case let dictionary as NSDictionary:
+            fields = dictionary.reduce(into: [:]) { result, entry in
+                guard let key = entry.key as? String else { return }
+                result[key] = (entry.value as? AnyCodable)?.value ?? entry.value
+            }
+        default:
+            return nil
+        }
+
+        guard let text = fields["step"] as? String,
+              let rawStatus = fields["status"] as? String,
+              let status = ProgressCardStepStatus(rawValue: rawStatus)
+        else {
+            return nil
+        }
+        return self.makeLegacyProgressCardStep(text: text, status: status)
+    }
+
+    private static func makeLegacyProgressCardStep(
+        text: String,
+        status: ProgressCardStepStatus) -> ProgressCardStep?
+    {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return ProgressCardStep(step: trimmed, status: status)
     }
 }
 

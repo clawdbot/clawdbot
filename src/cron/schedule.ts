@@ -37,7 +37,7 @@ function resolveCachedCron(expr: string, timezone: string): Cron {
   return next;
 }
 
-function resolveCronFromSchedule(schedule: { tz?: string; expr?: unknown }): Cron | undefined {
+function resolveCronFromSchedule(schedule: { tz?: string; expr?: unknown }) {
   if (typeof schedule.expr !== "string") {
     throw new Error("invalid cron schedule: expr is required");
   }
@@ -45,7 +45,8 @@ function resolveCronFromSchedule(schedule: { tz?: string; expr?: unknown }): Cro
   if (!expr) {
     return undefined;
   }
-  return resolveCachedCron(expr, resolveCronTimezone(schedule.tz));
+  const timezone = resolveCronTimezone(schedule.tz);
+  return { cron: resolveCachedCron(expr, timezone), timezone };
 }
 
 function hasNearbyCronTimezoneTransition(
@@ -249,16 +250,16 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
     return undefined;
   }
 
-  const cron = resolveCronFromSchedule(schedule);
-  if (!cron) {
+  const resolvedCron = resolveCronFromSchedule(schedule);
+  if (!resolvedCron) {
     return undefined;
   }
+  const { cron, timezone } = resolvedCron;
   const nextMs = cron.nextRun(new Date(nowMs))?.getTime();
   if (nextMs === undefined) {
     return undefined;
   }
 
-  const timezone = resolveCronTimezone(schedule.tz);
   const normalizedNextMs = resolveValidatedNextCronOccurrenceMs(cron, nowMs, nextMs, timezone);
   if (normalizedNextMs !== undefined) {
     return normalizedNextMs;
@@ -292,12 +293,12 @@ export function computePreviousRunAtMs(schedule: CronSchedule, nowMs: number): n
   if (schedule.kind !== "cron" || asDateTimestampMs(nowMs) === undefined) {
     return undefined;
   }
-  const cron = resolveCronFromSchedule(schedule);
-  if (!cron) {
+  const resolvedCron = resolveCronFromSchedule(schedule);
+  if (!resolvedCron) {
     return undefined;
   }
+  const { cron, timezone } = resolvedCron;
   let previousMs = cron.previousRuns(1, new Date(nowMs))[0]?.getTime();
-  const timezone = resolveCronTimezone(schedule.tz);
   if (
     previousMs !== undefined &&
     previousMs < nowMs &&
@@ -321,9 +322,12 @@ export function computePreviousRunAtMs(schedule: CronSchedule, nowMs: number): n
     return undefined;
   }
 
-  // previousRuns ends at Croner's minimum supported year; never drop valid
-  // historical occurrences after an arbitrary number of changed DST rules.
-  while (!matchesCronOccurrence(cron, new Date(previousMs))) {
+  // Croner's wall-clock decrement can cross spring gaps; its year horizon
+  // bounds transition walking without dropping valid historical occurrences.
+  while (
+    !matchesCronOccurrence(cron, new Date(previousMs)) ||
+    (resolveFirstCronOccurrenceMs(previousMs, timezone) ?? previousMs) >= nowMs
+  ) {
     const transitionMs = findCronTimezoneTransitionMs(previousMs - DAY_MS, previousMs, timezone);
     if (transitionMs === undefined) {
       return undefined;

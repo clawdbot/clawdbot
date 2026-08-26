@@ -8,6 +8,7 @@ import { DEFAULT_REDACT_PATTERNS } from "./redact-patterns.js";
 import {
   computeSensitiveRedactionBitmap,
   getDefaultRedactPatterns,
+  redactModelVisibleToolPayloadText,
   redactSecrets,
   redactSensitiveFieldValue,
   redactSensitiveLines,
@@ -114,6 +115,41 @@ describe("registered exact secret values", () => {
 
     expect(redactSensitiveText(first, { mode: "off" })).not.toContain(first);
     expect(redactSensitiveText(second, { mode: "off" })).toBe(second);
+  });
+});
+
+describe("model-visible tool payload redaction", () => {
+  it("preserves source assignments while masking explicit credential forms", () => {
+    const registeredSecret = "registered-model-visible-secret";
+    registerSecretValueForRedaction(registeredSecret);
+    const credentials = [
+      registeredSecret,
+      "bearer-model-visible-credential-1234567890",
+      "url-model-visible-password-1234567890",
+      "ghp_abcdefghijklmnopqrstuvwxyz1234567890",
+    ];
+    const input = [
+      "token = timeObserverToken",
+      "API_TOKEN = computeToken()",
+      "API_TOKEN=computeToken()",
+      "API_KEY: str = computeKey()",
+      '"api_key": "computeToken()"',
+      `registered: ${credentials[0]}`,
+      `Authorization: Bearer ${credentials[1]}`,
+      `https://user:${credentials[2]}@example.test/path`,
+      `GitHub token: ${credentials[3]}`,
+    ].join("\n");
+
+    const output = redactModelVisibleToolPayloadText(input);
+
+    expect(output).toContain("token = timeObserverToken");
+    expect(output).toContain("API_TOKEN = computeToken()");
+    expect(output).toContain("API_TOKEN=computeToken()");
+    expect(output).toContain("API_KEY: str = computeKey()");
+    expect(output).toContain('"api_key": "computeToken()"');
+    for (const credential of credentials) {
+      expect(output).not.toContain(credential);
+    }
   });
 });
 
@@ -1808,6 +1844,15 @@ describe("redactSensitiveText", () => {
     expect(output).toBe("ticket *** should hide");
   });
 
+  it("keeps custom redaction patterns active for structured sensitive fields", () => {
+    expect(
+      redactSensitiveFieldValue("TOKEN", "${TOKEN}", {
+        mode: "tools",
+        patterns: [/TOKEN/g],
+      }),
+    ).toBe("${***}");
+  });
+
   it("keeps configured redaction patterns active for text outside default markers", () => {
     const configPath = writeConfig(`{
       logging: {
@@ -1975,9 +2020,11 @@ describe("redactSensitiveLines", () => {
     expect(result[1]).toBe("normal log line");
   });
 
-  it("returns lines unmodified when mode is off", () => {
+  it("returns lines unmodified when redaction is off", () => {
     const resolved = resolveRedactOptions({ mode: "off", patterns: defaults });
-    const lines = ["TOKEN=abcdef1234567890ghij"];
+    const secret = "opaque-registry-value-1234567890";
+    registerSecretValueForRedaction(secret);
+    const lines = [`TOKEN=abcdef1234567890ghij ${secret}`];
     expect(redactSensitiveLines(lines, resolved)).toEqual(lines);
   });
 
@@ -2008,12 +2055,15 @@ describe("redactSensitiveLines", () => {
     ).toEqual(["Authorization: Digest", " ***; status=401"]);
   });
 
-  it("returns lines unmodified when resolved patterns is empty — does not fall back to defaults", () => {
+  it("applies exact registered secrets without falling back from empty resolved patterns", () => {
     // Simulates the case where all user-configured patterns fail to compile.
     // The pre-resolved empty array must be honored, not silently replaced with defaults.
     const resolved = { mode: "tools" as const, patterns: [], redactFormBodies: false };
-    const lines = ["TOKEN=abcdef1234567890ghij"];
-    expect(redactSensitiveLines(lines, resolved)).toEqual(lines);
+    const secret = "opaque-registry-value-1234567890";
+    registerSecretValueForRedaction(secret);
+    expect(redactSensitiveLines([`TOKEN=abcdef1234567890ghij ${secret}`], resolved)).toEqual([
+      "TOKEN=abcdef1234567890ghij opaque…7890",
+    ]);
   });
 
   it("returns empty array unchanged — does not produce a synthetic blank line", () => {

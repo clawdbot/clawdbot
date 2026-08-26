@@ -78,7 +78,6 @@ suite.define(() => {
       await expect
         .poll(async () => (await localEnvironment.boundingBox())?.height)
         .toBeCloseTo(56, 1);
-      const localEnvironmentBox = await localEnvironment.boundingBox();
       const folderTrigger = dialog.locator("#session-group-defaults-folder-trigger");
       await expect.poll(() => folderTrigger.getAttribute("aria-label")).toContain("peter");
       await folderTrigger.click();
@@ -129,10 +128,7 @@ suite.define(() => {
       const modeTrigger = modeDropdown.locator("#session-group-defaults-mode-trigger");
       await expect.poll(() => modeTrigger.getAttribute("data-value")).toBe("local");
       await expect.poll(() => modeTrigger.textContent()).toContain("Runs directly");
-      expect((await modeTrigger.boundingBox())?.height).toBeCloseTo(
-        localEnvironmentBox?.height ?? 0,
-        1,
-      );
+      expect((await modeTrigger.boundingBox())?.height).toBeCloseTo(56, 1);
       await modeTrigger.click();
       const worktreeOption = modeDropdown.getByRole("menuitemradio", {
         name: /Worktree.*isolated Git worktree/i,

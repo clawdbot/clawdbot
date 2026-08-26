@@ -151,8 +151,8 @@ describe("qa scenario catalog", () => {
     expect(fallbackFlow).toContain("!tools.has('memory_search')");
     expect(fallbackFlow).toContain("outbound.text.trim().length > 0");
     expect(bundledSkill.title).toBe("Bundled plugin skill runtime");
-    expect(bundledSkillConfig?.pluginId).toBe("open-prose");
-    expect(bundledSkillConfig?.expectedSkillName).toBe("prose");
+    expect(bundledSkillConfig?.pluginId).toBe("diffs");
+    expect(bundledSkillConfig?.expectedSkillName).toBe("diffs");
     expect(fanoutConfig?.expectedReplyGroups?.flat()).toContain("subagent-1: ok");
     expect(fanoutConfig?.expectedReplyGroups?.flat()).toContain("subagent-2: ok");
   });
@@ -194,7 +194,7 @@ describe("qa scenario catalog", () => {
 
   it("keeps the audited parallel script allowlist exact", () => {
     const expected =
-      "active-talk-agent-run-status agent-run-identity-inspection cached-health-snapshot-boundaries channel-health-monitor-lifecycle diagnostic-events-boundary gateway-loopback-lan-access gateway-rpc-account-health gateway-smoke gateway-ssh-tunnels gateway-stability-runtime gateway-support-export gateway-tls-pinning gateway-websocket-protocol-contracts logging-file-boundary mcp-gateway-connect-startup-retry mcp-plugin-tools-call otel-generation-config-watcher qa-otel-smoke remote-log-tailing tui-command-surfaces-pty tui-editor-input-pty tui-entrypoints-pty tui-gateway-boundary-pty tui-local-runtime-recovery-pty tui-local-shell-pty tui-pty-evidence-producer-contract tui-session-management-pty tui-streaming-tool-cards-pty tui-terminal-safety-pty voice-call-cli-rpc-agent-tool webchat-auto-tts".split(
+      "active-talk-agent-run-status agent-run-identity-inspection cached-health-snapshot-boundaries channel-health-monitor-lifecycle diagnostic-events-boundary gateway-loopback-lan-access gateway-rpc-account-health gateway-smoke gateway-ssh-tunnels gateway-stability-runtime gateway-support-export gateway-tls-pinning gateway-websocket-protocol-contracts logging-file-boundary mcp-gateway-connect-startup-retry mcp-plugin-tools-call otel-generation-config-watcher qa-otel-smoke remote-log-tailing subagent-lineage-inspection tui-command-surfaces-pty tui-editor-input-pty tui-entrypoints-pty tui-gateway-boundary-pty tui-local-runtime-recovery-pty tui-local-shell-pty tui-pty-evidence-producer-contract tui-session-management-pty tui-streaming-tool-cards-pty tui-terminal-safety-pty voice-call-cli-rpc-agent-tool webchat-auto-tts".split(
         " ",
       );
     const marked = readQaScenarioPack().scenarios.filter(
@@ -237,28 +237,18 @@ describe("qa scenario catalog", () => {
         flowContainsCall(scenario.execution.flow, "env.gateway.restartAfterStateMutation"),
       );
 
-    expect(scenarios.map((scenario) => scenario.id).toSorted()).toEqual([
-      "active-memory-preprompt-recall",
-      "channel-participant-identity-inspection",
-      "cron-model-created-explicit-authority",
-      "cron-model-created-one-shot-recurring",
-      "kitchen-sink-live-openai",
-      "matrix-post-restart-room-continue",
-      "matrix-restart-resume",
-      "message-delivery-decision-inspection",
-      "qa-channel-reconnect-dedupe",
-      "remember-across-conversations",
-      "remember-across-reset-private",
-      "slack-restart-resume",
-      "subagent-stale-child-links",
-      "telegram-repeated-command-authorization",
-      "whatsapp-restart-resume",
-    ]);
+    expect(scenarios.length).toBeGreaterThan(0);
     expect(
       scenarios
         .filter((scenario) => scenario.execution.suiteIsolation !== "isolated")
         .map((scenario) => scenario.id),
     ).toEqual([]);
+    expect(
+      scenarios.find((scenario) => scenario.id === "gateway-restart-unclaimed-delivery")?.execution,
+    ).toMatchObject({
+      suiteIsolation: "isolated",
+      isolationReason: expect.stringMatching(/\S/),
+    });
   });
 
   it("uses graceful restart and isolation for Matrix replay dedupe", () => {

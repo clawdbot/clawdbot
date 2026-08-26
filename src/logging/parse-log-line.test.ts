@@ -56,6 +56,19 @@ describe("parseLogLine", () => {
     expect(parseLogLine(JSON.stringify({ 0: "worker", 1: "ready" }))?.subsystem).toBeUndefined();
   });
 
+  it("retains the exact plugin identity from logger binding metadata", () => {
+    const parsed = parseLogLine(
+      JSON.stringify({
+        0: '{"subsystem":"gateway/channels/external-chat"}',
+        1: "sent",
+        _meta: { name: '{"plugin":"vendor-external-chat","feature":"delivery"}' },
+      }),
+    );
+
+    expect(parsed?.plugin).toBe("vendor-external-chat");
+    expect(parsed?.subsystem).toBe("gateway/channels/external-chat");
+  });
+
   it("falls back to meta timestamp when top-level time is missing", () => {
     const line = JSON.stringify({
       0: "hello",

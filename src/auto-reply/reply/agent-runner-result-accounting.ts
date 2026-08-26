@@ -230,16 +230,27 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     runResult.meta.agentMeta.contextTokens > 0
       ? Math.floor(runResult.meta.agentMeta.contextTokens)
       : undefined;
+  const resolvedContextTokens =
+    runtimeContextTokens === undefined
+      ? resolveContextTokensForModel({
+          cfg,
+          provider: providerUsed,
+          model: modelUsed,
+          allowAsyncLoad: false,
+        })
+      : undefined;
   const contextTokensUsed =
     runtimeContextTokens ??
-    resolveContextTokensForModel({
-      cfg,
-      provider: providerUsed,
-      model: modelUsed,
-      fallbackContextTokens: activeSessionEntry?.contextTokens ?? DEFAULT_CONTEXT_TOKENS,
-      allowAsyncLoad: false,
-    }) ??
+    resolvedContextTokens ??
+    activeSessionEntry?.contextTokens ??
     DEFAULT_CONTEXT_TOKENS;
+  const contextTokensSource =
+    runResult.meta?.agentMeta?.contextTokensSource ??
+    (runtimeContextTokens !== undefined
+      ? "runtime"
+      : resolvedContextTokens !== undefined
+        ? "resolved-v1"
+        : undefined);
 
   await persistRunSessionUsage({
     storePath,
@@ -257,11 +268,13 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     modelUsed,
     providerUsed,
     contextTokensUsed,
+    contextTokensSource,
     systemPromptReport: runResult.meta?.systemPromptReport,
     cliSessionId,
     cliSessionBinding,
     clearCliSessionBinding,
     preserveFreshTotalTokensOnStaleUsage: preflightCompactionApplied,
+    agentHarnessId: runResult.meta?.agentMeta?.agentHarnessId,
   });
   if (!isHeartbeat && !preserveUserFacingSessionState && !fallbackExhausted) {
     // A completed run that executed the persisted selection consumes the

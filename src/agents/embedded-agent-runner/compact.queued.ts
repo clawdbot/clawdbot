@@ -541,6 +541,7 @@ async function compactResolvedContextEngine(
         const resolved = await resolveModelAsync(ceRuntimeProvider, ceModelId, agentDir, config, {
           authStorage,
           modelRegistry,
+          preparedModelRuntime,
           skipAgentDiscovery: true,
           allowBundledStaticCatalogFallback: true,
           preferBundledStaticCatalogTransport: true,
@@ -616,14 +617,17 @@ async function compactResolvedContextEngine(
             contextTokenBudget,
             contextEngineRuntimeContext,
           },
-          preparedParams.preflightRequired === true
-            ? {
-                nativeCompactionRequest: "required_preflight",
-                onNativeCompactionCapabilityUsed: () => {
-                  requiredPreflightNativeCapabilityUsed = true;
-                },
-              }
-            : undefined,
+          {
+            preparedModelRuntime,
+            ...(preparedParams.preflightRequired === true
+              ? {
+                  nativeCompactionRequest: "required_preflight",
+                  onNativeCompactionCapabilityUsed: () => {
+                    requiredPreflightNativeCapabilityUsed = true;
+                  },
+                }
+              : {}),
+          },
         )
       : undefined;
   // A model lock normally makes the native harness result terminal: the
@@ -883,7 +887,7 @@ async function compactResolvedContextEngine(
                 contextTokenBudget,
                 contextEngineRuntimeContext,
               },
-              { nativeCompactionRequest: "after_context_engine" },
+              { nativeCompactionRequest: "after_context_engine", preparedModelRuntime },
             );
             if (secondaryNativeHarnessCompaction && !secondaryNativeHarnessCompaction.ok) {
               log.warn(

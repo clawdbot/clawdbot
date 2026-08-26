@@ -89,8 +89,8 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     state.requestUpdate = () => renderLifecycle.invalidate();
     this.cleanups.push(subscribeChatOutboxProjection(state));
     const sendChat = state.handleSendChat;
-    state.handleSendChat = async (messageOverride, options) => {
-      const pending = sendChat(messageOverride, options);
+    state.handleSendChat = async (messageOverride, options, submissionAction) => {
+      const pending = sendChat(messageOverride, options, submissionAction);
       renderLifecycle.invalidate();
       try {
         await pending;

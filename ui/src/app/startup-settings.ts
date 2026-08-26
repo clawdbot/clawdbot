@@ -1,10 +1,11 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { buildControlUiFocusPath } from "@openclaw/session-url-contract";
 // Control UI startup settings resolve native auth handoff and URL parameters.
 import {
   CONTROL_UI_BOOTSTRAP_PROFILE_FRAGMENT_PARAM,
   CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT,
   type ControlUiBootstrapProfileHint,
-} from "../../../src/gateway/control-ui-contract.js";
+} from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { inferBasePathFromPathname, sessionRouteNamespaceFromPath } from "../app-route-paths.ts";
 import type { UiSettings } from "./settings.ts";
 
@@ -36,6 +37,27 @@ declare global {
   interface Window {
     __OPENCLAW_NATIVE_CONTROL_AUTH__?: NativeControlAuth;
   }
+}
+
+export function normalizeLegacyTerminalViewLocation(
+  location: ApplicationStartupLocation,
+  basePath: string,
+): ApplicationStartupLocation {
+  const applicationRoot = basePath ? `${basePath}/` : "/";
+  if (location.pathname !== applicationRoot) {
+    return location;
+  }
+  const searchParams = new URLSearchParams(location.search);
+  if (searchParams.get("view") !== "terminal") {
+    return location;
+  }
+  searchParams.delete("view");
+  const search = searchParams.toString();
+  return {
+    pathname: buildControlUiFocusPath({ kind: "terminal" }, basePath),
+    search: search ? `?${search}` : "",
+    hash: location.hash,
+  };
 }
 
 export function resolveApplicationStartupSettings(

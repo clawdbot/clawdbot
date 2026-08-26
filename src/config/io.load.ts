@@ -1,12 +1,6 @@
-import {
-  loadShellEnvFallback,
-  resolveShellEnvFallbackTimeoutMs,
-  shouldDeferShellEnvFallback,
-  shouldEnableShellEnvFallback,
-} from "../infra/shell-env.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
 import type { ConfigIoContext } from "./io.context.js";
-import { materializeConfigForLoad } from "./io.context.js";
 import { throwInvalidConfig } from "./io.invalid-config.js";
 import { maybeRecoverSuspiciousConfigReadSync } from "./io.observe-recovery.js";
 import {
@@ -27,7 +21,7 @@ import {
   warnOnConfigMiskeys,
 } from "./io.warnings.js";
 import { migrateLegacyContextBudgetConfig, migratePersistedImplicitMainRoster } from "./legacy.js";
-import { resolveShellEnvExpectedKeys } from "./shell-env-expected-keys.js";
+import { materializeRuntimeConfig } from "./materialize.js";
 import type { OpenClawConfig } from "./types.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
@@ -42,27 +36,11 @@ export function loadConfigFromContext(
     envBeforeRead = snapshotEnv(deps.env);
     if (!deps.fs.existsSync(configPath)) {
       loggedConfigWarningFingerprints.delete(configPath);
-      if (
-        context.options.shellEnvFallback !== "defer" &&
-        shouldEnableShellEnvFallback(deps.env) &&
-        !shouldDeferShellEnvFallback(deps.env)
-      ) {
-        loadShellEnvFallback({
-          enabled: true,
-          env: deps.env,
-          expectedKeys: resolveShellEnvExpectedKeys(deps.env),
-          logger: deps.logger,
-          timeoutMs: resolveShellEnvFallbackTimeoutMs(deps.env),
-        });
-      }
       // A missing config is the fresh-install default path: materialize the
       // same runtime defaults an empty {} config gets, or out-of-box behavior
       // (compaction safeguard, session/cron defaults) silently diverges.
-      return materializeConfigForLoad(
-        context,
-        coerceConfig(migratePersistedImplicitMainRoster({}).config),
-        {},
-        undefined,
+      return context.finalizeLoadedRuntimeConfig(
+        materializeRuntimeConfig(coerceConfig(migratePersistedImplicitMainRoster({}).config)),
       );
     }
     const raw = deps.fs.readFileSync(configPath, "utf-8");
@@ -168,12 +146,9 @@ export function loadConfigFromContext(
         return loadConfigFromContext(context, { skipSuspiciousRecovery: true });
       }
     }
-    const cfg = materializeConfigForLoad(
-      context,
-      validated.config,
-      effectiveConfigRaw,
-      pluginMetadata.getManifestRegistry(),
-    );
+    const cfg = materializeRuntimeConfig(validated.config, {
+      manifestRegistry: pluginMetadata.getManifestRegistry(),
+    });
     context.observeLoadConfigSnapshot(
       createConfigFileSnapshot({
         path: configPath,
@@ -208,7 +183,7 @@ export function loadConfigFromContext(
     if ((error as { code?: string })?.code === "INVALID_CONFIG") {
       throw error;
     }
-    deps.logger.error(`Failed to read config at ${configPath}`, error);
+    deps.logger.error(`Failed to read config at ${configPath}: ${formatErrorMessage(error)}`);
     throw error;
   }
 }

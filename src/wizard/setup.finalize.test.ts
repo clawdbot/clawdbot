@@ -16,6 +16,10 @@ type DefaultModelCatalogFacts = ReturnType<
 >;
 
 const runTui = vi.hoisted(() => vi.fn<(options: unknown) => Promise<void>>(async () => {}));
+const setupCleanupExitTimer = vi.hoisted(() => ({ unref: vi.fn() }));
+const scheduleProcessExitAfterTuiReturn = vi.hoisted(() => vi.fn(() => setupCleanupExitTimer));
+const cancelProcessExitAfterTuiReturn = vi.hoisted(() => vi.fn());
+const resolveTuiShutdownHardExitMs = vi.hoisted(() => vi.fn(() => 122_000));
 const restoreTerminalState = vi.hoisted(() => vi.fn());
 const probeGatewayReachable = vi.hoisted(() =>
   vi.fn<() => Promise<{ ok: boolean; detail?: string }>>(async () => ({ ok: true })),
@@ -171,7 +175,10 @@ vi.mock("../commands/gateway-install-token.js", () => ({
 
 vi.mock("../commands/daemon-runtime.js", () => ({
   DEFAULT_GATEWAY_DAEMON_RUNTIME: "node",
-  GATEWAY_DAEMON_RUNTIME_OPTIONS: [{ value: "node", label: "Node" }],
+  GATEWAY_DAEMON_RUNTIME_OPTIONS: [
+    { value: "node", label: "Node" },
+    { value: "bun", label: "Bun 1.4+" },
+  ],
 }));
 
 vi.mock("../commands/health-format.js", () => ({
@@ -179,7 +186,7 @@ vi.mock("../commands/health-format.js", () => ({
 }));
 
 vi.mock("../commands/health.js", () => ({
-  healthCommand,
+  healthCommandNonExiting: healthCommand,
 }));
 
 vi.mock("../flows/search-setup.js", () => ({
@@ -245,7 +252,10 @@ vi.mock("../../packages/terminal-core/src/restore.js", () => ({
 }));
 
 vi.mock("../tui/tui.js", () => ({
+  cancelProcessExitAfterTuiReturn,
+  resolveTuiShutdownHardExitMs,
   runTui,
+  scheduleProcessExitAfterTuiReturn,
 }));
 
 vi.mock("../commands/auth-choice.js", () => ({
@@ -444,6 +454,11 @@ async function withPlatform<T>(platform: NodeJS.Platform, fn: () => Promise<T>):
 describe("finalizeSetupWizard", () => {
   beforeEach(() => {
     runTui.mockClear();
+    setupCleanupExitTimer.unref.mockClear();
+    scheduleProcessExitAfterTuiReturn.mockReset();
+    scheduleProcessExitAfterTuiReturn.mockReturnValue(setupCleanupExitTimer);
+    cancelProcessExitAfterTuiReturn.mockClear();
+    resolveTuiShutdownHardExitMs.mockClear();
     restoreTerminalState.mockClear();
     probeGatewayReachable.mockReset();
     probeGatewayReachable.mockResolvedValue({ ok: false, detail: "offline" });
@@ -588,9 +603,8 @@ describe("finalizeSetupWizard", () => {
     expect(runTui).toHaveBeenCalledWith({
       local: true,
       deliver: false,
-      forceProcessExitOnReturn: true,
       message: undefined,
-      timeoutMs: 300_000,
+      initialMessageTimeoutMs: 300_000,
     });
   });
 
@@ -646,7 +660,6 @@ describe("finalizeSetupWizard", () => {
     expect(runTui).toHaveBeenCalledWith(
       expect.objectContaining({
         config: args.nextConfig,
-        forceProcessExitOnReturn: true,
         boundGateway: {
           url: "ws://127.0.0.1:18789",
           token: gatewayToken,
@@ -656,6 +669,8 @@ describe("finalizeSetupWizard", () => {
     const tuiOptions = runTui.mock.calls.at(-1)?.[0] as Record<string, unknown>;
     expect(tuiOptions).not.toHaveProperty("url");
     expect(tuiOptions).not.toHaveProperty("token");
+    expect(tuiOptions).toMatchObject({ initialMessageTimeoutMs: 300_000 });
+    expect(tuiOptions).not.toHaveProperty("timeoutMs");
   });
 
   it.each([
@@ -853,9 +868,8 @@ describe("finalizeSetupWizard", () => {
     expect(runTui).toHaveBeenCalledWith({
       local: true,
       deliver: false,
-      forceProcessExitOnReturn: true,
       message: "Wake up, my friend!",
-      timeoutMs: 300_000,
+      initialMessageTimeoutMs: 300_000,
     });
   });
 
@@ -1013,9 +1027,8 @@ describe("finalizeSetupWizard", () => {
     expect(runTui).toHaveBeenCalledWith({
       local: true,
       deliver: false,
-      forceProcessExitOnReturn: true,
       message: undefined,
-      timeoutMs: 300_000,
+      initialMessageTimeoutMs: 300_000,
     });
   });
 
@@ -1061,9 +1074,8 @@ describe("finalizeSetupWizard", () => {
       expect(runTui).toHaveBeenCalledWith({
         local: true,
         deliver: false,
-        forceProcessExitOnReturn: true,
         message: "醒醒，我的朋友！",
-        timeoutMs: 300_000,
+        initialMessageTimeoutMs: 300_000,
       });
     } finally {
       if (previousLocale === undefined) {
@@ -1876,6 +1888,39 @@ describe("finalizeSetupWizard", () => {
     expect(requireMockArg(healthCommand, 0, 1)).toBeTypeOf("object");
   });
 
+  it("ends with a health-failure outro when the health check exits after a reachable probe", async () => {
+    // importActual yields the ExitError instance the prod graph sees; the test
+    // file's static import can be a second class instance under Vitest.
+    const { ExitError } = await vi.importActual<typeof import("../runtime.js")>("../runtime.js");
+    healthCommand.mockRejectedValueOnce(new ExitError(1));
+    const prompter = createLaterPrompter();
+
+    await finalizeSetupWizard({
+      flow: "quickstart",
+      opts: {
+        acceptRisk: true,
+        authChoice: "skip",
+        installDaemon: false,
+        skipHealth: false,
+        skipUi: true,
+      },
+      baseConfig: {},
+      nextConfig: {},
+      workspaceDir: "/tmp",
+      settings: {
+        port: 18789,
+        bind: "loopback",
+        authMode: "token",
+        gatewayToken: "session-token",
+        tailscaleMode: "off",
+      },
+      prompter,
+      runtime: createRuntime(),
+    });
+
+    expect(prompter.outro).toHaveBeenCalledWith(expect.stringContaining("health check failed"));
+  });
+
   it("labels unavailable systemd as container runtime information in containers", async () => {
     await withPlatform("linux", async () => {
       isSystemdUserServiceAvailable.mockResolvedValue(false);
@@ -1900,11 +1945,19 @@ describe("finalizeSetupWizard", () => {
       isContainerEnvironment.mockReturnValue(true);
       waitForGatewayReachable.mockResolvedValue({ ok: true });
       probeGatewayReachable.mockResolvedValue({ ok: true });
-      const sessionGateway = { close: vi.fn(async () => {}) };
+      let resolveClose: (() => void) | undefined;
+      const sessionGateway = {
+        close: vi.fn(
+          async () =>
+            await new Promise<void>((resolve) => {
+              resolveClose = resolve;
+            }),
+        ),
+      };
       startGatewayServer.mockResolvedValueOnce(sessionGateway);
       const prompter = createLaterPrompter();
 
-      await finalizeSetupWizard({
+      const finalizing = finalizeSetupWizard({
         flow: "quickstart",
         opts: {
           acceptRisk: true,
@@ -1934,6 +1987,16 @@ describe("finalizeSetupWizard", () => {
         runtime: createRuntime(),
       });
 
+      await vi.waitFor(() => expect(sessionGateway.close).toHaveBeenCalledOnce());
+      expect(resolveTuiShutdownHardExitMs).toHaveBeenCalledWith({ localMode: true });
+      expect(scheduleProcessExitAfterTuiReturn).toHaveBeenCalledOnce();
+      expect(scheduleProcessExitAfterTuiReturn).toHaveBeenNthCalledWith(1, {
+        delayMs: 122_000,
+      });
+      expect(cancelProcessExitAfterTuiReturn).not.toHaveBeenCalled();
+      resolveClose?.();
+      await finalizing;
+
       expect(startGatewayServer).toHaveBeenCalledWith(
         18789,
         expect.objectContaining({
@@ -1952,10 +2015,36 @@ describe("finalizeSetupWizard", () => {
           },
           deliver: false,
           message: undefined,
-          timeoutMs: 300_000,
+          initialMessageTimeoutMs: 300_000,
         }),
       );
+      expect(runTui.mock.calls.at(-1)?.[0]).not.toHaveProperty("timeoutMs");
       expect(sessionGateway.close).toHaveBeenCalledWith({ reason: "onboarding tui exited" });
+      expect(cancelProcessExitAfterTuiReturn).toHaveBeenCalledWith(setupCleanupExitTimer);
+      expect(scheduleProcessExitAfterTuiReturn).toHaveBeenCalledTimes(2);
+      expect(scheduleProcessExitAfterTuiReturn).toHaveBeenNthCalledWith(2);
+      expect(cancelProcessExitAfterTuiReturn.mock.invocationCallOrder[0]).toBeLessThan(
+        scheduleProcessExitAfterTuiReturn.mock.invocationCallOrder[1]!,
+      );
+    });
+  });
+
+  it("keeps a bounded exit armed when session gateway close never settles", async () => {
+    await withPlatform("linux", async () => {
+      isSystemdUserServiceAvailable.mockResolvedValue(false);
+      isContainerEnvironment.mockReturnValue(true);
+      waitForGatewayReachable.mockResolvedValue({ ok: true });
+      probeGatewayReachable.mockResolvedValue({ ok: true });
+      const sessionGateway = { close: vi.fn(() => new Promise<void>(() => {})) };
+      startGatewayServer.mockResolvedValueOnce(sessionGateway);
+      const prompter = createLaterPrompter();
+
+      void finalizeSetupWizard(createModelAuthFinalizeArgs({ prompter }));
+
+      await vi.waitFor(() => expect(sessionGateway.close).toHaveBeenCalledOnce());
+      expect(scheduleProcessExitAfterTuiReturn).toHaveBeenCalledOnce();
+      expect(scheduleProcessExitAfterTuiReturn).toHaveBeenCalledWith({ delayMs: 122_000 });
+      expect(cancelProcessExitAfterTuiReturn).not.toHaveBeenCalled();
     });
   });
 

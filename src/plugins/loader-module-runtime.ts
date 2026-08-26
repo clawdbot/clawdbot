@@ -223,6 +223,14 @@ export function createLazyPluginRuntime(params: {
   };
   return new Proxy({} as PluginRuntime, {
     get(_target, prop, receiver) {
+      // Instance-bound surfaces are complete runtime objects. Keep them direct so
+      // the first Gateway call does not materialize the broad plugin runtime graph.
+      if (prop === "gateway" || prop === "nodes" || prop === "subagent") {
+        const value = params.runtimeOptions?.[prop];
+        if (value !== undefined) {
+          return value;
+        }
+      }
       return Reflect.get(resolveRuntime(), prop, receiver);
     },
     set(_target, prop, value, receiver) {

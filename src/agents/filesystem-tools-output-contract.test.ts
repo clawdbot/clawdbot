@@ -40,14 +40,20 @@ describe("filesystem tool output contracts", () => {
     const text = await tool.execute("read-text", { path: "notes.txt", limit: 10 });
     const image = await tool.execute("read-image", { path: "pixel.png", limit: 10 });
     const truncated = await tool.execute("read-truncated", { path: "long.txt", limit: 10 });
-    const notFound = await tool.execute("read-not-found", { path: "memory/2026-07-17.md" });
+    const notFound = await tool.execute("read-not-found", {
+      path: "memory/2026-07-17.md",
+      optional: true,
+    });
 
     for (const result of [text, image, truncated, notFound]) {
       expectContract(tool, result.details);
     }
     expect(text.details).toEqual({ kind: "text", content: "ordinary text\n" });
     expect(image.details).toMatchObject({ kind: "image", mimeType: "image/png" });
-    expect(truncated.details).toMatchObject({ kind: "truncated" });
+    expect(truncated.details).toMatchObject({
+      kind: "truncated",
+      truncation: { totalBytes: DEFAULT_MAX_BYTES + 1 },
+    });
     expect(notFound.details).toEqual({
       kind: "not_found",
       status: "not_found",
@@ -55,7 +61,7 @@ describe("filesystem tool output contracts", () => {
       optional: true,
     });
     expect(compactToolOutputHint(tool.outputSchema)).toBe(
-      '{ content: string; kind: "text" } | { content: string; kind: "image"; mimeType: string } | { content: string; kind: "truncated"; truncation: { firstLineExceedsLimit: boolean; lastLinePartial: boolean; maxBytes: number; maxLines: number; outputBytes: number; outputLines: number; totalBytes: number; totalLines: number; truncated: true; truncatedBy: "lines" | "bytes" } } | { kind: "not_found"; optional: true; path: string; status: "not_found" }',
+      '{ content: string; kind: "text" } | { content: string; kind: "image"; mimeType: string } | { content: string; continuation: { kind: "line"; offset: number; limit?: number } | { cursor: number; kind: "cursor"; offset: number; limit?: number }; kind: "truncated"; truncation: { firstLineExceedsLimit: boolean; lastLinePartial: boolean; maxBytes: number; maxLines: number; outputBytes: number; outputLines: number; totalBytes: number; totalLines: number; truncated: true; truncatedBy: "lines" | "bytes" } } | { kind: "not_found"; optional: true; path: string; status: "not_found" }',
     );
   });
 

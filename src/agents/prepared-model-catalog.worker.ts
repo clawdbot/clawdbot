@@ -1,6 +1,7 @@
 /** Worker-thread entrypoint for complete model-catalog discovery. */
 import { parentPort, workerData } from "node:worker_threads";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import { resolveRuntimeSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
 import {
   resolveAgentCredentialMapFromStore,
   resolveUsableAgentCredentialModes,
@@ -20,6 +21,7 @@ import {
   type PreparedModelWorkerRequest,
   type PreparedModelWorkerResult,
 } from "./prepared-model-catalog-worker.js";
+import { scopeSyntheticAuthProviderRefs } from "./prepared-model-runtime.synthetic-auth.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
 
 function refreshAuthStore(params: {
@@ -61,7 +63,6 @@ function refreshAuthStore(params: {
       config: params.config,
       metadataSnapshot: params.pluginGeneration.pluginMetadataSnapshot,
       pluginRegistry: params.pluginGeneration.pluginRegistry,
-      workspaceDir: params.pluginGeneration.pluginMetadataSnapshot.workspaceDir,
     },
     () =>
       overlayExternalAuthProfiles(prepared, {
@@ -122,8 +123,8 @@ export async function runPreparedModelCatalogWorkerRequest(
         ),
       };
     }
-    const { prepareAgentCatalogSource, prepareFullCatalogFacts } =
-      await import("./prepared-model-runtime.facts.js");
+    const { prepareAgentCatalogSource } = await import("./prepared-model-runtime.facts.js");
+    const { prepareFullCatalogFacts } = await import("./prepared-model-runtime.full-catalog.js");
     // Full discovery is one point-in-time operation: refresh first, then let every provider hook
     // and the returned availability projection consume the same exact store.
     const authStore = refreshAuthStore({
@@ -141,12 +142,15 @@ export async function runPreparedModelCatalogWorkerRequest(
         config: value.input.config,
         metadataSnapshot: prepared.pluginGeneration.pluginMetadataSnapshot,
         pluginRegistry: prepared.pluginGeneration.pluginRegistry,
-        workspaceDir: value.input.workspaceDir,
       },
       () =>
         resolveAmbientAgentCredentialsForDiscovery({
           config: value.input.config,
           env: value.input.env,
+          syntheticAuthProviderRefs: scopeSyntheticAuthProviderRefs(
+            resolveRuntimeSyntheticAuthProviderRefs(),
+            value.providerIds,
+          ),
           ...(value.input.workspaceDir ? { workspaceDir: value.input.workspaceDir } : {}),
         }),
     );

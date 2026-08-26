@@ -1,10 +1,13 @@
-import { request } from "node:http";
-import { afterEach, describe, expect, it } from "vitest";
+import { request, type Server } from "node:http";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { getFreePort } from "../../test-utils/ports.js";
+import * as httpListen from "../server/http-listen.js";
 import { createGatewayPortalService, type GatewayPortalService } from "./portal-service.js";
 
 const services = new Set<GatewayPortalService>();
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all([...services].map((service) => service.closeAll()));
   services.clear();
 });
@@ -27,6 +30,16 @@ async function getStatus(host: string, port: number, path: string): Promise<numb
   });
 }
 
+async function getDistinctFreePort(excluded: number): Promise<number> {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const port = await getFreePort();
+    if (port !== excluded) {
+      return port;
+    }
+  }
+  throw new Error("Failed to reserve a distinct test port");
+}
+
 describe("gateway portal service", () => {
   it("allocates one port across every frozen bind host", async () => {
     const { service, httpServers } = makeService(["127.0.0.1", "::1"]);
@@ -37,6 +50,70 @@ describe("gateway portal service", () => {
     expect(httpServers).toHaveLength(2);
     expect(await getStatus("127.0.0.1", portal.listenPort, "/")).toBe(401);
     expect(await getStatus("::1", portal.listenPort, "/")).toBe(401);
+  });
+
+  it("retries a target-port collision before binding sibling hosts", async () => {
+    const targetPort = await getFreePort();
+    const acceptedPort = await getDistinctFreePort(targetPort);
+    const actualListen = httpListen.listenGatewayHttpServer;
+    const calls: Array<{ host: string; port: number }> = [];
+    let primaryAttempt = 0;
+    vi.spyOn(httpListen, "listenGatewayHttpServer").mockImplementation(async (params) => {
+      calls.push({ host: params.bindHost, port: params.port });
+      if (params.bindHost === "127.0.0.1" && params.port === 0) {
+        primaryAttempt += 1;
+        await actualListen({
+          ...params,
+          port: primaryAttempt === 1 ? targetPort : acceptedPort,
+        });
+        return;
+      }
+      await actualListen(params);
+    });
+    const { service, httpServers } = makeService(["127.0.0.1", "::1"]);
+
+    const portal = await service.open({ targetPort });
+
+    expect(portal.listenPort).toBe(acceptedPort);
+    expect(calls).toEqual([
+      { host: "127.0.0.1", port: 0 },
+      { host: "127.0.0.1", port: 0 },
+      { host: "::1", port: acceptedPort },
+    ]);
+    expect(httpServers).toHaveLength(2);
+    expect(httpServers.every((server) => server.listening)).toBe(true);
+    expect(await getStatus("127.0.0.1", portal.listenPort, `/?${portal.tokenQuery}`)).toBe(502);
+
+    const ownedServers = [...httpServers];
+    await service.closeAll();
+    expect(httpServers).toEqual([]);
+    expect(ownedServers.every((server) => !server.listening && server.address() === null)).toBe(
+      true,
+    );
+  });
+
+  it("cleans up when every allocation collides with the target port", async () => {
+    const targetPort = await getFreePort();
+    const actualListen = httpListen.listenGatewayHttpServer;
+    const attemptedServers = new Set<Server>();
+    const listen = vi
+      .spyOn(httpListen, "listenGatewayHttpServer")
+      .mockImplementation(async (params) => {
+        attemptedServers.add(params.httpServer);
+        await actualListen({ ...params, port: targetPort });
+      });
+    const { service, httpServers } = makeService(["127.0.0.1"]);
+
+    await expect(service.open({ targetPort })).rejects.toThrow(
+      `Portal listener repeatedly allocated target port ${targetPort}`,
+    );
+
+    expect(listen).toHaveBeenCalledTimes(10);
+    expect(attemptedServers.size).toBe(1);
+    expect(httpServers).toEqual([]);
+    const [primaryServer] = attemptedServers;
+    expect(primaryServer?.listening).toBe(false);
+    expect(primaryServer?.address()).toBeNull();
   });
 
   it("updates an existing target without replacing its listener or token", async () => {

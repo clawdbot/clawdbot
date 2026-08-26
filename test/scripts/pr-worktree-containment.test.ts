@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
+  chmodSync,
   mkdirSync,
   readFileSync,
   realpathSync,
@@ -109,7 +110,7 @@ function makeStaleWorktreeDir(fixture: Fixture) {
   mkdirSync(join(fixture.root, ".worktrees", "pr-42"), { recursive: true });
 }
 
-function runShell(fixture: Fixture, commands: string[]) {
+function runShell(fixture: Fixture, commands: string[], env?: NodeJS.ProcessEnv) {
   return spawnSync(
     "bash",
     [
@@ -132,7 +133,7 @@ function runShell(fixture: Fixture, commands: string[]) {
       reviewScript,
       fixture.root,
     ],
-    { cwd: fixture.root, encoding: "utf8" },
+    { cwd: fixture.root, encoding: "utf8", env: { ...process.env, ...env } },
   );
 }
 
@@ -330,6 +331,76 @@ describePosix("scripts/pr worktree containment", () => {
     );
     expect(readFileSync(join(worktree, "main-only.txt"), "utf8")).toBe("foreign ignored\n");
     expect(existsSync(join(worktree, ".local", "review-transition.json"))).toBe(true);
+    expectCanonicalCheckoutUnchanged(fixture);
+  });
+
+  it("allows a missing transition path that merely matches an ignore rule", () => {
+    const fixture = createReviewFixture();
+    const result = runShell(fixture, [
+      "review_init 42",
+      "review_checkout_pr 42",
+      'printf "main-only.txt\\n" >> "$(git rev-parse --git-path info/exclude)"',
+      "git check-ignore -q main-only.txt",
+      "test ! -e main-only.txt",
+      "review_checkout_main 42",
+    ]);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(readFileSync(join(fixture.root, ".worktrees", "pr-42", "main-only.txt"), "utf8")).toBe(
+      "main-only\n",
+    );
+    expectCanonicalCheckoutUnchanged(fixture);
+  });
+
+  it("checks every transition target for ignored collisions with bounded Git queries", () => {
+    const fixture = createReviewFixture();
+    git(fixture.root, "checkout", "review/pr");
+    for (let index = 0; index < 32; index += 1) {
+      writeFileSync(join(fixture.root, `transition-batch-${index}.txt`), `${index}\n`);
+    }
+    const literalPath = "transition-[literal]*?.txt";
+    writeFileSync(join(fixture.root, literalPath), "literal path\n");
+    git(fixture.root, "add", ".");
+    git(fixture.root, "commit", "-m", "add transition batch");
+    git(fixture.root, "update-ref", "refs/pull/42/head", "HEAD");
+    git(fixture.root, "checkout", fixture.siblingBranch);
+
+    const tools = join(fixture.root, "tools");
+    const commandLog = join(fixture.root, "git-commands.log");
+    mkdirSync(tools);
+    const realGit = spawnSync("bash", ["-lc", "command -v git"], {
+      encoding: "utf8",
+    }).stdout.trim();
+    writeFileSync(
+      join(tools, "git"),
+      [
+        "#!/usr/bin/env bash",
+        'printf "%s\\n" "$*" >> "$GIT_COMMAND_LOG"',
+        'if [[ ( "${1:-}" == "restore" || "${2:-}" == "restore" ) && "$#" -gt 12 ]]; then',
+        '  printf "%s\\n" "Argument list too long" >&2',
+        "  exit 126",
+        "fi",
+        'exec "$REAL_GIT" "$@"',
+      ].join("\n"),
+    );
+    chmodSync(join(tools, "git"), 0o755);
+
+    const result = runShell(fixture, ["review_checkout_pr 42"], {
+      GIT_COMMAND_LOG: commandLog,
+      PATH: `${tools}:${process.env.PATH ?? ""}`,
+      REAL_GIT: realGit,
+    });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    const commands = readFileSync(commandLog, "utf8").trim().split("\n");
+    // checkout validates once before journaling and again while recovering it.
+    expect(commands.filter((command) => command.startsWith("check-ignore "))).toHaveLength(2);
+    expect(
+      commands.filter((command) => command.startsWith("ls-files --others --ignored ")),
+    ).toHaveLength(0);
+    expect(readFileSync(join(fixture.root, ".worktrees", "pr-42", literalPath), "utf8")).toBe(
+      "literal path\n",
+    );
     expectCanonicalCheckoutUnchanged(fixture);
   });
 });

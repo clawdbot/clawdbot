@@ -38,7 +38,6 @@ import {
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { formatCompactTokenCount } from "../../lib/format.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
-import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
   DEFAULT_AGENT_ID,
@@ -376,7 +375,7 @@ async function executeThink(
           t("chat.commandResults.thinking.current", {
             level: resolveCurrentThinkingLevel(session, defaults, models),
           }),
-          formatThinkingCommandOptionsForSession(session, defaults),
+          formatThinkingCommandOptionsForSession(session, defaults, models),
         ),
       };
     } catch (err) {
@@ -406,20 +405,21 @@ async function executeThink(
 
   try {
     const { session, defaults } = await loadCurrentSessionState(context, sessionKey);
-    const level = resolveThinkingLevelInput(rawLevel, session, defaults);
+    const modelCatalog = context.chatModelCatalog ?? context.modelCatalog ?? [];
+    const level = resolveThinkingLevelInput(rawLevel, session, defaults, modelCatalog);
     if (!level) {
       return {
         content: t("chat.commandResults.thinking.unrecognized", {
           level: rawLevel,
-          options: formatThinkingCommandOptionsForSession(session, defaults),
+          options: formatThinkingCommandOptionsForSession(session, defaults, modelCatalog),
         }),
       };
     }
-    if (!isThinkingLevelOptionForSession(session, defaults, level)) {
+    if (!isThinkingLevelOptionForSession(session, defaults, level, modelCatalog)) {
       return {
         content: t("chat.commandResults.thinking.unsupported", {
           level: rawLevel,
-          options: formatThinkingCommandOptionsForSession(session, defaults),
+          options: formatThinkingCommandOptionsForSession(session, defaults, modelCatalog),
         }),
       };
     }
@@ -811,10 +811,10 @@ async function loadModelCatalog(
   }
 }
 
-async function resolveSteerTarget(
+function resolveCommandMessage(
   sessionKey: string,
   args: string,
-): Promise<{ key: string; message: string } | { error: string }> {
+): { key: string; message: string } | { error: string } {
   const trimmed = args.trim();
   if (!trimmed) {
     return { error: "empty" };
@@ -825,13 +825,8 @@ async function resolveSteerTarget(
   };
 }
 
-function isActiveSteerSession(
-  session: GatewaySessionRow | undefined,
-): session is GatewaySessionRow & { activeRunIds: [string] } {
-  return Boolean(session && isSessionRunActive(session) && session.activeRunIds?.length === 1);
-}
-
 type SteerChatSendAckStatus = "started" | "in_flight" | "ok" | "timeout" | "error";
+type SteerChatSendAck = { runId?: unknown; status?: unknown };
 
 function normalizeSteerChatSendAckStatus(payload: unknown): SteerChatSendAckStatus {
   if (!payload || typeof payload !== "object") {
@@ -871,19 +866,10 @@ async function executeSteer(
   context: SlashCommandContext,
 ): Promise<SlashCommandResult> {
   try {
-    const resolved = await resolveSteerTarget(sessionKey, args);
+    const resolved = resolveCommandMessage(sessionKey, args);
     if ("error" in resolved) {
       return {
         content: resolved.error === "empty" ? t("chat.commandResults.steer.usage") : resolved.error,
-      };
-    }
-    const sessions =
-      context.sessionsResult ??
-      (await listSessions(context, selectedGlobalScope(sessionKey, context)));
-    const targetSession = resolveCurrentSession(sessions, resolved.key);
-    if (!isActiveSteerSession(targetSession)) {
-      return {
-        content: t("chat.commandResults.steer.noActiveRun"),
       };
     }
     assertCurrentSlashCommand(context);
@@ -894,10 +880,6 @@ async function executeSteer(
         message: resolved.message,
         deliver: false,
         queueMode: "steer",
-        expectedRunId: targetSession.activeRunIds[0],
-        ...(targetSession.activeLeafEntryId !== undefined
-          ? { expectedLeafEntryId: targetSession.activeLeafEntryId }
-          : {}),
         idempotencyKey: generateUUID(),
       }),
     );
@@ -920,13 +902,13 @@ async function executeSteer(
 
 /** Hard redirect — aborts the active run and restarts with a new message. */
 async function executeRedirect(
-  _client: GatewayBrowserClient,
+  client: GatewayBrowserClient,
   sessionKey: string,
   args: string,
   context: SlashCommandContext,
 ): Promise<SlashCommandResult> {
   try {
-    const resolved = await resolveSteerTarget(sessionKey, args);
+    const resolved = resolveCommandMessage(sessionKey, args);
     if ("error" in resolved) {
       return {
         content:
@@ -934,11 +916,13 @@ async function executeRedirect(
       };
     }
     assertCurrentSlashCommand(context);
-    const resp = await context.sessions.steer(
-      resolved.key,
-      resolved.message,
-      selectedGlobalScope(resolved.key, context),
-    );
+    const resp = await client.request<SteerChatSendAck>("chat.send", {
+      sessionKey: resolved.key,
+      ...selectedGlobalScope(resolved.key, context),
+      message: resolved.message,
+      queueMode: "interrupt",
+      idempotencyKey: generateUUID(),
+    });
     const ackStatus = normalizeSteerChatSendAckStatus(resp);
     const terminalAckContent = formatTerminalRedirectAckContent(ackStatus);
     if (terminalAckContent) {

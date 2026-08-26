@@ -101,6 +101,24 @@ describe("qa suite transport helpers", () => {
     await expect(pending).rejects.toThrow("Tool read not found");
   });
 
+  it("fails success-only waits when a model reports a failed status with equals syntax", async () => {
+    const state = createQaBusState();
+    const pending = waitForOutboundMessage(
+      state,
+      (candidate) => candidate.text.includes("QA-RESTART-OK"),
+      5_000,
+    );
+
+    state.addOutboundMessage({
+      to: "dm:qa-operator",
+      text: "status=FAILED\nerror=Could not parse services",
+      senderId: "openclaw",
+      senderName: "OpenClaw QA",
+    });
+
+    await expect(pending).rejects.toThrow("Could not parse services");
+  });
+
   it("checks no-outbound waits from the supplied outbound cursor", async () => {
     const state = createQaBusState();
     state.addOutboundMessage({

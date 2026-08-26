@@ -9,6 +9,8 @@ export type FormatDurationSecondsOptions = {
 };
 
 export type FormatDurationCompactOptions = {
+  /** Show year units instead of folding them into days. Default: false */
+  showYears?: boolean;
   /** Add space between units: "2m 5s" instead of "2m5s". Default: false */
   spaced?: boolean;
 };
@@ -64,7 +66,7 @@ export function formatDurationCompact(
     return prettyMilliseconds(roundedMs);
   }
   const formatted = prettyMilliseconds(Math.round(ms / 1000) * 1000, {
-    hideYear: true,
+    hideYear: options?.showYears !== true,
     unitCount: 2,
   });
   return options?.spaced ? formatted : formatted.replaceAll(" ", "");

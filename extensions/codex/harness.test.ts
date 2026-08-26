@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 
 const completeWithPreparedSimpleCompletionModel = vi.hoisted(() => vi.fn());
 const runCodexIsolatedCompletion = vi.hoisted(() => vi.fn());
+const runCodexAppServerAttempt = vi.hoisted(() => vi.fn());
 
 vi.mock("openclaw/plugin-sdk/simple-completion-runtime", () => ({
   completeWithPreparedSimpleCompletionModel,
@@ -14,8 +15,12 @@ vi.mock("openclaw/plugin-sdk/simple-completion-runtime", () => ({
 vi.mock("./src/app-server/isolated-completion.js", () => ({
   runCodexIsolatedCompletion,
 }));
+vi.mock("./src/app-server/run-attempt.js", () => ({
+  runCodexAppServerAttempt,
+}));
 
 import { createCodexAppServerAgentHarness } from "./harness.js";
+import { buildCodexRuntimeModelParams } from "./src/app-server/model-runtime.js";
 import {
   createCodexTestBindingStore,
   sessionBindingIdentity,
@@ -29,9 +34,13 @@ describe("Codex agent harness supports()", () => {
 
   it("publishes provider ids for lightweight auto selection", () => {
     expect(harness.autoSelection?.providerIds).toEqual(["codex", "openai"]);
-    expect(
-      (harness as typeof harness & { cloudPlacement?: { mode: "remote-exec" } }).cloudPlacement,
-    ).toEqual({ mode: "remote-exec" });
+    expect(harness.cloudPlacement).toEqual({
+      mode: "remote-exec",
+      devicePlacement: {
+        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+        consumesWorkerSlot: false,
+      },
+    });
   });
 
   it("keeps computer-control denies out of the native-surface exemption", () => {
@@ -183,6 +192,38 @@ describe("Codex agent harness supports()", () => {
     });
   });
 
+  it("uses the attempt-scoped Codex config before the live Gateway config", async () => {
+    runCodexAppServerAttempt.mockResolvedValueOnce({ stopReason: "stop" });
+    const attemptHarness = createCodexAppServerAgentHarness({
+      bindingStore: testCodexAppServerBindingStore,
+      pluginConfig: { appServer: { homeScope: "agent" } },
+      resolvePluginConfig: () => ({ appServer: { homeScope: "agent" } }),
+    });
+    const params = {
+      config: {
+        plugins: {
+          entries: {
+            codex: { config: { appServer: { transport: "stdio", homeScope: "user" } } },
+          },
+        },
+      },
+      model: {
+        id: "gpt-5.6-sol",
+        params: buildCodexRuntimeModelParams("gpt-5.6-sol", "codex-execution-model"),
+      },
+    } as unknown as Parameters<NonNullable<typeof attemptHarness.runAttempt>>[0];
+
+    await attemptHarness.runAttempt?.(params);
+
+    expect(runCodexAppServerAttempt).toHaveBeenCalledWith(
+      params,
+      expect.objectContaining({
+        pluginConfig: { appServer: { transport: "stdio", homeScope: "user" } },
+        runtimeModelId: "codex-execution-model",
+      }),
+    );
+  });
+
   it("supports an official route declared compatible with Codex", () => {
     expect(
       harness.supports({
@@ -207,6 +248,62 @@ describe("Codex agent harness supports()", () => {
         preparedAuth: { source: "harness" },
       },
     });
+    expect(result.supported).toBe(false);
+    expect(!result.supported ? result.reason : undefined).toContain("not declared");
+  });
+
+  it("lets explicitly selected Codex discover unlisted models with its own account", () => {
+    expect(
+      harness.supports({
+        provider: "openai",
+        modelId: "gpt-future",
+        requestedRuntime: "codex",
+        modelProvider: {
+          requestTransportOverrides: "none",
+          preparedAuth: { source: "harness" },
+        },
+      }),
+    ).toEqual({ supported: true, priority: 100 });
+  });
+
+  it("lets explicit Codex model discovery run before auth has been prepared", () => {
+    expect(
+      harness.supports({
+        provider: "openai",
+        modelId: "gpt-future",
+        requestedRuntime: "codex",
+        modelProvider: { requestTransportOverrides: "none" },
+      }),
+    ).toEqual({ supported: true, priority: 100 });
+  });
+
+  it.each([
+    {
+      label: "automatic runtime selection",
+      requestedRuntime: "auto" as const,
+      modelProvider: { preparedAuth: { source: "harness" as const } },
+    },
+    {
+      label: "an authored endpoint",
+      requestedRuntime: "codex" as const,
+      modelProvider: {
+        baseUrl: "https://relay.example.test/v1",
+        preparedAuth: { source: "harness" as const },
+      },
+    },
+    {
+      label: "an owner-selected credential",
+      requestedRuntime: "codex" as const,
+      modelProvider: { preparedAuth: { source: "profile" as const, mode: "api-key" } },
+    },
+  ])("does not infer native model access for $label", ({ requestedRuntime, modelProvider }) => {
+    const result = harness.supports({
+      provider: "openai",
+      modelId: "gpt-future",
+      requestedRuntime,
+      modelProvider: { requestTransportOverrides: "none", ...modelProvider },
+    });
+
     expect(result.supported).toBe(false);
     expect(!result.supported ? result.reason : undefined).toContain("not declared");
   });

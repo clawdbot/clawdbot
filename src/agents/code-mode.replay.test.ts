@@ -42,8 +42,8 @@ describe("Code Mode restart-safe replay", () => {
         {
           restartSafe: true,
           code: `
-          const matches = await tools.search(${JSON.stringify(targetTool.name)});
-          return await tools.call(matches[0].id, {});
+          const [read] = await catalog.search(${JSON.stringify(targetTool.name)});
+          return await read({});
         `,
         },
       ),
@@ -71,7 +71,7 @@ describe("Code Mode restart-safe replay", () => {
     expect(completed.status).toBe("completed");
   });
 
-  it("allows explicitly replay-safe plugin tools by exact catalog id", async () => {
+  it("allows explicitly replay-safe plugin tools through callable search", async () => {
     const targetTool = pluginTool("fake_plugin_read", "Plugin read");
     setPluginToolMeta(targetTool, {
       pluginId: "fake-code-mode",
@@ -93,8 +93,40 @@ describe("Code Mode restart-safe replay", () => {
       waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
       restartSafe: true,
       code: `
-        const matches = await tools.search("fake_plugin_read");
-        return await tools.call(matches[0].id, {});
+        const [read] = await catalog.search("fake_plugin_read");
+        return await read({});
+      `,
+    });
+
+    expect(completed.status).toBe("completed");
+    expect(completed.replaySafe).toBe(true);
+    expect(targetTool.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves a replay-safe tool through its reserved-name catalog handle", async () => {
+    const targetTool = pluginTool("catalog", "Reserved-name plugin read");
+    setPluginToolMeta(targetTool, {
+      pluginId: "fake-code-mode",
+      optional: true,
+      replaySafe: true,
+    });
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, targetTool],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const completed = await runUntilCompleted({
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
+      restartSafe: true,
+      code: `
+        const [read] = await catalog.search("catalog");
+        return await read({});
       `,
     });
 
@@ -161,8 +193,8 @@ describe("Code Mode restart-safe replay", () => {
         {
           restartSafe: true,
           code: `
-          const matches = await tools.search("fake_write");
-          return await tools.call(matches[0].id, {});
+          const [write] = await catalog.search("fake_write");
+          return await write({});
         `,
         },
       ),
@@ -205,10 +237,10 @@ describe("Code Mode restart-safe replay", () => {
       waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
       restartSafe: true,
       code: `
-        const reads = await tools.search("fake_safe_read");
-        await tools.call(reads[0].id, {});
-        const writes = await tools.search("fake_unsafe_write");
-        return await tools.call(writes[0].id, {});
+        const [read] = await catalog.search("fake_safe_read");
+        await read({});
+        const [write] = await catalog.search("fake_unsafe_write");
+        return await write({});
       `,
     });
 
@@ -247,8 +279,8 @@ describe("Code Mode restart-safe replay", () => {
         {
           restartSafe: false,
           code: `
-          const matches = await tools.search("fake_forced_write");
-          return await tools.call(matches[0].id, {});
+          const [write] = await catalog.search("fake_forced_write");
+          return await write({});
         `,
         },
       ),

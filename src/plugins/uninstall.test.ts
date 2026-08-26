@@ -389,7 +389,6 @@ describe("planPluginUninstall package ownership", () => {
     expect(result.config.plugins).toEqual({
       allow: ["other"],
       entries: { other: { enabled: true } },
-      slots: { memory: "memory-core" },
     });
     expect(result.actions).toMatchObject({
       entry: true,
@@ -586,7 +585,7 @@ describe("removePluginFromConfig", () => {
         },
       }),
       pluginId: "memory-plugin",
-      expectedMemory: "memory-core",
+      expectedMemory: undefined,
       expectedChanged: true,
     },
     {
@@ -620,7 +619,7 @@ describe("removePluginFromConfig", () => {
 
     const { config: result, actions } = removePluginFromConfig(config, "context-plugin");
 
-    expect(result.plugins?.slots?.contextEngine).toBe("legacy");
+    expect(result.plugins?.slots?.contextEngine).toBeUndefined();
     expect(actions.contextEngineSlot).toBe(true);
   });
 
@@ -979,7 +978,7 @@ describe("uninstallPlugin", () => {
     });
     expect(successfulResult.config.plugins?.allow).toEqual(["other-plugin"]);
     expect(successfulResult.config.plugins?.deny).toBeUndefined();
-    expect(successfulResult.config.plugins?.slots?.memory).toBe("memory-core");
+    expect(successfulResult.config.plugins?.slots?.memory).toBeUndefined();
     expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
   });
 
@@ -1090,10 +1089,6 @@ describe("uninstallPlugin", () => {
       expectedConfig: {
         plugins: {
           allow: ["other-plugin"],
-          slots: {
-            memory: "memory-core",
-            contextEngine: "legacy",
-          },
         },
       },
     },

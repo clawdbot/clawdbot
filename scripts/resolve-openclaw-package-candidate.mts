@@ -24,6 +24,7 @@ import { terminateManagedChild } from "./lib/managed-child-process.mts";
 import { resolveNpmJsonEntries } from "./lib/npm-json-output.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { resolveNpmRunner } from "./npm-runner.mts";
+import { validatePackageSourceDir } from "./package-source-preflight.mjs";
 import { createPrepublishPluginRegistryArtifact } from "./prepublish-plugin-registry-artifact.mjs";
 
 const ROOT_DIR = resolveRepoRoot(import.meta.url);
@@ -1676,6 +1677,7 @@ async function resolveCandidate(options: PackageCandidateOptions) {
       }
       packageSourceSha = packageSource.selectedSha;
       packageTrustedReason = packageSource.trustedReason;
+      validatePackageSourceDir(packageSource.sourceDir, { allowUnreleasedChangelog: true });
       await installPackageSourceDeps(packageSource.sourceDir);
       await run("node", [
         "scripts/package-openclaw-for-docker.mjs",

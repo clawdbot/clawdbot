@@ -351,6 +351,7 @@ describe("delivery-queue recovery", () => {
           agentId: "main",
           operationId,
           storePath,
+          routeFingerprint: "route-recovery",
         },
       },
       operationId,
@@ -421,7 +422,14 @@ describe("delivery-queue recovery", () => {
   it("finalizes a persisted conversation operation during queue recovery", async () => {
     const scope = await createConversationRecoveryFixture("operation-recovery");
     const deliveryResult = { channel: "reef" as const, messageId: "reef-platform" };
-    const deliver = vi.fn(async (params: { onDeliveryResult?: (result: unknown) => unknown }) => {
+    const deliver = vi.fn(async (params: Parameters<DeliverFn>[0]) => {
+      expect(params.deliveryCompletion).toBeUndefined();
+      expect(params.conversationDeliveryAttemptAuthority).toEqual({
+        agentId: "main",
+        operationId: "operation-recovery",
+        storePath: scope.storePath,
+        routeFingerprint: "route-recovery",
+      });
       await params.onDeliveryResult?.(deliveryResult);
       return [deliveryResult];
     });
@@ -1087,7 +1095,7 @@ describe("delivery-queue recovery", () => {
     const id = await enqueueRecoveryDelivery({
       accountId: "acct-1",
       payloads: [{ text: "maybe sent" }],
-      replyToId: "root-message",
+      reply: { source: "implicit", replyToId: "root-message", mode: "all" },
       threadId: "thread-1",
       silent: true,
       maxRetries: 1,
@@ -1461,8 +1469,7 @@ describe("delivery-queue recovery", () => {
   });
   it("replays stored delivery options during recovery", async () => {
     const storedOptions = {
-      replyToId: "root-message",
-      replyToMode: "first",
+      reply: { replyToId: "root-message", source: "implicit", mode: "first" } as const,
       formatting: {
         textLimit: 1234,
         maxLinesPerMessage: 7,

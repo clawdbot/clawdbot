@@ -53,6 +53,7 @@ import {
   resolveTaskForLookupToken,
   setTaskCleanupAfterById,
 } from "./runtime-internal.js";
+import { runTaskFlowRegistryMaintenance } from "./task-flow-registry.maintenance.js";
 import {
   configureTaskAuditTaskProvider,
   listTaskAuditFindings,
@@ -61,7 +62,7 @@ import {
 import type { TaskAuditFinding, TaskAuditSummary } from "./task-registry.audit.js";
 import {
   listTaskRegistryRecordsByRuntimeSourceIdFromSqlite,
-  loadTaskRegistryStateFromSqliteReadOnly,
+  loadTaskRegistryStateFromSqliteReadOnlyResult,
 } from "./task-registry.store.sqlite.js";
 import { summarizeTaskRecords } from "./task-registry.summary.js";
 import type { TaskRecord, TaskRegistrySummary, TaskStatus } from "./task-registry.types.js";
@@ -490,15 +491,7 @@ function hasDetachedTaskRecoveryHook(): boolean {
 }
 
 function shouldStampCleanupAfter(task: TaskRecord): boolean {
-  return (
-    isTerminalTask(task) &&
-    typeof task.cleanupAfter !== "number" &&
-    resolveTaskCleanupAfter(task) !== undefined
-  );
-}
-
-function resolveCleanupAfter(task: TaskRecord): number | undefined {
-  return resolveTaskCleanupAfter(task);
+  return isTerminalTask(task) && typeof task.cleanupAfter !== "number";
 }
 
 function taskReferenceAt(task: TaskRecord): number {
@@ -698,7 +691,7 @@ function markTaskLost(
     ...task,
     status: "lost",
     endedAt: lostAt,
-  })!;
+  });
   const updated =
     taskRegistryMaintenanceRuntime.markTaskLostById({
       taskId: task.taskId,
@@ -747,7 +740,7 @@ function projectTaskRecovered(task: TaskRecord, recovery: CronTerminalRecovery):
     ...projected,
     ...(typeof projected.cleanupAfter === "number"
       ? {}
-      : { cleanupAfter: resolveCleanupAfter(projected) }),
+      : { cleanupAfter: resolveTaskCleanupAfter(projected) }),
   };
 }
 
@@ -767,7 +760,7 @@ function projectTaskLost(
     ...projected,
     ...(typeof projected.cleanupAfter === "number"
       ? {}
-      : { cleanupAfter: resolveCleanupAfter(projected) }),
+      : { cleanupAfter: resolveTaskCleanupAfter(projected) }),
   };
 }
 
@@ -819,9 +812,18 @@ export function reconcileInspectableTasks(): TaskRecord[] {
 
 /** Reads and reconciles persisted tasks without initializing the process task runtime. */
 export function listInspectableTasksReadOnly(): TaskRecord[] {
-  return reconcileTaskRecordsForOperatorInspection([
-    ...loadTaskRegistryStateFromSqliteReadOnly().tasks.values(),
-  ]);
+  return inspectTasksReadOnly().tasks;
+}
+
+export function inspectTasksReadOnly(): {
+  tasks: TaskRecord[];
+  state: "ready" | "migration-required";
+} {
+  const loaded = loadTaskRegistryStateFromSqliteReadOnlyResult();
+  return {
+    state: loaded.state,
+    tasks: reconcileTaskRecordsForOperatorInspection([...loaded.snapshot.tasks.values()]),
+  };
 }
 
 configureTaskAuditTaskProvider(reconcileInspectableTasks);
@@ -1012,7 +1014,10 @@ function startScheduledSweep() {
     sweepInProgress = false;
   };
   void runWithGatewayIndependentRootWorkAdmission(async () => {
+    // Flow retention reads linked task activity, so reconcile the task owner first.
+    // Reversing this order can preserve phantom active work for another sweep.
     await sweepTaskRegistry();
+    await runTaskFlowRegistryMaintenance();
   }).then(clearSweepInProgress, clearSweepInProgress);
 }
 
@@ -1105,12 +1110,10 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
       continue;
     }
     if (shouldStampCleanupAfter(current)) {
-      const cleanupAfter = resolveCleanupAfter(current);
       if (
-        cleanupAfter !== undefined &&
         taskRegistryMaintenanceRuntime.setTaskCleanupAfterById({
           taskId: current.taskId,
-          cleanupAfter,
+          cleanupAfter: resolveTaskCleanupAfter(current),
         })
       ) {
         cleanupStamped += 1;

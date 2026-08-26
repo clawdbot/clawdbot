@@ -349,6 +349,27 @@ describe("existing-session browser routes", () => {
     expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).not.toHaveBeenCalled();
   });
 
+  it("keeps ref semantics for labeled existing-session screenshots", async () => {
+    const handler = getSnapshotPostHandler();
+    const response = createBrowserRouteResponse();
+
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { labels: true, ref: "btn-1", type: "jpeg", timeoutMs: 4321 },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({ ok: true, labels: true });
+    expect(chromeMcpMocks.takeChromeMcpSnapshot).not.toHaveBeenCalled();
+    expect(chromeMcpMocks.takeChromeMcpScreenshot).toHaveBeenCalledWith(
+      expect.objectContaining({ uid: "btn-1", format: "jpeg", timeoutMs: 4321 }),
+    );
+  });
+
   it("checks existing-session snapshot URL when SSRF policy is configured", async () => {
     const handler = getSnapshotGetHandler({ allowPrivateNetwork: false });
     const response = createBrowserRouteResponse();

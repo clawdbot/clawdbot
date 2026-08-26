@@ -161,6 +161,7 @@ export async function readConfigFileSnapshotWithPluginMetadata(
     | "measure"
     | "observe"
     | "recoverSuspicious"
+    | "skipPluginValidation"
   >,
 ): Promise<ReadConfigFileSnapshotWithPluginMetadataResult> {
   return await createConfigIO({
@@ -168,6 +169,7 @@ export async function readConfigFileSnapshotWithPluginMetadata(
     ...(options?.observe === false ? { observe: false } : {}),
     ...(options?.isolateEnv ? { env: cloneEnvWithPlatformSemantics(process.env) } : {}),
     ...(options?.lowerPrecedenceEnv ? { lowerPrecedenceEnv: options.lowerPrecedenceEnv } : {}),
+    ...(options?.skipPluginValidation ? { pluginValidation: "skip" as const } : {}),
   }).readConfigFileSnapshotWithPluginMetadata({
     allowCurrentPluginMetadata: options?.allowCurrentPluginMetadata,
     recoverSuspicious: options?.recoverSuspicious === true,
@@ -186,12 +188,6 @@ export async function recoverConfigFromLastKnownGood(params: {
   reason: string;
 }): Promise<boolean> {
   return await createConfigIO().recoverConfigFromLastKnownGood(params);
-}
-
-export async function preserveConfigSnapshotAsClobbered(
-  snapshot: ConfigFileSnapshot,
-): Promise<string | null> {
-  return await createConfigIO().preserveConfigSnapshotAsClobbered(snapshot);
 }
 
 export async function recoverConfigFromJsonRootSuffix(

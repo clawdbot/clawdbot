@@ -443,14 +443,6 @@ describe("handleDiscordMessageAction", () => {
       params: { to: "channel:c1", filePath: "/tmp/image.png" },
     },
     {
-      action: "poll" as const,
-      params: {
-        to: "channel:c1",
-        pollQuestion: "Which option?",
-        pollOption: ["first", "second"],
-      },
-    },
-    {
       action: "sticker" as const,
       params: { to: "channel:c1", stickerId: ["sticker-1"] },
     },
@@ -611,6 +603,25 @@ describe("handleDiscordMessageAction", () => {
         cfg: discordConfig(),
       }),
     ).rejects.toThrow(/upload-file requires filePath, path, or media/i);
+
+    expect(handleDiscordActionMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects upload-file with a buffer and points at send", async () => {
+    await expect(
+      handleDiscordMessageAction({
+        action: "upload-file",
+        params: {
+          to: "channel:123",
+          filename: "report.pdf",
+          contentType: "application/pdf",
+          buffer: Buffer.from("report").toString("base64"),
+        },
+        cfg: discordConfig(),
+      }),
+    ).rejects.toThrow(
+      'Use action: "send" for base64 buffer attachments; upload-file requires filePath, path, or media.',
+    );
 
     expect(handleDiscordActionMock).not.toHaveBeenCalled();
   });
@@ -850,6 +861,28 @@ describe("handleDiscordMessageAction", () => {
       cfg,
       options: defaultActionOptions(),
     });
+  });
+
+  it("forwards embed-only Discord sends without requiring message text", async () => {
+    const embeds = [{ title: "Release notes", description: "Version available" }];
+    const cfg = discordConfig();
+
+    await handleDiscordMessageAction({
+      action: "send",
+      params: { to: "channel:123", embeds },
+      cfg,
+    });
+
+    expect(handleDiscordActionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "sendMessage",
+        to: "channel:123",
+        content: "",
+        embeds,
+      }),
+      cfg,
+      defaultActionOptions(),
+    );
   });
 
   it("downgrades chart-only presentations to Discord component text", async () => {

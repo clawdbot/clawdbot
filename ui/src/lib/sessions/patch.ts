@@ -14,6 +14,7 @@ export type SessionPatch = {
   category?: string | null;
   boardFace?: "chat" | "dashboard";
   model?: string | null;
+  contextWindow?: string | null;
   thinkingLevel?: string | null;
   fastMode?: FastMode | null;
   verboseLevel?: string | null;
@@ -29,6 +30,8 @@ export type SessionPatchOptions = {
   agentId?: string;
   /** Durable identity observed with the row before an archive or restore action. */
   expectedSessionId?: string;
+  /** Explicit unread marker observed by an automatic read acknowledgement. */
+  expectedMarkedUnreadAt?: number | null;
   /** Let a caller with stricter lifecycle ownership publish the resolved model value. */
   deferModelOverride?: boolean;
   /** Keep optimistic model state bound to the UI owner that initiated the patch. */

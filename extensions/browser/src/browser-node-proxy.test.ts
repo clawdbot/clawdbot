@@ -31,8 +31,7 @@ type BrowserGatewayCall = (
 
 const runtimeMocks = vi.hoisted(() => ({
   callGatewayTool: vi.fn<BrowserGatewayCall>(),
-  persistBrowserProxyFiles: vi.fn<(_files?: unknown) => Promise<Map<string, string>>>(),
-  applyBrowserProxyPaths: vi.fn<(result: unknown, mapping: Map<string, string>) => void>(),
+  persistBrowserProxyResultFiles: vi.fn<(result: unknown, files?: unknown) => Promise<unknown>>(),
   fetchBrowserJson: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
 }));
 
@@ -74,9 +73,9 @@ function readGatewayCall(index = 0) {
 beforeEach(() => {
   runtimeMocks.callGatewayTool.mockReset();
   runtimeMocks.callGatewayTool.mockResolvedValue({ payload: { result: { ok: true } } });
-  runtimeMocks.persistBrowserProxyFiles.mockReset();
-  runtimeMocks.persistBrowserProxyFiles.mockResolvedValue(new Map<string, string>());
-  runtimeMocks.applyBrowserProxyPaths.mockReset();
+  runtimeMocks.persistBrowserProxyResultFiles
+    .mockReset()
+    .mockImplementation(async (result) => result);
   runtimeMocks.fetchBrowserJson.mockReset();
   uploadMocks.isBrowserProxyUploadRequest.mockClear();
   uploadMocks.prepareBrowserProxyUploadRequest
@@ -173,6 +172,31 @@ describe("Browser node proxy nested watchdogs", () => {
     await expect(proxy({ method: "GET", path: "/snapshot" })).rejects.toThrow(
       /Studio Node.*action=status.*target="host"/i,
     );
+  });
+
+  it("rejects node file transfer failures without activating host fallback", async () => {
+    const transferError = new Error("browser proxy returned an invalid file envelope");
+    runtimeMocks.callGatewayTool.mockResolvedValueOnce({
+      payload: {
+        result: { path: "/node/browser/screenshot.png" },
+        files: [],
+      },
+    } as unknown as BrowserNodeResponse);
+    runtimeMocks.persistBrowserProxyResultFiles.mockRejectedValueOnce(transferError);
+    const proxy = createBrowserNodeProxyRequest({
+      nodeTarget: { nodeId: "node-1", commands: ["browser.proxy"] },
+      allowAutomaticHostFallback: true,
+    });
+
+    await expect(proxy({ method: "POST", path: "/screenshot" })).rejects.toBe(transferError);
+
+    expect(runtimeMocks.callGatewayTool).toHaveBeenCalledOnce();
+    expect(runtimeMocks.persistBrowserProxyResultFiles).toHaveBeenCalledWith(
+      { path: "/node/browser/screenshot.png" },
+      [],
+    );
+    expect(proxy.isHostFallbackActive()).toBe(false);
+    expect(runtimeMocks.fetchBrowserJson).not.toHaveBeenCalled();
   });
 
   it("sends Gateway-owned upload bytes without node-facing source paths", async () => {
@@ -342,7 +366,7 @@ describe("Browser node proxy nested watchdogs", () => {
         expect(runtimeMocks.callGatewayTool).toHaveBeenCalledTimes(10);
       });
       expect(completed.size).toBe(0);
-      expect(runtimeMocks.persistBrowserProxyFiles).not.toHaveBeenCalled();
+      expect(runtimeMocks.persistBrowserProxyResultFiles).not.toHaveBeenCalled();
       const invocationIds = new Set<string>();
 
       sessions.forEach(({ profile, timeoutMs, signal }, index) => {
@@ -371,8 +395,7 @@ describe("Browser node proxy nested watchdogs", () => {
       sessions.map(({ profile }) => ({ ok: true, profile })),
     );
     expect(completed.size).toBe(10);
-    expect(runtimeMocks.persistBrowserProxyFiles).toHaveBeenCalledTimes(10);
-    expect(runtimeMocks.applyBrowserProxyPaths).toHaveBeenCalledTimes(10);
+    expect(runtimeMocks.persistBrowserProxyResultFiles).toHaveBeenCalledTimes(10);
     expect(runtimeMocks.fetchBrowserJson).not.toHaveBeenCalled();
     expect(sessions.every(({ proxy }) => !proxy.isHostFallbackActive())).toBe(true);
   });
@@ -433,7 +456,7 @@ describe("Browser node proxy nested watchdogs", () => {
       });
       cancelledSession.controller.abort(abortError);
       await expect(cancelledRun).rejects.toBe(abortError);
-      expect(runtimeMocks.persistBrowserProxyFiles).not.toHaveBeenCalled();
+      expect(runtimeMocks.persistBrowserProxyResultFiles).not.toHaveBeenCalled();
       expect(runtimeMocks.fetchBrowserJson).not.toHaveBeenCalled();
     } finally {
       release();
@@ -446,8 +469,7 @@ describe("Browser node proxy nested watchdogs", () => {
           : { status: "fulfilled", value: { ok: true, profile } },
       ),
     );
-    expect(runtimeMocks.persistBrowserProxyFiles).toHaveBeenCalledTimes(9);
-    expect(runtimeMocks.applyBrowserProxyPaths).toHaveBeenCalledTimes(9);
+    expect(runtimeMocks.persistBrowserProxyResultFiles).toHaveBeenCalledTimes(9);
     expect(runtimeMocks.fetchBrowserJson).not.toHaveBeenCalled();
     expect(sessions.every(({ proxy }) => !proxy.isHostFallbackActive())).toBe(true);
   });

@@ -34,7 +34,10 @@ vi.mock("./agent-turn/internal-facade.runtime.js", () => ({
   },
 }));
 
-type ServerPluginsModule = typeof import("./server-plugins.js");
+type ServerPluginsModule = typeof import("./server-plugins.js") & {
+  clearFallbackGatewayContext: () => void;
+  setFallbackGatewayContext: (context: GatewayRequestContext) => void;
+};
 type GatewayRequestScopeModule = typeof import("../plugins/runtime/gateway-request-scope.js");
 type SubagentRequesterContextModule =
   typeof import("../plugins/runtime/subagent-requester-context.js");
@@ -53,8 +56,21 @@ function createTestContext(label: string, cfg: OpenClawConfig): GatewayRequestCo
 }
 
 async function loadServerPlugins(): Promise<ServerPluginsModule> {
-  return await import("./server-plugins.js");
+  const actual = await import("./server-plugins.js");
+  return {
+    ...actual,
+    clearFallbackGatewayContext: () => {
+      testGatewayContext = undefined;
+    },
+    setFallbackGatewayContext: (context) => {
+      testGatewayContext = context;
+    },
+    createGatewaySubagentRuntime: (resolveGatewayContext) =>
+      actual.createGatewaySubagentRuntime(resolveGatewayContext ?? (() => testGatewayContext)),
+  } as ServerPluginsModule;
 }
+
+let testGatewayContext: GatewayRequestContext | undefined;
 
 async function loadGatewayScope(): Promise<GatewayRequestScopeModule> {
   return await import("../plugins/runtime/gateway-request-scope.js");
@@ -243,6 +259,33 @@ describe("createGatewaySubagentRuntime.run subagent_ended tracking (#59164)", ()
     expect(request.client.internal?.pluginRuntimeOwnerId).toBe("memory-core");
   });
 
+  test("stamps tool-free subagent runs with a private exact empty cap", async () => {
+    const serverPlugins = await loadServerPlugins();
+    const gatewayScope = await loadGatewayScope();
+    const runtime = serverPlugins.createGatewaySubagentRuntime();
+    const scope = {
+      context: createTestContext("tool-free-plugin-scope", createTestCfg()),
+      pluginId: "memory-core",
+      isWebchatConnect: () => false,
+    } satisfies PluginRuntimeGatewayRequestScope;
+
+    await gatewayScope.withPluginRuntimeGatewayRequestScope(scope, () =>
+      runtime.run({
+        sessionKey: "agent:main:subagent:dreaming-narrative",
+        message: "dream task",
+        deliver: false,
+        disableTools: true,
+      } as Parameters<typeof runtime.run>[0] & { disableTools: true }),
+    );
+
+    const request = lastAgentTurnRequest();
+    expect(
+      (request.client.internal as { pluginSubagentToolsAllow?: string[] }).pluginSubagentToolsAllow,
+    ).toEqual([]);
+    expect(request.params).not.toHaveProperty("disableTools");
+    expect(request.params).not.toHaveProperty("toolsAllow");
+  });
+
   test("does not dispatch when no runtime config is available", async () => {
     const serverPlugins = await loadServerPlugins();
     const runtime = serverPlugins.createGatewaySubagentRuntime();
@@ -325,29 +368,47 @@ describe("createGatewaySubagentRuntime.run subagent_ended tracking (#59164)", ()
     ).rejects.toThrow(/not found/);
   });
 
-  test("normalizes completed agent.wait envelopes for plugin subagents", async () => {
+  test.each([
+    {
+      name: "pending queue observation",
+      result: {
+        status: "pending",
+        timeoutPhase: "queue",
+        providerStarted: false,
+      },
+    },
+    {
+      name: "metadata-rich observation timeout",
+      result: {
+        status: "timeout",
+        error: "provider retry is still pending",
+        startedAt: 1_000,
+        endedAt: 2_000,
+        stopReason: "timeout",
+        livenessState: "blocked",
+        yielded: true,
+        pendingError: true,
+        timeoutPhase: "provider",
+        providerStarted: true,
+        terminalReply: { disposition: "empty" },
+      },
+    },
+    {
+      name: "legacy completed status",
+      result: { status: "completed" },
+      expected: { status: "ok" },
+    },
+    {
+      name: "legacy completed error",
+      result: { status: "error", error: "completed" },
+      expected: { status: "ok" },
+    },
+  ])("preserves the agent.wait $name result", async ({ result, expected = result }) => {
     const serverPlugins = await loadServerPlugins();
     const runtime = serverPlugins.createGatewaySubagentRuntime();
     serverPlugins.setFallbackGatewayContext(createTestContext("plugin-wait", createTestCfg()));
+    internalAgentTurnFacade.wait.mockResolvedValue(result);
 
-    internalAgentTurnFacade.wait.mockResolvedValue({ status: "completed" });
-
-    await expect(runtime.waitForRun({ runId: "plugin-run-completed" })).resolves.toEqual({
-      status: "ok",
-    });
-  });
-
-  test("normalizes malformed completed wait errors for plugin subagents", async () => {
-    const serverPlugins = await loadServerPlugins();
-    const runtime = serverPlugins.createGatewaySubagentRuntime();
-    serverPlugins.setFallbackGatewayContext(
-      createTestContext("plugin-wait-error", createTestCfg()),
-    );
-
-    internalAgentTurnFacade.wait.mockResolvedValue({ status: "error", error: "completed" });
-
-    await expect(runtime.waitForRun({ runId: "plugin-run-error-completed" })).resolves.toEqual({
-      status: "ok",
-    });
+    await expect(runtime.waitForRun({ runId: "plugin-run-wait" })).resolves.toEqual(expected);
   });
 });

@@ -173,12 +173,11 @@ describe("runMessageAction core send routing", () => {
                   : undefined,
               resolveReplyTransport: ({
                 threadId,
-                replyToId,
               }: {
                 threadId?: string | number | null;
                 replyToId?: string | null;
               }) => {
-                const root = replyToId ?? (threadId == null ? undefined : String(threadId));
+                const root = threadId == null ? undefined : String(threadId);
                 return { replyToId: root, threadId: root };
               },
             },
@@ -213,10 +212,90 @@ describe("runMessageAction core send routing", () => {
     });
 
     expect(firstMockArg(sendText, "send text")).toMatchObject({
-      replyToId: "child-1",
+      replyToId: "root-1",
+      replyToIdSource: "explicit",
       threadId: "root-1",
     });
   });
+
+  it.each([
+    {
+      label: "implicit first-mode reply",
+      params: {},
+      replyToMode: "first" as const,
+      expectedReplyIds: ["source-1", undefined],
+      expectedSource: "implicit",
+      expectedMode: "first",
+    },
+    {
+      label: "implicit all-mode reply",
+      params: {},
+      replyToMode: "all" as const,
+      expectedReplyIds: ["source-1", "source-1"],
+      expectedSource: "implicit",
+      expectedMode: "all",
+    },
+    {
+      label: "explicit reply while replies are otherwise off",
+      params: { replyTo: "explicit-1" },
+      replyToMode: "off" as const,
+      expectedReplyIds: ["explicit-1", "explicit-1"],
+      expectedSource: "explicit",
+      expectedMode: undefined,
+    },
+  ])(
+    "carries resolved reply facts through durable chunk fanout for $label",
+    async ({ params, replyToMode, expectedReplyIds, expectedSource, expectedMode }) => {
+      const sendText = vi.fn().mockImplementation(async ({ text }: { text: string }) => ({
+        channel: "testchat",
+        messageId: text,
+      }));
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "testchat",
+            source: "test",
+            plugin: createOutboundTestPlugin({
+              id: "testchat",
+              outbound: {
+                deliveryMode: "gateway",
+                textChunkLimit: 2,
+                chunker: (text, limit) => [text.slice(0, limit), text.slice(limit)],
+                sendText,
+              },
+            }),
+          },
+        ]),
+      );
+
+      await runMessageAction({
+        cfg: { channels: { testchat: { enabled: true } } } as OpenClawConfig,
+        action: "send",
+        params: {
+          channel: "testchat",
+          target: "channel:C1",
+          message: "abcd",
+          ...params,
+        },
+        gatewayOwnedDelivery: true,
+        toolContext: {
+          currentChannelProvider: "testchat",
+          currentChannelId: "channel:C1",
+          currentMessagingTarget: "channel:C1",
+          currentMessageId: "source-1",
+          replyToMode,
+          hasRepliedRef: { value: false },
+        },
+        dryRun: false,
+      });
+
+      expect(sendText.mock.calls.map(([call]) => call.replyToId)).toEqual(expectedReplyIds);
+      expect(sendText.mock.calls[0]?.[0]).toMatchObject({
+        replyToIdSource: expectedSource,
+        replyToMode: expectedMode,
+      });
+    },
+  );
 
   it("carries a prepared conversation-turn id to the channel send", async () => {
     const sendText = registerSlackTextPlugin();

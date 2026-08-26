@@ -48,10 +48,11 @@ import type {
 } from "./agent-tools.before-tool-call.types.js";
 import {
   getCodeModeExecBeforeHookMetadataForToolKind,
-  normalizeCodeModeExecBeforeHookParamsForToolKind,
+  reconcileCodeModeExecBeforeHookParams,
 } from "./code-mode-control-tools.js";
 import { admitSingleToolCallLoop } from "./tool-loop-admission.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
+import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 const BEFORE_TOOL_CALL_HOOK_FAILURE_REASON =
   "Tool call blocked because before_tool_call hook failed";
@@ -206,6 +207,9 @@ export async function runBeforeToolCallHook(args: {
       ...(args.ctx?.requester ? { requester: args.ctx.requester } : {}),
     });
     const toolContext = buildToolContext(toolIdentity);
+    // Policies form a mutation chain. Reconcile each decision against the prior
+    // alias pair so an explicit blank rewrite remains fail-closed.
+    let trustedPolicyParams = normalizedParams;
     const trustedPolicyResult = shouldRunTrustedPolicies
       ? await runTrustedToolPolicies(
           {
@@ -224,13 +228,16 @@ export async function runBeforeToolCallHook(args: {
             ...(args.ctx?.config ? { config: args.ctx.config } : {}),
             deriveEvent: deriveToolEventParams,
             normalizeEvent(eventValue) {
-              const normalizedEventParams = normalizeCodeModeExecBeforeHookParamsForToolKind({
-                toolKind: eventValue.toolKind,
-                params: eventValue.params,
+              const normalizedEventParams = reconcileCodeModeExecBeforeHookParams({
+                owner: { toolKind: eventValue.toolKind },
+                originalParams: trustedPolicyParams,
+                hookParams: trustedPolicyParams,
+                adjustedParams: eventValue.params,
               });
               if (!isPlainObject(normalizedEventParams)) {
                 return undefined;
               }
+              trustedPolicyParams = normalizedEventParams;
               const normalizedEventIdentity = getCodeModeExecBeforeHookMetadataForToolKind({
                 toolKind: eventValue.toolKind,
                 params: normalizedEventParams,
@@ -277,11 +284,7 @@ export async function runBeforeToolCallHook(args: {
         trustedApprovalResolution = approvalOutcome.approvalResolution;
       }
     }
-    const rawPolicyAdjustedParams = trustedApprovalParams ?? trustedPolicyResult?.params ?? params;
-    const policyAdjustedParams = normalizeCodeModeExecBeforeHookParamsForToolKind({
-      toolKind: args.toolKind,
-      params: rawPolicyAdjustedParams,
-    });
+    const policyAdjustedParams = trustedApprovalParams ?? trustedPolicyResult?.params ?? params;
     const policyAdjustedToolIdentity =
       getCodeModeExecBeforeHookMetadataForToolKind({
         toolKind: args.toolKind,
@@ -314,6 +317,14 @@ export async function runBeforeToolCallHook(args: {
       return allowed;
     }
     const hookEventParams = isPlainObject(policyAdjustedParams) ? policyAdjustedParams : {};
+    const callerIdentity = getGatewayToolCallerIdentity();
+    const receipt =
+      callerIdentity?.executionIdentityToken && callerIdentity.receiptAuthority
+        ? {
+            token: callerIdentity.executionIdentityToken,
+            assertAuthority: callerIdentity.receiptAuthority,
+          }
+        : undefined;
     const hookResult = await hookRunner.runBeforeToolCall(
       {
         toolName,
@@ -326,6 +337,7 @@ export async function runBeforeToolCallHook(args: {
           : {}),
       },
       policyAdjustedToolContext,
+      receipt,
     );
 
     if (hookResult?.block) {
@@ -363,7 +375,12 @@ export async function runBeforeToolCallHook(args: {
     }
 
     if (hookResult?.params) {
-      finalParams = mergeParamsWithApprovalOverrides(finalParams, hookResult.params);
+      finalParams = reconcileCodeModeExecBeforeHookParams({
+        owner: { toolKind: args.toolKind },
+        originalParams: policyAdjustedParams,
+        hookParams: policyAdjustedParams,
+        adjustedParams: mergeParamsWithApprovalOverrides(finalParams, hookResult.params),
+      });
     }
     const finalApprovalOutcome = await resolveSkillWorkshopApprovalForFinalParams({
       toolName,

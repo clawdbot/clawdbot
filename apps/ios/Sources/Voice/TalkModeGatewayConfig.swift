@@ -9,6 +9,8 @@ enum TalkModeExecutionMode: Equatable {
 
 struct TalkRuntimeIssue: Equatable {
     enum Code: String {
+        case audioInputUnavailable = "audio_input_unavailable"
+        case realtimeOutputCancelFailed = "realtime_output_cancel_failed"
         case realtimeUnavailable = "realtime_unavailable"
     }
 

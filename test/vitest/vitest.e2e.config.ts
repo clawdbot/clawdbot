@@ -3,6 +3,7 @@ import { defineConfig } from "vitest/config";
 import { BUNDLED_PLUGIN_E2E_TEST_GLOB } from "./vitest.bundled-plugin-paths.ts";
 import baseConfig from "./vitest.config.ts";
 import { resolveRepoRootPath } from "./vitest.shared.config.ts";
+import { tuiPtyTestFiles } from "./vitest.test-shards.mjs";
 
 function resolveE2EWorkerCount(env: Record<string, string | undefined>): number {
   const requestedWorkers = Number.parseInt(env.OPENCLAW_E2E_WORKERS ?? "", 10);
@@ -20,12 +21,9 @@ const { projects: _projects, ...baseTest } = baseTestWithProjects as {
   projects?: string[];
   setupFiles?: string[];
 };
-// The dedicated TUI PTY config owns both terminal suites and emits per-test progress.
-// The local real-backend file can exceed the generic E2E silent-process watchdog.
-const tuiPtyExcludes = ["src/tui/tui-pty-harness.e2e.test.ts", "src/tui/tui-pty-local.e2e.test.ts"];
 const exclude = [
   ...(baseTest.exclude ?? []).filter((p) => p !== "**/*.e2e.test.ts"),
-  ...tuiPtyExcludes,
+  ...tuiPtyTestFiles,
 ];
 
 export function createE2EVitestConfig(env: Record<string, string | undefined> = process.env) {

@@ -534,11 +534,10 @@ export async function beginSessionWorkAdmission(params: {
   });
 }
 
-export async function interruptSessionWorkAdmissions(params: {
+export function startSessionWorkAdmissionInterruption(params: {
   scope: string;
   identities: Iterable<string | undefined>;
-  timeoutMs?: number;
-}): Promise<boolean> {
+}): { released: Promise<void> } {
   const admissions = new Set<SessionWorkAdmission>();
   const currentAdmissions = CURRENT_SESSION_WORK_ADMISSIONS.getStore();
   for (const identity of normalizeSessionIdentities(params.scope, params.identities)) {
@@ -555,7 +554,19 @@ export async function interruptSessionWorkAdmissions(params: {
     admission.interrupted = true;
     admission.interrupt?.();
   }
-  const released = Promise.all(Array.from(admissions, (admission) => admission.released));
+  return {
+    released: Promise.all(Array.from(admissions, (admission) => admission.released)).then(
+      () => undefined,
+    ),
+  };
+}
+
+export async function interruptSessionWorkAdmissions(params: {
+  scope: string;
+  identities: Iterable<string | undefined>;
+  timeoutMs?: number;
+}): Promise<boolean> {
+  const { released } = startSessionWorkAdmissionInterruption(params);
   if (params.timeoutMs === undefined) {
     await released;
     return true;

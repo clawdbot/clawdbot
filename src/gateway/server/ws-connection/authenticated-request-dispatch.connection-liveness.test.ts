@@ -41,7 +41,7 @@ function createClient(): GatewayWsClient {
   };
 }
 
-describe("authenticated request connection liveness", () => {
+describe.sequential("authenticated request connection liveness", () => {
   beforeEach(() => {
     runtime.beforeHandler.mockReset();
   });

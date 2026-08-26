@@ -48,6 +48,7 @@ export async function sendGatewayHello(
 ): Promise<void> {
   const {
     connId,
+    bootId,
     nodeReapprovalCoordinator,
     gatewayMethods,
     events,
@@ -102,6 +103,7 @@ export async function sendGatewayHello(
   const snapshot = buildGatewaySnapshot({
     includeSensitive: scopes.includes(ADMIN_SCOPE),
     includeUpdateDetails: canReadDetailedUpdateMetadata(role, scopes),
+    revisionProjector: buildRequestContext().configRevisionProjector,
   });
   const cachedHealth = getHealthCache();
   if (cachedHealth) {
@@ -125,6 +127,7 @@ export async function sendGatewayHello(
     server: {
       version: resolveRuntimeServiceVersion(process.env),
       ...(serverBuildId ? { buildId: serverBuildId } : {}),
+      bootId,
       controlUiBuildSource,
       connId,
     },
@@ -137,6 +140,7 @@ export async function sendGatewayHello(
         GATEWAY_SERVER_CAPS.GATEWAY_RESTART_TARGET_SAFE,
         GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION,
         GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_STATUS,
+        GATEWAY_SERVER_CAPS.SESSION_UNREAD_ACK_CONTRACT,
         GATEWAY_SERVER_CAPS.SYSTEM_AGENT_WIZARD_CANCEL,
         GATEWAY_SERVER_CAPS.SYSTEM_AGENT_SETUP_MODEL_REF,
         GATEWAY_SERVER_CAPS.TASK_SUGGESTIONS_ACCEPT_MODES,

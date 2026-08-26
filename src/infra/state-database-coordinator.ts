@@ -23,6 +23,13 @@ type CoordinatorOptions = {
   busyTimeoutMs?: number;
 };
 
+export class StateDatabaseCoordinatorContentionError extends SqliteCoordinatorError {
+  constructor(family: CoordinatorFamily) {
+    super(`another OpenClaw process owns ${family}`);
+    this.name = "StateDatabaseCoordinatorContentionError";
+  }
+}
+
 export function resolveStateLifecycleRuntimeDirectory(): string {
   return process.platform === "win32"
     ? path.join(os.homedir(), "AppData", "Local", "OpenClaw", "locks")
@@ -74,7 +81,7 @@ function acquireLifecycleCoordinator(
       busyTimeoutMs: params.busyTimeoutMs,
     });
     if (!coordinator) {
-      throw new SqliteCoordinatorError(`another OpenClaw process owns ${family}`);
+      throw new StateDatabaseCoordinatorContentionError(family);
     }
     heldCoordinators.set(coordinatorPath, { coordinator, references: 1 });
   }

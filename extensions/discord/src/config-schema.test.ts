@@ -342,6 +342,16 @@ describe("discord config schema", () => {
     expect(cfg.voice?.allowedChannels).toEqual([{ guildId: "123", channelId: "456" }]);
   });
 
+  it("accepts occupancy-managed Discord voice auto-join channels", () => {
+    const cfg = expectValidDiscordConfig({
+      voice: {
+        autoJoin: [{ guildId: "123", channelId: "456", whenOccupied: true }],
+      },
+    });
+
+    expect(cfg.voice?.autoJoin).toEqual([{ guildId: "123", channelId: "456", whenOccupied: true }]);
+  });
+
   it("rejects invalid Discord voice allowed channels", () => {
     for (const voice of [
       { allowedChannels: [{ guildId: "", channelId: "456" }] },

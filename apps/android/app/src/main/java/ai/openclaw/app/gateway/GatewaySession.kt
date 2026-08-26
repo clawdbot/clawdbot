@@ -214,7 +214,8 @@ data class GatewayHelloSummary(
   val updateAvailable: GatewayUpdateAvailableSummary?,
   val authRole: String? = null,
   val authScopes: List<String> = emptyList(),
-  val methods: Set<String> = emptySet(),
+  val methods: Set<String>? = null,
+  val capabilities: Set<String>? = null,
 )
 
 data class GatewayUpdateAvailableSummary(
@@ -950,6 +951,7 @@ class GatewaySession(
     private var socket: WebSocket? = null
     private val loggerTag = "OpenClawGateway"
     private val incomingMessages = Channel<String>(Channel.UNLIMITED)
+    private var lastEventSequence: Long? = null
 
     // RPC waiters belong to this socket generation. Closing it must not touch a replacement connection.
     private val pending = ConcurrentHashMap<String, CompletableDeferred<RpcResponse>>()
@@ -1095,7 +1097,7 @@ class GatewaySession(
         } else {
           ticketedPath
         }
-      val url = "$scheme://${formatGatewayAuthority(endpoint.host, endpoint.port)}$playbackPath"
+      val url = "$scheme://${formatGatewayAuthority(endpoint.host, endpoint.port)}${endpoint.contextPath}$playbackPath"
       val headers = mediaTransportHeaders()
       return TicketedMediaRequest(url = url, headers = headers)
     }
@@ -1441,7 +1443,13 @@ class GatewaySession(
           .asArrayOrNull()
           ?.mapNotNull { it.asStringOrNull()?.trim()?.takeIf { method -> method.isNotEmpty() } }
           ?.toSet()
-          .orEmpty()
+      val capabilities =
+        obj["features"]
+          .asObjectOrNull()
+          ?.get("capabilities")
+          .asArrayOrNull()
+          ?.mapNotNull { it.asStringOrNull()?.trim()?.takeIf { capability -> capability.isNotEmpty() } }
+          ?.toSet()
       val authObj = obj["auth"].asObjectOrNull()
       val deviceToken = authObj?.get("deviceToken").asStringOrNull()
       val authRole = authObj?.get("role").asStringOrNull() ?: options.role
@@ -1506,6 +1514,7 @@ class GatewaySession(
             authRole = authRole,
             authScopes = authScopes,
             methods = methods,
+            capabilities = capabilities,
           ),
       )
     }
@@ -1708,6 +1717,15 @@ class GatewaySession(
       }
       // Retired sockets can still drain queued frames after reconnect. Never let them mutate current state.
       if (currentConnection !== this) return
+      gatewayEvent.seq?.let { sequence ->
+        val previous = lastEventSequence
+        if (previous != null && sequence > previous + 1) {
+          onEvent("seqGap", null)
+          // Recovery can retire this socket before its triggering event is delivered.
+          if (currentConnection !== this || !isReady()) return
+        }
+        lastEventSequence = sequence
+      }
       if (event == GatewayEvent.NodeInvokeRequest.rawValue && payloadJson != null && onInvoke != null) {
         handleInvokeEvent(payloadJson)
         return
@@ -1980,11 +1998,8 @@ class GatewaySession(
         ?: endpoint.host.trim()
     if (fallbackHost.isEmpty()) return trimmed.ifBlank { null }
 
-    // For TLS connections, use the connected endpoint's scheme/port instead of raw canvas metadata.
     val fallbackScheme = if (isTlsConnection) "https" else scheme
-    // For TLS, always use the connected endpoint port.
-    val fallbackPort = if (isTlsConnection) endpoint.port else (endpoint.canvasPort ?: endpoint.port)
-    return buildCanvasUrl(host = fallbackHost, scheme = fallbackScheme, port = fallbackPort, suffix = suffix)
+    return buildCanvasUrl(host = fallbackHost, scheme = fallbackScheme, port = endpoint.port, suffix = suffix)
   }
 
   private fun buildCanvasUrl(

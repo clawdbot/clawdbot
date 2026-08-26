@@ -5,7 +5,10 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { runPluginSessionStateDoctorRepairs } from "./doctor-session-state-providers.js";
+import {
+  createPluginSessionStateDoctorScanner,
+  runPluginSessionStateDoctorRepairs,
+} from "./doctor-session-state-providers.js";
 
 const codexOwner = {
   id: "codex",
@@ -48,12 +51,17 @@ async function runDoctor(params: {
   const changes: string[] = [];
   const confirmRuntimeRepair = vi.fn(async () => params.confirm ?? true);
   try {
-    await runPluginSessionStateDoctorRepairs({
+    const scanner = createPluginSessionStateDoctorScanner({
       cfg: params.cfg,
-      store: structuredClone(params.store),
+      env: params.env ?? {},
+    });
+    for (const [sessionKey, sessionEntry] of Object.entries(params.store)) {
+      scanner.scanEntry(sessionKey, sessionEntry);
+    }
+    await runPluginSessionStateDoctorRepairs({
+      scan: scanner.result(),
       absoluteStorePath: storePath,
       prompter: { confirmRuntimeRepair, note: vi.fn() },
-      env: params.env ?? {},
       warnings,
       changes,
     });

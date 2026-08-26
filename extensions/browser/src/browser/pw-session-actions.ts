@@ -322,19 +322,27 @@ async function withPlaywrightSafeReadReconnect<T>(
 }
 
 async function readPagesViaPlaywright(
-  opts: { cdpUrl: string; ssrfPolicy?: SsrFPolicy },
+  opts: {
+    cdpUrl: string;
+    ssrfPolicy?: SsrFPolicy;
+    requireCompleteTargetList?: boolean;
+  },
   attempt?: { cancelled: boolean },
-): Promise<
-  Array<{
-    targetId: string;
-    title: string;
-    url: string;
-    type: string;
-  }>
-> {
+): Promise<PlaywrightPageEnumeration> {
   return await withPlaywrightSafeReadReconnect(
     { cdpUrl: opts.cdpUrl, ssrfPolicy: opts.ssrfPolicy, attempt },
     async (browser) => {
+      if (opts.requireCompleteTargetList) {
+        const session = await browser.newBrowserCDPSession();
+        try {
+          const result = await session.send("Target.getTargets");
+          if (!Array.isArray(result.targetInfos)) {
+            throw new Error("Browser target enumeration was unavailable.");
+          }
+        } finally {
+          await session.detach().catch(() => {});
+        }
+      }
       const pages = await getAllPages(browser);
       const candidatePages = pages.filter((page) => !isBlockedPageRef(opts.cdpUrl, page));
       const pageResults = await Promise.all(
@@ -348,8 +356,11 @@ async function readPagesViaPlaywright(
             }
             targetInfo = null;
           }
-          if (!targetInfo || isBlockedTarget(opts.cdpUrl, targetInfo.targetId)) {
-            return null;
+          if (!targetInfo) {
+            return { status: "unresolved" as const };
+          }
+          if (isBlockedTarget(opts.cdpUrl, targetInfo.targetId)) {
+            return { status: "blocked" as const };
           }
           let url = "";
           try {
@@ -360,19 +371,38 @@ async function readPagesViaPlaywright(
             }
           }
           return {
-            targetId: targetInfo.targetId,
-            title: targetInfo.title,
-            url,
-            type: "page",
+            status: "available" as const,
+            page: {
+              targetId: targetInfo.targetId,
+              title: targetInfo.title,
+              url,
+              type: "page" as const,
+            },
           };
         }),
       );
       // Promise.all preserves candidate order and still propagates recoverable disconnects
       // to the outer reconnect path when any per-page task rejects.
-      return pageResults.filter((result) => result !== null);
+      const resolvedPages = pageResults.flatMap((result) =>
+        result.status === "available" ? [result.page] : [],
+      );
+      if (
+        resolvedPages.length === 0 &&
+        pageResults.some((result) => result.status === "unresolved")
+      ) {
+        return { status: "unavailable", reason: "target-identity-unresolved" };
+      }
+      return { status: "available", pages: resolvedPages };
     },
   );
 }
+
+type PlaywrightPageEnumeration =
+  | {
+      status: "available";
+      pages: Array<{ targetId: string; title: string; url: string; type: "page" }>;
+    }
+  | { status: "unavailable"; reason: "target-identity-unresolved" };
 
 /**
  * List all pages/tabs from the persistent Playwright connection.
@@ -383,13 +413,18 @@ export async function listPagesViaPlaywright(opts: {
   cdpUrl: string;
   ssrfPolicy?: SsrFPolicy;
   timeoutMs?: number;
+  requireCompleteTargetList?: boolean;
 }) {
   const timeoutMs =
     typeof opts.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
       ? Math.max(1, Math.floor(opts.timeoutMs))
       : undefined;
   if (timeoutMs === undefined) {
-    return await readPagesViaPlaywright(opts);
+    const enumeration = await readPagesViaPlaywright(opts);
+    if (enumeration.status === "unavailable") {
+      throw new Error("Playwright page target identities are temporarily unavailable.");
+    }
+    return enumeration.pages;
   }
 
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -404,7 +439,11 @@ export async function listPagesViaPlaywright(opts: {
     timer.unref?.();
   });
   try {
-    return await Promise.race([readPagesViaPlaywright(opts, attempt), timeout]);
+    const enumeration = await Promise.race([readPagesViaPlaywright(opts, attempt), timeout]);
+    if (enumeration.status === "unavailable") {
+      throw new Error("Playwright page target identities are temporarily unavailable.");
+    }
+    return enumeration.pages;
   } catch (err) {
     if (err === timeoutError) {
       await forceDisconnectPlaywrightForTarget({
@@ -449,7 +488,6 @@ export async function createPageViaPlaywright(
   const createdTargetId = (await pageTargetInfo(page).catch(() => null))?.targetId ?? null;
   clearBlockedTarget(opts.cdpUrl, createdTargetId ?? undefined);
 
-  // Navigate to the URL
   const targetUrl = opts.url.trim() || "about:blank";
   if (targetUrl !== "about:blank") {
     const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
@@ -459,7 +497,7 @@ export async function createPageViaPlaywright(
       url: targetUrl,
       ...navigationPolicy,
     });
-    let response: Response | null = null;
+    let response: Response | null;
     try {
       response = await gotoPageWithNavigationGuard({
         cdpUrl: opts.cdpUrl,
@@ -471,9 +509,11 @@ export async function createPageViaPlaywright(
         targetId: createdTargetId ?? undefined,
       });
     } catch (err) {
-      if (isPolicyDenyNavigationError(err) || err instanceof BlockedBrowserTargetError) {
-        throw err;
+      if (!isPolicyDenyNavigationError(err) && !(err instanceof BlockedBrowserTargetError)) {
+        // This call owns the new page; best-effort cleanup must not replace its navigation error.
+        await page.close().catch(() => {});
       }
+      throw err;
     }
     // OpenClaw owns this newly-created tab: if the post-navigation safety
     // check trips, close the tab we just spawned.
@@ -498,7 +538,6 @@ export async function createPageViaPlaywright(
     }
   }
 
-  // Get the targetId for this page
   const tid = createdTargetId ?? (await pageTargetInfo(page).catch(() => null))?.targetId ?? null;
   if (!tid) {
     throw new Error("Failed to get targetId for new page");

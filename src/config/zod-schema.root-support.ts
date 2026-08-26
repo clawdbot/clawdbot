@@ -1,6 +1,7 @@
 import { isHttpsUrl, isHttpUrl } from "@openclaw/net-policy/url-protocol";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
+import { findEdgeAuthIssue } from "../shared/gateway-edge-auth-headers.js";
 import type { GatewayRemoteConfig } from "./types.gateway.js";
 import { MemorySearchSchema } from "./zod-schema.agent-runtime.js";
 import { SecretInputSchema } from "./zod-schema.core.js";
@@ -10,6 +11,20 @@ import { sensitive } from "./zod-schema.sensitive.js";
 type ConfigSchemaShape<T extends object> = {
   [Key in keyof T]-?: z.ZodType<T[Key]>;
 };
+
+const EdgeAuthHeadersSchema = z
+  .record(z.string(), SecretInputSchema.register(sensitive))
+  .superRefine((headers, ctx) => {
+    const issue = findEdgeAuthIssue(headers);
+    if (!issue) {
+      return;
+    }
+    ctx.addIssue({
+      code: "custom",
+      message: issue.message,
+      ...(issue.headerName ? { path: [issue.headerName] } : {}),
+    });
+  });
 
 const GatewayRemoteSchemaShape = {
   url: z.string().optional(),
@@ -21,6 +36,7 @@ const GatewayRemoteSchemaShape = {
   token: SecretInputSchema.optional().register(sensitive),
 
   password: SecretInputSchema.optional().register(sensitive),
+  edgeAuth: EdgeAuthHeadersSchema.optional(),
   tlsFingerprint: z.string().optional(),
   sshTarget: z.string().optional(),
   sshIdentity: z.string().optional(),

@@ -1,9 +1,8 @@
 // Xai plugin module implements x search shared behavior.
-import { readProviderJsonObjectResponse } from "openclaw/plugin-sdk/provider-http";
-import { postTrustedWebToolsJson, wrapWebContent } from "openclaw/plugin-sdk/provider-web-search";
+import { wrapWebContent } from "openclaw/plugin-sdk/provider-web-search";
 import { XAI_DEFAULT_MODEL_ID } from "../model-definitions.js";
 import {
-  buildXaiResponsesToolBody,
+  requestXaiResponsesTool,
   requireXaiResponseTextCitationsAndInline,
   resolveXaiResponsesEndpoint,
 } from "./responses-tool-shared.js";
@@ -126,32 +125,20 @@ export async function requestXaiXSearch(params: {
   signal?: AbortSignal;
 }): Promise<XaiXSearchResult> {
   params.signal?.throwIfAborted();
-  return await postTrustedWebToolsJson(
+  return await requestXaiResponsesTool(
     {
-      url: params.endpoint,
-      timeoutSeconds: params.timeoutSeconds,
-      apiKey: params.apiKey,
-      ...(params.signal ? { signal: params.signal } : {}),
-      body: buildXaiResponsesToolBody({
-        model: params.model,
-        inputText: params.options.query,
-        tools: [buildXSearchTool(params.options)],
-        maxTurns: params.maxTurns,
-        reasoningEffort: params.model === XAI_DEFAULT_X_SEARCH_MODEL ? "none" : undefined,
-      }),
-      errorLabel: "xAI",
+      ...params,
+      inputText: params.options.query,
+      tools: [buildXSearchTool(params.options)],
+      reasoningEffort: params.model === XAI_DEFAULT_X_SEARCH_MODEL ? "none" : undefined,
+      errorLabel: "xAI X search failed",
     },
-    async (response) => {
-      const data = (await readProviderJsonObjectResponse(
-        response,
-        "xAI X search failed",
-      )) as XaiWebSearchResponse;
-      return requireXaiResponseTextCitationsAndInline(
+    (data) =>
+      requireXaiResponseTextCitationsAndInline(
         data,
         "xAI X search failed",
         params.inlineCitations,
         XAI_X_SEARCH_MAX_CONTENT_CHARS,
-      );
-    },
+      ),
   );
 }

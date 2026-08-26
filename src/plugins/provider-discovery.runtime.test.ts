@@ -38,12 +38,14 @@ vi.mock("./providers.runtime.js", () => ({
   resolvePluginProvidersCore: mocks.resolvePluginProvidersCore,
 }));
 
-vi.mock("./plugin-module-loader-cache.js", () => ({
+vi.mock("./plugin-module-loader-cache.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./plugin-module-loader-cache.js")>()),
   createPluginModuleLoaderCache: mocks.createPluginModuleLoaderCache,
   getCachedPluginModuleLoader: mocks.getCachedPluginModuleLoader,
 }));
 
-vi.mock("./native-module-require.js", () => ({
+vi.mock("./native-module-require.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./native-module-require.js")>()),
   clearNativeRequireJavaScriptModuleCache: mocks.clearNativeRequireJavaScriptModuleCache,
 }));
 
@@ -749,7 +751,18 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
     expect(mocks.resolvePluginProvidersCore).not.toHaveBeenCalled();
   });
 
-  it("defaults missing manifest model costs for static discovery entries", async () => {
+  it.each([
+    {
+      name: "missing",
+      cost: undefined,
+      expectedCost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    },
+    {
+      name: "partial",
+      cost: { input: 3, output: 15, cacheRead: 0.3 },
+      expectedCost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 },
+    },
+  ])("defaults only $name manifest model cost components", async ({ cost, expectedCost }) => {
     mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["anthropic"]);
     mocks.loadPluginMetadataSnapshot.mockReturnValue({
       index: { plugins: [] },
@@ -770,6 +783,7 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
                       input: ["text"],
                       contextWindow: 200000,
                       maxTokens: 64000,
+                      ...(cost ? { cost } : {}),
                     },
                   ],
                 },
@@ -797,7 +811,7 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
           models: [
             expect.objectContaining({
               id: "claude-sonnet-4-6",
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              cost: expectedCost,
             }),
           ],
         }),

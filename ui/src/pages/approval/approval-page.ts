@@ -521,7 +521,7 @@ export class ApprovalPage extends OpenClawLightDomElement {
       <header class="approval-page__brand">
         <img
           class="approval-page__logo"
-          src=${controlUiPublicAssetPath("apple-touch-icon.png", this.context.basePath)}
+          src=${controlUiPublicAssetPath("apple-touch-icon.png", this.context.resourceBasePath)}
           alt=""
         />
         <div>
@@ -602,13 +602,14 @@ export class ApprovalPage extends OpenClawLightDomElement {
   private renderApproval(approval: ApprovalSnapshot) {
     const pending = approval.status === "pending";
     const presentation = approval.presentation;
+    const canGrant = this.hasApprovalGrantAccess;
     const title = pending
       ? presentation.kind === "plugin"
         ? presentation.title
         : t("approvalPage.execTitle")
       : terminalTitle(approval, this.resolutionOrigin);
     const statusDescription = pending
-      ? t("approvalPage.pendingDescription")
+      ? t(canGrant ? "approvalPage.pendingDescription" : "execApproval.reviewOnly")
       : terminalDescription(approval, this.resolutionOrigin);
     return html`
       <div class="approval-page__status" aria-live="polite" aria-atomic="true">
@@ -654,7 +655,7 @@ export class ApprovalPage extends OpenClawLightDomElement {
                     data-decision=${decision}
                     ?disabled=${this.resolving ||
                     !this.hasGatewayConnection ||
-                    !this.hasApprovalGrantAccess ||
+                    !canGrant ||
                     this.requestError !== null}
                     @click=${() => void this.resolveApproval(decision)}
                   >

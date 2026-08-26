@@ -1,150 +1,67 @@
 // Control UI component renders the command palette.
 import { consume } from "@lit/context";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { ref } from "lit/directives/ref.js";
+import type { SessionsSearchHit } from "../../../packages/gateway-protocol/src/index.js";
 import type { RouteId } from "../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
+import { hasOperatorAdminAccess } from "../app/operator-access.ts";
 import { t } from "../i18n/index.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
+import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
-import { getVisibleSessionRows } from "../lib/sessions/index.ts";
+import { filterVisibleSessionRows, getVisibleSessionRows } from "../lib/sessions/index.ts";
+import {
+  parseAgentSessionKey,
+  resolveUiSelectedGlobalAgentId,
+} from "../lib/sessions/session-key.ts";
+import { searchVisibleSessionTranscripts } from "../lib/sessions/transcript-search.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
+import {
+  commandPaletteCategoryLabel,
+  filterCommandPaletteItems,
+  getStaticCommandPaletteCatalogItems,
+  loadCommandPaletteCatalogItems,
+  toCommandPaletteItems,
+  type CommandPaletteItem,
+} from "./command-palette-catalog-search.ts";
 import { isCommandPaletteShortcut } from "./command-palette-contract.ts";
-import { icons, type IconName } from "./icons.ts";
+import {
+  sessionMetadataMatchRank,
+  transcriptSearchSnippet,
+} from "./command-palette-session-search.ts";
+import { icons } from "./icons.ts";
 import "./modal-dialog.ts";
 import {
   CUSTODIAN_PANEL_TOGGLE_EVENT,
   DESKTOP_PANEL_TOGGLE_EVENT,
 } from "./panel-toggle-contract.ts";
 
-type PaletteItem = {
-  id: string;
-  label: string;
-  icon: IconName;
-  category: "search" | "navigation" | "skills" | "chats";
-  action: string;
-  description?: string;
-};
+type PaletteItem = CommandPaletteItem;
 
 const SESSION_ACTION_PREFIX = "session:";
-const SESSION_SEARCH_DEBOUNCE_MS = 250;
+const SESSION_SEARCH_DEBOUNCE_MS = 50;
+const SESSION_SEARCH_MIN_CHARS = 2;
 const SESSION_SEARCH_LIMIT = 10;
 const SESSION_SEARCH_MAX_PAGES = 4;
 const SESSION_SEARCH_PAGE_SIZE = 50;
-
-function getPaletteBaseItems(
-  desktopAvailable: boolean,
-  custodianAvailable: boolean,
-): PaletteItem[] {
-  return [
-    {
-      id: "nav-new-session",
-      label: t("newSession.title"),
-      icon: "plus",
-      category: "navigation",
-      action: "nav:new-session",
-    },
-    {
-      id: "nav-sessions",
-      label: t("palette.items.sessions"),
-      icon: "fileText",
-      category: "navigation",
-      action: "nav:sessions",
-    },
-    {
-      id: "nav-cron",
-      label: t("palette.items.scheduled"),
-      icon: "scrollText",
-      category: "navigation",
-      action: "nav:cron",
-    },
-    {
-      id: "nav-skills",
-      label: t("palette.items.skills"),
-      icon: "zap",
-      category: "navigation",
-      action: "nav:skills",
-    },
-    {
-      id: "nav-plugins",
-      label: t("palette.items.plugins"),
-      icon: "puzzle",
-      category: "navigation",
-      action: "nav:plugins",
-    },
-    {
-      id: "nav-apps",
-      label: t("palette.items.apps"),
-      icon: "layoutGrid",
-      category: "navigation",
-      action: "nav:apps",
-    },
-    {
-      id: "nav-config",
-      label: t("palette.items.settings"),
-      icon: "settings",
-      category: "navigation",
-      action: "nav:config",
-    },
-    {
-      id: "nav-agents",
-      label: t("palette.items.agents"),
-      icon: "folder",
-      category: "navigation",
-      action: "nav:agents",
-    },
-    {
-      id: "slash:verbose",
-      label: "/verbose",
-      icon: "terminal",
-      category: "search",
-      action: "/verbose full",
-      description: t("palette.descriptions.verboseMode"),
-    },
-    ...(desktopAvailable
-      ? [
-          {
-            id: "panel-desktop",
-            label: t("palette.items.desktop"),
-            icon: "monitor" as const,
-            category: "navigation" as const,
-            action: "panel:desktop",
-          },
-        ]
-      : []),
-    ...(custodianAvailable
-      ? [
-          {
-            id: "panel-custodian",
-            label: t("nav.askOpenClaw"),
-            icon: "lobster" as const,
-            category: "navigation" as const,
-            action: "panel:custodian",
-          },
-        ]
-      : []),
-  ];
-}
-
-function getPaletteItemsInternal(
-  desktopAvailable: boolean,
-  custodianAvailable: boolean,
-): PaletteItem[] {
-  return getPaletteBaseItems(desktopAvailable, custodianAvailable);
-}
+const SESSION_TRANSCRIPT_MAX_LIST_PAGES = 4;
+const SESSION_TRANSCRIPT_MAX_REQUESTS = 4;
+const SESSION_TRANSCRIPT_MAX_SESSION_KEYS = 200;
+const CATALOG_CACHE_TTL_MS = 30_000;
 
 type CommandPaletteProps = {
   open: boolean;
   query: string;
   activeIndex: number;
   sessionItems: readonly PaletteItem[];
+  catalogItems: readonly PaletteItem[];
   sessionSearchFailed: boolean;
+  sessionSearchPartial: boolean;
+  sessionSearchIncomplete: boolean;
   onToggle: () => void;
   onQueryChange: (query: string) => void;
   onActiveIndexChange: (index: number) => void;
@@ -160,24 +77,18 @@ function filteredItems(
   query: string,
   includeSlashCommands = true,
   sessionItems: readonly PaletteItem[] = [],
+  catalogItems: readonly PaletteItem[] = [],
   desktopAvailable = false,
   custodianAvailable = false,
 ): PaletteItem[] {
-  const items = getPaletteItemsInternal(desktopAvailable, custodianAvailable).filter(
-    (item) => includeSlashCommands || item.category !== "search",
-  );
-  if (!query) {
-    return items;
-  }
-  const q = normalizeLowercaseStringOrEmpty(query);
-  const matches = items.filter(
-    (item) =>
-      normalizeLowercaseStringOrEmpty(item.label).includes(q) ||
-      normalizeLowercaseStringOrEmpty(item.description).includes(q),
-  );
-  // Gateway search already matched the chat rows, so lead with those before
-  // local navigation and slash-command matches.
-  return [...sessionItems, ...matches];
+  return filterCommandPaletteItems({
+    query,
+    includeSlashCommands,
+    sessionItems,
+    catalogItems,
+    desktopAvailable,
+    custodianAvailable,
+  });
 }
 
 function groupItems(items: PaletteItem[]): Array<[string, PaletteItem[]]> {
@@ -225,6 +136,7 @@ function handleKeydown(e: KeyboardEvent, props: CommandPaletteProps) {
     props.query,
     Boolean(props.onSlashCommand),
     props.sessionItems,
+    props.catalogItems,
     props.desktopAvailable,
     props.custodianAvailable,
   );
@@ -259,21 +171,6 @@ function handleKeydown(e: KeyboardEvent, props: CommandPaletteProps) {
   }
 }
 
-function getCategoryLabel(category: string): string {
-  switch (category) {
-    case "search":
-      return t("palette.categories.search");
-    case "navigation":
-      return t("palette.categories.navigation");
-    case "skills":
-      return t("palette.categories.skills");
-    case "chats":
-      return t("sessionsView.title");
-    default:
-      return category;
-  }
-}
-
 function getOptionId(item: PaletteItem): string {
   return `cmd-palette-option-${item.id.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
 }
@@ -296,6 +193,7 @@ function renderCommandPalette(props: CommandPaletteProps) {
     props.query,
     Boolean(props.onSlashCommand),
     props.sessionItems,
+    props.catalogItems,
     props.desktopAvailable,
     props.custodianAvailable,
   );
@@ -337,6 +235,15 @@ function renderCommandPalette(props: CommandPaletteProps) {
           }}
         />
         <div id=${paletteListboxId} class="cmd-palette__results" role="listbox">
+          ${props.sessionSearchPartial || props.sessionSearchIncomplete
+            ? html`<div class="cmd-palette__empty" role="status">
+                ${t(
+                  props.sessionSearchIncomplete
+                    ? "palette.searchIncomplete"
+                    : "palette.searchPartial",
+                )}
+              </div>`
+            : nothing}
           ${grouped.length === 0
             ? html`<div class="cmd-palette__empty">
                 <span class="nav-item__icon" style="opacity:0.3;width:20px;height:20px"
@@ -350,7 +257,9 @@ function renderCommandPalette(props: CommandPaletteProps) {
               </div>`
             : grouped.map(
                 ([category, groupedItems]) => html`
-                  <div class="cmd-palette__group-label">${getCategoryLabel(category)}</div>
+                  <div class="cmd-palette__group-label">
+                    ${commandPaletteCategoryLabel(category)}
+                  </div>
                   ${groupedItems.map((item) => {
                     const globalIndex = items.indexOf(item);
                     const isActive = globalIndex === props.activeIndex;
@@ -401,11 +310,20 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
   @state() private query = "";
   @state() private activeIndex = 0;
   @state() private sessionItems: readonly PaletteItem[] = [];
+  @state() private catalogItems: readonly PaletteItem[] = [];
   @state() private sessionSearchFailed = false;
+  @state() private sessionSearchPartial = false;
+  @state() private sessionSearchIncomplete = false;
 
   private readonly subscriptions = new SubscriptionsController(this);
   private sessionSearchTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private sessionSearchId = 0;
+  private catalogLoad?: {
+    client: NonNullable<ApplicationContext<RouteId>["gateway"]["snapshot"]["client"]>;
+    agentId: string;
+    promise: Promise<void>;
+    loadedAt?: number;
+  };
   private sessionSearchSource?: {
     gateway: ApplicationContext<RouteId>["gateway"];
     client: ApplicationContext<RouteId>["gateway"]["snapshot"]["client"];
@@ -432,6 +350,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     this.query = "";
     this.activeIndex = 0;
     this.clearSessionSearch();
+    this.clearCatalogSearch();
     this.sessionSearchSource = undefined;
     super.disconnectedCallback();
   }
@@ -478,6 +397,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       // Query results belong to one runtime/client connection. Discard them as
       // soon as that owner changes so detached or reconnecting rows stay inert.
       this.clearSessionSearch();
+      this.clearCatalogSearch();
     }
     if (snapshot.phase === "connected" && (sourceChanged || clientChanged || reconnected)) {
       this.scheduleSessionSearch(this.query);
@@ -492,6 +412,49 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     this.sessionSearchId += 1;
     this.sessionItems = [];
     this.sessionSearchFailed = false;
+    this.sessionSearchPartial = false;
+    this.sessionSearchIncomplete = false;
+  }
+
+  private clearCatalogSearch() {
+    this.catalogLoad = undefined;
+    this.catalogItems = [];
+  }
+
+  private ensureCatalogItems(): Promise<void> {
+    const context = this.context;
+    const gateway = context?.gateway;
+    const client = gateway?.snapshot.client;
+    if (!context || gateway?.snapshot.phase !== "connected" || !client) {
+      return Promise.resolve();
+    }
+    const agentId = resolveUiSelectedGlobalAgentId(gateway.snapshot);
+    const current = this.catalogLoad;
+    if (
+      current?.client === client &&
+      current.agentId === agentId &&
+      (current.loadedAt === undefined || Date.now() - current.loadedAt < CATALOG_CACHE_TTL_MS)
+    ) {
+      return current.promise;
+    }
+    const snapshot = gateway.snapshot;
+    const promise = loadCommandPaletteCatalogItems({
+      client,
+      agentId,
+      agents: () => context.agents?.ensureList?.() ?? Promise.resolve(null),
+      methodAvailable: (method) => Boolean(isGatewayMethodAdvertised(snapshot, method)),
+    }).then((items) => {
+      if (
+        this.catalogLoad?.promise === promise &&
+        this.context?.gateway === gateway &&
+        gateway.snapshot.client === client
+      ) {
+        this.catalogItems = toCommandPaletteItems(items);
+        this.catalogLoad.loadedAt = Date.now();
+      }
+    });
+    this.catalogLoad = { client, agentId, promise };
+    return promise;
   }
 
   private scheduleSessionSearch(query: string) {
@@ -504,13 +467,18 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     this.sessionSearchId += 1;
     this.sessionItems = [];
     this.sessionSearchFailed = false;
+    this.sessionSearchPartial = false;
+    this.sessionSearchIncomplete = false;
     const search = normalizeOptionalString(query);
-    if (!this.open || !search || !this.onSelectSession) {
+    if (!this.open || !search || search.length < SESSION_SEARCH_MIN_CHARS) {
       return;
     }
     this.sessionSearchTimer = globalThis.setTimeout(() => {
       this.sessionSearchTimer = null;
-      void this.searchSessions(search);
+      void this.ensureCatalogItems();
+      if (this.onSelectSession) {
+        void this.searchSessions(search);
+      }
     }, SESSION_SEARCH_DEBOUNCE_MS);
   }
 
@@ -523,6 +491,45 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       return;
     }
     const requestId = ++this.sessionSearchId;
+    const isCurrent = () =>
+      requestId === this.sessionSearchId &&
+      this.open &&
+      this.context?.sessions === sessions &&
+      this.context?.gateway === gateway &&
+      gateway.snapshot.client === client &&
+      gateway.snapshot.phase === "connected";
+    const transcriptSearchAvailable = isGatewayMethodAdvertised(
+      gateway.snapshot,
+      "sessions.search",
+    );
+    const defaultAgentId = resolveUiSelectedGlobalAgentId(gateway.snapshot);
+    const transcriptSearch = transcriptSearchAvailable
+      ? searchVisibleSessionTranscripts({
+          client,
+          query: search,
+          result: undefined,
+          listSessions: sessions.list,
+          listOptions: {
+            includeGlobal: false,
+            includeUnknown: false,
+            configuredAgentsOnly: true,
+          },
+          resolveAgentId: (sessionKey) =>
+            parseAgentSessionKey(sessionKey)?.agentId ?? defaultAgentId,
+          isCurrent,
+          maxListPages: SESSION_TRANSCRIPT_MAX_LIST_PAGES,
+          maxSearchRequests: SESSION_TRANSCRIPT_MAX_REQUESTS,
+          maxSessionKeys: SESSION_TRANSCRIPT_MAX_SESSION_KEYS,
+          mapPageRows: (rows) =>
+            filterVisibleSessionRows(rows, {
+              agentId: "",
+              defaultAgentId,
+              filterByAgent: false,
+            }),
+        })
+          .then((result) => ({ error: false as const, result }))
+          .catch(() => ({ error: true as const, result: null }))
+      : Promise.resolve(null);
     const visibleRows: ReturnType<typeof getVisibleSessionRows> = [];
     const visibleKeys = new Set<string>();
     const seenOffsets = new Set<number>([0]);
@@ -538,20 +545,12 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
           includeUnknown: false,
         });
         pagesLoaded += 1;
-        if (
-          requestId !== this.sessionSearchId ||
-          !this.open ||
-          this.context?.sessions !== sessions ||
-          this.context?.gateway !== gateway ||
-          gateway.snapshot.client !== client ||
-          gateway.snapshot.phase !== "connected" ||
-          !result
-        ) {
+        if (!isCurrent() || !result) {
           return;
         }
         const pageRows = getVisibleSessionRows(result, {
           agentId: "",
-          defaultAgentId: "",
+          defaultAgentId,
           filterByAgent: false,
         });
         for (const row of pageRows) {
@@ -576,14 +575,59 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
         seenOffsets.add(nextOffset);
         offset = nextOffset;
       }
-      this.sessionItems = visibleRows.slice(0, SESSION_SEARCH_LIMIT).map((row) => ({
-        id: `session-${row.key}`,
-        label: resolveSessionDisplayName(row.key, row),
-        icon: "messageSquare" as const,
-        category: "chats" as const,
-        action: `${SESSION_ACTION_PREFIX}${row.key}`,
-        description: formatRelativeTimestamp(row.updatedAt, { fallback: "" }),
-      }));
+      const transcriptOutcome = await transcriptSearch;
+      if (!isCurrent()) {
+        return;
+      }
+      const transcriptResult = transcriptOutcome?.result ?? null;
+      this.sessionSearchPartial = transcriptOutcome?.error === true;
+      this.sessionSearchIncomplete =
+        transcriptOutcome?.error !== true &&
+        (transcriptResult?.indexing === true || transcriptResult?.truncated === true);
+      const transcriptHitByKey = new Map<string, SessionsSearchHit>();
+      for (const hit of transcriptResult?.results ?? []) {
+        if (!transcriptHitByKey.has(hit.sessionKey)) {
+          transcriptHitByKey.set(hit.sessionKey, hit);
+        }
+      }
+      const rowsByKey = new Map(visibleRows.map((row) => [row.key, row] as const));
+      for (const row of transcriptResult?.sessions ?? []) {
+        if (!rowsByKey.has(row.key)) {
+          rowsByKey.set(row.key, row);
+        }
+      }
+      this.sessionItems = [...rowsByKey.values()]
+        .map((row) => ({
+          row,
+          metadataRank: Math.max(
+            visibleKeys.has(row.key) ? 1 : 0,
+            sessionMetadataMatchRank(row, search),
+          ),
+          transcriptHit: transcriptHitByKey.get(row.key),
+        }))
+        .filter(({ metadataRank, transcriptHit }) => metadataRank > 0 || transcriptHit)
+        .toSorted((left, right) => {
+          const metadataDiff = right.metadataRank - left.metadataRank;
+          if (metadataDiff !== 0) {
+            return metadataDiff;
+          }
+          const transcriptDiff =
+            (right.transcriptHit?.score ?? Number.NEGATIVE_INFINITY) -
+            (left.transcriptHit?.score ?? Number.NEGATIVE_INFINITY);
+          return transcriptDiff || (right.row.updatedAt ?? 0) - (left.row.updatedAt ?? 0);
+        })
+        .slice(0, SESSION_SEARCH_LIMIT)
+        .map(({ row, transcriptHit }) => ({
+          id: `session-${row.key}`,
+          label: resolveSessionDisplayName(row.key, row),
+          icon: "messageSquare" as const,
+          category: "chats" as const,
+          action: `${SESSION_ACTION_PREFIX}${row.key}`,
+          description:
+            transcriptHit && sessionMetadataMatchRank(row, search) === 0
+              ? transcriptSearchSnippet(transcriptHit.snippet)
+              : formatRelativeTimestamp(row.updatedAt, { fallback: "" }),
+        }));
       this.activeIndex = 0;
     } catch {
       // Session search is best-effort; navigation commands stay usable. But a
@@ -614,7 +658,17 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       query: this.query,
       activeIndex: this.activeIndex,
       sessionItems: this.sessionItems,
+      catalogItems: [
+        ...toCommandPaletteItems(
+          getStaticCommandPaletteCatalogItems(
+            hasOperatorAdminAccess(this.context?.gateway.snapshot.hello?.auth ?? null),
+          ),
+        ),
+        ...this.catalogItems,
+      ],
       sessionSearchFailed: this.sessionSearchFailed,
+      sessionSearchPartial: this.sessionSearchPartial,
+      sessionSearchIncomplete: this.sessionSearchIncomplete,
       desktopAvailable: this.desktopAvailable,
       custodianAvailable: this.custodianAvailable,
       onToggle: this.togglePalette,

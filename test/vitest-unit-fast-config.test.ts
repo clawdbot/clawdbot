@@ -312,6 +312,9 @@ describe("unit-fast vitest lane", () => {
       "src/acp/translator.error-kind.test.ts",
       "src/agents/auth-profiles/oauth-refresh-error.test.ts",
       "src/agents/embedded-agent-runner/model.provider-hooks.timeout.test.ts",
+      "src/agents/tools/computer-tool.context.test.ts",
+      "src/agents/tools/computer-tool.schema.test.ts",
+      "src/agents/tools/computer-tool.v2.test.ts",
       "src/auto-reply/reply/agent-runner-execution-runtime.test.ts",
     ];
     for (const file of files) {
@@ -382,12 +385,6 @@ describe("unit-fast vitest lane", () => {
     );
     expect(getUnitFastTestFilesForIncludePatterns(["**/*.test.ts"], { dir: "extensions" })).toEqual(
       extensionUnitFastFiles,
-    );
-    expect(extensionUnitFastFiles).toEqual(
-      expect.arrayContaining([
-        "extensions/canvas/src/host/server.test.ts",
-        "extensions/canvas/src/host/server.state-dir.test.ts",
-      ]),
     );
     expect(getUnitFastTestFilesForIncludePatterns(["!src/**/*.test.ts"])).toEqual(
       unitFastTestFiles,

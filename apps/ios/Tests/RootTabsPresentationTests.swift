@@ -71,6 +71,9 @@ struct RootTabsPresentationTests {
             Self.sessionEntry(key: "two", totalTokens: 80),
         ])
         let unknown = RootSidebarModel.tokenUsageSummary(for: [Self.sessionEntry(key: "unknown")])
+        let incompleteRoster = RootSidebarModel.tokenUsageSummary(
+            for: [Self.sessionEntry(key: "known", totalTokens: 45, totalTokensFresh: true)],
+            rosterIsComplete: false)
 
         #expect(summary.total == 1500)
         #expect(summary.isPartial)
@@ -78,6 +81,159 @@ struct RootTabsPresentationTests {
         #expect(!complete.isPartial)
         #expect(unknown.total == nil)
         #expect(unknown.isPartial)
+        #expect(incompleteRoster.total == 45)
+        #expect(incompleteRoster.isPartial)
+    }
+
+    @Test func `session roster loads every gateway page beyond the former thousand-row ceiling`() async throws {
+        let entries = (0..<1205).map { Self.sessionEntry(key: "session-\($0)") }
+        var offsets: [Int] = []
+
+        let snapshot = try await ChatSessionRosterSnapshot.collect { offset in
+            offsets.append(offset)
+            let page = Array(entries.dropFirst(offset).prefix(200))
+            let nextOffset = offset + page.count
+            return OpenClawChatSessionsListResponse(
+                ts: nil,
+                path: nil,
+                count: page.count,
+                totalCount: entries.count,
+                offset: offset,
+                nextOffset: nextOffset < entries.count ? nextOffset : nil,
+                hasMore: nextOffset < entries.count,
+                defaults: nil,
+                sessions: page)
+        }
+
+        #expect(offsets == [0, 200, 400, 600, 800, 1000, 1200])
+        #expect(snapshot.sessions.count == 1205)
+        #expect(snapshot.sessions.last?.key == "session-1204")
+        #expect(snapshot.totalCount == 1205)
+        #expect(snapshot.isComplete)
+    }
+
+    @Test func `session roster bounds an endlessly advancing gateway snapshot without dropping rows`() async throws {
+        var requestCount = 0
+
+        let snapshot = try await ChatSessionRosterSnapshot.collect { offset in
+            requestCount += 1
+            guard requestCount <= 51 else { throw URLError(.networkConnectionLost) }
+            let sessions = (offset..<(offset + 200)).map { Self.sessionEntry(key: "session-\($0)") }
+            return OpenClawChatSessionsListResponse(
+                ts: nil,
+                path: nil,
+                count: sessions.count,
+                totalCount: offset + 400,
+                offset: offset,
+                nextOffset: offset + sessions.count,
+                hasMore: true,
+                defaults: nil,
+                sessions: sessions)
+        }
+
+        #expect(requestCount == 50)
+        #expect(snapshot.sessions.count == 10000)
+        #expect(snapshot.sessions.last?.key == "session-9999")
+        #expect(!snapshot.isComplete)
+    }
+
+    @Test func `session roster preserves successful pages when a later request fails`() async throws {
+        let firstPage = (0..<200).map { Self.sessionEntry(key: "session-\($0)") }
+
+        let snapshot = try await ChatSessionRosterSnapshot.collect { offset in
+            guard offset == 0 else { throw URLError(.networkConnectionLost) }
+            return OpenClawChatSessionsListResponse(
+                ts: nil,
+                path: nil,
+                count: firstPage.count,
+                totalCount: 350,
+                offset: offset,
+                nextOffset: firstPage.count,
+                hasMore: true,
+                defaults: nil,
+                sessions: firstPage)
+        }
+
+        #expect(snapshot.sessions.count == 200)
+        #expect(snapshot.totalCount == 350)
+        #expect(!snapshot.isComplete)
+    }
+
+    @Test func `session roster rejects a nonadvancing gateway cursor without losing rows`() async throws {
+        var requestCount = 0
+
+        let snapshot = try await ChatSessionRosterSnapshot.collect { offset in
+            requestCount += 1
+            return OpenClawChatSessionsListResponse(
+                ts: nil,
+                path: nil,
+                count: 1,
+                totalCount: 2,
+                offset: offset,
+                nextOffset: offset,
+                hasMore: true,
+                defaults: nil,
+                sessions: [Self.sessionEntry(key: "first")])
+        }
+
+        #expect(requestCount == 1)
+        #expect(snapshot.sessions.map(\.key) == ["first"])
+        #expect(!snapshot.isComplete)
+    }
+
+    @Test func `session roster propagates cancellation after a successful page`() async {
+        await #expect(throws: CancellationError.self) {
+            _ = try await ChatSessionRosterSnapshot.collect { offset in
+                guard offset == 0 else { throw CancellationError() }
+                return OpenClawChatSessionsListResponse(
+                    ts: nil,
+                    path: nil,
+                    count: 1,
+                    totalCount: 2,
+                    offset: offset,
+                    nextOffset: 1,
+                    hasMore: true,
+                    defaults: nil,
+                    sessions: [Self.sessionEntry(key: "first")])
+            }
+        }
+    }
+
+    @Test func `usage list shows the latest fourteen days newest first`() {
+        let days = (1...20).map { day in
+            CostUsageDailyEntryLite(
+                date: String(format: "2026-07-%02d", day),
+                totalTokens: day,
+                totalCost: Double(day))
+        }
+
+        let displayed = AgentProTab.displayedUsageDays(days)
+
+        #expect(displayed.map(\.date) == (7...20).reversed().map {
+            String(format: "2026-07-%02d", $0)
+        })
+    }
+
+    @Test func `iOS usage requests device calendar days`() throws {
+        let cases: [(timeZoneID: String, timestamp: TimeInterval, expectedOffset: String)] = [
+            ("America/Los_Angeles", 1_769_000_000, "UTC-8"),
+            ("America/Los_Angeles", 1_785_000_000, "UTC-7"),
+            ("Asia/Kathmandu", 1_785_000_000, "UTC+5:45"),
+        ]
+
+        for testCase in cases {
+            let timeZone = try #require(TimeZone(identifier: testCase.timeZoneID))
+            let paramsJSON = CostUsageRequest.monthParamsJSON(
+                timeZone: timeZone,
+                date: Date(timeIntervalSince1970: testCase.timestamp))
+            let data = try #require(paramsJSON.data(using: .utf8))
+            let params = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+            #expect(params["days"] as? Int == 31)
+            #expect(params["mode"] as? String == "specific")
+            #expect(params["timeZone"] as? String == testCase.timeZoneID)
+            #expect(params["utcOffset"] as? String == testCase.expectedOffset)
+        }
     }
 
     @Test func `failed cron attention ignores disabled jobs`() {
@@ -250,6 +406,33 @@ struct RootTabsPresentationTests {
         #expect(IPadSkillWorkshopScreen.shouldEnableProposalMutation(canWrite: true, hasOperatorAdminScope: true))
         #expect(!IPadSkillWorkshopScreen.shouldEnableProposalMutation(canWrite: true, hasOperatorAdminScope: false))
         #expect(!IPadSkillWorkshopScreen.shouldEnableProposalMutation(canWrite: false, hasOperatorAdminScope: true))
+    }
+
+    @Test func `skill workshop actions carry the reviewed revision hash`() throws {
+        let revisionHash = String(repeating: "a", count: 64)
+        let proposal = Self.skillWorkshopProposal(revisionHash: revisionHash)
+        let apply = try #require(IPadSkillProposalAction(kind: .apply, proposal: proposal))
+        let reject = try #require(IPadSkillProposalAction(kind: .reject, proposal: proposal))
+
+        for (action, method) in [
+            (apply, "skills.proposals.apply"),
+            (reject, "skills.proposals.reject"),
+        ] {
+            let encoded = try #require(
+                JSONSerialization.jsonObject(
+                    with: JSONEncoder().encode(action.params(agentID: "main"))) as? [String: Any])
+
+            #expect(action.method == method)
+            #expect(encoded["agentId"] as? String == "main")
+            #expect(encoded["proposalId"] as? String == proposal.id)
+            #expect(encoded["expectedRevisionHash"] as? String == revisionHash)
+        }
+    }
+
+    @Test func `skill workshop actions require an inspected revision hash`() {
+        #expect(IPadSkillProposalAction(
+            kind: .apply,
+            proposal: Self.skillWorkshopProposal(revisionHash: nil)) == nil)
     }
 
     @Test func `skill workshop held filter includes quarantined and stale`() {
@@ -477,6 +660,20 @@ struct RootTabsPresentationTests {
 
         #expect(standalone.ownsNavigationStack)
         #expect(!embedded.ownsNavigationStack)
+    }
+
+    @Test func `direct approvals exposes notification remediation only when a navigation owner exists`() {
+        let routedApprovals = SettingsProTab(
+            directRoute: .approvals,
+            ownsNavigationStack: false,
+            navigateToRoute: { _ in })
+        let isolatedApprovals = SettingsProTab(directRoute: .approvals)
+        let unroutedEmbeddedSettings = SettingsProTab(ownsNavigationStack: false)
+
+        #expect(routedApprovals.canOpenNotificationsRouteFromApprovals)
+        #expect(!isolatedApprovals.canOpenNotificationsRouteFromApprovals)
+        #expect(!unroutedEmbeddedSettings.canOpenNotificationsRouteFromApprovals)
+        #expect(SettingsProTab().canOpenNotificationsRouteFromApprovals)
     }
 
     @Test func `localized QR status matcher accepts positional placeholders`() {
@@ -1058,5 +1255,23 @@ struct RootTabsPresentationTests {
             payload: AnyCodable(["kind": AnyCodable("agentTurn")]),
             state: [:],
             lastrunstatus: AnyCodable(status))
+    }
+
+    private static func skillWorkshopProposal(revisionHash: String?) -> IPadSkillProposal {
+        IPadSkillProposal(
+            inspect: IPadSkillProposalInspectResponse(
+                record: IPadSkillProposalRecord(
+                    id: "proposal-1",
+                    status: "pending",
+                    title: "Reviewed proposal",
+                    description: "A reviewed Skill Workshop proposal.",
+                    updatedAt: "2026-08-18T12:00:00Z",
+                    target: IPadSkillProposalTarget(
+                        skillName: "reviewed-skill",
+                        skillKey: "reviewed-skill")),
+                revisionHash: revisionHash,
+                content: "# Reviewed skill",
+                supportFiles: nil),
+            previous: nil)
     }
 }

@@ -28,6 +28,12 @@ describe("model catalog normalization", () => {
                 input: ["text", "image", "document", "audio"],
                 reasoning: true,
                 contextWindow: 256000,
+                contextWindows: [
+                  { id: "1m", label: " 1M ", contextWindow: 1_000_000 },
+                  { id: "invalid", label: "Invalid", contextWindow: 0 },
+                  { id: "200k", label: " 200K ", contextWindow: 200_000 },
+                ],
+                contextWindowDefault: " 1m ",
                 contextTokens: 200000,
                 maxTokens: 128000,
                 thinkingLevelMap: {
@@ -146,6 +152,11 @@ describe("model catalog normalization", () => {
               input: ["text", "image", "document"],
               reasoning: true,
               contextWindow: 256000,
+              contextWindows: [
+                { id: "200k", label: "200K", contextWindow: 200_000 },
+                { id: "1m", label: "1M", contextWindow: 1_000_000 },
+              ],
+              contextWindowDefault: "1m",
               contextTokens: 200000,
               maxTokens: 128000,
               thinkingLevelMap: { off: null, minimal: "low", max: "max" },
@@ -402,5 +413,56 @@ describe("model catalog normalization", () => {
       },
       { id: "z-model", headers: { "x-provider": "default", "x-override": "new" } },
     ]);
+  });
+
+  it("bounds selectable context windows and keeps the default inside the cap", () => {
+    const contextWindows = Array.from({ length: 20 }, (_, index) => ({
+      id: `window-${index}`,
+      label: `Window ${index}`,
+      contextWindow: 20 - index,
+    }));
+    const [row] = normalizeModelCatalogProviderRows({
+      provider: "example",
+      providerCatalog: {
+        models: [{ id: "model", contextWindows, contextWindowDefault: "window-3" }],
+      },
+      source: "manifest",
+    });
+
+    expect(row?.contextWindows).toHaveLength(16);
+    expect(row?.contextWindows?.map((option) => option.contextWindow)).toEqual([
+      5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+    ]);
+    expect(row?.contextWindowDefault).toBe("window-3");
+  });
+
+  it.each([
+    { name: "an omitted default", contextWindowDefault: undefined },
+    { name: "an undeclared default", contextWindowDefault: "missing" },
+    { name: "a default dropped by the option cap", contextWindowDefault: "window-19" },
+  ])("drops the selection tuple with $name", ({ contextWindowDefault }) => {
+    const contextWindows = Array.from({ length: 20 }, (_, index) => ({
+      id: `window-${index}`,
+      label: `Window ${index}`,
+      contextWindow: 20 - index,
+    }));
+    const [row] = normalizeModelCatalogProviderRows({
+      provider: "example",
+      providerCatalog: {
+        models: [
+          {
+            id: "model",
+            contextWindows,
+            ...(contextWindowDefault ? { contextWindowDefault } : {}),
+          },
+        ],
+      },
+      source: "manifest",
+    });
+
+    // Options without a selectable default would render no picker control, so
+    // the normalized row must drop the whole tuple, not just the default.
+    expect(row?.contextWindows).toBeUndefined();
+    expect(row?.contextWindowDefault).toBeUndefined();
   });
 });

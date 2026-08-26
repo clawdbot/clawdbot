@@ -414,7 +414,7 @@ describe("openclaw launcher", () => {
     expect(result.stdout).toBe(`PRECOMPUTED ${params.command} help\n`);
   });
 
-  it.each(["doctor", "gateway", "models", "plugins", "sessions", "tasks"])(
+  it.each(["config", "doctor", "gateway", "models", "plugins", "sessions", "tasks"])(
     "uses precomputed %s help before loading the runtime entry",
     async (command) => {
       const fixtureRoot = await makeLauncherFixture(fixtureRoots);

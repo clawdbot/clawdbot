@@ -95,6 +95,8 @@ export const en = {
       tokenPlaceholder: "Needed for multi-machine or non-loopback access",
       tokenPrompt: "Gateway token",
       tokenPromptGenerate: "Gateway token (blank to generate)",
+      tokenStoreProvisioned:
+        "Generated a gateway token and stored it in the OpenClaw secret store as {name}. Config keeps only a reference; inspect it with `openclaw secrets store list`.",
       websocketUrl: "Gateway WebSocket URL",
     },
     gatewayTailscale: {
@@ -126,6 +128,7 @@ export const en = {
       complete: "Migration complete. Run `openclaw doctor` next.",
       continuing: "Migration complete. Continuing setup.",
       importFrom: "Import from {source}",
+      importFromAnotherAgent: "Import from another agent",
       includeCredentials: "Import supported auth credentials too?",
       previewTitle: "Migration preview",
       setupModelSeparately: "Set up a model separately",
@@ -457,6 +460,13 @@ export const en = {
         "If multiple users can message one tool-enabled agent, they can all influence how it uses its tools.",
       title: "Security disclaimer",
       toolAccess: "This bot can read files and run actions if tools are enabled.",
+    },
+    telemetry: {
+      accept: "Yes, share feature stats",
+      decline: "No thanks",
+      description:
+        "Share which features you use (channels, providers, plugin count) as part of the daily update check. Never messages, never identifiers. See exactly what is sent: `openclaw telemetry show`. Change anytime: `openclaw telemetry on|off`.",
+      title: "Help make OpenClaw better?",
     },
     skills: {
       configure: "Configure skills now? (recommended)",
@@ -1110,8 +1120,9 @@ export const en = {
       dashboardWhenReady: "When you're ready: {command}",
       daemonRuntime: "Gateway service runtime",
       daemonRuntimeNode: "Node (recommended)",
-      daemonRuntimeNodeHint:
-        "Required because OpenClaw state uses node:sqlite; Bun cannot run the Gateway.",
+      daemonRuntimeNodeHint: "Primary and recommended runtime for managed services.",
+      daemonRuntimeBun: "Bun 1.4+",
+      daemonRuntimeBunHint: "Requires Bun 1.4 or newer with WAL-reset-safe node:sqlite.",
       editBootstrap: "Edit BOOTSTRAP.md later to change how the agent introduces itself.",
       bootstrapHatchMessage: "Wake up, my friend!",
       firstTerminalChat: 'The first Terminal chat run will send: "Wake up, my friend!"',
@@ -1161,6 +1172,8 @@ export const en = {
       outroDashboardLink: "Onboarding complete. Use the dashboard link above to control OpenClaw.",
       outroDashboardOpened:
         "Onboarding complete. Dashboard opened; keep that tab to control OpenClaw.",
+      outroHealthCheckFailed:
+        "Onboarding complete, but the gateway health check failed. Fix the issue above, then verify with {command}.",
       outroSeeded:
         "Onboarding complete. Web UI seeded in the background; open it anytime with the dashboard link above.",
       quickstartNodeRuntime: "QuickStart uses Node for the Gateway service (stable + supported).",

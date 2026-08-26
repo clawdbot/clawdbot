@@ -60,7 +60,6 @@ export async function runEmbeddedAttempt(
   const runAbortController = new AbortController();
   const {
     agentCoreThinkingLevel,
-    defaultAgentId,
     effectiveCwd,
     effectiveFsWorkspaceOnly,
     effectiveWorkspace,
@@ -246,6 +245,7 @@ export async function runEmbeddedAttempt(
       () =>
         prepareEmbeddedAttemptBootstrap({
           attempt: params,
+          bootstrapWorkspaceDir: params.bootstrapWorkspaceDir,
           effectiveWorkspace,
           hasReadTool: toolsEnabled && toolsRaw.some((tool) => tool.name === "read"),
           isRawModelRun,
@@ -325,7 +325,6 @@ export async function runEmbeddedAttempt(
           attempt: params,
           bootstrap: preparedBootstrap,
           capabilityToolNames: toolSearchRunPlan.capabilityToolNames,
-          defaultAgentId,
           effectiveCwd,
           effectiveTools,
           effectiveWorkspace,

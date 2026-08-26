@@ -2,6 +2,7 @@
 import type { App } from "@slack/bolt";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createInboundSlackTestContext } from "../message-handler/prepare.test-helpers.js";
+import { createSlackSystemEventRouteResolver } from "../system-event-session.js";
 import {
   createSlackSystemEventTestHarness,
   type SlackSystemEventTestOverrides,
@@ -731,6 +732,155 @@ describe("registerSlackMessageEvents", () => {
       contextKey: "slack:message:changed:C1:123.456:Ev-message-change-1",
     });
   });
+
+  it.each([
+    { channelType: "channel", subtype: "message_changed", threadSession: true },
+    { channelType: "channel", subtype: "message_deleted", threadSession: true },
+    { channelType: "group", subtype: "message_changed", threadSession: true },
+    { channelType: "group", subtype: "message_deleted", threadSession: true },
+    { channelType: "mpim", subtype: "message_changed", threadSession: true },
+    { channelType: "mpim", subtype: "message_deleted", threadSession: true },
+    { channelType: "im", subtype: "message_changed", threadSession: false },
+    { channelType: "im", subtype: "message_deleted", threadSession: false },
+    { channelType: "channel", subtype: "message_changed", root: true, threadSession: false },
+    { channelType: "channel", subtype: "message_deleted", root: true, threadSession: false },
+    {
+      channelType: "channel",
+      subtype: "message_changed",
+      previousOnly: true,
+      threadSession: true,
+    },
+    {
+      channelType: "channel",
+      subtype: "message_changed",
+      root: true,
+      parentUserId: "U_PARENT",
+      threadSession: true,
+    },
+    {
+      channelType: "channel",
+      subtype: "message_deleted",
+      root: true,
+      parentUserId: "U_PARENT",
+      threadSession: true,
+    },
+    { channelType: "mpim", subtype: "message_changed", denied: true, threadSession: false },
+    { channelType: "mpim", subtype: "message_deleted", denied: true, threadSession: false },
+    {
+      channelType: "channel",
+      subtype: "message_changed",
+      enterprise: true,
+      threadSession: true,
+    },
+    {
+      channelType: "channel",
+      subtype: "message_deleted",
+      enterprise: true,
+      threadSession: true,
+    },
+  ] as const)(
+    "routes $channelType $subtype events to their actual conversation",
+    async ({ channelType, subtype, threadSession, ...scenario }) => {
+      const actualSystemEvents = await vi.importActual<
+        typeof import("openclaw/plugin-sdk/system-event-runtime")
+      >("openclaw/plugin-sdk/system-event-runtime");
+      actualSystemEvents.resetSystemEventsForTest();
+      messageQueueMock.mockImplementation(
+        (text: string, { sessionKey, ...options }: { sessionKey: string }) =>
+          actualSystemEvents.enqueueRoutedSystemEvent(
+            text,
+            { agentId: "main", sessionKey },
+            options,
+          ),
+      );
+
+      const senderId = "U123";
+      const denied = "denied" in scenario;
+      const enterprise = "enterprise" in scenario;
+      const harness = createSlackSystemEventTestHarness({
+        channelType,
+        ...(channelType === "mpim" ? { allowFrom: denied ? ["U_OTHER"] : [senderId] } : {}),
+      });
+      harness.ctx.cfg = { channels: { slack: { enabled: true } } };
+      harness.ctx.accountId = "default";
+      harness.ctx.channelsConfigKeys = [];
+      if (enterprise) {
+        harness.ctx.installationIdentity = {
+          kind: "enterprise",
+          apiAppId: "A_TEST",
+          enterpriseId: "E_TEST",
+        };
+      }
+      harness.ctx.resolveSlackSystemEventRoute = createSlackSystemEventRouteResolver({
+        cfg: harness.ctx.cfg,
+        accountId: harness.ctx.accountId,
+        getTeamId: () => harness.ctx.teamId,
+        mainKey: "agent:main:main",
+        threadInheritParent: false,
+        recallSlackChannelType: () => channelType,
+      });
+      registerSlackMessageEvents({ ctx: harness.ctx, handleSlackMessage: async () => {} });
+
+      const threadTs = "1712345678.123456";
+      const channelId = channelType === "im" ? "D123" : channelType === "mpim" ? "G123" : "C123";
+      const nestedMessage = {
+        ts: "root" in scenario ? threadTs : "1712345678.654321",
+        thread_ts: threadTs,
+        user: senderId,
+        ...("parentUserId" in scenario ? { parent_user_id: scenario.parentUserId } : {}),
+      };
+      const event = {
+        type: "message",
+        subtype,
+        channel: channelId,
+        channel_type: channelType,
+        previous_message: nestedMessage,
+        event_ts: "1712345679.000000",
+        ...(subtype === "message_changed"
+          ? {
+              message:
+                "previousOnly" in scenario
+                  ? { ts: nestedMessage.ts, user: senderId }
+                  : nestedMessage,
+            }
+          : { deleted_ts: nestedMessage.ts }),
+      };
+      const listenerClient = {} as App["client"];
+      await requireMessageHandler(harness.getHandler("message") as MessageHandler | null)({
+        event,
+        body: { api_app_id: "A_TEST", event_id: `Ev-${channelType}-${subtype}` },
+        ...(enterprise
+          ? {
+              context: { isEnterpriseInstall: true, enterpriseId: "E_TEST", teamId: "T_GRID" },
+              client: listenerClient,
+            }
+          : {}),
+      });
+
+      const eventScope = enterprise ? { teamId: "T_GRID", client: listenerClient } : undefined;
+      const parentSessionKey = harness.ctx.resolveSlackSystemEventRoute({
+        channelId,
+        channelType,
+        senderId,
+        eventScope,
+      }).sessionKey;
+      const threadSessionKey = harness.ctx.resolveSlackSystemEventRoute({
+        channelId,
+        channelType,
+        senderId,
+        threadTs,
+        eventScope,
+      }).sessionKey;
+
+      expect(actualSystemEvents.peekSystemEventEntries(parentSessionKey)).toHaveLength(
+        denied || threadSession ? 0 : 1,
+      );
+      expect(actualSystemEvents.peekSystemEventEntries(threadSessionKey)).toHaveLength(
+        threadSession ? 1 : 0,
+      );
+      actualSystemEvents.resetSystemEventsForTest();
+    },
+  );
 
   it("keeps bot edit and delete events on a remembered C-prefix mpDM session", async () => {
     const handlers: Record<string, MessageHandler> = {};

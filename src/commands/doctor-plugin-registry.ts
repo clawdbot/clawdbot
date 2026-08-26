@@ -647,7 +647,7 @@ export async function maybeRepairPluginRegistryState(
     return { config: params.config };
   }
 
-  if (preflight.action === "migrate") {
+  if (preflight.action !== "skip-existing") {
     const result = await migratePluginRegistryForInstall({
       ...migrationParams,
       ...(shouldPersistRepairedInstallRecords

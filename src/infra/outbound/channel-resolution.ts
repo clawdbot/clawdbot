@@ -1,6 +1,5 @@
 // Channel resolution exposes read-only outbound runtime facades and performs
 // optional bootstrap for deliverable channels that are not loaded yet.
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { ChannelMessageAdapterShape } from "../../channels/message/types.js";
 import { getChannelPlugin, getLoadedChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
@@ -14,6 +13,7 @@ import {
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
 import { bootstrapOutboundChannelPlugin } from "./channel-bootstrap.runtime.js";
+import { findChannelPluginInRegistry } from "./runtime-visible-channels.js";
 
 /** Normalizes a raw channel id and rejects non-deliverable/internal channels. */
 export function normalizeDeliverableOutboundChannel(raw?: string | null): string | undefined {
@@ -81,25 +81,7 @@ function resolveDirectFromRegistry(
   registry: ReturnType<typeof getActivePluginRegistry>,
   channel: string,
 ): ChannelPlugin | undefined {
-  if (!registry) {
-    return undefined;
-  }
-  const normalizedChannel = normalizeOptionalLowercaseString(channel);
-  if (!normalizedChannel) {
-    return undefined;
-  }
-  for (const entry of registry.channels) {
-    const plugin = entry?.plugin;
-    if (
-      normalizeOptionalLowercaseString(plugin?.id) === normalizedChannel ||
-      plugin?.meta?.aliases?.some(
-        (alias) => normalizeOptionalLowercaseString(alias) === normalizedChannel,
-      )
-    ) {
-      return plugin;
-    }
-  }
-  return undefined;
+  return findChannelPluginInRegistry(registry, channel);
 }
 
 function messageAdapterCanSendText(

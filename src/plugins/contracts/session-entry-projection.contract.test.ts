@@ -320,6 +320,16 @@ describe("plugin session extension SessionEntry projection", () => {
           sessionEntrySlotKey: "icon",
         });
         api.registerSessionExtension({
+          namespace: "context-window-source",
+          description: "reserved context window provenance",
+          sessionEntrySlotKey: "contextTokensSource",
+        });
+        api.registerSessionExtension({
+          namespace: "sandbox-policy",
+          description: "reserved creation-only sandbox requirement",
+          sessionEntrySlotKey: "sandbox",
+        });
+        api.registerSessionExtension({
           namespace: "pending-final-text",
           description: "retired pending-final field",
           sessionEntrySlotKey: "pendingFinalDeliveryText",
@@ -354,6 +364,14 @@ describe("plugin session extension SessionEntry projection", () => {
       {
         pluginId: "slot-collision",
         message: "sessionEntrySlotKey is reserved by SessionEntry: icon",
+      },
+      {
+        pluginId: "slot-collision",
+        message: "sessionEntrySlotKey is reserved by SessionEntry: contextTokensSource",
+      },
+      {
+        pluginId: "slot-collision",
+        message: "sessionEntrySlotKey is reserved by SessionEntry: sandbox",
       },
       {
         pluginId: "slot-collision",

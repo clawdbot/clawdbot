@@ -3,12 +3,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HookStatusReport } from "../hooks/hooks-status.js";
-import {
-  formatHookInfo,
-  formatHooksCheck,
-  formatHooksList,
-  registerHooksCli,
-} from "./hooks-cli.js";
+import { formatHookInfo, formatHooksCheck, formatHooksList } from "./hooks-cli.format.js";
+import { registerHooksCli } from "./hooks-cli.js";
 import { createEmptyInstallChecks } from "./requirements-test-fixtures.js";
 
 const runPluginInstallCommandMock = vi.hoisted(() => vi.fn());
@@ -180,6 +176,14 @@ describe("hooks cli formatting", () => {
 
     expect(output).toContain("Missing requirements");
     expect(output).toContain("DEMO_HOOK_TOKEN");
+  });
+
+  it("keeps the missing hook identifier beside the canonical JSON failure", () => {
+    expect(JSON.parse(formatHookInfo(report, "missing-hook", { json: true }))).toEqual({
+      ok: false,
+      error: { type: "cli_error", message: 'Hook "missing-hook" not found.' },
+      hook: "missing-hook",
+    });
   });
 
   it("labels hooks status output", () => {

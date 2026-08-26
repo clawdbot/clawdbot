@@ -37,7 +37,10 @@ import {
   isSessionLifecycleMutationActive,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
-import { listSessionStateEventsSince } from "../../sessions/session-state-events.js";
+import {
+  listAmbientGroupWatchTargets,
+  listSessionStateEventsSince,
+} from "../../sessions/session-state-events.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   resolveIncognitoOpenClawAgentSqlitePath,
@@ -434,6 +437,34 @@ afterEach(async () => {
   await sessionMcpTesting.resetSessionMcpRuntimeManager();
 });
 describe("initSessionState guarded initialization", () => {
+  it("registers per-group ambient visibility when direct messages use isolated sessions", async () => {
+    const stateDir = await makeCaseDir("openclaw-per-group-main-watch-");
+    const storePath = path.join(stateDir, "sessions.json");
+    const groupSessionKey = "agent:main:telegram:group:family";
+
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      await initSessionState({
+        ctx: {
+          Body: "hello group",
+          ChatType: "group",
+          DmScope: "per-channel-peer",
+          From: "telegram:group:family",
+          Provider: "telegram",
+          SessionKey: groupSessionKey,
+        },
+        cfg: {
+          session: {
+            store: storePath,
+            dmScope: "per-channel-peer",
+            groupScope: "per-group",
+          },
+        } as OpenClawConfig,
+      });
+
+      expect(listAmbientGroupWatchTargets("agent:main:main")).toEqual(new Set([groupSessionKey]));
+    });
+  });
+
   it("pins an admitted non-default-agent incognito session to its process-local store", async () => {
     const stateDir = await makeCaseDir("openclaw-session-incognito-init-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
@@ -1465,6 +1496,7 @@ describe("initSessionState RawBody", () => {
           ).toEqual([
             {
               actor: { type: "human", id: "profile-ada" },
+              contributionCount: 1,
               firstPromptedAt: expect.any(Number),
               lastPromptedAt: expect.any(Number),
               source: "profile",
@@ -1481,7 +1513,7 @@ describe("initSessionState RawBody", () => {
     });
   });
 
-  it("records channel senders but skips unknown and own-agent prompt identities", async () => {
+  it("keeps channel and agent participant sources distinct", async () => {
     const root = await makeCaseDir("openclaw-session-participant-admission-");
     const storePath = path.join(root, "sessions.json");
     const cfg = { session: { store: storePath } } as OpenClawConfig;
@@ -1505,10 +1537,29 @@ describe("initSessionState RawBody", () => {
     });
     await initSessionState({
       ctx: {
+        RawBody: "channel-created prompt",
+        ChatType: "direct",
+        SessionKey: "agent:main:channel-created-participant",
+        SenderId: "channel-created-sender",
+        SessionCreation: { via: "channel", actor: { type: "human", id: "channel-actor" } },
+      },
+      cfg,
+    });
+    await initSessionState({
+      ctx: {
         RawBody: "own agent prompt",
         ChatType: "direct",
         SessionKey: "agent:main:own-agent-participant",
         SessionCreation: { via: "spawn", actor: { type: "agent", id: "main" } },
+      },
+      cfg,
+    });
+    await initSessionState({
+      ctx: {
+        RawBody: "delegated agent prompt",
+        ChatType: "direct",
+        SessionKey: "agent:main:delegated-agent-participant",
+        SessionCreation: { via: "spawn", actor: { type: "agent", id: "research" } },
       },
       cfg,
     });
@@ -1518,13 +1569,32 @@ describe("initSessionState RawBody", () => {
       expect(participants.get("agent:main:channel-participant")).toEqual([
         {
           actor: { type: "human", id: "channel-sender" },
+          contributionCount: 1,
           firstPromptedAt: expect.any(Number),
           lastPromptedAt: expect.any(Number),
           source: "channel",
         },
       ]);
       expect(participants.get("agent:main:unknown-participant")).toBeUndefined();
+      expect(participants.get("agent:main:channel-created-participant")).toEqual([
+        {
+          actor: { type: "human", id: "channel-created-sender" },
+          contributionCount: 1,
+          firstPromptedAt: expect.any(Number),
+          lastPromptedAt: expect.any(Number),
+          source: "channel",
+        },
+      ]);
       expect(participants.get("agent:main:own-agent-participant")).toBeUndefined();
+      expect(participants.get("agent:main:delegated-agent-participant")).toEqual([
+        {
+          actor: { type: "agent", id: "research" },
+          contributionCount: 1,
+          firstPromptedAt: expect.any(Number),
+          lastPromptedAt: expect.any(Number),
+          source: "agent",
+        },
+      ]);
     });
   });
 
@@ -1548,6 +1618,7 @@ describe("initSessionState RawBody", () => {
       createdVia: "spawn",
       createdActor: { type: "agent", id: "agent:main:main" },
       createdAt: staleStartedAt - 1_000,
+      sandbox: "required",
       spawnDepth: 1,
       subagentRole: "leaf",
       subagentControlScope: "none",
@@ -3410,6 +3481,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
         modelOverrideFallbackOriginModel: "gpt-5.5",
         totalTokens: 231_980,
         contextTokens: 272_000,
+        contextTokensSource: "runtime",
         totalTokensFresh: true,
       },
     });
@@ -3449,6 +3521,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     expect(result.sessionEntry.modelOverrideFallbackOriginModel).toBeUndefined();
     expect(result.sessionEntry.totalTokens).toBe(0);
     expect(result.sessionEntry.contextTokens).toBeUndefined();
+    expect(result.sessionEntry.contextTokensSource).toBeUndefined();
     expect(result.sessionEntry.totalTokensFresh).toBe(true);
   });
 
@@ -3460,6 +3533,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       modelProvider: "openai",
       model: "gpt-5.4-mini",
       contextTokens: 400_000,
+      contextTokensSource: "runtime",
       cacheRead: 1_000,
       cacheWrite: 2_000,
       fallbackNotice: {
@@ -3524,6 +3598,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
         explicitUserOverride.modelOverrideSource,
       );
       expect(stored[sessionKey]?.contextTokens, name).toBeUndefined();
+      expect(stored[sessionKey]?.contextTokensSource, name).toBeUndefined();
       expect(stored[sessionKey]?.verboseLevel, name).toBe(runtimeModelCache.verboseLevel);
     }
   });
@@ -3539,6 +3614,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       parentSessionKey: "agent:main:main",
       parentSessionId: "parent-session",
       forkedFromParent: true,
+      sandbox: "required",
       spawnDepth: 2,
       subagentRole: "orchestrator",
       subagentControlScope: "children",
@@ -4557,6 +4633,115 @@ describe("persistSessionUsageUpdate", () => {
   ) {
     await writeSessionStoreFast(storePath, { [targetSessionKey]: entry });
   }
+
+  it.each([
+    { name: "usage accounting", usage: { input: 120, output: 8, total: 128 } },
+    { name: "model-only accounting", usage: undefined },
+  ])(
+    "persists the producing harness with its model and context window ($name)",
+    async ({ usage }) => {
+      const storePath = await createStorePath("openclaw-usage-harness-");
+      await seedSessionStore(storePath, sessionKey, {
+        sessionId: "s1",
+        updatedAt: 1,
+        modelProvider: "openai",
+        model: "gpt-5.6-sol",
+        agentHarnessId: "openclaw",
+        contextTokens: 272_000,
+      });
+
+      await persistSessionUsageUpdate({
+        storePath,
+        sessionKey,
+        usage,
+        providerUsed: "openai",
+        modelUsed: "gpt-5.6-sol",
+        agentHarnessId: "codex",
+        contextTokensUsed: 1_000_000,
+        contextTokensSource: "runtime",
+      });
+
+      expect(readSessionStoreFast(storePath)[sessionKey]).toMatchObject({
+        modelProvider: "openai",
+        model: "gpt-5.6-sol",
+        agentHarnessId: "codex",
+        contextTokens: 1_000_000,
+        contextTokensSource: "runtime",
+      });
+    },
+  );
+
+  it.each([
+    { name: "usage accounting", usage: { input: 120, output: 8, total: 128 } },
+    { name: "model-only accounting", usage: undefined },
+  ])(
+    "preserves the complete producing-runtime tuple when model state is retained ($name)",
+    async ({ usage }) => {
+      const storePath = await createStorePath("openclaw-usage-preserved-runtime-");
+      await seedSessionStore(storePath, sessionKey, {
+        sessionId: "s1",
+        updatedAt: 1,
+        modelProvider: "google",
+        model: "gemini-3-pro",
+        agentHarnessId: "openclaw",
+        contextTokens: 1_000_000,
+        contextTokensSource: "runtime",
+      });
+
+      await persistSessionUsageUpdate({
+        storePath,
+        sessionKey,
+        usage,
+        providerUsed: "openai",
+        modelUsed: "gpt-5.6-sol",
+        agentHarnessId: "codex",
+        contextTokensUsed: 272_000,
+        contextTokensSource: "runtime-configured",
+        preserveRuntimeModel: true,
+      });
+
+      expect(readSessionStoreFast(storePath)[sessionKey]).toMatchObject({
+        modelProvider: "google",
+        model: "gemini-3-pro",
+        agentHarnessId: "openclaw",
+        contextTokens: 1_000_000,
+        contextTokensSource: "runtime",
+      });
+    },
+  );
+
+  it.each([
+    { name: "usage accounting", usage: { input: 120, output: 8, total: 128 } },
+    { name: "model-only accounting", usage: undefined },
+  ])("clears stale harness provenance when a committed run omits it ($name)", async ({ usage }) => {
+    const storePath = await createStorePath("openclaw-usage-harness-missing-");
+    await seedSessionStore(storePath, sessionKey, {
+      sessionId: "s1",
+      updatedAt: 1,
+      modelProvider: "openai",
+      model: "gpt-5.6-sol",
+      agentHarnessId: "openclaw",
+      contextTokens: 272_000,
+    });
+
+    await persistSessionUsageUpdate({
+      storePath,
+      sessionKey,
+      usage,
+      providerUsed: "openai",
+      modelUsed: "gpt-5.6-sol",
+      contextTokensUsed: 1_000_000,
+      contextTokensSource: "runtime",
+    });
+
+    expect(readSessionStoreFast(storePath)[sessionKey]).toMatchObject({
+      modelProvider: "openai",
+      model: "gpt-5.6-sol",
+      contextTokens: 1_000_000,
+      contextTokensSource: "runtime",
+    });
+    expect(readSessionStoreFast(storePath)[sessionKey]).not.toHaveProperty("agentHarnessId");
+  });
 
   it("accounts exhausted-run usage without committing its model and persists CLI binding", async () => {
     const storePath = await createStorePath("openclaw-usage-exhausted-");

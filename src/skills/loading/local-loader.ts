@@ -13,7 +13,6 @@ import {
   resolveSkillDisplayName,
   type Skill,
 } from "./skill-contract.js";
-import { computeSkillPromptVersion } from "./skill-version.js";
 
 type LoadedLocalSkill = {
   skill: Skill;
@@ -30,6 +29,7 @@ function readSkillFileSync(params: {
   rootRealPath: string;
   filePath: string;
   maxBytes?: number;
+  rejectHardlinks?: boolean;
   onDiagnostic?: (diagnostic: LocalSkillLoadDiagnostic) => void;
 }): string | null {
   const opened = openRootFileSync({
@@ -40,6 +40,7 @@ function readSkillFileSync(params: {
     // Operator skill roots are commonly symlinked; fs-safe still rejects hops
     // whose canonical target escapes the skill root.
     rejectSymlinks: false,
+    rejectHardlinks: params.rejectHardlinks !== false,
   });
   if (!opened.ok) {
     if (!isRootFileMissingFailure(opened)) {
@@ -69,6 +70,7 @@ function loadSingleSkillDirectory(params: {
   source: string;
   rootRealPath: string;
   maxBytes?: number;
+  rejectHardlinks?: boolean;
   onDiagnostic?: (diagnostic: LocalSkillLoadDiagnostic) => void;
 }): LoadedLocalSkill | null {
   const skillFilePath = path.join(params.skillDir, "SKILL.md");
@@ -76,6 +78,7 @@ function loadSingleSkillDirectory(params: {
     rootRealPath: params.rootRealPath,
     filePath: skillFilePath,
     maxBytes: params.maxBytes,
+    rejectHardlinks: params.rejectHardlinks,
     onDiagnostic: params.onDiagnostic,
   });
   if (raw === null) {
@@ -112,7 +115,6 @@ function loadSingleSkillDirectory(params: {
       description,
       filePath,
       baseDir,
-      promptVersion: computeSkillPromptVersion(raw),
       source: params.source,
       sourceInfo: createSyntheticSourceInfo(filePath, {
         source: params.source,
@@ -146,6 +148,7 @@ export function loadSkillsFromDirSafe(params: {
   dir: string;
   source: string;
   maxBytes?: number;
+  rejectHardlinks?: boolean;
   onDiagnostic?: (diagnostic: LocalSkillLoadDiagnostic) => void;
 }): {
   skills: Skill[];
@@ -164,6 +167,7 @@ export function loadSkillsFromDirSafe(params: {
     source: params.source,
     rootRealPath,
     maxBytes: params.maxBytes,
+    rejectHardlinks: params.rejectHardlinks,
     onDiagnostic: params.onDiagnostic,
   });
   if (rootSkill) {
@@ -180,6 +184,7 @@ export function loadSkillsFromDirSafe(params: {
         source: params.source,
         rootRealPath,
         maxBytes: params.maxBytes,
+        rejectHardlinks: params.rejectHardlinks,
         onDiagnostic: params.onDiagnostic,
       }),
     )
@@ -199,6 +204,7 @@ export function readSkillFrontmatterSafe(params: {
   rootDir: string;
   filePath: string;
   maxBytes?: number;
+  rejectHardlinks?: boolean;
 }): Record<string, string> | null {
   let rootRealPath: string;
   try {
@@ -210,6 +216,7 @@ export function readSkillFrontmatterSafe(params: {
     rootRealPath,
     filePath: path.resolve(params.filePath),
     maxBytes: params.maxBytes,
+    rejectHardlinks: params.rejectHardlinks,
   });
   if (raw === null) {
     return null;

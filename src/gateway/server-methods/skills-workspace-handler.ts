@@ -1,5 +1,9 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  buildSkillProposalRevisionChangedErrorDetails,
+  ErrorCodes,
+  errorShape,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import {
   listAgentIds,
@@ -8,6 +12,7 @@ import {
 } from "../../agents/agent-scope.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { SkillProposalRevisionChangedError } from "../../skills/workshop/service-evaluation.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 import { assertValidParams, type Validator } from "./validation.js";
 
@@ -80,10 +85,21 @@ export async function runSkillsProposalWorkspaceHandler<TParams, TResult>(params
       params.respond(true, result, undefined);
     }
   } catch (error) {
+    const details =
+      error instanceof SkillProposalRevisionChangedError
+        ? buildSkillProposalRevisionChangedErrorDetails({
+            expectedRevisionHash: error.expectedRevisionHash,
+            currentRevisionHash: error.currentRevisionHash,
+          })
+        : undefined;
     params.respond(
       false,
       undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(error)),
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        formatErrorMessage(error),
+        details ? { details } : undefined,
+      ),
     );
   }
 }

@@ -113,6 +113,12 @@ const SessionsToolSchema = Type.Object(
         description: `Persistent sidebar icon: a single emoji, or a named icon: ${SESSION_ICON_GLYPH_DESCRIPTION}. Empty string clears it. Distinct from attention, which is temporary.`,
       }),
     ),
+    category: Type.Optional(
+      Type.Union([Type.String(), Type.Null()], {
+        description:
+          "Sidebar category membership. Null or an empty string clears it. This assigns one session; group_set only replaces the ordered category catalog.",
+      }),
+    ),
     statusNote: Type.Optional(
       Type.String({
         maxLength: 120,
@@ -145,7 +151,11 @@ const SessionsToolSchema = Type.Object(
       }),
     ),
     ownerId: Type.Optional(Type.String({ description: "New owner id for assign_owner" })),
-    names: Type.Optional(Type.Array(Type.String(), { description: "Ordered group names" })),
+    names: Type.Optional(
+      Type.Array(Type.String(), {
+        description: "Ordered sidebar category catalog; does not assign sessions.",
+      }),
+    ),
     name: Type.Optional(Type.String({ description: "Group name" })),
     to: Type.Optional(Type.String({ description: "New group name" })),
   },
@@ -323,7 +333,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
     label: "Sessions",
     name: "sessions",
     description:
-      "Session settings, ownership, reset, delete, and groups: patch label/icon/status, pin, archive/restore, model/thinking override; assign_owner hands responsibility to a human or agent; reset/delete visible sessions; group_list/group_set/group_rename/group_delete.",
+      "Session settings, ownership, reset, delete, and sidebar categories: patch label/icon/category/status, pin, archive/restore, model/thinking override; category assigns one session while group_set replaces the ordered category catalog; assign_owner hands responsibility to a human or agent; reset/delete visible sessions; group_list/group_set/group_rename/group_delete.",
     parameters: SessionsToolSchema,
     execute: async (_toolCallId, rawArgs) => {
       const params = rawArgs as Record<string, unknown>;
@@ -462,6 +472,9 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         ...lifecycleIdentity,
         ...(params.label !== undefined ? { label: readClearableString(params, "label") } : {}),
         ...(params.icon !== undefined ? { icon: readClearableString(params, "icon") } : {}),
+        ...(params.category !== undefined
+          ? { category: readClearableString(params, "category") }
+          : {}),
         ...(params.statusNote !== undefined
           ? { statusNote: readClearableString(params, "statusNote") }
           : {}),

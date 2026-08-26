@@ -43,6 +43,17 @@ type MockExecAllowlistEntry = {
   source?: "allow-always";
   commandText?: string;
 };
+type MockRegisteredExecApprovalRequest = {
+  approvalId: string;
+  approvalSlug: string;
+  warningText: string;
+  expiresAtMs: number;
+  preResolvedDecision: string | null | undefined;
+  initiatingSurface: unknown;
+  sentApproverDms: boolean;
+  unavailableReason: string | null;
+};
+
 type MockExecApprovalsResolved = {
   allowlist: MockExecAllowlistEntry[];
   file: { version: 1; agents: Record<string, unknown> };
@@ -182,7 +193,14 @@ const resolveExecHostApprovalContextMock = vi.hoisted(() =>
     askFallback: "deny",
   })),
 );
-const createAndRegisterDefaultExecApprovalRequestMock = vi.hoisted(() => vi.fn());
+const createAndRegisterDefaultExecApprovalRequestMock = vi.hoisted(() =>
+  vi.fn(
+    (
+      _params?: unknown,
+    ): MockRegisteredExecApprovalRequest | Promise<MockRegisteredExecApprovalRequest> | undefined =>
+      undefined,
+  ),
+);
 const runAbortedApprovalError = vi.hoisted(() => new Error("approval owning run aborted"));
 const resolveApprovalDecisionOrUndefinedMock = vi.hoisted(() =>
   vi.fn(
@@ -206,7 +224,14 @@ const createExecApprovalDecisionStateMock = vi.hoisted(() =>
     }),
   ),
 );
-const shouldResolveExecApprovalUnavailableInlineMock = vi.hoisted(() => vi.fn(() => false));
+const shouldResolveExecApprovalUnavailableInlineMock = vi.hoisted(() =>
+  vi.fn(
+    (_params: {
+      unavailableReason: string | null;
+      preResolvedDecision: string | null | undefined;
+    }) => false,
+  ),
+);
 const buildExecApprovalPendingToolResultMock = vi.hoisted(() => vi.fn());
 const sendExecApprovalFollowupResultMock = vi.hoisted(() =>
   vi.fn(async (_target: unknown, _resultText: string) => undefined),
@@ -269,6 +294,41 @@ const resolveExecApprovalDecisionStateMock = vi.hoisted(() =>
     },
   ),
 );
+const createExecApprovalRequestRouteMock = vi.hoisted(() =>
+  vi.fn(
+    async (
+      params: Record<string, unknown> & {
+        askFallback: ExecSecurity;
+        resolveTimedOut?: (state: {
+          baseDecision: { timedOut: boolean };
+          approvedByAsk: boolean;
+          deniedReason: string | null;
+        }) =>
+          | Promise<{ approvedByAsk: boolean; deniedReason: string | null; context?: unknown }>
+          | { approvedByAsk: boolean; deniedReason: string | null; context?: unknown };
+        requiresExplicitApproval: boolean | ((context: unknown) => boolean);
+        requiresAutoReviewHumanApproval?: boolean;
+      },
+    ) => {
+      const request = await createAndRegisterDefaultExecApprovalRequestMock(params);
+      if (!request) {
+        throw new Error("missing test approval request");
+      }
+      const inline = shouldResolveExecApprovalUnavailableInlineMock({
+        unavailableReason: request.unavailableReason,
+        preResolvedDecision: request.preResolvedDecision,
+      });
+      if (!inline) {
+        return { ...request, kind: "wait" as const };
+      }
+      const state = await resolveExecApprovalDecisionStateMock({
+        ...params,
+        decision: request.preResolvedDecision ?? null,
+      });
+      return { ...request, kind: "inline" as const, preResolvedDecision: null, state };
+    },
+  ),
+);
 const resolveExecApprovalWaitOutcomeMock = vi.hoisted(() =>
   vi.fn(
     async (params: {
@@ -326,6 +386,7 @@ const detectInterpreterInlineEvalArgvMock = vi.hoisted(() =>
 );
 
 vi.mock("../infra/exec-approvals.js", () => ({
+  countObsoleteGeneratedExecApprovals: vi.fn(() => 0),
   evaluateShellAllowlist: evaluateShellAllowlistMock,
   evaluateShellAllowlistWithAuthorization: evaluateShellAllowlistMock,
   commandRequiresSecurityAuditSuppressionApproval:
@@ -372,6 +433,7 @@ vi.mock("./bash-tools.exec-host-shared.js", () => ({
   resolveExecHostApprovalContext: resolveExecHostApprovalContextMock,
   buildDefaultExecApprovalRequestArgs: vi.fn(() => ({})),
   createAndRegisterDefaultExecApprovalRequest: createAndRegisterDefaultExecApprovalRequestMock,
+  createExecApprovalRequestRoute: createExecApprovalRequestRouteMock,
   shouldResolveExecApprovalUnavailableInline: shouldResolveExecApprovalUnavailableInlineMock,
   buildExecApprovalFollowupTarget: vi.fn((value) => value),
   resolveApprovalDecisionOrUndefined: resolveApprovalDecisionOrUndefinedMock,
@@ -937,12 +999,13 @@ describe("executeNodeHostCommand", () => {
     }
   });
 
-  it("reports unexpected detached node approval failures without an unhandled rejection", async () => {
+  it("consumes rejected detached node approval recovery and fallback follow-ups", async () => {
     const unhandledRejections = captureProcessUnhandledRejections();
 
     try {
-      resolveApprovalDecisionOrUndefinedMock.mockRejectedValueOnce(
-        new Error("approval wait unavailable"),
+      resolveExecApprovalWaitOutcomeMock.mockResolvedValueOnce({ kind: "request-failed" });
+      sendExecApprovalFollowupResultMock.mockRejectedValue(
+        new Error("approval failure follow-up unavailable"),
       );
       resolveExecHostApprovalContextMock.mockReturnValue({
         approvals: { allowlist: [], file: { version: 1, agents: {} } },
@@ -954,14 +1017,19 @@ describe("executeNodeHostCommand", () => {
       const result = await executeNodeHostCommand(createNodeHostRequest({}));
 
       expect(result.details?.status).toBe("approval-pending");
-      await vi.waitFor(() => {
-        expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledWith(
-          expect.objectContaining({ approvalId: "approval-1" }),
-          "Exec denied (node=node-1 id=approval-1, approval-request-failed): bun ./script.ts",
-        );
-      });
+      await vi.waitFor(() => expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledTimes(2));
       await setImmediate();
       expect(unhandledRejections.reasons).toEqual([]);
+      expect(sendExecApprovalFollowupResultMock).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ approvalId: "approval-1" }),
+        "Exec denied (node=node-1 id=approval-1, approval-request-failed): bun ./script.ts",
+      );
+      expect(sendExecApprovalFollowupResultMock).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ approvalId: "approval-1" }),
+        "Exec denied (node=node-1 id=approval-1, approval-request-failed): bun ./script.ts",
+      );
       expect(
         callGatewayToolMock.mock.calls.some(
           ([method, , params]) =>
@@ -3789,6 +3857,14 @@ describe("executeNodeHostCommand", () => {
     expect(runParams.suppressNotifyOnExit).toBe(true);
     expect(runParams.timeoutMs).toBe(30_000);
     expect(Object.hasOwn(runParams, "systemRunPlan")).toBe(false);
+  });
+
+  it("bypasses host approval floors for an explicit full session", async () => {
+    await executeNodeHostCommand(createNodeHostRequest({ bypassHostApprovalFloors: true }));
+
+    expect(resolveExecHostApprovalContextMock).not.toHaveBeenCalled();
+    expect(callGatewayToolMock).toHaveBeenCalledTimes(1);
+    expect(Object.hasOwn(requireRunParams(requireGatewayCall(0)), "systemRunPlan")).toBe(false);
   });
 
   it("does not dispatch a direct full/off command after gateway policy revocation", async () => {

@@ -261,4 +261,75 @@ describe("prepareEmbeddedAttemptTransport", () => {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
   });
+
+  it("records image hydration failures at the provider handoff", async () => {
+    let providerOptions: ProviderStreamOptions | undefined;
+    const providerStream = vi.fn((_model, _context, options) => {
+      providerOptions = options as ProviderStreamOptions;
+      return {} as never;
+    });
+    bindStreamLlmRuntime(providerStream, {
+      streamSimple: providerStream,
+      registry: { getApiProvider: () => undefined },
+    } as never);
+    const session = {
+      agent: { streamFn: providerStream, transport: "auto" },
+    };
+    const model = { api: "test-api", provider: "test-provider", id: "test-model-image" };
+    const onCurrentTurnImageFailure = vi.fn();
+    registerProviderStreamForModel.mockReturnValue(providerStream);
+    await prepareEmbeddedAttemptTransport({
+      attempt: {
+        config: {},
+        model,
+        modelId: model.id,
+        provider: model.provider,
+        runId: "run-native-image-failure",
+        runtimePlan: {
+          auth: { forwardedAuthProfileId: undefined },
+          transport: { resolveExtraParams: () => ({}) },
+        },
+        sessionId: "session-native-image-failure",
+      },
+      session,
+      settingsManager: {
+        getGlobalSettings: () => ({}),
+        getProjectSettings: () => ({}),
+      },
+      onCurrentTurnImageFailure,
+      sessionAgentId: "main",
+      workspaceDir: "/tmp",
+      workspaceOnly: false,
+      agentDir: "/tmp",
+      abortSignal: new AbortController().signal,
+      getProviderRuntimeHandle: () => ({ provider: model.provider, modelId: model.id }),
+      sandboxSessionKey: "agent:main:test",
+      codeModeControlsEnabled: false,
+      providerPromptState: { state: {}, effectiveContextTokenBudget: 128_000 },
+    } as unknown as PrepareTransportInput);
+    const message = attachRuntimePromptMediaFacts(
+      castAgentMessage({
+        role: "user",
+        content: [
+          { type: "text", text: "inspect" },
+          { type: "image", data: "%%%", mimeType: "image/png" },
+        ],
+      }),
+      [{ kind: "image" }],
+      ["inline"],
+    );
+    const context = { systemPrompt: "system", messages: [message], tools: [] };
+
+    session.agent.streamFn(model as never, context as never, {});
+    const provider = await resolveProviderContext(context as never, providerOptions);
+
+    expect(onCurrentTurnImageFailure).toHaveBeenCalledWith(1);
+    expect(provider.messages[0]?.content).toEqual([
+      { type: "text", text: "inspect" },
+      {
+        type: "text",
+        text: expect.stringMatching(/1.*image contents.*unavailable.*resend.*not claim/is),
+      },
+    ]);
+  });
 });

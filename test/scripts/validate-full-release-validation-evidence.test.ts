@@ -125,6 +125,78 @@ describe("full release validation evidence", () => {
     expect(isShaPinnedReleaseValidationBranch(pinnedBranch)).toBe(true);
   });
 
+  it("accepts canonical SHA-pinned evidence exactly bound to a protected tooling tag", () => {
+    const isTrustedMainAncestor = vi.fn(() => false);
+    const trustedWorkflowRef = `release-publish/${workflowSha.slice(0, 12)}-123`;
+    const result = validateFullReleaseValidationEvidence({
+      run: releaseRun(),
+      manifest: releaseManifest(),
+      expectedRepository: "openclaw/openclaw",
+      expectedRunId: "123",
+      expectedTargetSha: targetSha,
+      expectedTrustedWorkflowFullRef: `refs/tags/${trustedWorkflowRef}`,
+      expectedTrustedWorkflowSha: workflowSha,
+      isTrustedMainAncestor,
+    });
+
+    expect(result.source).toBe("sha-pinned-protected-tag");
+    expect(isTrustedMainAncestor).not.toHaveBeenCalled();
+  });
+
+  it("rejects protected-tag evidence from a same-name branch or older ancestor", () => {
+    const trustedWorkflowRef = `release-publish/${workflowSha.slice(0, 12)}-123`;
+    expect(() =>
+      validateFullReleaseValidationEvidence({
+        run: releaseRun(),
+        manifest: releaseManifest(),
+        expectedRepository: "openclaw/openclaw",
+        expectedRunId: "123",
+        expectedTargetSha: targetSha,
+        expectedTrustedWorkflowFullRef: `refs/heads/${trustedWorkflowRef}`,
+        expectedTrustedWorkflowSha: workflowSha,
+        isTrustedMainAncestor: () => true,
+      }),
+    ).toThrow("must be an exact protected tag");
+
+    const olderWorkflowSha = "c".repeat(40);
+    const olderBranch = `release-ci/${olderWorkflowSha.slice(0, 12)}-1783705000000`;
+    expect(() =>
+      validateFullReleaseValidationEvidence({
+        run: releaseRun({
+          head_branch: olderBranch,
+          head_sha: olderWorkflowSha,
+        }),
+        manifest: releaseManifest({
+          workflowFullRef: `refs/heads/${olderBranch}`,
+          workflowRef: olderBranch,
+          workflowSha: olderWorkflowSha,
+        }),
+        expectedRepository: "openclaw/openclaw",
+        expectedRunId: "123",
+        expectedTargetSha: targetSha,
+        expectedTrustedWorkflowFullRef: `refs/tags/${trustedWorkflowRef}`,
+        expectedTrustedWorkflowSha: workflowSha,
+        isTrustedMainAncestor: () => true,
+      }),
+    ).toThrow("does not match trusted tooling");
+
+    expect(() =>
+      validateFullReleaseValidationEvidence({
+        run: releaseRun({ head_branch: trustedWorkflowRef }),
+        manifest: releaseManifest({
+          workflowFullRef: `refs/heads/${trustedWorkflowRef}`,
+          workflowRef: trustedWorkflowRef,
+        }),
+        expectedRepository: "openclaw/openclaw",
+        expectedRunId: "123",
+        expectedTargetSha: targetSha,
+        expectedTrustedWorkflowFullRef: `refs/tags/${trustedWorkflowRef}`,
+        expectedTrustedWorkflowSha: workflowSha,
+        isTrustedMainAncestor: () => true,
+      }),
+    ).toThrow("canonical release-ci producer branch");
+  });
+
   it.each([pinnedBranch, `refs/heads/${pinnedBranch}`])(
     "accepts a REST workflow path qualified with %s",
     (qualifiedRef) => {

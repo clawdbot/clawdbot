@@ -15,6 +15,7 @@ type PtyExitEvent = Parameters<Parameters<IPty["onExit"]>[0]>[0];
 export type PtyRun = {
   cols: number;
   output: () => string;
+  pid: number;
   rows: number;
   visibleOutput: () => string;
   write: (data: string, opts?: { delay?: boolean }) => Promise<void>;
@@ -370,6 +371,7 @@ export function startPty(
   const run: PtyRun = {
     cols,
     output: () => output,
+    pid: pty.pid,
     rows,
     visibleOutput: () => visibleOutput,
     write: async (data, writeOpts) => await writePtyInput(pty, data, ptyEnv, writeOpts),

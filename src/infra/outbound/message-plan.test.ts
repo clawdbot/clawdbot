@@ -33,6 +33,39 @@ describe("outbound message planning", () => {
     expect(units.map((unit) => unit.overrides.deliveryPartCount)).toEqual([2, 2]);
   });
 
+  it.each([
+    { label: "default", chunkMode: undefined },
+    { label: "length", chunkMode: "length" as const },
+    { label: "newline", chunkMode: "newline" as const },
+  ])("preserves nonempty text when a $label chunker returns nothing", ({ chunkMode }) => {
+    const policy = createReplyToDeliveryPolicy({ replyToId: "reply-1", replyToMode: "first" });
+    const reply = policy.resolveCurrentReplyTo({});
+    const units = planOutboundTextMessageUnits({
+      text: "visible reply",
+      textLimit: 64,
+      chunkMode,
+      chunker: () => [],
+      overrides: { replyToId: reply.replyToId, replyToIdSource: reply.source },
+      consumeReplyTo: (overrides) =>
+        policy.applyReplyToConsumption(overrides, {
+          consumeImplicitReply: overrides.replyToIdSource === "implicit",
+        }),
+    });
+
+    expect(units).toEqual([
+      {
+        kind: "text",
+        text: "visible reply",
+        overrides: {
+          replyToId: "reply-1",
+          replyToIdSource: "implicit",
+          deliveryPartIndex: 0,
+          deliveryPartCount: 1,
+        },
+      },
+    ]);
+  });
+
   it("keeps explicit text replies from consuming the implicit slot", () => {
     const policy = createReplyToDeliveryPolicy({
       replyToId: "implicit-reply",

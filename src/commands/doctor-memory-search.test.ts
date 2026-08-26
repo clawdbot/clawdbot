@@ -1077,6 +1077,22 @@ describe("noteMemorySearchHealth", () => {
       'Agent "secondary": Remember across conversations is effectively enabled for agent "secondary", but memory search is disabled. Enable memory search or set memory.search.rememberAcrossConversations to false.',
     );
   });
+
+  it("does not warn for secondary key-optional providers when readiness was skipped", async () => {
+    const multiAgentCfg = {
+      agents: { list: [{ id: "agent-default" }, { id: "secondary" }] },
+    } as OpenClawConfig;
+    resolveAgentDir.mockImplementation((_cfg, agentId) => `/tmp/${agentId}`);
+    resolveAgentWorkspaceDir.mockImplementation((_cfg, agentId) => `/tmp/${agentId}/workspace`);
+    resolveMemorySearchConfig.mockReturnValue({ provider: "ollama", local: {}, remote: {} });
+
+    await noteMemorySearchHealth(multiAgentCfg, {
+      ...skippedGatewayOptions,
+      includeWorkspaceMemoryHealth: false,
+    });
+
+    expect(note).not.toHaveBeenCalled();
+  });
 });
 
 describe("memory recall doctor integration", () => {

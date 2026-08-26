@@ -8,6 +8,7 @@ import { copyMarkdownLabel } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import type { SessionLinkTarget } from "../../../components/markdown-session-links.ts";
+import type { PersonActivityRouting } from "../../../components/person-activity-link.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
@@ -26,7 +27,9 @@ import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import type { UiSessionDefaultsHost } from "../../../lib/sessions/session-key.ts";
 import type { ChatRunStartupStatus } from "../chat-run-startup.ts";
 import { resetChatThreadState } from "../chat-thread.ts";
+import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
+import type { ChatRunUiStatus } from "../run-lifecycle.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
 import {
@@ -60,6 +63,8 @@ export type ReplyMessageAccess = {
 
 export type ChatThreadProps = {
   paneId: string;
+  /** Routing for peer sender names in a shared session. */
+  personActivity?: PersonActivityRouting;
   sessionKey: string;
   boardProvider?: BoardProvider;
   announceTranscript?: boolean;
@@ -73,6 +78,7 @@ export type ChatThreadProps = {
   streamStartedAt: number | null;
   runId?: string | null;
   runOutputTokens?: number | null;
+  runStatus?: ChatRunUiStatus | null;
   queue: ChatQueueItem[];
   showThinking: boolean;
   showToolCalls: boolean;
@@ -91,28 +97,33 @@ export type ChatThreadProps = {
   userName?: string | null;
   userAvatar?: string | null;
   basePath?: string;
+  resourceBasePath?: string;
   fullMessageAgentId?: string;
   loadFullAssistantMessage?: SidebarFullMessageLoader | null;
   localMediaPreviewRoots?: string[];
+  connectionEpoch?: number;
   assistantAttachmentAuthToken?: string | null;
   resolveArtifactDownload?: ArtifactDownloadResolver;
   canvasPluginSurfaceUrl?: string | null;
   embedSandboxMode?: EmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
+  fetchLinkFavicon?: LinkFaviconFetcher;
   autoExpandToolCalls?: boolean;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
+  typingActors?: readonly { id: string; label: string; preview?: string }[];
   onOpenSidebar?: (content: SidebarContent) => void;
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
   onOpenSessionLink?: (target: SessionLinkTarget) => void;
   onOpenSessionCheckpoints?: () => void | Promise<void>;
-  onAssistantAttachmentLoaded?: () => void;
   onRequestOpenImage?: () => number;
   onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
+  onAssistantAttachmentLoaded?: () => void;
   onRequestUpdate?: () => void;
   onChatScroll?: (event: Event) => void;
   onHistoryIntent?: (event: Event) => void;
   onDraftChange: (next: string) => void;
   onSend: () => void;
+  onRetryQueuedMessage?: (id: string) => void;
   onSetReply?: (target: MessageReplyTarget) => void;
   replyMessageAccess?: ReplyMessageAccess;
   onRewindMessage?: (entryId: string) => Promise<boolean> | boolean;
@@ -391,6 +402,8 @@ function toggleTouchMessageMeta(event: PointerEvent): void {
 export function handleTranscriptPointerUp(event: PointerEvent, props: TranscriptInteractionProps) {
   toggleTouchMessageMeta(event);
   if (
+    event.button !== 0 ||
+    event.ctrlKey ||
     typeof props.onCompanionQuestion !== "function" ||
     typeof props.onCompanionPrefill !== "function"
   ) {
@@ -454,7 +467,8 @@ export function handleTranscriptContextMenu(event: MouseEvent, props: Transcript
     (element) => element.dataset.messageActionsFor === messageId,
   );
   const copyButton = actionOwner?.querySelector<HTMLButtonElement>(".chat-copy-btn");
-  const canReply = Boolean(text && props.onSetReply);
+  const ownsRunFrame = group.dataset.chatRowKey?.startsWith("agent-run:") === true;
+  const canReply = Boolean(text && props.onSetReply && (!ownsRunFrame || actionOwner));
   const canRewind = isUserMessage && typeof props.onRewindMessage === "function";
   const canCopy = Boolean(copyButton);
   const canFork = isUserMessage && typeof props.onForkMessage === "function";

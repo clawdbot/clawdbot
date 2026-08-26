@@ -12,6 +12,10 @@ type PackageManifestContractParams = Parameters<typeof describePackageManifestCo
 
 const packageManifestContractTests: PackageManifestContractParams[] = [
   {
+    pluginId: "anthropic",
+    pluginLocalRuntimeDeps: ["@anthropic-ai/claude-agent-sdk"],
+  },
+  {
     pluginId: "buzz",
     pluginLocalRuntimeDeps: ["nostr-tools"],
     minHostVersionBaseline: "2026.7.2",

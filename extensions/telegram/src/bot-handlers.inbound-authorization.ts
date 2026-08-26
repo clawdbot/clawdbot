@@ -301,7 +301,7 @@ export function createTelegramHandlerAuthorization({
         accountId,
         chatId,
         isGroup,
-        resolvedThreadId: context.resolvedThreadId,
+        threadSpec: context.threadSpec,
         senderId,
         senderUsername,
       }).isAuthorizedSender;

@@ -539,6 +539,61 @@ describe("renderSkills ClawHub", () => {
     expect(normalizeText(container)).toContain("AgentReceipt Local trust card.");
   });
 
+  it.each([
+    { loading: true, label: "Refreshing…", warning: false },
+    { loading: false, label: "Unavailable", warning: true },
+  ])(
+    "shows $label consistently for a missing ClawHub verdict while loading=$loading",
+    async ({ loading, label, warning }) => {
+      const container = document.createElement("div");
+      document.body.append(container);
+      dialogRestores.push(() => container.remove());
+      installDialogMethod("showModal", function (this: HTMLDialogElement) {
+        this.setAttribute("open", "");
+      });
+
+      const linkedSkill = createSkill({
+        skillKey: "agentreceipt",
+        name: "AgentReceipt",
+        clawhub: {
+          status: "linked",
+          valid: true,
+          registry: "https://clawhub.ai",
+          slug: "agentreceipt",
+          installedVersion: "1.2.3",
+          installedAt: 123,
+        },
+      });
+      render(
+        renderSkills(
+          createProps({
+            report: {
+              workspaceDir: "/tmp/workspace",
+              managedSkillsDir: "/tmp/skills",
+              skills: [linkedSkill],
+            },
+            detailKey: "agentreceipt",
+            clawhubVerdictsLoading: loading,
+          }),
+        ),
+        container,
+      );
+      await Promise.resolve();
+
+      const rowVerdict = Array.from(container.querySelectorAll(".settings-status")).find(
+        (element) => normalizeText(element) === label,
+      );
+      const detailVerdict = Array.from(container.querySelectorAll(".chip")).find(
+        (element) => normalizeText(element) === label,
+      );
+      expect(rowVerdict).toBeDefined();
+      expect(detailVerdict).toBeDefined();
+      expect(rowVerdict?.classList.contains("settings-status--warn")).toBe(warning);
+      expect(detailVerdict?.classList.contains("chip-warn")).toBe(warning);
+      expect(normalizeText(container).match(new RegExp(label, "gu")) ?? []).toHaveLength(2);
+    },
+  );
+
   it("fails closed for inconsistent ClawHub verdict envelopes", async () => {
     const container = document.createElement("div");
     document.body.append(container);

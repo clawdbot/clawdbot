@@ -133,6 +133,61 @@ describe("cron tool", () => {
     expect(tool.description).toContain('tz:"Asia/Shanghai"');
   });
 
+  it("supports the promotion creation path: enabled add inherits conversation delivery, then a forced test run", async () => {
+    // Promotion flow contract (the guidance itself lives in the system prompt,
+    // since the repeat is noticed during ordinary work rather than while
+    // reading this tool's schema). The job is created enabled so the
+    // scheduler's failure alerts and auto-disable own a broken job; a job left
+    // disabled pending confirmation is watched by nothing. Delivery is
+    // inherited from the requesting conversation and the forced run is the
+    // visible test.
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:main:matrix:channel:!abcdef1234567890:example.org",
+      currentDeliveryContext: {
+        channel: "matrix",
+        to: "room:!AbCdEf1234567890:example.org",
+        threadId: "$RootEvent:Example.Org",
+      },
+    });
+    callGatewayMock.mockResolvedValueOnce({ id: "job-promoted" });
+    await tool.execute("call-promote-add", {
+      action: "add",
+      job: {
+        name: "morning brief",
+        schedule: { kind: "cron", expr: "0 7 * * *", tz: "Europe/Vienna" },
+        payload: { kind: "agentTurn", message: "Summarize overnight updates." },
+      },
+    });
+    const addCall = readGatewayCall(0);
+    expect(addCall.method).toBe("cron.add");
+    // Never created disabled: that is the one state no scheduler guard watches.
+    expect(addCall.params?.enabled).not.toBe(false);
+    expect(addCall.params?.delivery).toEqual({
+      mode: "announce",
+      channel: "matrix",
+      to: "room:!AbCdEf1234567890:example.org",
+      threadId: "$RootEvent:Example.Org",
+    });
+
+    await tool.execute("call-promote-test-run", {
+      action: "run",
+      jobId: "job-promoted",
+      runMode: "force",
+    });
+    const runCall = readGatewayCall(1);
+    expect(runCall.method).toBe("cron.run");
+    expect(runCall.params).toEqual({ id: "job-promoted", mode: "force" });
+
+    // Failed test is cleaned up, not left behind as a broken schedule.
+    await tool.execute("call-promote-rollback", {
+      action: "remove",
+      jobId: "job-promoted",
+    });
+    const removeCall = readGatewayCall(2);
+    expect(removeCall.method).toBe("cron.remove");
+    expect(removeCall.params).toEqual({ id: "job-promoted" });
+  });
+
   function buildReminderAgentTurnJob(overrides: Record<string, unknown> = {}): {
     name: string;
     schedule: { at: string };
@@ -933,6 +988,15 @@ describe("cron tool", () => {
     expect(tool.description).toContain(
       "Inherited configured MCP authority includes only model-callable tools; interactive app-view-only capabilities are excluded from headless jobs.",
     );
+    expect(tool.description).toContain(
+      "the run stays detached, reads bounded chat context, then commits its final visible assistant result to this conversation's durable history",
+    );
+    expect(tool.description).toContain(
+      "current=>canonical session commit, plus one normal channel send for external chats",
+    );
+    expect(tool.description).toContain(
+      "WebChat observes that commit live and after reconnect without another user message",
+    );
   });
 
   it("documents the event-trigger authoring contract", () => {
@@ -952,7 +1016,7 @@ describe("cron tool", () => {
     expect(tool.description).toContain("message is that run's entire context — self-contained");
     expect(tool.description).toContain('Silent watcher=>mode:"none"');
     expect(tool.description).toContain("once:true disables after first fire");
-    expect(tool.description).toContain('await tools.call("exec"');
+    expect(tool.description).toContain('await exec({command:"..."})');
   });
 
   it("documents due-by-default cron run mode", () => {

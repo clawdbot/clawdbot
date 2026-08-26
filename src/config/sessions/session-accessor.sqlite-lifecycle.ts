@@ -67,7 +67,7 @@ import {
   collectAdmissionProtectedSessionIds,
   kickSessionHistoryDiskBudgetMaintenance,
 } from "./session-history-eviction.js";
-import { buildSessionResetBoundaryPlan } from "./session-reset-boundary-event.js";
+import { buildSessionResetBoundaryEvent } from "./session-reset-boundary-event.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 // Single-target lifecycle owner: cleanup, reset, guarded delete, and trusted rollback.
@@ -189,15 +189,10 @@ export async function resetSessionEntryLifecycle(
         currentEntry: current ? cloneSessionEntry(current.entry) : undefined,
         primaryKey: params.target.canonicalKey,
       });
-      const resetBoundaryPlan =
+      const shouldAppendResetBoundary =
         params.resetBoundaryReason &&
         current?.entry.sessionId &&
-        !sqliteSessionEntriesEqual(current.entry, nextEntry)
-          ? await buildSessionResetBoundaryPlan({
-              events: loadTranscriptEventsFromDatabase(database, current.entry.sessionId),
-              reason: params.resetBoundaryReason,
-            })
-          : undefined;
+        !sqliteSessionEntriesEqual(current.entry, nextEntry);
       const mutation: ResetSessionEntryLifecycleMutation = {
         nextEntry: cloneSessionEntry(nextEntry),
         ...(current ? { previousEntry: cloneSessionEntry(current.entry) } : {}),
@@ -205,8 +200,11 @@ export async function resetSessionEntryLifecycle(
       };
       runOpenClawAgentWriteTransaction((transactionDb) => {
         assertLifecycleTargetUnchanged(transactionDb, params.target, current?.entry, "reset");
-        if (resetBoundaryPlan && current?.entry.sessionId) {
-          const events = [...resetBoundaryPlan.seedEvents, resetBoundaryPlan.event];
+        if (shouldAppendResetBoundary && current?.entry.sessionId && params.resetBoundaryReason) {
+          const event = buildSessionResetBoundaryEvent({
+            events: loadTranscriptEventsFromDatabase(transactionDb, current.entry.sessionId),
+            reason: params.resetBoundaryReason,
+          });
           const appended = appendTranscriptEventsInTransaction(
             transactionDb,
             {
@@ -214,9 +212,9 @@ export async function resetSessionEntryLifecycle(
               sessionId: current.entry.sessionId,
               sessionKey: current.key,
             },
-            events,
+            [event],
           );
-          if (appended !== events.length) {
+          if (appended !== 1) {
             throw new Error(`Failed to append reset boundary for ${current.key}`);
           }
         }

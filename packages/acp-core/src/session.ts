@@ -16,8 +16,8 @@ export type AcpSessionStore = {
   getSessionByRunId: (runId: string) => AcpSession | undefined;
   /** Binds an active runtime run to a session so cancel/close can abort it later. */
   setActiveRun: (sessionId: string, runId: string, abortController: AbortController) => void;
-  clearActiveRun: (sessionId: string) => void;
-  cancelActiveRun: (sessionId: string) => boolean;
+  clearActiveRun: (sessionId: string, expectedRunId?: string) => void;
+  cancelActiveRun: (sessionId: string, expectedRunId?: string) => boolean;
   deleteSession: (sessionId: string) => boolean;
 };
 
@@ -165,11 +165,7 @@ export function createInMemorySessionStore(
     touchSession(session, now());
   };
 
-  const clearActiveRun: AcpSessionStore["clearActiveRun"] = (sessionId) => {
-    const session = sessions.get(sessionId);
-    if (!session) {
-      return;
-    }
+  const releaseActiveRun = (session: AcpSession) => {
     if (session.activeRunId) {
       runIdToSessionId.delete(session.activeRunId);
     }
@@ -178,18 +174,23 @@ export function createInMemorySessionStore(
     touchSession(session, now());
   };
 
-  const cancelActiveRun: AcpSessionStore["cancelActiveRun"] = (sessionId) => {
+  const clearActiveRun: AcpSessionStore["clearActiveRun"] = (sessionId, expectedRunId) => {
     const session = sessions.get(sessionId);
-    if (!session?.abortController) {
+    if (session && (expectedRunId === undefined || session.activeRunId === expectedRunId)) {
+      releaseActiveRun(session);
+    }
+  };
+
+  const cancelActiveRun: AcpSessionStore["cancelActiveRun"] = (sessionId, expectedRunId) => {
+    const session = sessions.get(sessionId);
+    if (
+      !session?.abortController ||
+      (expectedRunId !== undefined && session.activeRunId !== expectedRunId)
+    ) {
       return false;
     }
     session.abortController.abort();
-    if (session.activeRunId) {
-      runIdToSessionId.delete(session.activeRunId);
-    }
-    session.abortController = null;
-    session.activeRunId = null;
-    touchSession(session, now());
+    releaseActiveRun(session);
     return true;
   };
 

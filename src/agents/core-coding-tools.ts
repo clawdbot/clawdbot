@@ -7,6 +7,7 @@ import {
   createSandboxedEditTool,
   createSandboxedReadTool,
   createSandboxedWriteTool,
+  resolveAdaptiveReadMaxBytes,
   wrapReadToolWithSkillContent,
   wrapToolWorkspaceRootGuard,
   wrapToolWorkspaceRootGuardWithOptions,
@@ -88,6 +89,7 @@ type CoreCodingToolsOptions = {
   readOnly: boolean;
   sandbox?: SandboxContext;
   skillsSnapshot?: SkillSnapshot;
+  skillInstructionPaths?: readonly string[];
   modelContextWindowTokens?: number;
   imageSanitization?: ImageSanitizationLimits;
   memoryWriteProvenance?: MemoryWriteProvenanceObserver;
@@ -110,7 +112,11 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
   const sandboxRoot = sandbox?.workspaceDir;
   const sandboxFsBridge = sandbox?.fsBridge;
   const allowWorkspaceWrites = sandbox?.workspaceAccess !== "ro";
-  if (sandboxRoot && !sandboxFsBridge) {
+  if (
+    sandboxRoot &&
+    !sandboxFsBridge &&
+    (options.includeBaseCodingTools || options.includeShellTools)
+  ) {
     throw new Error("Sandbox filesystem bridge is unavailable.");
   }
 
@@ -141,11 +147,13 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
             createTool: options.baseToolFactories?.createReadTool,
           })
         : createOpenClawReadTool(
-            options.baseToolFactories?.createReadTool(options.codingRoot) ??
-              createReadTool(options.codingRoot),
+            (options.baseToolFactories?.createReadTool ?? createReadTool)(options.codingRoot, {
+              maxBytes: resolveAdaptiveReadMaxBytes(options),
+            }),
             {
               modelContextWindowTokens: options.modelContextWindowTokens,
               imageSanitization: options.imageSanitization,
+              cwd: options.codingRoot,
             },
           );
       const guarded = options.workspaceOnly
@@ -159,6 +167,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
                     readOnlyWorkspaceSkillMounts,
                   ),
                   containerWorkdir: sandbox.containerWorkdir,
+                  bridge: sandboxFsBridge,
                 }
               : { additionalRoots: skillReadRoots, resolutionCwd: options.codingRoot },
           )
@@ -167,6 +176,9 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
         wrapReadToolWithSkillContent(guarded, options.skillsSnapshot?.resolvedSkills, {
           modelContextWindowTokens: options.modelContextWindowTokens,
           imageSanitization: options.imageSanitization,
+          cwd: options.codingRoot,
+          containerWorkdir: sandbox?.containerWorkdir,
+          instructionPaths: options.skillInstructionPaths,
         }),
       );
     }
@@ -208,11 +220,13 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
       options.workspaceOnly
         ? wrapToolWorkspaceRootGuardWithOptions(edit, sandboxRoot, {
             containerWorkdir: sandbox.containerWorkdir,
+            bridge: sandboxFsBridge,
           })
         : edit,
       options.workspaceOnly
         ? wrapToolWorkspaceRootGuardWithOptions(write, sandboxRoot, {
             containerWorkdir: sandbox.containerWorkdir,
+            bridge: sandboxFsBridge,
           })
         : write,
     );
@@ -238,6 +252,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
     shell.push(
       createLazyExecTool({
         ...options.execDefaults,
+        ...(sandbox?.required ? { sandboxRequired: true } : {}),
         cwd: options.codingRoot,
         sandbox: sandbox
           ? {

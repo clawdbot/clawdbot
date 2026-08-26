@@ -389,7 +389,10 @@ export async function appendAssistantMessageToSessionTranscript(params: {
   sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
   text?: string;
   mediaUrls?: string[];
+  content?: SessionTranscriptAssistantMessage["content"];
+  eventId?: string;
   idempotencyKey?: string;
+  runId?: string;
   deliveryMirror?: InternalSessionTranscriptDeliveryMirror;
   /** Optional override for store path (mostly for tests). */
   storePath?: string;
@@ -402,11 +405,15 @@ export async function appendAssistantMessageToSessionTranscript(params: {
     return { ok: false, reason: "missing sessionKey" };
   }
 
-  const mirrorText = resolveMirroredTranscriptText({
-    text: params.text,
-    mediaUrls: params.mediaUrls,
-  });
-  if (!mirrorText) {
+  const mirrorText = params.content
+    ? null
+    : resolveMirroredTranscriptText({
+        text: params.text,
+        mediaUrls: params.mediaUrls,
+      });
+  const content =
+    params.content ?? (mirrorText ? [{ type: "text" as const, text: mirrorText }] : []);
+  if (content.length === 0) {
     return { ok: false, reason: "empty text" };
   }
 
@@ -423,13 +430,15 @@ export async function appendAssistantMessageToSessionTranscript(params: {
       ? { sessionLifecyclePatch: params.sessionLifecyclePatch }
       : {}),
     storePath: params.storePath,
-    idempotencyKey: params.idempotencyKey,
+    ...(params.eventId ? { eventId: params.eventId } : {}),
+    ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
+    ...(params.runId ? { runId: params.runId } : {}),
     updateMode: params.updateMode,
     config: params.config,
     ...(params.beforeMessageWrite ? { beforeMessageWrite: params.beforeMessageWrite } : {}),
     message: {
       role: "assistant" as const,
-      content: [{ type: "text", text: mirrorText }],
+      content,
       api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
       provider: OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
       model: OPENCLAW_DELIVERY_MIRROR_MODEL,
@@ -463,7 +472,9 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   expectedSessionState?: SessionTranscriptTurnExpectedState;
   sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
   message: SessionTranscriptAssistantMessage;
+  eventId?: string;
   idempotencyKey?: string;
+  runId?: string;
   storePath?: string;
   updateMode?: SessionTranscriptUpdateMode;
   config?: OpenClawConfig;
@@ -584,11 +595,13 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
           ? { sessionLifecyclePatch: params.sessionLifecyclePatch }
           : {}),
         ...(params.config ? { config: params.config } : {}),
+        ...(params.runId ? { runId: params.runId } : {}),
         updateMode: params.updateMode ?? "inline",
         touchSessionEntry: true,
         messages: [
           {
             message: preparedUnkeyedMessage,
+            ...(params.eventId ? { eventId: params.eventId } : {}),
             ...(explicitIdempotencyKey ? { idempotencyLookup: "scan" } : {}),
             ...(explicitIdempotencyKey && params.beforeMessageWrite
               ? {

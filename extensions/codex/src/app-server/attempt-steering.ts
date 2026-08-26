@@ -33,6 +33,11 @@ export type CodexSteeringQueueOptions = {
   userTurnTranscriptRecorder?: AgentHarnessQueueMessageOptions["userTurnTranscriptRecorder"];
 };
 
+type CodexSteeringCommitItem = Pick<
+  CodexSteeringQueueOptions,
+  "isInboundUserMessage" | "userTurnTranscriptRecorder"
+>;
+
 /**
  * Creates a queue that batches steer messages while still serializing
  * app-server `turn/steer` requests.
@@ -42,22 +47,19 @@ export function createCodexSteeringQueue(params: {
   threadId: string;
   turnId: string;
   requestTimeoutMs: number;
-  claimPendingUserInput: () =>
-    | {
-        answer: (text: string) => boolean;
-        cancel: () => boolean;
-      }
-    | undefined;
   signal: AbortSignal;
+  beforeConfirmConsumed?: (items: readonly CodexSteeringCommitItem[]) => Promise<void>;
 }) {
   type PendingSteerMessage = {
     acceptance: "open" | "accepted" | "rejected";
     text: string;
     images?: EmbeddedRunAttemptParams["images"];
+    isInboundUserMessage?: boolean;
     onQueueAccepted?: (accepted: boolean) => void;
     resolve: () => void;
     reject: (error: unknown) => void;
     settled: boolean;
+    userTurnTranscriptRecorder?: CodexSteeringQueueOptions["userTurnTranscriptRecorder"];
   };
   type PendingSteerBatch = {
     items: PendingSteerMessage[];
@@ -251,10 +253,12 @@ export function createCodexSteeringQueue(params: {
       acceptance: "open" as const,
       text,
       images: options?.images,
+      isInboundUserMessage: options?.isInboundUserMessage,
       onQueueAccepted: options?.onQueueAccepted,
       resolve: resolveDelivery,
       reject: rejectDelivery,
       settled: false,
+      userTurnTranscriptRecorder: options?.userTurnTranscriptRecorder,
     };
     pendingMessages.add(item);
     return { item, delivery };
@@ -274,25 +278,6 @@ export function createCodexSteeringQueue(params: {
       if (unavailableError) {
         options?.onQueueAccepted?.(false);
         throw unavailableError;
-      }
-      // Only operator ingress can answer a pending prompt; internal steering stays transcript input.
-      const pendingUserInput =
-        options?.isInboundUserMessage === true ? params.claimPendingUserInput() : undefined;
-      if (pendingUserInput) {
-        if (!options?.images?.length) {
-          const answered = pendingUserInput.answer(text);
-          options?.onQueueAccepted?.(answered);
-          if (!answered) {
-            throw new Error("codex pending user input rejected the answer");
-          }
-          return;
-        }
-        // request_user_input cannot carry images. Submit the complete message
-        // before releasing the prompt so no partial text answer can win the race.
-        void flushBatch().catch(() => undefined);
-        const { item, delivery } = createPendingMessage(text, options);
-        await Promise.all([enqueueSend([item]).finally(() => pendingUserInput.cancel()), delivery]);
-        return;
       }
       const { item, delivery } = createPendingMessage(text, options);
       batchedMessages.push(item);
@@ -315,9 +300,28 @@ export function createCodexSteeringQueue(params: {
       }
       dispatchedBatches.delete(clientUserMessageId);
       for (const item of batch.items) {
-        resolveItem(item);
+        reportItemAcceptance(item, true);
       }
-      return true;
+      const resolveBatch = () => {
+        for (const item of batch.items) {
+          resolveItem(item);
+        }
+        return true;
+      };
+      const rejectBatch = (error: unknown) => {
+        for (const item of batch.items) {
+          rejectItem(item, error);
+        }
+        return true;
+      };
+      if (!params.beforeConfirmConsumed) {
+        return resolveBatch();
+      }
+      try {
+        return params.beforeConfirmConsumed(batch.items).then(resolveBatch, rejectBatch);
+      } catch (error) {
+        return rejectBatch(error);
+      }
     },
     sealAdmission: sealQueueAdmission,
     cancel: cancelQueue,

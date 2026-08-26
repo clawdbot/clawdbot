@@ -12,7 +12,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, type RawData } from "ws";
 import type { VoiceCallRealtimeConfig } from "../config.js";
 import type { CallManager } from "../manager.js";
-import type { VoiceCallProvider } from "../providers/base.js";
 import type { CallRecord, NormalizedEvent } from "../types.js";
 import { connectWs, startUpgradeWsServer, waitForClose } from "../websocket-test-support.js";
 import { RealtimeAudioPacer } from "./realtime-audio-pacer.js";
@@ -110,7 +109,6 @@ function makeHandler(
   overrides?: Partial<VoiceCallRealtimeConfig>,
   deps?: {
     manager?: Partial<CallManager>;
-    provider?: Partial<VoiceCallProvider>;
     providerConfig?: Record<string, unknown>;
     realtimeProvider?: RealtimeVoiceProviderPlugin;
     resolveInstructions?: (call: CallRecord) => string;
@@ -151,22 +149,11 @@ function makeHandler(
     config,
     {
       processEvent: vi.fn(),
+      endCall: vi.fn(async () => ({ success: true })),
       getCall: vi.fn(),
       getCallByProviderCallId: vi.fn(),
       ...deps?.manager,
     } as unknown as CallManager,
-    {
-      name: "twilio",
-      verifyWebhook: vi.fn(),
-      parseWebhookEvent: vi.fn(),
-      initiateCall: vi.fn(),
-      hangupCall: vi.fn(),
-      playTts: vi.fn(),
-      startListening: vi.fn(),
-      stopListening: vi.fn(),
-      getCallStatus: vi.fn(),
-      ...deps?.provider,
-    } as unknown as VoiceCallProvider,
     makeCallRegistrationResolver({
       provider: realtimeProvider,
       providerConfig,
@@ -453,12 +440,12 @@ describe("RealtimeCallHandler path routing", () => {
 
   it("preserves a public path prefix ahead of serve.path", () => {
     const handler = makeHandler({ streamPath: "/custom/stream/realtime" });
-    handler.setPublicUrl("https://public.example/api/voice/webhook");
+    handler.setPublicUrl("https://public.example:8443/api/voice/webhook");
     const payload = handler.buildTwiMLPayload(makeRequest("/voice/webhook", "127.0.0.1:3334"));
 
     expect(handler.getStreamPathPattern()).toBe("/api/custom/stream/realtime");
     expect(payload.body).toMatch(
-      /wss:\/\/public\.example\/api\/custom\/stream\/realtime\/[0-9a-f-]{36}/,
+      /wss:\/\/public\.example:8443\/api\/custom\/stream\/realtime\/[0-9a-f-]{36}/,
     );
   });
 
@@ -579,9 +566,6 @@ describe("RealtimeCallHandler path routing", () => {
         processEvent,
         getCall,
       },
-      provider: {
-        name: "telnyx",
-      },
       realtimeProvider: makeRealtimeProvider(createBridge),
       resolveInstructions,
     });
@@ -644,9 +628,6 @@ describe("RealtimeCallHandler path routing", () => {
       manager: {
         processEvent,
       },
-      provider: {
-        name: "telnyx",
-      },
       realtimeProvider: makeRealtimeProvider(createBridge),
     });
     handler.setPublicUrl("https://public.example/voice/webhook");
@@ -690,9 +671,6 @@ describe("RealtimeCallHandler path routing", () => {
       manager: {
         processEvent,
         getCall,
-      },
-      provider: {
-        name: "telnyx",
       },
       realtimeProvider: makeRealtimeProvider(createBridge),
     });
@@ -2295,15 +2273,15 @@ describe("RealtimeCallHandler path routing", () => {
       return bridge;
     });
     const processEvent = vi.fn();
-    const hangupCall = vi.fn(async () => {});
+    const endCall = vi.fn(async () => ({ success: true }));
     const sharedCallSid = "CA-continuity-shared";
     const call = makeCallRecord(sharedCallSid);
     const handler = makeHandler(undefined, {
       manager: {
         getCallByProviderCallId: vi.fn(() => call),
         processEvent,
+        endCall,
       },
-      provider: { hangupCall },
       realtimeProvider: makeRealtimeProvider(createBridge),
     });
     const oldServer = await startRealtimeServer(handler);
@@ -2378,7 +2356,7 @@ describe("RealtimeCallHandler path routing", () => {
           expect(oldCloseBridge).toHaveBeenCalledOnce();
         });
         expect(replacementCloseBridge).not.toHaveBeenCalled();
-        expect(hangupCall).not.toHaveBeenCalled();
+        expect(endCall).not.toHaveBeenCalled();
         expect(
           processEvent.mock.calls
             .map(([event]) => event as NormalizedEvent)
@@ -2433,15 +2411,15 @@ describe("RealtimeCallHandler path routing", () => {
       throw new Error("replacement bridge failed");
     });
     const processEvent = vi.fn();
-    const hangupCall = vi.fn(async () => {});
+    const endCall = vi.fn(async () => ({ success: true }));
     const sharedCallSid = "CA-transcript-rollback";
     const call = makeCallRecord(sharedCallSid);
     const handler = makeHandler(undefined, {
       manager: {
         getCallByProviderCallId: vi.fn(() => call),
         processEvent,
+        endCall,
       },
-      provider: { hangupCall },
       realtimeProvider: makeRealtimeProvider(createBridge),
     });
     const oldServer = await startRealtimeServer(handler);
@@ -2478,7 +2456,7 @@ describe("RealtimeCallHandler path routing", () => {
           success: true,
         });
         expect(oldTriggerGreeting).toHaveBeenCalledWith("Continue the existing call.");
-        expect(hangupCall).not.toHaveBeenCalled();
+        expect(endCall).not.toHaveBeenCalled();
         expect(
           processEvent.mock.calls
             .map(([event]) => event as NormalizedEvent)

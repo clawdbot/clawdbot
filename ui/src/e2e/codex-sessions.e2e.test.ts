@@ -451,7 +451,7 @@ suite.define(() => {
           .evaluateAll((items) => items.map((item) => item.getAttribute("role"))),
       ).toEqual(["listitem", "listitem"]);
       const openclawProject = section.locator(
-        '[data-session-catalog-project="/Users/dev/openclaw"]',
+        '[data-session-catalog-project="project:/Users/dev/openclaw"]',
       );
       const openclawProjectItem = openclawProject.locator("..");
       const openclawProjectList = openclawProjectItem.locator(":scope > [role=list]");
@@ -479,6 +479,7 @@ suite.define(() => {
         '[data-session-section="ungrouped"] .sidebar-recent-session, [data-session-section="catalog:codex"] .sidebar-recent-session--catalog-project-child',
       );
       await expect.poll(() => threadRows.count()).toBe(4);
+      expect(await threadRows.locator(".sidebar-recent-session__link[title]").count()).toBe(0);
       const threadRowMetrics = await threadRows.evaluateAll((rows) =>
         rows.map((row) => {
           const link = row.querySelector(".sidebar-recent-session__link");
@@ -492,18 +493,25 @@ suite.define(() => {
             nameFontSize: nameStyle?.fontSize ?? "",
             paddingBottom: linkStyle?.paddingBottom ?? "",
             paddingTop: linkStyle?.paddingTop ?? "",
+            singleLine: row.classList.contains("sidebar-recent-session--single-line"),
           };
         }),
       );
       expect(threadRowMetrics).toHaveLength(4);
-      expect(new Set(threadRowMetrics.map((metric) => metric.height)).size).toBe(1);
-      expect(threadRowMetrics[0]?.height).toBeGreaterThan(30);
+      // Gateway threads and native catalog children must stay density-identical.
+      // Catalog children never carry preview text, so every subtitle-less row —
+      // whichever source it came from — collapses to the same one-line height
+      // instead of reserving a phantom second line.
+      for (const metric of threadRowMetrics) {
+        expect(metric.singleLine).toBe(true);
+        expect(metric.height).toBeCloseTo(30, 1);
+      }
       for (const metric of threadRowMetrics) {
         expect(metric).toMatchObject({
           minHeight: "30px",
           nameFontSize: "13px",
-          paddingBottom: "3px",
-          paddingTop: "3px",
+          paddingBottom: "4px",
+          paddingTop: "4px",
         });
       }
       const projectLabelTone = await openclawProject
@@ -537,7 +545,7 @@ suite.define(() => {
       expect(projectLabelTone.distanceToText).toBeLessThan(projectLabelTone.distanceToMuted);
       expect(
         await section
-          .locator('[data-session-catalog-project="/Users/dev/other"]')
+          .locator('[data-session-catalog-project="project:/Users/dev/other"]')
           .locator(".sidebar-session-catalog-project__label")
           .textContent(),
       ).toBe("other");
@@ -627,7 +635,7 @@ suite.define(() => {
           (key) => JSON.parse(localStorage.getItem(key) ?? "[]"),
           collapsedSessionSectionsStorageKey,
         ),
-      ).toContain("catalog-project:codex:gateway:local:/Users/dev/openclaw");
+      ).toContain("catalog-project:codex:gateway:local:project:/Users/dev/openclaw");
 
       await openclawProject.click();
       await expect.poll(() => openclawProject.getAttribute("aria-expanded")).toBe("true");
@@ -638,7 +646,7 @@ suite.define(() => {
           (key) => JSON.parse(localStorage.getItem(key) ?? "[]"),
           collapsedSessionSectionsStorageKey,
         ),
-      ).not.toContain("catalog-project:codex:gateway:local:/Users/dev/openclaw");
+      ).not.toContain("catalog-project:codex:gateway:local:project:/Users/dev/openclaw");
 
       if (captureUiProofEnabled) {
         await mkdir(uiProofArtifactDir, { recursive: true });

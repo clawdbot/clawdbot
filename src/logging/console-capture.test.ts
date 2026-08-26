@@ -14,6 +14,7 @@ import {
 import { defaultRuntime } from "../runtime.js";
 import { withEnv } from "../test-utils/env.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
+import { applyLoggingConfig } from "./logger.js";
 import { testApi } from "./logger.test-support.js";
 import { loggingState } from "./state.js";
 import {
@@ -386,6 +387,23 @@ describe("enableConsoleCapture", () => {
 
     const content = fs.readFileSync(logPath, "utf-8");
     expect(countMatchingLines(content, "conflicting schema definitions")).toBe(1);
+  });
+
+  it("uses the current applied logger generation for each forwarded console call", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FILE_LOG", "1");
+    const firstFile = tempLogPath();
+    const secondFile = tempLogPath();
+    applyLoggingConfig({ level: "info", file: firstFile });
+    enableConsoleCapture();
+
+    console.log("first applied generation");
+    applyLoggingConfig({ level: "info", file: secondFile });
+    console.log("second applied generation");
+    await testApi.flushFileLogQueueForTests();
+
+    expect(fs.readFileSync(firstFile, "utf8")).toContain("first applied generation");
+    expect(fs.readFileSync(firstFile, "utf8")).not.toContain("second applied generation");
+    expect(fs.readFileSync(secondFile, "utf8")).toContain("second applied generation");
   });
 
   it.each([

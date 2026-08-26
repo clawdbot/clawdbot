@@ -201,6 +201,7 @@ export async function startOrResumeThread(
           // Supervised threads stay on the native user-home connection. Never
           // persist an outer OpenClaw auth profile onto that private ownership.
           authProfileId: undefined,
+          agentWorkspaceDeveloperInstructions: params.agentWorkspaceDeveloperInstructions,
           preserveNativeModel: true,
           dynamicToolsFingerprint,
           dynamicToolsContainDeferred,
@@ -313,7 +314,7 @@ export async function startOrResumeThread(
     }
     const startModelSelection = resolveCodexAppServerThreadModelSelection({
       provider: params.params.provider,
-      model: params.params.modelId,
+      model: params.runtimeModelId ?? params.params.modelId,
       binding,
       authProfileId: params.params.authProfileId,
       authProfileStore: params.params.authProfileStore,

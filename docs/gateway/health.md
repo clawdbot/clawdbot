@@ -93,8 +93,10 @@ When no `x-openclaw-session-key` header or `user` field is provided, `/v1/chat/c
 sockets from the CLI). By default it returns a fresh cached gateway snapshot and the
 gateway refreshes that cache in the background; `--verbose` forces a live probe instead.
 The command reports linked creds/auth age when available, per-channel probe summaries,
-session-store summary, and probe duration. It exits non-zero if the gateway is
-unreachable or the probe fails/times out.
+session-store summary, and probe duration. Live probes use bounded account concurrency
+and a Gateway-owned deadline, so one slow account returns a structured timeout while
+completed sibling results remain available. The command exits non-zero if the gateway is
+unreachable or the Gateway call itself times out.
 
 ### Queue warnings
 
@@ -120,7 +122,7 @@ payloads, claim owners or tokens, recorded errors, or session and target identif
 Options:
 
 - `--json`: machine-readable JSON output
-- `--timeout <ms>`: override the default 10s probe timeout
+- `--timeout <ms>`: override the default 10s Gateway connection timeout; it does not widen the Gateway's internal live-probe deadline
 - `--verbose`: force a live probe and print gateway connection details
 - `--debug`: alias for `--verbose`
 

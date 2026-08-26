@@ -1,5 +1,8 @@
 // Memory Core plugin module implements memory tool manager mock behavior.
-import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import type {
+  MemoryReadResult,
+  MemorySource,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import type { MemorySearchRuntimeDebug } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { vi } from "vitest";
 import type { getMemorySearchManager } from "./tools.runtime.js";
@@ -14,14 +17,6 @@ type SearchImpl = (opts?: {
   sources?: MemorySource[];
 }) => Promise<unknown[]>;
 export type MemoryReadParams = { relPath: string; from?: number; lines?: number };
-type MemoryReadResult = {
-  text: string;
-  path: string;
-  truncated?: boolean;
-  from?: number;
-  lines?: number;
-  nextFrom?: number;
-};
 type MemoryManagerDebug = Awaited<ReturnType<typeof getMemorySearchManager>>["debug"];
 type MemoryManagerParams = {
   cfg?: unknown;
@@ -32,6 +27,7 @@ type MemoryManagerParams = {
 
 let workspaceDir = "/workspace";
 let statusDirty = false;
+let pendingSyncSources: MemorySource[] | undefined;
 let customStatus: Record<string, unknown> | undefined;
 let sourceCounts: Array<{ source: MemorySource; files: number; chunks: number }> = [
   { source: "memory", files: 1, chunks: 1 },
@@ -46,6 +42,7 @@ let getManagerImpl:
     }>)
   | undefined;
 let readFileImpl: (params: MemoryReadParams) => Promise<MemoryReadResult> = async (params) => ({
+  status: "ok",
   text: "",
   path: params.relPath,
   from: params.from ?? 1,
@@ -60,6 +57,7 @@ const stubManager = {
     files: 1,
     chunks: 1,
     dirty: statusDirty,
+    pendingSyncSources,
     workspaceDir,
     dbPath: "/workspace/.memory/index.sqlite",
     provider: "builtin",
@@ -99,6 +97,10 @@ export function setMemoryStatusDirty(next: boolean): void {
   statusDirty = next;
 }
 
+export function setMemoryPendingSyncSources(next: MemorySource[] | undefined): void {
+  pendingSyncSources = next;
+}
+
 export function setMemorySourceCounts(
   next: Array<{ source: MemorySource; files: number; chunks: number }>,
 ): void {
@@ -135,6 +137,7 @@ export function resetMemoryToolMockState(overrides?: {
 }): void {
   workspaceDir = "/workspace";
   statusDirty = false;
+  pendingSyncSources = undefined;
   customStatus = undefined;
   sourceCounts = [{ source: "memory", files: 1, chunks: 1 }];
   getManagerImpl = undefined;
@@ -143,6 +146,7 @@ export function resetMemoryToolMockState(overrides?: {
   readFileImpl =
     overrides?.readFileImpl ??
     (async (params: MemoryReadParams) => ({
+      status: "ok",
       text: "",
       path: params.relPath,
       from: params.from ?? 1,

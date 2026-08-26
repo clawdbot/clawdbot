@@ -12,6 +12,8 @@ export type CloudWorkerProfileConfig = {
 export type CloudWorkersConfig = {
   /** Experimental Labs gate for the cloud-worker desktop observer. */
   desktop?: boolean;
+  /** Default worker profile names keyed by normalized repository identity. */
+  projectProfiles?: Record<string, string>;
   /** Named opt-in worker profiles. Omit or leave empty to disable cloud workers. */
   profiles?: Record<string, CloudWorkerProfileConfig>;
 };

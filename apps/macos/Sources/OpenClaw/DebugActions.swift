@@ -60,8 +60,8 @@ enum DebugActions {
         }
     }
 
-    static func sendTestNotification() async {
-        _ = await NotificationManager().send(title: "OpenClaw", body: "Test notification", sound: nil)
+    static func sendTestNotification() async -> TestNotificationOutcome {
+        await TestNotificationAction.send()
     }
 
     static func sendDebugVoice() async -> Result<String, DebugActionError> {
@@ -108,7 +108,6 @@ enum DebugActions {
                 }
 
             case .unconfigured:
-                await GatewayConnection.shared.shutdown()
                 await ControlChannel.shared.disconnect()
             }
         }

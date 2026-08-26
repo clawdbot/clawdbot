@@ -16,6 +16,7 @@ type DeletedSessionShell = {
   didConsiderNativeRouteRestore: boolean;
   replaceChatWithCurrentSession: () => void;
   updateRouteState: (state: ReturnType<typeof selectShellRouteState>) => void;
+  observeDeletedSessions: (state: ApplicationContext["sessions"]["state"]) => void;
 };
 
 const mainKey = "agent:main:main";
@@ -52,6 +53,7 @@ function createSessionRecoveryShell(params: {
           deletedSessions: (params.deletedSessionKeys ?? []).map((key) => ({
             agentId: "main",
             key,
+            retireBeforeRevision: Date.now(),
           })),
           result: { sessions: params.sessionKeys.map((key) => ({ key })) },
         },
@@ -65,10 +67,71 @@ function createSessionRecoveryShell(params: {
 }
 
 afterEach(() => {
+  document.body.replaceChildren();
   resetAppHostTestGlobals();
 });
 
 describe("OpenClaw shell deleted-session recovery", () => {
+  it("retires an externally observed batch once and shows one actionable cleanup failure", async () => {
+    const gatewayUrl = "ws://gateway.test";
+    const storage = createStorageMock();
+    vi.stubGlobal("sessionStorage", storage);
+    storage.setItem(
+      `openclaw.control.chatComposer.v2:${encodeURIComponent(gatewayUrl)}`,
+      JSON.stringify({
+        version: 2,
+        gatewayOwner: gatewayUrl,
+        sessions: {
+          [`${deletedKey}\u0000agent:main`]: {
+            draft: "retire me",
+            draftRevision: 1,
+            queue: [{ id: "queued", text: "queued", createdAt: 1 }],
+            updatedAt: 1,
+          },
+        },
+      }),
+    );
+    const shell = document.createElement("openclaw-app-shell") as unknown as DeletedSessionShell;
+    const deletedSessions = [
+      { key: deletedKey, agentId: "main", retireBeforeRevision: Date.now() },
+    ];
+    const state = {
+      deletedSessions,
+      result: { sessions: [] },
+    } as unknown as ApplicationContext["sessions"]["state"];
+    shell.runtime = {
+      context: {
+        agents: { state: { agentsList: null } },
+        gateway: {
+          snapshot: {
+            assistantAgentId: "main",
+            client: { gatewayUrl, recoveryScopeReady: false },
+            hello: null,
+          },
+        },
+      } as unknown as ApplicationContext,
+    };
+    const toast = document.body.appendChild(document.createElement("openclaw-toast-host"));
+
+    shell.observeDeletedSessions(state);
+    shell.observeDeletedSessions(state);
+
+    await vi.waitFor(() => {
+      const stored = JSON.parse(
+        storage.getItem(`openclaw.control.chatComposer.v2:${encodeURIComponent(gatewayUrl)}`) ??
+          "{}",
+      ) as { sessions?: Record<string, { draft?: string; queue?: unknown[] }> };
+      expect(stored.sessions?.[`${deletedKey}\u0000agent:main`]).toEqual({
+        draftRevision: expect.any(Number),
+        updatedAt: expect.any(Number),
+      });
+      expect(toast.textContent).toContain(
+        "Session deleted; browser draft remains. Clear site data.",
+      );
+    });
+    expect(toast.querySelectorAll(".app-toast")).toHaveLength(1);
+  });
+
   it("replaces an unresolvable session with the owning agent's main chat", () => {
     const { replace, setSessionKey, shell } = createSessionRecoveryShell({
       activeSessionKey: deletedKey,

@@ -192,4 +192,76 @@ describe("gateway caller context wrapper", () => {
     });
     expect(nestedIdentity?.cronSelfManagementJobId).toBeUndefined();
   });
+
+  it("composes same-run receipt authority without dropping either closure", async () => {
+    const operationalRunInstance = { instanceId: "instance-1", runId: "run-1" };
+    let outerActive = true;
+    let innerActive = true;
+    const outer = vi.fn(() => outerActive);
+    const inner = vi.fn(() => innerActive);
+    let receiptAuthority: (() => boolean | void) | undefined;
+
+    await withGatewayToolCallerIdentity(
+      {
+        agentId: "outer",
+        sessionKey: "agent:outer:session",
+        operationalRunInstance,
+        receiptAuthority: outer,
+      },
+      async () => {
+        await withGatewayToolCallerIdentity(
+          {
+            agentId: "inner",
+            sessionKey: "agent:inner:session",
+            operationalRunInstance,
+            receiptAuthority: inner,
+          },
+          () => {
+            receiptAuthority = getGatewayToolCallerIdentity()?.receiptAuthority;
+          },
+        );
+      },
+    );
+
+    expect(receiptAuthority?.()).toBe(true);
+    outerActive = false;
+    expect(receiptAuthority?.()).toBe(false);
+    outerActive = true;
+    innerActive = false;
+    expect(receiptAuthority?.()).toBe(false);
+    expect(outer).toHaveBeenCalledTimes(3);
+    expect(inner).toHaveBeenCalledTimes(3);
+  });
+
+  it("starts distinct admitted runs with a new receipt-authority root", async () => {
+    const outer = vi.fn(() => false);
+    const child = vi.fn(() => true);
+    let receiptAuthority: (() => boolean | void) | undefined;
+
+    await withGatewayToolCallerIdentity(
+      {
+        agentId: "outer",
+        sessionKey: "agent:outer:session",
+        operationalRunInstance: { instanceId: "outer-instance", runId: "outer-run" },
+        receiptAuthority: outer,
+      },
+      async () => {
+        await withGatewayToolCallerIdentity(
+          {
+            agentId: "child",
+            sessionKey: "agent:child:session",
+            operationalRunInstance: { instanceId: "child-instance", runId: "child-run" },
+            receiptAuthority: child,
+          },
+          () => {
+            receiptAuthority = getGatewayToolCallerIdentity()?.receiptAuthority;
+          },
+        );
+      },
+    );
+
+    expect(receiptAuthority?.()).toBe(true);
+    expect(child).toHaveBeenCalledOnce();
+    expect(outer).not.toHaveBeenCalled();
+  });
 });

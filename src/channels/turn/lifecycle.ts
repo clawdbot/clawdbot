@@ -625,6 +625,7 @@ async function dispatchChannelTurnWithDeliveryOwner(
                   },
                   onError: delivery.onError,
                 },
+                dispatchReplyFromConfig: params.dispatchReplyFromConfig,
                 toolsAllow: params.toolsAllow,
                 replyOptions,
                 replyResolver: params.replyResolver,

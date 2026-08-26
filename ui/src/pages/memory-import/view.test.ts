@@ -61,6 +61,7 @@ function createPlan(): NonNullable<MemoryImportProps["plan"]> {
 function createProps(overrides: Partial<MemoryImportProps> = {}): MemoryImportProps {
   return {
     connected: true,
+    canAdmin: true,
     agents: [{ id: "research", name: "Research" }],
     selectedAgentId: "research",
     plan: createPlan(),

@@ -11,6 +11,7 @@ import { cancelBackgroundExecSession } from "./bash-process-control.js";
 import {
   acknowledgeNotifyOnExit,
   type ProcessSession,
+  compareProcessSessionStartOrder,
   deleteSession,
   drainFinishedSession,
   drainSession,
@@ -164,6 +165,27 @@ function resetPollRetrySuggestion(sessionId: string): void {
 
 type FinishedSession = NonNullable<ReturnType<typeof getFinishedSession>>;
 
+function finishedSessionDetails(sessionId: string, finished: FinishedSession) {
+  return {
+    status: finished.status === "completed" ? "completed" : "failed",
+    sessionId,
+    exitCode: finished.exitCode ?? undefined,
+    ...(finished.exitSignal != null ? { exitSignal: finished.exitSignal } : {}),
+    ...(finished.exitReason
+      ? {
+          exitReason: finished.exitReason,
+          timedOut:
+            finished.exitReason === "overall-timeout" ||
+            finished.exitReason === "no-output-timeout",
+        }
+      : {}),
+    ...(finished.noOutputTimedOut !== undefined
+      ? { noOutputTimedOut: finished.noOutputTimedOut }
+      : {}),
+    name: deriveSessionName(finished.command),
+  };
+}
+
 function finishedPollResult(
   sessionId: string,
   finished: FinishedSession,
@@ -193,23 +215,8 @@ function finishedPollResult(
       },
     ],
     details: {
-      status: finished.status === "completed" ? "completed" : "failed",
-      sessionId,
-      exitCode: finished.exitCode ?? undefined,
-      ...(finished.exitSignal != null ? { exitSignal: finished.exitSignal } : {}),
-      ...(finished.exitReason
-        ? {
-            exitReason: finished.exitReason,
-            timedOut:
-              finished.exitReason === "overall-timeout" ||
-              finished.exitReason === "no-output-timeout",
-          }
-        : {}),
-      ...(finished.noOutputTimedOut !== undefined
-        ? { noOutputTimedOut: finished.noOutputTimedOut }
-        : {}),
+      ...finishedSessionDetails(sessionId, finished),
       aggregated: finished.aggregated,
-      name: deriveSessionName(finished.command),
     },
   };
 }
@@ -316,9 +323,26 @@ export function createProcessTool(
       };
 
       if (params.action === "list") {
-        const running = listRunningSessions()
+        const sessions = [...listRunningSessions(), ...listFinishedSessions()]
           .filter((s) => isInScope(s))
+          .toSorted(compareProcessSessionStartOrder)
           .map((s) => {
+            if ("endedAt" in s) {
+              return {
+                sessionId: s.id,
+                status: s.status,
+                startedAt: s.startedAt,
+                endedAt: s.endedAt,
+                runtimeMs: s.endedAt - s.startedAt,
+                cwd: s.cwd,
+                command: s.command,
+                name: deriveSessionName(s.command),
+                tail: s.tail,
+                truncated: s.truncated,
+                exitCode: s.exitCode ?? undefined,
+                exitSignal: s.exitSignal ?? undefined,
+              };
+            }
             const runtime = describeRunningSession(s);
             return {
               sessionId: s.id,
@@ -337,31 +361,13 @@ export function createProcessTool(
               lastOutputAt: runtime.lastOutputAt,
             };
           });
-        const finished = listFinishedSessions()
-          .filter((s) => isInScope(s))
-          .map((s) => ({
-            sessionId: s.id,
-            status: s.status,
-            startedAt: s.startedAt,
-            endedAt: s.endedAt,
-            runtimeMs: s.endedAt - s.startedAt,
-            cwd: s.cwd,
-            command: s.command,
-            name: deriveSessionName(s.command),
-            tail: s.tail,
-            truncated: s.truncated,
-            exitCode: s.exitCode ?? undefined,
-            exitSignal: s.exitSignal ?? undefined,
-          }));
-        const lines = [...running, ...finished]
-          .toSorted((a, b) => b.startedAt - a.startedAt)
-          .map((s) => {
-            const label = s.name ? truncateMiddle(s.name, 80) : truncateMiddle(s.command, 120);
-            const marker = "waitingForInput" in s && s.waitingForInput ? " [input-wait]" : "";
-            return `${s.sessionId} ${padProcessStatus(s.status, 9)} ${
-              formatDurationCompact(s.runtimeMs) ?? "n/a"
-            }${marker} :: ${label}`;
-          });
+        const lines = sessions.map((s) => {
+          const label = s.name ? truncateMiddle(s.name, 80) : truncateMiddle(s.command, 120);
+          const marker = "waitingForInput" in s && s.waitingForInput ? " [input-wait]" : "";
+          return `${s.sessionId} ${padProcessStatus(s.status, 9)} ${
+            formatDurationCompact(s.runtimeMs) ?? "n/a"
+          }${marker} :: ${label}`;
+        });
         return {
           content: [
             {
@@ -369,15 +375,12 @@ export function createProcessTool(
               text: lines.join("\n") || "No running or recent sessions.",
             },
           ],
-          details: { status: "completed", sessions: [...running, ...finished] },
+          details: { status: "completed", sessions },
         };
       }
 
       if (!params.sessionId) {
-        return {
-          content: [{ type: "text", text: "sessionId is required for this action." }],
-          details: { status: "failed" },
-        };
+        return failText("sessionId is required for this action.");
       }
 
       const session = getSession(params.sessionId);
@@ -385,35 +388,30 @@ export function createProcessTool(
       const scopedSession = isInScope(session) ? session : undefined;
       const scopedFinished = isInScope(finished) ? finished : undefined;
 
-      const failedResult = (text: string): AgentToolResult<unknown> => ({
-        content: [{ type: "text", text }],
-        details: { status: "failed" },
-      });
-
       const resolveBackgroundedWritableStdin = () => {
         if (!scopedSession) {
           return {
             ok: false as const,
-            result: failedResult(`No active session found for ${params.sessionId}`),
+            result: failText(`No active session found for ${params.sessionId}`),
           };
         }
         if (!scopedSession.backgrounded) {
           return {
             ok: false as const,
-            result: failedResult(`Session ${params.sessionId} is not backgrounded.`),
+            result: failText(`Session ${params.sessionId} is not backgrounded.`),
           };
         }
         if (scopedSession.finalizing) {
           return {
             ok: false as const,
-            result: failedResult(`Session ${params.sessionId} is finalizing.`),
+            result: failText(`Session ${params.sessionId} is finalizing.`),
           };
         }
         const stdin = resolveSessionStdin(scopedSession);
         if (!isWritableStdin(stdin)) {
           return {
             ok: false as const,
-            result: failedResult(`Session ${params.sessionId} stdin is not writable.`),
+            result: failText(`Session ${params.sessionId} stdin is not writable.`),
           };
         }
         return { ok: true as const, session: scopedSession, stdin };
@@ -445,8 +443,17 @@ export function createProcessTool(
           }
           const pollWaitMs = resolvePollWaitMs(params.timeout);
           if (pollWaitMs > 0 && !scopedSession.exited) {
+            if (signal?.aborted) {
+              throw createAbortError(signal.reason);
+            }
             const deadline = Date.now() + pollWaitMs;
-            while (!scopedSession.exited && Date.now() < deadline) {
+            // Interactive children cannot progress until their pending prompt reaches the model.
+            while (
+              !scopedSession.exited &&
+              scopedSession.pendingOutput.length === 0 &&
+              !scopedSession.pendingOutputDropped &&
+              Date.now() < deadline
+            ) {
               await sleepPollInterval(Math.max(0, Math.min(250, deadline - Date.now())), signal);
             }
           }
@@ -474,13 +481,11 @@ export function createProcessTool(
             content: [
               {
                 type: "text",
-                text: appendExecTimeoutRetryGuidance(
+                text:
                   (output || "(no new output)") +
-                    aggregateOutputNote +
-                    retainedOutputNote +
-                    (buildInputWaitHint(runtime) || "\n\nProcess still running."),
-                  undefined,
-                ),
+                  aggregateOutputNote +
+                  retainedOutputNote +
+                  (buildInputWaitHint(runtime) || "\n\nProcess still running."),
               },
             ],
             details: {
@@ -497,15 +502,7 @@ export function createProcessTool(
         case "log": {
           if (scopedSession) {
             if (!scopedSession.backgrounded) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: `Session ${params.sessionId} is not backgrounded.`,
-                  },
-                ],
-                details: { status: "failed" },
-              };
+              return failText(`Session ${params.sessionId} is not backgrounded.`);
             }
             const window = resolveLogSliceWindow(params.offset, params.limit);
             const { slice, totalLines, totalChars } = sliceLogLines(
@@ -545,40 +542,28 @@ export function createProcessTool(
               window.effectiveOffset,
               window.effectiveLimit,
             );
-            const status = scopedFinished.status === "completed" ? "completed" : "failed";
-            const logDefaultTailNote = defaultTailNote(totalLines, window.usingDefaultTail);
             return {
               content: [
                 {
                   type: "text",
-                  text:
+                  text: appendExecTimeoutRetryGuidance(
                     (slice || "(no output recorded)") +
-                    logDefaultTailNote +
-                    retentionCapNote(scopedFinished),
+                      defaultTailNote(totalLines, window.usingDefaultTail) +
+                      retentionCapNote(scopedFinished),
+                    scopedFinished.exitReason,
+                  ),
                 },
               ],
               details: {
-                status,
-                sessionId: params.sessionId,
+                ...finishedSessionDetails(params.sessionId, scopedFinished),
                 total: totalLines,
                 totalLines,
                 totalChars,
                 truncated: scopedFinished.truncated,
-                exitCode: scopedFinished.exitCode ?? undefined,
-                exitSignal: scopedFinished.exitSignal ?? undefined,
-                name: deriveSessionName(scopedFinished.command),
               },
             };
           }
-          return {
-            content: [
-              {
-                type: "text",
-                text: `No session found for ${params.sessionId}`,
-              },
-            ],
-            details: { status: "failed" },
-          };
+          return failText(`No session found for ${params.sessionId}`);
         }
 
         case "write": {
@@ -632,15 +617,7 @@ export function createProcessTool(
           }
           const payload = encodePaste(params.text ?? "", params.bracketed !== false);
           if (!payload) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: "No paste text provided.",
-                },
-              ],
-              details: { status: "failed" },
-            };
+            return failText("No paste text provided.");
           }
           await writeProcessStdin(resolved.stdin, payload);
           return runningSessionResult(
@@ -690,15 +667,7 @@ export function createProcessTool(
               details: { status: "completed" },
             };
           }
-          return {
-            content: [
-              {
-                type: "text",
-                text: `No finished session found for ${params.sessionId}`,
-              },
-            ],
-            details: { status: "failed" },
-          };
+          return failText(`No finished session found for ${params.sessionId}`);
         }
 
         case "remove": {
@@ -741,26 +710,14 @@ export function createProcessTool(
               details: { status: "completed" },
             };
           }
-          return {
-            content: [
-              {
-                type: "text",
-                text: `No session found for ${params.sessionId}`,
-              },
-            ],
-            details: { status: "failed" },
-          };
+          return failText(`No session found for ${params.sessionId}`);
         }
       }
 
-      return {
-        content: [{ type: "text", text: `Unknown action ${params.action as string}` }],
-        details: { status: "failed" },
-      };
+      return failText(`Unknown action ${params.action as string}`);
     },
   };
 }
 
 /** Shared process-control tool instance used by the default Bash tool barrel. */
 export const processTool = createProcessTool();
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

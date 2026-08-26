@@ -61,7 +61,7 @@ async function importTool(tarBuffer: Buffer) {
         tarBase64: tarBuffer.toString("base64"),
         tarBytes: tarBuffer.byteLength,
         sha256: crypto.createHash("sha256").update(tarBuffer).digest("hex"),
-        fileCount: 1,
+        fileCount: 3,
       },
       startedAt: Date.now(),
     })),
@@ -84,9 +84,11 @@ async function executeDirFetch(module: typeof import("./dir-fetch-tool.js")) {
 describe("dir.fetch archive extraction", () => {
   it("extracts a bounded tar and returns the plugin-side manifest", async () => {
     const tarBuffer = await createTarBuffer({
-      entries: ["ok.txt"],
+      entries: ["ok.txt", "nested"],
       setup: async (sourceDir) => {
         await fs.writeFile(path.join(sourceDir, "ok.txt"), "ok");
+        await fs.mkdir(path.join(sourceDir, "nested"));
+        await fs.writeFile(path.join(sourceDir, "nested", "also-ok.txt"), "also ok");
       },
     });
     const { appendFileTransferAudit, module, saveMediaBuffer } = await importTool(tarBuffer);
@@ -94,20 +96,30 @@ describe("dir.fetch archive extraction", () => {
     const result = await executeDirFetch(module);
 
     expect(result).toMatchObject({
+      content: [{ type: "text", text: expect.stringContaining("Fetched 2 files") }],
       details: {
         path: "/tmp/project",
-        fileCount: 1,
-        files: [
-          {
-            relPath: "ok.txt",
-            size: 2,
-            sha256: crypto.createHash("sha256").update("ok").digest("hex"),
-          },
-        ],
+        fileCount: 2,
       },
     });
-    const localPath = (result.details as { files: Array<{ localPath: string }> }).files[0]
-      ?.localPath;
+    const files = (result.details as { files: Array<{ relPath: string; localPath: string }> })
+      .files;
+    expect(files).toHaveLength(2);
+    expect(files).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          relPath: "ok.txt",
+          size: 2,
+          sha256: crypto.createHash("sha256").update("ok").digest("hex"),
+        }),
+        expect.objectContaining({
+          relPath: path.join("nested", "also-ok.txt"),
+          size: 7,
+          sha256: crypto.createHash("sha256").update("also ok").digest("hex"),
+        }),
+      ]),
+    );
+    const localPath = files.find((file) => file.relPath === "ok.txt")?.localPath;
     await expect(fs.readFile(localPath!, "utf8")).resolves.toBe("ok");
     expect(saveMediaBuffer).toHaveBeenCalledWith(
       tarBuffer,

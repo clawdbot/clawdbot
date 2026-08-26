@@ -14,6 +14,7 @@ import {
   resolveAgentWorkspaceDir,
 } from "../../../agents/agent-scope.js";
 import { resolveUserTimezone } from "../../../agents/date-time.js";
+import { createMemoryWriteProvenanceObserver } from "../../../agents/memory-write-provenance.js";
 import { resolveStateDir } from "../../../config/paths.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import {
@@ -34,12 +35,20 @@ import { formatHookErrorForLog } from "../../fire-and-forget.js";
 import type { HookHandler } from "../../hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
 import { isSessionAutoResetReason } from "../../session-auto-reset.js";
-import { countSessionMemoryMessages, getRecentSessionContentFromEvents } from "./transcript.js";
+import {
+  countSessionMemoryMessages,
+  getRecentSessionProjectionFromEvents,
+  type SessionMemoryProjection,
+} from "./transcript.js";
 
 const log = createSubsystemLogger("hooks/session-memory");
 const SESSION_MEMORY_CAPTURE_MAX_BYTES = 8 * 1024 * 1024;
 const SESSION_MEMORY_CAPTURE_PAGE_MESSAGES = 256;
 const SESSION_MEMORY_CAPTURE_MAX_SCANNED_MESSAGES = 4_096;
+
+type SessionMemoryTranscript =
+  | ({ status: "available" } & (SessionMemoryProjection | { content: null; originClass: "agent" }))
+  | { status: "unavailable"; reason: string };
 
 function pickDateTimePart(
   parts: Intl.DateTimeFormatPart[],
@@ -106,7 +115,7 @@ async function getRecentSqliteSessionContent(
   scope: { agentId: string; sessionId: string; sessionKey: string; storePath: string },
   messageCount: number,
   capturedEvents?: TranscriptEvent[],
-): Promise<string | null> {
+): Promise<SessionMemoryProjection | null> {
   const events = capturedEvents ?? (await loadTranscriptEvents({ ...scope }));
   const latestResetIndex = capturedEvents
     ? -1
@@ -118,7 +127,7 @@ async function getRecentSqliteSessionContent(
           (event as { type?: unknown }).type === "reset",
       );
   const retiredEvents = latestResetIndex >= 0 ? events.slice(0, latestResetIndex) : events;
-  return getRecentSessionContentFromEvents(
+  return getRecentSessionProjectionFromEvents(
     selectVisibleTranscriptEvents(retiredEvents),
     messageCount,
   );
@@ -274,12 +283,15 @@ async function saveSessionMemoryNow(
         : 15;
 
     let slug: string | null = null;
-    let sessionContent: string | null = null;
-    let transcriptUnavailableReason: string | null = null;
+    let transcript: SessionMemoryTranscript = {
+      status: "available",
+      content: null,
+      originClass: "agent",
+    };
 
     if (currentSessionId) {
       try {
-        sessionContent = await getRecentSqliteSessionContent(
+        const projection = await getRecentSqliteSessionContent(
           {
             agentId,
             sessionId: currentSessionId,
@@ -290,15 +302,19 @@ async function saveSessionMemoryNow(
           messageCount,
           capturedEvents,
         );
+        transcript = projection
+          ? { status: "available", ...projection }
+          : { status: "available", content: null, originClass: "agent" };
       } catch (error) {
-        transcriptUnavailableReason = formatHookErrorForLog(error);
+        const reason = formatHookErrorForLog(error);
+        transcript = { status: "unavailable", reason };
         log.warn("Session transcript unavailable for memory capture", {
           sessionKey: event.sessionKey,
-          error: transcriptUnavailableReason,
+          error: reason,
         });
       }
       log.debug("Session content loaded", {
-        length: sessionContent?.length ?? 0,
+        length: transcript.status === "available" ? (transcript.content?.length ?? 0) : 0,
         messageCount,
       });
 
@@ -306,11 +322,16 @@ async function saveSessionMemoryNow(
       const isTestEnv = isVitestRuntimeEnv();
       const allowLlmSlug = !isTestEnv && hookConfig?.llmSlug === true;
 
-      if (sessionContent && cfg && allowLlmSlug) {
+      if (transcript.status === "available" && transcript.content && cfg && allowLlmSlug) {
         log.debug("Calling generateSlugViaLLM...");
         // Use LLM to generate a descriptive slug
         const slugModel = typeof hookConfig?.model === "string" ? hookConfig.model : undefined;
-        slug = await generateSlugViaLLM({ sessionContent, cfg, agentId, model: slugModel });
+        slug = await generateSlugViaLLM({
+          sessionContent: transcript.content,
+          cfg,
+          agentId,
+          model: slugModel,
+        });
         log.debug("Generated slug", { slug });
       }
     }
@@ -349,22 +370,36 @@ async function saveSessionMemoryNow(
     ];
 
     // Include conversation content if available
-    if (sessionContent) {
-      entryParts.push("## Conversation Summary", "", sessionContent, "");
-    } else if (transcriptUnavailableReason) {
+    if (transcript.status === "available" && transcript.content) {
+      entryParts.push("## Conversation Summary", "", transcript.content, "");
+    } else if (transcript.status === "unavailable") {
       entryParts.push(
         "## Conversation Summary",
         "",
-        `> Transcript content was unavailable: ${JSON.stringify(transcriptUnavailableReason)}`,
+        `> Transcript content was unavailable: ${JSON.stringify(transcript.reason)}`,
         "",
       );
     }
 
     const entry = entryParts.join("\n");
 
-    // Write under memory root with alias-safe file validation.
+    // Reserve provenance before exposing the file. A restricted projection
+    // must never fall back to an untracked artifact that later reads as trusted.
     const memoryRoot = await root(memoryDir);
-    await memoryRoot.write(filename, entry, { encoding: "utf-8" });
+    const provenanceObserver = createMemoryWriteProvenanceObserver({
+      mutationRoot: workspaceDir,
+      workspaceDir,
+      resolveOriginClass: () =>
+        transcript.status === "available" ? transcript.originClass : "agent",
+      now: () => now.getTime(),
+    });
+    const commit = () => memoryRoot.write(filename, entry, { encoding: "utf-8" });
+    await provenanceObserver.write({
+      absolutePath: memoryFilePath,
+      contentBefore: "",
+      contentAfter: entry,
+      commit,
+    });
     log.debug("Memory file written successfully");
 
     // Log completion (but don't send user-visible confirmation - it's internal housekeeping)

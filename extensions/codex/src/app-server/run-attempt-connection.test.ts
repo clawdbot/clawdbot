@@ -4,7 +4,9 @@ import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import * as appServerPolicy from "./app-server-policy.js";
+import { applyCodexAppServerAuthProfile } from "./auth-bridge.js";
 import * as bindingConnection from "./binding-connection.js";
+import * as codexRequirements from "./config-requirements.js";
 import { prepareCodexAttemptConnection } from "./run-attempt-connection.js";
 import {
   createCodexRuntimePlanFixture,
@@ -18,6 +20,10 @@ import {
   testCodexAppServerBindingStore,
   writeCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
+import {
+  createIsolatedCodexAppServerClient,
+  getLeasedSharedCodexAppServerClient,
+} from "./shared-client.js";
 
 setupRunAttemptTestHooks();
 
@@ -154,6 +160,124 @@ describe("prepareCodexAttemptConnection", () => {
   });
 
   it.each([
+    {
+      name: "paired-device remote execution",
+      placement: { placementExecutionMode: "remote-exec", placementNodeId: "paired-device-1" },
+      expectedFactory: createIsolatedCodexAppServerClient,
+    },
+    {
+      name: "SSH remote execution",
+      placement: { placementExecutionMode: "remote-exec" },
+      expectedFactory: getLeasedSharedCodexAppServerClient,
+    },
+    {
+      name: "local sandbox execution",
+      placement: {},
+      expectedFactory: getLeasedSharedCodexAppServerClient,
+    },
+  ])(
+    "selects the correct app-server ownership for $name",
+    async ({ placement, expectedFactory }) => {
+      const sessionFile = path.join(
+        tempDir,
+        `client-ownership-${placement.placementNodeId ?? "other"}.jsonl`,
+      );
+      const workspaceDir = path.join(
+        tempDir,
+        `workspace-client-ownership-${placement.placementNodeId ?? "other"}`,
+      );
+      const params = createParams(sessionFile, workspaceDir);
+      params.sandbox = { ...createSandboxContext({}), ...placement } as NonNullable<
+        typeof params.sandbox
+      >;
+      if (placement.placementExecutionMode === "remote-exec") {
+        const runtimePlan = createCodexRuntimePlanFixture();
+        params.runtimePlan = {
+          ...runtimePlan,
+          auth: {
+            ...runtimePlan.auth,
+            providerForAuth: "openai",
+            authProfileProviderForAuth: "openai",
+            selectedAuthMode: "api-key",
+            modelRoute: {
+              provider: "openai",
+              modelId: "gpt-5.4-codex",
+              api: "openai-responses",
+              baseUrl: "https://api.openai.com/v1",
+              authRequirement: "api-key",
+              requestTransportOverrides: "none",
+            },
+          },
+        };
+        params.resolvedApiKey = "prepared-test-key";
+      }
+      registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
+
+      const connection = await prepareCodexAttemptConnection({
+        params,
+        options: { bindingStore: testCodexAppServerBindingStore },
+      });
+
+      expect(connection.attemptClientFactory).toBe(expectedFactory);
+    },
+  );
+
+  it("keeps a user-home subscription on native account verification", async () => {
+    const sessionFile = path.join(tempDir, "user-home-native-auth.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-user-home-native-auth");
+    const params = createParams(sessionFile, workspaceDir);
+    const runtimePlan = createCodexRuntimePlanFixture();
+    params.runtimePlan = {
+      ...runtimePlan,
+      auth: {
+        ...runtimePlan.auth,
+        providerForAuth: "openai",
+        authProfileProviderForAuth: "openai",
+        forwardedAuthProfileId: "openai:unusable",
+        selectedAuthMode: "subscription",
+        modelRoute: {
+          provider: "openai",
+          modelId: "gpt-5.4-codex",
+          api: "openai-chatgpt-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authRequirement: "subscription",
+          requestTransportOverrides: "none",
+        },
+      },
+    };
+    params.authProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:unusable": { type: "api_key", provider: "openai", key: "" },
+      },
+    };
+    registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
+
+    const connection = await prepareCodexAttemptConnection({
+      params,
+      options: {
+        bindingStore: testCodexAppServerBindingStore,
+        pluginConfig: { appServer: { homeScope: "user" } },
+      },
+    });
+    const request = vi.fn(async () => ({ account: { type: "chatgpt" } }));
+
+    expect(connection.startupAuthProfileId).toBeUndefined();
+    expect(connection.startupPreparedAuth).toBeUndefined();
+    expect(connection.startupClientAuthProfileId).toBeNull();
+    await expect(
+      applyCodexAppServerAuthProfile({
+        client: { request } as never,
+        agentDir: connection.agentDir,
+        authProfileId: connection.startupClientAuthProfileId,
+        authRequirement: connection.startupAuthRequirement,
+      }),
+    ).resolves.toBeUndefined();
+    expect(request).toHaveBeenCalledExactlyOnceWith("account/read", { refreshToken: false });
+    expect(request).not.toHaveBeenCalledWith("account/login/start", expect.anything());
+  });
+
+  it.each([
     { name: "fresh thread", existingThread: false },
     { name: "unchanged resumed thread", existingThread: true },
   ])("resolves a $name and its workspace only once", async ({ existingThread }) => {
@@ -231,7 +355,7 @@ describe("prepareCodexAttemptConnection", () => {
     expect(resolveModelPolicy).toHaveBeenCalledTimes(2);
   });
 
-  it("does not give OpenClaw ownership of an explicit operator approval policy", async () => {
+  it("rejects the retired explicit untrusted approval policy with Doctor remediation", async () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "before_tool_call", handler: vi.fn() }]),
     );
@@ -241,18 +365,20 @@ describe("prepareCodexAttemptConnection", () => {
     params.agentDir = path.join(tempDir, "agent");
     registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
 
-    const connection = await prepareCodexAttemptConnection({
-      params,
-      options: {
-        bindingStore: testCodexAppServerBindingStore,
-        pluginConfig: { appServer: { approvalPolicy: "untrusted" } },
-      },
-    });
-
-    expect(connection.appServer.approvalPolicy).toBe("untrusted");
+    await expect(
+      prepareCodexAttemptConnection({
+        params,
+        options: {
+          bindingStore: testCodexAppServerBindingStore,
+          pluginConfig: { appServer: { approvalPolicy: "untrusted" } },
+        },
+      }),
+    ).rejects.toThrow(
+      'plugins.entries.codex.config.appServer.approvalPolicy="untrusted" is retired; run "openclaw doctor --fix" to migrate it to "on-request".',
+    );
   });
 
-  it("lets a workspace session mode override explicitly configured full exec", async () => {
+  it("defaults a rootless workspace session boundary while overriding full exec", async () => {
     const sessionFile = path.join(tempDir, "workspace-session-policy.jsonl");
     const workspaceDir = path.join(tempDir, "workspace-session-policy");
     const params = createParams(sessionFile, workspaceDir);
@@ -261,7 +387,6 @@ describe("prepareCodexAttemptConnection", () => {
     // Dispatch owns mode→exec preparation; connection consumes the prepared override.
     params.execOverrides = { ...params.execOverrides, mode: "auto" };
     params.permissionMode = "workspace";
-    params.sessionRoot = workspaceDir;
     registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
 
     const resolveConnection = vi.spyOn(bindingConnection, "resolveCodexBindingAppServerConnection");
@@ -300,6 +425,46 @@ describe("prepareCodexAttemptConnection", () => {
 
     // Upstream 28f10c00b4e keeps YOLO approvals disabled despite generic tool hooks.
     expect(connection.appServer.approvalPolicy).toBe("never");
+  });
+
+  it("prepares one Guardian policy when requirements clamp an explicitly full session", async () => {
+    vi.mocked(codexRequirements.readCodexRequirementsToml).mockReturnValue(
+      [
+        'allowed_sandbox_modes = ["workspace-write"]',
+        'allowed_approval_policies = ["on-request"]',
+        'allowed_approvals_reviewers = ["auto_review"]',
+      ].join("\n"),
+    );
+    const workspaceDir = path.join(tempDir, "requirements-clamped-workspace");
+    const sessionFile = path.join(tempDir, "requirements-clamped-session.jsonl");
+    const params = createParams(sessionFile, workspaceDir);
+    params.agentDir = path.join(tempDir, "agent");
+    params.provider = "openai";
+    params.permissionMode = "full";
+    params.sessionRoot = workspaceDir;
+    params.execOverrides = { ...params.execOverrides, mode: "full" };
+    registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
+
+    const connection = await prepareCodexAttemptConnection({
+      params,
+      options: { bindingStore: testCodexAppServerBindingStore },
+    });
+
+    expect(connection.appServer).toMatchObject({
+      sandbox: "workspace-write",
+      approvalPolicy: "on-request",
+      approvalsReviewer: "auto_review",
+    });
+    expect(connection.sessionPermissionPolicy).toEqual({
+      mode: "workspace",
+      root: workspaceDir,
+      execMode: "auto",
+    });
+    expect(params).toMatchObject({
+      permissionMode: "workspace",
+      sessionRoot: workspaceDir,
+      execOverrides: { mode: "auto" },
+    });
   });
 
   it.each([

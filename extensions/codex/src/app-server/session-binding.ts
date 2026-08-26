@@ -18,6 +18,7 @@ import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-s
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
 import { CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN, normalizeCodexServiceTier } from "./config.js";
+import type { CodexManagedThreadStore } from "./managed-thread-store.js";
 import type { PluginAppPolicyContext } from "./plugin-thread-config.js";
 import type { CodexServiceTier } from "./protocol.js";
 
@@ -209,6 +210,9 @@ const threadBindingSchema = z
     connectionScope: z.literal("supervision").optional(),
     supervisionSourceThreadId: z.string().trim().min(1).optional(),
     authProfileId: optionalStringSchema,
+    // Freeze OpenClaw-carried AGENTS.md at thread creation; bootstrap refreshes
+    // must not mutate the inherited policy of a resumed native session.
+    agentWorkspaceDeveloperInstructions: optionalNonBlankStringSchema,
     model: optionalStringSchema,
     // Codex App Server owns selection for supervised and adopted threads. Keep
     // this marker across resumes so OpenClaw never substitutes a default or fallback.
@@ -559,6 +563,8 @@ function bindingLeaseLostError(key: string, cause?: unknown): Error {
 }
 
 export type CodexAppServerBindingStore = {
+  /** Durable ownership rows kept separate from replaceable session bindings. */
+  managedThreads?: CodexManagedThreadStore;
   read(identity: CodexAppServerBindingIdentity): Promise<CodexAppServerThreadBinding | undefined>;
   hasOtherThreadOwner(
     threadId: string,
@@ -602,6 +608,7 @@ export function scopeCodexRunBindingStore(params: {
   const mapIdentity = (identity: CodexAppServerBindingIdentity) =>
     identity.kind === "session" ? mapSessionIdentity(identity) : identity;
   return {
+    ...params.bindingStore,
     read: (identity) => params.bindingStore.read(mapIdentity(identity)),
     hasOtherThreadOwner: (threadId, identity) =>
       params.bindingStore.hasOtherThreadOwner(

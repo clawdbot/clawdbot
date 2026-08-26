@@ -57,7 +57,6 @@ export async function resetReplyRunSession(params: {
   activeSessionEntry?: SessionEntry;
   activeSessionStore?: Record<string, SessionEntry>;
   storePath?: string;
-  messageThreadId?: string;
   followupRun: FollowupRun;
   onActiveSessionEntry: (entry: SessionEntry) => void;
   onNewSession: (newSessionId: string, nextSessionFile: string) => void;
@@ -85,6 +84,7 @@ export async function resetReplyRunSession(params: {
     systemSent: false,
     abortedLastRun: false,
     lifecycleRunId: undefined,
+    lastRunId: undefined,
     modelProvider: undefined,
     model: undefined,
     inputTokens: undefined,
@@ -96,6 +96,7 @@ export async function resetReplyRunSession(params: {
     cacheRead: undefined,
     cacheWrite: undefined,
     contextTokens: undefined,
+    contextTokensSource: undefined,
     contextBudgetStatus: undefined,
     systemPromptReport: undefined,
     fallbackNotice: undefined,

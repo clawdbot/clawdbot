@@ -372,38 +372,53 @@ describe("runDoctorConfigPreflight", () => {
       );
 
       expect(failure).toBeInstanceOf(Error);
-      expect((failure as Error).message).toContain("Config could not be parsed or recovered");
+      expect((failure as Error).message).toContain("cannot be repaired automatically");
       await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(brokenRaw);
     });
   });
 
-  it("preserves and rejects unparseable config without last-known-good during repair preflight", async () => {
+  it("leaves unparseable config untouched and provides recovery steps", async () => {
     await withTempHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
       const brokenRaw = '{ "gateway": { "mode": "local" }, "models": {';
       await fs.mkdir(path.dirname(configPath), { recursive: true });
       await fs.writeFile(configPath, brokenRaw, "utf-8");
 
-      const failure = await runDoctorConfigPreflight({
-        migrateState: false,
-        migrateLegacyConfig: false,
-        repairPrefixedConfig: true,
-        invalidConfigNote: false,
-      }).then(
-        () => null,
-        (error: unknown) => error,
-      );
+      await withEnvOverride({ OPENCLAW_CONTAINER_HINT: "repair-test" }, async () => {
+        const failures: unknown[] = [];
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          failures.push(
+            await runDoctorConfigPreflight({
+              migrateState: false,
+              migrateLegacyConfig: false,
+              repairPrefixedConfig: true,
+              invalidConfigNote: false,
+            }).then(
+              () => null,
+              (error: unknown) => error,
+            ),
+          );
+        }
 
-      expect(failure).toBeInstanceOf(Error);
-      expect((failure as Error).message).toContain("Config could not be parsed or recovered.");
+        for (const failure of failures) {
+          expect(failure).toBeInstanceOf(Error);
+          expect((failure as Error).message).toContain(configPath);
+          expect((failure as Error).message).toContain(
+            "is not parseable and cannot be repaired automatically",
+          );
+          expect((failure as Error).message).toContain(
+            "openclaw --container repair-test config validate",
+          );
+          expect((failure as Error).message).toContain("hand-edit the file");
+          expect((failure as Error).message).toContain("move it aside");
+          expect((failure as Error).message).toContain("openclaw --container repair-test onboard");
+        }
+      });
 
       await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(brokenRaw);
       const entries = await fs.readdir(path.dirname(configPath));
       const clobbered = entries.filter((entry) => entry.startsWith("openclaw.json.clobbered."));
-      expect(clobbered).toHaveLength(1);
-      const clobberedPath = path.join(path.dirname(configPath), clobbered[0] ?? "missing");
-      expect((failure as Error).message).toContain(`Original preserved at ${clobberedPath}.`);
-      await expect(fs.readFile(clobberedPath, "utf-8")).resolves.toBe(brokenRaw);
+      expect(clobbered).toHaveLength(0);
     });
   });
 

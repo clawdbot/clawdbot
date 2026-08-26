@@ -33,6 +33,15 @@ const ROOT_SRC = "src/index.ts";
 const ROOT_TSCONFIG = "tsconfig.json";
 const ROOT_PACKAGE = "package.json";
 const ROOT_TSDOWN = "tsdown.config.ts";
+const RUNTIME_POSTBUILD_IMPLEMENTATION_PATHS = [
+  "scripts/check-built-plugin-control-plane-modules.mts",
+  "scripts/copy-bundled-plugin-metadata.mts",
+  "scripts/copy-hook-metadata.ts",
+  "scripts/runtime-postbuild.mts",
+  "scripts/stage-bundled-plugin-runtime.mts",
+  "scripts/write-official-channel-catalog.mts",
+] as const;
+const DEPLOYMENT_MANIFEST = "deployment.json";
 const GENERATED_PLUGIN_ASSET_BUNDLE = "extensions/demo/src/host/assets/view.bundle.js";
 const GENERATED_PLUGIN_ASSET_BUNDLE_HASH = "extensions/demo/src/host/assets/.bundle.hash";
 const DIST_ENTRY = "dist/entry.js";
@@ -73,6 +82,8 @@ const DIFFS_PACKAGE = "extensions/diffs/package.json";
 const DIFFS_VIEWER_RUNTIME_SOURCE = "extensions/diffs/assets/viewer-runtime.js";
 const DIST_DIFFS_VIEWER_RUNTIME = "dist/extensions/diffs/assets/viewer-runtime.js";
 const DIST_RUNTIME_DIFFS_VIEWER_RUNTIME = "dist-runtime/extensions/diffs/assets/viewer-runtime.js";
+const BUNDLED_HOOK_METADATA = "src/hooks/bundled/demo/HOOK.md";
+const DIST_BUNDLED_HOOK_METADATA = "dist/bundled/demo/HOOK.md";
 const DIST_EXTENSION_MANIFEST = bundledDistPluginFile("demo", "openclaw.plugin.json");
 const DIST_EXTENSION_PACKAGE = bundledDistPluginFile("demo", "package.json");
 
@@ -191,6 +202,18 @@ function statusCommandSpawn() {
   return [process.execPath, "openclaw.mjs", "status"];
 }
 
+function gatewayStatusCommandSpawn() {
+  return [
+    process.execPath,
+    "openclaw.mjs",
+    "gateway",
+    "status",
+    "--deep",
+    "--require-rpc",
+    "--json",
+  ];
+}
+
 function resolvePath(tmp: string, relativePath: string) {
   return path.join(tmp, relativePath);
 }
@@ -276,6 +299,12 @@ async function setupStampedProject(
   });
 }
 
+async function writeImmutableDeploymentManifest(tmp: string): Promise<void> {
+  await writeProjectFiles(tmp, {
+    [DEPLOYMENT_MANIFEST]: `${JSON.stringify({ kind: "git", sourceHead: "a".repeat(40) })}\n`,
+  });
+}
+
 function createSpawnRecorder(
   options: {
     gitHead?: string;
@@ -356,6 +385,7 @@ type RunCommandParams = {
   args?: string[];
   spawn: (cmd: string, args: string[]) => ReturnType<typeof createExitedProcess>;
   spawnSync?: (cmd: string, args: string[]) => { status: number; stdout: string };
+  stderr?: NodeJS.WriteStream;
   env?: Record<string, string>;
   runRuntimePostBuild?: (params?: {
     cwd?: string;
@@ -1120,6 +1150,74 @@ describe("run-node script", () => {
     expect(spawnCalls).toEqual([statusCommandSpawn()]);
     expect(runRuntimePostBuild).not.toHaveBeenCalled();
   });
+
+  it("runs current immutable deployment artifacts without refreshing them", async ({ tmp }) => {
+    await setupStampedProject(tmp, {
+      files: { [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n' },
+      oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
+    });
+    await writeImmutableDeploymentManifest(tmp);
+
+    const runRuntimePostBuild = vi.fn();
+    const { spawnCalls, spawn, spawnSync } = createCurrentGitSpawnRecorder();
+    const exitCode = await runStatusCommand({
+      tmp,
+      args: ["gateway", "status", "--deep", "--require-rpc", "--json"],
+      spawn,
+      spawnSync,
+      runRuntimePostBuild,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(spawnCalls).toEqual([gatewayStatusCommandSpawn()]);
+    expect(runRuntimePostBuild).not.toHaveBeenCalled();
+  });
+
+  for (const { label, missingPath, expectedReason } of [
+    {
+      label: "build output",
+      missingPath: BUILD_STAMP,
+      expectedReason: "build stamp missing",
+    },
+    {
+      label: "runtime postbuild output",
+      missingPath: DIST_OPENCLAW_ALIAS_PACKAGE,
+      expectedReason: "required runtime postbuild output missing",
+    },
+  ]) {
+    it(`refuses to regenerate missing ${label} in an immutable deployment`, async ({ tmp }) => {
+      await setupStampedProject(tmp, {
+        files: { [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n' },
+        oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
+      });
+      await writeImmutableDeploymentManifest(tmp);
+      await fs.rm(resolvePath(tmp, missingPath));
+
+      const stderrChunks: string[] = [];
+      const stderr = {
+        write: (chunk: string | Buffer) => {
+          stderrChunks.push(String(chunk));
+          return true;
+        },
+      } as unknown as NodeJS.WriteStream;
+      const runRuntimePostBuild = vi.fn();
+      const { spawnCalls, spawn, spawnSync } = createCurrentGitSpawnRecorder();
+      const exitCode = await runStatusCommand({
+        tmp,
+        args: ["gateway", "status", "--deep", "--require-rpc", "--json"],
+        spawn,
+        spawnSync,
+        stderr,
+        runRuntimePostBuild,
+      });
+
+      expect(exitCode).toBe(1);
+      expect(spawnCalls).toEqual([]);
+      expect(runRuntimePostBuild).not.toHaveBeenCalled();
+      expect(stderrChunks.join("")).toContain(expectedReason);
+      expect(stderrChunks.join("")).toContain("node openclaw.mjs");
+    });
+  }
 
   it("restages runtime artifacts when runtime metadata is dirty", async ({ tmp }) => {
     await setupStampedProject(tmp, {
@@ -1965,6 +2063,29 @@ describe("run-node script", () => {
     }
   });
 
+  it("reports missing bundled hook metadata when runtime stamps match HEAD", async ({ tmp }) => {
+    await setupStampedProject(tmp, {
+      files: {
+        [BUNDLED_HOOK_METADATA]: "# Demo hook\n",
+        [DIST_BUNDLED_HOOK_METADATA]: "# Demo hook\n",
+        [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+      },
+    });
+
+    expect(resolveRuntimePostBuildRequirement(createBuildRequirementDeps(tmp))).toEqual({
+      shouldSync: false,
+      reason: "clean",
+    });
+    await fs.rm(resolvePath(tmp, DIST_BUNDLED_HOOK_METADATA));
+
+    const requirement = resolveRuntimePostBuildRequirement(createBuildRequirementDeps(tmp));
+
+    expect(requirement).toEqual({
+      shouldSync: true,
+      reason: "missing_runtime_postbuild_output",
+    });
+  });
+
   it("does not require ambiguous stable runtime aliases that postbuild cannot create", async ({
     tmp,
   }) => {
@@ -2029,6 +2150,49 @@ describe("run-node script", () => {
     expect(resolveRuntimePostBuildRequirement(deps)).toEqual({
       shouldSync: true,
       reason: "dirty_runtime_postbuild_inputs",
+    });
+  });
+
+  it.each(RUNTIME_POSTBUILD_IMPLEMENTATION_PATHS)(
+    "reports dirty runtime postbuild implementation %s",
+    async (implementationPath) => {
+      await withTestDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+        await setupStampedProject(tmp, {
+          files: {
+            [implementationPath]: "export {};\n",
+            [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+          },
+          trackConfig: true,
+        });
+
+        const requirement = resolveRuntimePostBuildRequirement(
+          createBuildRequirementDeps(tmp, { gitStatus: ` M ${implementationPath}\n` }),
+        );
+
+        expect(requirement).toEqual({
+          shouldSync: true,
+          reason: "dirty_runtime_postbuild_inputs",
+        });
+      });
+    },
+  );
+
+  it("reports a newer hook metadata copier without git status", async ({ tmp }) => {
+    const implementationPath = "scripts/copy-hook-metadata.ts";
+    await setupStampedProject(tmp, {
+      files: {
+        [implementationPath]: "export {};\n",
+        [RUNTIME_POSTBUILD_STAMP]: "{}\n",
+      },
+      newPaths: [implementationPath],
+      trackConfig: true,
+    });
+    const deps = createBuildRequirementDeps(tmp);
+    deps.spawnSync = () => ({ status: 1, stdout: "" });
+
+    expect(resolveRuntimePostBuildRequirement(deps)).toEqual({
+      shouldSync: true,
+      reason: "runtime_postbuild_input_mtime_newer",
     });
   });
 

@@ -1,8 +1,10 @@
 // Message program helper tests cover message command helper behavior and mocks.
+import { Command } from "commander";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { registerMessageSendCommand } from "./register.send.js";
 
-const messageCommandMock = vi.fn(async () => {});
+const messageCommandMock = vi.fn(async (): Promise<unknown> => undefined);
 vi.mock("../../../commands/message.js", () => ({
   messageCommand: messageCommandMock,
 }));
@@ -52,7 +54,7 @@ vi.mock("../../../plugins/hook-runner-global.js", () => ({
   runGlobalGatewayStopSafely: runGlobalGatewayStopSafelyMock,
 }));
 
-const exitMock = vi.fn((): never => {
+const exitMock = vi.fn((_code: number): never => {
   throw new Error("exit");
 });
 const errorMock = vi.fn();
@@ -137,7 +139,7 @@ describe("runMessageAction", () => {
     hasHooksMock.mockClear().mockReturnValue(false);
     runGatewayStopMock.mockClear().mockResolvedValue(undefined);
     runGlobalGatewayStopSafelyMock.mockClear();
-    exitMock.mockClear().mockImplementation((): never => {
+    exitMock.mockClear().mockImplementation((_code: number): never => {
       throw new Error("exit");
     });
   });
@@ -149,6 +151,66 @@ describe("runMessageAction", () => {
     expect(exitMock).toHaveBeenCalledOnce();
     expect(exitMock).toHaveBeenCalledWith(0);
   });
+
+  it.each([
+    { name: "sent", status: "sent" as const, exitCode: 0 },
+    { name: "suppressed", status: "suppressed" as const, exitCode: 1 },
+    { name: "failed", status: "failed" as const, exitCode: 1 },
+    { name: "partial_failed", status: "partial_failed" as const, exitCode: 1 },
+    { name: "dry-run", status: undefined, dryRun: true, exitCode: 0 },
+  ])(
+    "propagates $name send outcomes through the real CLI parser",
+    async ({ status, dryRun, exitCode }) => {
+      const sendResult = {
+        channel: "discord",
+        to: "channel:123",
+        via: "direct" as const,
+        mediaUrl: null,
+        ...(status ? { deliveryStatus: status } : {}),
+        ...(status === "suppressed"
+          ? { suppressionReason: "cancelled_by_message_sending_hook" as const }
+          : {}),
+        ...(status === "failed" || status === "partial_failed"
+          ? { error: "provider rejected the message" }
+          : {}),
+        ...(status === "partial_failed"
+          ? { sentBeforeError: true as const, result: { channel: "discord", messageId: "part-1" } }
+          : {}),
+      };
+      messageCommandMock.mockResolvedValueOnce({
+        kind: "send",
+        channel: "discord",
+        action: "send",
+        to: "channel:123",
+        handledBy: "core",
+        payload: sendResult,
+        sendResult,
+        dryRun: Boolean(dryRun),
+      });
+      const program = new Command();
+      const message = program.command("message");
+      registerMessageSendCommand(message, createMessageCliHelpers(message, "discord"));
+
+      await expect(
+        program.parseAsync(
+          [
+            "message",
+            "send",
+            "--channel",
+            "discord",
+            "--target",
+            "channel:123",
+            "--message",
+            "hi",
+            ...(dryRun ? ["--dry-run"] : []),
+          ],
+          { from: "user" },
+        ),
+      ).rejects.toThrow("exit");
+
+      expect(exitMock).toHaveBeenCalledWith(exitCode);
+    },
+  );
 
   it("loads configured channel plugins when no target channel is known yet", async () => {
     await runSendAction({ channel: undefined });
@@ -508,6 +570,43 @@ describe("runMessageAction", () => {
 
     expect(runGatewayStopMock).toHaveBeenCalledWith({ reason: "cli message action complete" }, {});
     expect(exitMock).toHaveBeenCalledWith(1);
+  });
+
+  it("runs gateway_stop hooks before exit(1) for a failed broadcast result", async () => {
+    const order: string[] = [];
+    hasHooksMock.mockReturnValueOnce(true);
+    messageCommandMock.mockResolvedValueOnce({
+      kind: "broadcast",
+      channel: "telegram",
+      action: "broadcast",
+      handledBy: "core",
+      payload: {
+        results: [
+          { channel: "telegram", to: "123", ok: true },
+          { channel: "telegram", to: "456", ok: false, error: "delivery failed" },
+        ],
+      },
+      dryRun: false,
+    });
+    runGatewayStopMock.mockImplementationOnce(async () => {
+      order.push("stop");
+    });
+    exitMock.mockImplementationOnce((code: number): never => {
+      order.push(`exit:${code}`);
+      throw new Error("exit");
+    });
+    const runMessageAction = createRunMessageAction();
+
+    await expect(
+      runMessageAction("broadcast", {
+        channel: "telegram",
+        targets: ["123", "456"],
+        message: "hi",
+      }),
+    ).rejects.toThrow("exit");
+
+    expect(order).toEqual(["stop", "exit:1"]);
+    expect(exitMock).not.toHaveBeenCalledWith(0);
   });
 
   it("logs gateway_stop failure and still exits with success code", async () => {

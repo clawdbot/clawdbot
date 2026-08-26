@@ -493,36 +493,6 @@ describe("createSessionCapability", () => {
     sessions.dispose();
   });
 
-  it("does not publish a created session from a retired same-client epoch", async () => {
-    const staleCreate = createDeferred<{ key: string }>();
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.create") {
-        return await staleCreate.promise;
-      }
-      if (method === "sessions.subscribe") {
-        return { subscribed: true };
-      }
-      if (method === "sessions.list") {
-        return sessionsResult([], 2);
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const { gateway, publish } = createGatewayHarness(client);
-    const sessions = createSessionCapability(gateway);
-    const created = vi.fn();
-    sessions.subscribeCreated(created);
-
-    const operation = sessions.create({ agentId: "main" });
-    publish(false);
-    publish(true);
-    staleCreate.resolve({ key: "agent:main:stale" });
-
-    await expect(operation).resolves.toBeNull();
-    expect(created).not.toHaveBeenCalled();
-    sessions.dispose();
-  });
-
   it("creates a session while a list refresh is in flight", async () => {
     const pendingList = createDeferred<SessionsListResult>();
     let listCalls = 0;

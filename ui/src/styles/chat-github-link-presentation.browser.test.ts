@@ -22,20 +22,20 @@ function readChatCss(): string {
 }
 
 // The three shapes the parser can produce, all carrying the same mark:
-// a bare item URL whose label it rewrites to owner/repo#number, a bare URL to
+// a bare item URL whose label it rewrites to #number, a compact fallback for
 // any other GitHub path, and an authored label. Only the first two carry
 // markdown-bare-url, so the sweep covers both wrap regimes.
 const LINK_FORMS = [
   {
     className: "markdown-bare-url markdown-github-link",
     id: "human-ref",
-    label: "openclaw/openclaw#123309",
+    label: "#123309",
     lead: "then follow-up tracked in ",
   },
   {
     className: "markdown-bare-url markdown-github-link",
     id: "bare-url",
-    label: "https://github.com/openclaw/openclaw/blob/main/ui/src/styles/chat/text.css#L254",
+    label: "text.css",
     lead: "then the owning rule lives at ",
   },
   {

@@ -16,6 +16,7 @@ import {
   registerPreparedModelRuntimePublicationListener,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
+import { getPreparedPluginRuntimeLoadContext } from "./prepared-model-runtime.plugin-context.js";
 
 const mocks = getPreparedModelRuntimeMocks();
 
@@ -48,6 +49,7 @@ describe("prepared reply dispatch runtime", () => {
       gatewayLifecycle: true,
       catalogMode: "static",
       allowGatewaySubagentBinding: true,
+      pluginMetadataSnapshot: mocks.pluginMetadataSnapshot as never,
     });
     const input = {
       agentId: "default",
@@ -59,7 +61,7 @@ describe("prepared reply dispatch runtime", () => {
     };
     const firstSnapshot = getPreparedModelRuntimeSnapshot(input);
     const firstRuntime = await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" });
-    expect(firstRuntime).toEqual({
+    expect(firstRuntime).toMatchObject({
       agentId: "default",
       agentDir: "/tmp/unused-agent",
       workspaceDir: "/tmp/unused-workspace",
@@ -67,6 +69,10 @@ describe("prepared reply dispatch runtime", () => {
       modelCatalog: firstSnapshot?.modelCatalog,
       inboundPluginRegistry: firstRegistry,
     });
+    expect(firstRuntime?.pluginGeneration?.pluginMetadataSnapshot).toBe(
+      mocks.pluginMetadataSnapshot,
+    );
+    expect(firstSnapshot?.metadataSnapshot).toBe(mocks.pluginMetadataSnapshot);
     expect(Object.isFrozen(firstRuntime)).toBe(true);
 
     const replacementCatalog = createDeferred<{ entries: [] }>();
@@ -74,6 +80,7 @@ describe("prepared reply dispatch runtime", () => {
     const refresh = refreshPreparedModelRuntimeSnapshots(replacementConfig, {
       catalogMode: "static",
       allowGatewaySubagentBinding: true,
+      pluginMetadataSnapshot: mocks.pluginMetadataSnapshot as never,
     });
     await vi.waitFor(() =>
       expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(4),
@@ -138,28 +145,6 @@ describe("prepared reply dispatch runtime", () => {
     expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(publicationLoadCount);
   });
 
-  it("projects shared plugin metadata into each configured runtime workspace", async () => {
-    mocks.configuredAgentIds = ["default"];
-    const workspaceDir = "/tmp/configured-metadata-workspace";
-    const config = retainLegacyDefaultAgentId({ agents: { entries: { default: {} } } }, "default");
-    await refreshPreparedModelRuntimeSnapshots(config, {
-      gatewayLifecycle: true,
-      catalogMode: "static",
-      defaultWorkspaceDir: workspaceDir,
-    });
-
-    const snapshot = getPreparedModelRuntimeSnapshot({
-      agentId: "default",
-      agentDir: "/tmp/unused-agent",
-      inheritedAuthDir: "/tmp/unused-agent",
-      config,
-      workspaceDir,
-    });
-
-    expect(snapshot?.metadataSnapshot.workspaceDir).toBe(workspaceDir);
-    expect(snapshot?.metadataSnapshot.index.workspaceDir).toBe(workspaceDir);
-  });
-
   it("reuses configured and retained dynamic plugin generations during auth refresh", async () => {
     mocks.configuredAgentIds = ["default"];
     const workspaceDir = "/tmp/dynamic-auth-workspace";
@@ -188,6 +173,9 @@ describe("prepared reply dispatch runtime", () => {
     const configuredRuntimeBefore = await loadPublishedGatewayReplyDispatchRuntime({
       agentId: "default",
     });
+    if (!configuredRuntimeBefore) {
+      throw new Error("expected configured reply runtime");
+    }
     const configuredInput = {
       agentId: "default",
       agentDir: "/tmp/unused-agent",
@@ -204,8 +192,13 @@ describe("prepared reply dispatch runtime", () => {
         { provider: "openai", modelId: "gpt-5.5", runtime: "codex" as const },
       ],
     };
-    const dynamicLease = await acquireAgentRunPreparedModelRuntime(dynamicInput);
+    const dynamicLease = await acquireAgentRunPreparedModelRuntime(dynamicInput, {
+      pluginGeneration: configuredRuntimeBefore.pluginGeneration,
+    });
     const dynamicSelectedBefore = dynamicLease.snapshot.pluginRegistry;
+    expect(getPreparedPluginRuntimeLoadContext(dynamicSelectedBefore)).toMatchObject({
+      preferBuiltPluginArtifacts: true,
+    });
     dynamicLease.release();
     expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(2);
     expect(dynamicPreparationRegistries.every(Boolean)).toBe(true);

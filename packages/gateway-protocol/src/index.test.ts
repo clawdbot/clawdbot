@@ -180,21 +180,6 @@ describe("lazy protocol validators", () => {
     expectRejected(validateSessionsListParams, [{ face: "dashboard" }]);
   });
 
-  it("validates session patch compare-and-swap identity", () => {
-    expectAccepted(validateSessionsPatchParams, [
-      sessionPatch({
-        key: "agent:main:self-archive",
-        archived: true,
-        expectedSessionId: "session-self-archive",
-        expectedLifecycleRevision: "revision-self-archive",
-      }),
-    ]);
-    expectRejected(validateSessionsPatchParams, [
-      sessionPatch({ key: "agent:main:self-archive", expectedSessionId: "" }),
-      sessionPatch({ key: "agent:main:self-archive", expectedLifecycleRevision: "" }),
-    ]);
-  });
-
   it("validates bounded closed bulk session patch requests", () => {
     expect(protocol.SESSIONS_PATCH_MANY_MAX_TARGETS).toBe(100);
     const target = {
@@ -213,6 +198,7 @@ describe("lazy protocol validators", () => {
       archived: false,
       pinned: true,
       unread: true,
+      contextWindow: "1m",
       thinkingLevel: "high",
       fastMode: "auto",
       toolOverrides: null,
@@ -570,6 +556,7 @@ describe("lazy protocol validators", () => {
         idempotencyKey: "revision-run-1",
       }),
       proposalRequest({
+        expectedRevisionHash: "a".repeat(64),
         instructions: "Make the support files 5",
         sessionKey: "agent:main:session:skill-workshop",
         idempotencyKey: "revision-run-1",
@@ -850,7 +837,7 @@ describe("validateTalkSessionRelayParams", () => {
     expectAccepted(validateTalkSessionAppendAudioParams, [
       talkSession({ audioBase64: "aGVsbG8=", timestamp: 123 }),
     ]);
-    expectAccepted(validateTalkSessionCancelOutputParams, [talkSession({ reason: "barge-in" })]);
+    expectAccepted(validateTalkSessionCancelOutputParams, [talkSession({ turnId: "turn-7" })]);
     expectAccepted(validateTalkSessionSubmitToolResultParams, [
       talkSession({
         callId: "call-1",

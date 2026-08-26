@@ -55,6 +55,8 @@ export function createReplyMediaPathNormalizer(params: {
   requesterSenderName?: string;
   requesterSenderUsername?: string;
   requesterSenderE164?: string;
+  sandboxRoot?: string;
+  sandboxContainerWorkdir?: string;
 }): (payload: ReplyPayload) => Promise<ReplyPayload> {
   // Prefer an explicit agentId so callers without a resolved sessionKey (e.g.
   // `openclaw agent --deliver` with `--reply-channel/--reply-to`) still get
@@ -69,18 +71,30 @@ export function createReplyMediaPathNormalizer(params: {
     channel: params.messageProvider,
     accountId: params.accountId,
   });
-  let sandboxRootPromise: Promise<string | undefined> | undefined;
+  const explicitSandboxRoot = params.sandboxRoot?.trim();
+  let sandboxWorkspacePromise:
+    | Promise<{ root: string; containerWorkdir?: string } | undefined>
+    | undefined = explicitSandboxRoot
+    ? Promise.resolve({
+        root: explicitSandboxRoot,
+        containerWorkdir: params.sandboxContainerWorkdir,
+      })
+    : undefined;
   const persistedMediaBySource = new Map<string, Promise<string>>();
 
-  const resolveSandboxRoot = async (): Promise<string | undefined> => {
-    if (!sandboxRootPromise) {
-      sandboxRootPromise = ensureSandboxWorkspaceForSession({
+  const resolveSandboxWorkspace = async () => {
+    if (!sandboxWorkspacePromise) {
+      sandboxWorkspacePromise = ensureSandboxWorkspaceForSession({
         config: params.cfg,
         sessionKey: params.sessionKey,
         workspaceDir: params.workspaceDir,
-      }).then((sandbox) => sandbox?.workspaceDir);
+      }).then((sandbox) =>
+        sandbox
+          ? { root: sandbox.workspaceDir, containerWorkdir: sandbox.containerWorkdir }
+          : undefined,
+      );
     }
-    return await sandboxRootPromise;
+    return await sandboxWorkspacePromise;
   };
 
   const resolveMediaAccessForSource = (media: string) =>
@@ -162,13 +176,14 @@ export function createReplyMediaPathNormalizer(params: {
       !media.startsWith("~") &&
       !path.isAbsolute(media) &&
       !WINDOWS_DRIVE_RE.test(media);
-    const sandboxRoot = await resolveSandboxRoot();
-    if (sandboxRoot) {
+    const sandboxWorkspace = await resolveSandboxWorkspace();
+    if (sandboxWorkspace) {
       let sandboxResolvedMedia: string;
       try {
         sandboxResolvedMedia = await resolveSandboxedMediaSource({
           media,
-          sandboxRoot,
+          sandboxRoot: sandboxWorkspace.root,
+          containerWorkdir: sandboxWorkspace.containerWorkdir,
         });
       } catch (err) {
         if (FILE_URL_RE.test(media)) {

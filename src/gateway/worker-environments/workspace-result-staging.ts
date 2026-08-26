@@ -2,8 +2,11 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { runBestEffortCleanup } from "../../infra/non-fatal-cleanup.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runCommandBuffered, runCommandWithTimeout } from "../../process/exec.js";
 import type { WorkerWorkspaceReconcileRequest } from "./tunnel-contract.js";
+import { boundedWorkerError } from "./worker-error.js";
 import {
   activeWorkspaceHashContext,
   withWorkspaceHashContext,
@@ -36,6 +39,7 @@ const WORKER_RESULT_CLEANUP_REF_PREFIX = "refs/openclaw/worker-result-cleanup";
 const WORKER_RESULT_CLAIM_ID_PATTERN = /^[A-Za-z0-9-]+$/u;
 const STAGED_RESULT_MESSAGE = "OpenClaw worker workspace result";
 const STAGED_RESULT_METADATA_LIMIT = 128 * 1024 * 1024 + 4_096;
+const workspaceLog = createSubsystemLogger("gateway/worker-workspace");
 // Git documents the platform null device as the per-command way to disable
 // hooks. An unowned path under a shared temp dir could be populated by another user.
 const DISABLED_GIT_HOOKS_PATH = os.devNull;
@@ -529,7 +533,11 @@ async function applyStagedWorkerWorkspaceResultWithMemo(
     });
     return { ...applied, changed: staged.changed };
   } finally {
-    await fs.rm(stagingRoot, { recursive: true, force: true });
+    await runBestEffortCleanup({
+      cleanup: () => fs.rm(stagingRoot, { recursive: true, force: true }),
+      onError: (error) =>
+        workspaceLog.warn(`worker workspace staging cleanup failed: ${boundedWorkerError(error)}`),
+    });
   }
 }
 

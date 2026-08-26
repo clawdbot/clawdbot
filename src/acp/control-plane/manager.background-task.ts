@@ -1,5 +1,7 @@
 /** Mirrors child ACP turns into detached-task status for requester-facing progress. */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { AdmittedRunContext } from "../../agents/admitted-run-context.js";
+import { isRetainedExecutionOwnerBinding } from "../../audit/execution-owner-binding.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import {
@@ -8,7 +10,10 @@ import {
   failTaskRunByRunId,
   startTaskRunByRunId,
 } from "../../tasks/detached-task-runtime.js";
+import { createNextAcpTaskBackingDetail } from "../../tasks/task-backing-authority.js";
 import { resolveRequiredCompletionTerminalResult } from "../../tasks/task-completion-contract.js";
+import { bindTaskFlowExecution } from "../../tasks/task-flow-registry.store.sqlite.js";
+import { bindTaskRunExecution } from "../../tasks/task-registry.store.sqlite.js";
 import {
   deliveryContextFromSession,
   type DeliveryContext,
@@ -29,6 +34,11 @@ type BackgroundTaskContext = {
   runId: string;
   label?: string;
   task: string;
+};
+
+type BackgroundTaskRecord = {
+  taskId: string;
+  parentFlowId?: string;
 };
 
 /** Produces the bounded task label shown for a child ACP background run. */
@@ -133,7 +143,8 @@ export function resolveBackgroundTaskContext(params: {
 export function createBackgroundTaskRecord(
   context: BackgroundTaskContext,
   startedAt: number,
-): void {
+  instanceId: string,
+): BackgroundTaskRecord | undefined {
   try {
     const task = createRunningTaskRun({
       runtime: "acp",
@@ -146,16 +157,46 @@ export function createBackgroundTaskRecord(
       label: context.label,
       task: context.task,
       startedAt,
+      detail: createNextAcpTaskBackingDetail({
+        childSessionKey: context.childSessionKey,
+        instanceId,
+      }),
     });
     if (!task) {
       logVerbose(
         `acp-manager: failed creating background task for ${context.runId}: persist_failed`,
       );
+      return undefined;
     }
+    return {
+      taskId: task.taskId,
+      ...(task.parentFlowId ? { parentFlowId: task.parentFlowId } : {}),
+    };
   } catch (error) {
     logVerbose(
       `acp-manager: failed creating background task for ${context.runId}: ${String(error)}`,
     );
+    return undefined;
+  }
+}
+
+/** Links ACP owner rows only when the runtime reaches its prompt-submitted boundary. */
+export function bindBackgroundTaskExecution(
+  record: BackgroundTaskRecord,
+  admitted: AdmittedRunContext,
+): void {
+  try {
+    const taskResult = bindTaskRunExecution({ admitted, taskId: record.taskId });
+    const flowResult = record.parentFlowId
+      ? isRetainedExecutionOwnerBinding(taskResult)
+        ? bindTaskFlowExecution({ admitted, flowId: record.parentFlowId })
+        : taskResult
+      : undefined;
+    if ([taskResult, flowResult].some((result) => result === "mismatch" || result === "missing")) {
+      logVerbose("acp-manager: exact task execution binding was not retained");
+    }
+  } catch (error) {
+    logVerbose(`acp-manager: failed binding background task execution: ${String(error)}`);
   }
 }
 

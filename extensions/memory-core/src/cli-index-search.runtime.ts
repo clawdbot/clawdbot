@@ -58,6 +58,7 @@ export async function runMemoryIndex(
     agent: opts.agent,
     allAgents: true,
     purpose: "cli",
+    inspectSources: true,
     ...hostOptions,
     run: async ({ manager, agentId }) => {
       try {
@@ -146,7 +147,7 @@ export async function runMemoryIndex(
           },
         );
         let postIndexStatus = manager.status();
-        const scan = await scanMemoryManagerSources(postIndexStatus, agentId);
+        const scan = await scanMemoryManagerSources(postIndexStatus);
         const outcome = formatMemoryIndexOutcome(postIndexStatus, scan, agentId);
         let semanticVectorAvailable = postIndexStatus.vector?.semanticAvailable;
         const vectorStoreAvailable =

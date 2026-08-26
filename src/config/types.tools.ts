@@ -202,9 +202,9 @@ export type CodeModeConfig =
       maxPendingToolCalls?: number;
       /** Retention for suspended snapshots. */
       snapshotTtlSeconds?: number;
-      /** Default search result count for tools.search. */
+      /** Default search result count for catalog.search. */
       searchDefaultLimit?: number;
-      /** Maximum search result count for tools.search. */
+      /** Maximum search result count for catalog.search. */
       maxSearchLimit?: number;
     };
 
@@ -371,6 +371,8 @@ export type SessionsSpawnToolsConfig = {
 export type GitHubToolIdentityConfig = {
   /** Opaque generated directory version for atomic credential rotation. */
   profileId: string;
+  /** OAuth generations retain a separate rotating refresh credential. */
+  kind?: "oauth";
   /** Optional process-local author identity for commits made by local tools. */
   gitAuthor?: {
     name?: string;
@@ -446,7 +448,7 @@ export type ToolsConfig = {
         enabled?: boolean;
         /** Prefer cached or explicitly request live access. Unrestricted Codex turns resolve cached to live. */
         mode?: "cached" | "live";
-        /** Optional allowlist of domains passed to the native Codex tool. */
+        /** Native Codex search allowlist; also gates web_fetch on native-hosted-search turns. */
         allowedDomains?: string[];
         /** Optional Codex native search context size hint. */
         contextSize?: "low" | "medium" | "high";

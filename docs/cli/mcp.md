@@ -78,6 +78,8 @@ Use [`openclaw acp`](/cli/acp) instead when OpenClaw should host the coding runt
     - older transcript history is read with `messages_read`
     - Claude push notifications only exist while the MCP session is alive
     - when the client disconnects, the bridge exits and the live queue is gone
+    - cancelling an `events_wait` request immediately releases its server-side wait and timeout
+    - bridge or MCP transport close failures make `openclaw mcp serve` fail instead of reporting a clean shutdown
     - one-shot agent entry points such as `openclaw agent` and `openclaw infer model run` retire any bundled MCP runtimes they open when the reply completes, so repeated scripted runs do not accumulate stdio MCP child processes
     - stdio MCP servers launched by OpenClaw (bundled or user-configured) are torn down as a process tree on shutdown, so child subprocesses started by the server do not survive after the parent stdio client exits
     - deleting or resetting a session disposes that session's MCP clients through the shared runtime cleanup path, so there are no lingering stdio connections tied to a removed session
@@ -159,15 +161,16 @@ This gives MCP clients one place to:
     Reads recent transcript messages for one session-backed conversation. `limit` defaults to 20, max 200.
   </Accordion>
   <Accordion title="attachments_fetch">
-    Extracts non-text message content blocks from one transcript message. This is a metadata view over transcript content, not a standalone durable attachment blob store.
+    Extracts non-text message content blocks and canonical persisted media metadata from one transcript message. Persisted entries use `{ "type": "openclaw_media", "media": { ... } }`, where `media` can include `url`, `contentType`, `kind`, `fileName`, dimensions, duration, or size. This is a metadata view, not a standalone durable attachment blob store.
   </Accordion>
   <Accordion title="events_poll">
-    Reads queued live events since a numeric cursor. `limit` max 200.
+    Reads queued live events since a numeric cursor. `limit` max 200. If the requested cursor predates retained queue history, the result also includes `gap.requested_after_cursor` and `gap.oldest_available_cursor`.
   </Accordion>
   <Accordion title="events_wait">
     Long-polls until the next matching queued event arrives or a timeout expires (default 30s, max 300s).
 
     Use this when a generic MCP client needs near-real-time delivery without a Claude-specific push protocol.
+    A known cursor gap returns immediately with the same additive `gap` metadata, even when no matching event is currently retained.
 
   </Accordion>
   <Accordion title="messages_send">
@@ -209,6 +212,7 @@ Current event types:
 <Warning>
 - the queue is live-only; it starts when the MCP bridge starts
 - `events_poll` and `events_wait` do not replay older Gateway history by themselves
+- the queue is bounded; when `gap` is present, read durable history with `messages_read`, then resume with `after_cursor` set to one less than `gap.oldest_available_cursor`
 - durable backlog should be read with `messages_read`
 
 </Warning>
@@ -331,7 +335,7 @@ For broader testing context, see [Testing](/help/testing).
     Usually means the Gateway session is not already routable. Confirm that the underlying session has stored channel/provider, recipient, and optional account/thread route metadata.
   </Accordion>
   <Accordion title="events_poll or events_wait misses older messages">
-    Expected. The live queue starts when the bridge connects. Read older transcript history with `messages_read`.
+    The live queue starts when the bridge connects and retains a bounded window. If a result includes `gap`, read durable transcript history with `messages_read`, then resume with `after_cursor` set to one less than `gap.oldest_available_cursor`.
   </Accordion>
   <Accordion title="Claude notifications do not show up">
     Check all of these:
@@ -896,7 +900,7 @@ Notes:
 
 ## MCP Apps
 
-OpenClaw can render tools that implement the stable [MCP Apps extension](https://modelcontextprotocol.io/extensions/apps). Apps are opt-in because their HTML comes from the configured MCP server and can request app-visible tools or resources from that same server.
+OpenClaw can render tools that implement the stable [MCP Apps extension](https://modelcontextprotocol.io/extensions/apps). Apps are opt-in because their HTML comes from the configured MCP server. A view with current App-interaction authority can request app-visible tools and resources from that same server.
 
 Enable the host bridge:
 
@@ -944,8 +948,9 @@ Behavior and security boundaries:
 - Only `ui://` resources with the exact `text/html;profile=mcp-app` MIME type render.
 - UI resources are capped at 2 MiB, placed behind a double-iframe proxy on a dedicated outer origin, loaded into an opaque inner App origin, and constrained by CSP derived from the resource metadata.
 - App-only tools (`_meta.ui.visibility: ["app"]`) stay out of model tool lists. Apps can call only app-visible tools on their owning server that also pass the effective OpenClaw tool policy for the run that created the view.
+- Same-server resource listing and reads require that same current App-interaction authority. OpenClaw rechecks after upstream resource work, so a grant revoked in flight cannot return resource data to the App.
 - Origin-bound App permissions such as camera, microphone, and geolocation are not granted while inner App documents use opaque origins for cross-App isolation.
-- App HTML, complete tool arguments, and raw results live in a bounded ten-minute in-memory view lease and are not written to disk or copied into transcript preview metadata. The transcript stores only a bounded server/tool/resource descriptor tied to the original tool-call ID. After a Gateway restart, the Control UI can verify that descriptor against the authenticated session transcript and refetch the `ui://` resource; reconstructed views are read-only until a fresh run establishes current tool permissions.
+- App HTML, complete tool arguments, and raw results live in a bounded ten-minute in-memory view lease and are not written to disk or copied into transcript preview metadata. The transcript stores only a bounded server/tool/resource descriptor tied to the original tool-call ID. After a Gateway restart, the Control UI can verify that descriptor against the authenticated session transcript and refetch the `ui://` document for display; reconstructed views cannot call tools or use the resource bridge until a fresh run establishes current App-interaction authority.
 - In channel conversations, the latest successful App view in a turn adds one **Open App**-style action to the final assistant reply. Telegram DMs use a native Mini App button; Slack and Discord render the same portable action as a link. Other channels keep the original reply text and append an understandable HTTPS link.
 - Channel launch links are available only when Gateway Tailscale exposure has prepared a published HTTPS origin. `gateway.tailscale.mode: "serve"` is reachable only from the tailnet; password-authenticated `"funnel"` is reachable from the public internet. Externally managed Funnel routes targeting the ordinary Gateway listener must migrate to managed `"funnel"` mode before OpenClaw can publish an internet-reachable origin. See [Tailscale](/gateway/tailscale).
 - Launch tickets are opaque, minted only while materializing the final channel reply, and expire after at most two minutes or when the underlying view lease expires, whichever comes first. The URL does not contain Gateway bearer credentials, session keys, view metadata, App HTML, tool input, or tool results.

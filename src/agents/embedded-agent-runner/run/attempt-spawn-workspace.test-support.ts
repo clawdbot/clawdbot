@@ -132,12 +132,14 @@ function createSubscriptionMock(): SubscriptionMock {
     getLatestMcpAppChannelView: () => undefined,
     getLatestMcpConnectAction: () => undefined,
     toolMetas: [] as Array<{ toolName: string; meta?: string; asyncStarted?: boolean }>,
-    runToolLifecycle: async <T>(toolParams: { execute: () => Promise<T> }) =>
-      await toolParams.execute(),
+    runToolLifecycle: async <T>(toolParams: {
+      execute: (onImplementationStart: () => void) => Promise<T>;
+    }) => await toolParams.execute(() => undefined),
     unsubscribe: () => {},
     setTerminalLifecycleMeta: () => {},
     waitForCompactionRetry: async () => {},
     waitForPendingEvents: async () => {},
+    flushPartialAssistantText: () => {},
     getAcceptedSessionSpawns: () => [],
     getMessagingToolSentTexts: () => [] as string[],
     getMessagingToolSentMediaUrls: () => [] as string[],
@@ -155,7 +157,6 @@ function createSubscriptionMock(): SubscriptionMock {
     didSendViaMessagingTool: () => false,
     didSendDeterministicApprovalPrompt: () => false,
     getLastToolError: () => undefined,
-    getLastToolRecovery: () => undefined,
     getUsageTotals: () => undefined,
     getLastAssistantUsage: () => undefined,
     getAssistantTurnCount: () => 0,

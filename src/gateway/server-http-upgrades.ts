@@ -117,14 +117,22 @@ function handleBudgetedGatewayWebSocketUpgrade(params: {
   preauthConnectionBudget: PreauthConnectionBudget;
   preauthBudgetKey: string | undefined;
   ingressName: "Gateway" | "Worker";
+  isStartupPending?: () => boolean;
   prepareSocket?: (socket: GatewayIngressWebSocket) => void;
 }): void {
   const { req, socket, head, wss, preauthConnectionBudget, preauthBudgetKey, ingressName } = params;
+  const allowsRestartStartupPreauth =
+    ingressName === "Gateway" &&
+    isGatewayRestartDraining() &&
+    getGatewaySuspendAdmissionPhase() === "accepting" &&
+    params.isStartupPending?.() === true;
   if (
     isGatewayWorkAdmissionClosed() &&
+    !allowsRestartStartupPreauth &&
     (ingressName === "Worker" ||
       isGatewayRestartDraining() ||
-      getGatewaySuspendAdmissionPhase() !== "prepared")
+      (getGatewaySuspendAdmissionPhase() !== "draining" &&
+        getGatewaySuspendAdmissionPhase() !== "prepared"))
   ) {
     writeGatewayUpgradeServiceUnavailable(socket, `${ingressName} websocket admission closed`);
     socket.destroy();
@@ -190,6 +198,7 @@ export function attachGatewayUpgradeHandler(opts: {
   desktopSessionRegistry?: DesktopSessionRegistry;
   nodeDesktopStreamBroker?: NodeDesktopStreamBroker;
   getGatewayRequestContext?: () => GatewayRequestContext | undefined;
+  isStartupPending?: () => boolean;
   ingressTransport?: GatewayIngressTransport;
   reportUnattributableProxy?: GatewayUnattributableProxyReporter;
 }) {
@@ -417,7 +426,7 @@ export function attachGatewayUpgradeHandler(opts: {
         return;
       }
       // Plugin-owned upgrade routes have already had the opportunity to claim the socket.
-      // Core Gateway control connections remain reachable while suspension is prepared.
+      // Core Gateway control connections remain reachable throughout a held suspension.
       try {
         handleBudgetedGatewayWebSocketUpgrade({
           req,
@@ -427,6 +436,7 @@ export function attachGatewayUpgradeHandler(opts: {
           preauthConnectionBudget,
           preauthBudgetKey: requestClientIp,
           ingressName: "Gateway",
+          isStartupPending: opts.isStartupPending,
         });
       } catch {
         throw new Error("gateway websocket upgrade failed");

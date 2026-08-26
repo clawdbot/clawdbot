@@ -8,6 +8,7 @@ import {
 } from "./grammar.js";
 
 export { normalizeControlUiBasePath };
+export * from "./focus.js";
 
 // Control UI session URL grammar shared by browser and plugin consumers.
 export type ControlUiSessionNamespace = "chat" | "dashboard";

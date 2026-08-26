@@ -245,11 +245,14 @@ export function createConversationHandlers(
         return;
       }
       const request = params as ConversationListParams;
+      const readCurrentConfig = () =>
+        resolveGatewayPluginConfig({ config: context.getRuntimeConfig() });
       try {
         respond(
           true,
           await deps.runConversationList({
-            config: resolveGatewayPluginConfig({ config: context.getRuntimeConfig() }),
+            config: readCurrentConfig(),
+            readCurrentConfig,
             agentId: request.agentId,
             ...(request.channel ? { channel: request.channel } : {}),
             ...(request.query ? { query: request.query } : {}),
@@ -275,7 +278,9 @@ export function createConversationHandlers(
         return;
       }
       const request = params as ConversationSendParams;
-      const config = resolveGatewayPluginConfig({ config: context.getRuntimeConfig() });
+      const readCurrentConfig = () =>
+        resolveGatewayPluginConfig({ config: context.getRuntimeConfig() });
+      const config = readCurrentConfig();
       if (
         !validateConversationSourceSession({
           config,
@@ -318,6 +323,7 @@ export function createConversationHandlers(
         execute: async () =>
           await deps.runConversationSend({
             config,
+            readCurrentConfig,
             agentId: request.agentId,
             senderIsOwner: isAuthenticatedOwner(client),
             ...(request.sourceSessionKey ? { sourceSessionKey: request.sourceSessionKey } : {}),
@@ -357,7 +363,9 @@ export function createConversationHandlers(
         return;
       }
       const request = params as ConversationTurnParams;
-      const config = resolveGatewayPluginConfig({ config: context.getRuntimeConfig() });
+      const readCurrentConfig = () =>
+        resolveGatewayPluginConfig({ config: context.getRuntimeConfig() });
+      const config = readCurrentConfig();
       if (
         !validateConversationSourceSession({
           config,
@@ -401,6 +409,7 @@ export function createConversationHandlers(
         execute: async () =>
           await deps.runConversationTurn({
             config,
+            readCurrentConfig,
             agentId: request.agentId,
             senderIsOwner: isAuthenticatedOwner(client),
             ...(request.sourceSessionKey ? { sourceSessionKey: request.sourceSessionKey } : {}),

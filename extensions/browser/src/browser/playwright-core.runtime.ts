@@ -1,15 +1,22 @@
 /**
  * Playwright runtime loader.
  *
- * Static package imports keep the worker deploy build's executable closure visible
- * to the bundler while normal package builds may still externalize the dependency.
+ * Loads playwright-core only when browser behavior needs it. The worker deploy
+ * build declares its static dependency closure in worker-deploy-build-plugin.mts.
  */
-import playwrightCoreDefault from "playwright-core";
+import { createRequire } from "node:module";
 import type * as PlaywrightCore from "playwright-core";
-import coreBundle from "./playwright-core-bundle.runtime.mjs";
 
-/** Runtime playwright-core module instance. */
-export const playwrightCore = playwrightCoreDefault as typeof PlaywrightCore;
+const require = createRequire(import.meta.url);
+
+/** Loads the Playwright runtime on first Browser use. */
+export function getPlaywrightCore(): typeof PlaywrightCore {
+  return require("playwright-core") as typeof PlaywrightCore;
+}
 
 /** Dependency-owned User-Agent used by Playwright's native CDP WebSocket transport. */
-export const getPlaywrightUserAgent = (coreBundle as { getUserAgent: () => string }).getUserAgent;
+export function getPlaywrightUserAgent(): string {
+  return (
+    require("playwright-core/lib/coreBundle") as { getUserAgent: () => string }
+  ).getUserAgent();
+}

@@ -13,7 +13,7 @@ import {
   resolveHeartbeatScratchProposalFromReplyResult,
   resolveHeartbeatToolResponseFromReplyResult,
 } from "../auto-reply/heartbeat-tool-response.js";
-import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../auto-reply/heartbeat.js";
+import { isHeartbeatAcknowledgementText } from "../auto-reply/heartbeat.js";
 import { resolveReplyOperationAgentTurn } from "../auto-reply/reply/reply-operation-agent-turn-state.js";
 import {
   REPLY_OPERATION_RUN_STATE,
@@ -57,10 +57,10 @@ import { isWithinActiveHours } from "./heartbeat-active-hours.js";
 import { emitHeartbeatEvent } from "./heartbeat-events.js";
 import {
   heartbeatLog,
-  resolveAmbientHeartbeatAgentId,
   resolveHeartbeatForWake,
   resolveHeartbeatTimeoutOverrideSeconds,
   shouldUseHeartbeatResponseToolPrompt,
+  tryResolveAmbientHeartbeatAgentId,
   type HeartbeatConfig,
 } from "./heartbeat-runner-config.js";
 import {
@@ -79,7 +79,7 @@ import { resolveHeartbeatVisibility } from "./heartbeat-visibility.js";
 import {
   inferHeartbeatWakeSourceFromReason,
   isConfiguredHeartbeatAgent,
-  isTargetedImmediateUnscheduledWake,
+  isTargetedUnscheduledWake,
 } from "./heartbeat-wake-policy.js";
 import {
   areHeartbeatsEnabled,
@@ -151,9 +151,12 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
   const explicitAgentId = typeof opts.agentId === "string" ? opts.agentId.trim() : "";
   const forcedSessionAgentId =
     explicitAgentId.length > 0 ? undefined : parseAgentSessionKey(opts.sessionKey)?.agentId;
-  const agentId = normalizeAgentId(
-    explicitAgentId || forcedSessionAgentId || resolveAmbientHeartbeatAgentId(cfg),
-  );
+  const resolvedAgentId =
+    explicitAgentId || forcedSessionAgentId || tryResolveAmbientHeartbeatAgentId(cfg);
+  if (!resolvedAgentId) {
+    return { kind: "skipped", reason: "disabled" } as const;
+  }
+  const agentId = normalizeAgentId(resolvedAgentId);
   const wakeSource = opts.source ?? inferHeartbeatWakeSourceFromReason(opts.reason);
   const heartbeat = resolveHeartbeatForWake({
     cfg,
@@ -166,7 +169,7 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
     left.jobId.localeCompare(right.jobId),
   );
   const allowsUnscheduledTarget =
-    isTargetedImmediateUnscheduledWake(opts) && isConfiguredHeartbeatAgent(cfg, agentId);
+    isTargetedUnscheduledWake(opts) && isConfiguredHeartbeatAgent(cfg, agentId);
   if (!areHeartbeatsEnabled()) {
     return { kind: "skipped", reason: "disabled" } as const;
   }
@@ -324,10 +327,7 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
       : undefined;
   const pendingFinalDeliveryIsHeartbeatAck =
     typeof pendingFinalDeliveryText === "string" &&
-    stripHeartbeatToken(pendingFinalDeliveryText, {
-      mode: "heartbeat",
-      maxAckChars: DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
-    }).shouldSkip;
+    isHeartbeatAcknowledgementText(pendingFinalDeliveryText);
   if (
     recentSessionEntry?.pendingFinalDelivery !== undefined &&
     !pendingFinalDeliveryIsHeartbeatAck &&
@@ -661,15 +661,14 @@ export async function invokeHeartbeatAgentRun(
     cfg,
   );
   const agentTurnStatus = resolveReplyOperationAgentTurn(replyOperationRunState);
-  if (agentTurnStatus === "superseded") {
-    return { kind: "preempted" } as const;
+  if (agentTurnStatus === "superseded" || agentTurnStatus === "cancelled") {
+    return { kind: agentTurnStatus === "superseded" ? "preempted" : "cancelled" } as const;
   }
   const heartbeatToolResponse = resolveHeartbeatToolResponseFromReplyResult(replyResult);
   const heartbeatScratchProposal = resolveHeartbeatScratchProposalFromReplyResult(replyResult);
   const heartbeatTerminalToolFailure: HeartbeatTerminalToolFailure | undefined =
     resolveHeartbeatTerminalToolFailure(replyResult);
-  const selectedReplyPayload = resolveHeartbeatReplyPayload(replyResult);
-  const replyPayload = selectedReplyPayload;
+  const replyPayload = resolveHeartbeatReplyPayload(replyResult);
   const agentRunFailed = agentTurnStatus === "failed";
   if (
     heartbeatScratchProposal !== undefined &&

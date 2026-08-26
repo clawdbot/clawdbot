@@ -128,11 +128,13 @@ describe("resetReplyRunSession", () => {
       updatedAt: 1,
       sessionFile: path.join(rootDir, "session.jsonl"),
       lifecycleRunId: "run-before-reset",
+      lastRunId: "run-before-reset",
       agentHarnessId: "codex",
       claudeCliSessionId: "native-before-boundary",
       modelProvider: "qwencode",
       model: "qwen",
       contextTokens: 123,
+      contextTokensSource: "runtime",
       contextBudgetStatus: {
         schemaVersion: 1,
         source: "pre-prompt-estimate",
@@ -201,12 +203,14 @@ describe("resetReplyRunSession", () => {
     expect(activeSessionEntry?.sessionId).toBe("session");
     expect(activeSessionEntry?.lifecycleRevision).toBe("00000000-0000-0000-0000-000000000123");
     expect(activeSessionEntry?.lifecycleRunId).toBeUndefined();
+    expect(activeSessionEntry?.lastRunId).toBeUndefined();
     expect(followupRun.run.sessionId).toBe(activeSessionEntry?.sessionId);
     expect(activeSessionEntry?.modelProvider).toBeUndefined();
     expect(activeSessionEntry?.agentHarnessId).toBeUndefined();
     expect(activeSessionEntry?.claudeCliSessionId).toBeUndefined();
     expect(activeSessionEntry?.model).toBeUndefined();
     expect(activeSessionEntry?.contextTokens).toBeUndefined();
+    expect(activeSessionEntry?.contextTokensSource).toBeUndefined();
     expect(activeSessionEntry?.contextBudgetStatus).toBeUndefined();
     expect(activeSessionEntry?.fallbackNotice).toBeUndefined();
     expect(activeSessionEntry?.compactionCount).toBe(0);
@@ -231,6 +235,7 @@ describe("resetReplyRunSession", () => {
 
     const persisted = loadSessionEntry({ storePath, sessionKey });
     expect(persisted?.sessionId).toBe(activeSessionEntry?.sessionId);
+    expect(persisted?.contextTokensSource).toBeUndefined();
     expect(persisted?.contextBudgetStatus).toBeUndefined();
     expect(persisted?.fallbackNotice).toBeUndefined();
     expect(persisted?.compactionCount).toBe(0);
@@ -497,7 +502,6 @@ describe("resetReplyRunSession", () => {
     });
 
     // The boundary reset keeps both the logical id and transcript in place.
-    expect(rotatedSessionId).toBeDefined();
     expect(rotatedSessionId).toBe("old-session");
     await fs.access(oldTranscriptPath);
   });

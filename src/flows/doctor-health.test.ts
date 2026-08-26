@@ -17,7 +17,7 @@ vi.mock("../config/paths.js", () => ({
 
 vi.mock("../state/openclaw-database-preflight.js", () => ({
   OpenClawDatabaseSchemaPreflightError: class extends Error {},
-  preflightOpenClawDatabaseSchemas: () => ({ incompatible: [] }),
+  preflightOpenClawDatabaseSchemas: () => ({ incompatible: [], indeterminate: [] }),
 }));
 
 vi.mock("../state/openclaw-agent-db.js", () => ({

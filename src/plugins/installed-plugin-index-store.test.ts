@@ -12,6 +12,7 @@ import {
   OPENCLAW_STATE_SCHEMA_VERSION,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
 import type { PluginCandidate } from "./discovery.js";
 import {
   readPersistedInstalledPluginIndexInstallRecords,
@@ -781,7 +782,11 @@ describe("installed plugin index persistence", () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "plugins", "demo");
     fs.mkdirSync(pluginDir, { recursive: true });
-    const candidate = createCandidate(pluginDir);
+    const candidate = recordPluginCandidateInstallOwner(createCandidate(pluginDir), "package");
+    const installRecords = {
+      package: { source: "git", installPath: pluginDir },
+      orphaned: { source: "path", installPath: path.join(stateDir, "missing") },
+    } satisfies InstalledPluginIndex["installRecords"];
     const env = {
       OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
       OPENCLAW_VERSION: "2026.4.25",
@@ -791,8 +796,14 @@ describe("installed plugin index persistence", () => {
       reason: "manual",
       stateDir,
       candidates: [candidate],
+      installRecords,
       env,
     });
+    expect(
+      Object.keys(
+        requirePersisted(await readPersistedInstalledPluginIndex({ stateDir })).installRecords,
+      ),
+    ).toEqual(["orphaned", "package"]);
     fs.writeFileSync(
       path.join(pluginDir, "openclaw.plugin.json"),
       JSON.stringify({
@@ -808,6 +819,7 @@ describe("installed plugin index persistence", () => {
       reason: "policy-changed",
       stateDir,
       candidates: [candidate],
+      installRecords,
       env,
       config: {
         plugins: {
@@ -828,6 +840,19 @@ describe("installed plugin index persistence", () => {
       manifestHash: initial.plugins[0]?.manifestHash,
     });
     expect(refreshed.policyHash).not.toBe(initial.policyHash);
+
+    const changedInstallRecords = {
+      ...installRecords,
+      package: { ...installRecords.package, source: "npm" },
+    } satisfies InstalledPluginIndex["installRecords"];
+    const rebuilt = await refreshPersistedInstalledPluginIndex({
+      reason: "policy-changed",
+      stateDir,
+      candidates: [candidate],
+      installRecords: changedInstallRecords,
+      env,
+    });
+    expect(rebuilt.plugins[0]?.manifestHash).not.toBe(initial.plugins[0]?.manifestHash);
   });
 
   it("falls back to a source rebuild when a policy refresh target is missing", async () => {
@@ -869,6 +894,43 @@ describe("installed plugin index persistence", () => {
 
     expect(refreshed.plugins.map((plugin) => plugin.pluginId)).toContain("next-demo");
   });
+
+  it.each(["path", "npm", "archive", "git", "clawhub", "marketplace"] as const)(
+    "restores an installed %s plugin missing from a policy refresh projection",
+    async (source) => {
+      const stateDir = makeTempDir();
+      const pluginDir = path.join(stateDir, "plugins", "demo");
+      fs.mkdirSync(pluginDir, { recursive: true });
+      const candidate = createCandidate(pluginDir);
+      const installRecords = {
+        demo: { source, installPath: pluginDir },
+      } satisfies InstalledPluginIndex["installRecords"];
+      const env = {
+        OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      };
+      const initial = await refreshPersistedInstalledPluginIndex({
+        reason: "manual",
+        stateDir,
+        candidates: [candidate],
+        installRecords,
+        env,
+      });
+      await writePersistedInstalledPluginIndex({ ...initial, plugins: [] }, { stateDir });
+
+      const refreshed = await refreshPersistedInstalledPluginIndex({
+        reason: "policy-changed",
+        stateDir,
+        candidates: [candidate],
+        installRecords,
+        env,
+      });
+
+      expectPluginIds(refreshed, ["demo"]);
+      await expectPersistedIndex(stateDir, { pluginIds: ["demo"] });
+    },
+  );
 
   it("preserves existing install records when refreshing the manifest cache", async () => {
     const stateDir = makeTempDir();

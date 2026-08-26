@@ -182,6 +182,46 @@ describe("sessions-list-tool", () => {
     });
   });
 
+  it("limits session kind arguments to the documented classification values", () => {
+    const tool = createSessionsListTool({ config: VALID_CONFIG });
+
+    expect(
+      Value.Check(tool.parameters, { kinds: ["main", "group", "cron", "hook", "node", "other"] }),
+    ).toBe(true);
+    expect(Value.Check(tool.parameters, { kinds: ["unknown"] })).toBe(false);
+    expect(Value.Check(tool.parameters, { kinds: ["   "] })).toBe(false);
+  });
+
+  it.each([
+    { name: "unknown-only", kinds: ["unknown"], expected: [] },
+    { name: "whitespace-only", kinds: ["   "], expected: [] },
+    { name: "unknown scalar", kinds: "unknown", expected: [] },
+    { name: "whitespace scalar", kinds: "   ", expected: [] },
+    { name: "known scalar", kinds: "MAIN", expected: ["agent:main:main"] },
+    { name: "mixed known and unknown", kinds: ["unknown", "MAIN"], expected: ["agent:main:main"] },
+    {
+      name: "empty",
+      kinds: [],
+      expected: ["agent:main:main", "agent:main:slack:channel:team-room"],
+    },
+  ])("never broadens an explicit $name session kind filter", async ({ kinds, expected }) => {
+    mocks.gatewayCall.mockResolvedValue({
+      sessions: [
+        sessionRow("agent:main:main", "main"),
+        sessionRow("agent:main:slack:channel:team-room", "channel"),
+        sessionRow("agent:other:main", "main", "other"),
+      ],
+    });
+
+    const result = await createSessionsListTool({ config: VALID_CONFIG }).execute("filter-kinds", {
+      kinds,
+    });
+
+    expect(getSessionsListDetails(result).sessions?.map((session) => session.key)).toEqual(
+      expected,
+    );
+  });
+
   it("lists unspawned same-agent sessions from the canonical main session under tree visibility", async () => {
     mocks.resolveEffectiveSessionToolsVisibility.mockReturnValue("tree");
     mocks.resolveSandboxedSessionToolContext.mockReturnValue({
@@ -334,21 +374,27 @@ describe("sessions-list-tool", () => {
     mocks.gatewayCall.mockResolvedValue({
       path: "(multiple)",
       sessions: [
-        { key: "agent:main:dashboard:visible", kind: "direct", classification: "dashboard" },
+        {
+          key: "agent:main:dashboard:visible",
+          kind: "direct",
+          classification: "dashboard",
+          category: "Projects",
+        },
         {
           key: "agent:main:dashboard:incognito-private",
           kind: "direct",
           classification: "dashboard",
           incognito: true,
+          category: "Secret",
         },
       ],
     });
 
     const result = await createSessionsListTool({ config: VALID_CONFIG }).execute("blind", {});
 
-    expect(getSessionsListDetails(result).sessions?.map((session) => session.key)).toEqual([
-      "agent:main:dashboard:visible",
-    ]);
+    expect(
+      getSessionsListDetails(result).sessions?.map(({ key, category }) => ({ key, category })),
+    ).toEqual([{ key: "agent:main:dashboard:visible", category: "Projects" }]);
   });
 
   it("declares a complete focused row contract", async () => {
@@ -363,6 +409,7 @@ describe("sessions-list-tool", () => {
           classification: "subagent",
           channel: "discord",
           label: "worker",
+          category: "P1 issues",
           displayName: "Worker",
           derivedTitle: "Investigate queue",
           lastMessagePreview: "Use `[[reply_to_current]]` literally.",
@@ -399,7 +446,7 @@ describe("sessions-list-tool", () => {
       linkedDetails.sessionLinkRule,
     );
     expect(compactToolOutputHint(tool.outputSchema)).toBe(
-      '{ count: number; sessions: Array<{ agentId: string; archived: boolean; channel: string; key: string; kind: "main" | "group" | "cron" | "hook" | "node" | "other"; pinned: boolean; abortedLastRun?: boolean; childSessions?: Array<string>; contextTokens?: number; derivedTitle?: string; displayName?: string; label?: string; lastMessagePreview?: string; messages?: Array<unknown>; model?: string; parentSessionKey?: string; sessionId?: string; stateVersion?: number; status?: "running" | "done" | "failed" | "killed" | "timeout"; totalTokens?: number; updatedAt?: number }>; sessionLinkRule?: string; visibility?: { mode: "self" | "tree" | "agent"; restricted: true; warning: string } }',
+      '{ count: number; sessions: Array<{ agentId: string; archived: boolean; channel: string; key: string; kind: "main" | "group" | "cron" | "hook" | "node" | "other"; pinned: boolean; abortedLastRun?: boolean; category?: string; childSessions?: Array<string>; contextTokens?: number; derivedTitle?: string; displayName?: string; label?: string; lastMessagePreview?: string; messages?: Array<unknown>; model?: string; parentSessionKey?: string; sessionId?: string; stateVersion?: number; status?: "running" | "done" | "failed" | "killed" | "timeout"; totalTokens?: number; updatedAt?: number }>; sessionLinkRule?: string; visibility?: { mode: "self" | "tree" | "agent"; restricted: true; warning: string } }',
     );
     expect(result.details).toEqual({
       count: 1,
@@ -413,6 +460,7 @@ describe("sessions-list-tool", () => {
           archived: false,
           pinned: true,
           label: "worker",
+          category: "P1 issues",
           displayName: "Worker",
           derivedTitle: "Investigate queue",
           lastMessagePreview: "Use `[[reply_to_current]]` literally.",
@@ -428,6 +476,29 @@ describe("sessions-list-tool", () => {
         },
       ],
     });
+  });
+
+  it("preserves the context window already projected by the Gateway", async () => {
+    mocks.gatewayCall.mockResolvedValue({
+      path: "/tmp/sessions.json",
+      sessions: [
+        {
+          key: "agent:main:main",
+          agentId: "main",
+          kind: "direct",
+          classification: "main",
+          model: "gpt-5.6-sol",
+          contextTokens: 1_000_000,
+        },
+      ],
+    });
+
+    const result = await createSessionsListTool({ config: VALID_CONFIG }).execute(
+      "gateway-context-window",
+      {},
+    );
+
+    expect(getSessionsListDetails(result).sessions?.[0]?.contextTokens).toBe(1_000_000);
   });
 
   it("keeps channel discovery but omits delivery routing metadata", async () => {

@@ -12,6 +12,7 @@ import {
 } from "openclaw/plugin-sdk/param-readers";
 import { truncateSanitizedExternalContent } from "openclaw/plugin-sdk/security-runtime";
 import { DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS } from "openclaw/plugin-sdk/text-utility-runtime";
+import type { BrowserProxyRequest } from "./browser-node-proxy.js";
 import {
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
   browserSnapshot,
@@ -72,20 +73,6 @@ function wrapBoundedBrowserToolText(params: {
   }
   return { text: wrappedText, truncated: bounded.truncated };
 }
-
-export type BrowserProxyRequest = ((opts: {
-  method: string;
-  path: string;
-  query?: Record<string, string | number | boolean | undefined>;
-  body?: unknown;
-  timeoutMs?: number;
-  profile?: string;
-  signal?: AbortSignal;
-}) => Promise<unknown>) & {
-  // Present on node-proxy requests: reports whether the proxy silently fell
-  // back to the Gateway host browser after the node became unreachable.
-  isHostFallbackActive?: () => boolean;
-};
 
 /** Wrap page-controlled JSON payloads as untrusted browser content. */
 export function wrapBrowserExternalJson(params: {

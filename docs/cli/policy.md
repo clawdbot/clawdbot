@@ -14,7 +14,7 @@ conformance layer over existing OpenClaw settings, not a second configuration
 system. You author requirements in `policy.jsonc`; OpenClaw observes the active
 workspace as evidence; policy reports drift through `doctor --lint`. Policy
 does not enforce tool calls or rewrite runtime behavior at request time, and it
-does not attest per-agent credential stores such as `auth-profiles.json`.
+does not attest per-agent credential stores such as `openclaw-agent.sqlite`.
 
 Policy checks configured channels, MCP servers, model providers, network SSRF
 posture, ingress/channel access, Gateway exposure and node command posture,
@@ -199,7 +199,7 @@ Cross-cutting notes not obvious from the rule tables below:
   unobservable evidence, not a synthetic pass.
 - Secret and auth-profile evidence records provider/source posture and
   SecretRef metadata only, never raw values. Policy does not read or attest
-  per-agent credential stores such as `auth-profiles.json`.
+  per-agent credential stores such as `openclaw-agent.sqlite`.
 - Data-handling evidence is config-level posture (telemetry capture toggle,
   session maintenance mode, transcript-indexing setting) plus the always-on log
   redaction invariant. It does not inspect logs, telemetry exports,

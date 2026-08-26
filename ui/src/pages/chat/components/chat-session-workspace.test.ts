@@ -3,7 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createSessionWorkspaceProps,
   openSessionWorkspaceFile,
+  refreshSessionWorkspace,
   renderSessionWorkspaceRail,
+  revealSessionWorkspaceFile,
+  resolveSessionDiffSidebarContent,
   type SessionWorkspaceHost,
 } from "./chat-session-workspace.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
@@ -35,6 +38,7 @@ describe("session workspace state", () => {
       requestUpdate: vi.fn(),
       sessionKey: "agent:main:current",
       settings: { chatWorkspaceDock: "bottom" },
+      sidebarContent: null,
       sessions: {},
     } as unknown as SessionWorkspaceHost;
 
@@ -44,6 +48,239 @@ describe("session workspace state", () => {
     workspace.onSetDock("right");
     expect(createSessionWorkspaceProps(state).dock).toBe("right");
     expect(state.settings?.chatWorkspaceDock).toBe("right");
+  });
+
+  it("rotates Files and Review ownership across a same-client reconnect", async () => {
+    let resolveReplacementList!: (value: {
+      sessionKey: string;
+      root: string;
+      gitCheckout: boolean;
+      files: [];
+    }) => void;
+    const replacementList = new Promise<{
+      sessionKey: string;
+      root: string;
+      gitCheckout: boolean;
+      files: [];
+    }>((resolve) => {
+      resolveReplacementList = resolve;
+    });
+    let resolveOldFile!: (value: {
+      sessionKey: string;
+      root: string;
+      file: { path: string; name: string; kind: "read"; missing: false; content: string };
+    }) => void;
+    const oldFile = new Promise<{
+      sessionKey: string;
+      root: string;
+      file: { path: string; name: string; kind: "read"; missing: false; content: string };
+    }>((resolve) => {
+      resolveOldFile = resolve;
+    });
+    const listFiles = vi
+      .fn()
+      .mockResolvedValueOnce({
+        sessionKey: "agent:main:current",
+        root: "/checkout/a",
+        gitCheckout: true,
+        files: [],
+      })
+      .mockReturnValueOnce(replacementList);
+    const getFile = vi.fn().mockReturnValue(oldFile);
+    const client = { request: vi.fn().mockResolvedValue({ artifacts: [] }) };
+    const state = {
+      client,
+      connected: true,
+      connectionEpoch: 1,
+      handleOpenSidebar: vi.fn(),
+      hello: gatewayHello(["sessions.diff"]),
+      agentsList: { agents: [] },
+      requestUpdate: vi.fn(),
+      sessionKey: "agent:main:current",
+      sidebarContent: null,
+      sessions: { getFile, listFiles },
+    } as unknown as SessionWorkspaceHost;
+    const handleOpenSidebar = vi.fn((content: SidebarContent | null) => {
+      state.sidebarContent = content;
+    });
+    state.handleOpenSidebar = handleOpenSidebar;
+
+    createSessionWorkspaceProps(state, { expanded: true });
+    await vi.waitFor(() =>
+      expect(createSessionWorkspaceProps(state).list?.root).toBe("/checkout/a"),
+    );
+    const oldDiff = resolveSessionDiffSidebarContent(state);
+    expect(oldDiff?.kind).toBe("session-diff");
+    createSessionWorkspaceProps(state, { expanded: true }).onOpenDiff?.();
+    expect(state.sidebarContent).toBe(oldDiff);
+    openSessionWorkspaceFile(state, { path: "README.md" });
+    expect(handleOpenSidebar).toHaveBeenLastCalledWith(null);
+
+    (state as SessionWorkspaceHost & { connectionEpoch: number }).connectionEpoch = 2;
+    const pending = createSessionWorkspaceProps(state, { expanded: true });
+
+    expect(pending.list).toBeNull();
+    expect(pending.onOpenDiff).toBeTypeOf("function");
+    expect(listFiles).toHaveBeenCalledTimes(2);
+    expect(state.sidebarContent).toBeNull();
+
+    resolveOldFile({
+      sessionKey: "agent:main:current",
+      root: "/checkout/a",
+      file: {
+        path: "README.md",
+        name: "README.md",
+        kind: "read",
+        missing: false,
+        content: "old checkout",
+      },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(handleOpenSidebar).toHaveBeenCalledTimes(2);
+
+    resolveReplacementList({
+      sessionKey: "agent:main:current",
+      root: "/checkout/b",
+      gitCheckout: true,
+      files: [],
+    });
+    await vi.waitFor(() =>
+      expect(createSessionWorkspaceProps(state).list?.root).toBe("/checkout/b"),
+    );
+    expect(resolveSessionDiffSidebarContent(state)).not.toBe(oldDiff);
+  });
+
+  it("refreshes content in place while rotating an open default Review loader", async () => {
+    let resolveRefresh!: (value: unknown) => void;
+    const listFiles = vi
+      .fn()
+      .mockResolvedValueOnce({
+        sessionKey: "agent:main:current",
+        root: "/checkout/a",
+        gitCheckout: true,
+        files: [],
+      })
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveRefresh = resolve;
+        }),
+      );
+    const state = {
+      client: { request: vi.fn().mockResolvedValue({ artifacts: [] }) } as never,
+      connected: true,
+      connectionEpoch: 1,
+      handleOpenSidebar: vi.fn(),
+      hello: gatewayHello(["sessions.diff"]),
+      agentsList: { agents: [] },
+      requestUpdate: vi.fn(),
+      sessionKey: "agent:main:current",
+      sidebarContent: null,
+      sessions: { listFiles } as never,
+    } as SessionWorkspaceHost;
+    state.handleOpenSidebar = (content) => {
+      state.sidebarContent = content;
+    };
+    createSessionWorkspaceProps(state, { expanded: true });
+    await vi.waitFor(() => expect(createSessionWorkspaceProps(state).list).not.toBeNull());
+    const oldDiff = resolveSessionDiffSidebarContent(state)!;
+    createSessionWorkspaceProps(state, { expanded: true }).onOpenDiff?.();
+
+    refreshSessionWorkspace(state, true);
+
+    expect(createSessionWorkspaceProps(state).list?.root).toBe("/checkout/a");
+    expect(state.sidebarContent).toMatchObject({ kind: "session-diff" });
+    expect(state.sidebarContent).not.toBe(oldDiff);
+    expect(listFiles).toHaveBeenCalledTimes(2);
+    resolveRefresh({ sessionKey: state.sessionKey, files: [] });
+  });
+
+  it("retries a pending visible reload after the previous load failed", async () => {
+    let rejectInitialLoad!: (error: Error) => void;
+    const initialLoad = new Promise((_, reject) => {
+      rejectInitialLoad = reject;
+    });
+    const listFiles = vi
+      .fn()
+      .mockReturnValueOnce(initialLoad)
+      .mockResolvedValueOnce({ sessionKey: "agent:main:current", files: [] });
+    const state = {
+      client: { request: vi.fn().mockResolvedValue({ artifacts: [] }) } as never,
+      connected: true,
+      connectionEpoch: 1,
+      handleOpenSidebar: vi.fn(),
+      hello: null,
+      agentsList: { agents: [] },
+      requestUpdate: vi.fn(),
+      sessionKey: "agent:main:current",
+      sidebarContent: null,
+      sessions: { listFiles } as never,
+    } as SessionWorkspaceHost;
+
+    createSessionWorkspaceProps(state, { expanded: true });
+    expect(listFiles).toHaveBeenCalledTimes(1);
+    refreshSessionWorkspace(state, true);
+    rejectInitialLoad(new Error("temporary failure"));
+    await vi.waitFor(() =>
+      expect(createSessionWorkspaceProps(state).error).toContain("temporary failure"),
+    );
+
+    createSessionWorkspaceProps(state, { expanded: true });
+
+    await vi.waitFor(() => expect(createSessionWorkspaceProps(state).list).not.toBeNull());
+    expect(listFiles).toHaveBeenCalledTimes(2);
+    expect(createSessionWorkspaceProps(state).error).toBeNull();
+  });
+
+  it.each([
+    { label: "Files is closed or inactive", options: { expanded: false }, terminal: true },
+    {
+      label: "the chat pane is hidden before its pending search runs",
+      options: { expanded: true, presented: false },
+      terminal: false,
+    },
+  ])("keeps a revealed workspace cold when $label", async ({ options, terminal }) => {
+    vi.useFakeTimers();
+    try {
+      const listFiles = vi.fn().mockResolvedValue({
+        sessionKey: "agent:main:current",
+        files: [],
+      });
+      const state = {
+        client: { request: vi.fn().mockResolvedValue({ artifacts: [] }) } as never,
+        connected: true,
+        connectionEpoch: 1,
+        handleOpenSidebar: vi.fn(),
+        hello: null,
+        agentsList: { agents: [] },
+        requestUpdate: vi.fn(),
+        sessionKey: "agent:main:current",
+        sidebarContent: null,
+        sessions: { listFiles } as never,
+      } as SessionWorkspaceHost;
+
+      createSessionWorkspaceProps(state, { expanded: true });
+      await vi.advanceTimersByTimeAsync(0);
+      revealSessionWorkspaceFile(state, "src/README.md");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(listFiles).toHaveBeenCalledTimes(2);
+
+      createSessionWorkspaceProps(state, { expanded: true }).onSearch("hidden");
+      if (terminal) {
+        refreshSessionWorkspace(state, false);
+      }
+      createSessionWorkspaceProps(state, options);
+
+      expect(listFiles).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(160);
+      expect(listFiles).toHaveBeenCalledTimes(2);
+
+      createSessionWorkspaceProps(state, { expanded: true });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(listFiles).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -65,6 +302,7 @@ describe("session workspace artifacts", () => {
       handleOpenSidebar,
       hello: gatewayHello([]),
       sessionKey: "agent:main:current",
+      sidebarContent: null,
       sessions: {},
     } as unknown as SessionWorkspaceHost;
     return { handleOpenSidebar, request, state };
@@ -156,6 +394,7 @@ describe("openSessionWorkspaceFile", () => {
       handleOpenSidebar,
       hello: gatewayHello([]),
       sessionKey: "agent:main:current",
+      sidebarContent: existingContent,
       sessions: { getFile },
     } as unknown as SessionWorkspaceHost;
 
@@ -189,6 +428,7 @@ describe("openSessionWorkspaceFile", () => {
       sessionKey: "agent:main:current",
       sessionWorkspaceDraftScope: "pane-left",
       settings: { gatewayUrl: "wss://gateway-a.example" },
+      sidebarContent: null,
       sessions: { getFile },
     } as unknown as SessionWorkspaceHost;
 
@@ -219,6 +459,7 @@ describe("openSessionWorkspaceFile", () => {
       handleOpenSidebar,
       hello: gatewayHello(methods, scopes),
       sessionKey: "agent:main:current",
+      sidebarContent: null,
       sessions: {
         getFile: vi.fn().mockResolvedValue({
           sessionKey: "agent:main:current",
@@ -276,6 +517,7 @@ describe("openSessionWorkspaceFile", () => {
         hello: gatewayHello([]),
         agentsList: [],
         sessionKey: "agent:main:current",
+        sidebarContent: null,
         sessions: { getFile, listFiles },
       } as unknown as SessionWorkspaceHost;
 
@@ -307,6 +549,7 @@ describe("openSessionWorkspaceFile", () => {
       handleOpenSidebar,
       hello: gatewayHello([]),
       sessionKey: "agent:main:current",
+      sidebarContent: null,
       sessions: {
         getFile: vi.fn().mockResolvedValue({
           sessionKey: "agent:main:current",
@@ -345,6 +588,7 @@ describe("openSessionWorkspaceFile", () => {
       handleOpenSidebar,
       hello: gatewayHello([]),
       sessionKey: "agent:main:current",
+      sidebarContent: null,
       sessions: {
         getFile: vi.fn().mockResolvedValue({
           sessionKey: "agent:main:current",
@@ -381,6 +625,7 @@ describe("openSessionWorkspaceFile", () => {
       handleOpenSidebar,
       hello: gatewayHello([]),
       sessionKey: "agent:main:current",
+      sidebarContent: null,
       sessions: {
         getFile: vi.fn().mockResolvedValue({
           sessionKey: "agent:main:current",
@@ -414,6 +659,7 @@ describe("openSessionWorkspaceFile", () => {
       handleOpenSidebar,
       hello: gatewayHello([]),
       sessionKey: "agent:main:current",
+      sidebarContent: null,
       sessions: {
         getFile: vi.fn().mockResolvedValue({
           sessionKey: "agent:main:current",
@@ -451,6 +697,7 @@ describe("openSessionWorkspaceFile", () => {
       handleOpenSidebar,
       hello: gatewayHello([]),
       sessionKey: "agent:main:current",
+      sidebarContent: null,
       sessions: {
         getFile: vi.fn().mockResolvedValue({
           sessionKey: "agent:main:current",

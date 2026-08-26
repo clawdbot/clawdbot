@@ -11,6 +11,16 @@ read_when:
 
 The card is durable session state. A reconnect or page reload reads the latest card from the Gateway instead of reconstructing it from tool events or transcript history. The transcript keeps only a short update receipt, not another full copy of the card.
 
+## Adoption
+
+OpenClaw adds a short progress-card reminder only for non-main sessions when a web, iOS, Android, or macOS card renderer is paired with the Gateway and the run is not using the agent's utility model. Channel-only deployments such as a WhatsApp-only Gateway do not receive the reminder.
+
+The reminder says:
+
+> During multi-step work, keep your progress card current with the progress_card tool; the user follows it instead of reading the transcript.
+
+The reminder does not override tool policy. `tools.updatePlan: false` or a matching `tools.deny` entry still removes `progress_card` from the run entirely.
+
 ## Update a card
 
 Both input fields are optional:
@@ -37,7 +47,7 @@ The tool returns a short receipt such as `Progress card updated (rev 4, 1/3 done
 
 ## Format the note
 
-Markdown accepts ordinary formatting, small tables, links, and optional progress bars:
+Choose the representation that makes the current state easiest to scan: use a table for comparisons or metrics, a progress bar for one long operation, and a checklist only when the work is genuinely sequential. Omit the checklist when a table, bar, or sentence says it better, and do not repeat the same facts across the plan and Markdown. Markdown accepts ordinary formatting, links, and optional progress bars:
 
 ```md
 Tests are running.
@@ -76,9 +86,11 @@ An empty plan plus empty or whitespace-only Markdown also clears it. A successfu
 The current chat shows exactly one live card:
 
 - When the session rail is visible, the card appears in the rail.
-- At narrow widths where the rail is hidden, the card appears in the collapsible surface beside the composer.
+- Otherwise, when the chat is wide enough that the centered composer leaves a free gutter, the card docks in that space beside the composer with its full checklist expanded.
+- At narrower widths the card appears in the collapsible surface inside the composer.
 
-The two placements are mutually exclusive. Other sessions can show their latest card in the sidebar hovercard. All placements read the same Gateway-backed state and refresh after `progressCard.changed` notifications.
+The placements are mutually exclusive. Hover a session row in the sidebar or a session-reference link in chat to see the same card for that session. All card placements read the same Gateway-backed state and refresh after `progressCard.changed` notifications.
+Each placement shows the local time of the last progress update, including seconds.
 
 ## Pin the card to the dashboard
 

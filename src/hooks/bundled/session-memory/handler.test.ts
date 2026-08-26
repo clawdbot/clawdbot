@@ -19,7 +19,14 @@ import { writeWorkspaceFile } from "../../../test-helpers/workspace.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { createInternalHookEvent as createHookEvent } from "../../internal-hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
-import { getRecentSessionContentFromEvents } from "./transcript.js";
+import { getRecentSessionProjectionFromEvents } from "./transcript.js";
+
+function getRecentSessionContentFromEvents(
+  events: readonly unknown[],
+  messageCount?: number,
+): string | null {
+  return getRecentSessionProjectionFromEvents(events, messageCount)?.content ?? null;
+}
 
 // Avoid calling the embedded OpenClaw agent (global command lane); keep this unit test deterministic.
 vi.mock("../../llm-slug-generator.js", () => ({
@@ -33,8 +40,18 @@ const loggerMocks = vi.hoisted(() => ({
   error: vi.fn(),
 }));
 
+const memoryProvenanceMocks = vi.hoisted(() => ({
+  recordMemoryArtifactWriteProvenance: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock("../../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => loggerMocks,
+}));
+
+vi.mock("../../../memory/memory-artifact-provenance.js", () => ({
+  normalizeMemoryArtifactRelativePath: (relativePath: string) => relativePath,
+  recordMemoryArtifactWriteProvenance: memoryProvenanceMocks.recordMemoryArtifactWriteProvenance,
+  clearMemoryArtifactProvenance: vi.fn(),
 }));
 
 vi.mock("../../../config/sessions/session-accessor.js", async (importOriginal) => {
@@ -373,6 +390,106 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain(sessionMemoryRecord("assistant", "Hi! How can I help?"));
     expect(memoryContent).toContain(sessionMemoryRecord("user", "What is 2+2?"));
     expect(memoryContent).toContain(sessionMemoryRecord("assistant", "2+2 equals 4"));
+  });
+
+  it.each([
+    {
+      name: "owner-only transcript",
+      userOwner: true,
+      assistantTainted: false,
+      expectedOrigin: "agent",
+    },
+    {
+      name: "non-owner transcript",
+      userOwner: false,
+      assistantTainted: false,
+      expectedOrigin: "untrusted",
+    },
+    {
+      name: "tainted assistant response",
+      userOwner: true,
+      assistantTainted: true,
+      expectedOrigin: "untrusted",
+    },
+  ] as const)("records $name provenance before committing the file", async (testCase) => {
+    memoryProvenanceMocks.recordMemoryArtifactWriteProvenance.mockClear();
+    let observedWrite:
+      | {
+          workspaceDir: string;
+          relativePath: string;
+          contentBefore: string;
+          contentAfter: string;
+          originClass: "agent" | "untrusted";
+        }
+      | undefined;
+    memoryProvenanceMocks.recordMemoryArtifactWriteProvenance.mockImplementationOnce(
+      async (write) => {
+        observedWrite = write;
+        await expectPathMissing(path.join(write.workspaceDir, write.relativePath));
+        return undefined;
+      },
+    );
+    const sessionContent = [
+      {
+        type: "message",
+        message: {
+          role: "user",
+          content: "Retain this request",
+          __openclaw: { senderIsOwner: testCase.userOwner },
+        },
+      },
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          content: "Retained response",
+          ...(testCase.assistantTainted ? { __openclaw: { turnTainted: true } } : {}),
+        },
+      },
+    ]
+      .map((entry) => JSON.stringify(entry))
+      .join("\n");
+
+    const { tempDir, files, memoryContent } = await runNewWithPreviousSession({
+      sessionContent,
+      cfg: (workspace) => ({
+        agents: { defaults: { workspace } },
+        plugins: { slots: { memory: "none" } },
+      }),
+    });
+    const filename = expectDefined(files[0], "session memory file");
+
+    expect(files).toHaveLength(1);
+    expect(memoryProvenanceMocks.recordMemoryArtifactWriteProvenance).toHaveBeenCalledOnce();
+    expect(observedWrite).toMatchObject({
+      workspaceDir: tempDir,
+      relativePath: `memory/${filename}`,
+      contentBefore: "",
+      contentAfter: memoryContent,
+      originClass: testCase.expectedOrigin,
+    });
+  });
+
+  it("does not commit session memory when provenance recording fails", async () => {
+    memoryProvenanceMocks.recordMemoryArtifactWriteProvenance.mockRejectedValueOnce(
+      new Error("provenance unavailable"),
+    );
+    const sessionContent = [
+      {
+        type: "message",
+        message: {
+          role: "user",
+          content: "Do not persist without provenance",
+          __openclaw: { senderIsOwner: false },
+        },
+      },
+    ]
+      .map((entry) => JSON.stringify(entry))
+      .join("\n");
+
+    const { files } = await runNewWithPreviousSession({ sessionContent });
+
+    expect(files).toEqual([]);
   });
 
   it("creates memory file from SQLite transcript rows on /new command", async () => {

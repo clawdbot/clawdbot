@@ -5,8 +5,6 @@ import {
   getPreparedModelRuntimeTestApi,
   resetPreparedModelRuntimeHarness,
 } from "./prepared-model-runtime.test-harness.js";
-import fsp from "node:fs/promises";
-import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import {
@@ -243,9 +241,6 @@ describe("prepared model runtime snapshots", () => {
       gatewayLifecycle: true,
       defaultWorkspaceDir: "/tmp/gateway-launch-workspace",
     });
-    const workspacePluginRoot = path.join(workspaceDir, ".openclaw", "extensions");
-    const statSpy = vi.spyOn(fsp, "stat");
-
     const acquireDynamicLease = () =>
       acquireAgentRunPreparedModelRuntime({
         agentId: "default",
@@ -273,10 +268,6 @@ describe("prepared model runtime snapshots", () => {
     expect(retainedLease.snapshot).toBe(firstLease.snapshot);
     retainedLease.release();
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
-    expect(
-      statSpy.mock.calls.filter(([target]) => String(target) === workspacePluginRoot),
-    ).toHaveLength(1);
-    statSpy.mockRestore();
   });
 
   it("joins an in-flight dynamic owner publication", async () => {

@@ -67,6 +67,12 @@ export function isRunnableJob(params: {
   if (hasActiveCronRun(job)) {
     return false;
   }
+  const next = job.state.nextRunAtMs;
+  // Ordinary ticks cannot recover a missed cron slot before a future wake.
+  // Keep their dominant no-due path ahead of run-history normalization.
+  if (!params.allowCronMissedRunByLastRun && hasScheduledNextRunAtMs(next) && nowMs < next) {
+    return false;
+  }
   const lastRunStatus = resolveJobLastRunStatus(job);
   if (params.skipAtIfAlreadyRan && job.schedule.kind === "at" && lastRunStatus) {
     const lastRun = job.state.lastRunAtMs;
@@ -88,8 +94,7 @@ export function isRunnableJob(params: {
     }
     return false;
   }
-  const next = job.state.nextRunAtMs;
-  if (isErrorBackoffPending(params.state, job, nowMs)) {
+  if (isErrorBackoffPending(job, nowMs, lastRunStatus)) {
     // Error retry windows are anchored at run end; persisted start-based
     // retry timestamps from older state must not bypass active backoff.
     return false;
@@ -122,8 +127,12 @@ export function isRunnableJob(params: {
   return hasMissedCronSlotSinceLastRun(job, nowMs);
 }
 
-function isErrorBackoffPending(_state: CronServiceState, job: CronJob, nowMs: number): boolean {
-  if (job.schedule.kind === "at" || resolveJobLastRunStatus(job) !== "error") {
+function isErrorBackoffPending(
+  job: CronJob,
+  nowMs: number,
+  lastRunStatus: ReturnType<typeof resolveJobLastRunStatus>,
+): boolean {
+  if (job.schedule.kind === "at" || lastRunStatus !== "error") {
     return false;
   }
   const backoffUntilMs = resolveJobErrorBackoffUntilMs(job, DEFAULT_ERROR_BACKOFF_SCHEDULE_MS);

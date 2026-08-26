@@ -1,4 +1,5 @@
 // Shared root CLI failure formatting with debug stack gating and recovery hints.
+import { isGatewayTransportError } from "../gateway/transport-error.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
 import { formatCliCommand } from "./command-format.js";
@@ -40,7 +41,7 @@ export class ExpectedCliError extends Error {
   }
 }
 
-function isGatewayCredentialsCliError(
+export function isGatewayCredentialsCliError(
   error: unknown,
 ): error is Error & { method: string; configPath: string } {
   // Keep the root failure renderer lean; importing gateway/call would pull the
@@ -58,7 +59,11 @@ function isGatewayCredentialsCliError(
 }
 
 export function isExpectedCliError(error: unknown): error is Error {
-  return error instanceof ExpectedCliError || isGatewayCredentialsCliError(error);
+  return (
+    error instanceof ExpectedCliError ||
+    isGatewayCredentialsCliError(error) ||
+    isGatewayTransportError(error)
+  );
 }
 
 export function rethrowExpectedCliError(error: unknown): void {

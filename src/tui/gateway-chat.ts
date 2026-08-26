@@ -41,6 +41,12 @@ import {
 import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
 import { GatewayClient, GatewayClientRequestError } from "../gateway/client.js";
 import { resolveExplicitGatewayAuth } from "../gateway/credentials.js";
+import {
+  gatewayEdgeAuthValueForTarget,
+  normalizeEdgeAuthHeadersConfig,
+  resolveEdgeAuthHeaders,
+  type EdgeAuthHeadersConfig,
+} from "../gateway/edge-auth.js";
 import { loadOriginDeviceToken } from "../infra/device-auth-store.js";
 import { loadDeviceIdentityIfPresent } from "../infra/device-identity.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -82,6 +88,7 @@ type ResolvedGatewayConnection = {
   deviceAuthScope?: string;
   token?: string;
   password?: string;
+  edgeAuthHeaders?: Readonly<Record<string, string>>;
   tlsFingerprint?: string;
   preauthHandshakeTimeoutMs?: number;
 };
@@ -170,6 +177,7 @@ type HandoffSessionResolveResult =
 
 export class GatewayChatClient implements TuiBackend {
   private client: GatewayClient;
+  private readonly historyLifetime = new AbortController();
   private readyPromise: Promise<void>;
   private resolveReady?: () => void;
   private pendingConnectError?: Error;
@@ -194,6 +202,7 @@ export class GatewayChatClient implements TuiBackend {
       ...(connection.deviceAuthScope ? { deviceAuthScope: connection.deviceAuthScope } : {}),
       token: connection.token,
       password: connection.password,
+      edgeAuthHeaders: connection.edgeAuthHeaders,
       tlsFingerprint: connection.tlsFingerprint,
       preauthHandshakeTimeoutMs: connection.preauthHandshakeTimeoutMs,
       clientName: GATEWAY_CLIENT_NAMES.TUI,
@@ -253,10 +262,10 @@ export class GatewayChatClient implements TuiBackend {
   }
 
   /** Connect to a target already selected and authenticated by a preceding Gateway probe. */
-  static connectBound(
+  static async connectBound(
     opts: GatewayConnectionOptions & { config: OpenClawConfig; url: string },
-  ): GatewayChatClient {
-    return new GatewayChatClient(resolveBoundGatewayConnection(opts));
+  ): Promise<GatewayChatClient> {
+    return new GatewayChatClient(await resolveBoundGatewayConnection(opts));
   }
 
   start() {
@@ -304,6 +313,7 @@ export class GatewayChatClient implements TuiBackend {
   }
 
   stop() {
+    this.historyLifetime.abort();
     // Keep TUI teardown ordered after the transport closes. Otherwise the
     // late close callback can re-arm UI timers after shutdown cleared them.
     return this.client.stopAndWait();
@@ -365,8 +375,9 @@ export class GatewayChatClient implements TuiBackend {
   }
 
   async loadHistory(opts: { sessionKey: string; agentId?: string; limit?: number }) {
-    const startedAt = Date.now();
+    const deadline = Date.now() + STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS;
     for (;;) {
+      this.historyLifetime.signal.throwIfAborted();
       try {
         return await this.client.request("chat.history", {
           sessionKey: opts.sessionKey,
@@ -374,13 +385,10 @@ export class GatewayChatClient implements TuiBackend {
           limit: opts.limit,
         });
       } catch (err) {
-        const withinStartupRetryWindow =
-          Date.now() - startedAt < STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS;
-        if (withinStartupRetryWindow && isRetryableStartupUnavailable(err, "chat.history")) {
-          await sleep(resolveStartupRetryDelayMs(err));
-          continue;
+        if (Date.now() >= deadline || !isRetryableStartupUnavailable(err, "chat.history")) {
+          throw err;
         }
-        throw err;
+        await sleep(resolveStartupRetryDelayMs(err), this.historyLifetime.signal);
       }
     }
   }
@@ -542,20 +550,30 @@ export class GatewayChatClient implements TuiBackend {
  * deliberately ignores global config and Gateway env overrides, including
  * credentials, while still applying the normal remote URL safety policy.
  */
-function resolveBoundGatewayConnection(
+async function resolveBoundGatewayConnection(
   opts: GatewayConnectionOptions & { config: OpenClawConfig; url: string },
-): ResolvedGatewayConnection {
+): Promise<ResolvedGatewayConnection> {
   const url = buildGatewayConnectionDetails({
     config: opts.config,
     url: opts.url,
     ignoreEnvUrlOverride: true,
   }).url;
   const explicitAuth = resolveExplicitGatewayAuth({ token: opts.token, password: opts.password });
+  const edgeAuthConfig: EdgeAuthHeadersConfig | undefined = normalizeEdgeAuthHeadersConfig(
+    gatewayEdgeAuthValueForTarget({ config: opts.config, targetUrl: url }),
+  );
+  const edgeAuthHeaders = await resolveEdgeAuthHeaders({
+    config: opts.config,
+    value: edgeAuthConfig,
+    targetUrl: url,
+    env: process.env,
+  });
   return {
     url,
     deviceAuthScope: gatewayOriginScope(url),
     token: explicitAuth.token,
     password: explicitAuth.password,
+    ...(edgeAuthHeaders ? { edgeAuthHeaders } : {}),
     ...(opts.tlsFingerprint ? { tlsFingerprint: opts.tlsFingerprint } : {}),
   };
 }
@@ -619,11 +637,21 @@ async function resolveGatewayConnection(
   if (bootstrap.authFailureReason && (!missingSharedAuth || !hasStoredOriginAuth)) {
     throwGatewayAuthResolutionError(bootstrap.authFailureReason);
   }
+  const edgeAuthConfig: EdgeAuthHeadersConfig | undefined = normalizeEdgeAuthHeadersConfig(
+    gatewayEdgeAuthValueForTarget({ config, targetUrl: bootstrap.url }),
+  );
+  const edgeAuthHeaders = await resolveEdgeAuthHeaders({
+    config,
+    value: edgeAuthConfig,
+    targetUrl: bootstrap.url,
+    env,
+  });
   return {
     url: bootstrap.url,
     deviceAuthScope: bootstrap.deviceAuthScope,
     token: bootstrap.auth.token,
     password: bootstrap.auth.password,
+    ...(edgeAuthHeaders ? { edgeAuthHeaders } : {}),
     ...(bootstrap.tlsFingerprint ? { tlsFingerprint: bootstrap.tlsFingerprint } : {}),
   };
 }

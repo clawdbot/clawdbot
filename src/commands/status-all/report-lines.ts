@@ -5,6 +5,8 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { getTerminalTableWidth, renderTable } from "../../../packages/terminal-core/src/table.js";
 import { isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import type { ProgressReporter } from "../../cli/progress.js";
+import type { BestEffortConfigSnapshot } from "../../config/io.js";
+import { formatStatusConfigDiagnosticEntries } from "../status.format.js";
 import { buildStatusChannelsTableRows, statusChannelsTableColumns } from "./channels-table.js";
 import { appendStatusAllDiagnosis } from "./diagnosis.js";
 import {
@@ -51,6 +53,7 @@ type AgentStatusLike = {
 /** Builds the complete status-all text report, including overview tables and diagnosis lines. */
 export async function buildStatusAllReportLines(params: {
   progress: ProgressReporter;
+  configDiagnostics: BestEffortConfigSnapshot["configDiagnostics"];
   overviewRows: OverviewRow[];
   channels: ChannelsTable;
   channelIssues: ChannelIssueLike[];
@@ -71,6 +74,13 @@ export async function buildStatusAllReportLines(params: {
   const tableWidth = getTerminalTableWidth();
 
   const lines: string[] = [];
+  if (params.configDiagnostics) {
+    lines.push(
+      warn("Config diagnostics:"),
+      ...formatStatusConfigDiagnosticEntries(params.configDiagnostics),
+      "",
+    );
+  }
   lines.push(heading("OpenClaw status --all"));
   appendStatusReportSections({
     lines,

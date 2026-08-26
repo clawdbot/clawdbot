@@ -9,12 +9,9 @@ import type { DiffLine, DiffStat } from "../../../lib/chat/tool-call-diff.ts";
 export function renderDiffStatChips(stat: DiffStat & { modified?: number }) {
   // Tool cards omit `modified`; keep their original template byte-for-byte.
   if (stat.modified === undefined) {
-    if (stat.added === 0 && stat.removed === 0) {
-      return nothing;
-    }
     return html`<span class="chat-diffstat">
-      ${stat.added > 0 ? html`<span class="chat-diffstat__add">+${stat.added}</span>` : nothing}
-      ${stat.removed > 0 ? html`<span class="chat-diffstat__del">-${stat.removed}</span>` : nothing}
+      <span class="chat-diffstat__add">+${stat.added}</span>
+      <span class="chat-diffstat__del">-${stat.removed}</span>
     </span>`;
   }
   if (stat.added === 0 && stat.removed === 0 && !stat.modified) {

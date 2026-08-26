@@ -270,17 +270,20 @@ describe("createVoiceCallRuntime lifecycle", () => {
   });
 
   it("cleans up tunnel, tailscale, and webhook server when init fails after start", async () => {
+    const config = createBaseConfig();
+    config.tunnel.provider = "tailscale-funnel";
+    config.tailscale.port = 8443;
     const tunnelStop = vi.fn().mockResolvedValue(undefined);
     mocks.startTunnel.mockResolvedValue({
-      publicUrl: "https://public.example/voice/webhook",
-      provider: "ngrok",
+      publicUrl: "https://public.example:8443/voice/webhook",
+      provider: "tailscale-funnel",
       stop: tunnelStop,
     });
     mocks.managerInitialize.mockRejectedValue(new Error("init failed"));
 
     await expect(
       createVoiceCallRuntime({
-        config: createBaseConfig(),
+        config,
         coreConfig: {},
         agentRuntime: {} as never,
       }),
@@ -288,6 +291,8 @@ describe("createVoiceCallRuntime lifecycle", () => {
 
     expect(mocks.startTunnel).toHaveBeenCalledWith(
       expect.objectContaining({
+        provider: "tailscale-funnel",
+        tailscalePort: 8443,
         streamPaths: [
           {
             localPath: "/voice/stream/realtime",
@@ -391,8 +396,8 @@ describe("createVoiceCallRuntime lifecycle", () => {
       } as never,
     });
 
-    const resolveCallRegistration = mocks.realtimeHandlerCtorArgs[0]?.[3];
-    expect(mocks.realtimeHandlerCtorArgs[0]?.[5]).toBe(
+    const resolveCallRegistration = mocks.realtimeHandlerCtorArgs[0]?.[2];
+    expect(mocks.realtimeHandlerCtorArgs[0]?.[4]).toBe(
       mocks.webhookGetStreamDisconnectLifecycle.mock.results[0]?.value,
     );
     expect(mocks.resolveConfiguredRealtimeVoiceProvider).not.toHaveBeenCalled();
@@ -462,7 +467,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     ).resolves.toMatchObject({ config: { agentId: "main" } });
     expect(mocks.resolveConfiguredRealtimeVoiceProvider).not.toHaveBeenCalled();
 
-    const resolveCallRegistration = mocks.realtimeHandlerCtorArgs[0]?.[3];
+    const resolveCallRegistration = mocks.realtimeHandlerCtorArgs[0]?.[2];
     if (typeof resolveCallRegistration !== "function") {
       throw new Error("expected per-call realtime registration resolver");
     }

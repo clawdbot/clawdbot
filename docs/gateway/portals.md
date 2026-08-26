@@ -89,7 +89,7 @@ One consequence worth planning for: portal listeners bind the same interfaces as
 
 Each portal uses a separate origin on its own port and binds to the same interfaces as the Gateway. Access requires the token in the portal URL. On the first request, the proxy stores that token in an HttpOnly cookie and removes it from subsequent upstream requests. The proxy validates this cookie itself and never forwards it to the application.
 
-Browser cookies are hostname-scoped rather than port-scoped, so the proxy isolates each application's cookie jar with an `oc_portal_<targetPort>_` name prefix. Requests forward only cookies with that portal's prefix and strip it before reaching the application; Gateway cookies, unprefixed cookies, and cookies for other portals are dropped. Application `Set-Cookie` responses receive the prefix, and any `Domain` attribute is removed so the cookie stays host-only.
+Browser cookies are hostname-scoped rather than port-scoped, so the proxy gives each portal instance a random `oc_portal_<instance>_` cookie-name prefix. Requests forward only cookies with the current portal's prefix and strip it before reaching the application; Gateway cookies, unprefixed cookies, and cookies from sibling or closed portals are dropped. Application `Set-Cookie` responses receive the prefix, and any `Domain` attribute is removed so the cookie stays host-only.
 
 Portals proxy only the selected local development server. They never serve Gateway data, and every portal ends when the Gateway restarts.
 
@@ -97,7 +97,7 @@ Portals proxy only the selected local development server. They never serve Gatew
 
 - The development server must run on the Gateway host. Remote worker support is planned.
 - A proxy or tunnel in front of the Gateway does not automatically expose portal listener ports. The Control UI detects this and shows a reachable URL with retry guidance instead of mounting a dead iframe.
-- Browser-side cookie code sees the prefixed names in `document.cookie`. Applications that manage cookies in browser code must account for the prefix; unprefixed cookies written directly by browser code are not forwarded to the target.
+- The prefix isolates cookies forwarded to each target; it does not create separate browser cookie jars. Browser-side code can see non-`HttpOnly` cookies for sibling portals on the same hostname through `document.cookie`. Use `HttpOnly` for sensitive application cookies. Applications that manage cookies in browser code must account for the prefix; unprefixed cookies written directly by browser code are not forwarded to the target.
 
 ## Troubleshooting
 

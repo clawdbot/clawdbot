@@ -1,4 +1,3 @@
-import type { Tool as SdkTool } from "@github/copilot-sdk";
 import type {
   AgentMessage,
   AnyAgentTool,
@@ -253,8 +252,10 @@ export async function runCopilotExecution(context: {
     frameImageIdentity?: string;
   } = { value: 0 };
   let codeModeEngaged: boolean | undefined;
+  let promptToolPolicy:
+    | Awaited<ReturnType<typeof createToolBridge>>["promptToolPolicy"]
+    | undefined;
   try {
-    let sdkTools: SdkTool[] = [];
     let resultContentSourceByToolName = new Map<
       string,
       NonNullable<AnyAgentTool["resultContentSource"]>
@@ -299,7 +300,7 @@ export async function runCopilotExecution(context: {
         });
         cleanupToolBridge = toolBridge.cleanup;
         codeModeEngaged = toolBridge.codeModeEngaged;
-        sdkTools = toolBridge.sdkTools;
+        promptToolPolicy = toolBridge.promptToolPolicy;
         resultContentSourceByToolName = new Map(
           toolBridge.sourceTools.flatMap((tool) =>
             tool.resultContentSource ? [[tool.name, tool.resultContentSource] as const] : [],
@@ -333,7 +334,7 @@ export async function runCopilotExecution(context: {
       operation: deps.operation,
       poolAcquire,
       ringZeroSystemAgentRun,
-      sdkTools,
+      promptToolPolicy,
       sessionProvider,
       settledToolFinalization,
       signal: params.abortSignal,
@@ -362,6 +363,8 @@ export async function runCopilotExecution(context: {
         session = (await client.resumeSession(resumeSessionId, {
           ...sessionConfig,
           continuePendingWork: false,
+          // Settled finalization must not replay lifecycle from the completed turn.
+          ...(settledToolFinalization ? { suppressResumeEvent: true } : {}),
         })) as unknown as SessionLike;
         nativeSessionHistoryValidated = input.initialReplayState?.journalValidated === true;
       } catch (error: unknown) {

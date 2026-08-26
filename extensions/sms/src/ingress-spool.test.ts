@@ -96,6 +96,9 @@ afterEach(async () => {
 describe("createSmsIngressSpool", () => {
   it("retries acknowledged MMS provider outages before adopting later same-sender messages", async () => {
     const stateDir = await createStateDir();
+    let now = 1_700_000_000_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    disposers.push(() => nowSpy.mockRestore());
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     disposers.push(() => {
       vi.unstubAllEnvs();
@@ -232,14 +235,14 @@ describe("createSmsIngressSpool", () => {
     const firstResponse = await postSignedCallback(mediaCallback);
     expect(firstResponse.status).toBe(200);
     expect(firstResponse.headers.get("x-openclaw-delivery-accepted")).toBe("durable");
-    await vi.waitFor(async () => {
-      expect(mediaRequests).toBe(1);
-      expect(await queue.listPending()).toEqual([
-        expect.objectContaining({ id: messageSid, lastError: expect.stringContaining("HTTP 429") }),
-      ]);
-    });
+    await spool.waitForIdle();
+    expect(mediaRequests).toBe(1);
+    expect(await queue.listPending()).toEqual([
+      expect.objectContaining({ id: messageSid, lastError: expect.stringContaining("HTTP 429") }),
+    ]);
     expect(deliveries).toEqual([]);
 
+    now += 1_000;
     const secondSid = `SM${"d".repeat(32)}`;
     const secondResponse = await postSignedCallback({
       ...form(secondSid),
@@ -247,7 +250,7 @@ describe("createSmsIngressSpool", () => {
       Body: "the later message",
     });
     expect(secondResponse.status).toBe(200);
-    await vi.waitFor(() => expect(deliveries).toHaveLength(2), { timeout: 5_000 });
+    await spool.waitForIdle();
     expect(deliveries).toEqual([
       { id: messageSid, body: "keep this attachment", attachments: 1 },
       { id: secondSid, body: "the later message", attachments: 0 },

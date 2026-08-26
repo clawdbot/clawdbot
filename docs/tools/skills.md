@@ -34,14 +34,15 @@ binary presence.
 OpenClaw loads from these sources, **highest precedence first**. When the same
 skill name appears in multiple places, the highest source wins.
 
-| Priority    | Source                 | Path                                    |
-| ----------- | ---------------------- | --------------------------------------- |
-| 1 — highest | Workspace skills       | `<workspace>/skills`                    |
-| 2           | Project agent skills   | `<workspace>/.agents/skills`            |
-| 3           | Personal agent skills  | `~/.agents/skills` (default state only) |
-| 4           | Managed / local skills | `<state-dir>/skills`                    |
-| 5           | Bundled skills         | shipped with the install                |
-| 6 — lowest  | Extra directories      | `skills.load.extraDirs` + plugin skills |
+| Priority    | Source                 | Path                                     |
+| ----------- | ---------------------- | ---------------------------------------- |
+| 1 — highest | Workspace skills       | `<workspace>/skills`                     |
+| 2           | Project agent skills   | `<workspace>/.agents/skills`             |
+| 3           | Personal agent skills  | `~/.agents/skills` (default state only)  |
+| 4           | Managed / local skills | `<state-dir>/skills`                     |
+| 5           | Bundled skills         | shipped with the install                 |
+| 5           | Custodian skills       | shipped; configured Custodian agent only |
+| 6 — lowest  | Extra directories      | `skills.load.extraDirs` + plugin skills  |
 
 Skill roots support grouped layouts. OpenClaw discovers a skill whenever
 `SKILL.md` appears anywhere under a configured root (up to 6 levels deep):
@@ -54,6 +55,10 @@ Skill roots support grouped layouts. OpenClaw discovers a skill whenever
 The folder path is for organization only. The skill's name and slash command
 come from the `name` frontmatter field (or the directory name when `name` is
 missing). Agent allowlists (below) also match on this `name`.
+
+The release-versioned [Custodian skill library](/tools/custodian-skills) shares
+the bundled precedence tier but is absent for every agent except the configured
+system/Custodian agent.
 
 <Note>
   Codex CLI's native `$CODEX_HOME/skills` directory is **not** an OpenClaw
@@ -466,9 +471,13 @@ metadata:
       (Homebrew's `bin` on a fresh install, else `~/.local/bin`) rather than
       your configured `GOBIN` — your own `GOBIN`, `GOPATH`, and `GOTOOLCHAIN`
       env vars are read but never overwritten.
-    - **Download:** `url` (required), `archive` (`tar.gz` | `tar.bz2` | `zip`),
-      `extract` (default: auto when archive detected), `stripComponents`,
-      `targetDir` (default: `~/.openclaw/tools/<skillKey>`).
+    - **Download:** `url` (required), `sha256` (optional 64-character hexadecimal
+      digest, verified after download and before the file is installed or extracted),
+      `archive` (`tar.gz` | `tar.bz2` | `zip`), `extract` (default: auto when
+      archive detected), `stripComponents`, `targetDir` (default:
+      `~/.openclaw/tools/<skillKey>`). Existing specs without `sha256` keep the
+      previous download behavior. Response bodies are capped at 256 MiB; larger
+      transfers are aborted while streaming, and partial staging data is removed.
   </Accordion>
   <Accordion title="Sandboxing notes">
     `requires.bins` is checked on the **host** at skill load time. If an agent

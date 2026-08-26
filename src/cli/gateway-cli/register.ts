@@ -20,10 +20,11 @@ import { defaultRuntime } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { addGatewayServiceCommands } from "../daemon-cli/register-service-commands.js";
-import { rethrowExpectedCliError } from "../failure-output.js";
+import { formatCliJsonFailure, rethrowExpectedCliError } from "../failure-output.js";
 import { parseGatewayPortOption } from "../gateway-port-option.js";
-import { callGatewayFromCliWithTransport } from "../gateway-rpc.js";
+import { addGatewayClientOptions, callGatewayFromCliWithTransport } from "../gateway-rpc.js";
 import { formatHelpExamples } from "../help-format.js";
+import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
 import { setCommandJsonMode } from "../program/json-mode.js";
 import type { GatewayDiscoverOpts } from "./discover.js";
 import { isGatewayMachineOutput } from "./output-mode.js";
@@ -106,13 +107,11 @@ function loadDaemonStatusGatherModule() {
 }
 
 function gatewayCallOpts(cmd: Command, defaultTimeoutMs = DEFAULT_GATEWAY_RPC_TIMEOUT_MS): Command {
-  return cmd
-    .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
-    .option("--token <token>", "Gateway token (if required)")
-    .option("--password <password>", "Gateway password (password auth)")
-    .option("--timeout <ms>", "Timeout in ms", String(defaultTimeoutMs))
-    .option("--expect-final", "Wait for final response (agent)", false)
-    .option("--json", "Output JSON", false);
+  return addGatewayClientOptions(cmd, { timeoutMs: defaultTimeoutMs }).option(
+    "--json",
+    "Output JSON",
+    false,
+  );
 }
 
 async function callGatewayReadOnlyCli(method: string, opts: GatewayRpcOpts, params?: unknown) {
@@ -148,15 +147,14 @@ async function runGatewayCommand(
         formatGatewayClientRequestErrorJson,
         formatGatewayTransportErrorJson,
       } = await import("../../gateway/call.js");
-      const payload =
+      defaultRuntime.writeJson(
         formatGatewayAuthErrorJson(err) ??
-        formatGatewayClientRequestErrorJson(err) ??
-        formatGatewayTransportErrorJson(err);
-      if (payload) {
-        defaultRuntime.writeJson(payload);
-        defaultRuntime.exit(1);
-        return;
-      }
+          formatGatewayClientRequestErrorJson(err) ??
+          formatGatewayTransportErrorJson(err) ??
+          formatCliJsonFailure(err),
+      );
+      defaultRuntime.exit(1);
+      return;
     }
     const message = formatErrorMessage(err);
     defaultRuntime.error(label ? `${label}: ${message}` : message);
@@ -168,24 +166,15 @@ function parseDaysOption(raw: unknown, fallback = 30): number {
   if (typeof raw === "number" && Number.isFinite(raw)) {
     return Math.max(1, Math.floor(raw));
   }
-  if (typeof raw === "string" && raw.trim() !== "") {
+  if (typeof raw === "string") {
     const parsed = parseStrictPositiveInteger(raw);
     if (parsed !== undefined) {
       return parsed;
     }
-  }
-  return fallback;
-}
-
-function parseGatewayRpcTimeoutOption(raw: unknown, fallback = 10_000): number {
-  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
-    return Math.floor(raw);
-  }
-  if (typeof raw === "string" && raw.trim() !== "") {
-    const parsed = parseStrictPositiveInteger(raw);
-    if (parsed !== undefined) {
-      return parsed;
-    }
+    // A present-but-unparseable value (including an explicit empty one) is
+    // operator error; the main RPC path rejects malformed --timeout the same
+    // way instead of silently defaulting.
+    throw new Error(`Invalid --days. Use a positive integer, e.g. --days 30. Received: "${raw}".`);
   }
   return fallback;
 }
@@ -570,7 +559,6 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
       .description("Call a Gateway method")
       .argument("<method>", "Method name (health/status/system-presence/cron.*)")
       .option("--params <json>", "JSON object string for params", "{}")
-      .option("--port <port>", "Local Gateway port")
       .action(async (method, opts, command) => {
         await runGatewayCommand(
           async () => {
@@ -606,7 +594,6 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
       .description("Prepare the Gateway for cooperative host suspension")
       .option("--request-id <id>", "Stable suspension request id")
       .option("--wait <seconds>", "Wait up to this many seconds for active work to drain")
-      .option("--port <port>", "Local Gateway port")
       .action(async (opts, command) => {
         await runGatewayCommand(
           async () => {
@@ -632,7 +619,6 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
       .command("resume")
       .description("Release a cooperative Gateway suspension")
       .argument("<suspensionId>", "Suspension id returned by gateway suspend")
-      .option("--port <port>", "Local Gateway port")
       .action(async (suspensionId, opts, command) => {
         await runGatewayCommand(
           async () => {
@@ -658,7 +644,7 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
       .action(async (opts, command) => {
         await runGatewayCommand(
           async () => {
-            const rpcOpts = resolveGatewayRpcOptions(opts, command);
+            const rpcOpts = resolveGatewayRpcOptionsWithLocalPort(opts, command);
             const days = parseDaysOption(opts.days);
             const agentId = typeof opts.agent === "string" ? opts.agent.trim() : undefined;
             // The gateway honors agentScope only when no agentId is set, so reject the
@@ -690,7 +676,6 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
     gateway
       .command("health")
       .description("Fetch Gateway health")
-      .option("--port <port>", "Local Gateway port")
       .action(async (opts, command) => {
         await runGatewayCommand(
           async () => {
@@ -706,7 +691,9 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
                 error,
                 config: rpcOpts.config ?? (await readNonObservingHealthConfig()),
                 runtime: defaultRuntime,
-                timeoutMs: parseGatewayRpcTimeoutOption(rpcOpts.timeout),
+                timeoutMs: parseTimeoutMsWithFallback(rpcOpts.timeout, 10_000, {
+                  invalidType: "error",
+                }),
                 token: rpcOpts.token,
                 password: rpcOpts.password,
                 localPortOverride: rpcOpts.localPortOverride,
@@ -811,11 +798,15 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
               return;
             }
 
-            const result = await callGatewayReadOnlyCli("diagnostics.stability", rpcOpts, {
-              limit: query.limit,
-              ...(query.type ? { type: query.type } : {}),
-              ...(query.sinceSeq !== undefined ? { sinceSeq: query.sinceSeq } : {}),
-            });
+            const result = await callGatewayReadOnlyCli(
+              "diagnostics.stability",
+              resolveGatewayRpcOptionsWithLocalPort(rpcOpts, command),
+              {
+                limit: query.limit,
+                ...(query.type ? { type: query.type } : {}),
+                ...(query.sinceSeq !== undefined ? { sinceSeq: query.sinceSeq } : {}),
+              },
+            );
             if (rpcOpts.json) {
               defaultRuntime.writeJson(result);
               return;

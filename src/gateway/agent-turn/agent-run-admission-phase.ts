@@ -71,6 +71,7 @@ export type PreparedAgentRunDispatch = {
   lifecycleStorePath: string;
   resolvedThreadId?: string | number;
   dispatchTaskTrackingMode: Exclude<GatewayAgentTaskTrackingMode, "plugin_subagent">;
+  unpersistedOffloadedRefs: OffloadedRef[];
   userTurn: PreparedAgentRunUserTurn;
   restoreAdmittedRestartRecoveryInterrupted?: () => Promise<
     MainSessionRecoveryPendingTarget | undefined
@@ -305,10 +306,15 @@ export async function prepareAgentRunDispatch(params: {
       claimAgentRunContext(
         params.runId,
         params.suppressVisibleSessionEffects
-          ? { isControlUiVisible: false, lifecycleGeneration: params.lifecycleGeneration }
+          ? {
+              isControlUiVisible: false,
+              lifecycleGeneration: params.lifecycleGeneration,
+              mainSessionRestartRecovery: params.isRestartRecoveryResumeRun ? true : undefined,
+            }
           : {
               sessionKey: params.resolvedSessionKey,
               lifecycleGeneration: params.lifecycleGeneration,
+              mainSessionRestartRecovery: params.isRestartRecoveryResumeRun ? true : undefined,
             },
       );
     }
@@ -359,6 +365,7 @@ export async function prepareAgentRunDispatch(params: {
         task: params.request.message.trim(),
         requester: params.client?.internal?.pluginSubagentRequester,
         pluginId: normalizeOptionalString(params.client?.internal?.pluginRuntimeOwnerId),
+        gatewayContextResolver: params.context.resolveGatewayContext,
       });
     } catch (err) {
       params.context.logGateway.warn(
@@ -559,6 +566,7 @@ export async function prepareAgentRunDispatch(params: {
     lifecycleStorePath,
     resolvedThreadId,
     dispatchTaskTrackingMode,
+    unpersistedOffloadedRefs: userTurn.recorder ? [] : params.offloadedRefs,
     userTurn,
     restoreAdmittedRestartRecoveryInterrupted,
   };

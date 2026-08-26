@@ -200,6 +200,7 @@ function attachSignalVisibleText<T extends object>(result: T, visibleText: strin
     ...result,
     meta: {
       ...meta,
+      visibleText,
       signalVisibleText: visibleText,
     },
   };
@@ -211,6 +212,9 @@ const signalMessageAdapter = defineChannelMessageAdapter({
     capabilities: {
       text: true,
       media: true,
+      payload: true,
+      replyTo: true,
+      messageSendingHooks: true,
     },
   },
   send: {
@@ -300,16 +304,17 @@ async function sendFormattedSignalText(ctx: {
   if (chunks.length === 0 && ctx.text) {
     chunks = [{ text: ctx.text, styles: [] }];
   }
+  const effectiveReplyToMode =
+    ctx.replyToMode ??
+    resolveSignalReplyToMode({
+      cfg: ctx.cfg,
+      accountId: ctx.accountId,
+      chatType: inferSignalTargetChatType(to),
+    });
   const nextReplyToId = createReplyToFanout({
     replyToId: ctx.replyToId,
     replyToIdSource: ctx.replyToIdSource,
-    replyToMode:
-      ctx.replyToMode ??
-      resolveSignalReplyToMode({
-        cfg: ctx.cfg,
-        accountId: ctx.accountId,
-        chatType: inferSignalTargetChatType(to),
-      }),
+    replyToMode: effectiveReplyToMode,
   });
   const results = [];
   for (const chunk of chunks) {

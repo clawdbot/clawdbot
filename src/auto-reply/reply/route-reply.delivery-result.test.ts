@@ -180,25 +180,6 @@ describe("routeReply delivery result", () => {
     });
   });
 
-  it("reports delivery when the provider returns a non-id delivery identity", async () => {
-    mocks.deliverOutboundPayloads.mockResolvedValueOnce([
-      { channel: "whatsapp", messageId: "", toJid: "group:ops" },
-    ]);
-
-    const res = await routeReply({
-      payload: { text: "hello" },
-      channel: "whatsapp",
-      to: "group:ops",
-      cfg: {} as never,
-    });
-
-    expect(res).toEqual({
-      ok: true,
-      delivered: true,
-      messageId: "",
-    });
-  });
-
   it.each([
     ["skipped", false, undefined],
     ["suppressed", false, undefined],

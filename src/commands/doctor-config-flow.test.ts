@@ -1858,6 +1858,33 @@ describe("doctor config flow", () => {
     expect(result.cfg.agents).not.toHaveProperty("list");
   });
 
+  it("stamps explicit ownership when Doctor migrates a markerless multi-agent list", async () => {
+    const rawConfig = {
+      agents: {
+        list: [{ id: "ops" }, { id: "research", model: "openai/research" }],
+      },
+    };
+    const result = await runDoctorConfigWithInput({
+      config: migratePersistedImplicitMainRoster(rawConfig).config as OpenClawConfig,
+      parsedConfig: rawConfig,
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.shouldWriteConfig).toBe(true);
+    expect(result.explicitSetPaths).toEqual([
+      ["agents", "entries"],
+      ["agents", "ownership"],
+    ]);
+    expect(result.cfg.agents).toEqual({
+      ownership: "explicit",
+      entries: {
+        ops: {},
+        research: { model: "openai/research" },
+      },
+    });
+  });
+
   it("materializes ambient roles for a multi-agent configured default", async () => {
     const rawConfig = {
       agents: {

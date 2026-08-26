@@ -1,22 +1,14 @@
 // Control UI tests cover markdown behavior.
 import { describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
-import { handleMarkdownCodeBlockCopy } from "./markdown-code-blocks.ts";
+import { handleMarkdownCodeBlockClick } from "./markdown-code-blocks.ts";
+import { splitStableStreamingMarkdown } from "./markdown-streaming.ts";
 import { toSanitizedMarkdownHtml, toStreamingMarkdownHtml } from "./markdown.ts";
 
 function htmlFragment(html: string): HTMLElement {
   const container = document.createElement("div");
   container.innerHTML = html;
   return container;
-}
-
-function escapedCodeBlockCopyAttribute(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
 }
 
 function withControlUiBasePath<T>(basePath: string, fn: () => T): T {
@@ -337,7 +329,7 @@ describe("toSanitizedMarkdownHtml", () => {
           throw new Error("expected code copy button");
         }
 
-        fragment.addEventListener("click", handleMarkdownCodeBlockCopy);
+        fragment.addEventListener("click", handleMarkdownCodeBlockClick);
         button.click();
 
         await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith(blockArt));
@@ -353,16 +345,23 @@ describe("toSanitizedMarkdownHtml", () => {
     it("renders indented code blocks", () => {
       // markdown-it requires a blank line before indented code
       const html = toSanitizedMarkdownHtml("text\n\n    indented code");
-      expect(html).toBe(
-        `<p>text</p>\n<div class="code-block-wrapper"><div class="code-block-header"><button type="button" class="code-block-copy" data-code="${escapedCodeBlockCopyAttribute("indented code")}" aria-label="Copy code"><span class="code-block-copy__idle">Copy</span><span class="code-block-copy__done">Copied!</span></button></div><pre><code>indented code\n</code></pre></div>`,
+      const fragment = htmlFragment(html);
+
+      expect(fragment.querySelector("p")?.textContent).toBe("text");
+      expect(fragment.querySelector(".code-block-lang")?.textContent).toBe("Code");
+      expect(fragment.querySelector("pre code")?.textContent).toBe("indented code\n");
+      expect(fragment.querySelector(".code-block-copy")?.getAttribute("data-code")).toBe(
+        "indented code",
       );
     });
 
     it("includes copy button", () => {
       const html = toSanitizedMarkdownHtml("```\ncode\n```");
-      expect(html).toBe(
-        `<div class="code-block-wrapper"><div class="code-block-header"><button type="button" class="code-block-copy" data-code="${escapedCodeBlockCopyAttribute("code")}" aria-label="Copy code"><span class="code-block-copy__idle">Copy</span><span class="code-block-copy__done">Copied!</span></button></div><pre><code>code\n</code></pre></div>`,
-      );
+      const fragment = htmlFragment(html);
+
+      expect(fragment.querySelector(".code-block-lang")?.textContent).toBe("Code");
+      expect(fragment.querySelector(".code-block-copy__idle")).toBeInstanceOf(HTMLSpanElement);
+      expect(fragment.querySelector(".code-block-copy")?.getAttribute("data-code")).toBe("code");
     });
 
     it("omits copy chrome when rendering user-preserved code blocks", () => {
@@ -383,7 +382,8 @@ PY
       const fragment = htmlFragment(html);
 
       expect(fragment.querySelector(".code-block-copy")).toBeNull();
-      expect(fragment.textContent).toBe(source);
+      expect(fragment.querySelector(".code-block-wrapper")).toBeNull();
+      expect(fragment.querySelector("pre code")?.textContent).toBe(source);
     });
 
     it("keeps the no-chrome code-block cache separate from copy-enabled rendering", () => {
@@ -397,42 +397,154 @@ PY
       );
     });
 
-    it("keeps short JSON code blocks visible and highlighted", () => {
-      const html = toSanitizedMarkdownHtml(jsonBlock(6));
-      const fragment = htmlFragment(html);
-      const code = fragment.querySelector(".code-block-wrapper pre code");
+    it("keeps the interactive code-block cache separate from static rendering", () => {
+      const markdown = jsonBlock(41);
+      const staticHtml = toSanitizedMarkdownHtml(markdown);
+      const interactiveHtml = toSanitizedMarkdownHtml(markdown, {
+        codeBlockInteraction: "interactive",
+      });
 
-      expect(fragment.querySelector("details.json-collapse")).toBeNull();
-      expect(code?.textContent?.split("\n")).toHaveLength(7);
+      expect(htmlFragment(staticHtml).querySelector(".code-block-expand")).toBeNull();
+      expect(htmlFragment(interactiveHtml).querySelector(".code-block-expand")).toBeInstanceOf(
+        HTMLButtonElement,
+      );
+    });
+
+    it("keeps short code blocks fully visible in interactive hosts", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml(jsonBlock(7), { codeBlockInteraction: "interactive" }),
+      );
+      const code = fragment.querySelector(".code-block-viewport pre code");
+
+      expect(fragment.querySelector(".code-block-wrapper.is-collapsible")).toBeNull();
+      expect(fragment.querySelector(".code-block-expand")).toBeNull();
+      expect(code?.textContent?.split("\n")).toHaveLength(8);
       expect(code?.innerHTML).toContain("hljs-");
     });
 
-    it("collapses JSON only above 40 lines and uses one copyable header", () => {
-      const atLimit = htmlFragment(toSanitizedMarkdownHtml(jsonBlock(40)));
-      const overLimit = htmlFragment(toSanitizedMarkdownHtml(jsonBlock(41)));
-      const details = overLimit.querySelector("details.json-collapse");
-      const summary = details?.querySelector("summary");
+    it("previews longer code blocks with the exact hidden-line count", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml(jsonBlock(11), { codeBlockInteraction: "interactive" }),
+      );
+      const expand = fragment.querySelector(".code-block-expand");
 
-      expect(atLimit.querySelector("details.json-collapse")).toBeNull();
-      expect(summary?.textContent).toContain("JSON · 41 lines");
-      expect(summary?.querySelector(".code-block-copy")).toBeInstanceOf(HTMLButtonElement);
-      expect(details?.querySelectorAll(".code-block-header")).toHaveLength(1);
-      expect(summary?.classList.contains("code-block-header")).toBe(true);
-      expect(details?.querySelector("pre code")?.innerHTML).toContain("hljs-");
+      expect(fragment.querySelector(".code-block-wrapper.is-collapsible")).toBeInstanceOf(
+        HTMLDivElement,
+      );
+      expect(expand?.textContent).toContain("4 hidden lines");
+      expect(expand?.getAttribute("aria-expanded")).toBe("false");
+      expect(fragment.querySelector(".code-block-viewport pre code")?.innerHTML).toContain("hljs-");
     });
 
-    it("localizes collapsed JSON line counts", async () => {
+    it("uses the singular hidden-line label for a single hidden line", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml(jsonBlock(8), { codeBlockInteraction: "interactive" }),
+      );
+      const expand = fragment.querySelector(".code-block-expand");
+
+      expect(expand?.textContent).toBe("1 hidden line");
+      expect(expand?.getAttribute("aria-label")).toBe("Show 1 hidden line");
+    });
+
+    it.each(["text", "md", "markdown", "TEXT", "Markdown title=notes"])(
+      "keeps long %s fences fully visible",
+      (info) => {
+        const fragment = htmlFragment(
+          toSanitizedMarkdownHtml(`\`\`\`${info}\n${"prose line\n".repeat(20)}\`\`\``, {
+            codeBlockInteraction: "interactive",
+          }),
+        );
+
+        expect(fragment.querySelector(".code-block-wrapper.is-collapsible")).toBeNull();
+        expect(fragment.querySelector(".code-block-expand")).toBeNull();
+        expect(fragment.querySelector("pre code")?.textContent).toContain("prose line");
+      },
+    );
+
+    it.each([
+      { info: "json", content: '"value",\n'.repeat(20) },
+      { info: "bash", content: "echo hi\n".repeat(20) },
+      { info: "", content: "unlabeled line\n".repeat(20) },
+    ])("keeps long $info fences collapsible", ({ info, content }) => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml(`\`\`\`${info}\n${content}\`\`\``, {
+          codeBlockInteraction: "interactive",
+        }),
+      );
+
+      expect(fragment.querySelector(".code-block-wrapper.is-collapsible")).toBeInstanceOf(
+        HTMLDivElement,
+      );
+      expect(fragment.querySelector(".code-block-expand")?.textContent).toContain(
+        "13 hidden lines",
+      );
+    });
+
+    it("keeps collapse and wrap controls out of hosts that do not own them", () => {
+      const markdown = jsonBlock(41);
+      const staticHost = htmlFragment(toSanitizedMarkdownHtml(markdown));
+      const interactiveHost = htmlFragment(
+        toSanitizedMarkdownHtml(markdown, { codeBlockInteraction: "interactive" }),
+      );
+
+      expect(staticHost.querySelector(".code-block-expand")).toBeNull();
+      expect(staticHost.querySelector(".code-block-wrap")).toBeNull();
+      expect(staticHost.querySelector(".code-block-viewport")).toBeNull();
+      expect(staticHost.querySelector(".code-block-copy")).toBeInstanceOf(HTMLButtonElement);
+      expect(interactiveHost.querySelector(".code-block-expand")).toBeInstanceOf(HTMLButtonElement);
+      expect(interactiveHost.querySelector(".code-block-wrap")).toBeInstanceOf(HTMLButtonElement);
+    });
+
+    it("reveals a collapsed block through the shared click owner", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml(jsonBlock(41), { codeBlockInteraction: "interactive" }),
+      );
+      const wrapper = fragment.querySelector(".code-block-wrapper");
+      const expand = fragment.querySelector<HTMLButtonElement>(".code-block-expand");
+      fragment.addEventListener("click", handleMarkdownCodeBlockClick);
+
+      expand?.click();
+
+      expect(wrapper?.classList.contains("is-expanded")).toBe(true);
+      expect(expand?.getAttribute("aria-expanded")).toBe("true");
+    });
+
+    it("toggles wrapping through the shared click owner", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml(jsonBlock(41), { codeBlockInteraction: "interactive" }),
+      );
+      const wrapper = fragment.querySelector(".code-block-wrapper");
+      const wrap = fragment.querySelector<HTMLButtonElement>(".code-block-wrap");
+      fragment.addEventListener("click", handleMarkdownCodeBlockClick);
+
+      wrap?.click();
+      expect(wrapper?.classList.contains("is-wrapped")).toBe(true);
+      expect(wrap?.getAttribute("aria-pressed")).toBe("true");
+
+      wrap?.click();
+      expect(wrapper?.classList.contains("is-wrapped")).toBe(false);
+      expect(wrap?.getAttribute("aria-pressed")).toBe("false");
+    });
+
+    it("localizes the hidden-line count and the language fallback", async () => {
       i18n.registerTranslation("pt-BR", {
         chat: {
           codeBlock: {
-            jsonLines: "JSON · {count} linhas",
+            languageFallback: "Código",
+            hiddenLines: "{count} linhas ocultas",
           },
         },
       });
       await i18n.setLocale("pt-BR");
       try {
-        const fragment = htmlFragment(toSanitizedMarkdownHtml(jsonBlock(41)));
-        expect(fragment.querySelector("summary")?.textContent).toContain("JSON · 41 linhas");
+        const fragment = htmlFragment(
+          toSanitizedMarkdownHtml(jsonBlock(41), { codeBlockInteraction: "interactive" }),
+        );
+        expect(fragment.querySelector(".code-block-expand")?.textContent).toContain(
+          "34 linhas ocultas",
+        );
+        const unlabeled = htmlFragment(toSanitizedMarkdownHtml("```\nconteúdo\n```"));
+        expect(unlabeled.querySelector(".code-block-lang")?.textContent).toBe("Código");
       } finally {
         await i18n.setLocale("en");
       }
@@ -708,6 +820,14 @@ PY
   });
 
   describe("large text handling", () => {
+    it("does not build cache keys for replies larger than the cache limit", () => {
+      const locale = vi.spyOn(i18n, "getLocale");
+
+      expect(toSanitizedMarkdownHtml("x".repeat(50_001))).toContain("x".repeat(100));
+      expect(locale).not.toHaveBeenCalled();
+      locale.mockRestore();
+    });
+
     it("uses plain text fallback for oversized content", () => {
       // MARKDOWN_PARSE_LIMIT is 40_000 chars
       const input = Array.from(
@@ -745,6 +865,149 @@ PY
 });
 
 describe("toStreamingMarkdownHtml", () => {
+  it("keeps appended-prefix splitting below repeated full-rescan cost", () => {
+    const splitIncrementally = splitStableStreamingMarkdown as (
+      markdown: string,
+      streamKey: string,
+    ) => ReturnType<typeof splitStableStreamingMarkdown>;
+    const prefixes: string[] = [];
+    let prefix = "<details><summary>Done</summary></details>\n\n";
+    // The ratio catches a reverted full-rescan path without making runner load
+    // part of the assertion by spending most of the test timeout on the baseline.
+    for (let index = 0; index < 48; index += 1) {
+      prefix += `${String(index).padStart(3, "0")} ${"streaming markdown ".repeat(30)}\n`;
+      prefixes.push(prefix);
+    }
+    const measure = (streamKey?: string) => {
+      const startedAt = performance.now();
+      for (const value of prefixes) {
+        if (streamKey) {
+          splitIncrementally(value, streamKey);
+        } else {
+          splitStableStreamingMarkdown(value);
+        }
+      }
+      return performance.now() - startedAt;
+    };
+    measure("line-scan-warmup");
+    const fullRescanMs = measure();
+    const incrementalMs = measure("line-scan-regression");
+
+    expect(incrementalMs).toBeLessThan(fullRescanMs / 5);
+  }, 5_000);
+
+  it("keeps chunked-prefix splits identical to full splits", () => {
+    const splitIncrementally = splitStableStreamingMarkdown as (
+      markdown: string,
+      streamKey: string,
+    ) => ReturnType<typeof splitStableStreamingMarkdown>;
+    const cases = [
+      [
+        "## Result",
+        "",
+        "A paragraph with `inline code`.",
+        "",
+        "<details>",
+        "<summary>Logs</summary>",
+        "",
+        "```ts",
+        "const value = 1;",
+        "```",
+        "",
+        "More **text**",
+        "",
+        "</details>",
+      ].join("\n"),
+      "- one\n\n  - nested\n\n[Docs][ref\\]]\n\n[ref\\]]: /docs",
+      "`` multiline\n<details> remains code\n``\n\n<details>\n<summary>Real</summary>",
+      "- item\n\n    <details>\n    <summary>Logs</summary>\n\n    still inside",
+      "1. item\n\n    <details>\n    <summary>Logs</summary>\n\n    still inside",
+    ];
+    for (const [caseIndex, markdown] of cases.entries()) {
+      for (const chunkSize of [1, 7, 64]) {
+        for (let end = chunkSize; end <= markdown.length + chunkSize; end += chunkSize) {
+          const prefix = markdown.slice(0, Math.min(end, markdown.length));
+          const key = `${caseIndex}-${chunkSize}`;
+          expect(splitIncrementally(prefix, `split-parity-${key}`)).toEqual(
+            splitStableStreamingMarkdown(prefix),
+          );
+          expect(toStreamingMarkdownHtml(prefix, {}, `html-parity-${key}`)).toBe(
+            toStreamingMarkdownHtml(prefix),
+          );
+          if (end >= markdown.length) {
+            break;
+          }
+        }
+      }
+    }
+  });
+
+  it("resets replaced streams and keeps interleaved streams independent", () => {
+    const splitIncrementally = splitStableStreamingMarkdown as (
+      markdown: string,
+      streamKey: string,
+    ) => ReturnType<typeof splitStableStreamingMarkdown>;
+    const streams = new Map([
+      ["a", "First stream\n\n```ts\nconst a = 1;"],
+      ["b", "Second stream\n\n<details>\n<summary>B</summary>"],
+    ]);
+    for (const end of [8, 16, 32, 64]) {
+      for (const [key, markdown] of streams) {
+        const prefix = markdown.slice(0, end);
+        expect(splitIncrementally(prefix, `interleaved-${key}`)).toEqual(
+          splitStableStreamingMarkdown(prefix),
+        );
+      }
+    }
+    for (const replacement of [
+      "short",
+      "Replacement\n\n- starts a different list",
+      "A much longer replacement\n\n```ts\nconst changed = true;",
+    ]) {
+      expect(splitIncrementally(replacement, "interleaved-a")).toEqual(
+        splitStableStreamingMarkdown(replacement),
+      );
+    }
+  });
+
+  it("resets an incremental cursor when a completed citation marker rewrites its prefix", () => {
+    const partial = "Intro\n\ncitevery-long-partial-citation-marker";
+    const completed = `${partial}\n\n\`\`\`ts\nconst answer = 42;`;
+
+    toStreamingMarkdownHtml(partial, {}, "citation-prefix-replacement");
+
+    expect(toStreamingMarkdownHtml(completed, {}, "citation-prefix-replacement")).toBe(
+      toStreamingMarkdownHtml(completed),
+    );
+  });
+
+  it.each(["- item", "1. item"])(
+    "keeps details inside a loose %s list continuation while streaming",
+    (item) => {
+      const markdown = `${item}\n\n    <details>\n    <summary>Logs</summary>\n\n    still inside`;
+      const fragment = htmlFragment(toStreamingMarkdownHtml(markdown, {}, `loose-list:${item}`));
+      const details = fragment.querySelector("li details");
+
+      expect(details?.querySelector("summary")?.textContent).toBe("Logs");
+      expect(details?.textContent).toContain("still inside");
+    },
+  );
+
+  it("preserves incremental parity when streamed text grows beyond the truncation cap", () => {
+    const text = Array.from(
+      { length: 210 },
+      (_, index) => `${String(index).padStart(3, "0")} ${"streamed markdown ".repeat(55)}\n`,
+    ).join("");
+
+    for (const end of [139_500, 140_050, 141_000, text.length]) {
+      const prefix = text.slice(0, end);
+
+      expect(toStreamingMarkdownHtml(prefix, {}, "truncated-stream-parity")).toBe(
+        toStreamingMarkdownHtml(prefix),
+      );
+    }
+  });
+
   it("marks a completed transcript-role header in the streaming tail", () => {
     const html = toStreamingMarkdownHtml("user[Thu 2026-07-02] question", {
       assistantTranscriptRoleHeaders: true,
@@ -845,53 +1108,5 @@ describe("toStreamingMarkdownHtml", () => {
     const html = toStreamingMarkdownHtml("prices are $$50 and");
 
     expect(html).toBe("<p>prices are $$50 and</p>\n");
-  });
-
-  it("streams an open code fence as a live-highlighted code block", () => {
-    const html = toStreamingMarkdownHtml("Intro\n\n```ts\nconst x = 1 < 2");
-    const fragment = htmlFragment(html);
-
-    expect(fragment.querySelector("p")?.textContent).toBe("Intro");
-    expect(fragment.querySelector("code.language-ts")?.textContent).toContain("const x = 1 < 2");
-    expect(html).not.toContain("markdown-plain-text-fallback");
-  });
-
-  it("streams an open list code fence through blank lines", () => {
-    const html = toStreamingMarkdownHtml("- ```ts\n  const x = 1;\n\n  const y = 2;");
-    const fragment = htmlFragment(html);
-    const code = fragment.querySelector("li code");
-
-    expect(code?.textContent).toContain("const x = 1;");
-    expect(code?.textContent).toContain("const y = 2;");
-    expect(html).not.toContain("markdown-plain-text-fallback");
-  });
-
-  it("keeps completed tilde-fence code out of the remend tail", () => {
-    // remend only understands ``` fences; a closed ~~~ block must land in the
-    // stable prefix so its raw markers are never "completed" as inline markdown.
-    const html = toStreamingMarkdownHtml('~~~ts\nconst s = "**open";\n~~~\ncontinuing **bold');
-    const fragment = htmlFragment(html);
-
-    expect(fragment.querySelector("code")?.textContent).toContain('const s = "**open";');
-    expect(fragment.querySelector("code strong")).toBeNull();
-    expect(fragment.querySelector("p strong")?.textContent).toBe("bold");
-  });
-
-  it("streams an open blockquote code fence through blank lines", () => {
-    const html = toStreamingMarkdownHtml("> ```ts\n> const x = 1;\n>\n> const y = 2;");
-    const fragment = htmlFragment(html);
-    const code = fragment.querySelector("blockquote code");
-
-    expect(code?.textContent).toContain("const x = 1;");
-    expect(code?.textContent).toContain("const y = 2;");
-    expect(html).not.toContain("markdown-plain-text-fallback");
-  });
-
-  it("renders a completed code fence once the closing fence arrives", () => {
-    const html = toStreamingMarkdownHtml("```ts\nconst x = 1;\n```");
-
-    expect(html).toContain('<code class="hljs language-ts"');
-    expect(html).toContain("const x = 1;");
-    expect(html).not.toContain("markdown-plain-text-fallback");
   });
 });

@@ -170,6 +170,7 @@ type MemoryViewProps = {
   onAddonChange: (pluginId: string, enabled: boolean) => void;
   pluginsHref: string;
   memoryImportHref: string;
+  canImportMemory: boolean;
   /** New status-led landing view. */
   overview: TemplateResult;
   /** Search and read the selected agent's indexed memory. */
@@ -384,9 +385,11 @@ function renderSettingsTab(props: MemoryViewProps) {
         renderSettingsRow({
           title: t("tabs.memoryImport"),
           description: t("subtitles.memoryImport"),
-          control: html`<a class="memory-page__link" href=${props.memoryImportHref}
-            >${t("memoryPage.import.link")}</a
-          >`,
+          control: props.canImportMemory
+            ? html`<a class="memory-page__link" href=${props.memoryImportHref}
+                >${t("memoryPage.import.link")}</a
+              >`
+            : renderSettingsValue(t("memoryImport.adminRequired")),
         }),
       )}
     </div>

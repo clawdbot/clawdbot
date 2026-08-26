@@ -86,12 +86,16 @@ export type DevicePairingList = {
   paired: PairedDevice[];
 };
 
+export type ExecSecurity = "deny" | "allowlist" | "full";
+export type ExecAsk = "off" | "on-miss" | "always";
 type ExecApprovalsDefaults = {
-  security?: string;
-  ask?: string;
-  askFallback?: string;
+  security?: ExecSecurity;
+  ask?: ExecAsk;
+  askFallback?: ExecSecurity;
   autoAllowSkills?: boolean;
 };
+
+export type ExecApprovalsResolvedDefaults = Required<ExecApprovalsDefaults>;
 
 export type ExecApprovalsAllowlistEntry = {
   id?: string;
@@ -120,6 +124,7 @@ type FileExecApprovalsSnapshot = {
   exists: boolean;
   hash: string;
   file: ExecApprovalsFile;
+  resolvedDefaults?: ExecApprovalsResolvedDefaults;
 };
 
 type NativeExecApprovalRule = {
@@ -153,8 +158,11 @@ type NodesRequestState = {
   requestGeneration: number;
 };
 
+type QueuedRefresh = "none" | "quiet" | "visible";
+
 type NodesState = NodesRequestState & {
   nodesLoading: boolean;
+  nodesQueuedRefresh: QueuedRefresh;
   nodes: Array<Record<string, unknown>>;
   lastError: string | null;
   chatError?: string | null;
@@ -162,6 +170,7 @@ type NodesState = NodesRequestState & {
 
 type DevicesState = NodesRequestState & {
   devicesLoading: boolean;
+  devicesQueuedRefresh: QueuedRefresh;
   devicesError: string | null;
   devicesList: DevicePairingList | null;
 };
@@ -205,9 +214,11 @@ export function createInitialDevicesState(
     connected: snapshot.connected ?? false,
     requestGeneration: 0,
     nodesLoading: false,
+    nodesQueuedRefresh: "none",
     nodes: [],
     lastError: null,
     devicesLoading: false,
+    devicesQueuedRefresh: "none",
     devicesError: null,
     devicesList: null,
     execApprovalsLoading: false,
@@ -227,9 +238,17 @@ function isCurrentNodesRequest(
   return state.connected && state.client === client && state.requestGeneration === generation;
 }
 
+function queueRefresh(current: QueuedRefresh, quiet: boolean | undefined): QueuedRefresh {
+  return current === "visible" || quiet !== true ? "visible" : "quiet";
+}
+
 export async function loadNodes(state: NodesState, opts?: { quiet?: boolean }) {
   const client = state.client;
-  if (!client || !state.connected || state.nodesLoading) {
+  if (!client || !state.connected) {
+    return;
+  }
+  if (state.nodesLoading) {
+    state.nodesQueuedRefresh = queueRefresh(state.nodesQueuedRefresh, opts?.quiet);
     return;
   }
   state.nodesLoading = true;
@@ -250,13 +269,22 @@ export async function loadNodes(state: NodesState, opts?: { quiet?: boolean }) {
   } finally {
     if (isCurrentNodesRequest(state, client, generation)) {
       state.nodesLoading = false;
+      const queued = state.nodesQueuedRefresh;
+      state.nodesQueuedRefresh = "none";
+      if (queued !== "none") {
+        await loadNodes(state, { quiet: queued === "quiet" });
+      }
     }
   }
 }
 
 export async function loadDevices(state: DevicesState, opts?: { quiet?: boolean }) {
   const client = state.client;
-  if (!client || !state.connected || state.devicesLoading) {
+  if (!client || !state.connected) {
+    return;
+  }
+  if (state.devicesLoading) {
+    state.devicesQueuedRefresh = queueRefresh(state.devicesQueuedRefresh, opts?.quiet);
     return;
   }
   state.devicesLoading = true;
@@ -282,6 +310,11 @@ export async function loadDevices(state: DevicesState, opts?: { quiet?: boolean 
   } finally {
     if (isCurrentNodesRequest(state, client, generation)) {
       state.devicesLoading = false;
+      const queued = state.devicesQueuedRefresh;
+      state.devicesQueuedRefresh = "none";
+      if (queued !== "none") {
+        await loadDevices(state, { quiet: queued === "quiet" });
+      }
     }
   }
 }
@@ -516,29 +549,23 @@ export async function rotateDeviceToken(
       tokenDelivery?: string;
     }>("device.token.rotate", requestParams);
     const outcome = classifyRotationOutcome(res, requestParams);
-    // A retired epoch stops every state write below, but never the return: the previous
-    // credential is already dead on the server, so discarding this response would leave
-    // the operator locked out with no way to ask for the replacement again.
-    if (!isCurrentNodesRequest(state, client, generation)) {
-      return outcome;
-    }
     if (outcome.delivery === "in-band") {
       const identity = await loadOrCreateDeviceIdentity();
-      if (!isCurrentNodesRequest(state, client, generation)) {
-        return outcome;
-      }
-      const role = res.role ?? params.role;
-      if (res.deviceId === identity.deviceId || params.deviceId === identity.deviceId) {
+      // RPC success retires the old bearer and may immediately reconnect the page.
+      // Commit the exact captured credential scope before fencing render projections.
+      if (res.deviceId === identity.deviceId || requestParams.deviceId === identity.deviceId) {
         storeDeviceAuthToken({
           deviceId: identity.deviceId,
           gatewayUrl,
-          role,
+          role: requestParams.role,
           token: outcome.token,
-          scopes: res.scopes ?? params.scopes ?? [],
+          scopes: res.scopes ?? requestParams.scopes ?? [],
         });
       }
     }
-    await loadDevices(state);
+    if (isCurrentNodesRequest(state, client, generation)) {
+      await loadDevices(state);
+    }
     return outcome;
   } catch (err) {
     if (isCurrentNodesRequest(state, client, generation)) {
@@ -560,18 +587,14 @@ export async function revokeDeviceToken(
   try {
     const { gatewayUrl, ...requestParams } = params;
     await client.request("device.token.revoke", requestParams);
-    if (!isCurrentNodesRequest(state, client, generation)) {
-      return;
-    }
     const identity = await loadOrCreateDeviceIdentity();
-    if (!isCurrentNodesRequest(state, client, generation)) {
-      return;
-    }
-    if (params.deviceId === identity.deviceId) {
+    // Clearing the successfully revoked credential belongs to this captured scope,
+    // not to the page generation invalidated by the resulting reconnect.
+    if (requestParams.deviceId === identity.deviceId) {
       clearDeviceAuthToken({
         deviceId: identity.deviceId,
         gatewayUrl,
-        role: params.role,
+        role: requestParams.role,
       });
     }
     if (isCurrentNodesRequest(state, client, generation)) {

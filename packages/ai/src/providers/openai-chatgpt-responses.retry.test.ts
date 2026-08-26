@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
 import { responsesPromptObserver, type ResponsesPromptObservation } from "../internal/openai.js";
+import { withProviderAcceptanceObserver } from "../transports/transport-stream-shared.js";
 import type { Context, Model } from "../types.js";
 import {
   closeOpenAICodexWebSocketSessions,
@@ -92,10 +93,16 @@ describe("streamOpenAICodexResponses retry classification", () => {
       return 0 as unknown as ReturnType<typeof setTimeout>;
     });
 
-    const options = {
-      apiKey: jwt,
-      transport: "sse" as const,
-    };
+    const acceptanceObserver = vi.fn();
+    const onResponse = vi.fn();
+    const options = withProviderAcceptanceObserver(
+      {
+        apiKey: jwt,
+        transport: "sse" as const,
+        onResponse,
+      },
+      acceptanceObserver,
+    );
     responsesPromptObserver.set(options, (observation) => observations.push(observation));
 
     const result = await streamOpenAICodexResponses(
@@ -106,6 +113,8 @@ describe("streamOpenAICodexResponses retry classification", () => {
 
     expect(result.stopReason).toBe("error");
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(acceptanceObserver).not.toHaveBeenCalled();
+    expect(onResponse.mock.calls.map(([response]) => response.status)).toEqual([503, 401]);
     expect(observations).toHaveLength(2);
     expect(observations.every((entry) => entry.egress === "native-codex-sse")).toBe(true);
     expect(observations.every((entry) => entry.payloadVariant === "initial")).toBe(true);

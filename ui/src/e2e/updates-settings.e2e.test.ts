@@ -157,4 +157,60 @@ suite.define(() => {
       },
     );
   });
+
+  it("keeps a failed manual status check visible", async () => {
+    await suite.withPage(
+      {
+        colorScheme: "dark",
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1280 },
+      },
+      async ({ page }) => {
+        const config = { update: { auto: { enabled: false }, channel: "stable" } };
+        const gateway = await installMockGateway(page, {
+          featureMethods: ["config.get", "update.run", "update.status"],
+          methodResponses: {
+            "config.get": {
+              config,
+              hash: "updates-status-error-1",
+              issues: [],
+              raw: JSON.stringify(config),
+              runtimeConfig: config,
+              valid: true,
+            },
+            "update.status": {
+              sentinel: {
+                kind: "update",
+                status: "error",
+                ts: Date.now(),
+                stats: { mode: "package", reason: "build-failed" },
+              },
+            },
+          },
+          operatorScopes: ["operator.read", "operator.admin"],
+        });
+
+        expect((await page.goto(`${suite.server.baseUrl}settings/updates`))?.status()).toBe(200);
+        await gateway.waitForRequest("update.status");
+        const checkStatus = page.getByRole("button", { name: "Check status", exact: true });
+        await checkStatus.waitFor();
+
+        await gateway.deferNext("update.status");
+        await checkStatus.click();
+        await expect.poll(async () => (await gateway.getRequests("update.status")).length).toBe(2);
+        expect(await checkStatus.isDisabled()).toBe(true);
+
+        await gateway.rejectDeferred("update.status", {
+          code: "UNAVAILABLE",
+          message: "Gateway status is temporarily unavailable",
+        });
+        await page
+          .locator("#config-section-update .settings-status")
+          .filter({ hasText: "Gateway status is temporarily unavailable" })
+          .waitFor();
+        expect(await checkStatus.isDisabled()).toBe(false);
+      },
+    );
+  });
 });

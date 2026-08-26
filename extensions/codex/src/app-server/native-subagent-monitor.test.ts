@@ -1170,15 +1170,16 @@ describe("CodexNativeSubagentMonitor", () => {
     client.close();
   });
 
-  it("publishes child assistant and tool activity under the mirrored thread run id", async () => {
-    const events: Array<{ runId: string; stream: string; data: Record<string, unknown> }> = [];
+  it("publishes parent-owned child activity without projecting it into the parent session", async () => {
+    const events: Parameters<Parameters<typeof onAgentEvent>[0]>[0][] = [];
     const unsubscribe = onAgentEvent((event) => events.push(event));
     const client = createClient();
     const runtime = createRuntime();
     const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
     try {
-      registerParent(monitor);
+      const parent = registerParent(monitor);
       await notifyChildStarted(client);
+      parent.unregister();
       await client.notify({
         method: "item/agentMessage/delta",
         params: {
@@ -1217,16 +1218,19 @@ describe("CodexNativeSubagentMonitor", () => {
         expect.arrayContaining([
           expect.objectContaining({
             runId: "codex-thread:child-thread",
+            agentId: "main",
             stream: "assistant",
             data: expect.objectContaining({ delta: "Inspecting the registry" }),
           }),
           expect.objectContaining({
             runId: "codex-thread:child-thread",
+            agentId: "main",
             stream: "thinking",
             data: expect.objectContaining({ delta: "Planning the fix" }),
           }),
           expect.objectContaining({
             runId: "codex-thread:child-thread",
+            agentId: "main",
             stream: "tool",
             data: expect.objectContaining({
               phase: "start",
@@ -1236,6 +1240,40 @@ describe("CodexNativeSubagentMonitor", () => {
           }),
         ]),
       );
+      for (const event of events) {
+        expect(event.sessionKey).toBeUndefined();
+      }
+    } finally {
+      unsubscribe();
+      client.close();
+    }
+  });
+
+  it("does not retroactively assign a newly registered parent agent to an existing child", async () => {
+    const events: Parameters<Parameters<typeof onAgentEvent>[0]>[0][] = [];
+    const unsubscribe = onAgentEvent((event) => events.push(event));
+    const client = createClient();
+    const monitor = new CodexNativeSubagentMonitor(client as never, createRuntime());
+    try {
+      const parent = monitor.registerParent({ parentThreadId: "parent-thread" });
+      await notifyChildStarted(client, "parent-thread", "ownerless-child");
+      parent.unregister();
+      monitor.registerParent({ parentThreadId: "parent-thread", agentId: "research" });
+      await notifyChildStarted(client, "parent-thread", "owned-child");
+
+      for (const threadId of ["ownerless-child", "owned-child"]) {
+        await client.notify({
+          method: "item/agentMessage/delta",
+          params: { threadId, turnId: "child-turn", itemId: "assistant-1", delta: "progress" },
+        });
+      }
+
+      expect(
+        events.map(({ runId, agentId, sessionKey }) => ({ runId, agentId, sessionKey })),
+      ).toEqual([
+        { runId: "codex-thread:ownerless-child", agentId: undefined, sessionKey: undefined },
+        { runId: "codex-thread:owned-child", agentId: "research", sessionKey: undefined },
+      ]);
     } finally {
       unsubscribe();
       client.close();

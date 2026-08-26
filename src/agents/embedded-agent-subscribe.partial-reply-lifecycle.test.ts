@@ -96,4 +96,53 @@ describe("subscribeEmbeddedAgentSession partial reply lifecycle", () => {
       `assistant partial reply callback failed: ${String(callbackError)}`,
     );
   });
+
+  it("queue-only drain is not blocked by a stalled partial reply callback", async () => {
+    // Timeout salvage drains only the serialized event chain — the queue whose handlers mutate the assistant
+    // text buffer. A stalled onPartialReply transport callback is external
+    // fan-out and cannot change the buffered text, so it must not hold an
+    // already-aborted run in settlement. Pre-fix, the salvage path used
+    // waitForPendingEvents, which also awaits pendingPartialReplyTasks; a
+    // stalled callback would block the drain until the bounded liveness
+    // deadline (120s) elapsed.
+    let resolvePartialReply!: () => void;
+    const partialReply = new Promise<void>((resolve) => {
+      resolvePartialReply = resolve;
+    });
+    const onPartialReply = vi.fn(() => partialReply);
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run-stalled-partial-callback",
+      onPartialReply,
+    });
+
+    // First delta keeps the partial-reply callback pending through the queue-only drain.
+    emit({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: { type: "text_delta", delta: "partial " },
+    });
+    await vi.waitFor(() => expect(onPartialReply).toHaveBeenCalledOnce());
+
+    // A second delta queues behind the first on the serialized event chain.
+    emit({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: { type: "text_delta", delta: "answer" },
+    });
+
+    let broadDrained = false;
+    const broadDrain = subscription.waitForPendingEvents().then(() => {
+      broadDrained = true;
+    });
+
+    // The event chain drains while the broad join still waits for the callback.
+    await subscription.waitForPendingEvents({ includePartialReplies: false });
+    expect(broadDrained).toBe(false);
+
+    resolvePartialReply();
+    await broadDrain;
+    expect(broadDrained).toBe(true);
+
+    subscription.unsubscribe();
+  });
 });

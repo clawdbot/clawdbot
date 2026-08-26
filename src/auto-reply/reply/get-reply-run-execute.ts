@@ -106,6 +106,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     shouldInjectGroupIntro,
     typingMode,
     allowEmptyAssistantReplyAsSilent,
+    terminalReplyExpectation,
   } = context;
   const {
     ctx,
@@ -365,6 +366,13 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     ...(opts?.onFollowupQueueDisposition
       ? { onQueueDisposition: opts.onFollowupQueueDisposition }
       : {}),
+    ...(opts && "onQueuedFollowupReplyBatch" in opts
+      ? {
+          queuedFollowupReplyDisposition: opts.onQueuedFollowupReplyBatch
+            ? { kind: "deliver" as const, deliver: opts.onQueuedFollowupReplyBatch }
+            : { kind: "drop" as const, reason: "source-unavailable" as const },
+        }
+      : {}),
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
     summaryLine: baseBodyTrimmedRaw,
     ...(queuedToolsAllow !== undefined ? { toolsAllow: queuedToolsAllow } : {}),
@@ -497,7 +505,13 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       cliSessionBindingFacts,
       skipProviderRuntimeHints: useFastReplyRuntime,
       allowEmptyAssistantReplyAsSilent,
+      terminalReplyExpectation,
       suppressTranscriptOnlyAssistantPersistence: isRoomEvent,
+      ...(opts?.skillWorkshopProposalRevision
+        ? {
+            skillWorkshopProposalRevision: { ...opts.skillWorkshopProposalRevision },
+          }
+        : {}),
       ...(!useFastReplyRuntime &&
       isReasoningTagProvider(provider, { config: cfg, workspaceDir, modelId: model })
         ? { enforceFinalTag: true }

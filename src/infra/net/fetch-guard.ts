@@ -110,6 +110,18 @@ export type GuardedFetchResult = {
   dispatcherReused?: boolean;
 };
 
+export class GuardedFetchRedirectError extends Error {
+  readonly status: number;
+  readonly maxRedirects: number;
+
+  constructor(params: { status: number; maxRedirects: number }) {
+    super(`Too many redirects (limit: ${params.maxRedirects})`);
+    this.name = "GuardedFetchRedirectError";
+    this.status = params.status;
+    this.maxRedirects = params.maxRedirects;
+  }
+}
+
 type GuardedFetchInternalOptions = GuardedFetchOptions & {
   managedProxyBypass?: ConfiguredLocalOriginManagedProxyBypass;
   resolveDispatcherPolicy?: (url: URL) => PinnedDispatcherPolicy | undefined;
@@ -721,13 +733,13 @@ async function fetchWithSsrFGuardInternal(
       });
 
       if (isRedirectStatus(response.status)) {
+        redirectCount += 1;
+        if (redirectCount > maxRedirects) {
+          throw new GuardedFetchRedirectError({ status: response.status, maxRedirects });
+        }
         const location = response.headers.get("location");
         if (!location) {
           throw new Error(`Redirect missing location header (${response.status})`);
-        }
-        redirectCount += 1;
-        if (redirectCount > maxRedirects) {
-          throw new Error(`Too many redirects (limit: ${maxRedirects})`);
         }
         const nextParsedUrl = new URL(location, parsedUrl);
         const nextUrl = nextParsedUrl.toString();

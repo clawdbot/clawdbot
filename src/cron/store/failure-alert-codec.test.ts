@@ -48,7 +48,5 @@ describe("failureAlertFromRow", () => {
     expect(row.failure_alert_after).toBeNull();
     const decoded = failureAlertFromRow(row);
     expect(decoded).toEqual({});
-    expect(decoded).not.toBeUndefined();
-    expect(decoded).toBeTruthy();
   });
 });

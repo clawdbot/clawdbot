@@ -1,7 +1,6 @@
 import { vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  appendSessionAudit: vi.fn(async () => undefined),
   handleChatSend: vi.fn(),
   suggestionMutationFailure: undefined as
     | "claim"
@@ -13,7 +12,6 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./chat-send-handler.js", () => ({ handleChatSend: mocks.handleChatSend }));
-vi.mock("./session-audit.js", () => ({ appendSessionAudit: mocks.appendSessionAudit }));
 vi.mock("../../infra/system-presence.js", () => ({
   listSystemPresence: () => mocks.presence,
 }));

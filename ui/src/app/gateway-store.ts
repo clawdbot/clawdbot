@@ -2,7 +2,7 @@ import {
   isRetryableGatewayStartupUnavailableError,
   readControlUiBuildMismatchId,
 } from "@openclaw/gateway-client/browser";
-import type { ControlUiBootstrapProfileHint } from "../../../src/gateway/control-ui-contract.js";
+import type { ControlUiBootstrapProfileHint } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 // Control UI module owns the application gateway store: the reactive
 // snapshot around GatewayBrowserClient consumed by the app shell.
 import type { EventLogEntry } from "../api/event-log.ts";
@@ -78,7 +78,7 @@ export function createApplicationGateway(
   createClient: GatewayClientFactory = defaultClientFactory,
   options: {
     persistDefaultConnectionSettings?: boolean;
-    basePath?: string;
+    resourceBasePath?: string;
     bootstrapProfile?: ControlUiBootstrapProfileHint;
   } = {},
 ): ApplicationGateway {
@@ -91,6 +91,7 @@ export function createApplicationGateway(
     ...(options.bootstrapProfile ? { bootstrapProfile: options.bootstrapProfile } : {}),
     password: initialPassword,
   };
+  let connectionRevision = 0;
   let snapshot: ApplicationGatewaySnapshot = {
     client: null,
     phase: "stopped",
@@ -293,6 +294,7 @@ export function createApplicationGateway(
       nextConnection.bootstrapToken !== connection.bootstrapToken ||
       nextConnection.bootstrapProfile !== connection.bootstrapProfile;
     if (credentialsChanged) {
+      connectionRevision += 1;
       void clearStoredChatSnapshots();
     }
     const hasRequestedSessionKey = requestedSessionKey !== undefined;
@@ -319,7 +321,7 @@ export function createApplicationGateway(
         settings: { token: nextConnection.token },
         password: nextConnection.password,
       }),
-      options.basePath,
+      options.resourceBasePath,
     );
     updateSettings(
       {
@@ -390,7 +392,7 @@ export function createApplicationGateway(
             settings: { token: nextConnection.token },
             password: nextConnection.password,
           }),
-          options.basePath,
+          options.resourceBasePath,
         );
         connection = { ...connection, bootstrapToken: "", bootstrapProfile: undefined };
         if (persistConnectionSettings) {
@@ -542,6 +544,9 @@ export function createApplicationGateway(
     get connection() {
       return connection;
     },
+    get connectionRevision() {
+      return connectionRevision;
+    },
     get eventLog() {
       return eventLog;
     },
@@ -613,15 +618,15 @@ function normalizeCanvasPluginSurfaceUrl(value: string | undefined): string | nu
   return trimmed ? trimmed : null;
 }
 
-function readSessionDefaults(
+export function readSessionDefaults(
   hello: GatewayHelloOk,
-): { defaultAgentId?: string | null } | undefined {
+): { defaultAgentId?: string | null; modelConfigured?: boolean } | undefined {
   const snapshot = hello.snapshot;
   if (!snapshot || typeof snapshot !== "object" || !("sessionDefaults" in snapshot)) {
     return undefined;
   }
   const defaults = snapshot.sessionDefaults;
   return defaults && typeof defaults === "object"
-    ? (defaults as { defaultAgentId?: string | null })
+    ? (defaults as { defaultAgentId?: string | null; modelConfigured?: boolean })
     : undefined;
 }

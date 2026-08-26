@@ -17,6 +17,8 @@ const themeCases = [
   { family: "knot", mode: "light", resolved: "openknot-light" },
   { family: "dash", mode: "dark", resolved: "dash" },
   { family: "dash", mode: "light", resolved: "dash-light" },
+  { family: "absolutely", mode: "dark", resolved: "absolutely" },
+  { family: "absolutely", mode: "light", resolved: "absolutely-light" },
 ] as const;
 
 const textTokens = [
@@ -30,8 +32,13 @@ const textTokens = [
 
 const surfaceTokens = ["--bg", "--bg-elevated", "--bg-muted", "--card", "--panel"] as const;
 
-function themeConfigResponse(family: "claw" | "knot" | "dash", mode: "dark" | "light") {
-  const config = { ui: { prefs: { theme: family, themeMode: mode } } };
+function themeConfigResponse(
+  family: "claw" | "knot" | "dash" | "absolutely",
+  mode: "dark" | "light",
+) {
+  const config = {
+    ui: { prefs: { ...(family === "claw" ? {} : { theme: family }), themeMode: mode } },
+  };
   const hash = `theme-contrast-${family}-${mode}`;
   return {
     appliedConfigHash: hash,
@@ -176,7 +183,9 @@ suite.define(() => {
         const patch = await gateway.waitForRequest("config.patch");
         const raw = (patch.params as { raw?: unknown } | undefined)?.raw;
         expect(typeof raw).toBe("string");
-        expect(JSON.parse(String(raw))).toMatchObject({ ui: { prefs: { theme: family } } });
+        expect(JSON.parse(String(raw))).toMatchObject({
+          ui: { prefs: { theme: family === "claw" ? null : family } },
+        });
 
         // Theme clicks apply immediately; the eventual Gateway acknowledgement must not revert them.
         await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe(resolved);

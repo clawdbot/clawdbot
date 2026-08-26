@@ -37,4 +37,26 @@ describe("provider setup cold imports", () => {
       }
     }
   });
+
+  it("keeps bundled provider policy and config defaults off credential and execution runtime", () => {
+    for (const file of [
+      "extensions/anthropic/config-defaults.ts",
+      "extensions/anthropic/provider-policy-api.ts",
+    ]) {
+      const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
+      expect(
+        source,
+        `${file} must not load credential runtime for a provider-owned constant`,
+      ).not.toMatch(/from\s+["']openclaw\/plugin-sdk\/provider-auth["']/);
+    }
+
+    const policySource = fs.readFileSync(
+      path.join(repoRoot, "extensions/anthropic/provider-policy-api.ts"),
+      "utf8",
+    );
+    expect(
+      policySource,
+      "lightweight provider policy must not load CLI execution runtime",
+    ).not.toMatch(/from\s+["']\.\/cli-shared\.js["']/);
+  });
 });

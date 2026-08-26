@@ -1,0 +1,32 @@
+title: Worker inference generation reload
+
+scenario:
+  id: worker-inference-generation-reload
+  surface: gateway
+  category: gateway.session-apis
+  coverage:
+    secondary:
+      - plugins.activation-hot-reload
+      - gateway.config-reload-hot-reload
+  objective: Prove Gateway-owned worker inference keeps its admitted provider generation when a newer generation hot-publishes after model and auth preparation but before provider stream construction.
+  successCriteria:
+    - A managed-worktree session dispatches to a real paired-node worker through an isolated Gateway, establishes generation A's placement lifecycle, and uses mock-openai for provider transport.
+    - After generation B publishes, a second turn resolves B's model and source credential, then pauses in its final provider-owned runtime-auth preparation while generation C hot-publishes in the same Gateway process.
+    - Releasing B overrides the placement's stale A lifecycle scope and constructs the provider factory, stream policy, wrapper, and stream execution entirely from generation B with B's prepared model and runtime credential.
+    - A subsequent turn on the same worker placement constructs the same four stages entirely from generation C, and all three turns persist their exact replies once.
+  docsRefs:
+    - docs/gateway/cloud-workers.md
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - src/gateway/worker-environments/inference-runtime.ts
+    - src/agents/simple-completion-runtime.ts
+    - test/e2e/qa-lab/runtime/worker-inference-generation-reload.ts
+    - test/e2e/qa-lab/runtime/fixtures/worker-inference-generation-provider/index.js
+  execution:
+    kind: script
+    path: test/e2e/qa-lab/runtime/worker-inference-generation-reload.ts
+    summary: Establishes a generation A paired-node worker placement, hot-publishes C while a generation B turn is paused in runtime-auth preparation, and proves B overrides the stale placement scope before a fresh C turn.
+    timeoutMs: 900000
+    args:
+      - --artifact-base
+      - ${outputDir}

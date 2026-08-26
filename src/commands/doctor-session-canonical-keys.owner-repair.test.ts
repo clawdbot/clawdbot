@@ -2,11 +2,13 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
+  assignSessionOwner,
   loadExactSessionEntryReadOnly,
   loadTranscriptEvents,
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS } from "../state/openclaw-agent-db-additive-columns.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -42,6 +44,116 @@ function insertEmptyAlias(params: {
 }
 
 describe("doctor transcript owner repair", () => {
+  it.each([
+    { label: "replaces a stale same-store owner", sourceAgentId: "main", winnerOwned: true },
+    { label: "clears a stale same-store owner", sourceAgentId: "main", winnerOwned: false },
+    { label: "lazily restores cross-store owner columns", sourceAgentId: "ops", winnerOwned: true },
+    {
+      label: "preserves an owner while repairing malformed session metadata",
+      sourceAgentId: "main",
+      winnerOwned: true,
+      malformed: true,
+    },
+  ])("$label from the selected canonical-repair winner", async (fixture) => {
+    const { sourceAgentId, winnerOwned } = fixture;
+    await withStateDirEnv("openclaw-doctor-assigned-owner-", async ({ stateDir }) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions.json");
+      const destinationStore = resolveSessionStorePathCore(storeTemplate, { agentId: "main", env });
+      const sourceStore = resolveSessionStorePathCore(storeTemplate, {
+        agentId: sourceAgentId,
+        env,
+      });
+      const canonicalKey = "agent:main:work";
+      const winnerKey = "agent:main:main";
+      const cfg = {
+        agents: {
+          list: [
+            { id: "main", default: true },
+            ...(sourceAgentId === "ops" ? [{ id: "ops" }] : []),
+          ],
+        },
+        session: { mainKey: "work", store: storeTemplate },
+      } as OpenClawConfig;
+
+      if (sourceAgentId === "main") {
+        insertLegacySession({
+          agentId: "main",
+          entry: { sessionId: "stale-destination", updatedAt: 10 },
+          env,
+          sessionKey: canonicalKey,
+          storePath: destinationStore,
+        });
+        assignSessionOwner(
+          { agentId: "main", env, sessionKey: canonicalKey, storePath: destinationStore },
+          {
+            owner: { type: "human", id: "profile-stale" },
+            assignedBy: { type: "human", id: "profile-stale-assigner" },
+            assignedAt: 10,
+          },
+        );
+      }
+
+      insertLegacySession({
+        agentId: sourceAgentId,
+        entry: { sessionId: "selected-winner", updatedAt: 20 },
+        env,
+        sessionKey: winnerKey,
+        storePath: sourceStore,
+      });
+      const owner = winnerOwned
+        ? assignSessionOwner(
+            { agentId: sourceAgentId, env, sessionKey: winnerKey, storePath: sourceStore },
+            {
+              owner: { type: "human", id: "profile-winner" },
+              assignedBy: { type: "agent", id: "research" },
+              assignedAt: 1234,
+            },
+          )
+        : undefined;
+
+      if ("malformed" in fixture) {
+        openOpenClawAgentDatabase({
+          agentId: sourceAgentId,
+          env,
+          path: resolveSqliteTargetFromSessionStorePath(sourceStore, {
+            agentId: sourceAgentId,
+            env,
+          }).path,
+        })
+          .db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
+          .run("{malformed", winnerKey);
+      }
+
+      if (sourceAgentId === "ops") {
+        const database = openOpenClawAgentDatabase({
+          agentId: "main",
+          env,
+          path: resolveSqliteTargetFromSessionStorePath(destinationStore, {
+            agentId: "main",
+            env,
+          }).path,
+        });
+        for (const { columnName } of FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS) {
+          database.db.exec(`ALTER TABLE session_nodes DROP COLUMN ${columnName};`);
+        }
+      }
+
+      expect(await repairCanonicalSessionKeys({ apply: true, cfg, env })).toMatchObject({
+        foundGroups: 1,
+        repairedGroups: 1,
+      });
+      expect(
+        loadExactSessionEntryReadOnly({
+          agentId: "main",
+          env,
+          sessionKey: canonicalKey,
+          storePath: destinationStore,
+        })?.entry.owner,
+      ).toEqual(owner ?? undefined);
+    });
+  });
+
   it("restores a valid node after an empty alias steals its transcript window", async () => {
     await withStateDirEnv("openclaw-doctor-transcript-owner-", async ({ stateDir }) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };

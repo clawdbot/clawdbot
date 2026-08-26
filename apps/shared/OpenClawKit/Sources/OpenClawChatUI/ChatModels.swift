@@ -809,6 +809,9 @@ public struct OpenClawSessionMessageEventPayload: Codable, Sendable {
     public let message: OpenClawChatMessage?
     public let messageId: String?
     public let messageSeq: Int?
+    public let hasActiveRun: Bool?
+    public let activeRunIds: [String]?
+    let activeRunIdsPresent: Bool
 
     // periphery:ignore - package tests construct transport events; app consumers decode them.
     public init(
@@ -816,13 +819,68 @@ public struct OpenClawSessionMessageEventPayload: Codable, Sendable {
         agentId: String? = nil,
         message: OpenClawChatMessage?,
         messageId: String?,
-        messageSeq: Int?)
+        messageSeq: Int?,
+        hasActiveRun: Bool? = nil,
+        activeRunIds: [String]? = nil,
+        activeRunIdsPresent: Bool? = nil)
     {
         self.sessionKey = sessionKey
         self.agentId = agentId
         self.message = message
         self.messageId = messageId
         self.messageSeq = messageSeq
+        self.hasActiveRun = hasActiveRun
+        self.activeRunIds = activeRunIds
+        self.activeRunIdsPresent = activeRunIdsPresent ?? (activeRunIds != nil)
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let nested = try? container.nestedContainer(keyedBy: CodingKeys.self, forKey: .session)
+
+        func decode<T: Decodable>(_ type: T.Type, forKey key: CodingKeys) throws -> T? {
+            if container.contains(key) {
+                return try container.decodeIfPresent(type, forKey: key)
+            }
+            return try nested?.decodeIfPresent(type, forKey: key)
+        }
+
+        self.sessionKey = try decode(String.self, forKey: .sessionKey)
+        self.agentId = try decode(String.self, forKey: .agentId)
+        self.message = try container.decodeIfPresent(OpenClawChatMessage.self, forKey: .message)
+        self.messageId = try container.decodeIfPresent(String.self, forKey: .messageId)
+        self.messageSeq = try container.decodeIfPresent(Int.self, forKey: .messageSeq)
+        self.hasActiveRun = try decode(Bool.self, forKey: .hasActiveRun)
+        self.activeRunIds = try decode([String].self, forKey: .activeRunIds)
+        self.activeRunIdsPresent = container.contains(.activeRunIds) || nested?.contains(.activeRunIds) == true
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(self.sessionKey, forKey: .sessionKey)
+        try container.encodeIfPresent(self.agentId, forKey: .agentId)
+        try container.encodeIfPresent(self.message, forKey: .message)
+        try container.encodeIfPresent(self.messageId, forKey: .messageId)
+        try container.encodeIfPresent(self.messageSeq, forKey: .messageSeq)
+        try container.encodeIfPresent(self.hasActiveRun, forKey: .hasActiveRun)
+        if self.activeRunIdsPresent {
+            if let activeRunIds {
+                try container.encode(activeRunIds, forKey: .activeRunIds)
+            } else {
+                try container.encodeNil(forKey: .activeRunIds)
+            }
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case session
+        case sessionKey
+        case agentId
+        case message
+        case messageId
+        case messageSeq
+        case hasActiveRun
+        case activeRunIds
     }
 }
 

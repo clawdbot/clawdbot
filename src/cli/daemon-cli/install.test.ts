@@ -109,10 +109,16 @@ vi.mock("../../config/paths.js", () => ({
   resolveIsNixMode: resolveIsNixModeMock,
 }));
 
-vi.mock("../../config/types.secrets.js", () => ({
-  hasConfiguredSecretInput: hasConfiguredSecretInputMock,
-  resolveSecretInputRef: resolveSecretInputRefMock,
-}));
+vi.mock("../../config/types.secrets.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config/types.secrets.js")>();
+  return {
+    ...actual,
+    coerceSecretRef: (value: unknown, defaults?: unknown) =>
+      resolveSecretInputRefMock({ value, defaults })?.ref ?? null,
+    hasConfiguredSecretInput: hasConfiguredSecretInputMock,
+    resolveSecretInputRef: resolveSecretInputRefMock,
+  };
+});
 
 vi.mock("../../gateway/auth.js", () => ({
   resolveGatewayAuth: resolveGatewayAuthMock,
@@ -728,6 +734,13 @@ describe("runDaemonInstall", () => {
     expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
   });
 
+  it("forwards Bun as the explicit managed-service runtime", async () => {
+    await runDaemonInstall({ json: true, runtime: "bun" });
+
+    expect(readFirstInstallPlanArg().runtime).toBe("bun");
+    expect(actionState.failed).toStrictEqual([]);
+  });
+
   it("continues Linux install when service probe hits a non-fatal systemd bus failure", async () => {
     service.isLoaded.mockRejectedValueOnce(
       new Error("systemctl is-enabled unavailable: Failed to connect to bus"),
@@ -828,12 +841,30 @@ describe("runDaemonInstall", () => {
     expectLastEmittedResult("already-installed");
   });
 
-  it("preserves wrapper env from an installed but unloaded service during forced reinstall", async () => {
+  it("preserves managed base wrapper, environment, and provenance during forced reinstall", async () => {
+    for (const key of ["OPENAI_API_KEY", "OPENCLAW_WRAPPER"]) {
+      delete process.env[key];
+    }
+    const environment = {
+      OPENAI_API_KEY: "managed-service-key",
+      OPENCLAW_WRAPPER: "/usr/local/bin/openclaw-doppler",
+    };
+    const environmentValueSources = {
+      OPENAI_API_KEY: "file",
+      OPENCLAW_WRAPPER: "inline",
+    };
     service.isLoaded.mockResolvedValue(false);
     service.readCommand.mockResolvedValue({
-      programArguments: ["/usr/local/bin/openclaw-doppler", "gateway", "run"],
+      programArguments: ["/operator/drop-in-wrapper", "gateway", "run"],
       environment: {
-        OPENCLAW_WRAPPER: "/usr/local/bin/openclaw-doppler",
+        OPENAI_API_KEY: "operator-drop-in-key",
+        OPENCLAW_WRAPPER: "/operator/drop-in-wrapper",
+      },
+      environmentValueSources: { OPENAI_API_KEY: "inline" },
+      managedDefinition: {
+        programArguments: [environment.OPENCLAW_WRAPPER, "gateway", "run"],
+        environment,
+        environmentValueSources,
       },
     } as never);
 
@@ -841,13 +872,12 @@ describe("runDaemonInstall", () => {
 
     expect(service.readCommand).toHaveBeenCalledTimes(1);
     const installPlanArg = readFirstInstallPlanArg();
-    expectFields(installPlanArg, { wrapperPath: "/usr/local/bin/openclaw-doppler" });
-    expectFields(installPlanArg.existingEnvironment, {
-      OPENCLAW_WRAPPER: "/usr/local/bin/openclaw-doppler",
+    expectFields(installPlanArg, {
+      wrapperPath: environment.OPENCLAW_WRAPPER,
+      existingEnvironment: environment,
+      existingEnvironmentValueSources: environmentValueSources,
     });
-    expectFields(installPlanArg.env, {
-      OPENCLAW_WRAPPER: "/usr/local/bin/openclaw-doppler",
-    });
+    expectFields(installPlanArg.env, environment);
     expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
   });
 
@@ -953,20 +983,24 @@ describe("runDaemonInstall", () => {
     );
   });
 
-  it("does not reinstall when OPENCLAW_GATEWAY_TOKEN comes from an env file", async () => {
+  it.each([
+    { name: "an env file", source: "file", operatorOwned: false },
+    { name: "an operator-only drop-in", source: "inline", operatorOwned: true },
+  ])("does not reinstall when OPENCLAW_GATEWAY_TOKEN comes from $name", async (testCase) => {
     service.isLoaded.mockResolvedValue(true);
+    const programArguments = ["openclaw", "gateway", "run"];
     service.readCommand.mockResolvedValue({
-      programArguments: ["openclaw", "gateway", "run"],
-      environment: {
-        OPENCLAW_GATEWAY_TOKEN: "env-file-token",
-      },
-      environmentValueSources: {
-        OPENCLAW_GATEWAY_TOKEN: "file",
-      },
+      programArguments,
+      environment: { OPENCLAW_GATEWAY_TOKEN: "operator-token" },
+      environmentValueSources: { OPENCLAW_GATEWAY_TOKEN: testCase.source },
+      ...(testCase.operatorOwned && {
+        managedDefinition: { programArguments, environment: {} },
+      }),
     } as never);
 
     await runDaemonInstall({ json: true });
 
+    expect(buildGatewayInstallPlanMock).not.toHaveBeenCalled();
     expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
     expectLastEmittedResult("already-installed");
   });

@@ -47,7 +47,7 @@ function buildFromPrepared(
   return {
     role: "user",
     ...metadata,
-    ...(preparedUserMessage ?? { content: params.prompt }),
+    ...(preparedUserMessage ?? { content: params.transcriptPrompt ?? params.prompt }),
   } as AgentMessage;
 }
 

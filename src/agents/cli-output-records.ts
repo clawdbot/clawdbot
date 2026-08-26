@@ -235,6 +235,7 @@ export function collectExplicitCliErrorText(parsed: Record<string, unknown>): st
     (parsed.type === "result" && (subtype.startsWith("error_") || parsed.status === "error"));
   if (isResultError) {
     const text =
+      readClaudeResultErrorsText(parsed) ||
       collectCliText(parsed.result) ||
       collectCliText(parsed.message) ||
       collectCliText(parsed.content);
@@ -303,13 +304,17 @@ function readClaudeMaxTurnsFailure(
   return { reason: "max_turns" };
 }
 
-function readClaudeMaxTurnsErrorText(parsed: Record<string, unknown>): string | undefined {
+// Claude Code error results carry the user-facing failure in `errors[]`;
+// `[ede_diagnostic] ...` entries are CLI-internal telemetry that the CLI hides
+// from its own UI, so they never become the operator-visible error.
+function readClaudeResultErrorsText(parsed: Record<string, unknown>): string | undefined {
   if (!Array.isArray(parsed.errors)) {
     return undefined;
   }
   for (const error of parsed.errors) {
-    if (typeof error === "string" && error.trim()) {
-      return error.trim();
+    const text = typeof error === "string" ? error.trim() : "";
+    if (text && !text.startsWith("[ede_diagnostic]")) {
+      return text;
     }
   }
   return undefined;
@@ -319,9 +324,8 @@ function resolveCliTerminalErrorText(
   parsed: Record<string, unknown>,
   terminalFailure: CliTerminalFailure | undefined,
 ): string {
-  const explicitErrorText = collectExplicitCliErrorText(parsed);
   return (
-    ((terminalFailure ? readClaudeMaxTurnsErrorText(parsed) : undefined) ?? explicitErrorText) ||
+    collectExplicitCliErrorText(parsed) ||
     (terminalFailure ? "Reached maximum number of turns." : "")
   );
 }
@@ -345,6 +349,14 @@ export function pickCliSessionId(
   return undefined;
 }
 
+// Claude Code forwards subagent (Agent tool) traffic with `parent_tool_use_id`
+// set to the spawning tool call; only records with a null/absent parent belong
+// to the parent conversation. Subagent output reaches the parent through the
+// Agent tool result, so parent-lane consumers must skip these records.
+export function isClaudeSubagentRecord(parsed: Record<string, unknown>): boolean {
+  return parsed.parent_tool_use_id != null;
+}
+
 export function pickCliResumeCheckpointId(params: {
   backend: CliBackendConfig;
   providerId: string;
@@ -353,7 +365,7 @@ export function pickCliResumeCheckpointId(params: {
   if (
     !isClaudeStreamJsonDialect(params) ||
     params.parsed.type !== "assistant" ||
-    params.parsed.parent_tool_use_id != null
+    isClaudeSubagentRecord(params.parsed)
   ) {
     return undefined;
   }

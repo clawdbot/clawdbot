@@ -7,7 +7,7 @@ read_when:
 title: Session permission modes
 ---
 
-Session permission modes set one session's filesystem boundary and exec escalation reviewer. The boundary is the session's canonical `sessionRoot`; the mode determines what may happen inside or outside it.
+Session permission modes set one session's filesystem boundary and exec escalation reviewer. The boundary is the session's recorded canonical `sessionRoot`, or the selected agent's canonical workspace when no root is recorded. The mode determines what may happen inside or outside that boundary.
 
 | Mode        | Filesystem access                                 | Exec escalation reviewer              |
 | ----------- | ------------------------------------------------- | ------------------------------------- |
@@ -20,7 +20,7 @@ Session permission modes set one session's filesystem boundary and exec escalati
 
 ## Session root and defaults
 
-The Gateway records `sessionRoot` when it creates the session. An explicit working directory becomes the root after canonical path resolution. A session without an explicit working directory uses the selected agent's canonical workspace.
+A permission mode can be set on any session. When a session has a recorded `sessionRoot`, that canonical path is its filesystem boundary. An explicit working directory and a managed worktree each pin their session's root. When no root is recorded, the boundary defaults to the selected agent's canonical workspace when the run is prepared.
 
 Managed worktree sessions use the worktree checkout as `sessionRoot`. A nested working directory remains the runtime `cwd`, so relative paths start there while filesystem containment covers the whole checkout.
 
@@ -30,6 +30,6 @@ A new managed worktree session defaults to `workspace` when no mode is specified
 
 An explicit session mode takes precedence over the session's legacy `execSecurity` and `execAsk` overrides. When the mode is unset, those fields and the normal global or per-agent configuration continue to work as before.
 
-Host approval-file floors, sandbox restrictions, and tool allow/deny policy can only make the effective result stricter. A harness may also clamp an unsupported mode to a compatible safer policy tuple; it does not combine tuple fields into a less restrictive posture.
+An explicit `full` mode is the admin-authorized exception to host approval-file floors: its OpenClaw exec policy remains `full` with approvals off. Approval-file floors continue to tighten config-driven exec policy, legacy session overrides, unset modes, and every non-full session mode. Sandbox restrictions and tool allow/deny policy remain independent, and a harness may clamp an unsupported mode to a compatible safer policy tuple. Codex also continues to honor externally enforced `requirements.toml` constraints.
 
 For the independent sandbox, tool-policy, and elevated-exec controls, see [Sandbox vs tool policy vs elevated](/gateway/sandbox-vs-tool-policy-vs-elevated).

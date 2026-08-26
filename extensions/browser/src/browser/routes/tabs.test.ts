@@ -302,6 +302,25 @@ describe("browser tab routes", () => {
     expect(forProfile).not.toHaveBeenCalled();
   });
 
+  it("returns tab-open navigation failures instead of a success payload", async () => {
+    const navigationError = new Error("page.goto: net::ERR_NAME_NOT_RESOLVED");
+    const profileCtx = createProfileContext({
+      openTab: vi.fn(async () => {
+        throw navigationError;
+      }),
+    });
+
+    const response = await callTabsRoute({
+      method: "post",
+      path: "/tabs/open",
+      body: { url: "https://unresolved.example" },
+      profileCtx,
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.body).toEqual({ error: String(navigationError) });
+  });
+
   it("returns browser-not-running for close when the browser is not reachable", async () => {
     await expectBrowserNotRunningAction("close");
   });

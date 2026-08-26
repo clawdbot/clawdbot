@@ -199,6 +199,9 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 1200, width: 1280 },
+      ...(recordVisuals
+        ? { recordVideo: { dir: artifactDir, size: { height: 1200, width: 1280 } } }
+        : {}),
     });
     const page = await context.newPage();
     await installMockGateway(page, {
@@ -220,7 +223,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
               provider: "claude-cli",
               displayName: "Claude",
               status: "ok",
-              profiles: [{ profileId: "anthropic:default", type: "oauth", status: "ok" }],
+              profiles: [{ profileId: "anthropic:default", type: "oauth", status: "expired" }],
               usage: {
                 providerId: "anthropic",
                 plan: "Max 20x",
@@ -301,8 +304,20 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         .toContain("anthropic");
       await expect.poll(async () => claudeCard.textContent()).toContain("Max 20x");
       await expect.poll(async () => claudeCard.textContent()).toContain("Credentials configured");
+      await expect.poll(async () => claudeCard.textContent()).not.toContain("Expired");
+      await expect.poll(async () => claudeCard.textContent()).not.toContain("Expiring");
+      await expect.poll(async () => claudeCard.textContent()).not.toContain("Not signed in");
       await expect.poll(async () => claudeCard.textContent()).toContain("$4.20");
       await claudeCard.locator(".provider-usage-progress").first().waitFor();
+      await expect.poll(() => page.getByText("Model auth expired: Claude").count()).toBe(0);
+
+      if (recordVisuals) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(artifactDir, "claude-cli-oauth-alias.png"),
+        });
+      }
 
       const openrouterCard = page.locator(".model-providers__row", { hasText: "OpenRouter" });
       await openrouterCard.waitFor();

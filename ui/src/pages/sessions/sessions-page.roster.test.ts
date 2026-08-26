@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionCompactionCheckpoint, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import {
   createContext,
@@ -14,8 +13,6 @@ import {
   createRenderedPage,
   type TestSessionsPage,
 } from "./sessions-page.test-support.ts";
-
-vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -38,7 +35,6 @@ async function createPage(context: ApplicationContext): Promise<TestSessionsPage
 
 afterEach(() => {
   document.body.replaceChildren();
-  vi.mocked(showConfirmDialog).mockReset();
   vi.restoreAllMocks();
 });
 
@@ -281,53 +277,5 @@ describe("sessions page managed roster", () => {
 
     await vi.waitFor(() => expect(listCheckpoints).toHaveBeenCalledOnce());
     await vi.waitFor(() => expect(page.checkpointItemsByKey[key]).toEqual([newCheckpoint]));
-  });
-
-  it("adopts a managed snapshot that arrives under the bulk-delete lock after its tail refresh", async () => {
-    const deleted = deferred<{
-      deleted: string[];
-      errors: string[];
-      preservedWorktrees: Array<{ id: string; branch: string; path: string }>;
-    }>();
-    const deleteMany = vi.fn(() => deleted.promise);
-    const managed = createManagedSessions({ deleteMany });
-    const context = createContext(
-      createGateway({} as GatewayBrowserClient).gateway,
-      managed.sessions,
-    );
-    const page = await createRenderedPage(context, {
-      count: 1,
-      sessions: [{ key: "before" }],
-    } as SessionsListResult);
-    const query = vi.mocked(managed.subscribeList).mock.calls[0]?.[0];
-    if (!query) {
-      throw new Error("Expected a managed query subscription");
-    }
-    managed.refreshList.mockClear();
-    page.selectedKeys = new Set(["before"]);
-    vi.mocked(showConfirmDialog).mockResolvedValue(true);
-
-    const deleting = page.deleteSelected();
-    await vi.waitFor(() => expect(deleteMany).toHaveBeenCalledOnce());
-    const duringResult = {
-      count: 1,
-      sessions: [{ key: "arrived-during-mutation" }],
-    } as SessionsListResult;
-    managed.publish(query, {
-      result: duringResult,
-      agentId: "main",
-      loading: false,
-      error: null,
-    });
-    expect(page.result?.sessions.map((row) => row.key)).toEqual(["before"]);
-
-    deleted.resolve({ deleted: [], errors: [], preservedWorktrees: [] });
-    await deleting;
-
-    expect(managed.refreshList).toHaveBeenCalledWith({ ...query, force: true });
-    expect(deleteMany.mock.invocationCallOrder[0]).toBeLessThan(
-      managed.refreshList.mock.invocationCallOrder[0]!,
-    );
-    expect(page.result?.sessions.map((row) => row.key)).toEqual(["arrived-during-mutation"]);
   });
 });

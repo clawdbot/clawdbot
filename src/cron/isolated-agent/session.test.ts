@@ -423,6 +423,7 @@ describe("resolveCronSession", () => {
           cacheRead: 4,
           cacheWrite: 5,
           contextTokens: 200_000,
+          contextTokensSource: "runtime",
           compactionCount: 9,
           memoryFlush: { kind: "succeeded", compactionCount: 9 },
           abortCutoffMessageSid: "old-message",
@@ -508,6 +509,7 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.cacheRead).toBeUndefined();
       expect(result.sessionEntry.cacheWrite).toBeUndefined();
       expect(result.sessionEntry.contextTokens).toBeUndefined();
+      expect(result.sessionEntry.contextTokensSource).toBeUndefined();
       expect(result.sessionEntry.compactionCount).toBeUndefined();
       expect(result.sessionEntry.memoryFlush).toBeUndefined();
       expect(result.sessionEntry.abortCutoffMessageSid).toBeUndefined();

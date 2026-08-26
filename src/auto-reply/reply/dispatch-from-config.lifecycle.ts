@@ -43,6 +43,7 @@ async function restoreArchivedDispatchSession(params: {
   ctx: FinalizedMsgContext;
   entry?: SessionEntry;
   hasPluginOwnedBinding: boolean;
+  placementContext?: SessionWorkerPlacementContext;
   sessionKey?: string;
   storePath?: string;
 }): Promise<SessionEntry | undefined> {
@@ -60,13 +61,15 @@ async function restoreArchivedDispatchSession(params: {
   ) {
     return entry;
   }
-  let placementContext: SessionWorkerPlacementContext;
-  try {
-    placementContext = (
-      await import("../../gateway/session-worker-placement-context.js")
-    ).resolveSessionWorkerPlacementContext();
-  } catch {
-    return entry;
+  let placementContext = params.placementContext;
+  if (!placementContext) {
+    try {
+      placementContext = (
+        await import("../../gateway/session-worker-placement-context.js")
+      ).resolveSessionWorkerPlacementContext();
+    } catch {
+      return entry;
+    }
   }
   const snapshotSessionId = entry.sessionId;
   const snapshotArchivedAt = entry.archivedAt;
@@ -113,6 +116,7 @@ export function createDispatchReplyOperationCoordinator(params: {
     storePath?: string;
   };
   replyOptions?: DispatchFromConfigParams["replyOptions"];
+  sessionWorkerPlacementContext?: SessionWorkerPlacementContext;
   resolveOperationExpectedSessionId: () => string | undefined;
   routeThreadId?: string | number;
 }) {
@@ -201,6 +205,7 @@ export function createDispatchReplyOperationCoordinator(params: {
         ctx: params.ctx,
         entry: params.operationSessionStoreEntry.entry,
         hasPluginOwnedBinding,
+        placementContext: params.sessionWorkerPlacementContext,
         sessionKey: params.dispatchOperationSessionKey,
         storePath: params.operationSessionStoreEntry.storePath,
       });

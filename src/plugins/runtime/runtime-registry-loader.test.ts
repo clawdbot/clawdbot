@@ -113,6 +113,7 @@ function useMemoryProviderOwner(params: {
       plugins: [
         {
           pluginId: params.pluginId,
+          startup: { sidecar: false, memory: false, agentHarnesses: [] },
           contributions: {
             contracts: { [params.contract]: [params.adapterId] },
           },
@@ -135,7 +136,15 @@ describe("ensurePluginRegistryLoaded", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.resolvePluginMetadataSnapshot.mockReset().mockReturnValue({
-      index: { installRecords: {}, plugins: [{ pluginId: "openai" }] },
+      index: {
+        installRecords: {},
+        plugins: [
+          {
+            pluginId: "openai",
+            startup: { sidecar: false, memory: false, agentHarnesses: [] },
+          },
+        ],
+      },
       manifestRegistry: { plugins: [], diagnostics: [] },
     } as never);
     mocks.isPluginMetadataSnapshotCompatible.mockReturnValue(true);
@@ -189,6 +198,91 @@ describe("ensurePluginRegistryLoaded", () => {
         throwOnLoadError: true,
       }),
     );
+  });
+
+  it("loads only matching configured sandbox backend owners, never unrelated broken plugins", () => {
+    const config = {
+      agents: {
+        defaults: { sandbox: { backend: "sandbox-owner" } },
+        entries: { research: { sandbox: { backend: "research-owner" } } },
+      },
+      plugins: {
+        entries: {
+          "sandbox-owner": { enabled: true },
+          "research-owner": { enabled: true },
+          "broken-plugin": { enabled: true },
+        },
+      },
+    };
+    mocks.resolvePluginMetadataSnapshot.mockReturnValue({
+      index: {
+        installRecords: {},
+        plugins: ["sandbox-owner", "research-owner", "broken-plugin"].map((pluginId) => ({
+          pluginId,
+          startup: { sidecar: false, memory: false, agentHarnesses: [] },
+        })),
+      },
+      manifestRegistry: { plugins: [], diagnostics: [] },
+    } as never);
+    mocks.loadOpenClawPlugins.mockImplementationOnce((options) => {
+      if (options?.onlyPluginIds?.includes("broken-plugin")) {
+        throw new Error("unrelated plugin failed to initialize");
+      }
+      return undefined as never;
+    });
+
+    expect(() => ensurePluginRegistryLoaded({ scope: "sandbox-backends", config })).not.toThrow();
+    expect(requireLoadOptions().onlyPluginIds).toEqual(["research-owner", "sandbox-owner"]);
+    expect(mocks.resolveEffectivePluginIds).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, "docker", "podman", "ssh"])(
+    "does not activate plugins for the built-in sandbox backend %s",
+    (backend) => {
+      mocks.resolvePluginMetadataSnapshot.mockReturnValue({
+        index: {
+          installRecords: {},
+          plugins: ["docker", "podman", "ssh"].map((pluginId) => ({
+            pluginId,
+            startup: { sidecar: false, memory: false, agentHarnesses: [] },
+          })),
+        },
+        manifestRegistry: { plugins: [], diagnostics: [] },
+      } as never);
+
+      ensurePluginRegistryLoaded({
+        scope: "sandbox-backends",
+        config: { agents: { defaults: { sandbox: { backend } } } },
+      });
+
+      expect(requireLoadOptions().onlyPluginIds).toEqual([]);
+      expect(mocks.resolveEffectivePluginIds).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not guess a differently named sandbox backend owner", () => {
+    mocks.resolvePluginMetadataSnapshot.mockReturnValue({
+      index: {
+        installRecords: {},
+        plugins: [
+          {
+            pluginId: "actual-owner",
+            startup: { sidecar: false, memory: false, agentHarnesses: [] },
+          },
+        ],
+      },
+      manifestRegistry: { plugins: [], diagnostics: [] },
+    } as never);
+
+    ensurePluginRegistryLoaded({
+      scope: "sandbox-backends",
+      config: {
+        agents: { defaults: { sandbox: { backend: "different-backend" } } },
+        plugins: { entries: { "actual-owner": { enabled: true } } },
+      },
+    });
+
+    expect(requireLoadOptions().onlyPluginIds).toEqual([]);
   });
 
   it("loads only the selected memory backend and embedding provider owners", () => {

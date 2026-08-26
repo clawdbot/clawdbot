@@ -11,6 +11,7 @@ type QaSuiteArtifactErrorCode =
   | "summary_missing"
   | "summary_read_failed"
   | "summary_parse_failed"
+  | "summary_not_completed"
   | "summary_counts_invalid"
   | "summary_failure_count_missing"
   | "summary_blocking_count_missing";

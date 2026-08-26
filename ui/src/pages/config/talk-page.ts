@@ -8,8 +8,13 @@ import { property, state } from "lit/decorators.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import { isTalkGptLiveModel, resolveTalkRealtimeSelection } from "./talk-schema.ts";
 import {
+  isTalkGptLiveModel,
+  resolveTalkRealtimeSelection,
+  talkProviderRejectsTransport,
+} from "./talk-schema.ts";
+import {
+  effectiveTalkValues,
   renderTalk,
   selectedTalkProviderOption,
   talkProviderConfigKeys,
@@ -53,6 +58,10 @@ function toProviderOption(
 
 /** Transports whose sessions are client-owned (`talk.client.create`). */
 const TALK_CLIENT_OWNED_TRANSPORTS = new Set(["webrtc", "provider-websocket"]);
+
+function gptLiveRejectsTransport(model: string | null, transport: string): boolean {
+  return isTalkGptLiveModel(model) && transport === "provider-websocket";
+}
 
 class TalkSettingsPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
@@ -196,12 +205,24 @@ class TalkSettingsPage extends OpenClawLightDomElement {
     const runtimeConfig = this.context.runtimeConfig;
     if (model !== null) {
       runtimeConfig.patchForm(["talk", "realtime", "model"], model);
-      // GPT-Live is WebRTC-only; a configured relay or provider-websocket
-      // transport would make the just-picked model fail at session create, so
-      // clearing it lets the default client-owned WebRTC path apply.
-      const transport = this.liveSelection().transport;
-      if (isTalkGptLiveModel(model) && transport && transport !== "webrtc") {
+      const selection = this.liveSelection();
+      const transport = selection.transport;
+      const provider = selectedTalkProviderOption(this.catalog, selection);
+      const rejectsTransport =
+        transport !== null &&
+        (gptLiveRejectsTransport(model, transport) ||
+          talkProviderRejectsTransport(provider?.transports, transport));
+      // Preserve configured transports unless the selected provider positively
+      // advertises that it cannot serve them.
+      if (isTalkGptLiveModel(model) && rejectsTransport) {
         runtimeConfig.removeFormValue(["talk", "realtime", "transport"]);
+      } else if (
+        provider?.id === "openai" &&
+        isTalkGptLiveModel(model) &&
+        transport === "gateway-relay" &&
+        selection.consultRouting === "force-agent-consult"
+      ) {
+        runtimeConfig.removeFormValue(["talk", "realtime", "consultRouting"]);
       }
       return;
     }
@@ -247,17 +268,17 @@ class TalkSettingsPage extends OpenClawLightDomElement {
   }
 
   /**
-   * Model, voice, and transport picks are provider-coupled (an xAI session
-   * cannot use a gpt-live model, marin, or webrtc), so a provider switch
-   * clears the top-level overrides instead of carrying them across. Each
-   * provider's own `talk.realtime.providers.<id>` entry survives untouched and
-   * supplies that provider's fallback values.
+   * Model and voice picks are provider-coupled, so a provider switch clears
+   * those top-level overrides. Transport survives when the target provider
+   * advertises it; an unavailable catalog is not evidence of incompatibility.
+   * Each provider's own entry survives and supplies its fallback values.
    */
   private changeProvider(providerId: string | null) {
     if (this.mutationDisabled) {
       return;
     }
     const runtimeConfig = this.context.runtimeConfig;
+    const selection = this.liveSelection();
     for (const key of ["model", "speakerVoice", "speakerVoiceId"]) {
       runtimeConfig.removeFormValue(["talk", "realtime", key]);
     }
@@ -268,21 +289,42 @@ class TalkSettingsPage extends OpenClawLightDomElement {
       runtimeConfig.removeFormValue(["talk", "realtime", "provider"]);
       return;
     }
-    runtimeConfig.removeFormValue(["talk", "realtime", "transport"]);
-    runtimeConfig.patchForm(["talk", "realtime", "provider"], providerId);
-    // A relay-only provider (no client-owned transport) needs the transport
-    // written explicitly: an unset transport routes to talk.client.create,
-    // which such a provider cannot serve.
+    const configuredTransport = selection.transport;
     const option =
       this.catalog.kind === "ready"
         ? this.catalog.providers.find((provider) => provider.id === providerId)
         : undefined;
+    const targetModel =
+      effectiveTalkValues(
+        { ...selection, provider: providerId, model: null, speakerVoice: null },
+        option,
+      ).model ?? option?.defaultModel;
+    const rejectsTransport =
+      configuredTransport !== null &&
+      (gptLiveRejectsTransport(targetModel ?? null, configuredTransport) ||
+        talkProviderRejectsTransport(option?.transports, configuredTransport));
+    if (rejectsTransport) {
+      runtimeConfig.removeFormValue(["talk", "realtime", "transport"]);
+    }
+    runtimeConfig.patchForm(["talk", "realtime", "provider"], providerId);
+    // A relay-only provider (no client-owned transport) needs the transport
+    // written explicitly when the current selection cannot carry across.
     const relayOnly =
       option !== undefined &&
       option.transports.length > 0 &&
-      !option.transports.some((transport) => TALK_CLIENT_OWNED_TRANSPORTS.has(transport));
-    if (relayOnly) {
+      !option.transports.some((candidate) => TALK_CLIENT_OWNED_TRANSPORTS.has(candidate));
+    let resultingTransport = rejectsTransport ? null : configuredTransport;
+    if (relayOnly && configuredTransport !== "gateway-relay") {
       runtimeConfig.patchForm(["talk", "realtime", "transport"], "gateway-relay");
+      resultingTransport = "gateway-relay";
+    }
+    if (
+      option?.id === "openai" &&
+      isTalkGptLiveModel(targetModel ?? null) &&
+      resultingTransport === "gateway-relay" &&
+      selection.consultRouting === "force-agent-consult"
+    ) {
+      runtimeConfig.removeFormValue(["talk", "realtime", "consultRouting"]);
     }
   }
 

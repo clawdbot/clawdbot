@@ -832,7 +832,11 @@ function renderContextPanel(
       className: "files",
       labelKey: "usage.details.files",
       tokens: charsToTokens(
-        contextWeight.injectedWorkspaceFiles.reduce((sum, file) => sum + file.injectedChars, 0),
+        contextWeight.injectedWorkspaceFiles.reduce(
+          (sum, file) =>
+            file.injectionStatus === "native_unverified" ? sum : sum + file.injectedChars,
+          0,
+        ),
       ),
       entries: contextWeight.injectedWorkspaceFiles.map(({ name, injectedChars }) => ({
         name,
@@ -843,7 +847,12 @@ function renderContextPanel(
     className,
     labelKey,
     tokens,
-    entries: entries.toSorted((left, right) => right.chars - left.chars),
+    entries: entries.toSorted((left, right) => {
+      if (left.chars === null) {
+        return right.chars === null ? 0 : 1;
+      }
+      return right.chars === null ? -1 : right.chars - left.chars;
+    }),
   }));
   const categories = [
     {
@@ -915,7 +924,11 @@ function renderContextPanel(
                     ({ name, chars }) => html`
                       <div class="context-breakdown-item">
                         <span class="mono" title=${name}>${name}</span>
-                        <span class="muted">~${formatUsageTokens(charsToTokens(chars))}</span>
+                        <span class="muted"
+                          >${chars === null
+                            ? t("usage.common.unknown")
+                            : `~${formatUsageTokens(charsToTokens(chars))}`}</span
+                        >
                       </div>
                     `,
                   )}

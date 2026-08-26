@@ -384,7 +384,9 @@ export function registerDefaultAuthTokenSuite(): void {
           "role",
           "scopes",
         ]);
-        const admin = await rpcReq(wsReconnect, "config.schema");
+        const schema = await rpcReq(wsReconnect, "config.schema");
+        expect(schema.ok).toBe(true);
+        const admin = await rpcReq(wsReconnect, "config.patch");
         expect(admin.ok).toBe(false);
         expect(admin.error?.message).toBe("missing scope: operator.admin");
       } finally {

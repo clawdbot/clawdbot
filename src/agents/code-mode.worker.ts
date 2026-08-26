@@ -34,8 +34,9 @@ type VmRun = {
   didTimeout: () => boolean;
 };
 
-// Each worker handles exactly one exec/resume payload, so cancellations are run-scoped.
+// Each worker handles exactly one exec/resume payload, so bridge state is run-scoped.
 const canceledBridgeRequestIds: string[] = [];
+let bridgeAdmissionFailure: CodeModeWorkerFailure | undefined;
 
 // QuickJS error stacks are backtrace frames only ("    at file:line:col"), with
 // no leading "Name: message" header like V8. Returning .stack alone therefore
@@ -76,13 +77,16 @@ function createHostRequestHandler(params: {
 ) => JSValueHandle {
   return (methodHandle, argsHandle, bridgeIdHandle) => {
     if (params.pendingRequests.length >= params.config.maxPendingToolCalls) {
-      throw new Error("too many pending code mode tool calls");
+      bridgeAdmissionFailure ??= new CodeModeWorkerFailure(
+        "invalid_input",
+        "too many pending code mode tool calls",
+      );
+      throw bridgeAdmissionFailure;
     }
     const method = methodHandle.toString();
     if (
       method !== "search" &&
       method !== "describe" &&
-      method !== "call" &&
       method !== "callValue" &&
       method !== "nodes" &&
       method !== "yield" &&
@@ -293,7 +297,7 @@ function workerFailureResult(params: {
 
 async function readCompletedResult(vm: QuickJS, resultHandle: JSValueHandle): Promise<unknown> {
   if (!resultHandle.isPromise) {
-    return toJsonSafe(vm.dump(resultHandle));
+    return serializeCompletedCatalogHandles(vm, resultHandle);
   }
   const settled = await vm.resolvePromise(resultHandle);
   if ("error" in settled) {
@@ -319,7 +323,17 @@ async function readCompletedResult(vm: QuickJS, resultHandle: JSValueHandle): Pr
       throw new Error(text);
     });
   }
-  return settled.value.consume((value) => toJsonSafe(vm.dump(value)));
+  return settled.value.consume((value) => serializeCompletedCatalogHandles(vm, value));
+}
+
+function serializeCompletedCatalogHandles(vm: QuickJS, value: JSValueHandle): unknown {
+  return vm.global
+    .getProp("__openclawSerializeCatalogHandles")
+    .consume((serialize) =>
+      vm
+        .callFunction(serialize, vm.undefined, value)
+        .consume((serialized) => toJsonSafe(vm.dump(serialized))),
+    );
 }
 
 function waitingResult(params: {
@@ -354,6 +368,9 @@ async function runVmExecution(params: {
   try {
     params.prepare();
     params.vm.executePendingJobs();
+    if (bridgeAdmissionFailure) {
+      throw bridgeAdmissionFailure;
+    }
     output = takeOutput(params.vm);
     const resultHandle = params.vm.global.getProp("__openclawResult");
     try {

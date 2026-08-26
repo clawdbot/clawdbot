@@ -94,6 +94,8 @@ export const zh_TW = {
       tokenPlaceholder: "多機器或非 loopback 存取需要使用",
       tokenPrompt: "Gateway 權杖",
       tokenPromptGenerate: "Gateway 權杖（留空則產生）",
+      tokenStoreProvisioned:
+        "已產生 Gateway 權杖並以 {name} 存入 OpenClaw 祕密儲存。設定中只保留參照；可用 `openclaw secrets store list` 檢視。",
       websocketUrl: "Gateway WebSocket URL",
     },
     gatewayTailscale: {
@@ -125,6 +127,7 @@ export const zh_TW = {
       complete: "遷移完成。下一步執行 `openclaw doctor`。",
       continuing: "遷移完成。繼續設定。",
       importFrom: "從 {source} 匯入",
+      importFromAnotherAgent: "從其他 agent 匯入",
       includeCredentials: "也匯入支援的認證憑證？",
       previewTitle: "遷移預覽",
       setupModelSeparately: "另外設定模型",
@@ -446,6 +449,13 @@ export const zh_TW = {
         "如果多個使用者能向同一個啟用工具的 agent 傳訊息，他們都能影響它如何使用工具。",
       title: "安全免責聲明",
       toolAccess: "如果啟用了工具，這個 bot 可以讀取檔案並執行操作。",
+    },
+    telemetry: {
+      accept: "是，分享功能使用統計",
+      decline: "不用，謝謝",
+      description:
+        "在每日更新檢查中分享你使用的功能（頻道、提供者、插件數量）。絕不包含訊息或識別碼。查看實際傳送的內容：`openclaw telemetry show`。隨時變更：`openclaw telemetry on|off`。",
+      title: "幫助 OpenClaw 變得更好？",
     },
     skills: {
       configure: "現在設定技能？（建議）",
@@ -1074,7 +1084,9 @@ export const zh_TW = {
       dashboardWhenReady: "準備好後執行：{command}",
       daemonRuntime: "Gateway 服務執行環境",
       daemonRuntimeNode: "Node（建議）",
-      daemonRuntimeNodeHint: "OpenClaw 狀態使用 node:sqlite，因此必須使用 Node；Bun 無法執行閘道。",
+      daemonRuntimeNodeHint: "託管服務的主要與建議執行環境。",
+      daemonRuntimeBun: "Bun 1.4+",
+      daemonRuntimeBunHint: "需要 Bun 1.4 或更新版本，並使用符合 WAL 重設安全要求的 node:sqlite。",
       editBootstrap: "之後可編輯 BOOTSTRAP.md 來修改 agent 的自我介紹方式。",
       bootstrapHatchMessage: "醒醒，我的朋友！",
       firstTerminalChat: '第一次終端機聊天會傳送："醒醒，我的朋友！"',
@@ -1121,6 +1133,8 @@ export const zh_TW = {
       optionalApps: "可選應用",
       outroDashboardLink: "Onboarding 完成。使用上面的 dashboard 連結控制 OpenClaw。",
       outroDashboardOpened: "Onboarding 完成。Dashboard 已開啟；保留該分頁以控制 OpenClaw。",
+      outroHealthCheckFailed:
+        "Onboarding 完成，但閘道健康檢查失敗。請先解決上面的問題，再用 {command} 驗證。",
       outroSeeded: "Onboarding 完成。Web UI 已在背景初始化，可隨時用上面的 dashboard 連結開啟。",
       quickstartNodeRuntime: "QuickStart 使用 Node 執行 Gateway 服務（穩定且受支援）。",
       reinstall: "重新安裝",

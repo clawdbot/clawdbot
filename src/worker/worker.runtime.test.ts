@@ -8,7 +8,11 @@ import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
-import { validateWorkerSessionsSpawnParams } from "../../packages/gateway-protocol/src/index.js";
+import {
+  validateWorkerGitHubPublishParams,
+  validateWorkerSessionsSendParams,
+  validateWorkerSessionsSpawnParams,
+} from "../../packages/gateway-protocol/src/index.js";
 import {
   type WorkerConnectRequestFrame,
   WorkerConnectRequestFrameSchema,
@@ -19,6 +23,8 @@ import {
   WorkerLiveEventRequestFrameSchema,
   WORKER_PROTOCOL_FEATURES,
   WORKER_RPC_SET_VERSION,
+  type WorkerGitHubPublishParams,
+  type WorkerSessionsSendParams,
   type WorkerSessionsSpawnParams,
   type WorkerTranscriptCommitParams,
   type WorkerTranscriptCommitRequestFrame,
@@ -36,8 +42,10 @@ import {
   type WorkerInferenceTerminalFrame,
   type WorkerInferenceTerminalOutcome,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { listRunningSessions } from "../agents/bash-process-registry.js";
+import { saveExecApprovals, type ExecApprovalsFile } from "../infra/exec-approvals.js";
 import { buildWorkerConnectParams, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "./transcript-message.js";
 import { WorkerAdmissionDeadlineExceededError } from "./worker-connection-contract.js";
@@ -94,6 +102,7 @@ const WORKER_LOOP_REPLAY = {
 };
 const BUNDLE_HASH = Array.from({ length: 64 }, () => "a").join("");
 const CREDENTIAL = ["worker", "fixture", "admission"].join("-");
+const WORKER_INFERENCE_START_TIMEOUT_MS = 90_000;
 
 type InferencePlan =
   | "text"
@@ -114,6 +123,7 @@ type WorkerDoneMessage = Extract<WorkerInferenceTerminalOutcome, { type: "done" 
 
 type FakeGatewayOptions = {
   admissionFailure?: "gateway-unavailable" | "invalid-credential" | "owner-epoch-mismatch";
+  execApprovals?: ExecApprovalsFile;
   inferencePlans?: InferencePlan[];
   outageOnInferenceCancel?: boolean;
   ignoreFirstAdmission?: boolean;
@@ -121,7 +131,7 @@ type FakeGatewayOptions = {
   silenceFirstTranscript?: boolean;
   silenceFirstLiveEvent?: boolean;
   silenceFirstInference?: boolean;
-  silenceSessionSpawnResponses?: number;
+  silenceSessionToolResponses?: number;
   transcriptFailureAtRequest?: number;
   liveResyncAckedSeq?: number;
   liveResyncResponses?: number;
@@ -165,6 +175,7 @@ class FakeWorkerGateway {
   private sentLiveResync = 0;
   private unavailable = false;
   private ignoredAdmission = false;
+  private readonly inferenceStarted = createDeferred();
 
   socketPath = "";
   connectionCount = 0;
@@ -174,7 +185,17 @@ class FakeWorkerGateway {
   readonly liveEventRequests: WorkerLiveEventParams[] = [];
   readonly inferenceRequests: WorkerInferenceStartParams[] = [];
   readonly sessionSpawnRequests: WorkerSessionsSpawnParams[] = [];
+  readonly sessionSendRequests: WorkerSessionsSendParams[] = [];
+  readonly githubPublishRequests: WorkerGitHubPublishParams[] = [];
   readonly applicationOrder: string[] = [];
+
+  waitForInferenceStart(): Promise<void> {
+    return withTestTimeout(
+      this.inferenceStarted.promise,
+      WORKER_INFERENCE_START_TIMEOUT_MS,
+      "worker inference start did not reach the fake Gateway",
+    );
+  }
 
   constructor(private readonly options: FakeGatewayOptions = {}) {
     this.httpServer = createServer();
@@ -249,18 +270,29 @@ class FakeWorkerGateway {
       this.handleInferenceCancel(socket, parsed as WorkerInferenceCancelRequestFrame);
       return;
     }
-    if (
-      isRecord(parsed) &&
-      parsed.type === "req" &&
-      typeof parsed.id === "string" &&
-      parsed.method === "worker.sessions.spawn" &&
-      validateWorkerSessionsSpawnParams(parsed.params)
-    ) {
-      this.handleSessionSpawn(socket, {
-        id: parsed.id,
-        params: parsed.params,
-      });
-      return;
+    if (isRecord(parsed) && parsed.type === "req" && typeof parsed.id === "string") {
+      const sessionToolMethod =
+        parsed.method === "worker.sessions.spawn" &&
+        validateWorkerSessionsSpawnParams(parsed.params)
+          ? parsed.method
+          : parsed.method === "worker.sessions.send" &&
+              validateWorkerSessionsSendParams(parsed.params)
+            ? parsed.method
+            : parsed.method === "worker.github.publish" &&
+                validateWorkerGitHubPublishParams(parsed.params)
+              ? parsed.method
+              : undefined;
+      if (sessionToolMethod) {
+        this.handleSessionTool(socket, {
+          id: parsed.id,
+          method: sessionToolMethod,
+          params: parsed.params as
+            | WorkerSessionsSpawnParams
+            | WorkerSessionsSendParams
+            | WorkerGitHubPublishParams,
+        });
+        return;
+      }
     }
     const unsupported: unknown = parsed;
     if (isRecord(unsupported) && typeof unsupported.method === "string") {
@@ -354,13 +386,27 @@ class FakeWorkerGateway {
     });
   }
 
-  private handleSessionSpawn(
+  private handleSessionTool(
     socket: WebSocket,
-    frame: { id: string; params: WorkerSessionsSpawnParams },
+    frame: {
+      id: string;
+      method: "worker.sessions.spawn" | "worker.sessions.send" | "worker.github.publish";
+      params: WorkerSessionsSpawnParams | WorkerSessionsSendParams | WorkerGitHubPublishParams;
+    },
   ): void {
-    this.methods.push("worker.sessions.spawn");
-    this.sessionSpawnRequests.push(structuredClone(frame.params));
-    if (this.sessionSpawnRequests.length <= (this.options.silenceSessionSpawnResponses ?? 0)) {
+    this.methods.push(frame.method);
+    if (frame.method === "worker.sessions.spawn") {
+      this.sessionSpawnRequests.push(structuredClone(frame.params as WorkerSessionsSpawnParams));
+    } else if (frame.method === "worker.sessions.send") {
+      this.sessionSendRequests.push(structuredClone(frame.params as WorkerSessionsSendParams));
+    } else {
+      this.githubPublishRequests.push(structuredClone(frame.params as WorkerGitHubPublishParams));
+    }
+    const requestCount =
+      this.sessionSpawnRequests.length +
+      this.sessionSendRequests.length +
+      this.githubPublishRequests.length;
+    if (requestCount <= (this.options.silenceSessionToolResponses ?? 0)) {
       return;
     }
     this.send(socket, {
@@ -468,6 +514,10 @@ class FakeWorkerGateway {
   private handleInference(socket: WebSocket, frame: WorkerInferenceStartRequestFrame): void {
     this.methods.push(frame.method);
     this.inferenceRequests.push(structuredClone(frame.params));
+    if (this.inferencePlanIndex === 0 && this.options.execApprovals) {
+      saveExecApprovals(this.options.execApprovals);
+    }
+    this.inferenceStarted.resolve();
     if (this.options.silenceFirstInference && !this.droppedInference) {
       this.droppedInference = true;
       return;
@@ -1025,11 +1075,47 @@ describe("worker runtime", () => {
     ).toContain("sessions_spawn");
   });
 
-  it("replays the same durable session operation across repeated response loss", async () => {
+  it.each([
+    {
+      name: "spawn",
+      invoke: (connection: ReturnType<typeof createWorkerConnection>) =>
+        connection.requestSessionsSpawn({
+          toolCallId: "call-durable-spawn",
+          task: "start a nested cloud child",
+        }),
+      requests: (gateway: FakeWorkerGateway) => gateway.sessionSpawnRequests,
+      request: { toolCallId: "call-durable-spawn", task: "start a nested cloud child" },
+    },
+    {
+      name: "send",
+      invoke: (connection: ReturnType<typeof createWorkerConnection>) =>
+        connection.requestSessionsSend({
+          toolCallId: "call-durable-send",
+          sessionKey: "agent:main:cloud-child",
+          message: "status",
+        }),
+      requests: (gateway: FakeWorkerGateway) => gateway.sessionSendRequests,
+      request: {
+        toolCallId: "call-durable-send",
+        sessionKey: "agent:main:cloud-child",
+        message: "status",
+      },
+    },
+    {
+      name: "publish",
+      invoke: (connection: ReturnType<typeof createWorkerConnection>) =>
+        connection.requestGitHubPublish({
+          toolCallId: "call-durable-publish",
+          title: "Publish the fix",
+        }),
+      requests: (gateway: FakeWorkerGateway) => gateway.githubPublishRequests,
+      request: { toolCallId: "call-durable-publish", title: "Publish the fix" },
+    },
+  ])("replays the same durable $name operation across response loss", async (testCase) => {
     const { gateway, launch } = await setup({
       heartbeatIntervalMs: 1,
       ignoreHeartbeat: true,
-      silenceSessionSpawnResponses: 2,
+      silenceSessionToolResponses: 2,
     });
     const connection = createWorkerConnection({
       endpoint: { kind: "unix", socketPath: gateway.socketPath },
@@ -1041,10 +1127,7 @@ describe("worker runtime", () => {
     connection.onStateChange((state) => states.push(state.kind));
     await connection.start();
 
-    const response = await connection.requestSessionsSpawn({
-      toolCallId: "call-durable-spawn",
-      task: "start a nested cloud child",
-    });
+    const response = await testCase.invoke(connection);
 
     expect(response).toMatchObject({
       ok: true,
@@ -1052,10 +1135,10 @@ describe("worker runtime", () => {
     });
     expect(gateway.connectionCount).toBe(3);
     expect(states).toContain("reconnecting");
-    expect(gateway.sessionSpawnRequests).toEqual([
-      { toolCallId: "call-durable-spawn", task: "start a nested cloud child" },
-      { toolCallId: "call-durable-spawn", task: "start a nested cloud child" },
-      { toolCallId: "call-durable-spawn", task: "start a nested cloud child" },
+    expect(testCase.requests(gateway)).toEqual([
+      testCase.request,
+      testCase.request,
+      testCase.request,
     ]);
     await connection.stop();
   });
@@ -1168,7 +1251,7 @@ describe("worker runtime", () => {
     const { gateway, launch } = await setup({ inferencePlans: ["hold"] });
     const controller = new AbortController();
     const result = runWorkerDescriptor(launch, { signal: controller.signal });
-    await waitForFast(() => expect(gateway.inferenceRequests).toHaveLength(1));
+    await gateway.waitForInferenceStart();
 
     controller.abort(new Error("operator stopped worker"));
 
@@ -1187,7 +1270,7 @@ describe("worker runtime", () => {
     });
     const controller = new AbortController();
     const result = runWorkerDescriptor(launch, { signal: controller.signal });
-    await waitForFast(() => expect(gateway.inferenceRequests).toHaveLength(1));
+    await gateway.waitForInferenceStart();
 
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
@@ -1389,7 +1472,18 @@ describe("worker runtime", () => {
     },
     { mode: "full" as const, omittedTools: [], denial: null },
   ])("applies the $mode worker permission clamp", async ({ mode, omittedTools, denial }) => {
-    const { gateway, workspaceDir, launch } = await setup({ inferencePlans: ["tool", "text"] });
+    const { gateway, workspaceDir, launch } = await setup({
+      inferencePlans: ["tool", "text"],
+      ...(mode === "full"
+        ? {
+            execApprovals: {
+              version: 1,
+              defaults: { security: "full", ask: "always" },
+              agents: {},
+            },
+          }
+        : {}),
+    });
     launch.assignment.permissionMode = mode;
     launch.assignment.workerContainmentRoot = workspaceDir;
 
@@ -1413,6 +1507,8 @@ describe("worker runtime", () => {
       await expect(readFile(path.join(workspaceDir, "local-proof.txt"), "utf8")).resolves.toBe(
         "worker-local",
       );
+      expect(toolResult).not.toMatch(/approval_required|approval-pending/iu);
+      expect(gateway.methods.some((method) => method.includes("approval"))).toBe(false);
     }
   });
 

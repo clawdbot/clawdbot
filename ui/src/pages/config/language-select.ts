@@ -1,5 +1,6 @@
 import { html } from "lit";
 import "../../components/web-awesome-select.ts";
+import "../../styles/select-picker.css";
 import { SUPPORTED_LOCALES, t, type Locale } from "../../i18n/index.ts";
 
 export function languageLabel(locale: Locale) {

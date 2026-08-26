@@ -155,11 +155,9 @@ export function loadManifestMetadataSnapshot(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): PluginMetadataSnapshot {
-  const config = params.config ?? {};
-  const env = params.env ?? process.env;
   return resolvePluginMetadataSnapshot({
-    config,
-    env,
+    config: params.config,
+    env: params.env ?? process.env,
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     allowWorkspaceScopedCurrent: params.workspaceDir === undefined,
   });

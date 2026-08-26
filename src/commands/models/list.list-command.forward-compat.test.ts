@@ -425,30 +425,24 @@ describe("modelsListCommand forward-compat", () => {
 
     await modelsListCommand({ agent: "research", json: true }, createRuntime() as never);
 
-    expect(mocks.resolveModelsTargetAgent).toHaveBeenCalledWith(mocks.resolvedConfig, "research");
+    expect(mocks.resolveModelsTargetAgent).toHaveBeenCalledWith(mocks.resolvedConfig, "research", {
+      kind: "read",
+    });
     expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith("/tmp/openclaw-agent-research");
   });
 
   it("rejects unknown provider filters before loading the model registry", async () => {
     const runtime = createRuntime();
-    const previousExitCode = process.exitCode;
-    process.exitCode = undefined;
-    let observedExitCode: number | undefined;
 
-    try {
-      await modelsListCommand(
-        { provider: "autoqa-no-such-provider", json: true },
-        runtime as never,
-      );
-      observedExitCode = process.exitCode;
-    } finally {
-      process.exitCode = previousExitCode;
-    }
+    await expect(
+      modelsListCommand({ provider: "autoqa-no-such-provider", json: true }, runtime as never),
+    ).rejects.toMatchObject({
+      name: "ExpectedCliError",
+      humanOutput: expect.stringContaining('Unknown provider filter "autoqa-no-such-provider"'),
+      machineOutput: expect.stringContaining('Unknown provider filter "autoqa-no-such-provider"'),
+    });
 
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining('Unknown provider filter "autoqa-no-such-provider"'),
-    );
-    expect(observedExitCode).toBe(1);
+    expect(runtime.error).not.toHaveBeenCalled();
     expect(mocks.loadModelRegistry).not.toHaveBeenCalled();
     expect(mocks.loadModelCatalog).not.toHaveBeenCalled();
     expect(mocks.printModelTable).not.toHaveBeenCalled();
@@ -502,9 +496,14 @@ describe("modelsListCommand forward-compat", () => {
       mocks.loadModelRegistry.mockRejectedValueOnce(new Error("registry failed"));
       const runtime = createRuntime();
 
-      await modelsListCommand({ all: true }, runtime as never);
+      await expect(modelsListCommand({ all: true }, runtime as never)).rejects.toMatchObject({
+        name: "ExpectedCliError",
+        message: "Model registry unavailable: registry failed",
+        humanOutput: expect.stringContaining("Model registry unavailable:\nError: registry failed"),
+        machineOutput: "Model registry unavailable: registry failed",
+      });
 
-      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("registry failed"));
+      expect(runtime.error).not.toHaveBeenCalled();
       expect(mocks.startPromotionsFeedRefresh).not.toHaveBeenCalled();
       expect(mocks.printAvailablePromotionsSection).not.toHaveBeenCalled();
     });

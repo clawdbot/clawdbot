@@ -361,7 +361,6 @@ describe("cloud worker milestone 2 fault injection", () => {
     const messages = SessionManager.open(harness.sessionTarget)
       .getEntries()
       .flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
-    expect(messages).toHaveLength(2);
     expect(messages.map((message) => message.role)).toEqual(["user", "user"]);
     expect(harness.providerCalls).toBe(2);
     expect(

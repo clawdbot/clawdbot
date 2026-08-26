@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { listAgentIds, tryResolveSystemAgentTargetAgentId } from "../agents/agent-scope-config.js";
+import { listAgentIds, tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import {
   discardLegacyRegistryWorktrees,
@@ -12,10 +12,7 @@ import {
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { getChannelPlugin } from "../channels/plugins/registry.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
-import {
-  resolveSessionStoreCompatibilityAgentId,
-  tryResolveLegacyCompatibilityAgentId,
-} from "../config/legacy.default-agent-owner.js";
+import { resolveSessionStoreCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import { migrateLegacyMainSessionKeys } from "../config/sessions/legacy-main-session-migration.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
@@ -194,6 +191,10 @@ function describeStateSchemaMigration(migration: OpenClawStateDatabaseSchemaMigr
       return "cloud worker placements → execution-mode claims";
     case "agent-databases-relative-paths-v9":
       return "agent database registry paths → state-relative storage";
+    case "state-table-retirement-v10":
+      return "retired shared-state tables → removed tables and indexes";
+    case "state-table-retirement-v11":
+      return "retired skill curator tables → removed tables and indexes";
     case "operator-approvals-system-agent":
       return "operator approvals → OpenClaw system changes";
     case "session-watch-cursor-provenance-v4":
@@ -282,8 +283,7 @@ function createPluginDoctorStateMigrationContext(
 }
 
 function tryResolveDoctorStateMigrationAgentId(cfg: OpenClawConfig): string | undefined {
-  const agentId =
-    tryResolveLegacyCompatibilityAgentId(cfg) ?? tryResolveSystemAgentTargetAgentId(cfg);
+  const agentId = tryResolveAmbientOwnerAgentId(cfg);
   return agentId && listAgentIds(cfg).includes(agentId) ? agentId : undefined;
 }
 
@@ -363,6 +363,7 @@ export async function detectLegacyStateMigrations(params: {
   pluginSessionStoreAgentIds?: readonly string[];
   sessionStoreOwnership?: SessionStoreOwnership;
   doctorOnlyStateMigrations?: boolean;
+  allowLegacyDeviceIdentityImport?: boolean;
   legacySessionSurfaces: PreparedLegacySessionSurfaces;
 }): Promise<LegacyStateDetection> {
   const env = params.env ?? process.env;
@@ -547,6 +548,7 @@ export async function detectLegacyStateMigrations(params: {
     stateDir,
     env,
     doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
+    allowLegacyDeviceIdentityImport: params.allowLegacyDeviceIdentityImport,
   });
   const execApprovals = detectDoctorOwnedState(detectLegacyExecApprovals);
   const mcpOauth = detectDoctorOwnedState(detectLegacyMcpOAuthStores);
@@ -1368,6 +1370,7 @@ export async function autoMigrateLegacyState(params: {
   now?: () => number;
   recoverCorruptTargetStore?: boolean;
   doctorOnlyStateMigrations?: boolean;
+  allowLegacyDeviceIdentityImport?: boolean;
   legacySessionSurfaces?: PreparedLegacySessionSurfaces;
 }): Promise<{
   migrated: boolean;
@@ -1524,6 +1527,7 @@ export async function autoMigrateLegacyState(params: {
     env,
     homedir: params.homedir,
     doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
+    allowLegacyDeviceIdentityImport: params.allowLegacyDeviceIdentityImport,
     legacySessionSurfaces,
   });
   const deviceAuth = await migrateLegacyDeviceAuth({
@@ -1536,6 +1540,7 @@ export async function autoMigrateLegacyState(params: {
     env,
     stateDir: detected.stateDir,
     doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
+    allowLegacyDeviceIdentityImport: params.allowLegacyDeviceIdentityImport,
   });
   const meetingTranscripts = await migrateLegacyMeetingTranscripts({
     detected: detected.meetingTranscripts,

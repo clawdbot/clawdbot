@@ -238,8 +238,10 @@ describe("worker launch descriptor", () => {
     descriptor.assignment.toolAuthority.allowedToolNames = [];
     expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual(descriptor);
 
-    descriptor.assignment.toolAuthority.allowedToolNames = ["browser"];
+    descriptor.assignment.toolAuthority.allowedToolNames = ["browser", "github_publish"];
     expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual(descriptor);
+    expect(JSON.stringify(descriptor.assignment)).not.toContain("GH_CONFIG_DIR");
+    expect(JSON.stringify(descriptor.assignment)).not.toContain("GITHUB_TOKEN");
   });
 
   it("accepts only a closed absolute loopback browser attachment descriptor", () => {

@@ -16,7 +16,7 @@ import {
   pastePng,
   pollLocatorText,
   reconnectProofArtifactDir,
-  waitForPersistedNewSessionDraft,
+  waitForCommittedNewSessionDraft,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
@@ -35,35 +35,6 @@ async function withNewSessionPage(run: (page: Page) => Promise<void>): Promise<v
 }
 
 suite.define(() => {
-  it("restores a text-only prompt in a fresh page", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    try {
-      const text = "restore this text-only prompt after restart";
-      const firstPage = await context.newPage();
-      await installMockGateway(firstPage);
-      await firstPage.goto(`${suite.server.baseUrl}new`);
-      const firstMessage = firstPage.locator(".new-session-page__message");
-      await firstMessage.fill(text);
-      await waitForPersistedNewSessionDraft(firstPage, text, 0);
-      await firstPage.reload();
-      await expect.poll(() => firstMessage.inputValue()).toBe(text);
-      await firstPage.close();
-
-      const restoredPage = await context.newPage();
-      await installMockGateway(restoredPage);
-      await restoredPage.goto(`${suite.server.baseUrl}new`);
-      await expect
-        .poll(() => restoredPage.locator(".new-session-page__message").inputValue())
-        .toBe(text);
-    } finally {
-      await context.close();
-    }
-  });
-
   it("restores a prompt and image in a fresh page, then clears them after creation", async () => {
     const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     if (artifactDir) {
@@ -84,16 +55,16 @@ suite.define(() => {
       const firstMessage = firstPage.locator(".new-session-page__message");
       await firstMessage.fill("restore this prompt after restart");
       await pastePng(firstMessage);
-      await firstPage.locator('.chat-attachment-thumb img[alt="Attachment preview"]').waitFor();
+      await firstPage.locator('.chat-attachment-thumb img[alt="pixel.png"]').waitFor();
       const incognito = firstPage.getByRole("switch", { name: "Incognito" });
       await incognito.click();
       await expect.poll(() => incognito.getAttribute("aria-checked")).toBe("true");
-      await waitForPersistedNewSessionDraft(firstPage, null, 0);
+      await waitForCommittedNewSessionDraft(firstPage, null, 0);
       await incognito.click();
       await expect.poll(() => incognito.getAttribute("aria-checked")).toBe("false");
       await firstMessage.fill("restore this prompt after restart and incognito");
       await expect.poll(() => firstPage.locator(".chat-attachment-thumb").count()).toBe(1);
-      await waitForPersistedNewSessionDraft(
+      await waitForCommittedNewSessionDraft(
         firstPage,
         "restore this prompt after restart and incognito",
         1,
@@ -255,6 +226,7 @@ suite.define(() => {
 
   it("pastes an image into the draft and forwards it with the initial turn", async () => {
     await withNewSessionPage(async (page) => {
+      await page.setViewportSize({ width: 393, height: 852 });
       const gateway = await installMockGateway(page, {
         methodResponses: {
           "sessions.create": { key: "agent:main:image-draft", runStarted: true },
@@ -265,7 +237,8 @@ suite.define(() => {
       await message.waitFor();
       await pastePng(message);
 
-      await page.locator('.chat-attachment-thumb img[alt="Attachment preview"]').waitFor();
+      await page.getByRole("img", { name: "pixel.png" }).waitFor();
+      await captureUiProof(page, "mobile-composer-new-session-attachment.png");
       await page.getByRole("button", { name: "Start session" }).click();
 
       const create = await gateway.waitForRequest("sessions.create");
@@ -297,7 +270,7 @@ suite.define(() => {
         .setInputFiles(path.join(process.cwd(), "ui/public/favicon-32.png"));
 
       const attachment = page.locator(".chat-attachment-thumb");
-      const preview = attachment.locator('img[alt="Attachment preview"]');
+      const preview = attachment.getByRole("img", { name: "favicon-32.png" });
       const previewButton = page.getByRole("button", { name: "Open image favicon-32.png" });
       await preview.waitFor({ state: "visible" });
       await expect.poll(() => preview.getAttribute("src")).toMatch(/^data:image\/png;base64,/u);
@@ -306,7 +279,8 @@ suite.define(() => {
       const lightbox = page.locator("openclaw-image-lightbox");
       const dialog = page.getByRole("dialog", { name: "Image preview: favicon-32.png" });
       await dialog.waitFor({ state: "visible" });
-      await expect(lightbox.getAttribute("title")).resolves.toBe("favicon-32.png");
+      await expect(lightbox.getAttribute("title")).resolves.toBeNull();
+      await page.getByAltText("favicon-32.png").last().waitFor({ state: "visible" });
       await captureUiProof(page, "new-session-picked-image-lightbox.png");
       await page.keyboard.press("Escape");
       await lightbox.waitFor({ state: "detached" });
@@ -336,7 +310,7 @@ suite.define(() => {
       await expect.poll(() => previewButton.locator("img").getAttribute("src")).toMatch(/^blob:/u);
       await previewButton.click();
       await page.getByRole("dialog", { name: "Image preview: untrusted.svg" }).waitFor();
-      await expect(page.getByRole("link", { name: "Open original" }).count()).resolves.toBe(0);
+      await expect(page.getByRole("link", { name: "Open in new tab" }).count()).resolves.toBe(0);
       await captureUiProof(page, "new-session-svg-lightbox.png");
     });
   });
@@ -596,7 +570,7 @@ suite.define(() => {
         finish();
       });
 
-      await page.locator('.chat-attachment-thumb img[alt="Attachment preview"]').waitFor();
+      await page.getByRole("img", { name: "pixel.png" }).waitFor();
       await expect.poll(() => submit.isEnabled()).toBe(true);
       await submit.click();
       const create = await gateway.waitForRequest("sessions.create");
@@ -722,12 +696,12 @@ suite.define(() => {
       const composer = page.locator(".new-session-page__message");
 
       await pastePng(composer);
-      await page.locator('.chat-attachment-thumb img[alt="Attachment preview"]').waitFor();
+      await page.getByRole("img", { name: "pixel.png" }).waitFor();
       await page.getByRole("button", { name: "Remove attachment" }).click();
       await expect.poll(async () => (await proof()).revoked).toBe(1);
 
       await pastePng(composer);
-      await page.locator('.chat-attachment-thumb img[alt="Attachment preview"]').waitFor();
+      await page.getByRole("img", { name: "pixel.png" }).waitFor();
       const agentDropdown = page.locator(".new-session-page__select--agent wa-dropdown");
       await page.locator(".new-session-page__select--agent .agent-select__trigger").click();
       await expect
@@ -753,27 +727,23 @@ suite.define(() => {
 
       await navigate("new-session");
       await composer.waitFor();
-      await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(1);
-      await page.getByRole("button", { name: "Remove attachment" }).click();
-      await expect.poll(async () => (await proof()).revoked).toBe(3);
-      await pastePng(composer);
-      await page.locator('.chat-attachment-thumb img[alt="Attachment preview"]').waitFor();
+      await page.getByRole("img", { name: "pixel.png" }).waitFor();
       await navigate("chat");
       await page.waitForURL((url) => url.pathname.endsWith("/chat"));
-      await expect.poll(async () => (await proof()).revoked).toBe(3);
+      await expect.poll(async () => (await proof()).revoked).toBe(2);
 
       await navigate("new-session");
       await composer.waitFor();
       await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(1);
       await page.getByRole("button", { name: "Remove attachment" }).click();
-      await expect.poll(async () => (await proof()).revoked).toBe(4);
+      await expect.poll(async () => (await proof()).revoked).toBe(3);
       await pastePng(composer);
-      await page.locator('.chat-attachment-thumb img[alt="Attachment preview"]').waitFor();
+      await page.getByRole("img", { name: "pixel.png" }).waitFor();
       await page.getByRole("button", { name: "Start session" }).click();
       await page.waitForURL(
         (url) => url.pathname === controlUiSessionPath("agent:main:preview-cleanup"),
       );
-      await expect.poll(async () => await proof()).toEqual({ created: 5, revoked: 5 });
+      await expect.poll(async () => await proof()).toEqual({ created: 4, revoked: 4 });
     });
   });
 
@@ -931,20 +901,16 @@ suite.define(() => {
       await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
         timeout: 30_000,
       });
-      await expect
-        .poll(() => page.locator(".chat-queue__text").allInnerTexts(), { timeout: 30_000 })
-        .toContain(message);
-      await expect
-        .poll(() => page.locator(".chat-queue__error").allInnerTexts(), { timeout: 30_000 })
-        .toContain(runError);
+      const failedGroup = page.locator(".chat-group.user", { hasText: message });
+      const failedStatus = failedGroup.locator(".chat-send-status");
+      await failedGroup.waitFor({ state: "visible", timeout: 30_000 });
+      expect(await failedStatus.textContent()).toContain("Not sent");
+      expect(await failedStatus.getAttribute("title")).toBe(runError);
 
       await page.reload();
-      await expect
-        .poll(() => page.locator(".chat-queue__text").allInnerTexts(), { timeout: 30_000 })
-        .toContain(message);
-      await expect
-        .poll(() => page.locator(".chat-queue__error").allInnerTexts(), { timeout: 30_000 })
-        .toContain(runError);
+      await failedGroup.waitFor({ state: "visible", timeout: 30_000 });
+      expect(await failedStatus.textContent()).toContain("Not sent");
+      expect(await failedStatus.getAttribute("title")).toBe(runError);
 
       await page.getByRole("button", { name: "Retry queued message" }).click();
       const retry = await gateway.waitForRequest("chat.send");
@@ -997,12 +963,11 @@ suite.define(() => {
       await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
         timeout: 30_000,
       });
-      await expect
-        .poll(() => page.locator(".chat-queue__text").allInnerTexts(), { timeout: 30_000 })
-        .toContain(message);
-      await expect
-        .poll(() => page.locator(".chat-queue__error").allInnerTexts(), { timeout: 30_000 })
-        .toContain(runError);
+      const failedGroup = page.locator(".chat-group.user", { hasText: message });
+      const failedStatus = failedGroup.locator(".chat-send-status");
+      await failedGroup.waitFor({ state: "visible", timeout: 30_000 });
+      expect(await failedStatus.textContent()).toContain("Not sent");
+      expect(await failedStatus.getAttribute("title")).toBe(runError);
       await page.getByRole("button", { name: "Retry queued message" }).click();
       const retry = await gateway.waitForRequest("chat.send");
       expect(retry.params).toMatchObject({

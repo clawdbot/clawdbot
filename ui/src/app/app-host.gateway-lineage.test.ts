@@ -59,6 +59,7 @@ function renderGatewaySurface(
         basePath: "",
         agentSelection: { state: { selectedId: null } },
         config: { current: { terminalEnabled: false } },
+        theme: { resolvedMode: "dark" },
       } as unknown as ApplicationContext,
     };
     app.synchronizeGateway(gateway);
@@ -133,6 +134,7 @@ describe("Control UI Gateway target lineage", () => {
         basePath: "",
         agentSelection: { state: { selectedId: null } },
         config: { current: { terminalEnabled: false } },
+        theme: { resolvedMode: "dark" },
       } as unknown as ApplicationContext,
     };
     app.synchronizeGateway(gateway);

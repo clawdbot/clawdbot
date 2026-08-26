@@ -5,19 +5,6 @@ import { requireInvocationOrder } from "./bot-message-dispatch.test-harness.js";
 type OrderedMock = { mock: { invocationCallOrder: number[] } };
 
 /**
- * Turn end retires the progress window: no synthesized activity digest is ever
- * written back into it.
- */
-export function expectWindowRetiredWithoutSummary(stream: {
-  finalizeToPreview: { mock: { calls: unknown[][] } };
-}) {
-  const digests = stream.finalizeToPreview.mock.calls
-    .map((call) => (call[0] as { text?: string } | undefined)?.text ?? "")
-    .filter((text) => text.includes("⏱️"));
-  expect(digests).toEqual([]);
-}
-
-/**
  * Retirement lands after the final, so shrinking the window above it never
  * pushes the final off the anchored viewport. Text windows clear; tool-only
  * windows reposition in place — assert the ordering, not the mechanism.

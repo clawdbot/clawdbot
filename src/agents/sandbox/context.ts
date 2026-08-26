@@ -319,6 +319,7 @@ async function resolveProvisionedSandboxContext(
 
   const sandboxContext: SandboxContext = {
     enabled: true,
+    ...(runtime.sandboxRequired ? { required: true } : {}),
     backendId: backend.id,
     sessionKey: rawSessionKey,
     workspaceDir,

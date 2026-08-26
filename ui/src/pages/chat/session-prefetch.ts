@@ -1,14 +1,23 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import { requestChatSessionSnapshot } from "./chat-history.ts";
-import { cacheChatSessionSnapshot, type ChatMessageCache } from "./session-message-cache.ts";
+import { MAX_CACHED_CHAT_SESSIONS } from "./session-cache.ts";
+import {
+  appendChatMessageToCache,
+  cacheChatSessionSnapshot,
+  readChatSessionSnapshot,
+  type ChatMessageCache,
+  type ChatSessionSnapshot,
+} from "./session-message-cache.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-invalidation.ts";
 import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
 
 const SESSION_PREFETCH_COUNT = 5;
-const SESSION_PREFETCH_INITIAL_DELAY_MS = 1_500;
+const SESSION_PREFETCH_INITIAL_DELAY_MS = 250;
 const SESSION_PREFETCH_COOLDOWN_MS = 30_000;
 const SESSION_PREFETCH_LOCK_NAME = "openclaw-chat-prefetch";
 
@@ -167,48 +176,131 @@ class SessionPrefetcher {
     ) {
       return;
     }
+    const { client } = snapshot;
     await this.snapshotStore.loadSavedAtIndex();
     if (!this.isCurrent(snapshot)) {
       return;
+    }
+    // Refresh presented snapshots through their LRU owner before background writes
+    // so a full cache evicts stale entries instead of visible conversation panes.
+    for (const sessionKey of snapshot.openSessionKeys) {
+      const presented = readChatSessionSnapshot(this.cache, snapshot.snapshotHost, { sessionKey });
+      if (presented && this.cache.size === MAX_CACHED_CHAT_SESSIONS) {
+        this.snapshotStore.write(
+          resolveChatSnapshotKey(snapshot.snapshotHost, { sessionKey }),
+          presented,
+        );
+      }
     }
     const selection = this.selectCandidates(snapshot);
     if (selection.deferMs !== null) {
       this.schedule(selection.deferMs);
     }
-    for (const candidate of selection.candidates) {
-      if (!this.isCurrent(snapshot)) {
-        return;
-      }
-      if (this.isOpen(candidate.snapshotKey, this.snapshot)) {
-        continue;
-      }
-      this.lastAttemptAt.set(candidate.snapshotKey, Date.now());
-      try {
-        const cached = await requestChatSessionSnapshot(
-          snapshot.client,
-          candidate.snapshotKey,
-          this,
-          () => this.isCurrent(snapshot),
-        );
-        if (!this.isCurrent(snapshot)) {
+    await Promise.all(
+      selection.candidates.map(async (candidate) => {
+        if (!this.isCurrent(snapshot) || this.isOpen(candidate.snapshotKey, this.snapshot)) {
           return;
         }
-        if (
-          this.isOpen(candidate.snapshotKey, this.snapshot) ||
-          this.currentActivityAt(candidate.snapshotKey) > candidate.activityAt
-        ) {
-          continue;
+        this.lastAttemptAt.set(candidate.snapshotKey, Date.now());
+        try {
+          let existing = readChatSessionSnapshot(this.cache, snapshot.snapshotHost, {
+            sessionKey: candidate.snapshotKey,
+          });
+          if (!existing && this.snapshotStore.readSavedAt(candidate.snapshotKey) !== null) {
+            existing = await this.snapshotStore.read(candidate.snapshotKey);
+            if (!this.isCurrent(snapshot)) {
+              return;
+            }
+            if (existing) {
+              cacheChatSessionSnapshot(
+                this.cache,
+                snapshot.snapshotHost,
+                { sessionKey: candidate.snapshotKey },
+                existing,
+              );
+            }
+          }
+          let result = await requestChatSessionSnapshot(
+            client,
+            candidate.snapshotKey,
+            this,
+            () => this.isCurrent(snapshot),
+            existing?.deltaCursor,
+          );
+          if (!this.isCurrent(snapshot)) {
+            return;
+          }
+          if (result.kind === "reset") {
+            if (existing?.deltaCursor !== undefined) {
+              const { deltaCursor: _deltaCursor, ...withoutCursor } = existing;
+              cacheChatSessionSnapshot(
+                this.cache,
+                snapshot.snapshotHost,
+                { sessionKey: candidate.snapshotKey },
+                withoutCursor,
+              );
+              existing = withoutCursor;
+            }
+            result = await requestChatSessionSnapshot(client, candidate.snapshotKey, this, () =>
+              this.isCurrent(snapshot),
+            );
+            if (!this.isCurrent(snapshot)) {
+              return;
+            }
+          }
+          if (
+            this.isOpen(candidate.snapshotKey, this.snapshot) ||
+            this.currentActivityAt(candidate.snapshotKey) > candidate.activityAt
+          ) {
+            return;
+          }
+          let cached: ChatSessionSnapshot;
+          if (result.kind === "delta") {
+            for (const payload of result.messages) {
+              const event = asOptionalRecord(payload);
+              if (!event || !Object.hasOwn(event, "message")) {
+                continue;
+              }
+              appendChatMessageToCache(
+                this.cache,
+                snapshot.snapshotHost,
+                { sessionKey: candidate.snapshotKey },
+                event.message,
+                event,
+              );
+            }
+            const updated = readChatSessionSnapshot(this.cache, snapshot.snapshotHost, {
+              sessionKey: candidate.snapshotKey,
+            });
+            if (!updated) {
+              return;
+            }
+            cached = {
+              ...updated,
+              // Prefetch does not own transient run replay. Keep the prior cursor
+              // so the opening pane can consume the same authoritative snapshot.
+              ...(result.inFlightRun ? {} : { deltaCursor: result.deltaCursor }),
+              ...(Object.hasOwn(result.sessionInfo, "activeLeafEntryId")
+                ? { displayedLeafEntryId: result.sessionInfo.activeLeafEntryId?.trim() || null }
+                : {}),
+              sessionId: result.sessionInfo.sessionId?.trim() || updated.sessionId,
+            };
+          } else if (result.kind === "snapshot") {
+            cached = result.snapshot;
+          } else {
+            throw new Error("chat history page request returned a cursor reset");
+          }
+          cacheChatSessionSnapshot(
+            this.cache,
+            snapshot.snapshotHost,
+            { sessionKey: candidate.snapshotKey },
+            cached,
+          );
+        } catch (error) {
+          debugSessionPrefetch(`history fetch failed for ${candidate.snapshotKey}`, error);
         }
-        cacheChatSessionSnapshot(
-          this.cache,
-          snapshot.snapshotHost,
-          { sessionKey: candidate.snapshotKey },
-          cached,
-        );
-      } catch (error) {
-        debugSessionPrefetch(`history fetch failed for ${candidate.snapshotKey}`, error);
-      }
-    }
+      }),
+    );
   }
 
   private selectCandidates(snapshot: SessionPrefetchSnapshot): {
@@ -220,13 +312,19 @@ class SessionPrefetcher {
         resolveChatSnapshotKey(snapshot.snapshotHost, { sessionKey }),
       ),
     );
-    const rows = [...(snapshot.rows ?? [])].toSorted(
+    const maxPrefetchedSessions = Math.max(0, MAX_CACHED_CHAT_SESSIONS - openKeys.size);
+    const rows = (snapshot.rows ?? []).toSorted(
       (left, right) => sessionActivityAt(right) - sessionActivityAt(left),
     );
     const candidates: SessionPrefetchCandidate[] = [];
     const seen = new Set<string>();
     let deferMs: number | null = null;
     for (const row of rows) {
+      // The presented pane owns transient run adoption and replay. Background
+      // prefetch only warms durable history, so it must not consume active state.
+      if (isSessionRunActive(row)) {
+        continue;
+      }
       const snapshotKey = resolveChatSnapshotKey(snapshot.snapshotHost, {
         sessionKey: row.key,
         agentId: row.agentId,
@@ -235,6 +333,10 @@ class SessionPrefetcher {
         continue;
       }
       seen.add(snapshotKey);
+      // Warming older rows must never evict hotter or presented snapshots.
+      if (seen.size > maxPrefetchedSessions) {
+        break;
+      }
       const activityAt = sessionActivityAt(row);
       const savedAt = this.snapshotStore.readSavedAt(snapshotKey);
       if (savedAt !== null && savedAt >= activityAt) {

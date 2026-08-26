@@ -37,7 +37,6 @@ describe("embedded agent preparation timing", () => {
     );
 
     const events = await readTimeline(path);
-    expect(events).toHaveLength(4);
     expect(events.map((event) => event.name)).toEqual([
       "agent.prepare",
       "agent.prepare",

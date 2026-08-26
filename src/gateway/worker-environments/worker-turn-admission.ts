@@ -118,14 +118,30 @@ export async function waitForTurnOperation<T>(params: {
   });
 }
 
+function resolvePlacementIdentityField(
+  supplied: string | undefined,
+  persisted: string | undefined,
+  field: string,
+): string {
+  const resolved = supplied === undefined && persisted ? persisted : required(supplied, field);
+  if (persisted && resolved !== persisted) {
+    throw new Error(`Worker turn ${field} does not match its placement`);
+  }
+  return resolved;
+}
+
 export function resolvePlacementIdentity(
   claim: LocalTurnPlacementClaim,
   placement: WorkerSessionPlacementRecord | undefined,
 ) {
   return {
     sessionId: claim.sessionId,
-    agentId: placement?.agentId ?? required(claim.agentId, "agent id"),
-    sessionKey: placement?.sessionKey ?? required(claim.sessionKey, "session key"),
+    agentId: resolvePlacementIdentityField(claim.agentId, placement?.agentId, "agent id"),
+    sessionKey: resolvePlacementIdentityField(
+      claim.sessionKey,
+      placement?.sessionKey,
+      "session key",
+    ),
   };
 }
 
@@ -134,7 +150,7 @@ export function requireActivePlacement(
 ): ActiveWorkerPlacement {
   const failureDetail =
     placement.state === "failed"
-      ? `: ${withCurrentWorkerBuildRemediation(placement.terminalReason ?? placement.recoveryError)}`
+      ? `: ${withCurrentWorkerBuildRemediation(placement.recoveryError)}`
       : "";
   if (
     placement.state !== "active" ||

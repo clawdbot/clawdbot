@@ -34,8 +34,10 @@ export const slackChannelConfigUiHints = {
         "Show tool/progress activity in the live draft preview message (default: true). Set false to hide interim tool updates while the draft preview stays active.",
       "preview.commandText":
         'Command/exec detail in preview tool-progress lines: "status" is the safe default; "raw" opts into command text.',
+      "progress.style":
+        'Slack progress presentation: "card" (default) uses structured task/session cards; "compact" keeps one editable text draft that the final answer replaces in place when Slack can safely edit it.',
       "progress.nativeTaskCards":
-        'Slack native task-card progress updates when channels.slack.streaming.mode="progress" and streaming.nativeTransport is enabled. Set false to fall back to the Block Kit progress card. Default: true.',
+        'Slack native task-card progress updates when channels.slack.streaming.mode="progress", progress.style="card", and streaming.nativeTransport is enabled. Set false to fall back to the Block Kit progress card. Default: true.',
     },
     progress: { labels: "openclaw" },
   }),

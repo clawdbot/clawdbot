@@ -4,9 +4,9 @@ import path from "node:path";
 import { isCrablineServerChannel, OPENCLAW_CRABLINE_DEFAULT_CHANNEL } from "@openclaw/crabline";
 import {
   canonicalPathFromExistingAncestor,
-  extractErrorCode,
   isPathInside,
-} from "openclaw/plugin-sdk/security-runtime";
+} from "openclaw/plugin-sdk/file-access-runtime";
+import { extractErrorCode } from "openclaw/plugin-sdk/security-runtime";
 import {
   mergeQaEvidenceSummaries,
   validateQaEvidenceSummaryJson,
@@ -112,13 +112,7 @@ function selectQaProfileScenarioCategory(
 }
 
 function listQaProfileScenarioLiveChannels(scenario: QaSeedScenarioWithSource) {
-  const channel = scenario.execution.channel?.trim().toLowerCase();
-  if (channel) {
-    return [channel];
-  }
-  return scenario.execution.kind === "flow"
-    ? (scenario.execution.channels?.filter((candidate) => candidate !== "qa-channel") ?? [])
-    : [];
+  return (scenario.execution.channels ?? []).filter((candidate) => candidate !== "qa-channel");
 }
 
 function listExclusiveQaProfileChannels(

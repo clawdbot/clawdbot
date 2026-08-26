@@ -1,9 +1,9 @@
 ---
-summary: "Control UI URL routes, stable session-link grammar, and connection handoff parameters"
+summary: "Control UI routes, focus presentations, stable session links, and connection handoff parameters"
 read_when:
   - You need to bookmark or share a Control UI session
   - You are adding or changing a Control UI route
-  - You need a terminal, approval, onboarding, or remote Gateway URL
+  - You need a terminal, desktop, approval, onboarding, or remote Gateway URL
 title: "Control UI URLs"
 ---
 
@@ -105,10 +105,6 @@ the UI does not guess. It shows a small disambiguation view with the matching
 display names, agents, and longer id prefixes. Use a longer prefix to make the
 URL unique. Current Gateways return at most ten recent candidates; when that
 bound is reached, the view treats the result as incomplete instead of guessing.
-Against an older Gateway that predates short-id resolve support, the UI falls
-back to the prior bounded list search, scanning at most five pages of results.
-It likewise reports an incomplete search instead of guessing when that fallback
-cannot prove uniqueness.
 
 To continue one of these links in the terminal or attach a coding harness, see
 [Session synchronization and attachment](/concepts/session-attachment).
@@ -122,6 +118,71 @@ query-form identity, and new links must not emit it. The Sessions list keeps its
 own `?session=` parameter because that parameter expands a row; it is not a
 session deep link. The one-shot composer value `?draft=` remains supported on
 chat and dashboard session paths.
+
+## Focus presentation routes
+
+A focus route renders one supported content surface without the normal Control
+UI application chrome. Focus presentation is separate from browser fullscreen:
+opening a focus route does not invoke the browser Fullscreen API.
+
+Insert `/focus` immediately after the configured Control UI base path. Removing
+it returns the corresponding normal route when one exists:
+
+```text
+/dashboard/roboclaw/the-daily-claw-6d7c9ccb
+/focus/dashboard/roboclaw/the-daily-claw-6d7c9ccb
+
+/openclaw/dashboard/roboclaw/the-daily-claw-6d7c9ccb
+/openclaw/focus/dashboard/roboclaw/the-daily-claw-6d7c9ccb
+```
+
+Dashboard focus routes use the complete canonical `/dashboard` grammar above:
+
+```text
+/focus/dashboard/<agentId>
+/focus/dashboard/<agentId>/<sessionRef...>
+```
+
+The Control UI removes the focus modifier before passing the dashboard route to
+the canonical session resolver. Canonical address replacement and ambiguity
+candidate links preserve `/focus`. Missing, ambiguous, and unavailable sessions
+remain visible, and the dashboard is not read until the session resolves to a
+canonical key.
+
+The other focus targets are:
+
+```text
+/focus/terminal
+
+/focus/desktop
+/focus/desktop/source/<encodedSource>
+/focus/desktop/session/<encodedExactSessionKey>
+/focus/desktop/control
+/focus/desktop/control/source/<encodedSource>
+/focus/desktop/control/session/<encodedExactSessionKey>
+```
+
+Encode desktop source and exact-session-key values with `encodeURIComponent` so
+each occupies one path segment. Empty source and session values are omitted. If
+a native caller supplies both non-empty values, the source form wins. The
+optional `control` segment requests initial control; it does not grant control
+or authorize the connection.
+
+The focus target and desktop identity or options are path-only. Credentials do
+not belong in these URLs. Each target keeps the startup, authentication,
+permission, and capability checks of its normal or embedded surface. In
+particular, the terminal still requires `gateway.terminal.enabled` and an
+`operator.admin` connection.
+
+Stable releases previously emitted `/?view=terminal`. The Control UI accepts
+that form only at the application root (or `<basePath>/?view=terminal`) and
+immediately replaces it in browser history with `/focus/terminal` under the
+same base path, removing the legacy `view` parameter. New links must use
+`/focus/terminal`. The query form is not recognized on other application
+paths, and the removed desktop and dashboard query forms are not accepted.
+
+`/focus` and unsupported `/focus/*` targets show an error without the ordinary
+application shell. They do not open a normal application route.
 
 ## Route table
 
@@ -195,19 +256,21 @@ Agent selection and its `overview|files|tools|skills|channels|cron|memory`
 panels use paths. Older links with `?agent=<agentId>` are replaced once with
 the agent path while keeping other query parameters and the fragment.
 
-## Special documents and startup modes
+## Other special documents and startup modes
 
 These Gateway-served documents sit outside the application route table:
 
 - `/?onboarding=1` opens the first-run onboarding presentation.
-- `/terminal` opens the user-facing full-screen terminal. With a base path, use
-  `<basePath>/terminal`.
-- `/?view=terminal` opens the same terminal-only document in the WebView/embed
-  form used by the mobile apps. Terminal availability in either form still
-  requires `gateway.terminal.enabled` and `operator.admin`.
 - `/approve/<approvalId>` opens a standalone approval document. With a base
   path, use `<basePath>/approve/<approvalId>`. The id identifies an approval but
   never authorizes it; normal Gateway authentication still applies.
+
+Registered exact and prefix plugin HTTP routes can own `/focus` and
+`/focus/*`. After plugin authentication and dispatch decline a request, the
+Gateway uses those paths as the Control UI focus fallback: unclaimed `GET` and
+`HEAD` requests serve the Control UI document, while other methods return
+`404`. Every unclaimed method returns `404` when Control UI serving is
+disabled. Lookalikes such as `/focused` are not part of the focus fallback.
 
 The approval namespace is reserved ahead of plugin HTTP routes for all HTTP
 methods. When Control UI serving is disabled, it returns `404` instead of

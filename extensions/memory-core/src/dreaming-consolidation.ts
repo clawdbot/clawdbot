@@ -625,6 +625,7 @@ async function runConsolidationGroup(params: {
         params.group.candidates,
         params.maxPromotedSnippetTokens,
       ),
+      disableTools: true,
       ...(params.model ? { model: params.model } : {}),
       extraSystemPrompt: CONSOLIDATION_SYSTEM_PROMPT,
       lane: `dreaming-consolidation:${params.sessionKey}`,

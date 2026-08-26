@@ -51,7 +51,6 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
     const lineRuntime = runtime.channel.line;
     const location = lineData.location;
     const locationMessage = location ? outboundRuntime.createLocationMessage(location) : null;
-    const validLocation = locationMessage ? location : undefined;
     const sendText = lineRuntime?.pushMessageLine ?? outboundRuntime.pushMessageLine;
     const sendBatch = lineRuntime?.pushMessagesLine ?? outboundRuntime.pushMessagesLine;
     const sendFlex = lineRuntime?.pushFlexMessage ?? outboundRuntime.pushFlexMessage;
@@ -217,9 +216,9 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         }
       }
 
-      if (validLocation) {
+      if (location) {
         await recordResult(
-          sendLocation(to, validLocation, {
+          sendLocation(to, location, {
             verbose: false,
             cfg,
             accountId: accountId ?? undefined,
@@ -245,7 +244,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       await sendMediaMessages();
     }
 
-    if (orderedMessages) {
+    if (orderedMessages && !shouldSendQuickRepliesInline) {
       for (const [index, message] of orderedMessages.entries()) {
         const isLast = index === orderedMessages.length - 1;
         if (message.type === "flex") {

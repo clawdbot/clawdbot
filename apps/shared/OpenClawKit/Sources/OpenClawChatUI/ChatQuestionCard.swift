@@ -553,6 +553,17 @@ extension OpenClawChatViewModel {
     private func refreshQuestions(generation refreshGeneration: UInt64, retryIndex: Int) async {
         guard refreshGeneration == self.questionRefreshGeneration else { return }
         let stateRevision = self.questionStateRevision
+        // Released 2026.7.x gateways predate question.list and reject it with
+        // "missing scope: operator.admin" (authorization runs before dispatch),
+        // so an unadvertised method must resolve as unavailable without a call.
+        if await self.transport.gatewayAdvertisesMethod("question.list") == false {
+            guard self.questionRefreshSnapshotIsCurrent(
+                generation: refreshGeneration,
+                stateRevision: stateRevision)
+            else { return }
+            self.clearPendingQuestionsForUnavailableList()
+            return
+        }
         do {
             let records = try await self.transport.listQuestions()
             guard self.questionRefreshSnapshotIsCurrent(

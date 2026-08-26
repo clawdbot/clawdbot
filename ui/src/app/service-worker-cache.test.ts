@@ -71,7 +71,7 @@ describe("Control UI service worker cache versioning", () => {
     await activationPromise;
 
     expect(clients.matchAll).toHaveBeenCalledWith({ type: "window", includeUncontrolled: true });
-    expect(clients.claim).toHaveBeenCalled();
+    expect(clients.claim).toHaveBeenCalledBefore(clients.matchAll);
     expect(cacheDelete).toHaveBeenCalledWith("openclaw-control-oldest");
     expect(windowClient.postMessage).toHaveBeenCalledWith({
       type: "sw-updated",

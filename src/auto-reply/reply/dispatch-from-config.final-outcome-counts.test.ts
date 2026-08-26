@@ -1,8 +1,26 @@
 // Tests settled dispatcher outcome accounting for dispatch-from-config runs.
 import { describe, expect, it } from "vitest";
+import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 
 describe("settled dispatcher final outcomes", () => {
+  it("rethrows an opted-in proven no-send failure when nothing was visible", async () => {
+    const error = new PlatformMessageNotDispatchedError("offline before dispatch", {
+      cause: new Error("offline"),
+    });
+    const dispatcher = createReplyDispatcher({
+      deliver: async () => {
+        throw error;
+      },
+      propagateRetryableNoSendFailure: true,
+    });
+
+    dispatcher.sendFinalReply({ text: "retry me" });
+    dispatcher.markComplete();
+
+    await expect(dispatcher.waitForIdle()).rejects.toBe(error);
+  });
+
   it("keeps non-visible, pre-send, and post-send outcomes distinct", async () => {
     const dispatcher = createReplyDispatcher({
       deliver: async (_payload, info) => {
