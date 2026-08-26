@@ -19893,6 +19893,7 @@ public struct ChatHistoryDeltaResult: Codable, Sendable {
     public let deltacursor: String
     public let sessioninfo: AnyCodable
     public let agentslist: AnyCodable?
+    public let inflightrun: AnyCodable?
     public let metadata: AnyCodable?
 
     public init(
@@ -19901,6 +19902,7 @@ public struct ChatHistoryDeltaResult: Codable, Sendable {
         deltacursor: String,
         sessioninfo: AnyCodable,
         agentslist: AnyCodable? = nil,
+        inflightrun: AnyCodable? = nil,
         metadata: AnyCodable? = nil)
     {
         self.kind = kind
@@ -19908,6 +19910,7 @@ public struct ChatHistoryDeltaResult: Codable, Sendable {
         self.deltacursor = deltacursor
         self.sessioninfo = sessioninfo
         self.agentslist = agentslist
+        self.inflightrun = inflightrun
         self.metadata = metadata
     }
 
@@ -19917,6 +19920,7 @@ public struct ChatHistoryDeltaResult: Codable, Sendable {
         case deltacursor = "deltaCursor"
         case sessioninfo = "sessionInfo"
         case agentslist = "agentsList"
+        case inflightrun = "inFlightRun"
         case metadata
     }
 }
