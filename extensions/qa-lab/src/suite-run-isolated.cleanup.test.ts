@@ -242,10 +242,10 @@ describe("isolated QA suite transport cleanup", () => {
   it("keeps Crabline workers concurrent while publishing readiness only from the final aggregate", async () => {
     const lab = createCleanupTestLab();
     const selection = {
-      capabilityMatrixPath: "crabline-fake-provider-capabilities.json",
+      capabilityMatrixPath: "crabline-channel-driver-capabilities.json",
       channel: "telegram",
       channelDriver: "crabline",
-      smokeArtifactPath: "crabline-fake-provider-smoke.json",
+      providerReadinessArtifactPath: "crabline-provider-readiness.json",
     } as const;
     let activeWorkers = 0;
     let maxActiveWorkers = 0;

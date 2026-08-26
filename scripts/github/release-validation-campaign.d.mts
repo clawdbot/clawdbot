@@ -27,8 +27,27 @@ export function validateReleaseValidationCampaignArtifact(
   },
 ): ReleaseValidationCampaignArtifact;
 
+/**
+ * Structural subset of the Actions-provided Octokit client this publisher uses.
+ * Declared locally so the script keeps a real contract without depending on
+ * Octokit's generated types from a plain-Node script surface.
+ */
+export type ReleaseValidationCampaignGitHubClient = {
+  rest: {
+    issues: {
+      get(params: Record<string, unknown>): Promise<{ data: unknown }>;
+      getLabel(params: Record<string, unknown>): Promise<unknown>;
+      createLabel(params: Record<string, unknown>): Promise<unknown>;
+      createComment(params: Record<string, unknown>): Promise<unknown>;
+      update(params: Record<string, unknown>): Promise<{ data: unknown }>;
+      listForRepo: unknown;
+    };
+  };
+  paginate(route: unknown, params: Record<string, unknown>): Promise<unknown[]>;
+};
+
 export function runReleaseValidationCampaignPublish(params: {
-  github: any;
+  github: ReleaseValidationCampaignGitHubClient;
   context: { repo: { owner: string; repo: string } };
   core: { info(message: string): void; setOutput?(name: string, value: string): void };
   artifact: unknown;
