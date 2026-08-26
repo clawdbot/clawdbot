@@ -15,8 +15,8 @@ type SidebarSessionListOwner = {
   sessionsResult: SessionListSnapshot["result"];
   sessionsAgentId: SessionListSnapshot["agentId"];
   sessionsLoading: boolean;
-  sessionMutationError: string | null;
   expandedAgentId(): string;
+  publishSidebarSessionListError(error: string | null): void;
   requestSessionDataUpdate(): void;
 };
 
@@ -97,9 +97,7 @@ export function subscribeFilteredSidebarSessions(
     }
     publishSidebarSessionList(owner, snapshot);
     owner.sessionsLoading = snapshot.loading;
-    if (snapshot.error) {
-      owner.sessionMutationError = snapshot.error;
-    }
+    owner.publishSidebarSessionListError(snapshot.error);
     owner.requestSessionDataUpdate();
   };
   const unsubscribe = sessions.subscribeList(scope, apply);

@@ -70,6 +70,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   activeSessionLineageRoot: GatewaySessionRow | null = null;
   activeSessionLineageSelectedRow: GatewaySessionRow | null = null;
   sessionMutationError: string | null = null;
+  private sessionErrorOwner: "list" | "action" | null = null;
   presencePayload: PresencePayload | undefined;
   presenceInstanceId?: string;
 
@@ -157,6 +158,14 @@ export class SessionDataController implements ReactiveController, SessionCatalog
 
   get context(): ApplicationContext<RouteId> | undefined {
     return this.host.sessionDataContext;
+  }
+
+  publishSidebarSessionListError(error: string | null): void {
+    if (this.sessionErrorOwner === "action") {
+      return;
+    }
+    this.sessionMutationError = error;
+    this.sessionErrorOwner = error ? "list" : null;
   }
 
   get isSessionDataHostConnected(): boolean {
@@ -522,6 +531,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     this.unsubscribeFilteredSessions?.();
     this.unsubscribeFilteredSessions = null;
     this.filteredSessionScope = null;
+    this.publishSidebarSessionListError(null);
   }
 
   private bindFilteredSessions(agentId: string): void {
@@ -688,6 +698,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
 
   dismissSessionMutationError(): void {
     this.sessionMutationError = null;
+    this.sessionErrorOwner = null;
     this.notify();
   }
 
@@ -733,6 +744,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   private invalidateSessionMutations(): void {
     this.sessionMutationEpoch += 1;
     this.sessionMutationError = null;
+    this.sessionErrorOwner = null;
     // Dismiss any confirm dialog still open under the retired epoch before a
     // new one can be issued; otherwise it stays modal until manually closed.
     this.sessionMutationAbortController.abort();
@@ -751,6 +763,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
       return null;
     }
     this.sessionMutationError = null;
+    this.sessionErrorOwner = null;
     this.notify();
     return {
       epoch: this.sessionMutationEpoch,
@@ -780,6 +793,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   publishSessionMutationError(scope: SidebarSessionMutationScope, error: unknown): void {
     if (this.isSessionMutationScopeCurrent(scope)) {
       this.sessionMutationError = formatUiError(error);
+      this.sessionErrorOwner = "action";
       this.notify();
     }
   }
