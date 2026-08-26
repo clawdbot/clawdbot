@@ -4015,16 +4015,33 @@ jobs:
               process.stdout.write(simulator.udid);
             '
           )"
+          derived_data_path="$RUNNER_TEMP/openclaw-watch-lifecycle"
           xcodebuild \
             -project apps/ios/OpenClaw.xcodeproj \
             -scheme OpenClawWatchApp \
             -configuration Debug \
             -destination "platform=watchOS Simulator,id=${simulator_id}" \
+            -derivedDataPath "$derived_data_path" \
+            -parallel-testing-enabled NO \
+            -only-testing:OpenClawWatchTests/WatchInboxStoreOperationTests \
+            CODE_SIGNING_ALLOWED=NO \
+            build-for-testing
+          xcrun simctl boot "$simulator_id" 2>/dev/null || true
+          xcrun simctl bootstatus "$simulator_id" -b
+          xcrun simctl install \
+            "$simulator_id" \
+            "$derived_data_path/Build/Products/Debug-watchsimulator/OpenClawWatchApp.app"
+          xcodebuild \
+            -project apps/ios/OpenClaw.xcodeproj \
+            -scheme OpenClawWatchApp \
+            -configuration Debug \
+            -destination "platform=watchOS Simulator,id=${simulator_id}" \
+            -derivedDataPath "$derived_data_path" \
             -resultBundlePath apps/ios/build/LifecycleTestResults/OpenClawWatchOperationTests.xcresult \
             -parallel-testing-enabled NO \
             -only-testing:OpenClawWatchTests/WatchInboxStoreOperationTests \
             CODE_SIGNING_ALLOWED=NO \
-            test
+            test-without-building
 
       - name: Upload iOS lifecycle simulator evidence
         if: ${{ always() && steps.ios_lifecycle_tests.outcome != '' && steps.ios_lifecycle_tests.outcome != 'skipped' }}
