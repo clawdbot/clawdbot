@@ -21,7 +21,12 @@ import {
   uiSessionEventMatches,
 } from "../../lib/sessions/session-key.ts";
 import { invalidateChatAvatarCache } from "./chat-avatar.ts";
-import { applyChatAgentsList, syncSelectedSessionMessageSubscription } from "./chat-history.ts";
+import {
+  applyChatAgentsList,
+  getChatHistoryLoadState,
+  resumePendingChatHistoryLoad,
+  syncSelectedSessionMessageSubscription,
+} from "./chat-history.ts";
 import { ChatPaneLifecycle } from "./chat-pane-lifecycle.ts";
 import {
   applySelectedSessionProjection,
@@ -304,6 +309,12 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     state.connectionEpoch = this.connectionGeneration;
     state.hello = snapshot.hello;
     state.selfUser = snapshot.selfUser ?? null;
+    state.assistantAgentId = snapshot.assistantAgentId;
+    if (!state.connected) {
+      state.chatLoading = getChatHistoryLoadState(state).phase === "pending-connection";
+    }
+    const resumedHistory =
+      !wasConnected && state.connected ? resumePendingChatHistoryLoad(state) : undefined;
     if (sourceChanged) {
       retireSessionWorkspaceCheckout(state, this.presented);
     }
@@ -356,10 +367,10 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
         startup: true,
         awaitHistory: true,
         deferBranches: true,
+        historyLoad: resumedHistory,
       });
       this.deferSessionHydrationUntilTranscript(state.sessionKey, historyRefresh);
     }
-    state.assistantAgentId = snapshot.assistantAgentId;
     const routeSessionKey = this.sessionKey.trim();
     const catalogRouteKey = parseCatalogSessionKey(routeSessionKey);
     const canonicalRouteSessionKey =
@@ -445,6 +456,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
         startup: true,
         awaitHistory: true,
         deferBranches: true,
+        historyLoad: resumedHistory,
       });
       this.deferSessionHydrationUntilTranscript(startupSessionKey, historyRefresh);
       void historyRefresh.finally(() => {

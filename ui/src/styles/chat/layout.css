@@ -619,6 +619,19 @@ openclaw-chat-page {
   font-size: 12px;
 }
 
+.chat-history-error {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-height: 0;
+  padding: 24px;
+  color: var(--muted);
+  text-align: center;
+}
+
 .chat-history-available {
   position: absolute;
   z-index: 10;

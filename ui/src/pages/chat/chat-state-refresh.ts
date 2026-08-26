@@ -12,7 +12,7 @@ import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { refreshChatAvatar, resolveAgentIdForSession } from "./chat-avatar.ts";
 import { applyRemoteSlashCommandsResult, refreshSlashCommands } from "./chat-commands.ts";
-import { loadChatHistory } from "./chat-history.ts";
+import { loadChatHistory, type ChatHistoryResult } from "./chat-history.ts";
 import { flushChatQueueForEvent } from "./chat-send-actions.ts";
 import {
   flushChatQueueAfterIdleSessionReconciliation,
@@ -28,6 +28,7 @@ import { scheduleChatScroll } from "./scroll.ts";
 
 type ChatRefreshOptions = {
   deferBranches?: boolean;
+  historyLoad?: Promise<ChatHistoryResult | undefined>;
   scheduleScroll?: boolean;
   awaitHistory?: boolean;
   startup?: boolean;
@@ -227,10 +228,12 @@ async function refreshChat(
   const refreshedAgentId = resolveAgentIdForSession(host);
   const requestUpdate = () => host.requestUpdate?.();
   const previousSessionsResult = host.sessionsResult;
-  const historyLoad = loadChatHistory(host, {
-    deferBranches: opts?.deferBranches === true,
-    startup: opts?.startup === true,
-  });
+  const historyLoad =
+    opts?.historyLoad ??
+    loadChatHistory(host, {
+      deferBranches: opts?.deferBranches === true,
+      startup: opts?.startup === true,
+    });
   const historyRefresh = historyLoad.finally(() => {
     if (opts?.scheduleScroll !== false) {
       scheduleChatScroll(host);
