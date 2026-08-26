@@ -2,6 +2,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { controlUiBundledGatewayUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { requireRecord, requireString } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 /*
@@ -77,12 +78,15 @@ async function renderAssistantProse(
   await page.locator(".agent-chat__composer-combobox textarea").fill("say something");
   await page.getByRole("button", { name: "Send message" }).click();
   const sendRequest = await gateway.waitForRequest("chat.send");
-  const params = sendRequest.params as { idempotencyKey?: unknown };
+  const runId = requireString(
+    requireRecord(sendRequest.params).idempotencyKey,
+    "chat send idempotency key",
+  );
   const text =
     "Typography carries the theme: chat prose renders in the reading face while chrome, chips, and code keep their own.";
   await gateway.emitGatewayEvent("chat", {
     message: { content: [{ text, type: "text" }], role: "assistant", timestamp: Date.now() },
-    runId: String(params.idempotencyKey ?? "run"),
+    runId,
     sessionKey: "main",
     state: "final",
   });
