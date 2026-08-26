@@ -118,20 +118,7 @@ export async function resolveSlackMessageContent(params: {
   const effectiveDirectMedia = attachmentContent?.media.length ? attachmentContent.media : null;
   const mediaPlaceholder = effectiveDirectMedia?.map((item) => item.placeholder).join(" ");
 
-  const fallbackFiles = [...(attachmentContent?.files ?? [])];
-  for (const { placeholder } of effectiveDirectMedia ?? []) {
-    const match = fallbackFiles.findIndex((file) =>
-      placeholder.includes(
-        file.id?.trim()
-          ? `fileId: ${file.id.trim()})]`
-          : `[Slack file: ${formatSlackFileReference(file)}]`,
-      ),
-    );
-    if (match >= 0) {
-      fallbackFiles.splice(match, 1);
-    }
-  }
-  const fileOnlyFallback = fallbackFiles.map(formatSlackFileReference).join(", ");
+  const fileOnlyFallback = attachmentContent?.files?.map(formatSlackFileReference).join(", ");
 
   let botAttachmentText: string | undefined;
   if (params.isBotMessage && !attachmentContent?.text) {

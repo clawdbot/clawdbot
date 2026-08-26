@@ -1275,25 +1275,30 @@ describe("Slack message file intake", () => {
     expect(result?.rawBody).toContain("FRICH.png (image/png, fileId: FRICH)");
   });
 
-  it("reuses the exact preloaded voice-file object across forwarded duplicates", async () => {
-    const voice = file("FVOICE");
-    const preloaded = {
-      path: "/tmp/preloaded-voice.ogg",
-      contentType: "audio/ogg",
-      placeholder: "[Slack file: voice.ogg (fileId: FVOICE)]",
-    };
+  it.each(["direct", "forwarded"] as const)(
+    "reuses the exact preloaded %s voice-file object across forwarded duplicates",
+    async (source) => {
+      const voice = file("FVOICE");
+      const direct = source === "direct" ? voice : file(" FVOICE ");
+      const forwarded = source === "forwarded" ? voice : file("FVOICE");
+      const preloaded = {
+        path: "/tmp/preloaded-voice.ogg",
+        contentType: "audio/ogg",
+        placeholder: "[Slack file: voice.ogg (fileId: FVOICE)]",
+      };
 
-    const result = await resolveMessageFiles({
-      direct: [voice],
-      forwarded: [[file("FVOICE")]],
-      preloadedMedia: new Map([[voice, preloaded]]),
-    });
+      const result = await resolveMessageFiles({
+        direct: [direct],
+        forwarded: [[forwarded]],
+        preloadedMedia: new Map([[voice, preloaded]]),
+      });
 
-    expect(mockFetch).not.toHaveBeenCalled();
-    expect(result?.effectiveDirectMedia).toEqual([preloaded]);
-    expect(result?.effectiveDirectMedia?.[0]).toBe(preloaded);
-    expect(result?.rawBody.match(/fileId: FVOICE/g)).toHaveLength(1);
-  });
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(result?.effectiveDirectMedia).toEqual([preloaded]);
+      expect(result?.effectiveDirectMedia?.[0]).toBe(preloaded);
+      expect(result?.rawBody.match(/fileId: FVOICE/g)).toHaveLength(1);
+    },
+  );
 
   it("keeps failed file identities beside renamed, overlapping, and ID-less downloads", async () => {
     const downloaded = file("F11");
@@ -1322,9 +1327,9 @@ describe("Slack message file intake", () => {
         [
           downloadedWithoutId,
           {
-            path: "/tmp/available.png",
-            fileName: "available.png",
-            placeholder: "[Slack file: available.png (image/png)]",
+            path: "/tmp/server-renamed.png",
+            fileName: "server-renamed.png",
+            placeholder: "[Slack file: server-renamed.png (image/png)]",
           },
         ],
       ]),
@@ -1332,7 +1337,8 @@ describe("Slack message file intake", () => {
 
     expect(result?.effectiveDirectMedia).toHaveLength(2);
     expect(result?.rawBody.match(/fileId: F11/g)).toHaveLength(1);
-    expect(result?.rawBody.match(/available\.png/g)).toHaveLength(2);
+    expect(result?.rawBody.match(/server-renamed\.png/g)).toHaveLength(1);
+    expect(result?.rawBody.match(/available\.png/g)).toHaveLength(1);
     expect(result?.rawBody).toContain("missing-contract.pdf (application/pdf, fileId: F1)");
     expect(result?.rawBody).toContain("missing.png (image/png)");
   });

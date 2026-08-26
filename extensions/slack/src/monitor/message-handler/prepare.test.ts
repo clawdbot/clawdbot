@@ -2101,13 +2101,18 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
   it("keeps a failed file recoverable when a sibling download reaches the agent", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = vi.fn(
-      async () =>
+      async (input: RequestInfo | URL) =>
         new Response(Buffer.from("image contents"), {
           status: 200,
-          headers: { "content-type": "image/png" },
+          headers: {
+            "content-type": "image/png",
+            ...(typeof input === "string" && input.includes("original-name.png")
+              ? { "content-disposition": 'attachment; filename="server-renamed.png"' }
+              : {}),
+          },
         }),
     ) as typeof fetch;
-    let downloadedPath: string | undefined;
+    let downloadedPaths: string[] = [];
 
     try {
       const prepared = await prepareWithDefaultCtx(
@@ -2120,23 +2125,31 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
               mimetype: "image/png",
               url_private_download: "https://files.slack.com/available.png",
             },
+            {
+              name: "original-name.png",
+              mimetype: "image/png",
+              url_private_download: "https://files.slack.com/original-name.png",
+            },
+            { name: "original-name.png", mimetype: "image/png" },
             { id: "F1", name: "missing-contract.pdf", mimetype: "application/pdf" },
           ],
         }),
       );
 
       assertPrepared(prepared);
-      downloadedPath = prepared.ctxPayload.media?.[0]?.path;
-      expect(prepared.ctxPayload.media).toHaveLength(1);
+      downloadedPaths = prepared.ctxPayload.media?.map((media) => media.path) ?? [];
+      expect(prepared.ctxPayload.media).toHaveLength(2);
       expect(prepared.ctxPayload.RawBody).toContain("available.png (image/png, fileId: F11)");
+      expect(prepared.ctxPayload.RawBody).toContain("server-renamed.png (image/png)");
+      expect(prepared.ctxPayload.RawBody.match(/original-name\.png/g)).toHaveLength(1);
       expect(prepared.ctxPayload.BodyForAgent).toContain(
         "missing-contract.pdf (application/pdf, fileId: F1)",
       );
     } finally {
       globalThis.fetch = originalFetch;
-      if (downloadedPath) {
-        await fs.rm(downloadedPath, { force: true });
-      }
+      await Promise.all(
+        downloadedPaths.map((downloadedPath) => fs.rm(downloadedPath, { force: true })),
+      );
     }
   });
 
