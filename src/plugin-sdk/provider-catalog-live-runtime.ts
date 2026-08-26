@@ -20,7 +20,11 @@ import {
   getCachedLiveCatalogValue,
 } from "./provider-catalog-shared.js";
 import type { ManifestProviderCatalogEntry } from "./provider-catalog-shared.js";
-import type { ModelDefinitionConfig, ModelProviderConfig } from "./provider-model-shared.js";
+import {
+  normalizeProviderId,
+  type ModelDefinitionConfig,
+  type ModelProviderConfig,
+} from "./provider-model-shared.js";
 import {
   fetchWithSsrFGuard,
   type LookupFn,
@@ -146,10 +150,21 @@ export type OpenAICompatibleModelDiscoveryOptions = {
 export type BuildOpenAICompatibleProviderCatalogParams = {
   ctx: ProviderCatalogContext;
   providerId: string;
+  providerAliases?: readonly string[];
   buildProvider: () => ModelProviderConfig | Promise<ModelProviderConfig>;
   allowExplicitBaseUrl?: boolean;
   modelDiscovery?: OpenAICompatibleModelDiscoveryOptions;
 };
+
+function matchesProviderCatalogScope(
+  ctx: Pick<ProviderCatalogContext, "providerIds">,
+  providerIds: readonly string[],
+): boolean {
+  const selected = ctx.providerIds;
+  return (
+    selected === undefined || providerIds.some((id) => selected.includes(normalizeProviderId(id)))
+  );
+}
 
 function readDefaultLiveModelCatalogRows(body: unknown): readonly unknown[] {
   if (Array.isArray(body)) {
@@ -627,6 +642,10 @@ export function buildOpenAICompatibleProviderFamilyCatalog(params: {
     catalog: {
       order: "paired" as const,
       run: async (ctx: ProviderCatalogContext) => {
+        const entries = params.entries.filter(({ id }) => matchesProviderCatalogScope(ctx, [id]));
+        if (entries.length === 0) {
+          return null;
+        }
         const auth = ctx.resolveProviderApiKey(params.credentialProviderId);
         if (!auth.apiKey) {
           return null;
@@ -634,7 +653,7 @@ export function buildOpenAICompatibleProviderFamilyCatalog(params: {
         return {
           providers: Object.fromEntries(
             await Promise.all(
-              params.entries.map(
+              entries.map(
                 async ({ id, buildProvider }) =>
                   [
                     id,
@@ -659,6 +678,11 @@ export function buildOpenAICompatibleProviderFamilyCatalog(params: {
 export async function buildOpenAICompatibleProviderCatalog(
   params: BuildOpenAICompatibleProviderCatalogParams,
 ): Promise<ProviderCatalogResult> {
+  if (
+    !matchesProviderCatalogScope(params.ctx, [params.providerId, ...(params.providerAliases ?? [])])
+  ) {
+    return null;
+  }
   const result = await buildSingleProviderApiKeyCatalog({
     ctx: params.ctx,
     providerId: params.providerId,

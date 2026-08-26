@@ -40,18 +40,22 @@ check items off as they complete. Start with this visible checklist:
 6. Test surfaces and record feedback
 7. Draft, review, and publish feedback
 
-For **Update campaign**, instead explain that the run refreshes the stable
-release train's shared testing dashboard for the new beta, then ends; use a
-corresponding three-item checklist: identify release train, update priorities,
-verify the campaign issue. For a stable tag, the last item closes the campaign.
+For **Update campaign**, instead explain that the run dispatches the isolated
+GitHub workflow which refreshes the stable release train's shared testing
+dashboard, waits for its result, then ends. Use a three-item checklist:
+identify release train, dispatch the campaign runner, verify the issue.
+**Campaign artifact** is non-interactive CI work and does not show a checklist.
 
 ## Workflows
 
 Choose the workflow from the request:
 
-- **Update campaign** is the asynchronous release-process path. A beta creates
-  or refreshes the canonical issue for its stable release train. A stable tag
-  closes that train's issue. Print the issue URL and stop.
+- **Update campaign** dispatches `release-validation-skill-runner.yml` on the
+  default branch for an explicit beta or stable tag, waits for it, prints the
+  resulting issue URL, and stops. It never analyzes or writes the issue itself.
+- **Campaign artifact** runs only when `RELEASE_VALIDATION_ARTIFACT_PATH` is
+  present. It analyzes the selected release using the instructions below and
+  writes the publisher artifact. GitHub is read-only in this workflow.
 - **Validate release** is the default human-testing path. Join the existing
   campaign issue, choose an isolated-copy or in-place lane, move the selected
   test gateway to the latest immutable `origin/main`, then guide testing and
@@ -70,32 +74,57 @@ canonical issue, label, title, and hidden marker belong to that train; the body
 also records the current beta. Testing still targets an immutable latest
 `origin/main` SHA.
 
-When the request supplies an issue URL or number, resolve it directly with
-`gh issue view`. Accept it only when it is open, has the exact
-`release-validation` label, and contains
+When the request supplies an issue URL or number in **Validate release**,
+resolve it directly with `gh issue view`. Accept it only when it is open, has
+the exact `release-validation` label, and contains
 `<!-- openclaw-release-validation:<stable-train> -->`. Read the current beta
-from the body. In **Update campaign** only, a legacy beta-specific marker is
-also acceptable when it normalizes to the selected train; replace it with the
-stable-train marker during this update. Do not search releases or issues first.
+from the body. Do not search releases or issues first.
 
 When no issue is supplied, use an explicit beta or stable tag when supplied.
 Otherwise run `gh api 'repos/openclaw/openclaw/releases?per_page=100'` once and
 select the newest published `vYYYY.M.D-beta.N` locally. Do not paginate. If the
 bounded response has no beta, ask for an explicit tag.
 
-Find the campaign with one bounded lookup:
+Without a supplied issue, find the campaign with one bounded lookup:
 
 ```sh
 gh api 'repos/openclaw/openclaw/issues?state=open&labels=release-validation&per_page=2'
 ```
 
-Ignore pull requests. Require at most one issue with the label and require its
-marker to match the selected stable train. The label is the fast index; the
-marker is the identity check. In **Validate release**, no match means stop with
-`Release validation has not been initialized for <stable-train>.` Multiple
-matches or a different marker are conflicts: show their URLs and stop. Never
-fall back to an unbounded issue scan. **Update campaign** may migrate one legacy
-beta marker that normalizes to the selected stable train.
+Ignore pull requests. Require at most one issue with the label. The label is
+the fast index; the stable-train marker is the identity check. Multiple issues
+or a different marker are conflicts: show their URLs and stop. Never fall back
+to an unbounded issue scan.
+
+In **Validate release**, compare the selected latest beta with the issue's
+exact `- Current beta:` line. If the issue is absent or names an older beta,
+dispatch the runner. Generate a request id containing UTC time plus a short
+random suffix, then run:
+
+```sh
+gh workflow run release-validation-skill-runner.yml \
+  --repo openclaw/openclaw \
+  --ref main \
+  -f tag=<selected-beta> \
+  -f request_id=<request-id>
+```
+
+When the tester supplied an existing issue that still has a legacy
+beta-specific marker, also pass `-f campaign_issue=<number>` for that one-time
+migration. Never infer an unlabeled issue number from search results.
+
+Find the run by that request id with one bounded `gh run list --workflow
+release-validation-skill-runner.yml --event workflow_dispatch --limit 20`, then
+wait with `gh run watch <run-id> --exit-status`. On success, repeat the bounded
+issue lookup and require the marker and current-beta line to match. If dispatch
+is forbidden, stop with the exact permission error and say that a repository
+operator must run the workflow. If the workflow fails, show its URL and stop.
+Do not prepare or update a gateway without a current campaign.
+
+In **Update campaign**, always dispatch the same workflow for the selected
+explicit tag, wait for it by request id, and verify the resulting issue state.
+This is intentionally independent of beta publication and never blocks a
+release.
 
 Whenever the workflow reaches its issue announcement, use this exact shape with
 one raw URL and no commentary about discovery or campaign counts:
@@ -111,13 +140,10 @@ the private worksheet. After announcing it, resolve the test target and show
 `Test target: origin/main at <full SHA>`. The campaign beta describes the
 guidance; that immutable main SHA is the runtime being tested.
 
-In **Update campaign**, ensure these exact labels exist without changing an
-existing label:
-
-- `release-validation` — green `0E8A16`; only the one open campaign issue.
-- `release-validation-finding` — red `D93F0B`; bugs found by campaign testers.
-
-For a beta tag:
+In **Campaign artifact**, use the exact tag, release commit, and guidance-main
+SHA supplied in `RELEASE_VALIDATION_TAG`,
+`RELEASE_VALIDATION_RELEASE_COMMIT`, and
+`RELEASE_VALIDATION_GUIDANCE_MAIN_SHA`. For a beta tag:
 
 1. Resolve its stable train, release URL, commit, the previous stable release,
    and one immutable guidance SHA from the current `origin/main`. Record that
@@ -184,19 +210,42 @@ For a beta tag:
    <concise instruction to run this skill>
    ```
 
-7. Create the issue if absent or update the existing train issue in place. Keep
-   all comments. Apply only `release-validation`, read back title/body/labels,
-   and require the marker plus guidance bytes to match. Close any older open
-   train campaign after commenting with the new issue URL. Do not add history
-   for superseded betas to the current body.
+7. Write this exact JSON shape to `RELEASE_VALIDATION_ARTIFACT_PATH`:
 
-For a stable tag, find the matching train issue, comment with the stable release
-URL, remove the `release-validation` label, close the issue as completed, and
-stop. Never close it for another beta in the same train.
+   ```json
+   {
+     "schema": "openclaw.release-validation-campaign/v1",
+     "operation": "upsert",
+     "tag": "<exact beta tag>",
+     "stableTrain": "<vYYYY.M.D>",
+     "releaseUrl": "https://github.com/openclaw/openclaw/releases/tag/<tag>",
+     "releaseCommit": "<exact supplied release commit>",
+     "guidanceMainSha": "<exact supplied guidance SHA>",
+     "title": "OpenClaw <YYYY.M.D> beta feedback",
+     "body": "<rendered body>"
+   }
+   ```
 
-Campaign updating is deliberately last-writer-simple; release orchestration
-does not launch overlapping update tasks. **Update campaign** ends after the
-readback and never waits for human testing.
+   Write valid JSON, not a Markdown fence. Create no other files and do not
+   call a GitHub mutation API.
+
+For a stable tag, skip analysis and write this exact JSON shape to
+`RELEASE_VALIDATION_ARTIFACT_PATH`:
+
+```json
+{
+  "schema": "openclaw.release-validation-campaign/v1",
+  "operation": "close",
+  "tag": "<exact stable tag>",
+  "stableTrain": "<same exact stable tag>",
+  "releaseUrl": "https://github.com/openclaw/openclaw/releases/tag/<tag>"
+}
+```
+
+The trusted publisher validates every field, creates the two release-validation
+labels when needed, updates or creates the campaign, preserves comments, and
+closes older campaigns. Campaign publishing is deliberately last-writer-simple;
+release orchestration does not launch overlapping update tasks.
 
 ## 2. Choose a real gateway and test mode
 

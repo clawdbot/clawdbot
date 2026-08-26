@@ -383,17 +383,6 @@ CREATE TABLE IF NOT EXISTS session_upstream_links (
 CREATE INDEX IF NOT EXISTS idx_session_upstream_links_catalog_id
   ON session_upstream_links(catalog_id);
 
-CREATE TABLE IF NOT EXISTS diagnostic_stability_bundles (
-  bundle_key TEXT NOT NULL PRIMARY KEY,
-  reason TEXT NOT NULL,
-  generated_at TEXT NOT NULL,
-  bundle_json TEXT NOT NULL,
-  created_at INTEGER NOT NULL
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_diagnostic_stability_bundles_created
-  ON diagnostic_stability_bundles(created_at DESC, bundle_key);
-
 CREATE TABLE IF NOT EXISTS state_leases (
   scope TEXT NOT NULL,
   lease_key TEXT NOT NULL,
@@ -725,15 +714,6 @@ CREATE TABLE IF NOT EXISTS gateway_origin_device_tokens (
   PRIMARY KEY (gateway_scope, device_id, role)
 ) STRICT;
 
-CREATE TABLE IF NOT EXISTS android_notification_recent_packages (
-  package_name TEXT NOT NULL PRIMARY KEY,
-  sort_order INTEGER NOT NULL,
-  updated_at_ms INTEGER NOT NULL
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_android_notification_recent_packages_order
-  ON android_notification_recent_packages(sort_order, package_name);
-
 CREATE TABLE IF NOT EXISTS macos_port_guardian_records (
   pid INTEGER NOT NULL PRIMARY KEY,
   port INTEGER NOT NULL,
@@ -806,37 +786,6 @@ CREATE TABLE IF NOT EXISTS native_hook_relay_bridges (
 
 CREATE INDEX IF NOT EXISTS idx_native_hook_relay_bridges_expires
   ON native_hook_relay_bridges(expires_at_ms, relay_id);
-
-CREATE TABLE IF NOT EXISTS model_capability_cache (
-  provider_id TEXT NOT NULL,
-  model_id TEXT NOT NULL,
-  name TEXT NOT NULL,
-  input_text INTEGER NOT NULL,
-  input_image INTEGER NOT NULL,
-  reasoning INTEGER NOT NULL,
-  supports_tools INTEGER,
-  context_window INTEGER NOT NULL,
-  max_tokens INTEGER NOT NULL,
-  cost_input REAL NOT NULL,
-  cost_output REAL NOT NULL,
-  cost_cache_read REAL NOT NULL,
-  cost_cache_write REAL NOT NULL,
-  updated_at_ms INTEGER NOT NULL,
-  PRIMARY KEY (provider_id, model_id)
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_model_capability_cache_provider_updated
-  ON model_capability_cache(provider_id, updated_at_ms DESC, model_id);
-
-CREATE TABLE IF NOT EXISTS agent_model_catalogs (
-  catalog_key TEXT NOT NULL PRIMARY KEY,
-  agent_dir TEXT NOT NULL,
-  raw_json TEXT NOT NULL,
-  updated_at INTEGER NOT NULL
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_agent_model_catalogs_agent_dir
-  ON agent_model_catalogs(agent_dir, updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS managed_outgoing_image_records (
   attachment_id TEXT NOT NULL PRIMARY KEY,
@@ -1394,20 +1343,6 @@ CREATE INDEX IF NOT EXISTS idx_plugin_blob_expiry
 CREATE INDEX IF NOT EXISTS idx_plugin_blob_listing
   ON plugin_blob_entries(plugin_id, namespace, created_at, entry_key);
 
-CREATE TABLE IF NOT EXISTS media_blobs (
-  subdir TEXT NOT NULL,
-  id TEXT NOT NULL,
-  content_type TEXT,
-  size_bytes INTEGER NOT NULL,
-  blob BLOB NOT NULL,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL,
-  PRIMARY KEY (subdir, id)
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_media_blobs_created
-  ON media_blobs(created_at);
-
 CREATE TABLE IF NOT EXISTS skill_uploads (
   upload_id TEXT NOT NULL PRIMARY KEY,
   kind TEXT NOT NULL,
@@ -1688,22 +1623,6 @@ CREATE TABLE IF NOT EXISTS cron_job_scratch (
 
 CREATE INDEX IF NOT EXISTS idx_cron_job_scratch_store_updated
   ON cron_job_scratch(store_key, updated_at_ms DESC, job_id);
-
-CREATE TABLE IF NOT EXISTS command_log_entries (
-  id TEXT NOT NULL PRIMARY KEY,
-  timestamp_ms INTEGER NOT NULL,
-  action TEXT NOT NULL,
-  session_key TEXT NOT NULL,
-  sender_id TEXT NOT NULL,
-  source TEXT NOT NULL,
-  entry_json TEXT NOT NULL
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_command_log_entries_timestamp
-  ON command_log_entries(timestamp_ms DESC, id);
-
-CREATE INDEX IF NOT EXISTS idx_command_log_entries_session
-  ON command_log_entries(session_key, timestamp_ms DESC, id);
 
 CREATE TABLE IF NOT EXISTS delivery_queue_entries (
   queue_name TEXT NOT NULL,

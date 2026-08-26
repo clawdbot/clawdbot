@@ -73,10 +73,10 @@ const CORNER_CASES: readonly CornerCase[] = [
     superelliptical: "17.5px",
   },
   {
-    circular: "10px",
+    circular: "20px",
     markup: '<div class="agent-chat__input">Composer</div>',
     selector: ".agent-chat__input",
-    superelliptical: "12.5px",
+    superelliptical: "25px",
   },
   {
     circular: "10px",
@@ -292,9 +292,9 @@ beforeAll(async () => {
     return;
   }
   const css = readUiCss();
-  expect(css.split(SUPPORTS_CONDITION)).toHaveLength(2);
+  expect(css).toContain(SUPPORTS_CONDITION);
   superellipticalFixture = fixtureDocument(css);
-  circularFixture = fixtureDocument(css.replace(SUPPORTS_CONDITION, UNSUPPORTED_CONDITION));
+  circularFixture = fixtureDocument(css.replaceAll(SUPPORTS_CONDITION, UNSUPPORTED_CONDITION));
   browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
 });
 

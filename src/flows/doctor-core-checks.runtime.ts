@@ -32,6 +32,7 @@ import {
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { buildInventoryContinuationToolOpts } from "../agents/tools/continuation-inventory-opts.js";
 import { projectDoctorSecretRuntimeDegradations } from "../commands/doctor-secret-runtime-degradation.js";
+import { shouldManageGatewayService } from "../commands/doctor-service-repair-policy.js";
 import { collectUnavailableAgentSkills } from "../commands/doctor-skills-core.js";
 import {
   GATEWAY_HEALTH_RATE_LIMITED_MESSAGE,
@@ -50,7 +51,6 @@ import {
 } from "../gateway/call.js";
 import { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { isGatewayHostServiceEnvironment } from "../infra/gateway-supervision.js";
 import {
   formatLocalAudioSelection,
   inspectLocalAudioSelection,
@@ -206,7 +206,7 @@ function gatewayRuntimeStatus(runtime: GatewayServiceRuntime | undefined): strin
 export async function collectGatewayDaemonFindings(
   ctx: Pick<HealthCheckContext, "cfg">,
 ): Promise<readonly HealthFinding[]> {
-  if (ctx.cfg.gateway?.mode === "remote" || !isGatewayHostServiceEnvironment()) {
+  if (ctx.cfg.gateway?.mode === "remote" || !(await shouldManageGatewayService())) {
     return [];
   }
   const service = resolveGatewayService();

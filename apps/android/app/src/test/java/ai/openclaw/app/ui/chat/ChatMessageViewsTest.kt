@@ -3,6 +3,7 @@ package ai.openclaw.app.ui.chat
 import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatOutboxStatus
+import ai.openclaw.app.chat.parseChatMessageContent
 import androidx.compose.foundation.layout.Column
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertCountEquals
@@ -16,6 +17,7 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performSemanticsAction
+import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -210,6 +212,63 @@ class ChatMessageViewsTest {
     composeRule
       .onNode(hasContentDescription("OpenClaw") and hasText("quarterly-report.pdf"))
       .assertIsDisplayed()
+    assertEquals(0, artifactRequests)
+  }
+
+  @Test
+  fun omittedImageOnlyTurnsRemainVisibleWithoutLoadingBeyondTheImageCap() {
+    val omittedImage =
+      requireNotNull(
+        parseChatMessageContent(
+          Json.parseToJsonElement(
+            """{"type":"image","mimeType":"image/png","omitted":true,"bytes":5}""",
+          ),
+        ),
+      )
+    var artifactRequests = 0
+
+    composeRule.setContent {
+      Column {
+        listOf(
+          listOf(omittedImage),
+          (1..5).map { index -> omittedImage.copy(fileName = "redacted-$index.png") },
+        ).forEachIndexed { index, images ->
+          ChatBubble(
+            messageId = "omitted-images-$index",
+            entryId = null,
+            role = "assistant",
+            live = false,
+            content = images,
+            timestampMs = null,
+            onReplyMessage = {},
+            sessionActionsEnabled = false,
+            onRewindMessage = {},
+            onForkMessage = {},
+            speechState = null,
+            onToggleListen = { _, _ -> },
+            inlineMediaPlaybackBlocked = false,
+            inlineWidgetResolverReady = true,
+            resolveInlineWidgetResource = { _, _ ->
+              artifactRequests += 1
+              null
+            },
+            loadImageArtifact = {
+              artifactRequests += 1
+              null
+            },
+            loadMediaArtifact = { _, _, _ ->
+              artifactRequests += 1
+              null
+            },
+          )
+        }
+      }
+    }
+
+    composeRule.onNode(hasContentDescription("OpenClaw") and hasText("Attachment")).assertIsDisplayed()
+    (1..4).forEach { index -> composeRule.onNodeWithText("redacted-$index.png").assertIsDisplayed() }
+    composeRule.onAllNodesWithText("redacted-5.png").assertCountEquals(0)
+    composeRule.onNodeWithText("Additional images hidden: 1").assertIsDisplayed()
     assertEquals(0, artifactRequests)
   }
 

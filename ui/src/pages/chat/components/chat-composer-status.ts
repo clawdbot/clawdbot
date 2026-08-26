@@ -1,43 +1,10 @@
 import { html, nothing } from "lit";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
-import type { ChatRunUiStatus } from "../run-lifecycle.ts";
-import { CHAT_RUN_STATUS_TOAST_DURATION_MS } from "../run-lifecycle.ts";
 import type { CompactionStatus, FallbackStatus } from "../tool-stream.ts";
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
 const FALLBACK_TOAST_DURATION_MS = 8000;
-
-export type ComposerRunStatus =
-  | ChatRunUiStatus
-  | {
-      phase: "in-progress";
-      occurredAt?: number | null;
-    };
-
-// Working and Done need no composer chrome: the thread's working spark,
-// content arriving, and Stop reverting to Send already show them (screen
-// readers get the composer's persistent sr-only run-status region).
-// Interrupted keeps a visible toast: the transcript shows nothing when a run
-// is killed, so silence would read as "finished".
-export function renderChatRunStatusIndicator(status: ComposerRunStatus | null | undefined) {
-  if (status?.phase !== "interrupted") {
-    return nothing;
-  }
-  const elapsed = Date.now() - status.occurredAt;
-  if (elapsed >= CHAT_RUN_STATUS_TOAST_DURATION_MS) {
-    return nothing;
-  }
-  const interrupted = t("chat.composer.runInterrupted");
-  return html`
-    <span
-      class="agent-chat__run-status agent-chat__run-status--interrupted"
-      aria-label=${t("chat.composer.runStatus", { status: interrupted })}
-    >
-      ${icons.stop}<span class="agent-chat__run-status-label">${interrupted}</span>
-    </span>
-  `;
-}
 
 export function renderCompactionIndicator(status: CompactionStatus | null | undefined) {
   if (!status) {

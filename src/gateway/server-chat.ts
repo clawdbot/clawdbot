@@ -946,6 +946,10 @@ export function createAgentEventHandler({
           event: {
             ...evt,
             ...(eventRunId !== evt.runId ? { clientRunId: eventRunId } : {}),
+            ...(evt.lifecycleGeneration ? { lifecycleGeneration: evt.lifecycleGeneration } : {}),
+            ...(evt.mainSessionRestartRecovery === true
+              ? { mainSessionRestartRecovery: true as const }
+              : {}),
           },
         });
         trackTrackedRunTerminalPersistence?.({

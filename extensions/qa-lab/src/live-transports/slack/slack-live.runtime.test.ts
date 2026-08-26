@@ -596,12 +596,18 @@ describe("Slack live QA runtime helpers", () => {
 
     expect(progressConfig("slack-progress-commentary-true")).toMatchObject({
       commentary: true,
+      commandText: "raw",
       toolProgress: false,
     });
     expect(progressConfig("slack-progress-commentary-false")).toMatchObject({
       commentary: false,
+      commandText: "raw",
       toolProgress: false,
     });
+    expect(
+      buildScenarioConfig("slack-progress-commentary-true").channels?.slack?.accounts?.sut
+        ?.streaming?.nativeTransport,
+    ).toBe(false);
     expect(
       buildScenarioConfig("slack-progress-commentary-false").agents?.defaults?.verboseDefault,
     ).toBe("off");

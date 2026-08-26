@@ -473,7 +473,9 @@ metadata:
       env vars are read but never overwritten.
     - **Download:** `url` (required), `archive` (`tar.gz` | `tar.bz2` | `zip`),
       `extract` (default: auto when archive detected), `stripComponents`,
-      `targetDir` (default: `~/.openclaw/tools/<skillKey>`).
+      `targetDir` (default: `~/.openclaw/tools/<skillKey>`). Response bodies
+      are capped at 256 MiB; larger transfers are aborted while streaming,
+      and partial staging data is removed.
   </Accordion>
   <Accordion title="Sandboxing notes">
     `requires.bins` is checked on the **host** at skill load time. If an agent

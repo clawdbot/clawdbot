@@ -647,7 +647,21 @@ describe("gateway-backed CLI process exit", () => {
       configPath,
     });
 
-    expect(result).toMatchObject({ code: 1, signal: null, stdout: "" });
+    expect(result).toMatchObject({ code: 1, signal: null });
+    expect(JSON.parse(result.stdout)).toEqual({
+      ok: false,
+      error: {
+        type: "cli_error",
+        message: expect.stringContaining("OpenClaw config is invalid:"),
+      },
+      issues: [
+        {
+          path: "gateway.mode",
+          message: expect.stringContaining("Invalid input"),
+          allowedValues: ["local", "remote"],
+        },
+      ],
+    });
     expect(result.stderr).toContain("OpenClaw config is invalid");
     expect(result.stderr).toContain("gateway.mode");
     expect(gateway.calls).toEqual([]);

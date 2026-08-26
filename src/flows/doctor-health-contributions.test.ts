@@ -196,6 +196,13 @@ const mocks = vi.hoisted(() => ({
   ),
   shortenHomePath: vi.fn((p: string) => p),
   formatCliCommand: vi.fn((cmd: string) => cmd),
+  findInstalledSystemdGatewayScope: vi.fn<
+    (typeof import("../daemon/systemd.js"))["findInstalledSystemdGatewayScope"]
+  >(async () => ({
+    scope: "user",
+    unitName: "openclaw-gateway.service",
+    unitPath: "/home/alice/.config/systemd/user/openclaw-gateway.service",
+  })),
   isSystemdUserServiceAvailable: vi.fn(async () => true),
   readSystemdUserLingerStatus: vi.fn(
     async (_params: {
@@ -303,6 +310,7 @@ vi.mock("../daemon/systemd.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../daemon/systemd.js")>();
   return {
     ...actual,
+    findInstalledSystemdGatewayScope: mocks.findInstalledSystemdGatewayScope,
     isSystemdUserServiceAvailable: mocks.isSystemdUserServiceAvailable,
     readSystemdUserLingerStatus: mocks.readSystemdUserLingerStatus,
     resolveSystemdUserServiceAccount: mocks.resolveSystemdUserServiceAccount,
@@ -812,6 +820,11 @@ describe("doctor health contributions", () => {
     mocks.collectBundledChannelPackageStateLoadFailures.mockReset().mockReturnValue([]);
     mocks.collectStalePluginRuntimeSymlinkHealthFindings.mockReset().mockResolvedValue([]);
     mocks.collectChannelPreviewWarningHealthFindings.mockReset().mockResolvedValue([]);
+    mocks.findInstalledSystemdGatewayScope.mockReset().mockResolvedValue({
+      scope: "user",
+      unitName: "openclaw-gateway.service",
+      unitPath: "/home/alice/.config/systemd/user/openclaw-gateway.service",
+    });
     mocks.isSystemdUserServiceAvailable.mockReset().mockResolvedValue(true);
     mocks.readSystemdUserLingerStatus
       .mockReset()
@@ -1938,8 +1951,28 @@ describe("doctor health contributions", () => {
     );
   });
 
-  it("silently skips the host-service contribution in an externally managed container", async () => {
+  it("repairs an installed Gateway service during an authorized update inside Docker", async () => {
     mocks.isContainerEnvironment.mockReturnValue(true);
+
+    await withProcessPlatform("linux", async () => {
+      const ctx = createDoctorContext({
+        cfg: { gateway: { mode: "local" } },
+        shouldRepair: true,
+        env: {
+          OPENCLAW_UPDATE_IN_PROGRESS: "1",
+          OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR: "1",
+        },
+      });
+
+      await requireDoctorContribution("doctor:gateway-services").run(ctx);
+
+      expect(mocks.maybeRepairGatewayServiceConfig).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("silently skips the host-service contribution in a container without an OpenClaw service", async () => {
+    mocks.isContainerEnvironment.mockReturnValue(true);
+    mocks.findInstalledSystemdGatewayScope.mockResolvedValue(null);
     const contribution = requireDoctorContribution("doctor:gateway-services");
     const ctx = createDoctorContext({
       cfg: { gateway: { mode: "local" } },
@@ -2461,6 +2494,19 @@ describe("doctor health contributions", () => {
     });
   });
 
+  it("preserves interactive linger repair for a user-scoped Gateway service", async () => {
+    const contribution = requireDoctorContribution("doctor:systemd-linger");
+    const ctx = createDoctorContext({
+      cfg: { gateway: { mode: "local" } },
+    });
+
+    await withProcessPlatform("linux", async () => {
+      await contribution.run(ctx);
+    });
+
+    expect(mocks.readSystemdUserLingerStatus).toHaveBeenCalledOnce();
+  });
+
   it("keeps selected systemd linger quiet when the gateway service is not loaded", async () => {
     mocks.gatewayServiceIsLoaded.mockResolvedValue(false);
     const contributionChecks = await resolveDoctorContributionHealthChecks();
@@ -2486,8 +2532,40 @@ describe("doctor health contributions", () => {
     expect(mocks.readSystemdUserLingerStatus).not.toHaveBeenCalled();
   });
 
-  it("never probes systemd linger when selected inside an externally managed container", async () => {
+  it("skips user lingering for a reachable system-scoped Gateway service in a container", async () => {
     mocks.isContainerEnvironment.mockReturnValue(true);
+    mocks.findInstalledSystemdGatewayScope.mockResolvedValue({
+      scope: "system",
+      unitName: "openclaw-gateway.service",
+      unitPath: "/etc/systemd/system/openclaw-gateway.service",
+    });
+    const contribution = requireDoctorContribution("doctor:systemd-linger");
+    const checks = await resolveDoctorContributionHealthChecks();
+    const lingerCheck = checks.find((check) => check.id === "core/doctor/systemd-linger");
+    expect(lingerCheck).toBeDefined();
+    const lintResult = await withProcessPlatform("linux", async () => {
+      await contribution.run(
+        createDoctorContext({
+          cfg: { gateway: { mode: "local" } },
+        }),
+      );
+      return await runDoctorLintChecks(createDoctorLintFixture({ gateway: { mode: "local" } }), {
+        checks: [lingerCheck!],
+        onlyIds: ["core/doctor/systemd-linger"],
+      });
+    });
+
+    expect(mocks.findInstalledSystemdGatewayScope).toHaveBeenCalledTimes(2);
+    expect(mocks.gatewayServiceIsLoaded).not.toHaveBeenCalled();
+    expect(mocks.isSystemdUserServiceAvailable).not.toHaveBeenCalled();
+    expect(mocks.readSystemdUserLingerStatus).not.toHaveBeenCalled();
+    expect(lintResult).toMatchObject({ checksRun: 1, findings: [] });
+    expect(JSON.stringify(lintResult)).not.toContain("loginctl enable-linger");
+  });
+
+  it("never probes systemd linger inside a container without an OpenClaw service", async () => {
+    mocks.isContainerEnvironment.mockReturnValue(true);
+    mocks.findInstalledSystemdGatewayScope.mockResolvedValue(null);
     const checks = await resolveDoctorContributionHealthChecks();
     const lingerCheck = checks.find((check) => check.id === "core/doctor/systemd-linger");
     expect(lingerCheck).toBeDefined();

@@ -6,7 +6,6 @@ import {
   loadSqliteTrajectoryRuntimeEvents,
   type SqliteTrajectoryRuntimeEventForTest,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-// Qa Lab plugin module implements runtime parity behavior.
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asFiniteNumber as readFiniteNumber,
@@ -18,7 +17,7 @@ import {
   scanGatewayLogSentinels,
   type GatewayLogSentinelFinding,
 } from "./gateway-log-sentinel.js";
-import { discardIgnoredResponseBody } from "./ignored-response-body.js";
+import { readQaJsonResponse } from "./ignored-response-body.js";
 import * as parity from "./parity-shared.js";
 import {
   buildRuntimeParityCacheDiagnostics,
@@ -1431,16 +1430,7 @@ async function loadRuntimeParityMockToolCalls(
       policy: { allowPrivateNetwork: true },
       auditContext: "qa-lab-runtime-parity-mock-tool-calls",
     });
-    let payload: unknown;
-    try {
-      if (!response.ok) {
-        await discardIgnoredResponseBody(response);
-        return null;
-      }
-      payload = await response.json();
-    } finally {
-      await release();
-    }
+    const payload = await readQaJsonResponse<unknown>(response, release, "QA runtime parity");
     if (!Array.isArray(payload)) {
       return null;
     }

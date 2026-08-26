@@ -80,7 +80,8 @@ const restartRecoveryMocks = vi.hoisted(() => ({
   retryRestartAbortedMainSessionRecovery: vi.fn<
     typeof import("../agents/main-session-recovery/main-session-restart-recovery.js").retryRestartAbortedMainSessionRecovery
   >(async () => ({
-    recovered: 0,
+    started: 0,
+    settled: 0,
     failed: 1,
     skipped: 0,
   })),
@@ -3785,7 +3786,7 @@ describe("gateway server chat", () => {
             abortedLastRun: false,
             updatedAt: Date.now(),
           }));
-          return { recovered: 1, failed: 0, skipped: 0 };
+          return { started: 1, settled: 0, failed: 0, skipped: 0 };
         },
       );
       const context = createDirectChatContext();
@@ -3925,7 +3926,7 @@ describe("gateway server chat", () => {
             restartRecoveryDeliverySourceRunId: "replacement-source",
             updatedAt: Date.now(),
           }));
-          return { recovered: 0, failed: 0, skipped: 0 };
+          return { started: 0, settled: 0, failed: 0, skipped: 0 };
         },
       );
       const context = createDirectChatContext();

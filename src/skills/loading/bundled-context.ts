@@ -35,6 +35,7 @@ export function resolveBundledSkillsContext(
   const result = loadSkillsFromDirSafe({
     dir,
     source: "openclaw-bundled",
+    rejectHardlinks: false,
     onDiagnostic: (diagnostic) =>
       skillsLogger.warn(
         `Skipping bundled skill with invalid frontmatter (${diagnostic.path}): ${diagnostic.message}`,

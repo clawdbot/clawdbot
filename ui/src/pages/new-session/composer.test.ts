@@ -2,7 +2,15 @@
 
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildFallbackSlashCommands, replaceSlashCommands } from "../../lib/chat/commands.ts";
+import type { CommandsListResult } from "../../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ApplicationContext } from "../../app/context.ts";
+import {
+  buildFallbackSlashCommands,
+  getSkillCommandCompletions,
+  replaceSlashCommands,
+} from "../../lib/chat/commands.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { adjustTextareaHeight } from "../chat/components/chat-composer-dom.ts";
@@ -32,6 +40,9 @@ function renderComposer(
     toolOverrides?: SessionToolOverrides | null;
     onVisibilityChange?: (visibility: NewSessionVisibility) => void;
     message?: string;
+    draftOwnerKey?: string;
+    agentId?: string;
+    context?: ApplicationContext;
     onInput?: (message: string) => void;
     onSubmit?: () => void;
     textareaController?: NewSessionComposerTextareaController;
@@ -49,13 +60,16 @@ function renderComposer(
     textareaControllers.push(textareaController);
   }
   let message = overrides.message ?? "";
+  let agentId = overrides.agentId ?? "main";
+  let draftOwnerKey = overrides.draftOwnerKey ?? "draft:one";
   const renderCurrent = () =>
     render(
       renderNewSessionDraftComposer({
-        agentId: "main",
+        agentId,
         attachmentDraft,
         canSubmit: overrides.canSubmit ?? true,
-        context: undefined,
+        context: overrides.context,
+        draftOwnerKey,
         isCatalogTarget: true,
         message,
         visibility: overrides.visibility,
@@ -85,7 +99,22 @@ function renderComposer(
   if (!composer) {
     throw new Error("Expected new-session composer");
   }
-  return { attachmentDraft, composer, container, textareaController };
+  return {
+    attachmentDraft,
+    composer,
+    container,
+    textareaController,
+    rerender: renderCurrent,
+    rerenderForAgent: (nextAgentId: string) => {
+      agentId = nextAgentId;
+      renderCurrent();
+    },
+    rerenderForDraftRoute: (nextDraftOwnerKey: string, nextMessage: string) => {
+      draftOwnerKey = nextDraftOwnerKey;
+      message = nextMessage;
+      renderCurrent();
+    },
+  };
 }
 
 function createDragEvent(type: string, files: File[] = [], types = ["Files"]): Event {
@@ -155,6 +184,107 @@ describe("new-session composer keyboard submission", () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
+  it("drops a pending skill completion when the selected agent changes", async () => {
+    const response = createDeferred<CommandsListResult>();
+    const request = vi.fn(() => response.promise);
+    const client = { request } as unknown as GatewayBrowserClient;
+    const context = {
+      gateway: { snapshot: { client } },
+    } as unknown as ApplicationContext;
+    const { composer, rerenderForAgent, textareaController } = renderComposer({
+      agentId: "writer",
+      context,
+      message: "$",
+    });
+    const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
+    if (!textarea) {
+      throw new Error("Expected composer textarea");
+    }
+
+    textarea.setSelectionRange(1, 1);
+    textarea.dispatchEvent(new Event("select", { bubbles: true }));
+    expect(request).toHaveBeenCalledWith("commands.list", {
+      agentId: "writer",
+      includeArgs: true,
+      scope: "text",
+    });
+
+    rerenderForAgent("reviewer");
+    response.resolve({
+      commands: [
+        {
+          acceptsArgs: true,
+          description: "Only available to the previous agent.",
+          name: "writer_only",
+          scope: "both",
+          source: "skill",
+          skillModelVisible: true,
+          textAliases: ["/writer_only"],
+        },
+      ],
+    });
+    await waitForFast(() => {
+      expect(textareaController.skillMenuState.skillCommandRefreshPending).toBe(false);
+    });
+    expect(composer.querySelector(".skill-menu")?.textContent ?? "").not.toContain("writer_only");
+    expect(getSkillCommandCompletions("writer_only")).toEqual([]);
+  });
+
+  it("drops a pending skill completion when the Gateway client changes", async () => {
+    const response = createDeferred<CommandsListResult>();
+    const firstRequest = vi.fn(() => response.promise);
+    const firstClient = {
+      request: firstRequest,
+    } as unknown as GatewayBrowserClient;
+    const secondClient = {
+      request: vi.fn(),
+    } as unknown as GatewayBrowserClient;
+    const snapshot = { client: firstClient };
+    const context = {
+      gateway: { snapshot },
+    } as unknown as ApplicationContext;
+    const { composer, rerender, textareaController } = renderComposer({
+      agentId: "writer",
+      context,
+      message: "$",
+    });
+    const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
+    if (!textarea) {
+      throw new Error("Expected composer textarea");
+    }
+
+    textarea.setSelectionRange(1, 1);
+    textarea.dispatchEvent(new Event("select", { bubbles: true }));
+    expect(firstRequest).toHaveBeenCalledWith("commands.list", {
+      agentId: "writer",
+      includeArgs: true,
+      scope: "text",
+    });
+
+    snapshot.client = secondClient;
+    rerender();
+    response.resolve({
+      commands: [
+        {
+          acceptsArgs: true,
+          description: "Only available through the previous Gateway client.",
+          name: "previous_client_only",
+          scope: "both",
+          source: "skill",
+          skillModelVisible: true,
+          textAliases: ["/previous_client_only"],
+        },
+      ],
+    });
+    await waitForFast(() => {
+      expect(textareaController.skillMenuState.skillCommandRefreshPending).toBe(false);
+    });
+    expect(composer.querySelector(".skill-menu")?.textContent ?? "").not.toContain(
+      "previous_client_only",
+    );
+    expect(getSkillCommandCompletions("previous_client_only")).toEqual([]);
+  });
+
   it("opens skill mentions and inserts the selected skill with Enter", () => {
     replaceSlashCommands([
       {
@@ -185,6 +315,36 @@ describe("new-session composer keyboard submission", () => {
       new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" }),
     );
     expect(message).toBe("$release_notes ");
+  });
+
+  it("closes a skill menu when a route change replaces the owned draft", () => {
+    replaceSlashCommands([
+      {
+        key: "release_notes",
+        name: "release_notes",
+        description: "Draft release notes.",
+        source: "skill",
+        skillModelVisible: true,
+      },
+    ]);
+    const onSubmit = vi.fn();
+    const { composer, rerenderForDraftRoute } = renderComposer({ onSubmit });
+    const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
+    if (!textarea) {
+      throw new Error("Expected composer textarea");
+    }
+    textarea.value = "$";
+    textarea.setSelectionRange(1, 1);
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+    expect(composer.querySelector(".skill-menu")).not.toBeNull();
+
+    rerenderForDraftRoute("draft:two", "replacement task");
+    expect(composer.querySelector(".skill-menu")).toBeNull();
+
+    textarea.dispatchEvent(
+      new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" }),
+    );
+    expect(onSubmit).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -388,6 +548,7 @@ describe("new-session composer sizing lifecycle", () => {
         attachmentDraft: first.attachmentDraft,
         canSubmit: true,
         context: undefined,
+        draftOwnerKey: "draft:one",
         isCatalogTarget: true,
         message: "typed",
         modelControl: new NewSessionModelControl(() => undefined),
@@ -413,6 +574,7 @@ describe("new-session composer sizing lifecycle", () => {
         attachmentDraft: first.attachmentDraft,
         canSubmit: true,
         context: undefined,
+        draftOwnerKey: "draft:one",
         isCatalogTarget: true,
         message: "restored programmatically",
         modelControl: new NewSessionModelControl(() => undefined),
@@ -465,31 +627,20 @@ describe("new-session composer attachment drops", () => {
     expect(switches).toHaveLength(0);
   });
 
-  it("moves Draft into Plus and keeps active selections visible", () => {
+  it("lets the draft pill replace page-level incognito", () => {
     const onVisibilityChange = vi.fn();
     const { composer } = renderComposer({
       draftAvailable: true,
-      visibility: "draft",
-      toolOverrides: { skills: { release: false } },
+      visibility: "incognito",
       onVisibilityChange,
     });
-    const menu = composer.querySelector<HTMLElement>("wa-dropdown.agent-chat__capability-menu");
-    const draftToggle = menu?.querySelector<HTMLElement>(
-      'wa-dropdown-item[value="new-session-draft"]',
-    );
+    const draftPill = composer.querySelector<HTMLButtonElement>('[role="switch"]');
 
-    expect(
-      (draftToggle?.querySelector("wa-switch") as HTMLElement & { checked?: boolean })?.checked,
-    ).toBe(true);
-    expect(composer.querySelectorAll(".new-session-page__selection-status")).toHaveLength(2);
-    expect(composer.textContent).toContain("Draft");
-    expect(composer.textContent).toContain("1 session override");
-    expect(composer.querySelector(".agent-chat__input-btn--selected")).not.toBeNull();
+    expect(draftPill?.textContent).toContain("Draft");
+    expect(draftPill?.getAttribute("aria-checked")).toBe("false");
 
-    menu?.dispatchEvent(
-      new CustomEvent("wa-select", { bubbles: true, detail: { item: draftToggle } }),
-    );
-    expect(onVisibilityChange).toHaveBeenCalledWith("normal");
+    draftPill?.click();
+    expect(onVisibilityChange).toHaveBeenCalledWith("draft");
   });
 
   it("adds a dropped file through the shared attachment handling", async () => {
@@ -583,5 +734,82 @@ describe("new-session composer attachment drops", () => {
     const disabledTextareaDrop = createDragEvent("drop", [], ["text/uri-list"]);
     textarea.dispatchEvent(disabledTextareaDrop);
     expect(disabledTextareaDrop.defaultPrevented).toBe(true);
+  });
+});
+
+describe("new-session composer dictation insertion", () => {
+  function draftTextarea(composer: HTMLElement, value: string, start: number, end = start) {
+    const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
+    if (!textarea) {
+      throw new Error("Expected composer textarea");
+    }
+    textarea.value = value;
+    textarea.selectionStart = start;
+    textarea.selectionEnd = end;
+    return textarea;
+  }
+
+  it("inserts at the caret the writer left, not where the caret ended up", () => {
+    const { composer, textareaController } = renderComposer({ message: "ship it" });
+    const textarea = draftTextarea(composer, "ship it", 4);
+
+    // Pressing the microphone blurs the draft, so the caret is read then rather
+    // than when the transcript comes back and the caret has moved.
+    textareaController.captureSelection();
+    textarea.selectionStart = textarea.value.length;
+    textarea.selectionEnd = textarea.value.length;
+
+    expect(textareaController.insertTranscript("please")).toBe("ship please it");
+    expect(textarea.value).toBe("ship please it");
+  });
+
+  it("replaces the range the writer had highlighted", () => {
+    const { composer, textareaController } = renderComposer({ message: "ship the thing" });
+    draftTextarea(composer, "ship the thing", 5, 14);
+    textareaController.captureSelection();
+
+    expect(textareaController.insertTranscript("it now")).toBe("ship it now");
+  });
+
+  it("appends when no caret was captured", () => {
+    const { composer, textareaController } = renderComposer({ message: "ship" });
+    draftTextarea(composer, "ship", 0);
+
+    expect(textareaController.insertTranscript("it")).toBe("ship it");
+  });
+
+  it("reads uncommitted keystrokes from the draft rather than the committed value", () => {
+    const { composer, textareaController } = renderComposer({ message: "ship" });
+    // The writer kept typing after the last commit upward; the element holds it.
+    draftTextarea(composer, "ship the", 8);
+    textareaController.captureSelection();
+
+    expect(textareaController.insertTranscript("thing")).toBe("ship the thing");
+  });
+
+  it("reports nothing to insert for a blank transcript so the draft is left alone", () => {
+    const { composer, textareaController } = renderComposer({ message: "ship it" });
+    const textarea = draftTextarea(composer, "ship it", 7);
+    textareaController.captureSelection();
+
+    expect(textareaController.insertTranscript("   ")).toBeNull();
+    expect(textarea.value).toBe("ship it");
+  });
+
+  it("spends a captured caret once, so a later transcript appends instead of reusing it", () => {
+    const { composer, textareaController } = renderComposer({ message: "ship it" });
+    draftTextarea(composer, "ship it", 0);
+    textareaController.captureSelection();
+
+    expect(textareaController.insertTranscript("please")).toBe("please ship it");
+    expect(textareaController.insertTranscript("now")).toBe("please ship it now");
+  });
+
+  it("has nothing to insert into once the draft is gone", () => {
+    const { textareaController } = renderComposer({ message: "ship it" });
+    textareaController.captureSelection();
+    textareaController.disconnect();
+
+    expect(textareaController.insertTranscript("it")).toBeNull();
   });
 });

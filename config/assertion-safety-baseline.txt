@@ -1126,7 +1126,6 @@ extensions/reef/protocol/canonical.ts	1
 extensions/reef/protocol/envelope.ts	1
 extensions/reef/protocol/guard-adapters.ts	1
 extensions/reef/protocol/guard.ts	1
-extensions/reef/protocol/node.ts	2
 extensions/reef/src/channel.ts	6
 extensions/reef/src/cli.ts	6
 extensions/reef/src/doctor-durable-state.ts	2
@@ -2114,7 +2113,6 @@ src/agents/tools/image-tool.helpers.ts	2
 src/agents/tools/image-tool.ts	3
 src/agents/tools/in-process-gateway.ts	1
 src/agents/tools/media-generate-tool-actions-shared.ts	1
-src/agents/tools/media-tool-shared.ts	2
 src/agents/tools/message-tool-discovery.ts	3
 src/agents/tools/message-tool-execution.ts	4
 src/agents/tools/message-tool-visible-content.ts	9
@@ -2367,7 +2365,7 @@ src/cli/acp-cli.ts	7
 src/cli/attach-cli.ts	3
 src/cli/capability-cli/audio.ts	3
 src/cli/capability-cli/embedding.ts	3
-src/cli/capability-cli/image.ts	21
+src/cli/capability-cli/image.ts	17
 src/cli/capability-cli/model.ts	4
 src/cli/capability-cli/shared.ts	6
 src/cli/capability-cli/tts.ts	6
@@ -2414,7 +2412,7 @@ src/cli/gateway-cli/qa-parent-watchdog.ts	3
 src/cli/gateway-cli/register.ts	4
 src/cli/gateway-cli/run.ts	12
 src/cli/gateway-cli/suspend-cli.ts	2
-src/cli/hooks-cli.ts	3
+src/cli/hooks-cli.ts	2
 src/cli/logs-cli.ts	1
 src/cli/mcp-cli.ts	1
 src/cli/models-cli.ts	19
@@ -4137,7 +4135,6 @@ ui/src/pages/chat/chat-state-route.ts	1
 ui/src/pages/chat/chat-thread-build.ts	2
 ui/src/pages/chat/chat-thread-grouping.ts	2
 ui/src/pages/chat/chat-thread-items.ts	4
-ui/src/pages/chat/components/chat-attachments.ts	2
 ui/src/pages/chat/components/chat-audio-player.ts	1
 ui/src/pages/chat/components/chat-composer-plus-menu.ts	1
 ui/src/pages/chat/components/chat-composer-slash-menu.ts	1
@@ -4162,7 +4159,7 @@ ui/src/pages/chat/components/chat-session-sharing.ts	1
 ui/src/pages/chat/components/chat-session-workspace.ts	1
 ui/src/pages/chat/components/chat-sidebar-editor-menu.ts	2
 ui/src/pages/chat/components/chat-sidebar-region.runtime.ts	2
-ui/src/pages/chat/components/chat-swarm-progress.ts	3
+ui/src/pages/chat/components/chat-swarm-progress.ts	2
 ui/src/pages/chat/components/chat-thread-interactions.ts	7
 ui/src/pages/chat/components/chat-tool-cards.ts	2
 ui/src/pages/chat/components/chat-transcript-controller.ts	1

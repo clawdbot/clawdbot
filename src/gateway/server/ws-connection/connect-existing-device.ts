@@ -37,11 +37,6 @@ export async function authorizeExistingGatewayDevice(params: {
   };
   handoffBootstrapProfile: DeviceBootstrapProfile | null;
   requirePairing: (reason: PairingReason, paired: PairedDevice) => Promise<boolean>;
-  logUpgradeAudit: (
-    reason: "role-upgrade" | "scope-upgrade",
-    currentRoles: string[] | undefined,
-    currentScopes: string[] | undefined,
-  ) => void;
 }): Promise<{ ok: boolean; handoffBootstrapProfile: DeviceBootstrapProfile | null }> {
   const { context, state, paired, devicePublicKey, clientAccessMetadata, requirePairing } = params;
   const { connectParams, hasBrowserOriginHeader, reportedClientIp } = context;
@@ -101,9 +96,7 @@ export async function authorizeExistingGatewayDevice(params: {
   }
   const pairedRoles = listEffectivePairedDeviceRoles(paired);
   const pairedScopes = resolvePairedAccessScopes(paired);
-  const allowedRoles = new Set(pairedRoles);
-  if (allowedRoles.size === 0 || !allowedRoles.has(role)) {
-    params.logUpgradeAudit("role-upgrade", pairedRoles, pairedScopes);
+  if (!pairedRoles.includes(role)) {
     if (!(await requirePairing("role-upgrade", paired))) {
       return { ok: false, handoffBootstrapProfile };
     }
@@ -114,7 +107,6 @@ export async function authorizeExistingGatewayDevice(params: {
       pairedScopes.length > 0 &&
       roleScopesAllow({ role, requestedScopes: scopes, allowedScopes: pairedScopes });
     if (!scopesAllowed) {
-      params.logUpgradeAudit("scope-upgrade", pairedRoles, pairedScopes);
       if (!(await requirePairing("scope-upgrade", paired))) {
         return { ok: false, handoffBootstrapProfile };
       }
@@ -159,7 +151,6 @@ export async function authorizeExistingGatewayDevice(params: {
           allowedScopes: pairedScopes,
         });
       if (!pairedAllowsHandoff) {
-        params.logUpgradeAudit("scope-upgrade", pairedRoles, pairedScopes);
         if (!(await requirePairing("scope-upgrade", paired))) {
           return { ok: false, handoffBootstrapProfile };
         }

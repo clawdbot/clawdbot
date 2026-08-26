@@ -1,0 +1,257 @@
+.session-progress-card--composer {
+  position: relative;
+  display: block;
+  interpolate-size: allow-keywords;
+  width: 100%;
+  max-width: none;
+  overflow: hidden;
+  padding-bottom: var(--chat-progress-underlap, 18px);
+  border: 1px solid var(--chat-composer-hairline);
+  border-bottom: 0;
+  border-radius: calc(20px * var(--openclaw-corner-radius-scale))
+    calc(20px * var(--openclaw-corner-radius-scale)) 0 0;
+  corner-shape: superellipse(1.5);
+  background: color-mix(
+    in srgb,
+    var(--composer-attached-surface, var(--chat-composer-surface)) 90%,
+    transparent
+  );
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+
+.session-progress-card--composer::details-content {
+  block-size: 0;
+  overflow: hidden;
+  opacity: 0;
+  transform: translateY(-4px);
+  transition:
+    content-visibility 180ms allow-discrete,
+    block-size 180ms cubic-bezier(0.23, 1, 0.32, 1),
+    opacity 140ms cubic-bezier(0.23, 1, 0.32, 1),
+    transform 180ms cubic-bezier(0.23, 1, 0.32, 1);
+  transition-behavior: allow-discrete;
+}
+
+.session-progress-card--composer[open]::details-content {
+  block-size: auto;
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.agent-chat__progress-float {
+  --chat-progress-underlap: 18px;
+
+  position: relative;
+  z-index: 0;
+  display: block;
+  width: 100%;
+  max-width: none;
+  margin-bottom: calc(0px - var(--chat-composer-shell-gap) - var(--chat-progress-underlap));
+}
+
+.session-progress-card__summary {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+  min-height: 42px;
+  padding: 8px 18px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  cursor: var(--cursor-action);
+  list-style: none;
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.session-progress-card__summary::-webkit-details-marker {
+  display: none;
+}
+
+.session-progress-card__summary:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -3px;
+}
+
+.session-progress-card__summary-collapsed,
+.session-progress-card__summary-expanded {
+  min-width: 0;
+  align-items: center;
+}
+
+.session-progress-card__summary-collapsed {
+  display: inline-grid;
+  grid-template-columns: minmax(0, auto) auto;
+  justify-content: start;
+  gap: 8px;
+}
+
+.session-progress-card__summary-expanded {
+  display: none;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.session-progress-card--composer[open] .session-progress-card__summary-collapsed {
+  display: none;
+}
+
+.session-progress-card--composer[open] .session-progress-card__summary-expanded {
+  display: flex;
+}
+
+.session-progress-card__summary-title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: color 140ms ease;
+}
+
+.session-progress-card__summary-chevron {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  color: var(--muted);
+  transition:
+    color 140ms ease,
+    transform 140ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.session-progress-card__summary-chevron svg {
+  width: 14px;
+  height: 14px;
+}
+
+.session-progress-card--composer[open] .session-progress-card__summary-chevron {
+  transform: rotate(180deg);
+}
+
+.session-progress-card__summary-indicator {
+  position: relative;
+  display: inline-grid;
+  width: 14px;
+  height: 14px;
+  place-items: center;
+  flex: 0 0 14px;
+  color: var(--muted);
+  transform: translateX(-5px);
+}
+
+.session-progress-card__summary-indicator > svg {
+  width: 14px;
+  height: 14px;
+}
+
+.session-progress-card__summary-indicator--complete {
+  color: var(--ok);
+}
+
+.session-progress-card__summary-indicator > .session-run-spinner {
+  display: block;
+  width: 14px;
+  height: 14px;
+  border-color: color-mix(in srgb, var(--muted) 24%, transparent);
+  border-top-color: var(--muted);
+  animation-duration: 1.8s;
+}
+
+.session-progress-card__current {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: color 140ms ease;
+}
+
+.session-progress-card__summary-count {
+  flex: none;
+  color: var(--muted);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  line-height: 18px;
+  transition: color 140ms ease;
+}
+
+.session-progress-card--composer .session-progress-card__body {
+  position: static;
+  width: 100%;
+  min-width: 0;
+  max-height: min(360px, 48dvh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 18px 14px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.session-progress-card--composer .session-progress-card__heading {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.session-progress-card--composer .session-progress-card__heading-actions {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.session-progress-card--composer .session-progress-card__step,
+.session-progress-card--composer .session-progress-card__markdown.sidebar-markdown {
+  font-size: 13px;
+}
+
+.session-progress-card--composer .session-progress-card__markdown progress {
+  display: none;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .session-progress-card--composer:hover {
+    width: min(440px, 100%);
+  }
+
+  .session-progress-card__summary:hover {
+    background: color-mix(
+      in srgb,
+      var(--text-strong) 5%,
+      var(--chat-composer-surface, var(--popover))
+    );
+  }
+}
+
+:root[data-theme-mode="light"] .session-progress-card__summary,
+:root[data-theme-mode="light"] .session-progress-card--composer .session-progress-card__body {
+  border-color: transparent;
+  box-shadow:
+    0 0 0 1px rgb(0 0 0 / 6%),
+    0 1px 2px -1px rgb(0 0 0 / 6%),
+    0 4px 14px rgb(0 0 0 / 7%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-progress-card--composer,
+  .session-progress-card__summary,
+  .session-progress-card__summary-indicator > .session-run-spinner {
+    animation: none;
+    transition: none;
+  }
+}

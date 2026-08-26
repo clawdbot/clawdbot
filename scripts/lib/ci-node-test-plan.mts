@@ -1819,7 +1819,10 @@ const SPLIT_NODE_SHARDS = new Map<string, NodeTestSplitShard[]>([
       ...createAgenticGatewayCoreSplitShards(),
       {
         shardName: "agentic-gateway-methods",
-        configs: ["test/vitest/vitest.gateway-methods.config.ts"],
+        configs: [
+          "test/vitest/vitest.gateway-methods.config.ts",
+          "test/vitest/vitest.gateway-methods-isolated.config.ts",
+        ],
         requiresDist: false,
       },
       {

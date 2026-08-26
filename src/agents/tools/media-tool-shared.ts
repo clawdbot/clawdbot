@@ -436,36 +436,24 @@ export function hasGenerationToolAvailability(params: {
   );
 }
 
-function formatQuotedList(values: readonly string[]): string {
-  if (values.length === 1) {
-    return `"${values[0]}"`;
-  }
-  if (values.length === 2) {
-    return `"${values[0]}" or "${values[1]}"`;
-  }
-  return `${values
-    .slice(0, -1)
-    .map((value) => `"${value}"`)
-    .join(", ")}, or "${values[values.length - 1]}"`;
-}
-
 /**
  * Reads a constrained generation action and raises a tool-input error for invalid values.
  */
-export function resolveGenerateAction<TAction extends string>(params: {
-  args: Record<string, unknown>;
-  allowed: readonly TAction[];
-  defaultAction: TAction;
-}): TAction {
-  const raw = readToolStringParam(params.args, "action");
-  if (!raw) {
-    return params.defaultAction;
+export function resolveGenerateAction(
+  args: Record<string, unknown>,
+): "generate" | "status" | "list" {
+  const action = normalizeOptionalLowercaseString(readToolStringParam(args, "action"));
+  switch (action) {
+    case undefined:
+    case "generate":
+      return "generate";
+    case "status":
+      return "status";
+    case "list":
+      return "list";
+    default:
+      throw new ToolInputError('action must be "generate", "status", or "list"');
   }
-  const normalized = normalizeOptionalLowercaseString(raw);
-  if (normalized && (params.allowed as readonly string[]).includes(normalized)) {
-    return normalized as TAction;
-  }
-  throw new ToolInputError(`action must be ${formatQuotedList(params.allowed)}`);
 }
 
 /**

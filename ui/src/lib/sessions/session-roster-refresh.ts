@@ -563,6 +563,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       const entry = managedList(options);
       return refreshManagedList(entry, {
         append: options.append === true,
+        ...(options.force === true && options.append !== true ? { invalidated: true } : {}),
         ...(options.offset !== undefined ? { offset: options.offset } : {}),
       });
     },

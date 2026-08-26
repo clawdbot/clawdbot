@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import type { QaLabServerHandle } from "./lab-server.types.js";
 import type { QaTransportAdapterFactory } from "./qa-transport-registry.js";
+import type { writeQaSuiteArtifacts } from "./suite-artifacts.js";
 import { runQaFlowSuiteIsolated } from "./suite-run-isolated.js";
 import { runQaFlowSuiteStandard } from "./suite-run-standard.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
@@ -25,7 +26,7 @@ const mocks = vi.hoisted(() => ({
     getProcessRssBytes: () => null,
     stop: vi.fn(async () => {}),
   })),
-  writeQaSuiteArtifacts: vi.fn(async () => ({
+  writeQaSuiteArtifacts: vi.fn<typeof writeQaSuiteArtifacts>(async () => ({
     evidence: undefined,
     evidencePath: "/qa-output/qa-evidence.json",
     report: "",
@@ -42,6 +43,27 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 }));
 vi.mock("./gateway-child.js", () => ({
   startQaGatewayChild: mocks.startQaGatewayChild,
+}));
+vi.mock("./crabline-transport.js", () => ({
+  createQaCrablineTransportAdapter: vi.fn(async () => ({
+    id: "telegram",
+    label: "Crabline Telegram",
+    accountId: "sut",
+    requiredPluginIds: [],
+    supportedActions: [],
+    sendInbound: vi.fn(async () => {}),
+    createGatewayConfig: () => ({}),
+    waitReady: vi.fn(async () => {}),
+    buildAgentDelivery: ({ target }: { target: string }) => ({
+      channel: "telegram",
+      to: target,
+      replyChannel: "telegram",
+      replyTo: target,
+    }),
+    handleAction: vi.fn(async () => {}),
+    createReportNotes: () => [],
+    cleanup: vi.fn(async () => {}),
+  })),
 }));
 vi.mock("./providers/server-runtime.js", () => ({
   startQaProviderServer: vi.fn(async () => undefined),
@@ -215,6 +237,115 @@ describe("isolated QA suite transport cleanup", () => {
     expect((thrown as Error).cause).toBe(cleanupError);
     expect(stderrWrite.mock.calls.flat().join("")).not.toContain("run complete");
     stderrWrite.mockRestore();
+  });
+
+  it("keeps Crabline workers concurrent while publishing readiness only from the final aggregate", async () => {
+    const lab = createCleanupTestLab();
+    const selection = {
+      capabilityMatrixPath: "crabline-fake-provider-capabilities.json",
+      channel: "telegram",
+      channelDriver: "crabline",
+      smokeArtifactPath: "crabline-fake-provider-smoke.json",
+    } as const;
+    let activeWorkers = 0;
+    let maxActiveWorkers = 0;
+    let releaseWorkers!: () => void;
+    const bothWorkersStarted = new Promise<void>((resolve) => {
+      releaseWorkers = resolve;
+    });
+    let releaseFirstScenario!: () => void;
+    const firstScenarioStarted = new Promise<void>((resolve) => {
+      releaseFirstScenario = resolve;
+    });
+    let releaseScenarioExecutions!: () => void;
+    const bothScenarioExecutionsStarted = new Promise<void>((resolve) => {
+      releaseScenarioExecutions = resolve;
+    });
+    const context = createCleanupTestContext();
+    context.channelDriver = "crabline";
+    context.concurrency = 2;
+    context.selectedScenarios = [
+      makeQaSuiteTestScenario("first-crabline-scenario"),
+      makeQaSuiteTestScenario("second-crabline-scenario"),
+    ];
+    const runScenario = vi
+      .fn<QaSuiteScenarioRunner>()
+      .mockImplementation(async (_env, scenario) => {
+        if (scenario.id === "first-crabline-scenario") {
+          releaseFirstScenario();
+          await bothScenarioExecutionsStarted;
+        } else {
+          releaseScenarioExecutions();
+        }
+        return {
+          name: scenario.title,
+          status: "pass",
+          steps: [],
+        };
+      });
+    const runChild = vi.fn<QaSuiteRunner>().mockImplementation(async (params) => {
+      if (!params) {
+        throw new Error("expected nested standard run params");
+      }
+      activeWorkers += 1;
+      maxActiveWorkers = Math.max(maxActiveWorkers, activeWorkers);
+      if (activeWorkers === 2) {
+        releaseWorkers();
+      }
+      await bothWorkersStarted;
+      const scenarioId = params?.scenarioIds?.[0] ?? "missing-scenario";
+      if (scenarioId === "second-crabline-scenario") {
+        await firstScenarioStarted;
+      }
+      const scenario = context.selectedScenarios.find((candidate) => candidate.id === scenarioId);
+      if (!scenario) {
+        throw new Error(`missing scenario ${scenarioId}`);
+      }
+      try {
+        return await runQaFlowSuiteStandard(
+          params,
+          {
+            ...context,
+            startedAt: new Date("2026-08-04T00:00:01.000Z"),
+            outputDir: params.outputDir ?? `/qa-child/${scenarioId}`,
+            selectedScenarios: [scenario],
+            concurrency: 1,
+          },
+          runScenario,
+        );
+      } finally {
+        activeWorkers -= 1;
+      }
+    });
+
+    const result = await runQaFlowSuiteIsolated(
+      {
+        channelDriverSelection: selection,
+        channelId: "telegram",
+        lab,
+        startLab: async () => createCleanupTestLab(),
+      },
+      context,
+      runChild,
+    );
+
+    expect(maxActiveWorkers).toBe(2);
+    expect(result.scenarios).toEqual([
+      expect.objectContaining({ name: "first-crabline-scenario", status: "pass" }),
+      expect.objectContaining({ name: "second-crabline-scenario", status: "pass" }),
+    ]);
+    expect(runScenario).toHaveBeenCalledTimes(2);
+    expect(mocks.writeQaSuiteArtifacts).toHaveBeenCalledTimes(5);
+    for (const [nonFinalArtifacts] of mocks.writeQaSuiteArtifacts.mock.calls.slice(0, -1)) {
+      expect(nonFinalArtifacts).toMatchObject({ channel: "telegram", channelDriver: "crabline" });
+      expect(nonFinalArtifacts.channelDriverSelection).toBeUndefined();
+    }
+    const finalArtifacts = mocks.writeQaSuiteArtifacts.mock.calls.at(-1)?.[0];
+    expect(finalArtifacts).toMatchObject({
+      channel: "telegram",
+      channelDriver: "crabline",
+      channelDriverSelection: selection,
+    });
   });
 
   it("prints one generic completion after a real nested standard run and parent cleanup", async () => {
