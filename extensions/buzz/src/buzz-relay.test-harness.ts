@@ -105,7 +105,9 @@ export async function createBuzzRelayFixture() {
     socket.on("message", (data) => {
       const text = Buffer.isBuffer(data)
         ? data.toString("utf8")
-        : Buffer.from(Array.isArray(data) ? Buffer.concat(data) : data).toString("utf8");
+        : Array.isArray(data)
+          ? Buffer.concat(data).toString("utf8")
+          : Buffer.from(data).toString("utf8");
       const [type, value, ...filters] = JSON.parse(text) as [string, string | Event, ...Filter[]];
       if (type === "AUTH" && typeof value !== "string") {
         const valid =

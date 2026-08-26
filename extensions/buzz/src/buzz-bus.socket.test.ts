@@ -209,6 +209,13 @@ it("recovers the Gateway account after silent presence without replaying pre-act
   vi.mocked(runtime.channel.inbound.dispatch).mockImplementation(async (params) => {
     handled.push(String(params.ctxPayload.RawBody));
     await params.delivery.deliver({ text: "gateway socket reply" }, { kind: "final" });
+    return {
+      admission: { kind: "dispatch" },
+      dispatched: true,
+      ctxPayload: params.ctxPayload,
+      routeSessionKey: params.route.sessionKey,
+      dispatchResult: { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } },
+    };
   });
   const cfg = {
     channels: {
