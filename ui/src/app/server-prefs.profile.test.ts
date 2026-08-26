@@ -232,7 +232,9 @@ describe("profile-bound appearance preferences", () => {
     // explicit Claw selection as a reset and silently drop the user's choice.
     const config = configWithPrefs({ theme: "dash" });
     const request = vi.fn(async (method: string) =>
-      method === "users.prefs.get" ? { status: "ok" as const, entries: {} } : { status: "ok" as const },
+      method === "users.prefs.get"
+        ? { status: "ok" as const, entries: {} }
+        : { status: "ok" as const },
     );
     const writer = createServerPrefsWriter(request, scope, true, { ok: true }, false);
     await refreshProfileAppearancePrefs({

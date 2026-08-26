@@ -365,6 +365,7 @@ export function resetServerUiPref<K extends ResettableServerUiPrefKey>(
   // so the local settings must move to state.resetValue (that fallback), not the
   // product default the generic reset would apply.
   if (activeProfile && state) {
+    // SAFETY: SYNCED_PREFS pairs each key's write() with that key's own value type.
     const write = specification.write as
       | ((value: SyncedPrefValue<K> | undefined) => Partial<UiSettings>)
       | undefined;
