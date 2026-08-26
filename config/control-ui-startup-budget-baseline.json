@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 341489,
-  "reason": "composer queue stack rebased onto current main",
+  "startupJsGzipBytes": 340810,
+  "reason": "sidebar gateway status pill rebased onto the composer-queue main: combined tree measures 340754-340770 B; pinned with jitter headroom",
   "updatedAt": "2026-08-26"
 }
