@@ -17,7 +17,7 @@ import {
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import { APPEARANCE_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
+import { APPEARANCE_SETTINGS_TARGET_IDS } from "./route-data.ts";
 import {
   renderChatPreferencesSection,
   renderLanguageSection,

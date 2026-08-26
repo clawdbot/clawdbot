@@ -39,11 +39,3 @@ openclaw-approval-page {
     min-height: 100%;
   }
 }
-
-.approval-page--booting {
-  align-content: center;
-  color: var(--muted);
-}
-
-/* Only the shell's pre-hydration booting state lives here; the full approval
- * page styles load with the lazy page chunk (see approval-page.ts). */
