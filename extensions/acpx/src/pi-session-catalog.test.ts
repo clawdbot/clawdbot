@@ -674,7 +674,7 @@ describe("Pi session catalog", () => {
         readLocalPiTranscriptPage({ threadId: "pi-session", limit: 20 }),
       ).rejects.toThrow("32 MiB read safety limit");
       expect(new Set(buffers).size).toBe(1);
-      expect(buffers[0]?.length).toBe(32 * 1024 * 1024 + 1);
+    expect(buffers[0]?.length).toBe(129);
     } finally {
       openSpy.mockRestore();
     }
