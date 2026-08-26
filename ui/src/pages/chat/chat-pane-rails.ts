@@ -8,8 +8,6 @@ import { closeSlot, isSidebarSlotVisible, openSlot, type SidebarSlotId } from ".
 type ChatPaneSidebarLayout = Parameters<typeof isSidebarSlotVisible>[0];
 type ChatPaneGatewaySnapshot = Parameters<typeof isDesktopPanelAvailable>[0];
 
-export type ChatProgressCardPlacement = "composer";
-
 export function releaseAttachmentWorkspaceOwner(state: ChatPageHost, slot: SidebarSlotId): void {
   // Attachment views temporarily own Files content. Release that owner
   // with the slot so reopening Files restores the session workspace.
@@ -74,12 +72,10 @@ export function createChatPaneRails(params: {
     narrowLayout: false,
     onToggleCollapsed: () => togglePanelSlot("tasks"),
   };
-  const progressCardPlacement: ChatProgressCardPlacement = "composer";
   return {
     backgroundTasks,
     closePanelSlot,
     openPanelSlot,
-    progressCardPlacement,
     sessionWorkspace,
   };
 }
