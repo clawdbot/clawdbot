@@ -940,8 +940,6 @@ type SandboxToolParams = {
   memoryWriteProvenance?: MemoryWriteProvenanceObserver;
   modelContextWindowTokens?: number;
   imageSanitization?: ImageSanitizationLimits;
-  // Forwarded to the read tool so non-vision sandboxed models skip image
-  // payloads; only the read sandbox consumes this.
   modelHasVision?: boolean;
 };
 

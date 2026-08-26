@@ -5,7 +5,7 @@ import { Text } from "@earendil-works/pi-tui";
 import { hasErrnoCode, toErrorObject } from "../../../infra/errors.js";
 import { readRegularFile } from "../../../infra/regular-file.js";
 import { decodeWindowsTextFileBuffer } from "../../../infra/windows-encoding.js";
-import type { ImageContent, Model, TextContent } from "../../../llm/types.js";
+import type { ImageContent, TextContent } from "../../../llm/types.js";
 import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
@@ -141,12 +141,7 @@ export interface ReadToolOptions {
   operations?: ReadOperations;
   /** Complete model-visible call budget; individual pages never exceed the session ceiling. */
   maxBytes?: number;
-  // The active model's image-input capability, prepared at tool-construction
-  // time. When `false`, image payloads are dropped (a text note remains) so a
-  // non-vision model never receives base64 it cannot use — the bare read tool
-  // wrapper receives no per-call model context, so this flag is the only signal
-  // the embedded runtime can carry in. `undefined` falls back to the extension
-  // context's model when one is provided per call.
+  /** Prepared capability for embedded calls, which carry no extension model context. */
   modelHasVision?: boolean;
 }
 
@@ -184,28 +179,6 @@ function trimTrailingEmptyLines(lines: string[]): string[] {
     end--;
   }
   return lines.slice(0, end);
-}
-
-function getNonVisionImageNote(opts: {
-  model?: Model;
-  modelHasVision?: boolean;
-}): string | undefined {
-  // An explicit construction-time capability flag wins: the embedded runtime
-  // prepares it from the real model's input, and the bare read tool wrapper
-  // never receives a per-call model context, so this flag is the only signal
-  // that path can carry in. `false` => non-vision; `true` => vision.
-  if (opts.modelHasVision === false) {
-    return "[Current model does not support images. The image will be omitted from this request.]";
-  }
-  if (opts.modelHasVision === true) {
-    return undefined;
-  }
-  // Capability unknown at construction: fall back to the per-call extension
-  // context's model (TUI / extension-registered tools) when one is provided.
-  if (!opts.model || opts.model.input.includes("image")) {
-    return undefined;
-  }
-  return "[Current model does not support images. The image will be omitted from this request.]";
 }
 
 function getOpenClawDocsClassification(
@@ -495,7 +468,6 @@ export function createReadToolDefinition(
   const autoResizeImages = options?.autoResizeImages ?? true;
   const ops = options?.operations ?? defaultReadOperations;
   const maxBytes = options?.maxBytes ?? DEFAULT_MAX_BYTES;
-  const modelHasVision = options?.modelHasVision;
   return {
     name: "read",
     label: "read",
@@ -576,10 +548,11 @@ export function createReadToolDefinition(
             const mimeType = await detectReadImageMimeType(ops, buffer, absolutePath);
             let content: (TextContent | ImageContent)[];
             let truncated: Parameters<typeof createReadToolDetails>[1];
-            const nonVisionImageNote = getNonVisionImageNote({
-              model: ctx?.model,
-              modelHasVision,
-            });
+            const modelHasVision = options?.modelHasVision ?? ctx?.model?.input.includes("image");
+            const nonVisionImageNote =
+              modelHasVision === false
+                ? "[Current model does not support images. The image will be omitted from this request.]"
+                : undefined;
             if (mimeType) {
               const base64 = buffer.toString("base64");
               const processed = await processImage(
@@ -597,15 +570,12 @@ export function createReadToolDefinition(
                 if (processed.hints.length > 0) {
                   textNote += `\n${processed.hints.join("\n")}`;
                 }
-                // A non-vision model cannot consume image content; the note already
-                // tells the model the image is omitted, so drop the payload to keep
-                // the promise and avoid base64 token bloat that can exhaust the
-                // context window. The path + note remain for context.
                 if (nonVisionImageNote) {
                   textNote += `\n${nonVisionImageNote}`;
-                  content = [{ type: "text", text: textNote }];
-                } else {
-                  content = [{ type: "text", text: textNote }, processed.image];
+                }
+                content = [{ type: "text", text: textNote }];
+                if (!nonVisionImageNote) {
+                  content.push(processed.image);
                 }
               }
             } else {
