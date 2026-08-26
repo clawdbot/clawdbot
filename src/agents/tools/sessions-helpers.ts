@@ -18,7 +18,6 @@ import {
   resolveSandboxedSessionToolContext,
 } from "./sessions-access.js";
 export {
-  createAgentToAgentPolicy,
   createSessionVisibilityRowChecker,
   formatSessionToolAccessDenial,
   recordSessionToolActionFact,
