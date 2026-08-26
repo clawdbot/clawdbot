@@ -198,7 +198,7 @@
       },
       "headers": {
         "type": "object",
-        "additionalProperties": { "type": "string" }
+        "additionalProperties": { "type": ["string", "object"] }
       },
       "workflowPath": {
         "type": "string"

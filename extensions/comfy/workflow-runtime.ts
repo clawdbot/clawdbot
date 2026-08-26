@@ -270,17 +270,52 @@ function generateComfySeed(): number {
 // sit behind HTTP auth (Basic auth, a bearer token, etc.) that the plugin has
 // no built-in scheme for. A generic header passthrough -- same shape as the
 // established `remote.headers` config pattern (see the ollama plugin) --
-// covers that without inventing a Comfy-specific auth scheme.
-function normalizeComfyHeadersConfig(value: unknown): Record<string, string> | undefined {
+// covers that without inventing a Comfy-specific auth scheme. Each value
+// resolves through the same SecretInput path as `apiKey` (literal string or
+// a SecretRef), matching the ollama plugin's header-secret precedent -- a
+// credential-bearing header must never be forced into plaintext config.
+function resolveComfyHeadersConfig(
+  value: unknown,
+  cfg?: OpenClawConfig,
+): Record<string, string> | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
   const headers: Record<string, string> = {};
   for (const [name, headerValue] of Object.entries(value)) {
-    const normalized = normalizeOptionalString(headerValue);
-    if (normalized) {
-      headers[name] = normalized;
+    const resolved = resolveSecretInputString({
+      value: headerValue,
+      path: `plugins.entries.comfy.config.headers.${name}`,
+      defaults: cfg?.secrets?.defaults,
+      mode: "inspect",
+    });
+    if (resolved.status === "available") {
+      const normalized = normalizeSecretInputString(resolved.value);
+      if (normalized) {
+        headers[name] = normalized;
+      }
+      continue;
     }
+    if (resolved.status === "missing") {
+      continue;
+    }
+    if (resolved.ref.source === "env") {
+      const envVarName = resolved.ref.id.trim();
+      const normalized = canResolveEnvSecretRefInReadOnlyPath({
+        cfg,
+        provider: resolved.ref.provider,
+        id: envVarName,
+      })
+        ? normalizeSecretInputString(process.env[envVarName])
+        : undefined;
+      if (normalized) {
+        headers[name] = normalized;
+        continue;
+      }
+    }
+    throw new Error(
+      `plugins.entries.comfy.config.headers.${name} references an unavailable secret`,
+    );
   }
   return Object.keys(headers).length > 0 ? headers : undefined;
 }
@@ -745,7 +780,7 @@ export async function runComfyWorkflow(params: {
       defaultBaseUrl:
         mode === "cloud" ? DEFAULT_COMFY_CLOUD_BASE_URL : DEFAULT_COMFY_LOCAL_BASE_URL,
       allowPrivateNetwork: mode === "local" || explicitAllowPrivateNetwork,
-      headers: normalizeComfyHeadersConfig(capabilityConfig.headers),
+      headers: resolveComfyHeadersConfig(capabilityConfig.headers, params.cfg),
       defaultHeaders:
         mode === "cloud"
           ? {

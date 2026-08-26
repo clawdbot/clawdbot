@@ -501,6 +501,45 @@ describe("comfy image-generation provider", () => {
     expect(submitHeaders.get("content-type")).toBe("application/json");
   });
 
+  it("resolves an env-backed SecretRef header value, same path as apiKey", async () => {
+    mockLocalImageResponses("auth-secretref-1");
+    vi.stubEnv("COMFY_TEST_AUTH_HEADER", "Basic ZW52LXNlY3JldA==");
+
+    const provider = buildComfyImageGenerationProvider();
+    await provider.generateImage({
+      provider: "comfy",
+      model: "workflow",
+      prompt: "draw a lobster",
+      cfg: buildComfyConfig({
+        ...testWorkflowConfig(),
+        headers: {
+          Authorization: { source: "env", provider: "default", id: "COMFY_TEST_AUTH_HEADER" },
+        },
+      }),
+    });
+
+    const submitHeaders = new Headers(fetchRequest(1).init?.headers);
+    expect(submitHeaders.get("authorization")).toBe("Basic ZW52LXNlY3JldA==");
+  });
+
+  it("throws instead of silently dropping a header pointed at an unresolvable secret", async () => {
+    const provider = buildComfyImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "comfy",
+        model: "workflow",
+        prompt: "draw a lobster",
+        cfg: buildComfyConfig({
+          ...testWorkflowConfig(),
+          headers: {
+            Authorization: { source: "env", provider: "default", id: "COMFY_TEST_MISSING_ENV" },
+          },
+        }),
+      }),
+    ).rejects.toThrow(/unavailable secret/);
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
+
   it("injects a fresh random seed per submission when seedNodeId is configured", async () => {
     mockLocalImageResponses("seed-prompt-1");
     mockLocalImageResponses("seed-prompt-2");
