@@ -13,7 +13,7 @@ import android.app.NotificationManager
 import android.content.ComponentName
 import android.content.Context
 import android.provider.Settings
-import androidx.compose.ui.platform.LocalContext
+import androidx.activity.compose.LocalActivity
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -135,7 +135,7 @@ class NotificationSettingsScreenTest {
   private fun showNotificationSettings() {
     val viewModel = MainViewModel(app, prefs, SavedStateHandle())
     composeRule.setContent {
-      activity = LocalContext.current as Activity
+      activity = requireNotNull(LocalActivity.current)
       ClawDesignTheme {
         SettingsDetailScreen(
           viewModel = viewModel,
