@@ -60,6 +60,11 @@ function recorder() {
 describe("portal tool", () => {
   it("uses a flat closed action schema and owner-only security gate", () => {
     const tool = createPortalTool();
+    expect(tool.description).toMatch(/standalone local web app\/server preview/i);
+    expect(tool.description).toMatch(/not a session dashboard or Split view/i);
+    expect(tool.description).toMatch(/explicitly asks.*URL.*dev server.*standalone web app/i);
+    expect(tool.description).toMatch(/dashboard is requested.*native per-session dashboard/i);
+    expect(tool.description).toMatch(/only if no board authoring capability/i);
     expect(tool.parameters).toMatchObject({
       additionalProperties: false,
       properties: { action: { enum: ["open", "list", "close"] } },

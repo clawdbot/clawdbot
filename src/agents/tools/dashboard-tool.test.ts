@@ -34,18 +34,24 @@ function recorder(boardSnapshot: BoardSnapshot = snapshot) {
 }
 
 describe("dashboard tool", () => {
-  it("declares every action, no client capability guard, sizing, and the dashboard threshold", () => {
+  it("declares native Split routing, every action, sizing, and the dashboard threshold", () => {
     const tool = createDashboardTool();
-    const directoryDescription = tool.description.slice(0, 177);
+    const directoryDescription = tool.description.slice(0, 260);
     expect(tool.requiredClientCaps).toBeUndefined();
     expect(tool.description).toContain("stable names");
     expect(tool.description).toContain("sm=3x3");
     expect(directoryDescription).toMatch(
       /(?:single|one[- ]off|ad hoc).{0,40}visualizations?.{0,40}inline/i,
     );
+    expect(directoryDescription).toMatch(/native per-session dashboard.*Split view/i);
+    expect(directoryDescription).toMatch(/not a standalone web app/i);
     expect(directoryDescription).toContain("explicit dashboard request");
     expect(directoryDescription).toContain("multiple non-code visualizations");
-    expect(directoryDescription).toMatch(/widget_put.*plugin.*only/i);
+    expect(tool.description).toMatch(/focus_tab.*set_chat_dock.*Split view/i);
+    expect(tool.description).toMatch(/preserve.*visible dock/i);
+    expect(tool.description).toMatch(/otherwise use right/i);
+    expect(tool.description).toMatch(/hidden only.*full Dashboard without chat/i);
+    expect(tool.description).toMatch(/widget_put.*plugin.*only/i);
     expect(tool.description).not.toMatch(/show_widget|widget_code|\bpin\b/);
     expect(tool.parameters).toMatchObject({
       additionalProperties: false,

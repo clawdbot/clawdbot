@@ -313,7 +313,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "dashboard",
     label: "dashboard",
-    description: "Read and arrange the session dashboard",
+    description: "Read, arrange, and present the native session dashboard",
     sectionId: "ui",
     profiles: ["coding"],
     includeInOpenClawGroup: true,
@@ -329,7 +329,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "portal",
     label: "portal",
-    description: "Expose local web apps through the gateway",
+    description: "Expose a standalone local web app through the gateway",
     sectionId: "ui",
     profiles: ["coding"],
     includeInOpenClawGroup: true,
@@ -344,7 +344,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "show_widget",
     label: "show_widget",
-    description: "Show an interactive widget on chat or an auto-fitting dashboard",
+    description: "Show a widget inline or pin it to the native session dashboard",
     sectionId: "ui",
     profiles: [],
     includeInOpenClawGroup: true,

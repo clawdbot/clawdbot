@@ -63,7 +63,7 @@ export function createPortalTool(options: PortalToolOptions = {}): AnyAgentTool 
     label: "Portal",
     name: "portal",
     description:
-      "Expose local HTTP server; operator sees it live in Control UI. Order matters: action=open with the port first, which returns the URL; then start the dev server as a background process, passing PORT and PUBLIC_URL from that result. Workspace may declare servers in .openclaw/portals.json. Proxies HTTP and WebSockets, so hot reload works; serves retry page until port listens. action=list and action=close manage portals. Portals end at gateway restart.",
+      "Standalone local web app/server preview, not a session dashboard or Split view. Use only when the operator explicitly asks for a URL, dev server, or standalone web app. When a dashboard is requested, use the native per-session dashboard; fall back here only if no board authoring capability can satisfy required app behavior, and explain the gap. Expose the local HTTP server in the Control UI Portals page. Order matters: action=open with the port first, which returns the URL; then start the dev server as a background process, passing PORT and PUBLIC_URL from that result. Workspace may declare servers in .openclaw/portals.json. Proxies HTTP and WebSockets, so hot reload works; serves retry page until port listens. action=list and action=close manage portals. Portals end at gateway restart.",
     parameters: PortalToolSchema,
     outputSchema: PortalToolOutputSchema,
     execute: async (_toolCallId, rawArgs) => {
