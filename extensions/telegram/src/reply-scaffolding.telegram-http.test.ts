@@ -174,6 +174,20 @@ describe("reply scaffolding through final preparation and Telegram HTTP", () => 
     expect(delivered).toEqual(["Visible answer."]);
   });
 
+  it("never delivers a copied prompt with bare carriage-return separators", async () => {
+    const conversationContext = buildHistoryContext({
+      historyText: "[Telegram] Alice: private history",
+      currentMessage: "private inbound paragraph",
+    });
+
+    await prepareAndDispatch(
+      { text: `${conversationContext.replace(/\n/g, "\r")}\n\nVisible answer.` },
+      conversationContext,
+    );
+
+    expect(delivered).toEqual(["Visible answer."]);
+  });
+
   it("never makes a Telegram HTTP request for empty internal exec output", async () => {
     await prepareAndDispatch({ text: "  (no output)\r\n" });
 

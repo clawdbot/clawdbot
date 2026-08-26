@@ -97,7 +97,7 @@ function stripVerifiedConversationContext(
     const promptPattern = normalizedSource
       .split("\n")
       .map(escapeRegExp)
-      .join(`\\r?\\n${markdownLinePrefix}`);
+      .join(`(?:\\r\\n?|\\n)${markdownLinePrefix}`);
     const copiedPrompt = new RegExp(`(?:^${markdownLinePrefix})?${promptPattern}`, "gmu");
     // Markdown formatting does not make an exact owner-bound private prompt safe to disclose.
     result = text.replace(copiedPrompt, "");

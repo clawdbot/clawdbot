@@ -194,6 +194,26 @@ describe("agent runner streaming presentation", () => {
     }
   });
 
+  it("withholds every copied prompt prefix with bare carriage-return separators", () => {
+    const conversationContext = [
+      "[Current message - respond to this]",
+      "private inbound paragraph",
+    ].join("\n");
+    const copiedContext = conversationContext.replace(/\n/g, "\r");
+    const presentation = createPresentation({ conversationContext });
+
+    for (let length = 1; length <= copiedContext.length; length += 1) {
+      const visibleText =
+        presentation.normalizeStreamingText({ text: copiedContext.slice(0, length) }).text ?? "";
+
+      expect(visibleText).not.toContain("private");
+    }
+
+    expect(
+      presentation.normalizeStreamingText({ text: `${copiedContext}\n\nVisible answer.` }),
+    ).toEqual({ text: "Visible answer.", skip: false });
+  });
+
   it("keeps the original prompt anchor when private context repeats its first marker", () => {
     const marker = "[Current message - respond to this]";
     const conversationContext = [

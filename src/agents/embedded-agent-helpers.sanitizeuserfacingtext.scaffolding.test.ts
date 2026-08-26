@@ -67,6 +67,10 @@ describe("user-facing internal scaffolding", () => {
         .map((line, index) => `${index === 0 ? "- " : "  "}${line}`)
         .join("\n")}`,
     },
+    {
+      name: "bare carriage-return line endings",
+      input: `Visible answer.\n\n${conversationContext.replace(/\n/g, "\r")}`,
+    },
   ])("never preserves an exact private prompt inside a $name", ({ input }) => {
     const result = sanitizeUserFacingText(input, { conversationContext });
 
