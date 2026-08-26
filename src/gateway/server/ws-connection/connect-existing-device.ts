@@ -131,42 +131,38 @@ export async function authorizeExistingGatewayDevice(params: {
           publicKey: devicePublicKey,
         })
       : null;
-  if (retryBootstrapHandoffProfile) {
+  if (
+    retryBootstrapHandoffProfile &&
+    isSetupCodeHandoffBootstrapClient({
+      profile: retryBootstrapHandoffProfile,
+      client: connectParams.client,
+    })
+  ) {
     const retryBootstrapOperatorScopes = resolveBootstrapProfileScopesForRole(
       "operator",
       retryBootstrapHandoffProfile.scopes,
       retryBootstrapHandoffProfile.purpose,
     );
+    const pairedAllowsHandoff =
+      pairedRoles.includes("operator") &&
+      roleScopesAllow({
+        role: "operator",
+        requestedScopes: retryBootstrapOperatorScopes,
+        allowedScopes: pairedScopes,
+      });
+    if (!pairedAllowsHandoff && !(await requirePairing("scope-upgrade", paired))) {
+      return { ok: false, handoffBootstrapProfile };
+    }
     if (
-      isSetupCodeHandoffBootstrapClient({
+      pairedDeviceAllowsBootstrapOperator({
+        device: device ? await getPairedDevice(device.id) : null,
+        devicePublicKey,
         profile: retryBootstrapHandoffProfile,
-        client: connectParams.client,
       })
     ) {
-      const pairedAllowsHandoff =
-        pairedRoles.includes("operator") &&
-        roleScopesAllow({
-          role: "operator",
-          requestedScopes: retryBootstrapOperatorScopes,
-          allowedScopes: pairedScopes,
-        });
-      if (!pairedAllowsHandoff) {
-        if (!(await requirePairing("scope-upgrade", paired))) {
-          return { ok: false, handoffBootstrapProfile };
-        }
-      }
-      const pairedAfterBootstrapUpgrade = device ? await getPairedDevice(device.id) : null;
-      if (
-        pairedDeviceAllowsBootstrapOperator({
-          device: pairedAfterBootstrapUpgrade,
-          devicePublicKey,
-          profile: retryBootstrapHandoffProfile,
-        })
-      ) {
-        // The setup code is the owner-approved upgrade artifact. Reuse the
-        // same handoff after retrying or promoting an existing mobile pairing.
-        handoffBootstrapProfile = retryBootstrapHandoffProfile;
-      }
+      // The setup code is the owner-approved upgrade artifact. Reuse the
+      // same handoff after retrying or promoting an existing mobile pairing.
+      handoffBootstrapProfile = retryBootstrapHandoffProfile;
     }
   }
 

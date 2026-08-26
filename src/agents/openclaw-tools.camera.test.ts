@@ -420,16 +420,55 @@ describe("nodes photos_latest", () => {
       photo: { ...PHOTOS_LATEST_PAYLOAD.photos[0], format: "webp" },
       expectedError: /unsupported photos\.latest format/i,
     },
+    {
+      name: "malformed base64",
+      photo: { format: "jpeg", base64: "not-base64!", width: 1, height: 1 },
+      expectedError: /invalid base64/i,
+    },
+    {
+      name: "insecure URL",
+      photo: { format: "jpeg", url: "http://198.51.100.42/photo.jpg", width: 1, height: 1 },
+      remoteIp: "198.51.100.42",
+      expectedError: /only https/i,
+    },
+    {
+      name: "mismatched URL host",
+      photo: { format: "jpeg", url: "https://198.51.100.43/photo.jpg", width: 1, height: 1 },
+      remoteIp: "198.51.100.42",
+      expectedError: /must match node host/i,
+    },
+    {
+      name: "missing URL node host",
+      photo: { format: "jpeg", url: "https://198.51.100.42/photo.jpg", width: 1, height: 1 },
+      expectedError: /node remoteip/i,
+    },
+    {
+      name: "valid URL with malformed base64",
+      photo: {
+        format: "jpeg",
+        url: "https://198.51.100.42/photo.jpg",
+        base64: "not-base64!",
+        width: 1,
+        height: 1,
+      },
+      remoteIp: "198.51.100.42",
+      expectedError: /invalid base64/i,
+    },
   ])("rejects a second photo with $name before writing the first", async (testCase) => {
+    stubFetchTextResponse("url-image");
     setupNodeInvokeMock({
+      ...(testCase.remoteIp ? { remoteIp: testCase.remoteIp } : {}),
       invokePayload: { photos: [PHOTOS_LATEST_PAYLOAD.photos[0], testCase.photo] },
     });
     const firstPhotoId = "00000000-0000-4000-8000-000000000022";
+    const secondPhotoId = "00000000-0000-4000-8000-000000000033";
     const firstPhotoPath = cameraTempPath({ kind: "snap", ext: "jpg", id: firstPhotoId });
+    const secondPhotoPath = cameraTempPath({ kind: "snap", ext: "jpg", id: secondPhotoId });
     const randomUUID = vi
       .spyOn(crypto, "randomUUID")
       .mockReturnValueOnce("00000000-0000-4000-8000-000000000001")
-      .mockReturnValueOnce(firstPhotoId);
+      .mockReturnValueOnce(firstPhotoId)
+      .mockReturnValueOnce(secondPhotoId);
 
     try {
       await expect(
@@ -446,6 +485,7 @@ describe("nodes photos_latest", () => {
     } finally {
       randomUUID.mockRestore();
       await fs.unlink(firstPhotoPath).catch(() => undefined);
+      await fs.unlink(secondPhotoPath).catch(() => undefined);
     }
   });
 

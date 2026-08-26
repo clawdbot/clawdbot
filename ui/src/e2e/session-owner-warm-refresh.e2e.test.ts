@@ -2,6 +2,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import type { ApplicationContext } from "../app/context.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -81,9 +82,8 @@ suite.define(() => {
       await bob.waitFor();
       await captureSidebar(page, "warm-before-event.png");
 
-      // Hold the warm refresh open at its vulnerable point: the owner-scoped
-      // request resolves instantly (mocked response), the shared request stays
-      // deferred. Pre-#129558 the owner-only publish blanks Bob's row here.
+      // Hold the warm refresh open at its vulnerable point: release the
+      // owner-scoped response while the shared response remains deferred.
       const before = (await gateway.getRequests("sessions.list")).length;
       await gateway.deferNext("sessions.list", { ownerId: "profile-ada" });
       await gateway.deferNext("sessions.list");
@@ -95,21 +95,107 @@ suite.define(() => {
         updatedAt: 3,
       });
       await gateway.waitForRequest("sessions.list", { after: before + 1 });
+      const ownerProbe = await page.evaluateHandle(() => {
+        const app = document.querySelector<
+          HTMLElement & { runtime?: { context: ApplicationContext } }
+        >("openclaw-app");
+        const sidebar = document.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
+          "openclaw-app-sidebar",
+        );
+        const sessions = app?.runtime?.context.sessions;
+        const row = sidebar?.querySelector('[data-session-key="agent:main:bob"]');
+        const scope = sessions?.captureConnectionScope();
+        if (!sidebar || !sessions || !row || !scope) {
+          throw new Error("The warm session owner or sidebar is unavailable");
+        }
+        let removed = false;
+        const observer = new MutationObserver((records) => {
+          removed ||= records.some(({ removedNodes }) =>
+            Array.from(removedNodes).some((node) => node === row || node.contains(row)),
+          );
+        });
+        observer.observe(sidebar, { childList: true, subtree: true });
+        return {
+          observer,
+          revision: sessions.canonicalListRevision,
+          row,
+          scope,
+          sessions,
+          sidebar,
+          wasRemoved: () => removed,
+        };
+      });
       await gateway.resolveDeferred("sessions.list", ownerRoster);
 
-      // The shared phase is still pending; the roster on screen must not shrink
-      // to the owner window. Sample repeatedly so a transient blank fails loud.
+      const ownerPhase = await ownerProbe.evaluate(async (probe) => {
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => resolve());
+        });
+        await probe.sidebar.updateComplete;
+        return {
+          connected: probe.sessions.isConnectionScopeCurrent(probe.scope),
+          loading: probe.sessions.state.loading,
+          revisionAdvanced: probe.sessions.canonicalListRevision !== probe.revision,
+          rowConnected: probe.row.isConnected,
+          rowRemoved: probe.wasRemoved(),
+        };
+      });
+      expect(ownerPhase).toEqual({
+        connected: true,
+        loading: true,
+        revisionAdvanced: false,
+        rowConnected: true,
+        rowRemoved: false,
+      });
+      expect(
+        (await gateway.getRequests("sessions.list"))
+          .slice(before)
+          .map((request) => (request.params as { ownerId?: string }).ownerId ?? null),
+      ).toEqual(["profile-ada", null]);
+
       for (let sample = 0; sample < 6; sample += 1) {
-        await page.waitForTimeout(100);
         expect(await bob.count()).toBe(1);
         expect(await ada.count()).toBe(1);
       }
       await captureSidebar(page, "warm-shared-deferred.png");
 
       await gateway.resolveDeferred("sessions.list", sharedRoster);
+      const sharedPhase = await ownerProbe.evaluate(async (probe) => {
+        if (probe.sessions.canonicalListRevision === probe.revision) {
+          await new Promise<void>((resolve) => {
+            const unsubscribe = probe.sessions.subscribe(() => {
+              if (probe.sessions.canonicalListRevision > probe.revision) {
+                unsubscribe();
+                resolve();
+              }
+            });
+            if (probe.sessions.canonicalListRevision > probe.revision) {
+              unsubscribe();
+              resolve();
+            }
+          });
+        }
+        await probe.sidebar.updateComplete;
+        probe.observer.disconnect();
+        return {
+          connected: probe.sessions.isConnectionScopeCurrent(probe.scope),
+          loading: probe.sessions.state.loading,
+          revisionAdvanced: probe.sessions.canonicalListRevision > probe.revision,
+          rowConnected: probe.row.isConnected,
+          rowRemoved: probe.wasRemoved(),
+        };
+      });
+      expect(sharedPhase).toEqual({
+        connected: true,
+        loading: false,
+        revisionAdvanced: true,
+        rowConnected: true,
+        rowRemoved: false,
+      });
       await expect.poll(() => bob.count()).toBe(1);
       expect(await ada.count()).toBe(1);
       await captureSidebar(page, "warm-after-merge.png");
+      await ownerProbe.dispose();
     } finally {
       await context.close();
     }

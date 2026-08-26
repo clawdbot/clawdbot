@@ -204,7 +204,20 @@ suite.define(() => {
         await expect(firstConfirm.textContent()).resolves.toContain(
           "Logging out of account default stops its listener and deletes its saved credentials.",
         );
-        await firstConfirm.getByRole("button", { name: "Cancel" }).click();
+        await firstConfirm.getByRole("button", { name: "Cancel" }).focus();
+        await page.keyboard.press("Escape");
+        if (captureUiProofEnabled) {
+          await mkdir(uiProofArtifactDir, { recursive: true });
+          await page.screenshot({
+            animations: "disabled",
+            fullPage: true,
+            path: path.join(
+              uiProofArtifactDir,
+              `modal-escape-${process.env.OPENCLAW_UI_PROOF_LABEL ?? "dismissed"}.png`,
+            ),
+          });
+        }
+        await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/channels");
         await expect.poll(() => page.locator("openclaw-modal-dialog").count()).toBe(1);
         await expect.poll(async () => gateway.getRequests("channels.logout")).toHaveLength(0);
         await expect(qr.getAttribute("src")).resolves.toBe(QR_DATA_URL);
