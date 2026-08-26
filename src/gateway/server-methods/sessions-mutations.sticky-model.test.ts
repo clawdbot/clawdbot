@@ -3,6 +3,7 @@ import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import type { AgentConfig } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import {
@@ -92,13 +93,15 @@ vi.mock("../../logging/subsystem.js", async () => {
 
 import { sessionMutationHandlers } from "./sessions-mutations.js";
 
+const defaultAgents: AgentConfig[] = [
+  { id: "main", default: true },
+  { id: "work", model: "anthropic/claude-sonnet-4-6" },
+];
+
 const defaultConfig = {
   agents: {
     defaults: { model: "anthropic/claude-opus-4-6" },
-    list: [
-      { id: "main", default: true },
-      { id: "work", model: "anthropic/claude-sonnet-4-6" },
-    ],
+    list: defaultAgents,
   },
 } satisfies OpenClawConfig;
 
