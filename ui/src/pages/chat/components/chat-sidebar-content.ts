@@ -179,7 +179,7 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
                     .loadFileText=${content.loadFileText ?? null}
                     .execNode=${props.fileView?.execNode ?? null}
                     .openFile=${content.openFile ?? null}
-                    .revealFile=${content.revealFile ?? null}
+                    .revealFile=${props.fileView?.onReveal ?? null}
                   ></openclaw-session-diff>`
                 : content.kind === "canvas"
                   ? html`

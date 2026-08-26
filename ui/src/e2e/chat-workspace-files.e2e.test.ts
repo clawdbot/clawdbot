@@ -58,10 +58,17 @@ suite.define(() => {
           sessionKey: "main",
         },
         "sessions.diff": {
-          additions: 0,
+          additions: 1,
           branch: "main",
           deletions: 0,
-          files: [],
+          files: [
+            {
+              additions: 1,
+              deletions: 0,
+              path: "AFTER_RUN.md",
+              status: "modified",
+            },
+          ],
           root: "/workspace",
           sessionKey: "main",
         },
@@ -121,6 +128,17 @@ suite.define(() => {
 
       await openChatSidePanelType(page, "Review");
       await page.locator('[data-panel-slot="detail"]:not([hidden])').waitFor();
+      await page.getByRole("button", { name: "Actions for AFTER_RUN.md" }).click();
+      await page
+        .locator('openclaw-session-diff-menu wa-dropdown-item[value="reveal-file"]')
+        .click();
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.files.list")).length)
+        .toBe(3);
+      await page.locator(".chat-workspace-rail__file-name", { hasText: "AFTER_RUN.md" }).waitFor({
+        timeout: 10_000,
+      });
+      await page.locator("wa-tab").filter({ hasText: "Review" }).click();
       await gateway.setMethodResponse("sessions.files.list", {
         files: [
           {
@@ -135,12 +153,12 @@ suite.define(() => {
         text: "Workspace stayed inactive.",
       });
       await page.getByText("Workspace stayed inactive.").first().waitFor();
-      expect(await gateway.getRequests("sessions.files.list")).toHaveLength(2);
+      expect(await gateway.getRequests("sessions.files.list")).toHaveLength(3);
 
       await page.locator("wa-tab").filter({ hasText: "Files" }).click();
       await expect
         .poll(async () => (await gateway.getRequests("sessions.files.list")).length)
-        .toBe(3);
+        .toBe(4);
       await page
         .locator(".chat-workspace-rail__file-name", { hasText: "AFTER_REVIEW.md" })
         .waitFor({ timeout: 10_000 });

@@ -443,8 +443,15 @@ export function createSessionWorkspaceProps(
   state.sessionWorkspaceDraftScope = options?.draftScope;
   const workspace = getSessionWorkspace(state);
   if (
+    (options?.expanded === false || options?.presented === false) &&
+    workspace.browserSearchTimer
+  ) {
+    clearWorkspaceTimer(workspace);
+    workspace.pendingReload = true;
+  }
+  if (
     options?.presented !== false &&
-    (options?.expanded === true || !workspace.collapsed) &&
+    options?.expanded === true &&
     state.connected &&
     state.agentsList &&
     !workspace.loading &&
@@ -559,6 +566,5 @@ function buildSessionDiffSidebarContent(
         }
       : undefined,
     openFile: (path) => openFile(state, getSessionWorkspace(state), path),
-    revealFile: (path) => revealSessionWorkspaceFile(state, path),
   };
 }

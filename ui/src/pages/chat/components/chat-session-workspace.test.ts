@@ -5,6 +5,7 @@ import {
   openSessionWorkspaceFile,
   refreshSessionWorkspace,
   renderSessionWorkspaceRail,
+  revealSessionWorkspaceFile,
   resolveSessionDiffSidebarContent,
   type SessionWorkspaceHost,
 } from "./chat-session-workspace.ts";
@@ -229,6 +230,57 @@ describe("session workspace state", () => {
     await vi.waitFor(() => expect(createSessionWorkspaceProps(state).list).not.toBeNull());
     expect(listFiles).toHaveBeenCalledTimes(2);
     expect(createSessionWorkspaceProps(state).error).toBeNull();
+  });
+
+  it.each([
+    { label: "Files is closed or inactive", options: { expanded: false }, terminal: true },
+    {
+      label: "the chat pane is hidden before its pending search runs",
+      options: { expanded: true, presented: false },
+      terminal: false,
+    },
+  ])("keeps a revealed workspace cold when $label", async ({ options, terminal }) => {
+    vi.useFakeTimers();
+    try {
+      const listFiles = vi.fn().mockResolvedValue({
+        sessionKey: "agent:main:current",
+        files: [],
+      });
+      const state = {
+        client: { request: vi.fn().mockResolvedValue({ artifacts: [] }) } as never,
+        connected: true,
+        connectionEpoch: 1,
+        handleOpenSidebar: vi.fn(),
+        hello: null,
+        agentsList: { agents: [] },
+        requestUpdate: vi.fn(),
+        sessionKey: "agent:main:current",
+        sidebarContent: null,
+        sessions: { listFiles } as never,
+      } as SessionWorkspaceHost;
+
+      createSessionWorkspaceProps(state, { expanded: true });
+      await vi.advanceTimersByTimeAsync(0);
+      revealSessionWorkspaceFile(state, "src/README.md");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(listFiles).toHaveBeenCalledTimes(2);
+
+      createSessionWorkspaceProps(state, { expanded: true }).onSearch("hidden");
+      if (terminal) {
+        refreshSessionWorkspace(state, false);
+      }
+      createSessionWorkspaceProps(state, options);
+
+      expect(listFiles).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(160);
+      expect(listFiles).toHaveBeenCalledTimes(2);
+
+      createSessionWorkspaceProps(state, { expanded: true });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(listFiles).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

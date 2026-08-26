@@ -48,7 +48,6 @@ type SessionDiffSidebarContent = {
   load: SessionDiffLoader;
   loadFileText?: SessionDiffFileTextLoader;
   openFile?: (path: string) => void;
-  revealFile?: (path: string) => void;
   rawText?: string | null;
 };
 
