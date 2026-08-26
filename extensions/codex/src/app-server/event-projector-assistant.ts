@@ -514,7 +514,7 @@ export class CodexAssistantProjection {
   }
 
   private emitCommentaryProgress(params: { itemId: string; text: string }): void {
-    const progressText = params.text.replace(/\s+/g, " ").trim();
+    const progressText = params.text.trim();
     if (
       !progressText ||
       this.lastCommentaryProgressTextByItem.get(params.itemId) === progressText
