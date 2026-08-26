@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import type { Command } from "commander";
 import {
   mutateConfigFile,
@@ -23,6 +24,22 @@ function readPluginConfig(config: unknown): Record<string, unknown> | null {
   const entries = asNullableRecord(plugins?.entries);
   const entry = asNullableRecord(entries?.["file-transfer"]);
   return asNullableRecord(entry?.config);
+}
+
+function resolveMigrationBackupPath(
+  prepared: Awaited<ReturnType<typeof readConfigFileSnapshotForWrite>>,
+): string {
+  const ownership = prepared.snapshot.includeProvenance?.findLast(
+    (entry) => entry.path.length <= 1 && entry.path[0] === "plugins",
+  );
+  const configPath =
+    ownership?.path.length === 1 &&
+    ownership.kind === "single" &&
+    !ownership.hasSiblingOverrides &&
+    ownership.targetPath
+      ? ownership.targetPath
+      : prepared.snapshot.path;
+  return `${path.normalize(configPath)}.bak`;
 }
 
 async function runApprovalMigration(options: MigrationOptions): Promise<void> {
@@ -68,10 +85,6 @@ async function runApprovalMigration(options: MigrationOptions): Promise<void> {
   );
   const decisions: ApprovalMigrationDecision[] = [];
   for (const item of items) {
-    if (item.selector === "*") {
-      decisions.push({ item, action: "keep-glob" });
-      continue;
-    }
     const action = await prompt.select({
       message: `${item.selector} · ${item.kind} · ${item.path}`,
       options: [
@@ -112,7 +125,7 @@ async function runApprovalMigration(options: MigrationOptions): Promise<void> {
   }
 
   const migrated = applyApprovalMigration(pluginConfig, decisions);
-  const backupPath = `${prepared.snapshot.path}.bak`;
+  const backupPath = resolveMigrationBackupPath(prepared);
   const backupBefore = await fs.stat(backupPath).catch(() => null);
   await mutateConfigFile({
     base: "source",

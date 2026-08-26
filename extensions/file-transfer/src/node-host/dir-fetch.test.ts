@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createTarArchive } from "./dir-fetch-archive.js";
 import { handleDirFetch } from "./dir-fetch.js";
 
 let tmpRoot: string;
@@ -56,6 +57,22 @@ describe("handleDirFetch — fs errors", () => {
 });
 
 describe("handleDirFetch — happy path", () => {
+  it.runIf(process.platform !== "win32")(
+    "binds tar to the canonical directory after changing its working directory",
+    async () => {
+      const first = path.join(tmpRoot, "first");
+      const second = path.join(tmpRoot, "second");
+      const link = path.join(tmpRoot, "current");
+      await fs.mkdir(first);
+      await fs.mkdir(second);
+      await fs.symlink(second, link);
+
+      await expect(createTarArchive(link, first, 1024 * 1024)).resolves.toBe(
+        "CANONICAL_PATH_CHANGED",
+      );
+    },
+  );
+
   it.runIf(HAS_TAR)("preflights directory entries without returning a tarball", async () => {
     await fs.writeFile(path.join(tmpRoot, "a.txt"), "alpha\n");
     await fs.mkdir(path.join(tmpRoot, ".ssh"));

@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
 import { root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
+import { createTarArchive } from "./dir-fetch-archive.js";
 import {
   classifyFsSafeReadError,
   readAbsolutePath,
@@ -116,33 +117,6 @@ async function listTarEntries(tarBuffer: Buffer): Promise<string[] | null> {
   return entries.toSorted((left, right) => left.localeCompare(right));
 }
 
-type TarArchiveResult = Buffer | "TOO_LARGE" | "TIMEOUT" | "ERROR";
-
-async function createTarArchive(
-  canonicalPath: string,
-  maxBytes: number,
-): Promise<TarArchiveResult> {
-  const tarBin = process.platform !== "win32" ? "/usr/bin/tar" : "tar";
-  const tarArgs = ["-czf", "-", "-C", canonicalPath, "."];
-  const timeoutMs = 60_000;
-
-  const result = await runCommandBuffered([tarBin, ...tarArgs], {
-    discardOutput: { stderr: true },
-    maxOutputBytes: { stdout: maxBytes, stderr: 64 * 1024 },
-    timeoutMs,
-  }).catch(() => null);
-  if (!result) {
-    return "ERROR";
-  }
-  if (result.termination === "timeout") {
-    return "TIMEOUT";
-  }
-  if (result.termination === "output-limit" && result.outputLimitStream === "stdout") {
-    return "TOO_LARGE";
-  }
-  return result.termination === "exit" && result.code === 0 ? result.stdout : "ERROR";
-}
-
 async function listTreeEntries(root: string, maxEntries: number): Promise<string[] | "TOO_MANY"> {
   const results: string[] = [];
   const rootHandle = await fsRoot(root);
@@ -219,7 +193,7 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
       };
     }
 
-    const tarBuffer = await createTarArchive(canonical, maxBytes);
+    const tarBuffer = await createTarArchive(canonical, canonical, maxBytes);
     if (tarBuffer === "TOO_LARGE") {
       return {
         ok: false,
@@ -233,6 +207,14 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
         ok: false,
         code: "READ_ERROR",
         message: "tar command exceeded 60s wall-clock timeout (slow filesystem or symlink loop?)",
+        canonicalPath: canonical,
+      };
+    }
+    if (tarBuffer === "CANONICAL_PATH_CHANGED") {
+      return {
+        ok: false,
+        code: "CANONICAL_PATH_CHANGED",
+        message: "canonical path differs from the authorized target",
         canonicalPath: canonical,
       };
     }
@@ -284,7 +266,7 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
   // Capture tar output with a hard byte cap and a wall-clock timeout.
   // SIGTERM if the byte cap is exceeded; SIGKILL if the timeout fires
   // (covers tar hanging on a slow filesystem or symlink loop).
-  const tarBuffer = await createTarArchive(canonical, maxBytes);
+  const tarBuffer = await createTarArchive(canonical, canonical, maxBytes);
 
   if (tarBuffer === "TOO_LARGE") {
     return {
@@ -299,6 +281,14 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
       ok: false,
       code: "READ_ERROR",
       message: "tar command exceeded 60s wall-clock timeout (slow filesystem or symlink loop?)",
+      canonicalPath: canonical,
+    };
+  }
+  if (tarBuffer === "CANONICAL_PATH_CHANGED") {
+    return {
+      ok: false,
+      code: "CANONICAL_PATH_CHANGED",
+      message: "canonical path differs from the authorized target",
       canonicalPath: canonical,
     };
   }
