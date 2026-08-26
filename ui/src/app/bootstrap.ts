@@ -143,6 +143,9 @@ function createApplicationTheme(
   syncSystemThemeListener();
 
   return {
+    get settings() {
+      return settings;
+    },
     get mode() {
       return settings.themeMode;
     },

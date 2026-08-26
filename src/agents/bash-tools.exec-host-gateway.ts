@@ -5,9 +5,15 @@
  */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import {
+  buildCronExecOperationBinding,
+  consumeCronStandingGrant,
+  validateCronStandingGrant,
+} from "../gateway/operator-approval-standing-grants.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { describeInterpreterInlineEval } from "../infra/command-analysis/inline-eval.js";
 import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
+import { lookupCronRunExecSource } from "../infra/cron-run-exec-source.js";
 import { emitTrustedSecurityEvent } from "../infra/diagnostic-events.js";
 import {
   type AllowAlwaysPersistenceDecision,
@@ -392,9 +398,19 @@ function buildGatewayExecApprovalFollowupSummary(params: {
 function shouldAwaitGatewayApprovalInline(params: {
   turnSourceChannel?: string;
   approvalFollowupMode?: "agent" | "direct";
+  trigger?: string;
 }): boolean {
   if (params.approvalFollowupMode !== undefined) {
     return false;
+  }
+  // Scheduled runs cannot recover from an "approval-pending" handoff: the
+  // isolated session ends and authority-close cancels the parked approval
+  // seconds later. Wait inline so a connected approval client gets the full
+  // approval window; allow-always there mints the standing grant and this
+  // occurrence executes. Cron jobs are single-flight, so waiting cannot
+  // stack runs.
+  if (params.trigger === "cron") {
+    return true;
   }
   // Native chat approval clients (Telegram /approve, Discord buttons,
   // etc.) resolve the approval back into the same session, so the agent can
@@ -776,6 +792,89 @@ export async function processGatewayAllowlist(
     mutableFileBinding = prepared.binding;
   }
   const mutableFileApprovalRequiresOneShot = (mutableFileBinding?.operands.length ?? 0) > 0;
+  // Cron standing grants: a prior allow-always for this exact job + operation
+  // minted a scoped SQLite grant instead of a JSON allowlist digest. Consult it
+  // before prompting; any validation failure falls through to the normal prompt
+  // path (fail closed to prompting, never to silent execution or denial).
+  // Special approval classes (inline eval, heredoc, audit suppression) and
+  // mutable operands keep prompting — mirroring one-shot durable-trust guards.
+  const cronExecutionSource =
+    params.runId && params.agentId ? lookupCronRunExecSource(params.runId) : undefined;
+  const cronStandingGrantEligible =
+    policyRequiresAsk &&
+    // Mirror durable-approval semantics: ask "always" and security "deny"
+    // always keep their prompt/deny behavior regardless of standing trust.
+    hostAsk !== "always" &&
+    hostSecurity !== "deny" &&
+    cronExecutionSource !== undefined &&
+    cronExecutionSource.agentId === params.agentId &&
+    !mutableFileApprovalRequiresOneShot &&
+    !requiresInlineEvalApproval &&
+    !requiresHeredocApproval &&
+    !requiresSecurityAuditSuppressionApproval;
+  if (cronStandingGrantEligible) {
+    const grantLookup = {
+      agentId: cronExecutionSource.agentId,
+      cronJobId: cronExecutionSource.jobId,
+      jobConfigRevision: cronExecutionSource.jobConfigRevision,
+      operationBinding: buildCronExecOperationBinding({
+        command: params.command,
+        cwd: params.workdir,
+        env: params.requestedEnv,
+      }),
+    };
+    let grantCheck: ReturnType<typeof validateCronStandingGrant> | undefined;
+    try {
+      grantCheck = validateCronStandingGrant(grantLookup);
+    } catch {
+      grantCheck = undefined;
+    }
+    if (grantCheck?.outcome === "consumed") {
+      const emitGrantEvent = (approved: boolean, reason: string) =>
+        emitGatewayExecApprovalSecurityEvent({
+          action: approved ? "exec.approval.approved" : "exec.approval.denied",
+          outcome: approved ? "success" : "denied",
+          severity: "medium",
+          agentId: params.agentId,
+          reason,
+          hostSecurity,
+          hostAsk,
+          host: "gateway",
+          segmentCount: allowlistEval.segments.length,
+          trigger: params.trigger,
+          decision: "standing-grant",
+        });
+      return {
+        execCommandOverride: enforcedCommand,
+        // Durable authority is recorded only at the final effect: awaited
+        // pre-spawn work (script preflight) can outlive a revocation or job
+        // edit, so the grant is re-verified and consumed right before the
+        // process spawns and any failure denies instead of executing.
+        revalidateBeforeExecution: async () => {
+          let grantUse: ReturnType<typeof consumeCronStandingGrant> | undefined;
+          try {
+            grantUse = consumeCronStandingGrant(grantLookup);
+          } catch {
+            grantUse = undefined;
+          }
+          if (grantUse?.outcome === "consumed") {
+            emitGrantEvent(
+              true,
+              `standing-grant grant=${grantUse.grant.grantId} approval=${grantUse.grant.mintedByApprovalId}`,
+            );
+            return undefined;
+          }
+          const invalidReason = grantUse?.outcome ?? "grant-store-unavailable";
+          emitGrantEvent(false, `standing-grant-invalidated ${invalidReason}`);
+          return buildGatewayExecApprovalDeniedToolResult({
+            deniedReason: `standing grant no longer valid (${invalidReason}); the next occurrence will prompt for approval again`,
+            command: params.command,
+            cwd: params.workdir,
+          });
+        },
+      };
+    }
+  }
   const requiresAsk =
     policyRequiresAsk || (durableApprovalRequiresBinding && mutableFileApprovalRequiresOneShot);
   // Mutable operands and unenforceable patterns cannot authorize later cwd/env bindings.
@@ -1191,8 +1290,12 @@ export async function processGatewayAllowlist(
         requestFailed: false,
         authorizationSource:
           decision === null ? ("ask-fallback" as const) : ("explicit-approval" as const),
+        // Cron contexts mint a scoped standing grant in the durable resolution
+        // transaction instead of writing an unbounded JSON allowlist digest.
         allowAlwaysDecision:
-          decision === "allow-always" ? approvalAllowAlwaysPersistence : undefined,
+          decision === "allow-always" && !cronExecutionSource
+            ? approvalAllowAlwaysPersistence
+            : undefined,
         execCommandOverride:
           decision === null && fallbackSecurity === "allowlist"
             ? fallbackEnforcedCommand

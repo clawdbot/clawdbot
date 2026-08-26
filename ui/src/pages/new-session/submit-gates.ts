@@ -50,6 +50,20 @@ export const PAGE_RENDERED_GATES: ReadonlySet<string> = new Set([
   "worktree-name",
 ]);
 
+export function resolveCloudPlacementDisabledReason(place: DraftPlaceState): string | undefined {
+  const runtimeReason = place.modelControl.cloudRuntimeUnsupportedReason();
+  if (runtimeReason) {
+    return runtimeReason;
+  }
+  if (place.repository.kind === "checking") {
+    return t("newSession.checkingGit");
+  }
+  if (place.repository.kind === "unavailable" && !place.worktreeAvailable()) {
+    return t("newSession.gitCheckUnavailable");
+  }
+  return place.worktreeAvailable() ? undefined : t("newSession.cloudRequiresWorktree");
+}
+
 /** Facts the gate walk reads from DraftSubmissionFlow, kept read-only. */
 type SubmitGateHost = {
   readonly gatewayState: DraftGatewayState;

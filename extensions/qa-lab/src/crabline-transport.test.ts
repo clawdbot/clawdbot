@@ -29,6 +29,40 @@ function requireString(value: unknown, label: string): string {
 }
 
 describe("crabline transport", () => {
+  it("rejects oversized successful inbound responses before parsing provider metadata", async () => {
+    await withTempDir("qa-crabline-transport-", async (outputDir) => {
+      const transport = await createQaCrablineTransportAdapter({
+        outputDir,
+        selection: createSelection(),
+        state: createQaBusState(),
+      });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          async () =>
+            new Response(
+              JSON.stringify({
+                update: { message: { message_id: 42, padding: "x".repeat(1024 * 1024) } },
+              }),
+            ),
+        ),
+      );
+
+      try {
+        await expect(
+          transport.sendInbound({
+            conversation: { id: "-1001234567890", kind: "group" },
+            senderId: "100001",
+            senderName: "Alice",
+            text: "Oversized response marker.",
+          }),
+        ).rejects.toThrow("JSON response exceeds 1048576 bytes");
+      } finally {
+        await transport.cleanup?.();
+      }
+    });
+  });
+
   it("cancels a failed inbound response before surfacing the provider error", async () => {
     await withTempDir("qa-crabline-transport-", async (outputDir) => {
       const transport = await createQaCrablineTransportAdapter({

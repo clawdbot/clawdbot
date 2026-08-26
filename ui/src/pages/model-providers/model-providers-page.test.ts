@@ -1,381 +1,24 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelsProbeResult } from "../../api/types.ts";
-import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import type { DefaultModelSelection, ModelProviderLogoutTarget } from "./data.ts";
-import { EMPTY_MODEL_PROVIDERS_DATA, type ModelProvidersData } from "./load.ts";
-import type { ModelProvidersRouteData } from "./route.ts";
-import "./model-providers-page.ts";
-
-type ModelProvidersPageTestElement = HTMLElement & {
-  context: ApplicationContext;
-  updateComplete: Promise<boolean>;
-  busy: Record<string, boolean>;
-  data: ModelProvidersData | null;
-  addProvider: () => Promise<void>;
-  addProviderId: string;
-  addProviderKey: string;
-  addProviderOpen: boolean;
-  defaultsDraft: DefaultModelSelection | null;
-  keyDraft: string;
-  keyEditorProvider: string | null;
-  logout: (cardId: string, targets: ModelProviderLogoutTarget[]) => Promise<void>;
-  messages: Record<string, { kind: "success" | "error"; text: string; warning?: string }>;
-  pendingLogoutProvider: string | null;
-  probe: (cardId: string, providers: string[]) => Promise<void>;
-  probeResults: Record<string, ModelsProbeResult>;
-  refresh: (opts: { force: boolean }) => Promise<void>;
-  routeData: ModelProvidersRouteData | undefined;
-  requestUpdate: () => void;
-  saveDefaultModels: () => Promise<void>;
-  saveKey: (provider: string, configKey: string) => Promise<void>;
-  selectedAgentId: string;
-};
-
-type AgentSelectElement = HTMLElement & {
-  onSelect: (value: string) => void;
-};
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
-
-function createHarness(initialScopeId: string) {
-  let pendingAuthStatus: Promise<void> | null = null;
-  let releaseAuthStatus: (() => void) | null = null;
-  const deferNextAuthStatus = () => {
-    pendingAuthStatus = new Promise<void>((resolve) => {
-      releaseAuthStatus = resolve;
-    });
-    return () => releaseAuthStatus?.();
-  };
-  let usageStatus: unknown = { updatedAt: 1, providers: [] };
-  let usageStatusRejects = false;
-  const request = vi.fn(async (method: string): Promise<unknown> => {
-    switch (method) {
-      case "models.authStatus": {
-        if (pendingAuthStatus) {
-          const gate = pendingAuthStatus;
-          pendingAuthStatus = null;
-          await gate;
-        }
-        return {
-          ts: 1,
-          providers: [],
-          providerCapabilities: [
-            { provider: "anthropic", apiKeySupported: true, quickApiKeySetup: true },
-          ],
-        };
-      }
-      case "models.list":
-        return { models: [] };
-      case "config.get":
-        return { config: {}, hash: "hash" };
-      case "usage.status":
-        if (usageStatusRejects) {
-          throw new Error("usage.status unavailable");
-        }
-        return usageStatus;
-      case "sessions.usage":
-        return { aggregates: { byProvider: [] } };
-      default:
-        return {};
-    }
-  });
-  const snapshot: ApplicationGatewaySnapshot = {
-    client: { request } as unknown as GatewayBrowserClient,
-    phase: "connected",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    hello: null,
-    assistantAgentId: "main",
-    sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-  };
-  const gatewaySource = publishableGateway(snapshot);
-  let selectionListener: (() => void) | undefined;
-  const agentSelection = {
-    state: {
-      selectedId: initialScopeId as string | null,
-      scopeId: initialScopeId as string | null,
-    },
-    set: vi.fn(),
-    setScope: vi.fn(),
-    subscribe(listener: () => void) {
-      selectionListener = listener;
-      return () => {
-        selectionListener = undefined;
-      };
-    },
-  };
-  const subscribe = () => () => undefined;
-  const runtimeConfig = {
-    state: {
-      connected: true,
-      configSnapshot: { config: {} },
-      configForm: {
-        agents: { defaults: { thinkingDefault: "low", fastModeDefault: "auto" } },
-      },
-      configLoading: false,
-      configSaving: false,
-      configApplying: false,
-      configNeedsApply: false,
-      configFormMode: "form",
-      configFormDirty: false,
-      configAutoSaveStatus: "idle",
-      lastError: null as string | null,
-    },
-    ensureLoaded: vi.fn(async (): Promise<void> => undefined),
-    patch: vi.fn(async () => true),
-    patchForm: vi.fn(),
-    removeFormValue: vi.fn(),
-    refresh: vi.fn(async () => undefined),
-    save: vi.fn(async () => true),
-    apply: vi.fn(async () => true),
-    discardDraft: vi.fn(async () => undefined),
-    subscribe,
-  };
-  const context = {
-    gateway: gatewaySource.gateway,
-    agents: {
-      state: {
-        agentsList: {
-          defaultId: "main",
-          mainKey: "main",
-          scope: "project",
-          agents: [
-            { id: "main", name: "Main" },
-            { id: "writer", name: "Writer" },
-          ],
-        },
-        agentsLoading: false,
-        agentsError: null as string | null,
-      },
-      ensureList: vi.fn(),
-      refreshList: vi.fn(),
-      subscribe,
-    },
-    agentSelection,
-    runtimeConfig,
-    overlays: {
-      snapshot: { updateRunning: false, updateReconciliationPending: false },
-      subscribe,
-    },
-    navigate: vi.fn(),
-  } as unknown as ApplicationContext;
-  return {
-    agentSelection,
-    context,
-    deferNextAuthStatus,
-    notifySelection: () => selectionListener?.(),
-    request,
-    runtimeConfig,
-    snapshot,
-    publishPhase: (phase: ApplicationGatewaySnapshot["phase"]) => {
-      snapshot.phase = phase;
-      gatewaySource.publish({ ...snapshot });
-    },
-    setUsageStatus: (value: unknown) => {
-      usageStatus = value;
-    },
-    failUsageStatus: () => {
-      usageStatusRejects = true;
-    },
-  };
-}
-
-function publishableGateway(initial: ApplicationGatewaySnapshot) {
-  let current = initial;
-  const listeners = new Set<(value: ApplicationGatewaySnapshot) => void>();
-  return {
-    gateway: {
-      get snapshot() {
-        return current;
-      },
-      subscribe(listener: (value: ApplicationGatewaySnapshot) => void) {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      },
-    },
-    publish(next: ApplicationGatewaySnapshot) {
-      current = next;
-      for (const listener of listeners) {
-        listener(next);
-      }
-    },
-  };
-}
-
-function requestCount(request: ReturnType<typeof vi.fn>, method: string): number {
-  return request.mock.calls.filter(([candidate]) => candidate === method).length;
-}
-
-async function advanceUsageRetries(): Promise<void> {
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    await vi.advanceTimersByTimeAsync(5_000);
-  }
-}
-
-function focusDocument(): void {
-  vi.spyOn(document, "hasFocus").mockReturnValue(true);
-  vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
-}
-
-function appendPage(context: ApplicationContext) {
-  const page = document.createElement(
-    "openclaw-model-providers-page",
-  ) as ModelProvidersPageTestElement;
-  page.context = context;
-  document.body.append(page);
-  return page;
-}
+import type { DefaultModelSelection } from "./data.ts";
+import { EMPTY_MODEL_PROVIDERS_DATA } from "./load.ts";
+import {
+  appendPage,
+  createHarness,
+  deferred,
+  publishableGateway,
+  requestCount,
+  type AgentSelectElement,
+  type ModelProvidersPageTestElement,
+} from "./model-providers-page.test-support.ts";
 
 afterEach(() => {
   document.body.replaceChildren();
   vi.useRealTimers();
   vi.restoreAllMocks();
-});
-
-describe("ModelProvidersPage usage convergence", () => {
-  it("restarts an exhausted retry cycle on same-client reconnect", async () => {
-    vi.useFakeTimers();
-    focusDocument();
-    const harness = createHarness("main");
-    harness.setUsageStatus({ updatedAt: 1, providers: [], refreshing: true });
-    const page = appendPage(harness.context);
-    await page.updateComplete;
-    await advanceUsageRetries();
-
-    const usageCallsBeforeReconnect = harness.request.mock.calls.filter(
-      ([method]) => method === "usage.status",
-    ).length;
-    expect(usageCallsBeforeReconnect).toBe(4);
-
-    harness.publishPhase("offline");
-    await page.updateComplete;
-    harness.publishPhase("connected");
-    await page.updateComplete;
-    await vi.advanceTimersByTimeAsync(0);
-
-    expect(harness.request.mock.calls.filter(([method]) => method === "usage.status").length).toBe(
-      5,
-    );
-  });
-
-  it("reports a stalled provider refresh once the retry budget is spent", async () => {
-    vi.useFakeTimers();
-    focusDocument();
-    const harness = createHarness("main");
-    harness.setUsageStatus({ updatedAt: 1, providers: [], refreshing: true });
-    const page = appendPage(harness.context);
-    await page.updateComplete;
-
-    // Nothing is visible while retries are still in flight: a converging load is
-    // not a failure and must not warn.
-    expect(page.textContent ?? "").not.toContain("did not finish loading");
-
-    await advanceUsageRetries();
-    await page.updateComplete;
-
-    // Budget spent and the payload is still incomplete. Rendering the ordinary
-    // cards with no usage and no notice is indistinguishable from a provider
-    // that simply reports none.
-    expect(page.textContent ?? "").toContain("did not finish loading");
-
-    // The notice says "Refresh to retry", so a manual refresh has to hand back a
-    // budget — otherwise the button is a dead end and nothing ever converges.
-    const callsBeforeManual = harness.request.mock.calls.filter(
-      ([method]) => method === "usage.status",
-    ).length;
-    page.querySelector<HTMLButtonElement>(".settings-section__actions button")?.click();
-    await page.updateComplete;
-    await advanceUsageRetries();
-    expect(
-      harness.request.mock.calls.filter(([method]) => method === "usage.status").length,
-    ).toBeGreaterThan(callsBeforeManual + 1);
-  });
-
-  it("keeps the stalled explanation when usage.status starts rejecting", async () => {
-    vi.useFakeTimers();
-    focusDocument();
-    const harness = createHarness("main");
-    harness.setUsageStatus({ updatedAt: 1, providers: [], refreshing: true });
-    const page = appendPage(harness.context);
-    await page.updateComplete;
-    await advanceUsageRetries();
-    await page.updateComplete;
-    expect(page.textContent ?? "").toContain("did not finish loading");
-
-    // loadModelProvidersData turns a rejected usage.status into providerUsage:
-    // null. Read as a completed load that would reset the budget and erase the
-    // notice, leaving broken usage looking exactly like absent usage.
-    harness.failUsageStatus();
-    page.querySelector<HTMLButtonElement>(".settings-section__actions button")?.click();
-    await page.updateComplete;
-    await advanceUsageRetries();
-    await page.updateComplete;
-
-    expect(page.textContent ?? "").toContain("did not finish loading");
-  });
-
-  it("does not warn about a stall while disconnected", async () => {
-    vi.useFakeTimers();
-    const harness = createHarness("main");
-    const page = appendPage(harness.context);
-    await page.updateComplete;
-
-    // Disconnected route data carries providerUsage: null for the ordinary
-    // "nothing loaded yet" reason. Treating that as unresolved would count down
-    // the budget and warn about a stall that never happened.
-    page.routeData = {
-      gateway: harness.context.gateway,
-      gatewaySnapshot: harness.context.gateway.snapshot,
-      data: EMPTY_MODEL_PROVIDERS_DATA,
-      client: null,
-      agentId: "main",
-    };
-    page.requestUpdate();
-    await page.updateComplete;
-    await vi.advanceTimersByTimeAsync(60_000);
-    await page.updateComplete;
-
-    expect(page.textContent ?? "").not.toContain("did not finish loading");
-  });
-
-  it("replaces a pending pre-disconnect load before it can publish", async () => {
-    const harness = createHarness("main");
-    harness.setUsageStatus({ updatedAt: 1, providers: [] });
-    const releaseOldLoad = harness.deferNextAuthStatus();
-    const page = appendPage(harness.context);
-    await page.updateComplete;
-
-    harness.publishPhase("offline");
-    await page.updateComplete;
-    harness.setUsageStatus({ updatedAt: 2, providers: [] });
-    harness.publishPhase("connected");
-    await page.updateComplete;
-
-    await vi.waitFor(() =>
-      expect(
-        harness.request.mock.calls.filter(([method]) => method === "usage.status").length,
-      ).toBe(2),
-    );
-    releaseOldLoad();
-    await vi.waitFor(() =>
-      expect(page.data?.providerUsage).toMatchObject({
-        ok: true,
-        value: { updatedAt: 2 },
-      }),
-    );
-  });
 });
 
 describe("ModelProvidersPage agent scope", () => {
@@ -878,6 +521,17 @@ describe("ModelProvidersPage agent scope", () => {
       { provider: "alias", profileIds: ["openai:second"] },
     ]);
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    const defaultsDraft: DefaultModelSelection = {
+      primary: "openai/gpt-5",
+      fallbacks: [],
+      utilityModel: null,
+    };
+    page.keyEditorProvider = "openai";
+    page.keyDraft = "synthetic-route-agent-key";
+    page.addProviderOpen = true;
+    page.addProviderId = "anthropic";
+    page.addProviderKey = "synthetic-route-provider-key";
+    page.defaultsDraft = defaultsDraft;
     page.pendingLogoutProvider = "openai";
     page.messages = { openai: { kind: "error", text: "Previous agent failure" } };
     page.probeResults = {
@@ -898,6 +552,12 @@ describe("ModelProvidersPage agent scope", () => {
     expect(page.pendingLogoutProvider).toBeNull();
     expect(page.messages).toEqual({});
     expect(page.probeResults).toEqual({});
+    expect(page.keyEditorProvider).toBeNull();
+    expect(page.keyDraft).toBe("");
+    expect(page.addProviderOpen).toBe(false);
+    expect(page.addProviderId).toBe("");
+    expect(page.addProviderKey).toBe("");
+    expect(page.defaultsDraft).toBe(defaultsDraft);
     firstLogout.resolve({});
     await loggingOut;
 
@@ -917,7 +577,25 @@ describe("ModelProvidersPage agent scope", () => {
     );
 
     request.mockClear();
+    const defaultsDraft: DefaultModelSelection = {
+      primary: "openai/gpt-5",
+      fallbacks: [],
+      utilityModel: null,
+    };
     page.busy = { "logout:openai": true };
+    page.keyEditorProvider = "openai";
+    page.keyDraft = "synthetic-selected-agent-key";
+    page.addProviderOpen = true;
+    page.addProviderId = "anthropic";
+    page.addProviderKey = "synthetic-selected-provider-key";
+    page.defaultsDraft = defaultsDraft;
+    notifySelection();
+    expect(page.keyEditorProvider).toBe("openai");
+    expect(page.keyDraft).toBe("synthetic-selected-agent-key");
+    expect(page.addProviderOpen).toBe(true);
+    expect(page.addProviderId).toBe("anthropic");
+    expect(page.addProviderKey).toBe("synthetic-selected-provider-key");
+    expect(page.defaultsDraft).toBe(defaultsDraft);
     agentSelection.state.selectedId = "writer";
     agentSelection.state.scopeId = "writer";
     notifySelection();
@@ -931,6 +609,12 @@ describe("ModelProvidersPage agent scope", () => {
     );
     expect(request.mock.calls.filter(([method]) => method === "models.authStatus")).toHaveLength(1);
     expect(page.busy).toEqual({});
+    expect(page.keyEditorProvider).toBeNull();
+    expect(page.keyDraft).toBe("");
+    expect(page.addProviderOpen).toBe(false);
+    expect(page.addProviderId).toBe("");
+    expect(page.addProviderKey).toBe("");
+    expect(page.defaultsDraft).toBe(defaultsDraft);
   });
 
   it("keeps the concrete selected owner after another page widens scope to all agents", async () => {

@@ -301,6 +301,41 @@ describe("handleInlineActions", () => {
     ]);
   });
 
+  it("propagates an explicit steer queue override into the prepared-turn result", async () => {
+    const typing = createTypingController();
+    const ctx = buildTestCtx({
+      Body: "/steer use the monochrome version",
+      CommandBody: "/steer use the monochrome version",
+    });
+    handleCommandsMock.mockImplementationOnce(async (params) => {
+      params.command.rawBodyNormalized = "use the monochrome version";
+      params.command.commandBodyNormalized = "use the monochrome version";
+      params.ctx.agentText = "use the monochrome version";
+      return { shouldContinue: true, queueModeOverride: "steer" };
+    });
+
+    const result = await runTestInlineActions({
+      ctx,
+      typing,
+      cleanedBody: "/steer use the monochrome version",
+      command: {
+        isAuthorizedSender: true,
+        rawBodyNormalized: "/steer use the monochrome version",
+        commandBodyNormalized: "/steer use the monochrome version",
+      },
+      overrides: {
+        allowTextCommands: true,
+        cfg: { commands: { text: true } },
+      },
+    });
+
+    expect(result).toMatchObject({
+      kind: "continue",
+      cleanedBody: "use the monochrome version",
+      queueModeOverride: "steer",
+    });
+  });
+
   it("delivers a continuing mixed directive ack as a status block without losing metadata", async () => {
     const typing = createTypingController();
     const ctx = buildTestCtx({

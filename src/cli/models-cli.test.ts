@@ -3,6 +3,7 @@ import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runRegisteredCli } from "../test-utils/command-runner.js";
 import { registerModelsCli } from "./models-cli.js";
+import { isModelsPlainMachineOutput, isModelsStatusJsonOutput } from "./models-output-mode.js";
 import { isCommandJsonOutputMode } from "./program/json-mode.js";
 
 const mocks = vi.hoisted(() => ({
@@ -181,6 +182,52 @@ describe("models cli", () => {
     }
 
     expect(detected).toBe(false);
+  });
+
+  it.each([
+    ["aliases list --plain", ["models", "aliases", "list", "--plain"]],
+    ["fallbacks list --plain", ["models", "fallbacks", "list", "--plain"]],
+    ["image-fallbacks list --plain", ["models", "image-fallbacks", "list", "--plain"]],
+    ["list --plain", ["models", "list", "--plain"]],
+    ["status --plain", ["models", "status", "--plain"]],
+    ["parent --status-plain", ["models", "--status-plain"]],
+  ])("declares %s as plain machine output owning stdout", (_label, args) => {
+    const argv = ["node", "openclaw", ...args];
+    expect(isModelsPlainMachineOutput(argv)).toBe(true);
+  });
+
+  it.each([
+    ["list (no flag)", ["models", "list"]],
+    ["status --json", ["models", "status", "--json"]],
+    ["parent --status-json", ["models", "--status-json"]],
+    ["aliases list", ["models", "aliases", "list"]],
+    ["logs --plain", ["logs", "--plain"]],
+    ["secrets store list --plain", ["secrets", "store", "list", "--plain"]],
+    ["secrets store get --plain", ["secrets", "store", "get", "EXAMPLE", "--plain"]],
+    ["plain after argv terminator", ["models", "list", "--", "--plain"]],
+  ])("does not declare %s as plain machine output", (_label, args) => {
+    const argv = ["node", "openclaw", ...args];
+    expect(isModelsPlainMachineOutput(argv)).toBe(false);
+  });
+
+  it("does not turn plain output into JSON failure envelope", async () => {
+    const program = createProgram();
+    let jsonMode = true;
+    program.hook("preAction", (_command, actionCommand) => {
+      jsonMode = isCommandJsonOutputMode(actionCommand, process.argv);
+    });
+
+    const originalArgv = process.argv;
+    process.argv = ["node", "openclaw", "models", "aliases", "list", "--plain"];
+    try {
+      await program.parseAsync(["models", "aliases", "list", "--plain"], { from: "user" });
+    } finally {
+      process.argv = originalArgv;
+    }
+
+    // Plain owns stdout for log routing but must not activate the JSON failure envelope.
+    expect(jsonMode).toBe(false);
+    expect(isModelsStatusJsonOutput(process.argv)).toBe(false);
   });
 
   it("forwards bare --json to the default status report", async () => {

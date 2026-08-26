@@ -321,7 +321,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "terminal",
     label: "terminal",
-    description: "Own visible gateway terminal",
+    description: "Use shared operator terminals with policy-governed input",
     sectionId: "ui",
     profiles: ["coding"],
     includeInOpenClawGroup: true,

@@ -218,18 +218,21 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       this.dataClient = null;
     }
     this.refreshPolicy.resetPayload();
+    this.resetAgentScopeState();
+    this.probeEpochs = new Map();
+    this.probeUnsupported = false;
+    this.defaultsDraft = null;
+  }
+
+  private resetAgentScopeState() {
     this.busy = {};
     this.messages = {};
     this.probeResults = {};
-    this.probeEpochs = new Map();
-    this.probeUnsupported = false;
-    this.keyEditorProvider = null;
-    this.keyDraft = "";
+    this.closeKeyEditor();
     this.pendingLogoutProvider = null;
     this.addProviderOpen = false;
     this.addProviderId = "";
     this.addProviderKey = "";
-    this.defaultsDraft = null;
   }
 
   private isCurrentClient(client: GatewayBrowserClient, epoch: number): boolean {
@@ -247,10 +250,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     }
     this.selectedAgentId = agentId;
     this.agentEpoch += 1;
-    this.busy = {};
-    this.pendingLogoutProvider = null;
-    this.messages = {};
-    this.probeResults = {};
+    this.resetAgentScopeState();
     return true;
   }
 

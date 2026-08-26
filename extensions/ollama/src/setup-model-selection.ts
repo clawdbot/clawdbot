@@ -112,8 +112,7 @@ export function selectAppGuidedOllamaModelFromDiscovery(
       id: model.name,
       contextWindow: model.contextWindow,
       supportsTools: model.capabilities?.includes("tools") === true,
-      reasoning:
-        model.capabilities?.includes("thinking") === true || isReasoningModelHeuristic(model.name),
+      reasoning: model.capabilities?.includes("thinking") ?? isReasoningModelHeuristic(model.name),
       size: model.size,
     })),
   );

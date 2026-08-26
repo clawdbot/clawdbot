@@ -2119,42 +2119,6 @@ openclaw-chat-session-rail {
   }
 }
 
-.chat-session-rail__composer {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 0 0 auto;
-  padding: 10px 10px 11px 14px;
-  border-top: 1px solid var(--border);
-  background: color-mix(in srgb, var(--secondary) 40%, transparent);
-}
-
-.chat-session-rail__prompt {
-  min-width: 0;
-  flex: 1 1 auto;
-}
-
-.chat-session-rail__input {
-  width: 100%;
-  min-height: 34px;
-  padding: 7px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--card);
-  color: var(--text);
-  font: inherit;
-  font-size: 12.5px;
-}
-
-.chat-session-rail__input:focus {
-  border-color: var(--border-strong);
-  outline: none;
-}
-
-.chat-session-rail__input::placeholder {
-  color: var(--muted);
-}
-
 /* The docked form: a real column in the pane's flex row. It claims layout space
    instead of painting over the thread, so nothing here may float, shadow, or
    blur — those cues would read as an overlay again. */

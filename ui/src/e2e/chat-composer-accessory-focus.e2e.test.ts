@@ -128,15 +128,17 @@ suite.define(() => {
       await page.keyboard.press("Escape");
 
       await outside.focus();
-      await composer.locator(".agent-chat__input-btn--attach").click();
+      const attachTrigger = composer.locator(".agent-chat__input-btn--attach");
+      await attachTrigger.click();
       await expect
-        .poll(() =>
-          page
-            .locator(".agent-chat__attach-menu-option")
-            .first()
-            .evaluate((element) => document.activeElement === element),
-        )
+        .poll(() => attachTrigger.evaluate((element) => document.activeElement === element))
         .toBe(true);
+      expect(
+        await page
+          .locator(".agent-chat__attach-menu-option")
+          .first()
+          .evaluate((element) => document.activeElement === element),
+      ).toBe(false);
       await page.keyboard.press("Escape");
     });
   });

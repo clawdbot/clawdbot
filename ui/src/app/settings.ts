@@ -465,11 +465,9 @@ export function loadSettings(): UiSettings {
     const selectedGatewayUrl = normalizeOptionalString(
       storage?.getItem(currentGatewaySelectionKeyForPage(pageDerivedUrl)),
     );
-    const selected = selectedGatewayUrl
-      ? readSettingsForGateway(storage, selectedGatewayUrl)
-      : null;
-    const defaultSource = readSettingsForGateway(storage, defaultUrl);
-    const source = selected ?? defaultSource;
+    const source =
+      (selectedGatewayUrl ? readSettingsForGateway(storage, selectedGatewayUrl) : null) ??
+      readSettingsForGateway(storage, defaultUrl);
     if (!source) {
       return defaults;
     }

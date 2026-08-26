@@ -2370,25 +2370,19 @@ describe("prepareCliRunContext", () => {
     },
   );
 
-  it.each([
-    { trigger: undefined, expectsHeartbeatGuidance: false },
-    { trigger: "user" as const, expectsHeartbeatGuidance: false },
-    { trigger: "cron" as const, expectsHeartbeatGuidance: false },
-    { trigger: "heartbeat" as const, expectsHeartbeatGuidance: true },
-  ])("limits heartbeat guidance to heartbeat-triggered CLI runs: $trigger", async (testCase) => {
-    const context = await fixture.prepare({
-      config: { agents: { defaults: { heartbeat: { every: "30m" } } } },
-      sessionKey: "agent:main:main",
-      trigger: testCase.trigger,
-    });
+  it.each([undefined, "user", "cron", "heartbeat"] as const)(
+    "keeps heartbeat scheduler instructions out of CLI system prompts: %s",
+    async (trigger) => {
+      const context = await fixture.prepare({
+        config: { agents: { defaults: { heartbeat: { every: "30m" } } } },
+        sessionKey: "agent:main:main",
+        trigger,
+      });
 
-    if (testCase.expectsHeartbeatGuidance) {
-      expect(context.systemPrompt).toContain("## Heartbeats");
-      expect(context.systemPrompt).toContain("reply exactly NO_REPLY");
-    } else {
       expect(context.systemPrompt).not.toContain("## Heartbeats");
-    }
-  });
+      expect(context.systemPrompt).not.toContain("Heartbeat poll;");
+    },
+  );
 
   it.each([
     {

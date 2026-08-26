@@ -555,12 +555,7 @@ export async function executeGitHubPublication(params: {
       GIT_CONFIG_GLOBAL: os.devNull,
       GIT_CONFIG_SYSTEM: os.devNull,
     };
-    const pushArgs = [
-      "git",
-      "-c",
-      `core.hooksPath=${os.devNull}`,
-      ...githubPublicationPushArgs(httpsRemote, headCommit, branch).slice(1),
-    ];
+    const pushArgs = githubPublicationPushArgs(httpsRemote, headCommit, branch);
     const observeRemoteHead = async () => {
       const observed = await requireCommand(githubPublicationRemoteHeadArgs(httpsRemote, branch), {
         cwd: worktree.path,

@@ -709,7 +709,6 @@ async function writeLiveGatewayConfig(params: {
       },
       entries: {
         dev: {
-          default: true,
           workspace: params.workspace,
           thinkingDefault: CODEX_HARNESS_THINKING,
           model: { primary: params.modelKey },
@@ -2156,6 +2155,7 @@ describeLive("gateway live (Codex harness)", () => {
           auth: { mode: "token", token },
           controlUiEnabled: false,
         });
+        await server.startupSettled;
         client = await connectTestGatewayClient({
           url: `ws://127.0.0.1:${port}`,
           token,
@@ -2480,6 +2480,7 @@ describeLive("gateway live (Codex harness)", () => {
               auth: { mode: "token", token },
               controlUiEnabled: false,
             });
+            await server.startupSettled;
             client = await connectTestGatewayClient({
               url: `ws://127.0.0.1:${port}`,
               token,

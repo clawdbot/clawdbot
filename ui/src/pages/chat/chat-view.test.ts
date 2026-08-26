@@ -750,11 +750,11 @@ describe("chat typing status", () => {
       expectedText: "Ayaan, Liam, Maya, Zoe are typing…",
       expectedAvatars: 3,
     },
-  ])("renders $expectedText as a transcript row", ({ actors, expectedText, expectedAvatars }) => {
+  ])("renders $expectedText in the transcript", ({ actors, expectedText, expectedAvatars }) => {
     const container = renderChatView({ typingActors: actors });
-    const row = container.querySelector('[data-virtual-row-key="presence:typing"]');
-    const indicator = row?.querySelector(".agent-chat__typing-indicator");
+    const indicator = container.querySelector(".agent-chat__typing-indicator--outside");
 
+    expect(indicator?.closest('[data-virtual-row-key="presence:typing"]')).not.toBeNull();
     expect(indicator?.closest(".agent-chat__composer-shell")).toBeNull();
     expect(indicator?.querySelectorAll(".chat-avatar")).toHaveLength(expectedAvatars);
     expect(
@@ -763,66 +763,34 @@ describe("chat typing status", () => {
     expect(indicator?.textContent).toContain(expectedText);
   });
 
-  it("keeps typing after every other transient transcript row", () => {
-    vi.mocked(chatThread.buildCachedChatItems).mockReturnValueOnce([
-      {
-        kind: "group",
-        key: "group:assistant:typing-order",
-        role: "assistant",
-        messages: [
-          {
-            key: "message:assistant:typing-order",
-            message: { role: "assistant", content: "Done", timestamp: 1 },
-          },
-        ],
-        timestamp: 1,
-        isStreaming: false,
-      },
-      {
-        kind: "group",
-        key: "group:tool:typing-order",
-        role: "tool",
-        messages: [
-          {
-            key: "message:tool:typing-order",
-            message: { role: "tool", content: "Later tool result", timestamp: 2 },
-          },
-        ],
-        timestamp: 2,
-        isStreaming: false,
-      },
-    ]);
-    vi.spyOn(chatProgress, "resolveTurnRecap").mockReturnValue({
-      runtimeMs: 5_000,
-      outputTokens: 42,
-    });
+  it("keeps queue and error state outside the transcript typing row", () => {
     const container = renderChatView({
-      messages: [{ role: "user", content: "Done?", timestamp: 1 }],
       typingActors: [{ id: "ayaan", label: "Ayaan" }],
-      realtimeTalkConversation: [
-        { id: "voice", role: "assistant", text: "Listening", isStreaming: true },
-      ],
-      backgroundTasks: createBackgroundTasks({
-        collapsed: true,
-        tasks: [
-          {
-            id: "task-1",
-            taskId: "task-1",
-            status: "running",
-            agentId: "main",
-            createdAt: 1,
-            startedAt: 2,
-          },
-        ],
-      }),
+      runError: { summary: "Gateway unavailable" },
+      queue: [{ id: "queued", text: "Try again", createdAt: 1 }],
     });
-    const keys = [...container.querySelectorAll<HTMLElement>("[data-virtual-row-key]")].map(
-      (row) => row.dataset.virtualRowKey,
+    const indicator = requireElement(
+      container,
+      ".agent-chat__typing-indicator--outside",
+      "typing status",
     );
-    expect(keys).toContain("realtime-talk");
-    expect(keys).toContain("turn-recap");
-    expect(keys).toContain("background-tasks");
-    expect(keys.at(-1)).toBe("presence:typing");
+
+    expect(indicator.closest('[data-virtual-row-key="presence:typing"]')).not.toBeNull();
+    expect(container.querySelector(".chat-queue")).not.toBeNull();
+    expect(container.querySelector(".chat-error__content")?.textContent).toContain(
+      "Gateway unavailable",
+    );
+    expect(container.querySelector(".agent-chat__composer-shell")).not.toBeNull();
+  });
+
+  it("keeps transcript typing status with the model setup composer", () => {
+    const container = renderChatView({
+      canSend: false,
+      modelSetupRequired: true,
+      typingActors: [{ id: "ayaan", label: "Ayaan" }],
+    });
+
+    expect(container.querySelector(".agent-chat__typing-indicator--outside")).not.toBeNull();
   });
 });
 
@@ -885,9 +853,7 @@ describe("chat Swarm progress", () => {
     expect(scrollAnchor?.classList.contains("chat-scroll-to-bottom-wrap")).toBe(true);
     expect(scrollAnchor?.previousElementSibling?.classList.contains("chat-thread")).toBe(true);
     expect(widget?.nextElementSibling?.classList.contains("agent-chat__composer-shell")).toBe(true);
-    expect(container.querySelector(".chat-swarm__dot--running")?.getAttribute("title")).toBe(
-      "Worker A: Running",
-    );
+    expect(container.querySelector(".chat-swarm__task-name")?.textContent).toBe("Worker A");
   });
 });
 
@@ -960,18 +926,27 @@ describe("inline approval card", () => {
 });
 
 describe("chat run error", () => {
-  it("renders a non-interactive alert immediately above the composer", () => {
+  it("renders a non-interactive alert in the conversation notices", () => {
     const container = renderChatView({
       runError: { summary: "Error: gateway disconnected" },
     });
 
-    const alert = requireElement(container, ".chat-run-error", "chat run error");
-    const summary = requireElement(alert, ".chat-run-error__summary", "chat run error summary");
+    const alert = requireElement(container, ".chat-error", "chat run error");
+    const summary = requireElement(alert, ".chat-error__content", "chat run error summary");
     expect(alert.getAttribute("role")).toBe("alert");
     expect(summary.textContent?.trim()).toBe("Error: gateway disconnected");
-    expect(alert.querySelector(".chat-run-error__icon svg")).not.toBeNull();
-    expect(alert.querySelector("button")).toBeNull();
-    expect(alert.nextElementSibling?.classList.contains("agent-chat__composer-shell")).toBe(true);
+    expect(alert.querySelector<HTMLButtonElement>('[aria-label="Dismiss error"]')).toBeNull();
+    expect(alert.closest(".chat-main__conversation-column")).not.toBeNull();
+    expect(alert.closest(".agent-chat__composer-shell")).toBeNull();
+  });
+
+  it("keeps dismiss on the error state owned by its callback", () => {
+    const onDismissError = vi.fn();
+    const container = renderChatView({ error: "Request failed", onDismissError });
+
+    container.querySelector<HTMLButtonElement>('[aria-label="Dismiss error"]')?.click();
+
+    expect(onDismissError).toHaveBeenCalledOnce();
   });
 });
 
@@ -1109,6 +1084,28 @@ describe("cloud workspace conflict notice", () => {
       "git show 'refs/openclaw/worker-results/claim-mixed:src/safe.ts'",
       "git checkout 'refs/openclaw/worker-results/claim-mixed' -- ':(top,literal)src/safe.ts'",
     ]);
+  });
+
+  it("copies the recovery command for the selected conflicted path", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    const normalizedConflict = workspaceResultConflictFromTranscript({
+      role: "custom",
+      customType: "cloud-workspace-conflict",
+      details: {
+        paths: ["src/first.ts", "src/second.ts"],
+        stagedResultRef: "refs/openclaw/worker-results/claim-per-row",
+      },
+    });
+    const container = renderChatView({ workspaceConflict: normalizedConflict });
+    const rows = container.querySelectorAll(".chat-workspace-conflict-paths li");
+
+    rows[1]?.querySelectorAll<HTMLButtonElement>("button")[1]?.click();
+    await Promise.resolve();
+
+    expect(writeText).toHaveBeenCalledWith(
+      "git checkout 'refs/openclaw/worker-results/claim-per-row' -- ':(top,literal)src/second.ts'",
+    );
   });
 });
 
@@ -1809,7 +1806,8 @@ describe("chat goal status", () => {
     );
     expect(goal?.querySelector(".agent-chat__goal-elapsed")?.textContent).toBe("15s");
     expect(goal?.getAttribute("aria-label")).toBe("Pursuing goal (12k/50k): Land the web goal UI");
-    expect(goal?.closest(".agent-chat__composer-status-stack")).not.toBeNull();
+    expect(goal?.closest(".agent-chat__goal-float")).not.toBeNull();
+    expect(goal?.closest(".agent-chat__composer-status-stack")).toBeNull();
   });
 
   it("dispatches goal commands from the pill controls", () => {
@@ -1857,7 +1855,9 @@ describe("chat goal status", () => {
     const container = document.createElement("div");
     render(renderChat(props), container);
 
-    expect(container.querySelector(".agent-chat__goal-detail")).toBeNull();
+    expect(container.querySelector(".agent-chat__goal-detail")?.getAttribute("aria-hidden")).toBe(
+      "true",
+    );
     const toggle = container.querySelector<HTMLButtonElement>(
       'button[aria-label="Show goal details"]',
     );
@@ -1866,6 +1866,7 @@ describe("chat goal status", () => {
     render(renderChat(props), container);
 
     const detail = container.querySelector(".agent-chat__goal-detail");
+    expect(detail?.getAttribute("aria-hidden")).toBe("false");
     expect(detail?.querySelector(".agent-chat__goal-detail-objective")?.textContent).toBe(
       "Land the web goal UI",
     );
@@ -2079,7 +2080,7 @@ describe("chat composer workbench", () => {
 
     const voiceButton = container.querySelector('button[aria-label="Start voice input"]');
     expect(voiceButton).not.toBeNull();
-    expect(voiceButton?.closest(".agent-chat__composer-input-row")).not.toBeNull();
+    expect(voiceButton?.closest(".agent-chat__composer-trail")).not.toBeNull();
     expect(container.querySelector('button[aria-label="Talk settings"]')).toBeNull();
     // The mic device picker is a caret on the voice button, not a separate settings button.
     const picker = container.querySelector('button[aria-label="Microphone input"]');
@@ -3132,10 +3133,11 @@ describe("chat loading skeleton", () => {
     }
   });
 
-  it("shows the interrupted toast in the composer footer", () => {
+  it("keeps interrupted chrome out of the composer", () => {
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
     try {
       const container = renderChatView({
+        messages: [{ role: "assistant", content: "Partial response" }],
         composerControls: html`<button class="chat-composer-model-control" type="button">
           Model
         </button>`,
@@ -3147,10 +3149,7 @@ describe("chat loading skeleton", () => {
         },
       });
 
-      const toast = container.querySelector(
-        ".agent-chat__composer-run-status .agent-chat__run-status--interrupted",
-      );
-      expect(toast?.textContent).toContain("Interrupted");
+      expect(container.querySelector(".agent-chat__composer-run-status")).toBeNull();
       expect(
         container.querySelector(".agent-chat__run-status-announcement")?.textContent?.trim(),
       ).toBe("Interrupted");
@@ -5224,7 +5223,7 @@ describe("chat attachment picker", () => {
     expect(cards[0]?.querySelector(".chat-browser-annotation-card__meta")?.textContent).toContain(
       "2 marked regions",
     );
-    expect(cards[0]?.textContent).toContain("Element inspected");
+    expect(cards[0]?.textContent).not.toContain("Element inspected");
     expect(cards[1]?.querySelector(".chat-browser-annotation-card__identity")?.textContent).toBe(
       "docs.example.test/narrow-layout",
     );
@@ -5904,22 +5903,30 @@ describe("chat model controls", () => {
     expect(onThinkingSelect).not.toHaveBeenCalled();
   });
 
-  it("shows override provenance without a separate reset action", () => {
+  it("shows override provenance with a reset action", () => {
     const { state } = createChatHeaderState({
       model: null,
       models: createOpenAiModelCatalog(),
     });
+    const onModelSelect = vi.fn(async () => true);
     const container = renderModelControls(state);
 
     expect(container.querySelector(".chat-controls__model-provenance")).toBeNull();
     expect(container.querySelector("[data-chat-model-reset]")).toBeNull();
 
-    renderModelControls(state, { modelOverrides: { main: "openai/gpt-5.4" } }, container);
+    renderModelControls(
+      state,
+      { modelOverrides: { main: "openai/gpt-5.4" }, onModelSelect },
+      container,
+    );
 
-    expect(container.querySelector(".chat-controls__model-provenance")?.textContent?.trim()).toBe(
+    expect(container.querySelector(".chat-controls__model-provenance")?.textContent).toContain(
       "Session override",
     );
-    expect(container.querySelector("[data-chat-model-reset]")).toBeNull();
+    const reset = container.querySelector<HTMLButtonElement>("[data-chat-model-reset]");
+    expect(reset).toBeInstanceOf(HTMLButtonElement);
+    reset?.click();
+    expect(onModelSelect).toHaveBeenCalledWith("", "main");
   });
 
   it("hides model choices for locked sessions while preserving reasoning and speed", () => {

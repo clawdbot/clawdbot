@@ -216,9 +216,7 @@ export function supersedeReplyRunByRunId(runId: string, beforeCancel: () => void
     if (normalizeOptionalString(backend?.runId) !== expectedRunId) {
       continue;
     }
-    beforeCancel();
-    backend?.cancel("superseded");
-    return true;
+    return operation.supersede(beforeCancel);
   }
   return false;
 }

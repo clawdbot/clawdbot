@@ -23,7 +23,6 @@ import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { truncateUtf16Safe } from "../../../utils.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
 import { resolveProcessToolScopeKey } from "../../bash-process-scope.js";
-import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
 import { wrapPluginSystemContextSection } from "../../hook-system-context-boundary.js";
 import {
   buildActiveImageGenerationTaskPromptContextForSession,
@@ -35,7 +34,6 @@ import { deriveContextPromptTokens, type NormalizedUsage } from "../../usage.js"
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
 import { resolveContextEngineCapabilities } from "../context-engine-capabilities.js";
 import { log } from "../logger.js";
-import { shouldInjectHeartbeatPromptForTrigger } from "./trigger-policy.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type PromptBuildHookRunner = {
@@ -194,32 +192,6 @@ export function resolvePromptModeForSession(sessionKey?: string): "minimal" | "f
     return "full";
   }
   return isSubagentSessionKey(sessionKey) || isCronSessionKey(sessionKey) ? "minimal" : "full";
-}
-
-/**
- * Determines whether the default agent's heartbeat run should include the
- * heartbeat prompt contribution. Non-default agents and non-heartbeat triggers
- * keep their normal prompt shape.
- */
-export function shouldInjectHeartbeatPrompt(params: {
-  config?: OpenClawConfig;
-  agentId?: string;
-  defaultAgentId?: string;
-  isDefaultAgent: boolean;
-  trigger?: EmbeddedRunAttemptParams["trigger"];
-  bootstrapContextRunKind?: EmbeddedRunAttemptParams["bootstrapContextRunKind"];
-}): boolean {
-  return (
-    params.isDefaultAgent &&
-    shouldInjectHeartbeatPromptForTrigger(params.trigger) &&
-    Boolean(
-      resolveHeartbeatPromptForSystemPrompt({
-        config: params.config,
-        agentId: params.agentId,
-        defaultAgentId: params.defaultAgentId,
-      }),
-    )
-  );
 }
 
 /** User-visible runs warn when transcript repair had to merge an orphaned user turn. */

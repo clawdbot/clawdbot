@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runCommandBuffered } from "../process/exec.js";
@@ -14,6 +15,8 @@ import {
 import {
   assertGitHubPublicationTreeHasNoFilters,
   assertSafeGitPublicationWorkspace,
+  githubPublicationPushArgs,
+  githubPublicationUpdateRefArgs,
 } from "./github-publication-git-transport.js";
 
 let testState: OpenClawTestState;
@@ -112,6 +115,92 @@ describe("GitHub publication index update", () => {
           }),
       ),
     ).resolves.toBeUndefined();
+  });
+
+  it.each([
+    { scope: "--local" as const, label: "repository-local" },
+    { scope: "--worktree" as const, label: "worktree-scoped" },
+  ])("publishes and recovers with $label hooks without executing them", async ({ scope }) => {
+    const fixture = await createFixture();
+    const remote = await makeDirectory("remote");
+    const hooks = await makeDirectory("hooks");
+    const marker = path.join(hooks, "invoked");
+    const hookEnv = { ...process.env, OPENCLAW_PUBLICATION_HOOK_MARKER: marker };
+    await git(remote, ["init", "--bare"]);
+    await Promise.all(
+      ["pre-push", "post-index-change", "reference-transaction"].map(
+        async (hook) =>
+          await fs.writeFile(
+            path.join(hooks, hook),
+            '#!/bin/sh\nprintf invoked > "$OPENCLAW_PUBLICATION_HOOK_MARKER"\nexit 97\n',
+            { mode: 0o755 },
+          ),
+      ),
+    );
+    if (scope === "--worktree") {
+      await git(fixture.cwd, ["config", "--local", "extensions.worktreeConfig", "true"]);
+    }
+    await git(fixture.cwd, ["config", scope, "core.hooksPath", hooks]);
+
+    await expect(
+      assertSafeGitPublicationWorkspace(
+        fixture.cwd,
+        async (argv, options) =>
+          await runCommandBuffered(argv, {
+            cwd: options?.cwd ?? fixture.cwd,
+            env: options?.env,
+            timeoutMs: 10_000,
+            maxOutputBytes: 64 * 1024,
+          }),
+      ),
+    ).resolves.toBeUndefined();
+
+    await expect(
+      updateGitHubPublicationBranchAndIndex({
+        ...publicationIndexParams(fixture),
+        env: hookEnv,
+        updateRef: async () => {
+          await git(
+            fixture.cwd,
+            githubPublicationUpdateRefArgs("main", fixture.headCommit, fixture.previousHead).slice(
+              1,
+            ),
+            undefined,
+            hookEnv,
+          );
+          throw new Error("response lost");
+        },
+      }),
+    ).rejects.toThrow("workspace recovery is pending");
+    await fs.rm(path.join(fixture.cwd, ".git", "index.lock"));
+    const hardenedGit = ["-c", `core.hooksPath=${os.devNull}`, "-c", "core.fsmonitor=false"];
+    await git(
+      fixture.cwd,
+      [...hardenedGit, "update-index", "--force-remove", "artifact.txt"],
+      undefined,
+      hookEnv,
+    );
+    await git(fixture.cwd, [...hardenedGit, "add", "artifact.txt"], undefined, hookEnv);
+    await recoverGitHubPublicationBranchAndIndex({
+      cwd: fixture.cwd,
+      requestId: REQUEST_ID,
+      branch: "main",
+      sourceHeadCommit: fixture.previousHead,
+      workspaceTree: fixture.workspaceTree,
+      assertCurrent: () => undefined,
+      run: async (argv, options) =>
+        await git(fixture.cwd, argv.slice(1), options?.input, options?.env ?? hookEnv),
+    });
+    await expect(fs.access(marker)).rejects.toThrow();
+    await git(
+      fixture.cwd,
+      githubPublicationPushArgs(remote, fixture.headCommit, "publication").slice(1),
+      undefined,
+      hookEnv,
+    );
+
+    expect(await git(remote, ["rev-parse", "refs/heads/publication"])).toBe(fixture.headCommit);
+    await expect(fs.access(marker)).rejects.toThrow();
   });
 
   it("rejects a filter from Git's default global attributes file", async () => {

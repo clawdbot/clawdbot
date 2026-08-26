@@ -363,6 +363,43 @@ describe("loadWorkspaceSkills", () => {
     await expectMissingPath(path.join(workspaceDir, ".plugin-skills", "browser-automation"));
   });
 
+  it("loads hardlinked skills only from trusted bundled plugins", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    const packageCacheDir = path.join(workspaceDir, ".package-cache");
+    await fs.mkdir(packageCacheDir, { recursive: true });
+
+    for (const plugin of [
+      { id: "browser", skill: "bundled-hardlinked-skill" },
+      { id: "workspace-skills", skill: "workspace-hardlinked-skill" },
+    ]) {
+      const pluginRoot = path.join(workspaceDir, ".openclaw", "extensions", plugin.id);
+      await writePluginWithSkill({
+        pluginRoot,
+        pluginId: plugin.id,
+        skillId: plugin.skill,
+        skillDescription: `${plugin.id} hardlink fixture`,
+      });
+      const skillFile = path.join(pluginRoot, "skills", plugin.skill, "SKILL.md");
+      await fs.link(skillFile, path.join(packageCacheDir, `${plugin.skill}.md`));
+      expect((await fs.stat(skillFile)).nlink).toBeGreaterThan(1);
+    }
+
+    const warn = captureWarningLogger();
+    const entries = loadTestWorkspaceSkills(workspaceDir, {
+      config: {
+        plugins: {
+          entries: { browser: { enabled: true }, "workspace-skills": { enabled: true } },
+        },
+      },
+    });
+
+    expect(entries.map((entry) => entry.skill.name)).toContain("bundled-hardlinked-skill");
+    expect(entries.map((entry) => entry.skill.name)).not.toContain("workspace-hardlinked-skill");
+    expect(warn.mock.calls.map(([line]) => String(line))).toEqual(
+      expect.arrayContaining([expect.stringContaining("workspace-hardlinked-skill")]),
+    );
+  });
+
   it("loads frontmatter edge cases in one workspace", async () => {
     const workspaceDir = await createTempWorkspaceDir();
     const skillDir = path.join(workspaceDir, "skills", "fallback-name");

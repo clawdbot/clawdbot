@@ -29,6 +29,7 @@ import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import type { CliSessionBinding } from "../../config/sessions.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { registerCronRunExecSource } from "../../infra/cron-run-exec-source.js";
 import type { SourceDeliveryPlan } from "../../infra/outbound/source-delivery-plan.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import {
@@ -41,6 +42,7 @@ import {
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../../tasks/task-status-access.js";
+import { resolveCronJobConfigRevision } from "../config-revision.js";
 import type { CronRuntimeAuthority } from "../runtime-authority.js";
 import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import type { CronAgentExecutionPhaseUpdate, CronJob, CronStoredJob } from "../types.js";
@@ -422,6 +424,21 @@ function createCronPromptExecutor(params: {
       params.onExecutionStarted?.(info);
       params.executionIdentity?.onExecutionStarted?.();
     };
+    // Record the cron source fact at its producer for the run's lifetime so
+    // exec-approval creation and standing-grant use never infer job identity
+    // from session keys or run ids. Cleared when the run settles. A job whose
+    // config cannot be canonicalized simply keeps standing grants inert; the
+    // run itself must never fail for this diagnostic-side registration.
+    let unregisterCronRunExecSource = () => {};
+    try {
+      unregisterCronRunExecSource = registerCronRunExecSource(runId, {
+        agentId: params.agentId,
+        jobId: params.job.id,
+        jobConfigRevision: resolveCronJobConfigRevision(params.job),
+      });
+    } catch {
+      // Non-canonicalizable job config: no grant registration for this run.
+    }
     const fallbackResult = await runWithModelFallback({
       cfg: params.cfgWithAgentDefaults,
       provider: params.liveSelection.provider,
@@ -797,7 +814,10 @@ function createCronPromptExecutor(params: {
         await contextEngineLogicalTurnLease.dispose();
         throw error;
       })
-      .finally(() => preparedRunAdmission.close());
+      .finally(() => {
+        unregisterCronRunExecSource();
+        preparedRunAdmission.close();
+      });
     try {
       if (
         acceptedContextEngineTurnCandidate &&
