@@ -65,7 +65,7 @@ function createClient() {
     return typeof response === "function" ? await response(readParams) : response;
   });
   onTestFinished(async () => {
-    for (const handler of [...closeHandlers]) {
+    for (const handler of closeHandlers) {
       handler();
     }
     await Promise.resolve();
