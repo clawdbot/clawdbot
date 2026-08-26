@@ -19,6 +19,8 @@ import { resolveSystemEventOptionsOwnerAgentId } from "../infra/system-event-own
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
 import type { RunExit } from "../process/supervisor/types.js";
 import { writeConfigMachineState } from "../state/config-machine-state.js";
@@ -902,6 +904,56 @@ describe("buildGatewayCronService", () => {
       expect(state.cron.getJob(job.id)?.enabled).toBe(false);
     } finally {
       state.cron.stop();
+    }
+  });
+
+  it("persists an existing watcher exit during drain but fences its new scheduled run", async () => {
+    resetGatewayWorkAdmission();
+    const commandExit = createDeferred<RunExit>();
+    const spawn = vi.fn(async () => ({
+      runId: "run-on-exit-draining",
+      startedAtMs: Date.now(),
+      cancel: vi.fn(),
+      wait: () => commandExit.promise,
+    }));
+    getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope: vi.fn() });
+    const state = loadCronService(createCronConfig("server-cron-on-exit-draining"));
+    let suspensionAdmission: ReturnType<typeof tryBeginGatewaySuspendAdmission> | undefined;
+
+    try {
+      const job = await addCronJob(
+        state,
+        "watch and drain naturally",
+        { kind: "systemEvent", text: "done" },
+        {
+          schedule: { kind: "on-exit", command: "true" },
+          sessionTarget: "main",
+          wakeMode: "now",
+        },
+      );
+      await state.reconcileExitWatchers();
+      await vi.waitFor(() => {
+        expect(spawn).toHaveBeenCalledOnce();
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
+      });
+
+      state.cron.pauseScheduling();
+      suspensionAdmission = tryBeginGatewaySuspendAdmission(() => {});
+      expect(suspensionAdmission?.drain()).toBe(true);
+      commandExit.resolve(runExit({ reason: "exit", exitCode: 0 }));
+
+      await vi.waitFor(() => expect(state.cron.getJob(job.id)?.enabled).toBe(false));
+      expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
+      expect(runHeartbeatOnceMock).not.toHaveBeenCalled();
+
+      state.cron.resumeScheduling();
+      expect(suspensionAdmission?.release()).toBe(true);
+    } finally {
+      commandExit.resolve(runExit());
+      state.cron.resumeScheduling();
+      suspensionAdmission?.release();
+      await state.cron.stopAndDrain?.();
+      resetGatewayWorkAdmission();
     }
   });
 
@@ -2080,6 +2132,7 @@ describe("buildGatewayCronService", () => {
   it("delivers isolated script notify through the cron announce path", async () => {
     const cfg = createCronConfig("server-cron-script-announce");
     cfg.cron = { ...cfg.cron, triggers: { enabled: true } };
+    cfg.gateway = { publicOrigin: "https://gateway.example", controlUi: { basePath: "/control" } };
     loadConfigMock.mockReturnValue(cfg);
     cronScriptExecutorMock.mockResolvedValueOnce({
       kind: "completed",
@@ -2112,7 +2165,9 @@ describe("buildGatewayCronService", () => {
       expect(sendCronAnnouncePayloadStrictMock).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
           jobId: job.id,
-          payload: { text: "queue changed" },
+          payload: {
+            text: `queue changed\nInspect: https://gateway.example/control/automations?job=${job.id}&run=cron%3A${job.id}%3A${state.cron.getJob(job.id)?.state.lastRunAtMs}`,
+          },
           target: expect.objectContaining({ threadId: 456 }),
         }),
       );
@@ -2421,14 +2476,15 @@ describe("buildGatewayCronService", () => {
     }
   });
 
-  it("redacts command summary secrets before announce delivery", async () => {
+  it("appends the command inspection link after redacting announce delivery secrets and URLs", async () => {
     const cfg = createCronConfig("server-cron-command-announce-redaction");
+    cfg.gateway = { publicOrigin: "https://gateway.example", controlUi: { basePath: "/control" } };
     const state = loadCronService(cfg);
     try {
       const job = await addCommandJob(
         state,
         "announce-redacted-command",
-        "process.stdout.write('Log in with token=opaque-secret-value\\n')",
+        "process.stdout.write('Visit https://private.example/device and log in with token=opaque-secret-value\\n')",
         {
           deleteAfterRun: false,
           delivery: {
@@ -2448,7 +2504,12 @@ describe("buildGatewayCronService", () => {
       const payload = requireRecord(announcePayload.payload, "cron announce reply payload");
       const message = typeof payload.text === "string" ? payload.text : "";
       expect(message).toContain("token=***");
+      expect(message).toContain("[redacted-url]");
       expect(message).not.toContain("opaque-secret-value");
+      expect(message).not.toContain("https://private.example/device");
+      expect(message).toContain(
+        `\nInspect: https://gateway.example/control/automations?job=${job.id}&run=cron%3A${job.id}%3A${state.cron.getJob(job.id)?.state.lastRunAtMs}`,
+      );
       expect(state.cron.getJob(job.id)?.state.lastRunStatus).toBe("ok");
       expect(state.cron.getJob(job.id)?.state.lastDeliveryStatus).toBe("delivered");
     } finally {

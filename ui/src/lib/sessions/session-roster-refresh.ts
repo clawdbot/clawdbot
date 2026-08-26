@@ -12,7 +12,6 @@ import type {
   SessionState,
 } from "./session-capability.ts";
 import {
-  areUiSessionKeysEquivalent,
   normalizeAgentId,
   parseAgentSessionKey,
   resolveUiSelectedGlobalAgentId,
@@ -103,26 +102,20 @@ function preserveCurrentSessionRow(
   if (!currentKey) {
     return result;
   }
+  const parsedAgentId = parseAgentSessionKey(currentKey)?.agentId;
   const currentAgentId = normalizeAgentId(
-    parseAgentSessionKey(currentKey)?.agentId ?? resolveUiSelectedGlobalAgentId(snapshot),
+    parsedAgentId ?? resolveUiSelectedGlobalAgentId(snapshot),
   );
-  const exactPreviousCurrentRow = state.result?.sessions.find((row) =>
-    areUiSessionKeysEquivalent(row.key, currentKey),
-  );
-  const previousCurrentRow =
-    exactPreviousCurrentRow ??
-    (state.agentId === currentAgentId
-      ? state.result?.sessions.find((row) =>
-          uiSessionRowMatchesSelectedChat(snapshot, row.key, currentKey),
-        )
-      : undefined);
-  const nextContainsCurrentRow = exactPreviousCurrentRow
-    ? result.sessions.some((row) => areUiSessionKeysEquivalent(row.key, currentKey))
-    : result.sessions.some((row) => uiSessionRowMatchesSelectedChat(snapshot, row.key, currentKey));
+  if (!parsedAgentId && normalizeAgentId(state.agentId ?? "") !== currentAgentId) {
+    return result;
+  }
+  const matchesCurrent = (row: GatewaySessionRow) =>
+    uiSessionRowMatchesSelectedChat(snapshot, row.key, currentKey);
+  const previousCurrentRow = state.result?.sessions.find(matchesCurrent);
   if (
     previousCurrentRow &&
     (backgroundHydrate || previousCurrentRow.archived === true) &&
-    !nextContainsCurrentRow
+    !result.sessions.some(matchesCurrent)
   ) {
     const sessions = [...result.sessions, previousCurrentRow];
     return { ...result, count: sessions.length, sessions };

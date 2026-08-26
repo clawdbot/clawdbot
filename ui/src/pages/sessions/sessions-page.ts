@@ -1082,7 +1082,11 @@ class SessionsPage extends OpenClawLightDomElement {
     if (
       !this.requireMutationAccess(scope, {
         method: "sessions.patch",
-        params: { key, ...patch, ...(agentId ? { agentId } : {}) },
+        params: {
+          key,
+          ...patch,
+          ...(agentId ? { agentId } : {}),
+        },
       })
     ) {
       return "failed";

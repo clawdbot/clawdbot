@@ -3229,6 +3229,7 @@ describe("gateway/node-registry", () => {
       bufferedAmount: MAX_BUFFERED_BYTES + 1,
       send: vi.fn(),
       close: vi.fn(),
+      terminate: vi.fn(),
     };
     registerTestNodeSocket(registry, socket);
     const payload = serializeEventPayload({ foo: "bar" });
@@ -3237,6 +3238,10 @@ describe("gateway/node-registry", () => {
       expect(registry.sendEventRaw("node-1", "chat", payload)).toBe(false);
       expect(socket.send).not.toHaveBeenCalled();
       expect(socket.close).toHaveBeenCalledWith(1008, "slow consumer");
+      expect(socket.terminate).toHaveBeenCalledOnce();
+      expect(socket.close.mock.invocationCallOrder[0]).toBeLessThan(
+        socket.terminate.mock.invocationCallOrder[0]!,
+      );
       expect(diagnosticEvents).toEqual(
         expect.arrayContaining([
           expect.objectContaining({

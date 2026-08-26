@@ -2,8 +2,12 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { chunkMarkdownText } from "openclaw/plugin-sdk/reply-runtime";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../api.js";
+import { deliverLineAutoReply } from "./auto-reply-delivery.js";
+import { baseDeliveryParams, createDeps } from "./auto-reply-delivery.test-helpers.js";
+import { processLineMessage } from "./markdown-to-line.js";
 import { lineOutboundAdapter } from "./outbound.js";
 import { setLineRuntime } from "./runtime.js";
+import { createQuickReplyItems, pushMessagesLine } from "./send.js";
 
 type WireMessage = { type: string; text?: string; altText?: string };
 
@@ -164,6 +168,16 @@ describe("Row-overflow table delivery through production outbound adapter over l
         body,
       };
       requests.push(record);
+
+      if (
+        url.pathname === "/v2/bot/message/push" &&
+        body.to === "UtestAutoReplyRecovery" &&
+        body.messages.some((message) => message.type === "flex")
+      ) {
+        response.writeHead(400, { "content-type": "application/json" });
+        response.end(JSON.stringify({ message: "invalid rich message" }));
+        return;
+      }
 
       if (url.pathname === "/v2/bot/message/push" || url.pathname === "/v2/bot/message/reply") {
         response.writeHead(200, { "content-type": "application/json" });
@@ -374,6 +388,57 @@ describe("Row-overflow table delivery through production outbound adapter over l
         quickReply: { items: [{ action: { label: "Continue", text: "Continue" } }] },
       },
     ]);
+  });
+
+  it("preserves quick replies when LINE rejects the final Markdown card", async () => {
+    const { deps } = createDeps({
+      processLineMessage,
+      chunkMarkdownText,
+      pushMessagesLine,
+      createQuickReplyItems,
+    });
+
+    const result = await deliverLineAutoReply({
+      ...baseDeliveryParams,
+      cfg: LINE_TEST_CFG,
+      accountId: "default",
+      to: "line:user:UtestAutoReplyRecovery",
+      replyToken: undefined,
+      payload: { text: "Choose one\n\n```js\nfirst()\n```" },
+      lineData: { quickReplies: ["Continue"] },
+      deps,
+    });
+
+    expect(requests).toHaveLength(2);
+    expect(requests[0]).toMatchObject({
+      path: "/v2/bot/message/push",
+      body: {
+        to: "UtestAutoReplyRecovery",
+        messages: [
+          { type: "text", text: "Choose one" },
+          {
+            type: "flex",
+            altText: "Code",
+            quickReply: { items: [{ action: { label: "Continue", text: "Continue" } }] },
+          },
+        ],
+      },
+    });
+    expect(requests[1]).toMatchObject({
+      path: "/v2/bot/message/push",
+      body: {
+        to: "UtestAutoReplyRecovery",
+        messages: [
+          {
+            type: "text",
+            text: "Choose one",
+            quickReply: { items: [{ action: { label: "Continue", text: "Continue" } }] },
+          },
+        ],
+      },
+    });
+    expect(recordChannelActivityMock).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ status: "partial", visibleReplySent: true });
   });
 
   it("carries a valid Bearer token and recipient through the production outbound adapter", async () => {

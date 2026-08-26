@@ -18,11 +18,11 @@ import {
   LEGACY_WORKSPACE_STATE_DIRNAME,
 } from "./workspace-legacy-state.js";
 import { resetLegacyWorkspaceStateCheckForTest } from "./workspace-legacy-state.test-support.js";
+import { resolveWorkspaceStateIdentity } from "./workspace-state-identity.js";
 import {
   mergeWorkspaceSetupState,
   readWorkspaceStateSnapshot,
   replaceWorkspaceAttestation,
-  resolveWorkspaceStateIdentity,
 } from "./workspace-state-store.js";
 import {
   DEFAULT_AGENTS_FILENAME,

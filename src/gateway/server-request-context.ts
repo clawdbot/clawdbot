@@ -44,6 +44,7 @@ type GatewayRequestContextParams = {
   resolveTerminalLaunchPolicy: GatewayRequestContext["resolveTerminalLaunchPolicy"];
   isTerminalEnabled: GatewayRequestContext["isTerminalEnabled"];
   execApprovalManager: GatewayRequestContext["execApprovalManager"];
+  questionManager?: GatewayRequestContext["questionManager"];
   cancelRunBoundApprovals?: (runId: string, context: GatewayRequestContext) => number;
   forwardPluginApprovalRequest?: GatewayRequestContext["forwardPluginApprovalRequest"];
   pluginApprovalIosPushDelivery?: GatewayRequestContext["pluginApprovalIosPushDelivery"];
@@ -195,6 +196,7 @@ export function createGatewayRequestContext(
     resolveTerminalLaunchPolicy: params.resolveTerminalLaunchPolicy,
     isTerminalEnabled: params.isTerminalEnabled,
     execApprovalManager: params.execApprovalManager,
+    questionManager: params.questionManager,
     scopeUpgradeCoordinator,
     cancelRunBoundApprovals: params.cancelRunBoundApprovals
       ? (runId) => params.cancelRunBoundApprovals!(runId, context)

@@ -1038,7 +1038,7 @@ export async function finalizeSetupWizard(
           message: shouldSeedBootstrapHatch
             ? t("wizard.finalize.bootstrapHatchMessage")
             : undefined,
-          timeoutMs: HATCH_TUI_TIMEOUT_MS,
+          initialMessageTimeoutMs: HATCH_TUI_TIMEOUT_MS,
         });
       } finally {
         restoreTerminalState("post-setup tui", { resumeStdinIfPaused: false });

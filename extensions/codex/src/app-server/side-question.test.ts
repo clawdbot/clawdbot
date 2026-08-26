@@ -767,47 +767,53 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(toolOptions).toHaveProperty("requireExplicitMessageTarget", true);
   });
 
-  it("keeps stale binding full access from overriding a guarded side-session root", async () => {
-    const root = "/tmp/workspace/guarded";
-    readCodexAppServerBindingMock.mockResolvedValue({
-      threadId: "parent-thread",
-      cwd: "/tmp/outside-session-root",
-      authProfileId: "openai:work",
-      model: "gpt-5.5",
-      modelProvider: "openai",
-      approvalPolicy: "never",
-      sandbox: "danger-full-access",
-    });
-    const client = createFakeClient();
-    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+  it.each([
+    { boundary: "recorded root", sessionRoot: "/tmp/workspace/guarded" },
+    { boundary: "agent workspace", sessionRoot: undefined },
+  ])(
+    "clamps stale binding full access to the guarded side-session $boundary",
+    async ({ sessionRoot }) => {
+      const root = sessionRoot ?? "/tmp/workspace";
+      readCodexAppServerBindingMock.mockResolvedValue({
+        threadId: "parent-thread",
+        cwd: "/tmp/outside-session-root",
+        authProfileId: "openai:work",
+        model: "gpt-5.5",
+        modelProvider: "openai",
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
+      });
+      const client = createFakeClient();
+      getSharedCodexAppServerClientMock.mockResolvedValue(client);
 
-    await expect(
-      runCodexAppServerSideQuestion(
-        sideParams({
-          sessionKey: "agent:main:session-1",
-          sessionEntry: {
-            sessionId: "session-1",
-            sessionFile: "/tmp/session-1.jsonl",
-            updatedAt: 1,
-            permissionMode: "guarded",
-            sessionRoot: root,
-          },
-        }),
-      ),
-    ).resolves.toEqual({ text: "Side answer." });
+      await expect(
+        runCodexAppServerSideQuestion(
+          sideParams({
+            sessionKey: "agent:main:session-1",
+            sessionEntry: {
+              sessionId: "session-1",
+              sessionFile: "/tmp/session-1.jsonl",
+              updatedAt: 1,
+              permissionMode: "guarded",
+              ...(sessionRoot ? { sessionRoot } : {}),
+            },
+          }),
+        ),
+      ).resolves.toEqual({ text: "Side answer." });
 
-    expect(mockCall(client.request)[1]).toMatchObject({
-      cwd: root,
-      runtimeWorkspaceRoots: [root],
-      sandbox: "workspace-write",
-      approvalPolicy: "on-request",
-      approvalsReviewer: "user",
-    });
-    expect(mockCall(createOpenClawCodingToolsMock)[0]).toMatchObject({
-      exec: { mode: "ask" },
-      sessionPermissionPolicy: { mode: "guarded", root },
-    });
-  });
+      expect(mockCall(client.request)[1]).toMatchObject({
+        cwd: root,
+        runtimeWorkspaceRoots: [root],
+        sandbox: "workspace-write",
+        approvalPolicy: "on-request",
+        approvalsReviewer: "user",
+      });
+      expect(mockCall(createOpenClawCodingToolsMock)[0]).toMatchObject({
+        exec: { mode: "ask" },
+        sessionPermissionPolicy: { mode: "guarded", root },
+      });
+    },
+  );
 
   it("returns an explicit unsupported decline for ordinary MCP input", async () => {
     const client = createFakeClient({ completeTurn: false });

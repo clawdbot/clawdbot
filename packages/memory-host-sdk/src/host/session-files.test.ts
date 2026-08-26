@@ -31,28 +31,9 @@ import {
   type SessionFileEntry,
 } from "./session-files.js";
 
-function captureStateDirEnv() {
-  const stateDir = process.env.OPENCLAW_STATE_DIR;
-  const configPath = process.env.OPENCLAW_CONFIG_PATH;
-  return {
-    restore() {
-      if (stateDir === undefined) {
-        Reflect.deleteProperty(process.env, "OPENCLAW_STATE_DIR");
-      } else {
-        Reflect.set(process.env, "OPENCLAW_STATE_DIR", stateDir);
-      }
-      if (configPath === undefined) {
-        Reflect.deleteProperty(process.env, "OPENCLAW_CONFIG_PATH");
-      } else {
-        Reflect.set(process.env, "OPENCLAW_CONFIG_PATH", configPath);
-      }
-    },
-  };
-}
-
 let fixtureRoot: string;
 let tmpDir: string;
-let envSnapshot: ReturnType<typeof captureStateDirEnv> | undefined;
+let envSnapshot: Record<string, string | undefined> | undefined;
 let fixtureId = 0;
 
 beforeAll(() => {
@@ -66,7 +47,10 @@ afterAll(() => {
 beforeEach(() => {
   tmpDir = path.join(fixtureRoot, `case-${fixtureId++}`);
   fsSync.mkdirSync(tmpDir, { recursive: true });
-  envSnapshot = captureStateDirEnv();
+  envSnapshot = {
+    OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
+    OPENCLAW_CONFIG_PATH: process.env.OPENCLAW_CONFIG_PATH,
+  };
   Reflect.set(process.env, "OPENCLAW_STATE_DIR", tmpDir);
   clearRuntimeConfigSnapshot();
   clearConfigCache();
@@ -77,7 +61,13 @@ afterEach(() => {
   // env is active, then close shared state before removing the Windows-owned directory.
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
-  envSnapshot?.restore();
+  for (const [key, value] of Object.entries(envSnapshot ?? {})) {
+    if (value === undefined) {
+      Reflect.deleteProperty(process.env, key);
+    } else {
+      Reflect.set(process.env, key, value);
+    }
+  }
   envSnapshot = undefined;
   clearRuntimeConfigSnapshot();
   clearConfigCache();
@@ -110,7 +100,15 @@ describe("listSessionFilesForAgent", () => {
       "active.jsonl.reset.2026-02-16T22-26-33.000Z",
       "active.jsonl.deleted.2026-02-16T22-27-33.000Z",
     ];
-    const excluded = ["active.jsonl.bak.2026-02-16T22-28-33.000Z", "sessions.json", "notes.md"];
+    const excluded = [
+      "active.jsonl.bak.2026-02-16T22-28-33.000Z",
+      "active.trajectory.jsonl.deleted.2026-02-16T22-30-33.000Z",
+      "active.trajectory.jsonl.reset.2026-02-16T22-31-33.000Z.zst",
+      "active.checkpoint.11111111-1111-4111-8111-111111111111.jsonl.deleted.2026-02-16T22-32-33.000Z",
+      "active.checkpoint.11111111-1111-4111-8111-111111111111.jsonl.reset.2026-02-16T22-33-33.000Z.zst",
+      "sessions.json",
+      "notes.md",
+    ];
     excluded.push("active.checkpoint.11111111-1111-4111-8111-111111111111.jsonl");
 
     for (const fileName of [...included, ...excluded]) {

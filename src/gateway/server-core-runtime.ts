@@ -279,6 +279,7 @@ export async function startGatewayCoreRuntime(input: {
 
   const {
     execApprovalManager,
+    questionManager,
     cancelRunBoundApprovals,
     forwardPluginApprovalRequest,
     pluginApprovalIosPushDelivery,
@@ -665,6 +666,7 @@ export async function startGatewayCoreRuntime(input: {
     sessionObserver,
     approvalSessionEvents,
     execApprovalManager,
+    questionManager,
     cancelRunBoundApprovals,
     forwardPluginApprovalRequest,
     pluginApprovalIosPushDelivery,

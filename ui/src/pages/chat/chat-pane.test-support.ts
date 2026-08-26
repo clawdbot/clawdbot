@@ -114,7 +114,7 @@ export type TestChatPane = HTMLElement & {
   performUpdate: () => void;
   deferSessionHydrationUntilTranscript: (
     sessionKey: string,
-    transcriptLoad: Promise<unknown>,
+    transcriptLoad: Promise<boolean>,
   ) => void;
   paneTitle: string;
   catalogSession: SessionCatalogSession | null;

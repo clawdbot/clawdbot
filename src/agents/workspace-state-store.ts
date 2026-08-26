@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs, { existsSync } from "node:fs";
 import path from "node:path";
 import {
@@ -16,6 +15,12 @@ import {
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveUserPath } from "../utils.js";
+import {
+  createWorkspaceStateIdentity,
+  resolveWorkspaceStateAliases,
+  resolveWorkspaceStateIdentity,
+  type WorkspaceStateIdentity,
+} from "./workspace-state-identity.js";
 
 export const WORKSPACE_SETUP_STATE_VERSION = 1 as const;
 export const WORKSPACE_ATTESTATION_RECENT_MS = 24 * 60 * 60 * 1000;
@@ -76,11 +81,6 @@ export type WorkspaceStateSnapshot = {
   attestation?: WorkspaceAttestation;
 };
 
-type WorkspaceStateIdentity = {
-  workspaceKey: string;
-  workspacePath: string;
-};
-
 type WorkspaceStateDeletionPlan = {
   lexicalAlias: WorkspaceStateIdentity;
   currentCanonicalIdentity: WorkspaceStateIdentity;
@@ -99,77 +99,6 @@ type WorkspaceStateDatabase = Pick<
 
 type WorkspaceStateDatabaseHandle = Pick<ReturnType<typeof openOpenClawStateDatabase>, "db">;
 
-const MAX_WORKSPACE_IDENTITY_SYMLINKS = 40;
-
-type WorkspaceIdentityResolution = {
-  identity: WorkspaceStateIdentity;
-  aliases: WorkspaceStateIdentity[];
-  missingAliasKeys: string[];
-};
-
-function normalizeWorkspaceIdentityPath(value: string): string {
-  const normalized = path.normalize(value).normalize("NFC");
-  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
-}
-
-function canonicalizeWorkspaceIdentityPath(workspaceDir: string): string {
-  const fallback = normalizeWorkspaceIdentityPath(path.resolve(resolveUserPath(workspaceDir)));
-  let candidate = fallback;
-  const followedSymlinks = new Set<string>();
-
-  for (let redirectCount = 0; redirectCount < MAX_WORKSPACE_IDENTITY_SYMLINKS; redirectCount += 1) {
-    const missingSegments: string[] = [];
-    let current = candidate;
-    while (true) {
-      try {
-        return normalizeWorkspaceIdentityPath(
-          path.join(fs.realpathSync.native(current), ...missingSegments.toReversed()),
-        );
-      } catch {
-        // A dangling symlink still carries the stable target identity. Resolve
-        // it lexically so vanished-workspace protection cannot be bypassed.
-      }
-      try {
-        if (fs.lstatSync(current).isSymbolicLink()) {
-          const normalizedLink = normalizeWorkspaceIdentityPath(current);
-          if (followedSymlinks.has(normalizedLink)) {
-            return fallback;
-          }
-          followedSymlinks.add(normalizedLink);
-          candidate = path.resolve(
-            path.dirname(current),
-            fs.readlinkSync(current),
-            ...missingSegments.toReversed(),
-          );
-          break;
-        }
-      } catch {
-        // Keep walking to a real existing ancestor.
-      }
-      const parent = path.dirname(current);
-      if (parent === current) {
-        return fallback;
-      }
-      missingSegments.push(path.basename(current));
-      current = parent;
-    }
-  }
-  return fallback;
-}
-
-function createWorkspaceStateIdentity(workspacePath: string): WorkspaceStateIdentity {
-  return {
-    workspacePath,
-    workspaceKey: createHash("sha256").update(workspacePath).digest("hex"),
-  };
-}
-
-function resolveWorkspaceStateAliases(workspaceDir: string): WorkspaceStateIdentity[] {
-  const lexicalPath = normalizeWorkspaceIdentityPath(path.resolve(resolveUserPath(workspaceDir)));
-  const canonicalPath = canonicalizeWorkspaceIdentityPath(workspaceDir);
-  return [...new Set([lexicalPath, canonicalPath])].map(createWorkspaceStateIdentity);
-}
-
 function workspacePathEntryExists(workspaceDir: string): boolean {
   try {
     fs.lstatSync(path.resolve(resolveUserPath(workspaceDir)));
@@ -179,9 +108,11 @@ function workspacePathEntryExists(workspaceDir: string): boolean {
   }
 }
 
-export function resolveWorkspaceStateIdentity(workspaceDir: string): WorkspaceStateIdentity {
-  return createWorkspaceStateIdentity(canonicalizeWorkspaceIdentityPath(workspaceDir));
-}
+type WorkspaceIdentityResolution = {
+  identity: WorkspaceStateIdentity;
+  aliases: WorkspaceStateIdentity[];
+  missingAliasKeys: string[];
+};
 
 function resolveWorkspaceIdentityFromDatabase(params: {
   workspaceDir: string;

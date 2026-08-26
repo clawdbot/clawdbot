@@ -5804,8 +5804,6 @@ export const en: TranslationMap = {
       nextRun: "New permissions apply to the next run.",
       default: "Default",
       defaultDescription: "Follow the agent's configured policy.",
-      rootLabel: "Root",
-      sessionRoot: "Session root: {root}",
       fullRequiresAdmin: "Full access requires operator.admin access.",
       updateFailed: "Failed to update permissions: {error}",
       modes: {

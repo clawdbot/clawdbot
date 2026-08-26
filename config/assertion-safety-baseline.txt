@@ -872,7 +872,6 @@ extensions/msteams/src/reply-dispatcher.ts	4
 extensions/msteams/src/reply-stream-controller.ts	1
 extensions/msteams/src/sdk-proactive.ts	7
 extensions/msteams/src/sdk.ts	10
-extensions/msteams/src/send.ts	1
 extensions/msteams/src/setup-surface.ts	7
 extensions/msteams/src/sqlite-state.ts	1
 extensions/msteams/src/sso-token-store.ts	2
@@ -1839,7 +1838,7 @@ src/agents/embedded-agent-runner/run/attempt-stop-reason-recovery.ts	3
 src/agents/embedded-agent-runner/run/attempt-stream-prepare.ts	3
 src/agents/embedded-agent-runner/run/attempt-stream.ts	9
 src/agents/embedded-agent-runner/run/attempt-subscription-cleanup.ts	2
-src/agents/embedded-agent-runner/run/attempt-tool-call-replay-sanitization.ts	18
+src/agents/embedded-agent-runner/run/attempt-tool-call-replay-sanitization.ts	17
 src/agents/embedded-agent-runner/run/attempt-tool-call-stream-normalization.ts	7
 src/agents/embedded-agent-runner/run/attempt-tool-call-text-promotion.ts	3
 src/agents/embedded-agent-runner/run/attempt-tool-prepare.ts	3
@@ -2084,7 +2083,7 @@ src/agents/tool-search-runtime.ts	6
 src/agents/tool-search-transcript.ts	3
 src/agents/tool-search.ts	1
 src/agents/tools-effective-inventory-build.ts	2
-src/agents/tools-effective-inventory.ts	5
+src/agents/tools-effective-inventory.ts	4
 src/agents/tools/agent-step.ts	6
 src/agents/tools/agents-wait-tool.ts	1
 src/agents/tools/ask-user-tool-normalization.ts	3

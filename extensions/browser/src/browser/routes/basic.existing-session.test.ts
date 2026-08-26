@@ -32,6 +32,8 @@ function createExistingSessionProfileState(params?: {
     options?: { ephemeral?: boolean; signal?: AbortSignal },
   ) => Promise<boolean>;
 }) {
+  const isTransportAvailable = params?.isTransportAvailable ?? (async () => true);
+  const isReachable = params?.isReachable ?? (async () => true);
   return {
     resolved: {
       enabled: true,
@@ -54,8 +56,27 @@ function createExistingSessionProfileState(params?: {
           attachOnly: true,
         },
         isHttpReachable: params?.isHttpReachable ?? (async () => true),
-        isTransportAvailable: params?.isTransportAvailable ?? (async () => true),
-        isReachable: params?.isReachable ?? (async () => true),
+        isTransportAvailable: async (
+          timeoutMs?: number,
+          signal?: AbortSignal,
+          pageProbe?: { timeoutMs?: () => number; onResult: (tabCount: number | null) => void },
+        ) => {
+          const available = await isTransportAvailable(timeoutMs, signal);
+          if (available && pageProbe) {
+            try {
+              const ready = await isReachable(pageProbe.timeoutMs?.() ?? timeoutMs, {
+                ephemeral: true,
+                signal,
+              });
+              pageProbe.onResult(ready ? 1 : null);
+            } catch {
+              signal?.throwIfAborted();
+              pageProbe.onResult(null);
+            }
+          }
+          return available;
+        },
+        isReachable,
       }) as never,
   };
 }

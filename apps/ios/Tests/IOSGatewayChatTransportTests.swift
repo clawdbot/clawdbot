@@ -79,7 +79,7 @@ struct IOSGatewayChatTransportTests {
               "type":"hello-ok",
               "protocol":4,
               "server":{"version":"test","connId":"test"},
-              "features":{"methods":[],"events":[],"capabilities":["chat-send-routing-contract"]},
+              "features":{"methods":[],"events":[],"capabilities":["chat-send-routing-contract","session-unread-ack-contract"]},
               "snapshot":{
                 "presence":[],
                 "health":{},
@@ -92,6 +92,7 @@ struct IOSGatewayChatTransportTests {
             """#.utf8)
         let hello = try JSONDecoder().decode(HelloOk.self, from: data)
         #expect(hello.supportsServerCapability(.chatSendRoutingContract))
+        #expect(hello.supportsServerCapability(.sessionUnreadAckContract))
     }
 
     @Test func `session mutations dispatch normalized selected agent targets`() async throws {

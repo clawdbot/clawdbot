@@ -314,9 +314,6 @@ export async function setCodexConversationPermissions(params: {
       if (entry.sessionId !== params.session.sessionId) {
         throw new Error("Codex session changed while applying the permission mode.");
       }
-      if (!entry.sessionRoot?.trim()) {
-        throw new Error("Codex permission mode requires a recorded session root.");
-      }
       entry.permissionMode = params.mode === "yolo" ? "full" : "guarded";
       return entry;
     },

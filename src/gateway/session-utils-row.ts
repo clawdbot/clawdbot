@@ -598,6 +598,7 @@ export function buildGatewaySessionRow(params: {
     pinnedAt: entry?.pinnedAt,
     unread: deriveSessionUnread(entry),
     lastReadAt: entry?.lastReadAt,
+    markedUnreadAt: entry?.markedUnreadAt,
     agentStatus,
     observerDigest: observerDigest
       ? {

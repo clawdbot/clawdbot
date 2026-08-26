@@ -38,7 +38,6 @@ export function buildCodexMessagesSnapshot(params: {
   turnId: string;
   upstreamUserText: string | undefined;
   reasoningText: string | undefined;
-  planText: string | undefined;
   asyncMessages: ReadonlyArray<{ itemId: string; message: AssistantMessage }>;
   commentaryMessages: ReadonlyArray<{ itemId: string; message: AssistantMessage }>;
   toolMessages: readonly AgentMessage[];
@@ -52,14 +51,6 @@ export function buildCodexMessagesSnapshot(params: {
       attachCodexMirrorIdentity(
         params.createAssistantMirrorMessage("Codex reasoning", params.reasoningText),
         `${params.turnId}:reasoning`,
-      ),
-    );
-  }
-  if (params.planText) {
-    messages.push(
-      attachCodexMirrorIdentity(
-        params.createAssistantMirrorMessage("Codex plan", params.planText),
-        `${params.turnId}:plan`,
       ),
     );
   }
@@ -120,7 +111,6 @@ export function buildCodexSteeringMessagesSnapshot(params: {
     turnId: params.turnId,
     upstreamUserText: params.upstreamUserText,
     reasoningText: undefined,
-    planText: undefined,
     asyncMessages,
     commentaryMessages,
     toolMessages: params.toolMessages,
