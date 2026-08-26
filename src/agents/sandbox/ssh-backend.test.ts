@@ -469,7 +469,10 @@ describe("ssh sandbox backend", () => {
       token: execSpec.finalizeToken,
     });
 
-    expect(sshMocks.spawnCommand).toHaveBeenCalledOnce();
+    expect(sshMocks.spawnCommand).toHaveBeenCalledTimes(2);
+    const cleanup = requirePreparedSshInvocation(1);
+    expect(cleanup.argv.at(-1)).toContain("openclaw-sandbox-exec-cleanup");
+    expect(cleanup.argv.join(" ")).not.toContain(sentinel);
     expect(sshMocks.disposeSshSandboxSession).toHaveBeenCalledOnce();
   });
 

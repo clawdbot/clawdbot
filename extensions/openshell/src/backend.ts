@@ -46,7 +46,7 @@ type CreateOpenShellSandboxBackendFactoryParams = {
 
 type PendingExec = {
   sshSession: SshSandboxSession;
-  cleanup: (status: "completed" | "failed") => Promise<void>;
+  cleanup: () => Promise<void>;
 };
 
 const MATERIALIZED_SKILLS_REMOTE_PARTS = [".openclaw", "sandbox-skills"] as const;
@@ -337,8 +337,8 @@ class OpenShellSandboxBackendImpl {
           finalizeToken: pending.token,
         };
       },
-      finalizeExec: async ({ token, status }) => {
-        await this.finalizeExec(token as PendingExec | undefined, status);
+      finalizeExec: async ({ token }) => {
+        await this.finalizeExec(token as PendingExec | undefined);
       },
       runShellCommand: async (command) => await this.runRemoteShellScript(command),
       createFsBridge: ({ sandbox }) =>
@@ -478,10 +478,7 @@ class OpenShellSandboxBackendImpl {
     }
   }
 
-  async finalizeExec(
-    token: PendingExec | undefined,
-    status: "completed" | "failed",
-  ): Promise<void> {
+  async finalizeExec(token: PendingExec | undefined): Promise<void> {
     try {
       if (this.params.execContext.config.mode === "mirror") {
         await this.syncWorkspaceFromRemote();
@@ -489,7 +486,7 @@ class OpenShellSandboxBackendImpl {
     } finally {
       if (token?.sshSession) {
         try {
-          await token.cleanup(status);
+          await token.cleanup();
         } finally {
           await disposeSshSandboxSession(token.sshSession);
         }

@@ -205,8 +205,8 @@ describe("ssh subprocess env sanitization", () => {
     expect(prepared.argv.join(" ")).not.toContain(sentinel);
     expect(prepared.argv.join(" ")).not.toContain("SetEnv");
 
-    await prepared.cleanup("completed");
-    expect(spawnCommandMock).toHaveBeenCalledOnce();
+    await prepared.cleanup();
+    expect(spawnCommandMock).toHaveBeenCalledTimes(2);
   });
 
   it("removes remote SSH staging after an upload failure", async () => {

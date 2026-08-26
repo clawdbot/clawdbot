@@ -312,11 +312,7 @@ export function buildValidatedExecRemoteCommand(params: {
 }
 
 function createSshSandboxExecCleanup(session: SshSandboxSession, remoteDir: string) {
-  return async (status: "completed" | "failed"): Promise<void> => {
-    // The staged script removes its directory before exec, so successful runs need no cleanup SSH handshake.
-    if (status === "completed") {
-      return;
-    }
+  return async (): Promise<void> => {
     await runSshSandboxCommand({
       session,
       remoteCommand: buildRemoteCommand([
@@ -339,7 +335,7 @@ export async function prepareSshSandboxExec(params: {
   tty?: boolean;
 }): Promise<{
   argv: string[];
-  cleanup: (status: "completed" | "failed") => Promise<void>;
+  cleanup: () => Promise<void>;
 }> {
   const env =
     params.tty && params.env.TERM === undefined
@@ -381,7 +377,7 @@ export async function prepareSshSandboxExec(params: {
       stdin: script,
     });
   } catch (error) {
-    await cleanup("failed").catch(() => undefined);
+    await cleanup().catch(() => undefined);
     throw error;
   }
   return {

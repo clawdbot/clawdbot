@@ -765,7 +765,7 @@ describe("openshell backend manager", () => {
         token: execSpec.finalizeToken,
       });
 
-      expect(sandboxMocks.cleanupPreparedExec).toHaveBeenCalledExactlyOnceWith(status);
+      expect(sandboxMocks.cleanupPreparedExec).toHaveBeenCalledOnce();
       expect(sandboxMocks.disposeSshSandboxSession).toHaveBeenCalledWith(
         expect.objectContaining({ host: "openshell-test" }),
       );

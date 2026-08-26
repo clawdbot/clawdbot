@@ -39,7 +39,7 @@ import {
 
 type PendingExec = {
   sshSession: SshSandboxSession;
-  cleanup: (status: "completed" | "failed") => Promise<void>;
+  cleanup: () => Promise<void>;
 };
 
 type ResolvedSshRuntimePaths = {
@@ -234,11 +234,11 @@ class SshSandboxBackendImpl {
           throw error;
         }
       },
-      finalizeExec: async ({ token, status }) => {
+      finalizeExec: async ({ token }) => {
         const pending = token as PendingExec | undefined;
         if (pending) {
           try {
-            await pending.cleanup(status);
+            await pending.cleanup();
           } finally {
             await disposeSshSandboxSession(pending.sshSession);
           }
