@@ -197,22 +197,27 @@ describe("createSlackDraftStream", () => {
     expect(stream.messageId()).toBe("333.444");
   });
 
-  it("retries a failed detached preview cleanup on the next drain", async () => {
+  it("drains past a failed preview and retries only the retained failure", async () => {
+    const send = vi
+      .fn<DraftSendFn>()
+      .mockResolvedValueOnce(slackDraftSendResult("100.100"))
+      .mockResolvedValueOnce(slackDraftSendResult("100.300"));
     const remove = vi.fn<DraftRemoveFn>(async () => {});
     remove.mockRejectedValueOnce(new Error("cleanup failed"));
-    const { stream } = createDraftStreamHarness({ remove });
+    const { stream } = createDraftStreamHarness({ send, remove });
+    const removedMessageIds = () =>
+      mockCalls<Parameters<DraftRemoveFn>>(remove).map(([, messageId]) => messageId);
 
-    stream.update("working");
-    await stream.flush();
-    stream.forceNewMessage();
+    for (const text of ["first", "second"]) {
+      stream.update(text);
+      await stream.flush();
+      stream.forceNewMessage();
+    }
     await stream.dropDetachedMessages();
-    await stream.dropDetachedMessages();
+    expect(removedMessageIds()).toEqual(["100.100", "100.300"]);
 
-    expect(remove).toHaveBeenCalledTimes(2);
-    expect(remove).toHaveBeenLastCalledWith("C123", "111.222", {
-      token: "xoxb-test",
-      accountId: undefined,
-    });
+    await stream.dropDetachedMessages();
+    expect(removedMessageIds()).toEqual(["100.100", "100.300", "100.100"]);
   });
 
   it("drains previews detached during an in-flight removal", async () => {

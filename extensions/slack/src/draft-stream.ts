@@ -168,20 +168,20 @@ export function createSlackDraftStream(params: {
 
   const dropDetachedMessages = () => {
     const drain = cleanupTail.then(async () => {
-      // Keep the failed head authoritative so the next cleanup call retries in order.
-      while (pendingCleanupMessages[0]) {
-        const message = pendingCleanupMessages[0];
+      // Retain failures for retry without letting one stale preview block the rest.
+      for (let index = 0; index < pendingCleanupMessages.length;) {
+        const message = pendingCleanupMessages[index];
         try {
           await remove(message.channelId, message.messageId, {
             token: params.token,
             accountId: params.accountId,
             ...(params.eventScope ? { client: params.eventScope.client } : {}),
           });
+          pendingCleanupMessages.splice(index, 1);
         } catch (err) {
           params.warn?.(`slack stream preview cleanup failed: ${formatSlackError(err)}`);
-          return;
+          index += 1;
         }
-        pendingCleanupMessages.shift();
       }
     });
     cleanupTail = drain;
