@@ -1749,7 +1749,7 @@ describe("ChatStateController render lifecycle", () => {
       toolStreamOrder: [],
       toolStreamSyncTimer: null,
       waitingApprovalStatuses: new Map(),
-      sessions: { setModelOverride: vi.fn() },
+      sessions: { refreshReplacement: vi.fn(async () => undefined) },
       chatStreamRenderFrame: null,
       renderLifecycle: { invalidate: requestUpdate },
       requestUpdate,
@@ -1812,7 +1812,7 @@ describe("ChatStateController render lifecycle", () => {
       toolStreamById: new Map(),
       toolStreamOrder: [],
       toolStreamSyncTimer: null,
-      sessions: { setModelOverride: vi.fn() } as never,
+      sessions: { refreshReplacement: vi.fn(async () => undefined) } as never,
     });
     const emitAgent = (seq: number, stream: string, data: Record<string, unknown>) =>
       handlePageGatewayEvent(state, {

@@ -687,10 +687,9 @@ describe("chat-model-select-state", () => {
   // The session model equals the agent default in every case, so anything other than
   // the recorded marker would have to guess — and would always guess "inherited".
   it.each([
-    { name: "inherited default", source: null, expected: "inherited" },
-    { name: "user pin the default grew into", source: "user" as const, expected: "pinned" },
-    { name: "automatic fallback", source: "auto" as const, expected: "fallback" },
-    { name: "gateway older than the marker", source: undefined, expected: "inherited" },
+    { name: "inherited default", source: null, expected: null },
+    { name: "user pin the default grew into", source: "user" as const, expected: "user" },
+    { name: "automatic fallback", source: "auto" as const, expected: "auto" },
   ])("resolves $expected from provenance for $name", ({ source, expected }) => {
     const state = createChatModelState({
       agentDefaultModel: "openai/gpt-5.6-sol",
@@ -710,20 +709,7 @@ describe("chat-model-select-state", () => {
 
     const resolved = resolveChatModelSelectState(state);
     expect(resolved.currentOverride).toBe("openai/gpt-5.6-sol");
-    expect(resolved.modelSelectionSource).toBe(expected);
-  });
-
-  it("still reads a pin from an older gateway that omits the provenance marker", () => {
-    const state = createChatModelState({
-      agentDefaultModel: "openai/gpt-5",
-      sessionsResult: createSessionsListResult({
-        model: "gpt-5-mini",
-        modelProvider: "openai",
-        modelOverrideSource: undefined,
-      }),
-    });
-
-    expect(resolveChatModelSelectState(state).modelSelectionSource).toBe("pinned");
+    expect(resolved.modelOverrideSource).toBe(expected);
   });
 
   it("reads pin provenance from a canonical main row when the route uses the alias key", () => {
@@ -740,7 +726,7 @@ describe("chat-model-select-state", () => {
     const resolved = resolveChatModelSelectState(state);
 
     expect(resolved.currentOverride).toBe("openai/gpt-5-mini");
-    expect(resolved.modelSelectionSource).toBe("pinned");
+    expect(resolved.modelOverrideSource).toBe("user");
   });
 
   // `currentOverride` already lets a pending local selection outrank the row, so
@@ -757,7 +743,7 @@ describe("chat-model-select-state", () => {
     });
 
     expect(resolveChatModelSelectState(pendingPin).currentOverride).toBe("openai/gpt-5-mini");
-    expect(resolveChatModelSelectState(pendingPin).modelSelectionSource).toBe("pinned");
+    expect(resolveChatModelSelectState(pendingPin).modelOverrideSource).toBe("user");
 
     const pendingReset = {
       ...pendingPin,
@@ -770,7 +756,7 @@ describe("chat-model-select-state", () => {
     };
 
     expect(resolveChatModelSelectState(pendingReset).currentOverride).toBe("");
-    expect(resolveChatModelSelectState(pendingReset).modelSelectionSource).toBe("inherited");
+    expect(resolveChatModelSelectState(pendingReset).modelOverrideSource).toBeNull();
   });
 
   it("disambiguates duplicate friendly names in picker options and default labels", () => {

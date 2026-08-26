@@ -162,6 +162,7 @@ export function buildGatewaySessionSnapshot(params: {
   if (params.lifecycle) {
     delete sessionRow.modelProvider;
     delete sessionRow.model;
+    delete sessionRow.modelOverrideSource;
     delete sessionRow.agentRuntime;
     if (sessionRow.totalTokensFresh !== true) {
       delete sessionRow.totalTokens;

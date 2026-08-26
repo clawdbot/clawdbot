@@ -32,19 +32,11 @@ type ChatModelSelectOption = {
   disabled?: boolean;
 };
 
-/**
- * How the session arrived at its current model, as recorded by the Gateway.
- * `inherited` means nothing is persisted on the session, so it follows the agent
- * default; `pinned` is an explicit user selection; `fallback` is a runtime
- * failover the user never chose. These are distinct facts, not model comparisons.
- */
-type ChatModelSelectionSource = "inherited" | "pinned" | "fallback";
-
 type ChatModelSelectState = {
   currentOverride: string;
   defaultModel: string;
   defaultLabel: string;
-  modelSelectionSource: ChatModelSelectionSource;
+  modelOverrideSource: GatewaySessionRow["modelOverrideSource"];
   options: ChatModelSelectOption[];
 };
 
@@ -87,33 +79,13 @@ function resolveActiveSessionRow(state: ChatModelSelectStateInput) {
   );
 }
 
-function resolveModelSelectionSource(params: {
-  state: ChatModelSelectStateInput;
-  currentOverride: string;
-  defaultModel: string;
-}): ChatModelSelectionSource {
+function resolveModelOverrideSource(state: ChatModelSelectStateInput) {
   // A local selection is newer than the row that still reports the previous
   // provenance, so it owns the answer until the refreshed row lands.
-  const pending = params.state.modelOverrides;
-  if (Object.hasOwn(pending, params.state.sessionKey)) {
-    return pending[params.state.sessionKey] == null ? "inherited" : "pinned";
+  if (Object.hasOwn(state.modelOverrides, state.sessionKey)) {
+    return state.modelOverrides[state.sessionKey] == null ? null : "user";
   }
-  const recorded = resolveActiveSessionRow(params.state)?.modelOverrideSource;
-  if (recorded === "user") {
-    return "pinned";
-  }
-  if (recorded === "auto") {
-    return "fallback";
-  }
-  if (recorded === null) {
-    return "inherited";
-  }
-  // Gateways older than the provenance marker omit the field entirely rather than
-  // sending null. Their rows carry no recorded fact, so fall back to the historical
-  // guess (matching the default reads as inherited) instead of misreporting a pin.
-  return params.currentOverride.trim().toLowerCase() === params.defaultModel.trim().toLowerCase()
-    ? "inherited"
-    : "pinned";
+  return resolveActiveSessionRow(state)?.modelOverrideSource;
 }
 
 export function resolveChatModelOverrideValue(state: ChatModelSelectStateInput): string {
@@ -254,7 +226,7 @@ export function resolveChatModelSelectState(
     currentOverride,
     defaultModel,
     defaultLabel: defaultModel ? `Default (${defaultLabel})` : "Default model",
-    modelSelectionSource: resolveModelSelectionSource({ state, currentOverride, defaultModel }),
+    modelOverrideSource: resolveModelOverrideSource(state),
     options,
   };
 }

@@ -1581,6 +1581,7 @@ function installControlUiMockGateway(
       label: "Main",
       model: "gpt-5.5",
       modelProvider: "openai",
+      modelOverrideSource: null,
       status: "done",
       totalTokens: 0,
       updatedAt: Date.now(),

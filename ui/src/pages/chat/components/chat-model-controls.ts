@@ -186,7 +186,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     currentOverride,
     defaultModel,
     defaultLabel,
-    modelSelectionSource,
+    modelOverrideSource,
     options: selectOptions,
   } = resolveChatModelSelectState({
     agentDefaultModel: props.agentDefaultModel,
@@ -304,7 +304,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     });
   }
   // A persisted pin can match a changed default; equality cannot establish inheritance.
-  const pickerValue = modelSelectionSource === "inherited" ? "" : currentOverride;
+  const pickerValue = modelOverrideSource === null ? "" : currentOverride;
   const activeModelOption =
     pickerValue === ""
       ? modelOptions.find((option) => option.isDefault)
@@ -437,7 +437,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
         modelOptions,
         targetGroups: props.modelPickerTargetGroups,
         selectedModelValue: pickerValue,
-        sessionModelPinned: modelSelectionSource === "pinned",
+        sessionModelPinned: modelOverrideSource === "user",
         sessionKey: props.sessionKey,
         triggerModelLabel: formatPickerModelLabel(committedModelLabel),
         triggerStatusLabel: catalogTriggerStatus,

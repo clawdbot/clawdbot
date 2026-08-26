@@ -621,37 +621,37 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                       ${params.sessionModelPinned && params.modelOptions.length > 0
                         ? html`<footer class="chat-controls__model-provenance">
                             <span>${t("chat.modelControls.onlyForSession")}</span>
-                              <button
-                                class="chat-controls__model-reset"
-                                data-chat-model-reset="true"
-                                type="button"
-                                ?disabled=${params.disabled}
-                                @click=${(event: MouseEvent) => {
-                                  event.stopPropagation();
-                                  if (params.disabled) {
-                                    event.preventDefault();
-                                    return;
+                            <button
+                              class="chat-controls__model-reset"
+                              data-chat-model-reset="true"
+                              type="button"
+                              ?disabled=${params.disabled}
+                              @click=${(event: MouseEvent) => {
+                                event.stopPropagation();
+                                if (params.disabled) {
+                                  event.preventDefault();
+                                  return;
+                                }
+                                commitModel("");
+                                const resetButton = event.currentTarget;
+                                if (!(resetButton instanceof HTMLElement)) {
+                                  return;
+                                }
+                                const details = resetButton.closest<HTMLDetailsElement>("details");
+                                if (details) {
+                                  details.open = false;
+                                  if (event.detail === 0) {
+                                    details
+                                      .querySelector<HTMLElement>("summary")
+                                      ?.focus({ preventScroll: true });
                                   }
-                                  commitModel("");
-                                  const resetButton = event.currentTarget;
-                                  if (!(resetButton instanceof HTMLElement)) {
-                                    return;
-                                  }
-                                  const details =
-                                    resetButton.closest<HTMLDetailsElement>("details");
-                                  if (details) {
-                                    details.open = false;
-                                    if (event.detail === 0) {
-                                      details
-                                        .querySelector<HTMLElement>("summary")
-                                        ?.focus({ preventScroll: true });
-                                    }
-                                  }
-                                }}
-                              >
-                                ${t("chat.modelControls.useDefaultModel", { model: params.defaultModelLabel })}
-                              </button>
-
+                                }
+                              }}
+                            >
+                              ${t("chat.modelControls.useDefaultModel", {
+                                model: params.defaultModelLabel,
+                              })}
+                            </button>
                           </footer>`
                         : nothing}
                     `

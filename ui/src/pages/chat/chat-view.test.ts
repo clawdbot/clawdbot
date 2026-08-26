@@ -7513,7 +7513,6 @@ describe("chat model controls", () => {
         },
       ),
       refresh: async () => {},
-      setModelOverride: vi.fn(),
       patchRowLocal: vi.fn(),
     };
     const host = {
@@ -7588,7 +7587,6 @@ describe("chat model controls", () => {
         reconciliationStarted.resolve();
         await releaseReconciliation.promise;
       },
-      setModelOverride: vi.fn(),
       patchRowLocal: vi.fn(),
     };
     const host = {
@@ -7637,7 +7635,6 @@ describe("chat model controls", () => {
         },
       ),
       refresh: async () => {},
-      setModelOverride: vi.fn(),
       patchRowLocal: vi.fn(),
     };
     const host = {
@@ -7691,13 +7688,6 @@ describe("chat model controls", () => {
           },
         ),
         refresh: async () => {},
-        setModelOverride: vi.fn((key: string, value: string | null | undefined) => {
-          if (value === undefined) {
-            delete modelOverrides[key];
-          } else {
-            modelOverrides[key] = value;
-          }
-        }),
         patchRowLocal: vi.fn(),
       };
       const host = {

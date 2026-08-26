@@ -533,7 +533,6 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     setArchiveVisibility: mutations.setArchiveVisibility,
     assignOwner: mutations.assignOwner,
     retireModelOverride: mutations.retireModelOverride,
-    setModelOverride: mutations.setModelOverride,
     patchRowLocal: mutations.patchRowLocal,
     isPreparedWorkSession: mutations.isPreparedWorkSession,
     pullRequestSummary,

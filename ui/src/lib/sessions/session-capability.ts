@@ -186,7 +186,6 @@ export type SessionCapability = {
     owner: SessionsAssignOwnerParams["owner"],
     options?: { agentId?: string | null },
   ) => Promise<SessionOwner | null>;
-  setModelOverride: (key: string, value: string | null | undefined) => void;
   retireModelOverride: (key: string) => void;
   /** Keep optimistic row changes in the published snapshot through later publishes. */
   patchRowLocal: (key: string, patch: Partial<GatewaySessionRow>) => void;

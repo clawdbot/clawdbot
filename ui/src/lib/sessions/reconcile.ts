@@ -361,9 +361,7 @@ export function readSessionChangedEvent(payload: unknown): SessionChangedEventIn
   };
 }
 
-// Row fields whose schema admits null as a real value. `modelOverrideSource` is
-// one: null is the gateway confirming the session inherits the agent default,
-// which the picker must keep to tell inheritance from an older gateway's silence.
+// Null source confirms inheritance; omission on a lifecycle event preserves selection.
 const NULLABLE_SESSION_ROW_FIELDS = new Set<string>([
   "updatedAt",
   "activeLeafEntryId",
