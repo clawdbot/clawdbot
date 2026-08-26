@@ -978,6 +978,7 @@ describe("gateway sessions patch", () => {
       modelOverrideFallbackOriginModel: "gpt-primary",
       authProfileOverride: "openai:good",
       authProfileOverrideSource: "user",
+      authProfileOverrideRequired: true,
       thinkingLevel: "high",
     });
     const entry = await withAgentSessionModelPatchOrigin(
@@ -997,6 +998,7 @@ describe("gateway sessions patch", () => {
       prevModelOverrideFallbackOriginProvider: "openai",
       prevModelOverrideFallbackOriginModel: "gpt-primary",
       prevAuthProfileOverride: "openai:good",
+      prevAuthProfileOverrideRequired: true,
       prevThinkingLevel: "high",
       source: "agent-patch",
     });

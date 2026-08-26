@@ -531,6 +531,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     authProfileOverride?: string;
     authProfileOverrideSource?: "auto" | "user";
     authProfileOverrideCompactionCount?: number;
+    /** Fails the run instead of replacing an explicit spawn credential selection. */
+    authProfileOverrideRequired?: boolean;
     /**
      * Set on explicit user-driven session model changes (for example `/model`
      * and `sessions.patch`) during an active run. The embedded runner checks

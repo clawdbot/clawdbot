@@ -32,7 +32,10 @@ function loadSessionAccessor() {
 
 type SessionAuthProfileOverrideState = Pick<
   SessionEntry,
-  "authProfileOverride" | "authProfileOverrideSource" | "authProfileOverrideCompactionCount"
+  | "authProfileOverride"
+  | "authProfileOverrideSource"
+  | "authProfileOverrideCompactionCount"
+  | "authProfileOverrideRequired"
 >;
 type SessionAuthProfileOverrideSnapshot = SessionAuthProfileOverrideState &
   Pick<SessionEntry, "sessionId">;
@@ -72,6 +75,11 @@ function applySessionAuthProfileOverrideState(
   } else {
     entry.authProfileOverrideCompactionCount = state.authProfileOverrideCompactionCount;
   }
+  if (state.authProfileOverrideRequired === undefined) {
+    delete entry.authProfileOverrideRequired;
+  } else {
+    entry.authProfileOverrideRequired = state.authProfileOverrideRequired;
+  }
   entry.updatedAt = Math.max(entry.updatedAt ?? 0, updatedAt);
 }
 
@@ -83,7 +91,8 @@ function matchesSessionAuthProfileOverrideSnapshot(
     entry.sessionId === snapshot.sessionId &&
     entry.authProfileOverride === snapshot.authProfileOverride &&
     entry.authProfileOverrideSource === snapshot.authProfileOverrideSource &&
-    entry.authProfileOverrideCompactionCount === snapshot.authProfileOverrideCompactionCount
+    entry.authProfileOverrideCompactionCount === snapshot.authProfileOverrideCompactionCount &&
+    entry.authProfileOverrideRequired === snapshot.authProfileOverrideRequired
   );
 }
 
@@ -237,6 +246,7 @@ export async function clearSessionAuthProfileOverride(params: {
       authProfileOverride: undefined,
       authProfileOverrideSource: undefined,
       authProfileOverrideCompactionCount: undefined,
+      authProfileOverrideRequired: undefined,
     },
     storePath,
   });
@@ -303,11 +313,19 @@ async function resolveSessionAuthProfileOverride(params: {
       }),
     )
   ) {
+    if (sessionEntry.authProfileOverrideRequired) {
+      throw new Error(`Required auth profile "${currentProfileId}" is no longer available.`);
+    }
     await clearSessionAuthProfileOverride({ sessionEntry, sessionStore, sessionKey, storePath });
     current = undefined;
   }
 
   if (current && !isProfileForProvider({ cfg, providers, profileId: current, store })) {
+    if (sessionEntry.authProfileOverrideRequired) {
+      throw new Error(
+        `Required auth profile "${current}" is not valid for provider "${provider}".`,
+      );
+    }
     await clearSessionAuthProfileOverride({ sessionEntry, sessionStore, sessionKey, storePath });
     current = undefined;
   }
@@ -338,6 +356,7 @@ async function resolveSessionAuthProfileOverride(params: {
           authProfileOverride: undefined,
           authProfileOverrideSource: undefined,
           authProfileOverrideCompactionCount: undefined,
+          authProfileOverrideRequired: undefined,
         },
         storePath,
         expectedSnapshot: {
@@ -345,6 +364,7 @@ async function resolveSessionAuthProfileOverride(params: {
           authProfileOverride: sessionEntry.authProfileOverride,
           authProfileOverrideSource: sessionEntry.authProfileOverrideSource,
           authProfileOverrideCompactionCount: sessionEntry.authProfileOverrideCompactionCount,
+          authProfileOverrideRequired: sessionEntry.authProfileOverrideRequired,
         },
       });
       const latestProfileId = latest?.authProfileOverride;

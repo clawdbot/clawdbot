@@ -482,12 +482,16 @@ export async function resolveEmbeddedModelSelection(params: {
         }),
       );
     if (!profileMatchesRuntime) {
+      if (entry.authProfileOverrideRequired) {
+        throw new Error(`Required auth profile "${authProfileId}" is no longer available.`);
+      }
       if (hasExplicitRunOverride || autoFallbackPrimaryProbe) {
         sessionEntryForAttempt = {
           ...entry,
           authProfileOverride: undefined,
           authProfileOverrideSource: undefined,
           authProfileOverrideCompactionCount: undefined,
+          authProfileOverrideRequired: undefined,
         };
       } else if (
         params.sessionStore &&

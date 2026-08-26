@@ -2082,6 +2082,21 @@ describe("sessions_spawn tool", () => {
     expect(spawnArgs.model).toBe("github-copilot/claude-sonnet-4.6");
   });
 
+  it("rejects native auth-profile suffixes before ACP dispatch", async () => {
+    registerAcpBackendForTest();
+    const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:main" });
+
+    await expect(
+      tool.execute("call-acp-profile", {
+        runtime: "acp",
+        task: "investigate the failing CI run",
+        agentId: "codex",
+        model: "openai/gpt-5.4@openai:work",
+      }),
+    ).rejects.toThrow('auth-profile suffixes support runtime="subagent" only');
+    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+  });
+
   it("forwards a per-run timeout to ACP runtime spawns", async () => {
     registerAcpBackendForTest();
     const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:main" });

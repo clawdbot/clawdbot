@@ -138,6 +138,11 @@ See [Session state awareness](/concepts/session-state) for the full model: event
 
 `sessions_spawn` creates an isolated session for a background task by default. It is always non-blocking; it returns immediately with a `runId` and `childSessionKey`. Native sub-agent runs receive the delegated task in the child session's first visible `[Subagent Task]` message, while the system prompt carries only sub-agent runtime rules and routing context.
 
+Set `model` to select the child's model. For native sub-agents, append
+`@<auth-profile-id>` (for example, `openai/gpt-5.4@openai:work`) to require that
+exact auth profile; the child fails instead of switching credentials if the profile
+becomes unavailable before the run starts. ACP runtimes do not accept this suffix.
+
 Key options:
 
 - `runtime: "subagent"` (default) or `"acp"` for external harness agents.

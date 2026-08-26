@@ -59,6 +59,37 @@ async function select(params: {
 }
 
 describe("session auth selection prepared facts", () => {
+  it("fails when a required child profile is revoked after spawn planning", async () => {
+    await withAuthState(async (state) => {
+      authStoreMocks.state.hasSource = true;
+      authStoreMocks.state.store = createAuthStoreWithProfiles({
+        profiles: {
+          [TEST_SECONDARY_PROFILE_ID]: {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-secondary",
+          },
+        },
+        order: { openai: [TEST_SECONDARY_PROFILE_ID] },
+      });
+      const sessionEntry: SessionEntry = {
+        sessionId: "s1",
+        updatedAt: 1,
+        authProfileOverride: TEST_PRIMARY_PROFILE_ID,
+        authProfileOverrideSource: "user",
+        authProfileOverrideRequired: true,
+      };
+
+      await expect(select({ agentDir: state.agentDir(), sessionEntry })).rejects.toThrow(
+        `Required auth profile "${TEST_PRIMARY_PROFILE_ID}" is no longer available.`,
+      );
+      expect(sessionEntry).toMatchObject({
+        authProfileOverride: TEST_PRIMARY_PROFILE_ID,
+        authProfileOverrideRequired: true,
+      });
+    });
+  });
+
   it("returns prepared facts for a user pin", async () => {
     await withAuthState(async (state) => {
       configureProfiles();

@@ -14,6 +14,7 @@ export const SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS = [
   "authProfileOverride",
   "authProfileOverrideSource",
   "authProfileOverrideCompactionCount",
+  "authProfileOverrideRequired",
 ] as const satisfies ReadonlyArray<keyof SessionEntry>;
 
 const MODEL_ROUTE_OVERRIDE_FIELDS = [

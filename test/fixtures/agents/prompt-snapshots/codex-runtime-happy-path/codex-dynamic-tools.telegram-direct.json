@@ -222,6 +222,7 @@
           "type": "string"
         },
         "model": {
+          "description": "Child model override. For native subagents, append @<auth-profile-id> to require that exact credential profile.",
           "type": "string"
         },
         "runtime": {

@@ -539,7 +539,14 @@ export async function runEmbeddedAgentAttempt(params: {
       }
       break;
     } catch (err) {
-      if (err instanceof LiveSessionModelSwitchError) {
+      const requiredProfileId =
+        sessionEntry?.authProfileOverrideRequired && sessionEntry.authProfileOverride;
+      // An explicit child credential is part of its launch contract. Let a
+      // replacement profile fail the run instead of retrying as another account.
+      if (
+        err instanceof LiveSessionModelSwitchError &&
+        (!requiredProfileId || err.authProfileId === requiredProfileId)
+      ) {
         if (isModelSelectionLocked(sessionEntry)) {
           if (!attemptLifecycleState.lifecycleEnded) {
             emitAgentEvent({

@@ -35,6 +35,7 @@ import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import { createCronCreatorAuthorityCapability } from "../cron-creator-authority-context.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { FailoverError } from "../failover-error.js";
+import { LiveSessionModelSwitchError } from "../live-model-switch-error.js";
 import type { ModelFallbackAttemptProvenance } from "../model-fallback.types.js";
 import { attachToolAllowlistIntersection } from "../tool-policy.js";
 import {
@@ -3752,6 +3753,39 @@ describe("embedded attempt harness pinning", () => {
       ...overrides,
     });
   }
+
+  it("does not retry a required child profile as another account", async () => {
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          "openai:required": { type: "api_key", provider: "openai", key: "sk-required" },
+          "openai:fallback": { type: "api_key", provider: "openai", key: "sk-fallback" },
+        },
+      },
+      tmpDir,
+      { filterExternalAuthProfiles: false, syncExternalCli: false },
+    );
+    const replacement = new LiveSessionModelSwitchError({
+      provider: "openai",
+      model: "gpt-5.4",
+      authProfileId: "openai:fallback",
+      authProfileIdSource: "auto",
+    });
+    runEmbeddedAgentMock.mockRejectedValueOnce(replacement);
+
+    await expect(
+      runHarnessAttempt({
+        runId: "run-required-profile",
+        sessionEntry: makeSessionEntry("required-profile-session", {
+          authProfileOverride: "openai:required",
+          authProfileOverrideSource: "user",
+          authProfileOverrideRequired: true,
+        }),
+      }),
+    ).rejects.toBe(replacement);
+    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+  });
 
   it("does not store a session harness pin for default OpenAI Codex routing", async () => {
     const sessionEntry = makeSessionEntry("legacy-session");

@@ -649,6 +649,7 @@ describe("sessions tool", () => {
               prevModelOverrideFallbackOriginModel: "primary",
               prevAuthProfileOverride: "good-profile",
               prevAuthProfileOverrideSource: "user",
+              prevAuthProfileOverrideRequired: true,
               prevThinkingLevel: "high",
               ts: Date.now(),
               source: "agent-patch",
@@ -692,6 +693,7 @@ describe("sessions tool", () => {
           prevModelOverrideFallbackOriginProvider: "openai",
           prevModelOverrideFallbackOriginModel: "primary",
           prevAuthProfileOverride: "good-profile",
+          prevAuthProfileOverrideRequired: true,
           prevThinkingLevel: "high",
           source: "agent-patch",
         },
@@ -715,6 +717,7 @@ describe("sessions tool", () => {
         modelOverrideFallbackOriginProvider: "openai",
         modelOverrideFallbackOriginModel: "primary",
         authProfileOverride: "good-profile",
+        authProfileOverrideRequired: true,
         thinkingLevel: "high",
       });
       expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).not.toHaveProperty(
