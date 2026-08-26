@@ -30,7 +30,21 @@ Bun remains usable as an optional package-script runner. The default package man
     bun run vitest run
     ```
 
-    Use Node by default for commands that launch OpenClaw. To opt into Bun 1.4+, invoke the CLI with Bun or select `--runtime bun` when installing the managed Gateway or node host.
+    Use Node by default for commands that launch OpenClaw.
+
+  </Step>
+  <Step title="Run OpenClaw with Bun">
+    To run onboarding under Bun and install the managed Gateway under Bun:
+
+    ```sh
+    bun openclaw.mjs onboard --install-daemon --daemon-runtime bun
+    ```
+
+    For a managed node host, select Bun separately:
+
+    ```sh
+    bun openclaw.mjs node install --runtime bun
+    ```
 
   </Step>
 </Steps>
