@@ -13,6 +13,7 @@ import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import { logVerbose, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatSlackError } from "./errors.js";
 import {
   postSlackMessageWithIdentityFallback,
@@ -40,6 +41,26 @@ const SLACK_UPLOAD_POST_TIMEOUT_MS = 120_000;
 const SLACK_DNS_RETRY_CODES = new Set(["EAI_AGAIN", "ENOTFOUND", "UND_ERR_DNS_RESOLVE_FAILED"]);
 const SLACK_DNS_RETRY_ATTEMPTS = 2;
 const SLACK_DNS_RETRY_BASE_DELAY_MS = 250;
+
+// Slack reports provider verdicts as `slack_webapi_platform_error` with the code in
+// `data.error`; these two mean no recipient can ever see the message, so durable
+// recovery must stop retrying. Everything else rethrows by identity — the
+// `invalid_blocks` and custom-identity fallbacks match on the original value.
+// Pre-dispatch calls only: PlatformMessageNotDispatchedError asserts no send began,
+// so a call made after onPlatformSendDispatch must stay ambiguous instead.
+export function rethrowSlackPermanentOutboundApiRejection(err: unknown): never {
+  const rawData =
+    isRecord(err) && err.code === "slack_webapi_platform_error" ? err.data : undefined;
+  const data = isRecord(rawData) ? rawData : undefined;
+  const code = data?.error;
+  if (data?.ok === false && (code === "messages_tab_disabled" || code === "account_inactive")) {
+    throw new PlatformMessageNotDispatchedError(`Slack outbound delivery rejected: ${code}`, {
+      cause: err,
+      retryable: false,
+    });
+  }
+  throw err;
+}
 
 function readSlackRequestErrorCode(value: unknown): string | undefined {
   if (!value || typeof value !== "object") {
@@ -236,7 +257,9 @@ export async function postSlackMessageBestEffort(params: {
   const basePayload = buildSlackPostMessagePayload(params);
   const postChatMessage = params.client.chat.postMessage.bind(params.client.chat);
   const post = async (payload: SlackPostMessagePayload, identity?: SlackPostMessageIdentity) => ({
-    response: await withSlackDnsRequestRetry("chat.postMessage", () => postChatMessage(payload)),
+    response: await withSlackDnsRequestRetry("chat.postMessage", () =>
+      postChatMessage(payload),
+    ).catch(rethrowSlackPermanentOutboundApiRejection),
     identity,
   });
   const posted = await postSlackMessageWithIdentityFallback({
@@ -287,7 +310,7 @@ export async function uploadSlackFile(params: {
       filename: uploadFileName,
       length: buffer.length,
     }),
-  );
+  ).catch(rethrowSlackPermanentOutboundApiRejection);
   if (!uploadUrlResp.ok || !uploadUrlResp.upload_url || !uploadUrlResp.file_id) {
     throw new Error(`Failed to get upload URL: ${uploadUrlResp.error ?? "unknown error"}`);
   }
@@ -349,6 +372,8 @@ export async function uploadSlackFile(params: {
   await params.onPlatformSendDispatch?.();
   // Slack allows this finalize call only once. Keep only the pre-connect DNS
   // retry; a timeout or broader retry would create an unknown-send state.
+  // Dispatch is already recorded above, so this call is the ambiguous send:
+  // no rejection here may claim non-dispatch, however definitive its code reads.
   const completionClient = params.completionClient ?? params.client;
   const completeResp = await withSlackDnsRequestRetry("files.completeUploadExternal", () =>
     completionClient.files.completeUploadExternal({

@@ -7,19 +7,13 @@ import {
   buildExecRemoteCommand,
   disposeSshSandboxSession,
   shellEscape,
-  type CreateSandboxBackendParams,
 } from "openclaw/plugin-sdk/sandbox";
 import {
   resolvePreferredOpenClawTmpDir,
   tempWorkspace,
   type TempWorkspace,
 } from "openclaw/plugin-sdk/temp-path";
-import {
-  createSandboxBrowserConfig,
-  createSandboxPruneConfig,
-  createSandboxSshConfig,
-  createSandboxTestContext,
-} from "openclaw/plugin-sdk/test-fixtures";
+import { createSandboxTestContext } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenShellSandboxBackend } from "./backend.types.js";
 import {
@@ -28,6 +22,10 @@ import {
   runOpenShellCli,
 } from "./cli.js";
 import { resolveOpenShellPluginConfig } from "./config.js";
+import {
+  createOpenShellBackendSandboxConfig,
+  createOpenShellRuntimeEntryFixture,
+} from "./openshell.test-support.js";
 
 const openShellTestWorkspaceRoot = resolvePreferredOpenClawTmpDir();
 
@@ -522,16 +520,7 @@ describe("openshell backend manager", () => {
     });
 
     const result = await manager.describeRuntime({
-      entry: {
-        containerName: "openclaw-session-1234",
-        backendId: "openshell",
-        runtimeLabel: "openclaw-session-1234",
-        sessionKey: "agent:main",
-        createdAtMs: 1,
-        lastUsedAtMs: 1,
-        image: "custom-source",
-        configLabelKind: "Source",
-      },
+      entry: createOpenShellRuntimeEntryFixture("openclaw-session-1234", "custom-source"),
       config: {
         plugins: {
           entries: {
@@ -579,16 +568,7 @@ describe("openshell backend manager", () => {
 
       await expect(
         manager.describeRuntime({
-          entry: {
-            containerName: "openclaw-session-1234",
-            backendId: "openshell",
-            runtimeLabel: "openclaw-session-1234",
-            sessionKey: "agent:main",
-            createdAtMs: 1,
-            lastUsedAtMs: 1,
-            image: "openclaw",
-            configLabelKind: "Source",
-          },
+          entry: createOpenShellRuntimeEntryFixture("openclaw-session-1234"),
           config: {},
         }),
       ).resolves.toMatchObject({ running: false });
@@ -610,16 +590,7 @@ describe("openshell backend manager", () => {
     });
 
     await manager.removeRuntime({
-      entry: {
-        containerName: "openclaw-session-5678",
-        backendId: "openshell",
-        runtimeLabel: "openclaw-session-5678",
-        sessionKey: "agent:main",
-        createdAtMs: 1,
-        lastUsedAtMs: 1,
-        image: "openclaw",
-        configLabelKind: "Source",
-      },
+      entry: createOpenShellRuntimeEntryFixture("openclaw-session-5678"),
       config: {},
     });
 
@@ -636,16 +607,7 @@ describe("openshell backend manager", () => {
     });
 
     await manager.removeRuntime({
-      entry: {
-        containerName: "openclaw-session-5678",
-        backendId: "openshell",
-        runtimeLabel: "openclaw-session-5678",
-        sessionKey: "agent:main",
-        createdAtMs: 1,
-        lastUsedAtMs: 1,
-        image: "openclaw",
-        configLabelKind: "Source",
-      },
+      entry: createOpenShellRuntimeEntryFixture("openclaw-session-5678"),
       config: {
         plugins: {
           entries: {
@@ -691,16 +653,7 @@ describe("openshell backend manager", () => {
 
     await expect(
       manager.removeRuntime({
-        entry: {
-          containerName: "openclaw-session-5678",
-          backendId: "openshell",
-          runtimeLabel: "openclaw-session-5678",
-          sessionKey: "agent:main",
-          createdAtMs: 1,
-          lastUsedAtMs: 1,
-          image: "openclaw",
-          configLabelKind: "Source",
-        },
+        entry: createOpenShellRuntimeEntryFixture("openclaw-session-5678"),
         config: {},
       }),
     ).rejects.toThrow(expected);
@@ -928,32 +881,6 @@ describe("openshell backend manager", () => {
 });
 
 const executableWorkspaces: TempWorkspace[] = [];
-
-function createOpenShellBackendSandboxConfig(): CreateSandboxBackendParams["cfg"] {
-  return {
-    mode: "all",
-    backend: "openshell",
-    scope: "session",
-    workspaceAccess: "rw",
-    workspaceRoot: "/tmp/openclaw-sandboxes",
-    dockerTmpfsSource: "configured",
-    docker: {
-      image: "openclaw-sandbox:bookworm-slim",
-      containerPrefix: "openclaw-sbx-",
-      workdir: "/workspace",
-      readOnlyRoot: false,
-      tmpfs: [],
-      network: "none",
-      capDrop: [],
-      binds: [],
-      env: {},
-    },
-    ssh: createSandboxSshConfig("/tmp/openclaw-sandboxes"),
-    browser: createSandboxBrowserConfig(),
-    tools: { allow: ["*"], deny: [] },
-    prune: createSandboxPruneConfig(),
-  };
-}
 
 async function makeExecutable(params: { name: string; script: string }): Promise<string> {
   const workspace = await createOpenShellTestWorkspace("bin");

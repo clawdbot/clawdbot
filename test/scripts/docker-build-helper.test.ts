@@ -1,7 +1,7 @@
 // Docker Build Helper tests cover docker build helper script behavior.
 import { type ChildProcess, execFileSync, spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
@@ -2510,7 +2510,9 @@ docker_e2e_docker_run_cmd run demo
     }
     expectTextToIncludeAll(registryHelper, [
       "OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org",
-      'OPENCLAW_NPM_REGISTRY_DIST_TAGS="latest=0.0.0,beta=$candidate_version"',
+      '[[ "$candidate_version" =~ -(alpha|beta)\\.[1-9][0-9]*$ ]]',
+      'dist_tags="latest=0.0.0,$dist_tags"',
+      'OPENCLAW_NPM_REGISTRY_DIST_TAGS="$dist_tags"',
       'export NPM_CONFIG_REGISTRY="http://127.0.0.1:$(cat "$port_file")"',
       'export npm_config_registry="$NPM_CONFIG_REGISTRY"',
     ]);
@@ -3886,7 +3888,7 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
       "OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_REQUIRED_PACKAGES_JSON='[\"@openclaw/codex\"]'",
     ]);
     expectTextToIncludeAll(registryHelper, [
-      'OPENCLAW_NPM_REGISTRY_DIST_TAGS="latest=0.0.0,beta=$candidate_version"',
+      'OPENCLAW_NPM_REGISTRY_DIST_TAGS="$dist_tags"',
       "OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org",
     ]);
     expect(runner.indexOf("openclaw_e2e_install_package")).toBeLessThan(
@@ -4530,17 +4532,69 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
     }
   });
 
+  it("copies the complete bun harness closure into the package-install lane", () => {
+    const packageRunner = readFileSync(DOCKER_PACKAGE_INSTALL_E2E_PATH, "utf8");
+    const listMatch = /for harness_path in \\\n([^;]*); do/u.exec(packageRunner);
+    expect(listMatch, "bun harness copy list").toBeTruthy();
+    const copiedRoots = [...(listMatch?.[1] ?? "").matchAll(/[^\s\\]+/gu)].map((match) => match[0]);
+    expect(copiedRoots.length).toBeGreaterThan(0);
+    for (const root of copiedRoots) {
+      expect(existsSync(root), `${root} missing from repo`).toBe(true);
+    }
+    const isCopied = (file: string) =>
+      copiedRoots.some((root) => file === root || file.startsWith(`${root}/`));
+
+    // Walk every source/import/spawn reachable from the bun smoke entrypoint.
+    // Anything outside the copied roots crashes the bun proof container at
+    // runtime on its /repo mount, the way the #129552 e2e-instance drift did.
+    const pending = ["scripts/e2e/bun-global-install-smoke.sh"];
+    const visited = new Set<string>();
+    while (pending.length > 0) {
+      const file = pending.pop() ?? "";
+      if (visited.has(file)) {
+        continue;
+      }
+      visited.add(file);
+      expect(existsSync(file), `${file} referenced by the bun harness is missing`).toBe(true);
+      const body = readFileSync(file, "utf8");
+      const requirements: string[] = [];
+      for (const match of body.matchAll(/source "\$ROOT_DIR\/([^"]+)"/gu)) {
+        requirements.push(match[1] ?? "");
+      }
+      for (const match of body.matchAll(/source "\$[0-9A-Z_]+_LIB_DIR\/([^"]+)"/gu)) {
+        requirements.push(join(dirname(file), match[1] ?? ""));
+      }
+      for (const match of body.matchAll(/from "(\.\.?\/[^"]+)"/gu)) {
+        requirements.push(join(dirname(file), match[1] ?? ""));
+      }
+      for (const match of body.matchAll(/\bnode (scripts\/[^\s"']+\.(?:mjs|ts))/gu)) {
+        requirements.push(match[1] ?? "");
+      }
+      for (const requirement of requirements) {
+        expect(
+          isCopied(requirement),
+          `${file} needs ${requirement} inside the bun harness copy roots`,
+        ).toBe(true);
+        pending.push(requirement);
+      }
+    }
+    expect(visited.size).toBeGreaterThan(3);
+  });
+
   it("executes each CLI distribution boundary instead of promoting metadata", () => {
     const installerRunner = readFileSync(CLI_INSTALLER_DISTRIBUTION_E2E_PATH, "utf8");
     const packageRunner = readFileSync(DOCKER_PACKAGE_INSTALL_E2E_PATH, "utf8");
     const updateRunner = readFileSync(UPDATE_CHANNEL_SWITCH_DOCKER_E2E_PATH, "utf8");
 
     expectTextToIncludeAll(packageRunner, [
-      "npm install -g --prefix /tmp/openclaw-proof",
+      "--user root",
+      "npm install -g /tmp/openclaw-current.tgz",
+      "runuser -u appuser -- openclaw --version",
+      "runuser -u appuser -- openclaw --help",
       "corepack prepare pnpm@11.22.0 --activate",
       "pnpm add --global --allow-build=openclaw",
       "bun@1.4.0",
-      'test "$(command -v openclaw)" = "/tmp/openclaw-proof/bin/openclaw"',
+      'test "$(command -v openclaw)" = "/usr/local/bin/openclaw"',
       'test "$(command -v openclaw)" = "$PNPM_HOME/openclaw"',
       "OPENCLAW_BUN_GLOBAL_SMOKE_PROOF_PATH",
       'BUN_HARNESS_DIR="$(mktemp -d',
@@ -4682,6 +4736,7 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
     expectTextToIncludeAll(helper, [
       "--allow-unreleased-changelog",
       'local harness_root="${DOCKER_E2E_HARNESS_ROOT_DIR:-$ROOT_DIR}"',
+      '-v "$harness_root/scripts/prepublish-plugin-registry-artifact.mjs:/app/scripts/prepublish-plugin-registry-artifact.mjs:ro"',
       '-v "$harness_root/scripts/windows-cmd-helpers.mjs:/app/scripts/windows-cmd-helpers.mjs:ro"',
       '-v "$harness_root/packages/gateway-client/src:/app/packages/gateway-client/src:ro"',
       '-v "$harness_root/packages/normalization-core/package.json:/app/packages/normalization-core/package.json:ro"',

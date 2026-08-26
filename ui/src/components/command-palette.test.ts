@@ -125,6 +125,13 @@ async function enterQuery(palette: CommandPalette, query: string) {
   await palette.updateComplete;
 }
 
+function findPaletteOption(palette: CommandPalette, label: string, exact = false) {
+  return [...palette.querySelectorAll<HTMLElement>('[role="option"]')].find((item) => {
+    const text = item.textContent?.replace(/\s+/g, " ").trim();
+    return exact ? text === label : text?.includes(label);
+  });
+}
+
 describe("CommandPalette lifecycle", () => {
   let restoreDialogPolyfill: () => void;
 
@@ -323,9 +330,7 @@ describe("CommandPalette lifecycle", () => {
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
     await palette.updateComplete;
 
-    const metadataItem = palette.querySelector<HTMLElement>(
-      "#cmd-palette-option-session-agent-main-metadata",
-    );
+    const metadataItem = findPaletteOption(palette, "Needle planning");
     expect(metadataItem?.textContent).toContain("Needle planning");
     metadataItem?.click();
     expect(palette.onSelectSession).toHaveBeenCalledWith("agent:main:metadata");
@@ -413,9 +418,7 @@ describe("CommandPalette lifecycle", () => {
     await enterQuery(palette, "reconciles");
     await vi.advanceTimersByTimeAsync(50);
     await vi.waitFor(() => expect(palette.textContent).toContain("Nightly invoices"));
-    const item = palette.querySelector<HTMLElement>(
-      "#cmd-palette-option-automation-nightly-invoices",
-    );
+    const item = findPaletteOption(palette, "Nightly invoices");
     item?.click();
     expect(palette.onNavigate).toHaveBeenCalledWith("cron");
 
@@ -435,6 +438,120 @@ describe("CommandPalette lifecycle", () => {
 
     expect(list).not.toHaveBeenCalled();
   });
+
+  it.each(["click", "keyboard"])(
+    "opens the selected catalog agent's encoded route by %s",
+    async (method) => {
+      const { gateway } = createGateway(true);
+      const context = createContext(
+        gateway,
+        vi.fn(async () => null),
+      );
+      const { palette } = await mountPalette({
+        ...context,
+        basePath: "/openclaw",
+        agents: {
+          ...context.agents,
+          ensureList: async () => ({
+            defaultId: "main",
+            mainKey: "main",
+            scope: "per-sender",
+            agents: [{ id: "reviewer.team", name: "Reviewer" }],
+          }),
+        },
+      });
+      await enterQuery(palette, "Reviewer");
+      await vi.advanceTimersByTimeAsync(50);
+      await palette.updateComplete;
+      const item = palette.querySelector<HTMLElement>('[role="option"]');
+      expect(item?.textContent).toContain("Reviewer");
+      if (method === "click") {
+        item?.click();
+      } else {
+        palette
+          .querySelector("input")
+          ?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      }
+      expect(palette.onNavigate).toHaveBeenCalledWith("agents", {
+        pathname: "/openclaw/settings/agents/reviewer%2Eteam",
+      });
+      expect(palette.isOpen).toBe(false);
+    },
+  );
+
+  it("moves the keyboard selection through catalog groups in visible order", async () => {
+    const { gateway } = createGateway(true, {
+      methods: ["cron.list"],
+      request: vi.fn(async () => ({
+        jobs: [{ id: "bravo", name: "Needle Bravo" }],
+      })) as GatewayBrowserClient["request"],
+    });
+    const context = createContext(
+      gateway,
+      vi.fn(async () => null),
+    );
+    const { palette } = await mountPalette({
+      ...context,
+      agents: {
+        ...context.agents,
+        ensureList: async () => ({
+          defaultId: "alpha",
+          mainKey: "main",
+          scope: "per-sender",
+          agents: [
+            { id: "alpha", name: "Needle Alpha" },
+            { id: "charlie", name: "Needle Charlie" },
+          ],
+        }),
+      },
+    });
+    await enterQuery(palette, "Needle");
+    await vi.advanceTimersByTimeAsync(50);
+    await palette.updateComplete;
+    const items = [...palette.querySelectorAll<HTMLElement>('[role="option"]')];
+    expect(items.map((item) => item.textContent?.replace(/\s+/g, " ").trim())).toEqual([
+      "Needle Alpha alpha",
+      "Needle Charlie charlie",
+      "Needle Bravo",
+    ]);
+    for (const expectedIndex of [1, 2, 0]) {
+      palette
+        .querySelector("input")
+        ?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+      await palette.updateComplete;
+      expect(palette.querySelector('[aria-selected="true"]')).toBe(items[expectedIndex]);
+    }
+  });
+
+  it.each(["agent:main:topic:thread", "agent:main:topic:\ud800"])(
+    "keeps the active descendant bound for session key %j",
+    async (key) => {
+      const { gateway } = createGateway(true);
+      const colon = createSessionResult(key, "Needle colon");
+      const hyphen = createSessionResult("agent:main:topic-thread", "Needle hyphen");
+      const { palette } = await mountPalette(
+        createContext(
+          gateway,
+          vi.fn(async () => ({
+            ...colon,
+            count: 2,
+            sessions: [...colon.sessions, ...hyphen.sessions],
+          })),
+        ),
+      );
+      await enterQuery(palette, "Needle");
+      await vi.advanceTimersByTimeAsync(50);
+      await palette.updateComplete;
+      palette
+        .querySelector("input")
+        ?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+      await palette.updateComplete;
+      const active = palette.querySelector('[aria-selected="true"]');
+      expect(active?.textContent).toContain("Needle hyphen");
+      const activeId = palette.querySelector("input")?.getAttribute("aria-activedescendant");
+      expect(document.getElementById(activeId ?? "")).toBe(active);
+    },
+  );
 
   it("keeps bounded metadata pagination when transcript search is unavailable", async () => {
     const list = vi.fn<ApplicationContext<RouteId>["sessions"]["list"]>(async (options) => {
@@ -527,7 +644,7 @@ describe("CommandPalette lifecycle", () => {
     );
     await enterQuery(palette, "plugins");
 
-    const item = palette.querySelector<HTMLButtonElement>("#cmd-palette-option-nav-plugins");
+    const item = findPaletteOption(palette, "Plugins");
     expect(item?.textContent).toContain("Plugins");
     item?.click();
 
@@ -550,9 +667,7 @@ describe("CommandPalette lifecycle", () => {
       palette.desktopAvailable = available;
       await enterQuery(palette, "desktop");
 
-      expect(palette.querySelectorAll("#cmd-palette-option-panel-desktop")).toHaveLength(
-        expectedCount,
-      );
+      expect(findPaletteOption(palette, "Desktop", true) ? 1 : 0).toBe(expectedCount);
     },
   );
 
@@ -570,7 +685,7 @@ describe("CommandPalette lifecycle", () => {
     const listener = (event: Event) => events.push(event as CustomEvent<DesktopPanelToggleDetail>);
     window.addEventListener(DESKTOP_PANEL_TOGGLE_EVENT, listener);
     try {
-      palette.querySelector<HTMLElement>("#cmd-palette-option-panel-desktop")?.click();
+      findPaletteOption(palette, "Desktop", true)?.click();
     } finally {
       window.removeEventListener(DESKTOP_PANEL_TOGGLE_EVENT, listener);
     }
@@ -595,9 +710,7 @@ describe("CommandPalette lifecycle", () => {
       palette.custodianAvailable = available;
       await enterQuery(palette, "openclaw");
 
-      expect(palette.querySelectorAll("#cmd-palette-option-panel-custodian")).toHaveLength(
-        expectedCount,
-      );
+      expect(findPaletteOption(palette, "Ask OpenClaw", true) ? 1 : 0).toBe(expectedCount);
     },
   );
 
@@ -616,7 +729,7 @@ describe("CommandPalette lifecycle", () => {
       events.push(event as CustomEvent<CustodianPanelToggleDetail>);
     window.addEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, listener);
     try {
-      palette.querySelector<HTMLElement>("#cmd-palette-option-panel-custodian")?.click();
+      findPaletteOption(palette, "Ask OpenClaw", true)?.click();
     } finally {
       window.removeEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, listener);
     }

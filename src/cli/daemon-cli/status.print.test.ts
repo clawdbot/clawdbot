@@ -107,7 +107,6 @@ vi.mock("./shared.js", () => ({
   filterDaemonEnv: () => ({}),
   formatRuntimeStatus: () => "running (pid 8000)",
   resolveRuntimeStatusColor: () => "",
-  resolveDaemonContainerContext: () => null,
   renderRuntimeHints: () => [],
   safeDaemonEnv: () => [],
 }));
@@ -475,7 +474,7 @@ describe("printDaemonStatus", () => {
     expect(renderSystemdUnavailableHintsMock).toHaveBeenCalledWith({
       wsl: true,
       kind: "generic_unavailable",
-      container: false,
+      env: { WSL_DISTRO_NAME: "Ubuntu" },
     });
     expectMockLineContains(runtime.log, "Service: systemd (unknown)");
     expect(runtime.log.mock.calls.flat().join("\n")).not.toContain("Service: systemd (not loaded)");

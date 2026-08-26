@@ -15,6 +15,135 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
+  it.each([
+    { name: "caret insertion", start: 5, end: 5, expected: "ship please it", cancel: false },
+    { name: "selection replacement", start: 5, end: 7, expected: "ship please", cancel: false },
+    { name: "cancel after blur", start: 7, end: 7, expected: "ship it please", cancel: true },
+  ])("preserves the draft through $name", async ({ name, start, end, expected, cancel }) => {
+    await suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        deferredMethods: ["talk.session.create"],
+        methodResponses: {
+          "talk.catalog": {
+            transcription: { ready: true, providers: [] },
+            realtime: { providers: [] },
+            speech: { providers: [] },
+            modes: [],
+            transports: [],
+            brains: [],
+          },
+          "talk.session.create": {
+            sessionId: "dictation-preview-proof",
+            transcriptionSessionId: "dictation-preview-proof",
+            audio: { inputEncoding: "g711_ulaw", inputSampleRateHz: 8000 },
+          },
+        },
+      });
+      await installTalkBrowserFixtures(page);
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const textarea = page.locator(".agent-chat__composer-combobox textarea");
+      await textarea.fill("ship it");
+      await textarea.evaluate(
+        (element: HTMLTextAreaElement, selection) =>
+          element.setSelectionRange(selection.start, selection.end),
+        { start, end },
+      );
+      await page.getByRole("button", { name: "Start voice input" }).hover();
+      await page.mouse.down();
+      await gateway.waitForRequest("talk.session.create");
+      await gateway.resolveDeferred("talk.session.create");
+      await page.mouse.up();
+      await gateway.emitGatewayEvent("talk.event", {
+        transcriptionSessionId: "dictation-preview-proof",
+        type: "partial",
+        text: "please",
+      });
+      await expect.poll(() => textarea.inputValue()).toBe(expected);
+      if (cancel) {
+        await page.getByRole("button", { name: "Collapse sidebar", exact: true }).click();
+        await page.keyboard.press("Escape");
+      } else {
+        await page.getByRole("button", { name: "Stop and keep text" }).click();
+      }
+      await gateway.waitForRequest("talk.session.close");
+      const committedDraft = cancel ? "ship it" : expected;
+      expect(await textarea.inputValue()).toBe(committedDraft);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      await captureComposerProof(page, `dictation-${name.replaceAll(" ", "-")}-committed.png`);
+      expect(await textarea.inputValue()).toBe(committedDraft);
+    });
+  });
+
+  it("keeps recognized speech visible until Escape cancels new-session dictation", async () => {
+    await suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        deferredMethods: ["talk.session.create"],
+        featureMethods: ["chat.metadata", "chat.startup", "sessions.create", "sessions.dispatch"],
+        methodResponses: {
+          "talk.catalog": {
+            transcription: { ready: true, providers: [] },
+            realtime: { providers: [] },
+            speech: { providers: [] },
+            modes: [],
+            transports: [],
+            brains: [],
+          },
+          "talk.session.create": {
+            sessionId: "dictation-direct-proof",
+            transcriptionSessionId: "dictation-direct-proof",
+            audio: { inputEncoding: "g711_ulaw", inputSampleRateHz: 8000 },
+          },
+        },
+      });
+      await installTalkBrowserFixtures(page);
+      await page.goto(`${suite.server.baseUrl}new`);
+      const textarea = page.locator(".new-session-page__message");
+      await textarea.fill("keep this draft");
+      await page.getByRole("button", { name: "Dictate", exact: true }).click();
+      await gateway.waitForRequest("talk.session.create");
+      await gateway.resolveDeferred("talk.session.create");
+      await gateway.emitGatewayEvent("talk.event", {
+        transcriptionSessionId: "dictation-direct-proof",
+        type: "partial",
+        text: "discard this speech",
+      });
+      await expect.poll(() => textarea.inputValue()).toContain("discard this speech");
+      await gateway.emitGatewayEvent("talk.event", {
+        transcriptionSessionId: "dictation-direct-proof",
+        type: "transcript",
+        text: "discard this speech",
+        final: true,
+      });
+      await expect.poll(() => textarea.inputValue()).toBe("keep this draft discard this speech");
+      await gateway.emitGatewayEvent("talk.event", {
+        transcriptionSessionId: "dictation-direct-proof",
+        type: "partial",
+        text: "too",
+      });
+      await expect
+        .poll(() => textarea.inputValue())
+        .toBe("keep this draft discard this speech too");
+      await gateway.emitGatewayEvent("talk.event", {
+        transcriptionSessionId: "dictation-direct-proof",
+        type: "transcript",
+        text: "",
+        final: true,
+      });
+      await expect
+        .poll(() => textarea.inputValue())
+        .toBe("keep this draft discard this speech too");
+      await captureComposerProof(page, "dictation-new-session-recognized-preview.png");
+      await page.keyboard.press("Escape");
+      await expect.poll(() => textarea.inputValue()).toBe("keep this draft");
+      await gateway.waitForRequest("talk.session.close");
+      expect(await page.getByRole("button", { name: "Dictate", exact: true }).isVisible()).toBe(
+        true,
+      );
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+      await captureComposerProof(page, "dictation-new-session-cancelled.png");
+    });
+  });
+
   it("keeps the hold-to-dictate switch interactive without closing the microphone picker", async () => {
     await suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
       await installMockGateway(page, {

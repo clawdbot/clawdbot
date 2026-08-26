@@ -14,13 +14,16 @@ function sha256(path: string): string {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
-function createTarball(root: string, outputDir: string, name: string, filename: string): string {
+function createTarball(
+  root: string,
+  outputDir: string,
+  name: string,
+  filename: string,
+  version = VERSION,
+): string {
   const packageRoot = join(root, "staging", filename, "package");
   mkdirSync(packageRoot, { recursive: true });
-  writeFileSync(
-    join(packageRoot, "package.json"),
-    `${JSON.stringify({ name, version: VERSION })}\n`,
-  );
+  writeFileSync(join(packageRoot, "package.json"), `${JSON.stringify({ name, version })}\n`);
   const tarball = join(outputDir, filename);
   execFileSync("tar", ["-czf", tarball, "-C", join(packageRoot, ".."), "package"]);
   return tarball;
@@ -120,6 +123,67 @@ NODE
 
     expect(result.status, result.stderr).toBe(0);
   });
+
+  it.each(["2026.8.1", "2026.8.1-2"])(
+    "resolves stable candidate %s from an unversioned npm spec",
+    (version) => {
+      const root = tempDirs.make("openclaw-stable-prepublish-registry-shell-");
+      const registryRoot = join(root, "registry");
+      const discordTarball = createTarball(
+        root,
+        root,
+        "@openclaw/discord",
+        `openclaw-discord-${version}.tgz`,
+        version,
+      );
+      const fixtureVersion = "2026.5.2";
+      const braveTarball = createTarball(
+        root,
+        root,
+        "@openclaw/brave-plugin",
+        `openclaw-brave-${fixtureVersion}.tgz`,
+        fixtureVersion,
+      );
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          `
+set -euo pipefail
+source "$HELPER"
+registry_pid=""
+cleanup() {
+  if [ -n "$registry_pid" ]; then
+    kill "$registry_pid" >/dev/null 2>&1 || true
+    wait "$registry_pid" >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup EXIT
+openclaw_prepublish_plugin_registry_start \
+  "" "" "$VERSION" "" "$REGISTRY_ROOT" registry_pid \
+  "@openclaw/discord" "$VERSION" "$DISCORD_TARBALL" \
+  "@openclaw/brave-plugin" "$FIXTURE_VERSION" "$BRAVE_TARBALL"
+test "$(npm view @openclaw/discord version)" = "$VERSION"
+test "$(npm view @openclaw/brave-plugin version)" = "$FIXTURE_VERSION"
+`,
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            BRAVE_TARBALL: braveTarball,
+            DISCORD_TARBALL: discordTarball,
+            FIXTURE_VERSION: fixtureVersion,
+            HELPER: SCRIPT,
+            REGISTRY_ROOT: registryRoot,
+            VERSION: version,
+          },
+        },
+      );
+
+      expect(result.status, result.stderr).toBe(0);
+    },
+  );
 
   it("is valid Bash", () => {
     const result = spawnSync("bash", ["-n", SCRIPT], { encoding: "utf8" });

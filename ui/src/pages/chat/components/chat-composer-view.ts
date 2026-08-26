@@ -242,15 +242,14 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
       : nothing;
   // Dictation previews at the captured selection. The textarea remains
   // read-only until stop commits the same insertion into the real draft.
-  const dictationPreviewDraft =
-    dictation?.active && dictation.partial
-      ? insertComposerDictation(
-          visibleDraft,
-          dictation.partial,
-          state.dictationSelection?.start ?? visibleDraft.length,
-          state.dictationSelection?.end ?? visibleDraft.length,
-        ).value
-      : visibleDraft;
+  const dictationPreviewDraft = dictation?.active
+    ? insertComposerDictation(
+        state.dictationSelection?.value ?? visibleDraft,
+        dictation.transcript,
+        state.dictationSelection?.start ?? visibleDraft.length,
+        state.dictationSelection?.end ?? visibleDraft.length,
+      ).value
+    : visibleDraft;
   const draftDirection = detectTextDirection(dictationPreviewDraft);
   const interruptedStatus = props.runError
     ? nothing
@@ -259,7 +258,15 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
   const compactionStatus = renderCompactionIndicator(props.compactionStatus);
   const progressCard = props.progressCard
     ? html`<div class="agent-chat__progress-float">
-        ${renderSessionProgressCard(props.progressCard, "composer", props.onDismissProgressCard)}
+        ${renderSessionProgressCard(
+          props.progressCard,
+          "composer",
+          props.onDismissProgressCard,
+          activeSession?.status,
+          activeSession?.startedAt,
+          activeSession?.endedAt,
+          props.progressCardHasActiveRun,
+        )}
       </div>`
     : nothing;
   const queue = renderChatQueue({
@@ -293,8 +300,13 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
         })}
       </div>`
     : nothing;
+  const compoundQuestionComposer = Boolean(questionPanelProps && showComposerInput);
   return html`
-    <div class="agent-chat__composer-shell">
+    <div
+      class="agent-chat__composer-shell ${compoundQuestionComposer
+        ? "agent-chat__composer-shell--question-composer"
+        : ""}"
+    >
       <div class="agent-chat__composer-overlay">
         ${props.anchoredNotices ?? nothing} ${composerAlerts} ${fallbackStatus} ${compactionStatus}
         ${interruptedStatus === nothing

@@ -207,12 +207,20 @@ async function executeWorkerTurn(params: {
     ...(turn.abortSignal ? { signal: turn.abortSignal } : {}),
     timeoutMs: turn.timeoutMs,
   });
+  const portalAvailable =
+    Boolean(environment.nodeDeviceId) &&
+    environment.sshEndpoint === null &&
+    (await params.environments.supportsNodePortal?.(
+      placement.environmentId,
+      placement.activeOwnerEpoch,
+    )) === true;
   const reasoning = mapThinkingLevelForProvider(turn.thinkLevel);
   const { browser, toolAuthority } = resolveWorkerBrowserLaunchPlan({
     desktop: environment.desktop,
     modelRef,
     turn,
     githubPublicationAvailable,
+    portalAvailable,
   });
   params.placements.authorizeWorkerTurnTools(params.turnClaim, toolAuthority.allowedToolNames);
   const { operationalRunInstance, runtimeIdentity } = await prepareWorkerAgentRuntimeIdentity({

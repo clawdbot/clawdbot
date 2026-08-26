@@ -11,7 +11,10 @@ import {
   isGatewayWorkAdmissionClosed,
 } from "../process/gateway-work-admission.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import { NODE_DESKTOP_ATTACH_PATH } from "../shared/node-desktop-stream.js";
+import {
+  NODE_DESKTOP_ATTACH_PATH,
+  NODE_PORTAL_ATTACH_PATH,
+} from "../shared/node-desktop-stream.js";
 import { AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION, type AuthRateLimiter } from "./auth-rate-limit.js";
 import type { GatewayAuthResult, ResolvedGatewayAuth } from "./auth.js";
 import type { NodeDesktopStreamBroker } from "./desktop/node-stream-broker.js";
@@ -410,10 +413,11 @@ export function attachGatewayUpgradeHandler(opts: {
         });
         return;
       }
-      if (requestPath === NODE_DESKTOP_ATTACH_PATH) {
+      if (requestPath === NODE_DESKTOP_ATTACH_PATH || requestPath === NODE_PORTAL_ATTACH_PATH) {
         const context = opts.getGatewayRequestContext?.();
         if (!opts.nodeDesktopStreamBroker || !context) {
-          writeGatewayUpgradeServiceUnavailable(socket, "node desktop attach unavailable");
+          const feature = requestPath === NODE_DESKTOP_ATTACH_PATH ? "desktop" : "portal";
+          writeGatewayUpgradeServiceUnavailable(socket, `node ${feature} attach unavailable`);
           socket.destroy();
           return;
         }

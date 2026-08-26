@@ -64,6 +64,21 @@ const BUILTIN_THEME_OPTIONS: ThemeOption[] = [
     labelKey: "configView.themes.absolutely.label",
     descriptionKey: "configView.themes.absolutely.description",
   },
+  {
+    id: "tide",
+    labelKey: "configView.themes.tide.label",
+    descriptionKey: "configView.themes.tide.description",
+  },
+  {
+    id: "beacon",
+    labelKey: "configView.themes.beacon.label",
+    descriptionKey: "configView.themes.beacon.description",
+  },
+  {
+    id: "phosphor",
+    labelKey: "configView.themes.phosphor.label",
+    descriptionKey: "configView.themes.phosphor.description",
+  },
 ];
 
 const ACCENT_PRESETS = [

@@ -931,16 +931,19 @@
   /*
    * Accent — terracotta clay on warm graphite
    *
-   * WCAG 2.1 AA audit (bg = #262624, relative luminance ≈ 0.0198):
-   *   --accent #d97757  L ≈ 0.257  contrast ≈ 4.9:1  AA text ✓
-   *   --accent-hover #e68b6b  L ≈ 0.338  contrast ≈ 6.0:1  ✓
+   * WCAG 2.1 AA audit (bg = #1c1c1a, relative luminance ≈ 0.0115):
+   *   --accent #d97757  L ≈ 0.257  contrast ≈ 5.5:1  AA text ✓
+   *   --accent-hover #e68b6b  L ≈ 0.338  contrast ≈ 6.7:1  ✓
    *   --primary-foreground #241f1b on #d97757 button: 5.2:1 AA ✓
    *   --primary-foreground #241f1b on #e68b6b hover: 6.4:1 AA ✓
    *   --destructive-foreground #fafafa on #d32f2f button: 4.77:1 AA ✓
-   *   focus-ring at 75% opacity: ≈ 3.3:1 against bg ✓ (non-text 3:1 required)
+   *   focus-ring at 75% opacity: ≈ 3.6:1 against bg ✓ (non-text 3:1 required)
    *
-   * The accent dims below AA on the lightest surfaces (3.7:1 on --bg-muted),
-   * so it stays a fill/indicator color there; body copy uses --text.
+   * The surface ramp sits a step below the original #262624 launch palette,
+   * which was the lightest dark theme in the set by a wide margin. Every
+   * pairing improved: worst text 4.68 -> 5.42:1, accent on --card 4.47 ->
+   * 5.05:1 (AA where it previously was not). The accent still dims below AA on
+   * --bg-muted (4.3:1), so it stays a fill/indicator color there, not body copy.
    */
   --ring: #d97757;
   --accent: #d97757;
@@ -961,23 +964,23 @@
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 75%, transparent);
 
   /* Surfaces — warm graphite, a shade off true neutral */
-  --bg: #262624;
-  --bg-accent: #2d2c29;
-  --bg-elevated: #33322e;
-  --bg-hover: #3a3934;
-  --bg-muted: #3a3934;
+  --bg: #1c1c1a;
+  --bg-accent: #232320;
+  --bg-elevated: #292825;
+  --bg-hover: #302f2b;
+  --bg-muted: #302f2b;
 
-  --card: #2d2c29;
+  --card: #232320;
   --card-foreground: #ede8dd;
   --card-highlight: rgba(255, 246, 232, 0.04);
-  --popover: #33322e;
+  --popover: #292825;
   --popover-foreground: #ede8dd;
 
-  --panel: #262624;
-  --panel-strong: #33322e;
-  --panel-hover: #3a3934;
-  --chrome: rgba(38, 38, 36, 0.96);
-  --chrome-strong: rgba(38, 38, 36, 0.98);
+  --panel: #1c1c1a;
+  --panel-strong: #292825;
+  --panel-hover: #302f2b;
+  --chrome: rgba(28, 28, 26, 0.96);
+  --chrome-strong: rgba(28, 28, 26, 0.98);
 
   --text: #e4dfd4;
   --text-strong: #f5f1e8;
@@ -986,12 +989,12 @@
   --muted-strong: #b8b1a4;
   --muted-foreground: #aba498;
 
-  --border: #383630;
-  --border-strong: #48453d;
-  --border-hover: #5c584e;
-  --input: #383630;
+  --border: #2e2c27;
+  --border-strong: #3d3a33;
+  --border-hover: #514d44;
+  --input: #2e2c27;
 
-  --secondary: #2d2c29;
+  --secondary: #232320;
   --secondary-foreground: #ede8dd;
   --accent-2: #b8926a;
   --accent-2-muted: rgba(184, 146, 106, 0.7);
@@ -1079,6 +1082,512 @@
      system fallbacks so a failed font load degrades instead of blanking text. */
   --font-body: "Space Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-chat: "Lora", Georgia, "Times New Roman", serif;
+}
+
+:root[data-theme="tide"] {
+  /*
+   * Accent — steel cyan on deep slate
+   *
+   * The first cool-primary theme in the set; every other palette accents warm.
+   *
+   * WCAG 2.1 AA audit (bg = #10151b, relative luminance ≈ 0.0093):
+   *   --accent #5ab6d8  contrast ≈ 8.0:1  AA text ✓
+   *   --primary-foreground #0b1116 on #5ab6d8 button: 8.2:1 AAA ✓
+   *   --primary-foreground #0b1116 on #7ac8e4 hover: 10.1:1 ✓
+   *   --destructive-foreground #fafafa on #d32f2f button: 4.77:1 AA ✓
+   *   worst text pairing --muted on --bg-muted: 6.12:1 ✓
+   *   inherited status label on own subtle tint, worst surface: 4.65:1 ✓
+   */
+  --ring: #5ab6d8;
+  --accent: #5ab6d8;
+  --accent-hover: #7ac8e4;
+  --accent-muted: #5ab6d8;
+  --accent-subtle: rgba(90, 182, 216, 0.12);
+  --accent-glow: rgba(90, 182, 216, 0.2);
+  --primary: #5ab6d8;
+  --primary-hover: #7ac8e4;
+  --primary-foreground: #0b1116;
+
+  /* Deepen only the text-bearing destructive fill; keep danger accents vivid. */
+  --destructive: #d32f2f;
+  --destructive-hover: #bc2a2a;
+
+  --focus: rgba(90, 182, 216, 0.2);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 70%, transparent);
+  --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 16px var(--accent-glow);
+
+  /* Surfaces — cold slate, low saturation */
+  --bg: #10151b;
+  --bg-accent: #151b23;
+  --bg-elevated: #1b232c;
+  --bg-hover: #212b36;
+  --bg-muted: #212b36;
+
+  --card: #161d25;
+  --card-foreground: #eef3f8;
+  --card-highlight: rgba(210, 232, 255, 0.04);
+  --popover: #1b232c;
+  --popover-foreground: #eef3f8;
+
+  --panel: #10151b;
+  --panel-strong: #1b232c;
+  --panel-hover: #212b36;
+  --chrome: rgba(16, 21, 27, 0.96);
+  --chrome-strong: rgba(16, 21, 27, 0.98);
+
+  --text: #dce3ea;
+  --text-strong: #f2f6fa;
+  --chat-text: #dce3ea;
+  --muted: #9dabb9;
+  --muted-strong: #aab7c4;
+  --muted-foreground: #9dabb9;
+
+  --border: #222c37;
+  --border-strong: #33414f;
+  --border-hover: #465767;
+  --input: #222c37;
+
+  --secondary: #161d25;
+  --secondary-foreground: #eef3f8;
+  --accent-2: #7f9bb5;
+  --accent-2-muted: rgba(127, 155, 181, 0.7);
+  --accent-2-subtle: rgba(127, 155, 181, 0.12);
+
+  --shadow-sm: 0 1px 2px rgba(2, 6, 12, 0.4);
+  --shadow-md: 0 4px 16px rgba(2, 6, 12, 0.5);
+  --shadow-lg: 0 12px 32px rgba(2, 6, 12, 0.6);
+  --overlay-shadow: var(--shadow-md);
+
+  --grid-line: rgba(210, 232, 255, 0.03);
+}
+
+:root[data-theme="tide-light"] {
+  /*
+   * Accent — deep teal-blue on cool paper
+   *
+   * WCAG 2.1 AA audit (bg = #f7f9fb, relative luminance ≈ 0.928):
+   *   --accent #1f6f8f  contrast ≈ 5.3:1  AA text ✓
+   *   --accent-hover #175a75  contrast ≈ 7.6:1  AAA ✓
+   *   --primary-foreground #ffffff on #1f6f8f button: 5.6:1 AA ✓
+   *   worst text pairing --muted on --bg-muted: 4.63:1 ✓
+   */
+  --ring: #1f6f8f;
+  --accent: #1f6f8f;
+  --accent-hover: #175a75;
+  --accent-muted: #1f6f8f;
+  --accent-subtle: rgba(31, 111, 143, 0.1);
+  --accent-glow: rgba(31, 111, 143, 0.14);
+  --primary: #1f6f8f;
+  --primary-foreground: #ffffff;
+
+  --bg: #f7f9fb;
+  --bg-accent: #eef2f7;
+  --bg-elevated: #ffffff;
+  --bg-hover: #e8edf2;
+  --bg-muted: #e8edf2;
+  --bg-content: #eef2f7;
+
+  --card: #ffffff;
+  --card-foreground: #1b232b;
+  --card-highlight: rgba(20, 40, 60, 0.02);
+  --popover: #ffffff;
+  --popover-foreground: #1b232b;
+  --session-hovercard-surface: var(--card);
+  --session-hovercard-progress-surface: color-mix(
+    in srgb,
+    var(--card) 52%,
+    var(--panel-strong) 48%
+  );
+
+  --panel: #f7f9fb;
+  --panel-strong: #eef2f7;
+  --panel-hover: #dfe6ee;
+  --chrome: rgba(247, 249, 251, 0.96);
+  --chrome-strong: rgba(247, 249, 251, 0.98);
+
+  --text: #333c45;
+  --text-strong: #1b232b;
+  --chat-text: #333c45;
+  --muted: #5f6b76;
+  --muted-strong: #4c5761;
+  --muted-foreground: #5f6b76;
+
+  --border: #dfe5ec;
+  --border-strong: #c5cfd9;
+  --border-hover: #a3b0bd;
+  --input: #dfe5ec;
+
+  --secondary: #eef2f7;
+  --secondary-foreground: #333c45;
+  --accent-2: #3d6d88;
+  --accent-2-muted: rgba(61, 109, 136, 0.75);
+  --accent-2-subtle: rgba(61, 109, 136, 0.1);
+
+  --shadow-sm: 0 1px 2px rgba(20, 40, 60, 0.05);
+  --shadow-md: 0 4px 12px rgba(20, 40, 60, 0.07);
+  --shadow-lg: 0 12px 28px rgba(20, 40, 60, 0.09);
+  --overlay-shadow: var(--shadow-md);
+
+  --grid-line: rgba(20, 40, 60, 0.04);
+}
+
+/*
+ * Beacon targets WCAG AAA (7:1), not the AA 4.5:1 floor the other themes hold,
+ * for low vision, direct sunlight, projectors, and poor panels.
+ *
+ * That forces one deliberate break from the status-token convention in :root:
+ * elsewhere each --x-subtle is --x at 8%, but a label sitting on a tint of its
+ * own hue caps the achievable contrast, because the tint pulls the background
+ * toward the text. Beacon tints neutrally instead and lets the label carry the
+ * contrast, which is what buys AAA on the status pairs.
+ */
+:root[data-theme="beacon"] {
+  /*
+   * Accent — high-visibility amber on pure black
+   *
+   * WCAG 2.1 AAA audit (bg = #000000):
+   *   --accent #ffc233  contrast ≈ 13.0:1 AAA ✓
+   *   --primary-foreground #000000 on #ffc233 button: 13.0:1 ✓
+   *   worst text pairing --muted on --bg-muted: 10.29:1 ✓
+   *   worst status label on its neutral subtle tint: 7.05:1 ✓
+   */
+  --ring: #ffc233;
+  --accent: #ffc233;
+  --accent-hover: #ffd45e;
+  --accent-muted: #ffc233;
+  --accent-subtle: rgba(255, 255, 255, 0.1);
+  --accent-glow: rgba(255, 194, 51, 0.3);
+  --primary: #ffc233;
+  --primary-hover: #ffd45e;
+  --primary-foreground: #000000;
+
+  /* Focus is 3px and fully opaque: a translucent ring is the first thing to
+     disappear on a poor panel, which is exactly this theme's audience. */
+  --focus: rgba(255, 194, 51, 0.35);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 5px var(--ring);
+  --focus-glow: 0 0 0 2px var(--bg), 0 0 0 5px var(--ring);
+
+  --bg: #000000;
+  --bg-accent: #0a0a0a;
+  --bg-elevated: #141414;
+  --bg-hover: #1c1c1c;
+  --bg-muted: #1c1c1c;
+
+  --card: #0a0a0a;
+  --card-foreground: #ffffff;
+  --card-highlight: rgba(255, 255, 255, 0.06);
+  --popover: #141414;
+  --popover-foreground: #ffffff;
+
+  --panel: #000000;
+  --panel-strong: #141414;
+  --panel-hover: #1c1c1c;
+  --chrome: rgba(0, 0, 0, 0.98);
+  --chrome-strong: #000000;
+
+  --text: #ffffff;
+  --text-strong: #ffffff;
+  --chat-text: #ffffff;
+  --muted: #c9c9c9;
+  --muted-strong: #dcdcdc;
+  --muted-foreground: #c9c9c9;
+
+  /* Borders are structure here, not decoration: hairlines vanish first. */
+  --border: #4a4a4a;
+  --border-strong: #6e6e6e;
+  --border-hover: #9a9a9a;
+  --input: #4a4a4a;
+
+  --secondary: #141414;
+  --secondary-foreground: #ffffff;
+  --accent-2: #8ecdff;
+  --accent-2-muted: rgba(142, 205, 255, 0.85);
+  --accent-2-subtle: rgba(255, 255, 255, 0.1);
+
+  /* Neutral status tints — see the block comment above. */
+  --ok: #5ee88a;
+  --ok-muted: rgba(94, 232, 138, 0.85);
+  --ok-subtle: rgba(255, 255, 255, 0.1);
+  --destructive: #ffabab;
+  --destructive-hover: #ffc4c4;
+  --destructive-foreground: #000000;
+  --warn: #ffc233;
+  --warn-muted: rgba(255, 194, 51, 0.85);
+  --warn-subtle: rgba(255, 255, 255, 0.1);
+  --danger: #ffabab;
+  --danger-muted: rgba(255, 171, 171, 0.85);
+  --danger-subtle: rgba(255, 255, 255, 0.1);
+  --info: #8ecdff;
+  --info-subtle: rgba(255, 255, 255, 0.1);
+  --run: #5ee88a;
+
+  /* Diff ink is a status pair too: it sits on the same neutral tints. */
+  --hljs-deletion: #ffaba3;
+  --hljs-addition: #7ee787;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.9);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.9);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.95);
+  --overlay-shadow: var(--shadow-md);
+  --overlay-border: var(--border-strong);
+
+  --grid-line: rgba(255, 255, 255, 0.08);
+  /* Atkinson Hyperlegible Next everywhere, prose included: the face is part of
+     the accessibility contract, not an accent (see styles fonts/beacon.css). */
+  --font-body:
+    "Atkinson Hyperlegible Next", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-chat: var(--font-body);
+}
+
+:root[data-theme="beacon-light"] {
+  /*
+   * Accent — dark amber on pure white
+   *
+   * WCAG 2.1 AAA audit (bg = #ffffff):
+   *   --accent #6e4a00  contrast ≈ 8.0:1 AAA ✓
+   *   --primary-foreground #ffffff on #6e4a00 button: 8.0:1 ✓
+   *   worst text pairing --muted on --bg-muted: 9.72:1 ✓
+   *   worst status label on its neutral subtle tint: 7.02:1 ✓
+   */
+  --ring: #6e4a00;
+  --accent: #6e4a00;
+  --accent-hover: #573a00;
+  --accent-muted: #6e4a00;
+  --accent-subtle: rgba(0, 0, 0, 0.07);
+  --accent-glow: rgba(110, 74, 0, 0.2);
+  --primary: #6e4a00;
+  --primary-foreground: #ffffff;
+
+  --focus: rgba(110, 74, 0, 0.35);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 5px var(--ring);
+  --focus-glow: 0 0 0 2px var(--bg), 0 0 0 5px var(--ring);
+
+  --bg: #ffffff;
+  --bg-accent: #f4f4f4;
+  --bg-elevated: #ffffff;
+  --bg-hover: #ededed;
+  --bg-muted: #ededed;
+  --bg-content: #f4f4f4;
+
+  --card: #ffffff;
+  --card-foreground: #000000;
+  --card-highlight: rgba(0, 0, 0, 0.04);
+  --popover: #ffffff;
+  --popover-foreground: #000000;
+  --session-hovercard-surface: var(--card);
+  --session-hovercard-progress-surface: var(--bg-accent);
+
+  --panel: #ffffff;
+  --panel-strong: #f4f4f4;
+  --panel-hover: #e4e4e4;
+  --chrome: rgba(255, 255, 255, 0.98);
+  --chrome-strong: #ffffff;
+
+  --text: #000000;
+  --text-strong: #000000;
+  --chat-text: #000000;
+  --muted: #3a3a3a;
+  --muted-strong: #262626;
+  --muted-foreground: #3a3a3a;
+
+  --border: #8a8a8a;
+  --border-strong: #5a5a5a;
+  --border-hover: #2e2e2e;
+  --input: #8a8a8a;
+
+  --secondary: #f4f4f4;
+  --secondary-foreground: #000000;
+  --accent-2: #09428d;
+  --accent-2-muted: rgba(9, 66, 141, 0.85);
+  --accent-2-subtle: rgba(0, 0, 0, 0.07);
+
+  /* Neutral status tints — see the block comment above. */
+  --ok: #0c5024;
+  --ok-muted: rgba(12, 80, 36, 0.85);
+  --ok-subtle: rgba(0, 0, 0, 0.07);
+  --destructive: #8c0f0f;
+  --destructive-foreground: #ffffff;
+  --warn: #613d00;
+  --warn-muted: rgba(97, 61, 0, 0.85);
+  --warn-subtle: rgba(0, 0, 0, 0.07);
+  --danger: #8c0f0f;
+  --danger-muted: rgba(140, 15, 15, 0.85);
+  --danger-subtle: rgba(0, 0, 0, 0.07);
+  --info: #09428d;
+  --info-subtle: rgba(0, 0, 0, 0.07);
+  --run: #0c5024;
+
+  /* Diff ink is a status pair too: it sits on the same neutral tints. */
+  --hljs-deletion: #8b0c20;
+  --hljs-addition: #0e5021;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.25);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.28);
+  --shadow-lg: 0 12px 28px rgba(0, 0, 0, 0.3);
+  --overlay-shadow: var(--shadow-md);
+  --overlay-border: var(--border-strong);
+
+  --grid-line: rgba(0, 0, 0, 0.12);
+  /* Atkinson Hyperlegible Next everywhere, prose included: the face is part of
+     the accessibility contract, not an accent (see styles fonts/beacon.css). */
+  --font-body:
+    "Atkinson Hyperlegible Next", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-chat: var(--font-body);
+}
+
+:root[data-theme="phosphor"] {
+  /*
+   * Accent — phosphor green on green-cast black
+   *
+   * WCAG 2.1 AA audit (bg = #0a0f0a, relative luminance ≈ 0.0045):
+   *   --accent #4ade80  contrast ≈ 11.1:1 AAA ✓
+   *   --primary-foreground #07120a on #4ade80 button: 11.0:1 ✓
+   *   --destructive-foreground #fafafa on #d32f2f button: 4.77:1 AA ✓
+   *   worst text pairing --muted on --bg-muted: 6.69:1 ✓
+   *   inherited status label on own subtle tint, worst surface: 5.32:1 ✓
+   */
+  --ring: #4ade80;
+  --accent: #4ade80;
+  --accent-hover: #6ee79b;
+  --accent-muted: #4ade80;
+  --accent-subtle: rgba(74, 222, 128, 0.12);
+  --accent-glow: rgba(74, 222, 128, 0.22);
+  --primary: #4ade80;
+  --primary-hover: #6ee79b;
+  --primary-foreground: #07120a;
+
+  --destructive: #d32f2f;
+  --destructive-hover: #bc2a2a;
+
+  --focus: rgba(74, 222, 128, 0.2);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 75%, transparent);
+  --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 16px var(--accent-glow);
+
+  --bg: #0a0f0a;
+  --bg-accent: #0e150e;
+  --bg-elevated: #121a12;
+  --bg-hover: #18221a;
+  --bg-muted: #18221a;
+
+  --card: #0e150e;
+  --card-foreground: #e8f5e9;
+  --card-highlight: rgba(200, 255, 210, 0.04);
+  --popover: #121a12;
+  --popover-foreground: #e8f5e9;
+
+  --panel: #0a0f0a;
+  --panel-strong: #121a12;
+  --panel-hover: #18221a;
+  --chrome: rgba(10, 15, 10, 0.96);
+  --chrome-strong: rgba(10, 15, 10, 0.98);
+
+  --text: #cfe0cf;
+  --text-strong: #e8f5e9;
+  --chat-text: #cfe0cf;
+  --muted: #93ac95;
+  --muted-strong: #a4bba6;
+  --muted-foreground: #93ac95;
+
+  --border: #1d291f;
+  --border-strong: #2c3d2f;
+  --border-hover: #3e5442;
+  --input: #1d291f;
+
+  --secondary: #0e150e;
+  --secondary-foreground: #e8f5e9;
+  --accent-2: #8fd6a5;
+  --accent-2-muted: rgba(143, 214, 165, 0.7);
+  --accent-2-subtle: rgba(143, 214, 165, 0.12);
+
+  --shadow-sm: 0 1px 2px rgba(0, 6, 2, 0.4);
+  --shadow-md: 0 4px 16px rgba(0, 6, 2, 0.5);
+  --shadow-lg: 0 12px 32px rgba(0, 6, 2, 0.6);
+  --overlay-shadow: var(--shadow-md);
+
+  --grid-line: rgba(200, 255, 210, 0.04);
+
+  /* The whole surface is one face, prose included. Mono is a deliberate
+     character choice for an operator console, not a readability claim; it is
+     why this theme is opt-in. --mono already named JetBrains Mono, but nothing
+     shipped it until this theme did. */
+  --mono:
+    "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
+  --font-body: var(--mono);
+  --font-chat: var(--mono);
+}
+
+:root[data-theme="phosphor-light"] {
+  /*
+   * Accent — deep green on cool paper
+   *
+   * WCAG 2.1 AA audit (bg = #f4f7f4, relative luminance ≈ 0.897):
+   *   --accent #10693a  contrast ≈ 6.3:1  AA text ✓
+   *   --primary-foreground #ffffff on #10693a button: 6.8:1 AA ✓
+   *   worst text pairing --muted on --bg-muted: 4.76:1 ✓
+   */
+  --ring: #10693a;
+  --accent: #10693a;
+  --accent-hover: #0b512c;
+  --accent-muted: #10693a;
+  --accent-subtle: rgba(16, 105, 58, 0.1);
+  --accent-glow: rgba(16, 105, 58, 0.14);
+  --primary: #10693a;
+  --primary-foreground: #ffffff;
+
+  --bg: #f4f7f4;
+  --bg-accent: #ecf1ec;
+  --bg-elevated: #ffffff;
+  --bg-hover: #e4ebe5;
+  --bg-muted: #e4ebe5;
+  --bg-content: #ecf1ec;
+
+  --card: #ffffff;
+  --card-foreground: #16201a;
+  --card-highlight: rgba(20, 50, 30, 0.02);
+  --popover: #ffffff;
+  --popover-foreground: #16201a;
+  --session-hovercard-surface: var(--card);
+  --session-hovercard-progress-surface: color-mix(
+    in srgb,
+    var(--card) 52%,
+    var(--panel-strong) 48%
+  );
+
+  --panel: #f4f7f4;
+  --panel-strong: #ecf1ec;
+  --panel-hover: #dde6de;
+  --chrome: rgba(244, 247, 244, 0.96);
+  --chrome-strong: rgba(244, 247, 244, 0.98);
+
+  --text: #2a352b;
+  --text-strong: #16201a;
+  --chat-text: #2a352b;
+  --muted: #566b58;
+  --muted-strong: #455947;
+  --muted-foreground: #566b58;
+
+  --border: #dbe4dc;
+  --border-strong: #bfcdc1;
+  --border-hover: #9aad9d;
+  --input: #dbe4dc;
+
+  --secondary: #ecf1ec;
+  --secondary-foreground: #2a352b;
+  --accent-2: #2f6b47;
+  --accent-2-muted: rgba(47, 107, 71, 0.75);
+  --accent-2-subtle: rgba(47, 107, 71, 0.1);
+
+  --shadow-sm: 0 1px 2px rgba(20, 50, 30, 0.05);
+  --shadow-md: 0 4px 12px rgba(20, 50, 30, 0.07);
+  --shadow-lg: 0 12px 28px rgba(20, 50, 30, 0.09);
+  --overlay-shadow: var(--shadow-md);
+
+  --grid-line: rgba(20, 50, 30, 0.04);
+
+  --mono:
+    "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
+  --font-body: var(--mono);
+  --font-chat: var(--mono);
 }
 
 * {

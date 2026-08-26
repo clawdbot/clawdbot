@@ -11,7 +11,7 @@ const dictationHarness = vi.hoisted(() => ({
   controllers: [] as Array<{
     active: boolean;
     finalizing: boolean;
-    partial: string;
+    transcript: string;
     finishActive: ReturnType<typeof vi.fn>;
     handleClick: ReturnType<typeof vi.fn>;
     handlePointerDown: () => void;
@@ -24,7 +24,7 @@ vi.mock("../chat/composer-dictation.ts", () => ({
     active = false;
     connecting = false;
     finalizing = false;
-    partial = "";
+    transcript = "";
     private options: { onCommit: (transcript: string) => void; onStateChange?: () => void };
 
     get locksComposer() {
@@ -168,7 +168,7 @@ describe("NewSessionDictationControl", () => {
     }
 
     controller.active = true;
-    controller.partial = "spoken";
+    controller.transcript = "spoken";
     expect(control.previewDraft()).toBe("draft spoken");
     render(html`${control.renderStatus()}${control.render("agent-a")}`, container);
     expect(container.querySelector(".agent-chat__dictation-status")?.textContent).toContain(

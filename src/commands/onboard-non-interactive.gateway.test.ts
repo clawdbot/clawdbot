@@ -566,7 +566,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         url: `ws://127.0.0.1:${port}`,
         token,
       });
-      expect(cfg.hooks?.internal?.entries?.["session-memory"]).toEqual({ enabled: true });
+      expect(cfg.hooks).toBeUndefined();
     });
   }, 60_000);
 
@@ -593,9 +593,16 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
           },
         },
       ];
+      const seededHooks = {
+        internal: {
+          enabled: false,
+          entries: { "session-memory": { enabled: false } },
+        },
+      };
       testConfigStore.set(resolveTestConfigPath(), {
         agents: { list: seededAgents },
         bindings: seededBindings,
+        hooks: seededHooks,
         gateway: {
           mode: "remote",
           remote: {
@@ -621,6 +628,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       const cfg = readTestConfig();
       expect(cfg.agents?.list?.map((a) => a.id)).toEqual(["alpha", "beta"]);
       expect(cfg.bindings).toEqual(seededBindings);
+      expect(cfg.hooks).toEqual(seededHooks);
       expect(cfg.gateway?.remote).toEqual({
         url: `ws://127.0.0.1:${port}`,
         token: tokenRef,

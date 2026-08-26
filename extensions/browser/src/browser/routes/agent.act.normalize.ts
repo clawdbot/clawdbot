@@ -4,6 +4,7 @@
  * Converts loosely typed route bodies into the closed BrowserActRequest union
  * used by Playwright and Chrome MCP action executors.
  */
+import { filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   ACT_MAX_BATCH_ACTIONS,
   ACT_MAX_BATCH_DEPTH,
@@ -15,12 +16,7 @@ import {
 import type { BrowserActRequest, BrowserFormField } from "../client-actions.types.js";
 import { normalizeBrowserFormField } from "../form-fields.js";
 import { resolveTargetIdFromTabs } from "../target-id.js";
-import {
-  type ActKind,
-  isActKind,
-  parseClickButton,
-  parseClickModifiers,
-} from "./agent.act.shared.js";
+import { isActKind, parseClickButton, parseClickModifiers } from "./agent.act.shared.js";
 import {
   readRouteFiniteNumber,
   readRouteInteger,
@@ -36,14 +32,6 @@ const KEY_ALIASES = new Map([
   ["ctrl", "Control"],
   ["cmd", "Meta"],
 ]);
-
-function normalizeActKind(raw: unknown): ActKind {
-  const kind = toStringOrEmpty(raw);
-  if (!isActKind(kind)) {
-    throw new Error("kind is required");
-  }
-  return kind;
-}
 
 function countBatchActions(actions: BrowserActRequest[]): number {
   let count = 0;
@@ -144,7 +132,10 @@ export function normalizeActRequest(
 ): BrowserActRequest {
   const source = options?.source ?? "request";
   const depth = options?.depth ?? 0;
-  const kind = normalizeActKind(body.kind);
+  const kind = toStringOrEmpty(body.kind);
+  if (!isActKind(kind)) {
+    throw new Error("kind is required");
+  }
 
   switch (kind) {
     case "click": {
@@ -301,8 +292,9 @@ export function normalizeActRequest(
     case "select": {
       const ref = toStringOrEmpty(body.ref) || undefined;
       const selector = toStringOrEmpty(body.selector) || undefined;
-      const values = toStringArray(body.values);
-      if ((!ref && !selector) || !values?.length) {
+      // Option values are content: empty strings and surrounding whitespace can identify a choice.
+      const values = filterStringEntries(body.values);
+      if ((!ref && !selector) || !values.length) {
         throw new Error("select requires ref/selector and values");
       }
       const targetId = toStringOrEmpty(body.targetId) || undefined;

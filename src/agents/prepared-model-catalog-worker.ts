@@ -102,7 +102,7 @@ export function createPreparedModelCatalogWorkerInput(params: {
   const input: PreparedModelRuntimeInput = {
     ...(source.agentId ? { agentId: source.agentId } : {}),
     agentDir: source.agentDir,
-    inheritedAuthDir: source.inheritedAuthDir ?? source.agentDir,
+    ...(source.inheritedAuthDir ? { inheritedAuthDir: source.inheritedAuthDir } : {}),
     ...(source.workspaceDir ? { workspaceDir: source.workspaceDir } : {}),
     ...(source.readOnly ? { readOnly: true } : {}),
     skipCredentials: true,

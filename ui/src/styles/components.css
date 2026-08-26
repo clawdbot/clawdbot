@@ -1487,13 +1487,6 @@ select.input {
   color: var(--text);
 }
 
-:root[data-theme-mode="light"] .chat-controls .btn--icon.active {
-  border-color: var(--accent);
-  background: var(--accent-subtle);
-  color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent-subtle);
-}
-
 /* Ghost stays chromeless in light mode too: without the border-color reset,
    the higher-specificity light .btn--icon override above re-adds a 1px border
    that dark mode never shows. Chrome appears on hover only. */

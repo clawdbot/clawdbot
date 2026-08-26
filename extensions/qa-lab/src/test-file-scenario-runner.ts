@@ -524,7 +524,7 @@ function buildTestFileEvidence(params: {
     // colliding non-fail results without discarding producer execution facts.
     const producerEntryIds = new Set(producerEntries.map((entry) => entry.test.id));
     const fallbackResults = params.results.filter(
-      (result) => !result.producerEvidence || result.includeFallbackEvidence,
+      (result) => !result.producerEvidence?.entries.length || result.includeFallbackEvidence,
     );
     const evidenceMode =
       params.evidenceMode ??
