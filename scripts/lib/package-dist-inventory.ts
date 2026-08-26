@@ -10,7 +10,6 @@ import {
 
 export { LOCAL_BUILD_METADATA_DIST_PATHS } from "./local-build-metadata-paths.mts";
 export {
-  comparePackageDistInventory,
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
 } from "./package-dist-inventory-contract.mts";
