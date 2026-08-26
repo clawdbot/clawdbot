@@ -97,11 +97,21 @@ async function listenTargetServer(server: Server): Promise<number> {
   return (server.address() as AddressInfo).port;
 }
 
-function createWorkerStream(port: number): Duplex {
+function createWorkerStreamPair() {
   const [gatewayStream, workerStream] = duplexPair({ allowHalfOpen: false });
+  // WebSocket closure delivers EOF to its peer; Node 22's duplexPair does not forward destroy.
+  gatewayStream.once("close", () => workerStream.push(null));
+  workerStream.once("close", () => gatewayStream.push(null));
+  return [gatewayStream, workerStream] as const;
+}
+
+function createWorkerStream(port: number): Duplex {
+  const [gatewayStream, workerStream] = createWorkerStreamPair();
   const appSocket = net.connect({ host: "127.0.0.1", port });
   workerStream.on("error", () => appSocket.destroy());
   appSocket.on("error", () => workerStream.destroy());
+  workerStream.once("close", () => appSocket.destroy());
+  appSocket.once("close", () => workerStream.destroy());
   workerStream.pipe(appSocket).pipe(workerStream);
   return gatewayStream;
 }
@@ -646,7 +656,7 @@ describe("portal HTTP proxy", () => {
         if (streamState === "rejected") {
           throw new Error("Worker node stream unavailable");
         }
-        const [gatewayStream, workerStream] = duplexPair({ allowHalfOpen: false });
+        const [gatewayStream, workerStream] = createWorkerStreamPair();
         if (streamState === "closed") {
           workerStream.end();
         } else {
