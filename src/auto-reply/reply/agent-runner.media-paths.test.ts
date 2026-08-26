@@ -266,6 +266,7 @@ vi.mock("./agent-runner-memory.js", () => ({
 }));
 
 vi.mock("./queue.js", () => ({
+  markFollowupQueuePrecedingDelivery: vi.fn(),
   admitFollowupRunLifecycle: vi.fn(async () => {}),
   enqueueFollowupRun: enqueueFollowupRunMock,
   parkSteerCandidate: parkSteerCandidateMock,

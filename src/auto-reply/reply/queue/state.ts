@@ -200,6 +200,39 @@ export function clearFollowupQueue(key: string): number {
   return cleared;
 }
 
+/**
+ * Record the just-completed turn's source-reply delivery outcome on every
+ * pending run of this queue so drain-time prompt composition can acknowledge
+ * an already-delivered answer (#126813). The last completing turn wins.
+ */
+export function markFollowupQueuePrecedingDelivery(params: {
+  key: string;
+  precedingTurnDeliveredViaSourceReply: boolean;
+}): void {
+  const cleaned = params.key.trim();
+  if (!cleaned) {
+    return;
+  }
+  const queue = getExistingFollowupQueue(cleaned);
+  if (!queue) {
+    return;
+  }
+  const mark = (run: FollowupRun) => {
+    run.precedingTurnDeliveredViaSourceReply = params.precedingTurnDeliveredViaSourceReply;
+  };
+  for (const item of queue.items) {
+    mark(item);
+  }
+  for (const item of queue.summarySources) {
+    mark(item);
+  }
+  for (const entry of queue.summaryElisions) {
+    for (const source of entry.sources) {
+      mark(source);
+    }
+  }
+}
+
 export function refreshQueuedFollowupSession(params: {
   key: string;
   previousSessionId?: string;

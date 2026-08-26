@@ -138,6 +138,12 @@ export type FollowupRun = {
   strandedReplyRetry?: boolean;
   /** Preserve priority runs when old-item queue overflow eviction runs before drain. */
   protectFromQueueOverflow?: boolean;
+  /**
+   * Set by the completion pipeline when the turn this run queued behind
+   * delivered its source reply; drain-time prompt composition acknowledges it
+   * so the model does not answer the same question twice (#126813).
+   */
+  precedingTurnDeliveredViaSourceReply?: boolean;
   enqueuedAt: number;
   images?: Array<{ type: "image"; data: string; mimeType: string }>;
   imageOrder?: PromptImageOrderEntry[];

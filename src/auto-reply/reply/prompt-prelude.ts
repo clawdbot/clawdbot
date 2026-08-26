@@ -3,7 +3,10 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { CurrentInboundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import { normalizeMediaFacts, type MediaFact } from "../../media/media-facts.js";
-import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
+import {
+  MESSAGE_TOOL_ONLY_DELIVERY_HINT,
+  MESSAGE_TOOL_ONLY_DELIVERY_HINT_AFTER_DELIVERED_REPLY,
+} from "../../plugin-sdk/message-tool-delivery-hints.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { MEDIA_ONLY_USER_TEXT } from "../../sessions/user-turn-media.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
@@ -173,6 +176,21 @@ function buildRoomEventContext(params: ReplyPromptEnvelopeBaseParams, roomContex
   const roomContextBlock = roomContext.trim() ? `Room context:\n${roomContext.trim()}` : "";
   const deliveryDirective = resolvePerTurnDeliveryDirective(params);
   return [ROOM_EVENT_PROMPT, roomContextBlock, deliveryDirective].filter(Boolean).join("\n\n");
+}
+
+/**
+ * Amend a queued re-invocation prompt whose preceding turn already delivered
+ * via the message tool: the baked answer-expected hint is replaced with the
+ * delivered-reply variant so the model does not answer the same question
+ * twice (#126813). No-op when the hint is absent.
+ */
+export function acknowledgePrecedingDeliveryInPrompt(prompt: string): string {
+  return prompt.includes(MESSAGE_TOOL_ONLY_DELIVERY_HINT)
+    ? prompt.replace(
+        MESSAGE_TOOL_ONLY_DELIVERY_HINT,
+        MESSAGE_TOOL_ONLY_DELIVERY_HINT_AFTER_DELIVERED_REPLY,
+      )
+    : prompt;
 }
 
 function buildResumableRoomContext(roomContext: string): string {

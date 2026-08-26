@@ -354,6 +354,7 @@ vi.mock("../auto-reply/group-activation.js", () => ({
   normalizeGroupActivation: (value: unknown) => value ?? "always",
 }));
 vi.mock("../auto-reply/reply/queue.js", () => ({
+  markFollowupQueuePrecedingDelivery: vi.fn(),
   getFollowupQueueDepth: () => 0,
   resolveQueueSettings: resolveQueueSettingsMock,
 }));

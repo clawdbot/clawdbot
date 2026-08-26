@@ -50,6 +50,7 @@ vi.mock("../../infra/system-events.js", () => ({
 }));
 
 vi.mock("./queue.js", () => ({
+  markFollowupQueuePrecedingDelivery: vi.fn(),
   refreshQueuedFollowupSession: vi.fn(),
 }));
 

@@ -1048,6 +1048,15 @@ function resolveOverflowSummaryInboundEventKind(sources: FollowupRun[]): "room_e
     : undefined;
 }
 
+/**
+ * Synthetic collect/overflow runs must inherit the delivery acknowledgment
+ * fact stamped on their sources, or the merged re-invocation reverts to the
+ * bare answer-expected hint and answers an already-answered question (#126813).
+ */
+function resolveSynthesizedPrecedingDelivery(sources: readonly FollowupRun[]): boolean {
+  return sources.some((source) => source.precedingTurnDeliveredViaSourceReply === true);
+}
+
 async function runSyntheticOverflowSummary(params: {
   source: FollowupRun;
   sources: FollowupRun[];
@@ -1099,6 +1108,9 @@ async function runSyntheticOverflowSummary(params: {
     channelAdmissionEvidence: runtimeMetadata.channelAdmissionEvidence,
     toolsAllow: runtimeMetadata.toolsAllow,
     disableTools: runtimeMetadata.disableTools,
+    ...(resolveSynthesizedPrecedingDelivery(params.sources)
+      ? { precedingTurnDeliveredViaSourceReply: true }
+      : {}),
     ...(params.onAdmitted
       ? {
           turnAdoptionLifecycle: {
@@ -1457,6 +1469,9 @@ export function scheduleFollowupDrain(
                     }
                   : {}),
                 ...collectQueuedPromptMedia(activeGroupItems),
+                ...(resolveSynthesizedPrecedingDelivery(activeGroupItems)
+                  ? { precedingTurnDeliveredViaSourceReply: true }
+                  : {}),
               });
             };
             try {

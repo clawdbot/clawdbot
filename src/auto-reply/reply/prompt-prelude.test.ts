@@ -1,12 +1,35 @@
 // Tests prompt prelude construction for sender, routing, and context metadata.
 import { describe, expect, it } from "vitest";
-import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
+import {
+  MESSAGE_TOOL_ONLY_DELIVERY_HINT,
+  MESSAGE_TOOL_ONLY_DELIVERY_HINT_AFTER_DELIVERED_REPLY,
+} from "../../plugin-sdk/message-tool-delivery-hints.js";
 import { finalizeInboundContext } from "./inbound-context.js";
-import { buildReplyPromptEnvelope } from "./prompt-prelude.js";
+import {
+  acknowledgePrecedingDeliveryInPrompt,
+  buildReplyPromptEnvelope,
+} from "./prompt-prelude.js";
 
 function countOccurrences(text: string | undefined, needle: string): number {
   return (text?.split(needle).length ?? 1) - 1;
 }
+
+describe("acknowledgePrecedingDeliveryInPrompt", () => {
+  it("replaces the answer-expected hint when the preceding turn already delivered (#126813)", () => {
+    const prompt = `Room context:\npeer bot message\n\n${MESSAGE_TOOL_ONLY_DELIVERY_HINT}`;
+
+    const amended = acknowledgePrecedingDeliveryInPrompt(prompt);
+
+    expect(amended).not.toContain(MESSAGE_TOOL_ONLY_DELIVERY_HINT);
+    expect(amended).toContain(MESSAGE_TOOL_ONLY_DELIVERY_HINT_AFTER_DELIVERED_REPLY);
+    expect(amended).toContain("peer bot message");
+  });
+
+  it("leaves prompts without the answer-expected hint untouched", () => {
+    const prompt = "plain prompt without hints";
+    expect(acknowledgePrecedingDeliveryInPrompt(prompt)).toBe(prompt);
+  });
+});
 
 describe("buildReplyPromptEnvelope", () => {
   it("keeps bare reset runtime context in the model prompt and out of transcript/current-turn context", () => {

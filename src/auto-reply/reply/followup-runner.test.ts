@@ -48,6 +48,7 @@ vi.mock("./followup-delivery.js", () => ({
 }));
 
 vi.mock("./queue.js", () => ({
+  markFollowupQueuePrecedingDelivery: vi.fn(),
   completeFollowupRunLifecycle: (...args: unknown[]) => state.completeLifecycle(...args),
   FollowupRunDeferredError: class FollowupRunDeferredError extends Error {},
 }));

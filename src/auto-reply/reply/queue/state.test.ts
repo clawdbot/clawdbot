@@ -5,6 +5,7 @@ import {
   clearFollowupQueue,
   getFollowupQueue,
   hasPendingFollowupQueueWork,
+  markFollowupQueuePrecedingDelivery,
   refreshQueuedFollowupSession,
 } from "./state.js";
 import type { FollowupRun } from "./types.js";
@@ -33,6 +34,52 @@ function makeRun(): FollowupRun["run"] {
     blockReplyBreak: "message_end",
   };
 }
+
+describe("markFollowupQueuePrecedingDelivery", () => {
+  it("marks pending, summarized, and elided runs with the completed turn's delivery outcome (#126813)", () => {
+    const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
+    const queuedRun: FollowupRun = {
+      prompt: "queued message",
+      enqueuedAt: Date.now(),
+      run: makeRun(),
+    };
+    const summarizedRun: FollowupRun = {
+      prompt: "summarized message",
+      enqueuedAt: Date.now(),
+      run: makeRun(),
+    };
+    const elidedRun: FollowupRun = {
+      prompt: "elided summary",
+      enqueuedAt: Date.now(),
+      run: makeRun(),
+    };
+    queue.items.push(queuedRun);
+    queue.summarySources.push(summarizedRun);
+    queue.summaryElisions.push({
+      contextKey: "context",
+      count: 1,
+      sources: [elidedRun],
+      summaryLines: ["elided summary"],
+      sourceRefs: new WeakMap(),
+    });
+
+    markFollowupQueuePrecedingDelivery({
+      key: QUEUE_KEY,
+      precedingTurnDeliveredViaSourceReply: true,
+    });
+
+    expect(queuedRun.precedingTurnDeliveredViaSourceReply).toBe(true);
+    expect(summarizedRun.precedingTurnDeliveredViaSourceReply).toBe(true);
+    expect(elidedRun.precedingTurnDeliveredViaSourceReply).toBe(true);
+
+    // A later non-delivering turn wins: it is the new "immediately preceding" turn.
+    markFollowupQueuePrecedingDelivery({
+      key: QUEUE_KEY,
+      precedingTurnDeliveredViaSourceReply: false,
+    });
+    expect(queuedRun.precedingTurnDeliveredViaSourceReply).toBe(false);
+  });
+});
 
 describe("refreshQueuedFollowupSession", () => {
   it("retargets queued runs to the persisted selection", () => {

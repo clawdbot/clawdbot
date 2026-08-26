@@ -35,6 +35,7 @@ vi.mock("./reply-turn-admission.js", () => ({
 }));
 
 vi.mock("./queue.js", () => ({
+  markFollowupQueuePrecedingDelivery: vi.fn(),
   admitFollowupRunLifecycle: (...args: unknown[]) => state.admitLifecycle(...args),
   isFollowupRunAborted: (run: FollowupRun) =>
     run.abortSignal?.aborted === true || run.queueAbortSignal?.aborted === true,

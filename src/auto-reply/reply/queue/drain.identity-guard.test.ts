@@ -28,7 +28,12 @@
 // mirrors the pattern in queue.drain-restart.test.ts:207-234.
 
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  MESSAGE_TOOL_ONLY_DELIVERY_HINT,
+  MESSAGE_TOOL_ONLY_DELIVERY_HINT_AFTER_DELIVERED_REPLY,
+} from "../../../plugin-sdk/message-tool-delivery-hints.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { acknowledgePrecedingDeliveryInPrompt } from "../prompt-prelude.js";
 import {
   clearSessionQueues,
   enqueueFollowupRun,
@@ -43,6 +48,81 @@ import { FOLLOWUP_QUEUES } from "./state.js";
 import type { FollowupRun, QueueSettings } from "./types.js";
 
 installQueueRuntimeErrorSilencer();
+
+describe("collect drain delivery fact propagation (#126813)", () => {
+  const keysToCleanup: string[] = [];
+
+  afterEach(() => {
+    if (keysToCleanup.length > 0) {
+      clearSessionQueues(keysToCleanup.splice(0));
+    }
+  });
+
+  it("carries precedingTurnDeliveredViaSourceReply onto the synthesized collect run", async () => {
+    const key = `test-collect-delivery-${Date.now()}-${Math.random()}`;
+    keysToCleanup.push(key);
+    const settings: QueueSettings = { mode: "collect", debounceMs: 0, cap: 50 };
+    const calls: FollowupRun[] = [];
+    const entered = createDeferred();
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      entered.resolve();
+    };
+
+    const first = createRun({ prompt: "peer one" });
+    first.precedingTurnDeliveredViaSourceReply = true;
+    const second = createRun({ prompt: "peer two" });
+    second.precedingTurnDeliveredViaSourceReply = true;
+    enqueueFollowupRun(key, first, settings, "message-id", runFollowup, false);
+    enqueueFollowupRun(key, second, settings, "message-id", runFollowup, false);
+    scheduleFollowupDrain(key, runFollowup);
+
+    await entered.promise;
+
+    expect(calls[0]?.precedingTurnDeliveredViaSourceReply).toBe(true);
+    expect(calls[0]?.prompt).toContain("peer one");
+    expect(calls[0]?.prompt).toContain("peer two");
+  });
+
+  it("turns the synthesized collect prompt into the delivered-reply directive (#126813)", async () => {
+    // Production-boundary trace: delivered turn → queued peer messages →
+    // real collect drain synthesis → execution-time prompt amendment. The
+    // final model-visible prompt must not re-present the bare answer-expected
+    // hint when the preceding turn already delivered.
+    const key = `test-collect-amend-${Date.now()}-${Math.random()}`;
+    keysToCleanup.push(key);
+    const settings: QueueSettings = { mode: "collect", debounceMs: 0, cap: 50 };
+    const calls: FollowupRun[] = [];
+    const entered = createDeferred();
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      entered.resolve();
+    };
+
+    const first = createRun({ prompt: `${MESSAGE_TOOL_ONLY_DELIVERY_HINT}\n\npeer one` });
+    first.precedingTurnDeliveredViaSourceReply = true;
+    const second = createRun({ prompt: `peer two` });
+    second.precedingTurnDeliveredViaSourceReply = true;
+    enqueueFollowupRun(key, first, settings, "message-id", runFollowup, false);
+    enqueueFollowupRun(key, second, settings, "message-id", runFollowup, false);
+    scheduleFollowupDrain(key, runFollowup);
+
+    await entered.promise;
+
+    const synthesized = calls[0];
+    if (!synthesized) {
+      throw new Error("expected synthesized collect run");
+    }
+    expect(synthesized.precedingTurnDeliveredViaSourceReply).toBe(true);
+    expect(synthesized.prompt).toContain(MESSAGE_TOOL_ONLY_DELIVERY_HINT);
+
+    const amended = acknowledgePrecedingDeliveryInPrompt(synthesized.prompt);
+    expect(amended).not.toContain(MESSAGE_TOOL_ONLY_DELIVERY_HINT);
+    expect(amended).toContain(MESSAGE_TOOL_ONLY_DELIVERY_HINT_AFTER_DELIVERED_REPLY);
+    expect(amended).toContain("peer one");
+    expect(amended).toContain("peer two");
+  });
+});
 
 describe("drain finally identity guard — late D1 must not orphan Q2", () => {
   const keysToCleanup: string[] = [];
