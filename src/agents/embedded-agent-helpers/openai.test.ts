@@ -167,7 +167,7 @@ describe("normalizeOpenAIResponsesToolCallIds", () => {
       const expectedId = toolCallId(assistant);
 
       expect(toolResultId(rewritten)).toBe(expectedId);
-      expect((rewritten as Record<string, unknown>)[alias]).toBe(expectedId);
+      expect(rewritten).toMatchObject({ [alias]: expectedId });
     },
   );
 });
