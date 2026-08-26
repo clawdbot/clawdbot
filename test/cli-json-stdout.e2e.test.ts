@@ -781,6 +781,30 @@ describe("cli json stdout contract", () => {
     );
   });
 
+  it.each(["--plain", "--json"])(
+    "keeps human auth-list output on stdout when provider value is %s",
+    async (provider) => {
+      await withTempHome(
+        async (tempHome) => {
+          const result = runBuiltCli(tempHome, ["models", "auth", "list", "--provider", provider], {
+            CI: "1",
+            NO_COLOR: "1",
+            OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
+            OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+          });
+
+          expect(result.status, result.stderr).toBe(0);
+          expect(result.stdout).toContain("Agent: main\n");
+          expect(result.stdout).toContain(`Provider: ${provider}\n`);
+          expect(result.stdout).toContain("Profiles: (none)\n");
+          expect(result.stderr).not.toContain("Agent: main");
+          expect(result.stderr).not.toContain(`Provider: ${provider}`);
+        },
+        { prefix: "openclaw-models-output-option-value-e2e-" },
+      );
+    },
+  );
+
   it("preserves model catalog refresh success payloads and persisted rows", async () => {
     await withTempHome(
       async (tempHome) => {

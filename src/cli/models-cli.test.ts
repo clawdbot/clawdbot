@@ -196,6 +196,68 @@ describe("models cli", () => {
     expect(detected).toBe(false);
   });
 
+  it.each(["--plain", "--json"])(
+    "does not treat required provider value %s as a model output flag",
+    async (provider) => {
+      const program = createProgram();
+      let jsonMode = true;
+      program.hook("preAction", (_command, actionCommand) => {
+        jsonMode = isCommandJsonOutputMode(actionCommand, process.argv);
+      });
+
+      const originalArgv = process.argv;
+      process.argv = ["node", "openclaw", "models", "auth", "list", "--provider", provider];
+      try {
+        await program.parseAsync(["models", "auth", "list", "--provider", provider], {
+          from: "user",
+        });
+      } finally {
+        process.argv = originalArgv;
+      }
+
+      expect(jsonMode).toBe(false);
+      expectCommandOptions(modelsAuthListCommand, { provider, json: false });
+    },
+  );
+
+  it.each([
+    {
+      name: "an ignored parent status alias and a JSON-looking provider value",
+      args: ["models", "--status-json", "auth", "list", "--provider", "--json"],
+      provider: "--json",
+      json: false,
+    },
+    {
+      name: "a real JSON flag after a status-alias-looking provider value",
+      args: ["models", "auth", "list", "--provider", "--status-json", "--json"],
+      provider: "--status-json",
+      json: true,
+    },
+    {
+      name: "a real JSON flag before a plain-looking provider value",
+      args: ["models", "auth", "list", "--json", "--provider", "--plain"],
+      provider: "--plain",
+      json: true,
+    },
+  ])("classifies $name by its actual Commander role", async ({ args, provider, json }) => {
+    const program = createProgram();
+    let jsonMode = !json;
+    program.hook("preAction", (_command, actionCommand) => {
+      jsonMode = isCommandJsonOutputMode(actionCommand, process.argv);
+    });
+
+    const originalArgv = process.argv;
+    process.argv = ["node", "openclaw", ...args];
+    try {
+      await program.parseAsync(args, { from: "user" });
+    } finally {
+      process.argv = originalArgv;
+    }
+
+    expect(jsonMode).toBe(json);
+    expectCommandOptions(modelsAuthListCommand, { provider, json });
+  });
+
   it.each([
     ["aliases list --plain", ["models", "aliases", "list", "--plain"]],
     ["fallbacks list --plain", ["models", "fallbacks", "list", "--plain"]],

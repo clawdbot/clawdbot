@@ -131,7 +131,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       return;
     }
     const jsonOutputMode = isCommandJsonOutputMode(actionCommand, argv);
-    const machineOutputMode = jsonOutputMode || isModelsPlainMachineOutput(argv);
+    const machineOutputMode = jsonOutputMode || isModelsPlainMachineOutput(argv, actionCommand);
     applyResolvedCommandOutputMode(jsonOutputMode, machineOutputMode);
     const { commandPath, startupPolicy } = resolveCliExecutionStartupContext({
       argv,

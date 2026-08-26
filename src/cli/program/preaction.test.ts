@@ -224,8 +224,14 @@ describe("registerPreActionHooks", () => {
       .action(() => {});
     programLocal.command("completion").action(() => {});
     programLocal.command("secrets").action(() => {});
-    const modelList = programLocal.command("models").command("aliases").command("list");
+    const models = programLocal.command("models").option("--status-json").option("--status-plain");
+    const modelList = models.command("aliases").command("list");
     modelList.option("--plain").action(() => {});
+    models
+      .command("auth")
+      .command("list")
+      .option("--provider <id>")
+      .action(() => {});
     const skills = programLocal.command("skills");
     skills.option("--json").action(() => {});
     for (const skillCommand of ["list", "check"]) {
@@ -921,6 +927,26 @@ describe("registerPreActionHooks", () => {
       commandPath: ["models", "aliases", "list"],
       suppressDoctorStdout: true,
     });
+  });
+
+  it.each([
+    {
+      name: "plain-looking provider value",
+      args: ["models", "auth", "list", "--provider", "--plain"],
+    },
+    {
+      name: "ignored parent plain alias and plain-looking provider value",
+      args: ["models", "--status-plain", "auth", "list", "--provider", "--plain"],
+    },
+  ])("restores human stdout for $name", async ({ args }) => {
+    loggingState.forceConsoleToStderr = true;
+    loggingState.earlyConsoleRoutingRestore = false;
+    process.argv = ["node", "openclaw", ...args];
+
+    await program.parseAsync(process.argv);
+
+    expect(loggingState.forceConsoleToStderr).toBe(false);
+    expect(routeLogsToStderrMock).not.toHaveBeenCalled();
   });
 
   it("uses the Commander action path for protocol stdout ownership", async () => {

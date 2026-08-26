@@ -53,7 +53,9 @@ export function registerModelsCli(program: Command) {
     );
   const hasJsonOutput = (opts?: { json?: boolean }): boolean =>
     Boolean(opts?.json || models.opts<{ json?: boolean }>().json);
-  setCommandJsonMode(models, "output", ({ argv }) => isModelsStatusJsonOutput(argv));
+  setCommandJsonMode(models, "output", ({ argv, command }) =>
+    isModelsStatusJsonOutput(argv, command),
+  );
 
   models
     .command("list")
