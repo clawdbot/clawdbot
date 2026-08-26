@@ -112,6 +112,28 @@ export function createComputerTool(options?: {
       referenceWidth,
       modelHasVision: options?.modelHasVision,
     });
+    const previousFrame = session.refreshUnchangedFrame({
+      target: params.resolved.target,
+      capture: params.capture,
+      imageIdentity: projected.imageIdentity,
+      modelHasVision: options?.modelHasVision,
+    });
+    if (previousFrame) {
+      const text = [
+        ...params.noteLines,
+        `screen unchanged since previous frame (frameId ${previousFrame.id}); screenshot omitted — keep using this frameId for coordinates`,
+      ].join("\n");
+      return {
+        content: [{ type: "text" as const, text }],
+        details: {
+          node: params.resolved.target.nodeId,
+          action: params.action,
+          screenIndex: params.resolved.target.screenIndex,
+          frameId: previousFrame.id,
+          refWidth: referenceWidth,
+        },
+      };
+    }
     session.bindDeliveredFrame({
       resolved: params.resolved,
       capture: params.capture,
@@ -149,7 +171,6 @@ export function createComputerTool(options?: {
 
         switch (action) {
           case "screenshot": {
-            session.setTarget(resolved.target);
             const capture = await session.captureScreenshot(resolved, referenceWidth, signal);
             return await deliverScreenshot({
               capture,
@@ -166,7 +187,6 @@ export function createComputerTool(options?: {
                 max: MAX_WAIT_SECONDS,
                 message: `duration must be 0-${MAX_WAIT_SECONDS} seconds for wait`,
               }) ?? 1;
-            session.setTarget(resolved.target);
             await sleep(Math.round(seconds * 1000), signal);
             const capture = await session.captureScreenshot(resolved, referenceWidth, signal);
             return await deliverScreenshot({
@@ -209,8 +229,8 @@ export function createComputerTool(options?: {
             modelHasVision: options?.modelHasVision,
           });
         }
-        await sleep(AFTER_ACTION_SCREENSHOT_DELAY_MS, signal);
         try {
+          await sleep(AFTER_ACTION_SCREENSHOT_DELAY_MS, signal);
           const capture = await session.captureScreenshot(resolved, referenceWidth, signal);
           return await deliverScreenshot({
             capture,
@@ -220,6 +240,7 @@ export function createComputerTool(options?: {
             toolCallId,
           });
         } catch (err) {
+          session.setTarget(resolved.target);
           signal?.throwIfAborted();
           // Input landed; a failed follow-up screenshot should not fail the action.
           return {

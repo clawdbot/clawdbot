@@ -3,6 +3,22 @@ import { MessageFlags, Routes } from "discord-api-types/v10";
 import { describe, expect, it, vi } from "vitest";
 import { createDiscordDraftStream } from "./draft-stream.js";
 
+function createCurrentPreviewHarness(remove = vi.fn(async () => undefined)) {
+  const rest = {
+    post: vi.fn().mockResolvedValueOnce({ id: "m1" }).mockResolvedValueOnce({ id: "m2" }),
+    patch: vi.fn(async () => undefined),
+    delete: remove,
+  };
+  const warn = vi.fn();
+  const stream = createDiscordDraftStream({
+    rest: rest as never,
+    channelId: "c1",
+    throttleMs: 250,
+    warn,
+  });
+  return { rest, stream, warn };
+}
+
 describe("createDiscordDraftStream", () => {
   it("moves the visible draft to a newly adopted thread", async () => {
     const rest = {
@@ -136,16 +152,7 @@ describe("createDiscordDraftStream", () => {
   });
 
   it("deletes the current preview without stopping later draft updates", async () => {
-    const rest = {
-      post: vi.fn().mockResolvedValueOnce({ id: "m1" }).mockResolvedValueOnce({ id: "m2" }),
-      patch: vi.fn(async () => undefined),
-      delete: vi.fn(async () => undefined),
-    };
-    const stream = createDiscordDraftStream({
-      rest: rest as never,
-      channelId: "c1",
-      throttleMs: 250,
-    });
+    const { rest, stream } = createCurrentPreviewHarness();
 
     stream.update("temporary commentary");
     await stream.flush();
@@ -162,6 +169,24 @@ describe("createDiscordDraftStream", () => {
     });
     expect(rest.patch).not.toHaveBeenCalled();
     expect(stream.messageId()).toBe("m2");
+  });
+
+  it("retries failed current-preview cleanup without reusing the stale message", async () => {
+    const remove = vi.fn().mockRejectedValueOnce(new Error("transient"));
+    const { rest, stream, warn } = createCurrentPreviewHarness(remove);
+
+    stream.update("temporary commentary");
+    await stream.flush();
+    await stream.deleteCurrentMessage();
+    stream.update("tool progress");
+    await stream.flush();
+    await stream.cleanupRetargeted();
+
+    expect(rest.delete).toHaveBeenNthCalledWith(1, Routes.channelMessage("c1", "m1"));
+    expect(rest.delete).toHaveBeenNthCalledWith(2, Routes.channelMessage("c1", "m1"));
+    expect(rest.patch).not.toHaveBeenCalled();
+    expect(stream.messageId()).toBe("m2");
+    expect(warn).toHaveBeenCalledWith("discord stream preview cleanup failed: transient");
   });
 
   it("suppresses mentions in preview creates and edits", async () => {

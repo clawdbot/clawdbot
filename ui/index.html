@@ -21,7 +21,7 @@
       globalThis.__zod_globalConfig.jitless = true;
 
       (function () {
-        var THEMES = { claw: 1, knot: 1, dash: 1 };
+        var THEMES = { claw: 1, knot: 1, dash: 1, absolutely: 1 };
         var MODES = { system: 1, light: 1, dark: 1 };
         var LEGACY = {
           dark: "claw:dark",
@@ -61,9 +61,13 @@
                 ? mode === "light"
                   ? "dash-light"
                   : "dash"
-                : mode === "light"
-                  ? "light"
-                  : "dark";
+                : theme === "absolutely"
+                  ? mode === "light"
+                    ? "absolutely-light"
+                    : "absolutely"
+                  : mode === "light"
+                    ? "light"
+                    : "dark";
           document.documentElement.setAttribute("data-theme", resolved);
           var resolvedMode = resolved.includes("light") ? "light" : "dark";
           document.documentElement.setAttribute("data-theme-mode", resolvedMode);
@@ -104,6 +108,14 @@
 
       html[data-theme="dash-light"] {
         background: #f7f2ec;
+      }
+
+      html[data-theme="absolutely"] {
+        background: #262624;
+      }
+
+      html[data-theme="absolutely-light"] {
+        background: #faf9f5;
       }
 
       body {

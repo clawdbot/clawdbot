@@ -6,6 +6,7 @@ import {
   isHeartbeatUserMessage,
 } from "./heartbeat-filter.js";
 import {
+  HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS,
   HEARTBEAT_RESPONSE_TOOL_PROMPT,
   HEARTBEAT_PROMPT,
   HEARTBEAT_TRANSCRIPT_PROMPT,
@@ -52,7 +53,7 @@ describe("isHeartbeatUserMessage", () => {
       isHeartbeatUserMessage(
         {
           role: "user",
-          content: `${HEARTBEAT_PROMPT}\nWhen reading HEARTBEAT.md, use workspace file /tmp/HEARTBEAT.md (exact case). Do not read docs/heartbeat.md.`,
+          content: `${HEARTBEAT_PROMPT}\nUse the provided monitor scratch when deciding what needs attention.`,
         },
         HEARTBEAT_PROMPT,
       ),
@@ -63,6 +64,18 @@ describe("isHeartbeatUserMessage", () => {
         isHeartbeatUserMessage({
           role: "user",
           content: `Run the following periodic tasks (only those due based on their intervals):\n\n- email-check: Check for urgent unread emails\n\nAfter completing all due tasks, reply ${acknowledgement}.`,
+        }),
+      ).toBe(true);
+    }
+
+    for (const completion of [
+      "After completing all due tasks, use heartbeat_respond to report the outcome. Set notify=false when nothing needs the user's attention.",
+      `After completing all due tasks:\n${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS}`,
+    ]) {
+      expect(
+        isHeartbeatUserMessage({
+          role: "user",
+          content: `Run the following periodic tasks (only those due based on their intervals):\n\n- deployment: Check deployment status\n\n${completion}\n\nHeartbeat monitor scratch:\nReview the deployment queue.`,
         }),
       ).toBe(true);
     }
@@ -282,14 +295,14 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
             type: "toolCall",
             id: "call_bash",
             name: "bash",
-            arguments: { command: "cat HEARTBEAT.md" },
+            arguments: { command: "inspect monitor scratch" },
           },
         ],
       },
       {
         role: "toolResult",
         toolCallId: "call_bash",
-        content: [{ type: "text", text: "checked HEARTBEAT.md" }],
+        content: [{ type: "text", text: "checked monitor scratch" }],
       },
       { role: "user", content: "what model are you" },
     ];
@@ -309,7 +322,7 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
       {
         role: "toolResult",
         toolCallId: "call_bash",
-        content: [{ type: "text", text: "checked HEARTBEAT.md" }],
+        content: [{ type: "text", text: "checked monitor scratch" }],
       },
       createHeartbeatNoChangeMessage(),
       {
@@ -325,9 +338,19 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
     ]);
   });
 
-  it("removes full default response-tool prompt spans", () => {
+  it.each([
+    ["default", HEARTBEAT_RESPONSE_TOOL_PROMPT],
+    [
+      "scheduled task",
+      `Run the following periodic tasks (only those due based on their intervals):\n\n- deployment: Check deployment status\n\nAfter completing all due tasks:\n${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS}\n\nHeartbeat monitor scratch:\nReview the deployment queue.`,
+    ],
+    [
+      "previous scheduled task",
+      "Run the following periodic tasks (only those due based on their intervals):\n\n- deployment: Check deployment status\n\nAfter completing all due tasks, use heartbeat_respond to report the outcome. Set notify=false when nothing needs the user's attention.",
+    ],
+  ])("removes %s response-tool prompt spans", (_label, prompt) => {
     const messages = [
-      { role: "user", content: HEARTBEAT_RESPONSE_TOOL_PROMPT },
+      { role: "user", content: prompt },
       createHeartbeatNoChangeMessage(),
       {
         role: "toolResult",
@@ -352,7 +375,7 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
             type: "function_call",
             call_id: "call_bash",
             name: "bash",
-            arguments: '{"command":"cat HEARTBEAT.md"}',
+            arguments: '{"command":"inspect monitor scratch"}',
           },
         ],
       },
@@ -362,7 +385,7 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
           {
             type: "function_call_output",
             call_id: "call_bash",
-            output: "checked HEARTBEAT.md",
+            output: "checked monitor scratch",
           },
         ],
       },
@@ -734,7 +757,7 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
             type: "toolCall",
             id: "call_bash",
             name: "bash",
-            arguments: { command: "cat HEARTBEAT.md" },
+            arguments: { command: "inspect monitor scratch" },
           },
           {
             type: "toolCall",
@@ -747,7 +770,7 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
       {
         role: "toolResult",
         toolCallId: "call_bash",
-        content: [{ type: "text", text: "checked HEARTBEAT.md" }],
+        content: [{ type: "text", text: "checked monitor scratch" }],
       },
       { role: "user", content: "what changed while I was away?" },
     ];
@@ -899,7 +922,7 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
       {
         role: "toolResult",
         toolCallId: "call_bash",
-        content: [{ type: "text", text: "checked HEARTBEAT.md" }],
+        content: [{ type: "text", text: "checked monitor scratch" }],
       },
       { role: "assistant", content: "Build is blocked on a failing release check." },
       { role: "user", content: "what model are you" },
@@ -921,7 +944,7 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
             id: "call_bash",
             function: {
               name: "bash",
-              arguments: '{"command":"cat HEARTBEAT.md"}',
+              arguments: '{"command":"inspect monitor scratch"}',
             },
           },
         ],
@@ -929,7 +952,7 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
       {
         role: "tool",
         toolCallId: "call_bash",
-        content: [{ type: "text", text: "checked HEARTBEAT.md" }],
+        content: [{ type: "text", text: "checked monitor scratch" }],
       },
       { role: "assistant", content: "Build is blocked on a failing release check." },
       { role: "user", content: "what model are you" },

@@ -1123,7 +1123,7 @@ describe("applyMediaUnderstanding", () => {
     expect(markerCount - 1).toBe(1);
   });
 
-  it("uses CLI image understanding and preserves caption for commands", async () => {
+  it("describes ACP-delivered images and preserves their captions for commands", async () => {
     const imagePath = await createTempMediaFile({
       fileName: "photo.jpg",
       content: "image-bytes",
@@ -1159,6 +1159,7 @@ describe("applyMediaUnderstanding", () => {
     const result = await applyMediaUnderstanding({
       ctx,
       cfg,
+      deliveredImageIndexes: new Set([0]),
     });
 
     expect(result.appliedImage).toBe(true);

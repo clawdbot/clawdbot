@@ -318,6 +318,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   const sessionPermissionCwd = resolveCodexSessionPermissionCwd({
     permissionMode: params.permissionMode,
     sessionRoot: params.sessionRoot,
+    defaultRoot: effectiveWorkspace,
     requestedCwd,
     fallbackCwd: effectiveWorkspace,
   });
@@ -334,6 +335,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       appServer,
       permissionMode: params.permissionMode,
       sessionRoot: params.sessionRoot,
+      defaultRoot: effectiveWorkspace,
       pluginConfig,
       canUseAutoReview: canUseCodexModelBackedApprovalsReviewerForModel({
         modelProvider: selection.modelProvider,
@@ -433,6 +435,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     appServer,
     permissionMode: params.permissionMode,
     sessionRoot: params.sessionRoot,
+    defaultRoot: effectiveWorkspace,
   });
   if (sessionPermissionPolicy) {
     params.permissionMode = sessionPermissionPolicy.mode;

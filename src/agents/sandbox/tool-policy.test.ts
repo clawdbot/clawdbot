@@ -1,8 +1,11 @@
 // Sandbox tool policy tests cover effective allow/deny merging and blocked-tool
 // guidance for sandboxed agent sessions.
-import { describe, expect, it } from "vitest";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { migratePersistedImplicitMainRoster } from "../../config/legacy.roster.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveSandboxConfigForAgent as resolveSandboxConfigForAgentBase } from "./config.js";
 import {
   formatSandboxToolPolicyBlockedMessage as formatSandboxToolPolicyBlockedMessageBase,
@@ -12,6 +15,8 @@ import {
   isToolAllowed,
   resolveSandboxToolPolicyForAgent as resolveSandboxToolPolicyForAgentBase,
 } from "./tool-policy.js";
+
+const sandboxStoreDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function loadedConfig(config: OpenClawConfig | undefined): OpenClawConfig {
   return migratePersistedImplicitMainRoster(config ?? {}).config as OpenClawConfig;
@@ -236,6 +241,38 @@ describe("sandbox/tool-policy", () => {
         sessionKey: "agent:main:telegram:default:direct:42",
       }).sandboxed,
     ).toBe(true);
+  });
+
+  it("forces a persisted sandbox requirement even when the agent sandbox mode is off", async () => {
+    const sessionKey = "agent:main:guest";
+    const storePath = path.join(
+      sandboxStoreDirs.make("openclaw-required-sandbox-"),
+      "agents",
+      "main",
+      "sessions",
+      "sessions.json",
+    );
+    const entry = { sessionId: "guest-session", updatedAt: 1, sandbox: "required" as const };
+    await replaceSessionEntry({ sessionKey, storePath }, entry);
+    const cfg: OpenClawConfig = {
+      session: { store: storePath },
+      agents: {
+        defaults: { sandbox: { mode: "off", scope: "session" } },
+        list: [{ id: "main" }],
+      },
+    };
+
+    expect(resolveSandboxRuntimeStatus({ cfg, sessionKey })).toMatchObject({
+      sandboxRequired: true,
+      sandboxed: true,
+    });
+    const blockedMessage = formatSandboxToolPolicyBlockedMessage({
+      cfg,
+      sessionKey,
+      toolName: "browser",
+    });
+    expect(blockedMessage).toContain("create a new session under an authorized role");
+    expect(blockedMessage).not.toContain("sandbox.mode=off");
   });
 
   it("classifies a borrowed runtime key under its own sandbox agent", () => {

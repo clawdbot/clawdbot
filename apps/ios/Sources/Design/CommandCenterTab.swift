@@ -123,13 +123,13 @@ struct CommandCenterTab: View {
         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 4), spacing: 8) {
             self.threadTile(
                 title: String(localized: "Sessions"),
-                value: self.overviewSessions.count.formatted())
+                value: self.overviewCountText(self.overviewSessions.count))
             self.threadTile(
                 title: String(localized: "Live"),
-                value: self.overviewLiveCount.formatted())
+                value: self.overviewCountText(self.overviewLiveCount))
             self.threadTile(
                 title: String(localized: "Unread"),
-                value: self.overviewUnreadCount.formatted())
+                value: self.overviewCountText(self.overviewUnreadCount))
             self.threadTile(
                 title: String(localized: "Tokens"),
                 value: self.overviewTokenText)
@@ -282,8 +282,14 @@ struct CommandCenterTab: View {
         self.overviewSessions.count { $0.unread == true }
     }
 
+    private func overviewCountText(_ count: Int) -> String {
+        "\(count.formatted())\(self.dashboardModel?.isSessionRosterComplete == false ? "+" : "")"
+    }
+
     private var overviewTokenText: String {
-        let summary = RootSidebarModel.tokenUsageSummary(for: self.overviewSessions)
+        let summary = RootSidebarModel.tokenUsageSummary(
+            for: self.overviewSessions,
+            rosterIsComplete: self.dashboardModel?.isSessionRosterComplete ?? true)
         guard let total = summary.total else { return "n/a" }
         return "\(summary.isPartial ? "~" : "")\(total.formatted(.number.notation(.compactName)))"
     }

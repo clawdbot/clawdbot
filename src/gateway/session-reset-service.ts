@@ -97,7 +97,7 @@ import {
   forgetActiveSessionForShutdown,
   noteActiveSessionForShutdown,
 } from "./active-sessions-shutdown-tracker.js";
-import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
+import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "./operator-role-policy.js";
 import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
 import { findDirectChildSessionsForParent } from "./session-child-sessions.js";
 import {
@@ -105,7 +105,6 @@ import {
   type PrepareGatewaySessionLifecycle,
   rollbackGatewaySessionPreparation,
 } from "./session-lifecycle-preparation.js";
-import { resolveSessionPermissionRootError } from "./session-permission-policy.js";
 import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
 import { notifyGatewaySessionReset } from "./session-reset-notifications.js";
 import {
@@ -1203,20 +1202,6 @@ export async function performGatewaySessionReset(params: {
         return;
       }
       preparedResetSessionId = normalizeOptionalString(currentEntry?.sessionId);
-      // Lifecycle preparation can establish a worktree root unless the request clears it.
-      // Reject every other impossible tuple before active work is interrupted.
-      if (params.clearSpawnedCwd || !params.prepareLifecycle) {
-        const permissionRootError = resolveSessionPermissionRootError(
-          params.clearSpawnedCwd
-            ? undefined
-            : (params.permissionMode ?? currentEntry?.permissionMode),
-          params.clearSpawnedCwd ? undefined : (params.sessionRoot ?? currentEntry?.sessionRoot),
-        );
-        if (permissionRootError) {
-          resetPreparationError = errorShape(ErrorCodes.INVALID_REQUEST, permissionRootError);
-          return;
-        }
-      }
       admittedWorkReleased = await interruptSessionWorkAdmissions({
         scope: resetTarget.storePath,
         identities: resetLifecycleIdentities,
@@ -1234,19 +1219,6 @@ export async function performGatewaySessionReset(params: {
           return;
         }
         preparedLifecycle = prepared.value;
-      }
-      if (admittedWorkReleased) {
-        const permissionRootError = resolveSessionPermissionRootError(
-          params.clearSpawnedCwd
-            ? undefined
-            : (params.permissionMode ?? currentEntry?.permissionMode),
-          params.clearSpawnedCwd
-            ? undefined
-            : (preparedLifecycle?.sessionRoot ?? params.sessionRoot ?? currentEntry?.sessionRoot),
-        );
-        if (permissionRootError) {
-          resetPreparationError = errorShape(ErrorCodes.INVALID_REQUEST, permissionRootError);
-        }
       }
     },
     run: async () => {
@@ -1573,9 +1545,15 @@ export async function performGatewaySessionReset(params: {
                 createdActor: currentEntry.createdActor,
                 createdAt: currentEntry.createdAt,
                 projectId: currentEntry.projectId,
+                ...(currentEntry.sandbox === "required" ? { sandbox: "required" as const } : {}),
               }
             : params.creation
-              ? buildSessionCreationStamp(params.creation)
+              ? {
+                  ...buildSessionCreationStamp(params.creation),
+                  ...(resolveCreatorSandbox(cfg, params.creation) === "required"
+                    ? { sandbox: "required" as const }
+                    : {}),
+                }
               : {};
           const nextEntry: InternalSessionEntry = {
             sessionId: nextSessionId,

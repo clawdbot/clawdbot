@@ -464,13 +464,15 @@ export async function buildModelsListResult(
   let loadedSnapshot: Awaited<ReturnType<typeof loadDeferredCatalog>> | undefined;
   let loadedReadOnly = true;
   let usedPreloadedCatalog = false;
+  let catalogTimedOut = false;
   const handleCatalogTimeout = (timeoutMs: number) => {
+    catalogTimedOut = true;
     if (loggedSlowModelsListCatalog) {
       return;
     }
     loggedSlowModelsListCatalog = true;
-    params.context.logGateway.debug(
-      `models.list continuing without model catalog after ${timeoutMs}ms`,
+    params.context.logGateway.warn(
+      `models.list catalog load exceeded ${timeoutMs}ms; using the prepared catalog when available`,
     );
   };
   let snapshot = await loadPreparedModelCatalogSnapshotForBrowse({
@@ -555,6 +557,9 @@ export async function buildModelsListResult(
     (preloadedCatalog && params.catalogProjector
       ? undefined
       : await readPreparedCatalog(params.context, initialAgentId));
+  if (catalogTimedOut && ownerSnapshot) {
+    snapshot = ownerSnapshot;
+  }
   const cfg = ownerSnapshot?.config ?? initialConfig;
   const agentId = ownerSnapshot?.agentId ?? initialAgentId;
   const workspaceDir =

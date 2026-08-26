@@ -127,6 +127,11 @@ Version 3 was an unshipped development step folded into version 4.
 | 8       | Cloud-worker placement execution modes and mode-aware turn claims                                                                                                                                                                                | Unreleased          |
 | 9       | In-root agent database registry paths stored relative to the state directory                                                                                                                                                                     | Unreleased          |
 | 10      | Six dead tables retired (agent_model_catalogs, android_notification_recent_packages, command_log_entries, diagnostic_stability_bundles, media_blobs, model_capability_cache)                                                                     | Unreleased          |
+| 11      | Legacy skill curator lifecycle table and never-read proposal origin-run projection retired                                                                                                                                                       | Unreleased          |
+
+### State schema 11
+
+Schema 11 removes the `skill_lifecycle` and `skill_workshop_proposal_origin_runs` tables. Archived-skill lifecycle state is discarded during the upgrade: previously archived Workshop skills return to the active collection, where weekly collection review judges them by content. The origin-run rows were a never-read projection; canonical proposal provenance stays in `skill_workshop_proposals.record_json`. Recorded skill usage and collection-review state are preserved.
 
 ### State schema 9
 
@@ -182,6 +187,60 @@ The general procedure is:
 2. In one transaction, drop every table, index, trigger, and column introduced after the target version.
 3. Set `PRAGMA user_version` and `schema_meta.schema_version` to the target version.
 4. Run the target release's full database verification before starting the Gateway.
+
+### Example: state schema 11 to 10
+
+Schema 11 removed the retired skill lifecycle table and the never-read proposal
+origin-run projection. A schema 10 build still requires both canonical tables, so
+a manual downgrade must recreate their exact empty schemas and lifecycle indexes
+before lowering the version.
+
+Run equivalent SQL against the global state database after inspecting the exact
+schema that wrote it:
+
+```sql
+BEGIN IMMEDIATE;
+
+CREATE TABLE skill_lifecycle (
+  skill_file TEXT NOT NULL PRIMARY KEY,
+  skill_key TEXT NOT NULL,
+  skill_name TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('active', 'stale', 'archived')),
+  pinned INTEGER NOT NULL DEFAULT 0,
+  state_changed_at_ms INTEGER NOT NULL,
+  created_at_ms INTEGER NOT NULL,
+  archived_reason TEXT
+) STRICT;
+
+CREATE INDEX idx_skill_lifecycle_key
+  ON skill_lifecycle(skill_key, skill_file);
+
+CREATE INDEX idx_skill_lifecycle_state
+  ON skill_lifecycle(state, skill_file);
+
+CREATE TABLE skill_workshop_proposal_origin_runs (
+  proposal_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  position INTEGER NOT NULL,
+  mutation_count INTEGER NOT NULL CHECK (mutation_count > 0),
+  PRIMARY KEY (proposal_id, run_id),
+  FOREIGN KEY (proposal_id) REFERENCES skill_workshop_proposals(proposal_id) ON DELETE CASCADE
+) STRICT;
+
+PRAGMA user_version = 10;
+UPDATE schema_meta
+SET schema_version = 10,
+    updated_at = unixepoch('now') * 1000
+WHERE meta_key = 'primary';
+
+COMMIT;
+```
+
+Both recreated tables start empty. The upgrade discarded archived-skill
+lifecycle state, so those skills returned to the active collection and a manual
+downgrade cannot recover their previous archived state. Proposal origin-run
+rows were never read; authoritative provenance remains in each proposal's
+`record_json`. A botched downgrade means restore from the verified backup.
 
 ### Example: state schema 10 to 9
 

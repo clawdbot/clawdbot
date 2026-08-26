@@ -161,6 +161,8 @@ vi.mock("../infra/heartbeat-runner.js", () => ({
   resolveHeartbeatSchedulerSeed: () => "test-seed",
 }));
 
+vi.mock("../infra/heartbeat-runner-run.js", () => ({ runHeartbeatOnce }));
+
 vi.mock("../infra/restart-coordinator.js", async () => {
   const actual = await vi.importActual<typeof import("../infra/restart-coordinator.js")>(
     "../infra/restart-coordinator.js",
@@ -2571,7 +2573,6 @@ describe("buildGatewayCronService", () => {
         sessionKey: "discord:channel:ops",
         heartbeat: { target: "last" },
         scheduledEveryMs: 15 * 60_000,
-        scheduledAnchorMs: 42_000,
       });
 
       expect(requestHeartbeatMock).toHaveBeenCalledWith({
@@ -2582,7 +2583,6 @@ describe("buildGatewayCronService", () => {
         sessionKey: "agent:main:discord:channel:ops",
         heartbeat: { target: "last", to: undefined, accountId: undefined },
         scheduledEveryMs: 15 * 60_000,
-        scheduledAnchorMs: 42_000,
       });
     } finally {
       state.cron.stop();

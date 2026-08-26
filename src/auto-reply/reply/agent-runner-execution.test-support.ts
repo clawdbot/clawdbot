@@ -249,8 +249,7 @@ vi.mock("../../utils/message-channel.js", async () => ({
 vi.mock("../heartbeat.js", async () => {
   const actual = await vi.importActual<typeof import("../heartbeat.js")>("../heartbeat.js");
   return {
-    DEFAULT_HEARTBEAT_EVERY: actual.DEFAULT_HEARTBEAT_EVERY,
-    resolveHeartbeatPromptCore: actual.resolveHeartbeatPromptCore,
+    ...actual,
     stripHeartbeatToken: (text: string) => ({
       text,
       didStrip: false,

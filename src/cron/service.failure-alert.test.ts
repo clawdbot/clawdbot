@@ -8,6 +8,7 @@ type CronServiceParams = ConstructorParameters<typeof CronService>[0];
 type RunIsolatedAgentJob = NonNullable<CronServiceParams["runIsolatedAgentJob"]>;
 type IsolatedAgentRunResult = Awaited<ReturnType<RunIsolatedAgentJob>>;
 type FailureAlertConfig = NonNullable<CronServiceParams["cronConfig"]>["failureAlert"];
+type SendCronFailureAlert = NonNullable<CronServiceParams["sendCronFailureAlert"]>;
 
 const { logger: noopLogger, makeStorePath } = setupCronServiceSuite({
   prefix: "openclaw-cron-failure-alert-",
@@ -43,12 +44,12 @@ async function withFailureAlertCron(
     cron: CronService;
     enqueueSystemEvent: ReturnType<typeof vi.fn>;
     requestHeartbeat: ReturnType<typeof vi.fn>;
-    sendCronFailureAlert: ReturnType<typeof vi.fn>;
+    sendCronFailureAlert: ReturnType<typeof vi.fn<SendCronFailureAlert>>;
     addJob: (name: string, overrides?: Partial<CronJobCreate>) => ReturnType<CronService["add"]>;
   }) => Promise<void>,
 ): Promise<void> {
   const store = await makeStorePath();
-  const sendCronFailureAlert = vi.fn(async () => undefined);
+  const sendCronFailureAlert = vi.fn<SendCronFailureAlert>(async () => undefined);
   const enqueueSystemEvent = vi.fn();
   const requestHeartbeat = vi.fn();
   const runResult = params.runResult ?? {
@@ -169,15 +170,75 @@ describe("CronService failure alerts", () => {
 
         expect(enqueueSystemEvent).toHaveBeenCalledWith(
           expect.stringContaining('Automation "work-owned failure" failed 1 times'),
-          { agentId: "work", sessionKey },
+          { agentId: "work", sessionKey, contextKey: `cron:${job.id}:failure-alert` },
         );
         expect(requestHeartbeat).toHaveBeenCalledWith({
-          source: "cron",
+          source: "notifications-event",
           intent: "immediate",
-          reason: `cron:${job.id}:failure-alert`,
+          reason: "wake",
           agentId: "work",
           sessionKey,
         });
+      },
+    );
+  });
+
+  it.each([
+    {
+      name: "suppressed before reaching the recipient",
+      recipientReached: false,
+      rejects: false,
+      fallbackCalls: 1,
+    },
+    {
+      name: "suppressed after the recipient may have received it",
+      recipientReached: true,
+      rejects: false,
+      fallbackCalls: 0,
+    },
+    {
+      name: "failed after reaching the recipient",
+      recipientReached: true,
+      rejects: true,
+      fallbackCalls: 0,
+    },
+    {
+      name: "failed before reaching the recipient",
+      recipientReached: false,
+      rejects: true,
+      fallbackCalls: 1,
+    },
+    {
+      name: "rejected before a delivery attempt",
+      recipientReached: undefined,
+      rejects: true,
+      fallbackCalls: 1,
+    },
+  ])("falls back exactly once only when an alert $name", async (testCase) => {
+    await withFailureAlertCron(
+      { failureAlert: { enabled: true, after: 1 } },
+      async ({ cron, sendCronFailureAlert, enqueueSystemEvent, addJob }) => {
+        sendCronFailureAlert.mockImplementationOnce(async (alert) => {
+          if (testCase.recipientReached !== undefined) {
+            alert.onDeliveryAttempt?.(testCase.recipientReached);
+          }
+          if (testCase.rejects) {
+            throw new Error("failure alert delivery failed");
+          }
+        });
+        const job = await addJob("recipient custody", { delivery: createTelegramDelivery() });
+
+        await cron.run(job.id, "force");
+
+        expect(sendCronFailureAlert).toHaveBeenCalledOnce();
+        expect(enqueueSystemEvent).toHaveBeenCalledTimes(testCase.fallbackCalls);
+
+        const deliveryAttempt = alertCallArg(sendCronFailureAlert).onDeliveryAttempt;
+        expect(typeof deliveryAttempt).toBe("function");
+        if (typeof deliveryAttempt === "function") {
+          deliveryAttempt(false);
+        }
+        expect(enqueueSystemEvent).toHaveBeenCalledTimes(testCase.fallbackCalls);
       },
     );
   });

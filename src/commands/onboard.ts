@@ -165,7 +165,7 @@ function validatePreflightOptions(opts: OnboardOptions, runtime: RuntimeEnv): bo
     );
   }
   if (opts.daemonRuntime !== undefined && !isGatewayDaemonRuntime(opts.daemonRuntime)) {
-    return rejectOption(opts, runtime, 'Invalid --daemon-runtime. Use "node".');
+    return rejectOption(opts, runtime, 'Invalid --daemon-runtime. Use "node" or "bun".');
   }
   if (opts.nodeManager !== undefined && !isNodeManagerChoice(opts.nodeManager)) {
     return rejectOption(opts, runtime, 'Invalid --node-manager. Use "npm", "pnpm", or "bun".');

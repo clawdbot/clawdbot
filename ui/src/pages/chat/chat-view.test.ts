@@ -6887,6 +6887,47 @@ describe("chat model controls", () => {
     ).not.toBeNull();
   });
 
+  it("labels the mobile secondary setting as Fast mode when reasoning is unavailable", () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      models: [
+        {
+          id: "gpt-5.5",
+          name: "GPT-5.5",
+          provider: "openai",
+          reasoning: false,
+        },
+      ],
+    });
+    const sessionsResult = expectDefined(state.sessionsResult, "fast-only session");
+    const session = expectDefined(sessionsResult.sessions[0], "fast-only session row");
+    state.sessionsResult = {
+      ...sessionsResult,
+      defaults: {
+        ...sessionsResult.defaults,
+        thinkingLevels: [],
+      },
+      sessions: [
+        {
+          ...session,
+          thinkingLevels: [],
+        },
+      ],
+    };
+
+    const container = renderModelControls(state);
+    const mobileSecondary = container.querySelector(".chat-controls__mobile-effort-option");
+    const modelTrigger = container.querySelector('[data-chat-model-select="true"]');
+
+    expect(mobileSecondary?.textContent).toContain("Fast mode");
+    expect(mobileSecondary?.textContent).toContain("Standard");
+    expect(modelTrigger?.getAttribute("aria-label")).toContain("Fast mode: Standard");
+    expect(modelTrigger?.getAttribute("aria-label")).not.toContain("Thinking level");
+    expect(getThinkingSlider(container)).toBeNull();
+    expect(container.querySelector("[data-chat-speed-toggle]")).not.toBeNull();
+  });
+
   it("applies model, reasoning, and speed for the session that opened the picker", async () => {
     const { state } = createReasoningHeaderState({
       models: createOpenAiModelCatalog(),

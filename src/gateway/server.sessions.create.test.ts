@@ -260,6 +260,80 @@ test("sessions.create assigns and registers its requested group", async () => {
   );
 });
 
+test.each([
+  ["sessions.create", "create"],
+  ["sessions.patch", "patch"],
+  ["sessions.patchMany", "patch-many"],
+] as const)(
+  "required operator sandbox follows new %s session ownership",
+  async (method, suffix) => {
+    const { storePath } = await createSessionStoreDir();
+    const profile = ensureProfileForEmail(`sandboxed-session-${suffix}@example.com`);
+    setUserProfileRole(profile.id, "guest");
+    const cfg = {
+      ...getRuntimeConfig(),
+      session: { ...getRuntimeConfig().session, store: storePath },
+      gateway: {
+        ...getRuntimeConfig().gateway,
+        roles: {
+          default: "guest",
+          definitions: {
+            guest: {
+              sessions: { others: "view" as const },
+              agents: ["main"],
+              scopes: ["operator.read" as const, "operator.write" as const],
+              sandbox: "required" as const,
+            },
+          },
+        },
+      },
+    };
+    const client = {
+      connect: { role: "operator", scopes: ["operator.read", "operator.write"] },
+      authenticatedUserProfile: {
+        profileId: profile.id,
+        displayName: profile.displayName,
+        hasAvatar: false,
+        updatedAt: profile.updatedAt,
+      },
+    } as never;
+    const key = `agent:main:dashboard:role-sandbox-${suffix}`;
+    const request =
+      method === "sessions.create"
+        ? { agentId: "main", key }
+        : method === "sessions.patch"
+          ? { key, label: "Guest session" }
+          : { patch: { label: "Guest session" }, targets: [{ key }] };
+
+    const created = await directSessionReq<{ outcomes?: Array<{ ok: boolean }> }>(method, request, {
+      client,
+      context: { getRuntimeConfig: () => cfg },
+    });
+
+    expect(created.ok, JSON.stringify(created.error)).toBe(true);
+    if (method === "sessions.patchMany") {
+      expect(created.payload?.outcomes).toEqual([{ ok: true, key }]);
+    }
+    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toMatchObject({
+      createdActor: { type: "human", id: profile.id },
+      sandbox: "required",
+    });
+
+    for (const forgedSandbox of [null, "inherit"] as const) {
+      const forged = await directSessionReq(
+        "sessions.patch",
+        { key, sandbox: forgedSandbox },
+        { client, context: { getRuntimeConfig: () => cfg } },
+      );
+
+      expect(forged).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+    }
+    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toMatchObject({
+      sandbox: "required",
+    });
+  },
+);
+
 test("operator role agent allowlists protect creation without blocking existing sessions", async () => {
   const { storePath } = await createSessionStoreDir();
   const profile = ensureProfileForEmail("restricted-session-creator@example.com");

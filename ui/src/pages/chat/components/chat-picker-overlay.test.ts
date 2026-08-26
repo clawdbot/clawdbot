@@ -2,6 +2,7 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  handleChatComposerDetailsToggle,
   handleChatComposerDropdownShow,
   markPointerOpenedChatComposerDropdown,
   restorePointerOpenedChatComposerTrigger,
@@ -32,5 +33,37 @@ describe("chat picker overlay", () => {
     dropdown.dispatchEvent(new Event("wa-after-show"));
 
     expect(trigger.hasAttribute("data-chat-pointer-restored-focus")).toBe(false);
+  });
+
+  it("returns Escape focus to the visible mobile settings trigger", async () => {
+    const composer = document.createElement("div");
+    composer.className = "agent-chat__input";
+    const settings = document.createElement("div");
+    settings.className = "chat-controls__model-settings";
+    const modelPicker = document.createElement("details");
+    modelPicker.className = "chat-controls__model-picker";
+    const modelTrigger = document.createElement("summary");
+    modelPicker.append(modelTrigger);
+    const effortPicker = document.createElement("details");
+    effortPicker.className = "chat-controls__effort-picker";
+    const hiddenEffortTrigger = document.createElement("summary");
+    hiddenEffortTrigger.style.display = "none";
+    const effortControl = document.createElement("input");
+    effortPicker.append(hiddenEffortTrigger, effortControl);
+    settings.append(modelPicker, effortPicker);
+    composer.append(settings);
+    document.body.append(composer);
+
+    effortPicker.open = true;
+    effortPicker.addEventListener("toggle", handleChatComposerDetailsToggle);
+    effortPicker.dispatchEvent(new Event("toggle"));
+    effortControl.focus();
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    });
+
+    expect(effortPicker.open).toBe(false);
+    expect(document.activeElement).toBe(modelTrigger);
   });
 });

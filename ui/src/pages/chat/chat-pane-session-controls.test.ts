@@ -37,14 +37,24 @@ describe("chat model catalog state", () => {
       expected: { hasSnapshot: true, status: "ready" },
     },
     {
-      label: "refreshing with a cached snapshot",
+      label: "ready with a cached snapshot",
       state: {
         chatModelCatalog: cachedCatalog,
+        chatModelCatalogError: null,
+        chatModelsLoading: false,
+        connected: true,
+      },
+      expected: { hasSnapshot: true, status: "ready" },
+    },
+    {
+      label: "loading without a cached snapshot",
+      state: {
+        chatModelCatalog: [],
         chatModelCatalogError: null,
         chatModelsLoading: true,
         connected: true,
       },
-      expected: { hasSnapshot: true, status: "refreshing" },
+      expected: { hasSnapshot: false, status: "loading" },
     },
     {
       label: "offline",
@@ -137,7 +147,7 @@ describe("chat pane composer controls", () => {
     expect(icons.size).toBe(5);
   });
 
-  it("patches a keyboard-selected mode, clears to default, and locks full access", async () => {
+  it("patches a rootless session, clears to default, and locks full access", async () => {
     const container = document.createElement("div");
     const patch = vi.fn(async () => ({}));
     const state = {
@@ -161,7 +171,6 @@ describe("chat pane composer controls", () => {
         key: "agent:main:permission-test",
         kind: "direct",
         permissionMode: "full",
-        sessionRoot: "/workspace/projects/openclaw",
       },
       agentDefaultModel: undefined,
       modelAccess: { allowed: true, requiredScope: "operator.write" },
@@ -261,51 +270,6 @@ describe("chat pane composer controls", () => {
         }),
       );
     }
-  });
-
-  it("surfaces a rejected permission change in the rendered error state", async () => {
-    const failure = new Error(
-      "permission mode requires a session root; choose Default or a rooted session",
-    );
-    const state = {
-      chatRunId: null,
-      connected: true,
-      client: {},
-      chatLoading: false,
-      chatModelCatalog: [],
-      sessions: {
-        state: { modelOverrides: {} },
-        patch: vi.fn(async () => {
-          throw failure;
-        }),
-      },
-      chatModelSwitchPromises: {},
-      sessionKey: "agent:main:rootless-permission-test",
-      chatModelsLoading: false,
-      chatSending: false,
-      sessionsResult: null,
-      chatStream: null,
-      lastError: null,
-      chatError: null,
-      requestUpdate: vi.fn(),
-    } as unknown as ChatPageHost;
-
-    const controls = renderChatPaneComposerControls({
-      state,
-      selectedSession: undefined,
-      agentDefaultModel: undefined,
-      modelAccess: { allowed: true, requiredScope: "operator.write" },
-      effortAccess: { allowed: true, requiredScope: "operator.write" },
-      permissionAccess: { allowed: true, requiredScope: "operator.write" },
-      canSelectFull: true,
-      toastAnchor: document.createElement("div"),
-      onModelSetup: vi.fn(),
-    });
-    await controls.permissionPicker.onSelect("full");
-
-    expect(state.chatError).toContain(failure.message);
-    expect(state.lastError).toBe(state.chatError);
-    expect(state.requestUpdate).toHaveBeenCalledOnce();
   });
 
   it("holds the session send barrier until a Full Access selection settles", async () => {
@@ -477,48 +441,77 @@ describe("chat pane composer controls", () => {
     expect(state.requestUpdate).toHaveBeenCalledOnce();
   });
 
-  it("refreshes the configured model catalog when the picker opens", async () => {
-    const container = document.createElement("div");
-    const request = vi.fn(async () => ({ models: [] }));
-    const state = {
-      chatRunId: null,
-      connected: true,
-      connectionEpoch: 1,
-      client: { request },
-      chatLoading: false,
-      chatModelCatalog: [],
-      chatModelCatalogError: null,
-      sessions: { state: { modelOverrides: {} }, patch: vi.fn() },
-      chatModelSwitchPromises: {},
-      sessionKey: "main",
-      chatModelsLoading: false,
-      chatSending: false,
-      sessionsResult: null,
-      chatStream: null,
-      requestUpdate: vi.fn(),
-    } as unknown as ChatPageHost;
-    const controls = renderChatPaneComposerControls({
-      state,
-      selectedSession: undefined,
-      agentDefaultModel: undefined,
-      modelAccess: { allowed: true, requiredScope: "operator.write" },
-      effortAccess: { allowed: true, requiredScope: "operator.write" },
-      permissionAccess: { allowed: true, requiredScope: "operator.write" },
-      canSelectFull: true,
-      toastAnchor: document.createElement("div"),
-      onModelSetup: vi.fn(),
-    });
-    render(controls.composerControls, container);
+  it.each([
+    {
+      label: "warm",
+      cachedModels: [{ id: "cached-model", name: "Cached Model", provider: "openai" }],
+    },
+    { label: "cold", cachedModels: [] },
+  ])(
+    "revalidates the $label configured model catalog when the picker opens",
+    async ({ cachedModels }) => {
+      const container = document.createElement("div");
+      const catalog = createDeferred<{ models: typeof cachedModels }>();
+      const request = vi.fn(() => catalog.promise);
+      const state = {
+        chatRunId: null,
+        connected: true,
+        connectionEpoch: 1,
+        client: { request },
+        chatLoading: false,
+        chatModelCatalog: cachedModels,
+        chatModelCatalogError: null,
+        sessions: {
+          state: { modelOverrides: {} },
+          patch: vi.fn(),
+          refresh: vi.fn().mockResolvedValue(undefined),
+        },
+        chatModelSwitchPromises: {},
+        sessionKey: "main",
+        chatModelsLoading: false,
+        chatSending: false,
+        sessionsResult: null,
+        chatStream: null,
+        requestUpdate: vi.fn(),
+      } as unknown as ChatPageHost;
+      const controlParams = {
+        state,
+        selectedSession: undefined,
+        agentDefaultModel: undefined,
+        modelAccess: { allowed: true, requiredScope: "operator.write" } as const,
+        effortAccess: { allowed: true, requiredScope: "operator.write" } as const,
+        permissionAccess: { allowed: true, requiredScope: "operator.write" } as const,
+        canSelectFull: true,
+        toastAnchor: document.createElement("div"),
+        onModelSetup: vi.fn(),
+      };
+      render(renderChatPaneComposerControls(controlParams).composerControls, container);
 
-    const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker");
-    picker!.open = true;
-    picker!.dispatchEvent(new Event("toggle"));
+      const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker");
+      picker!.open = true;
+      picker!.dispatchEvent(new Event("toggle"));
 
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-    expect(request).toHaveBeenCalledWith("models.list", {
-      view: "configured",
-      agentId: "main",
-      refresh: true,
-    });
-  });
+      expect(request).toHaveBeenCalledOnce();
+      expect(request).toHaveBeenCalledWith("models.list", {
+        view: "configured",
+        agentId: "main",
+        refresh: true,
+      });
+      expect(state.chatModelsLoading).toBe(cachedModels.length === 0);
+      render(renderChatPaneComposerControls(controlParams).composerControls, container);
+      if (cachedModels.length > 0) {
+        expect(container.querySelector("[data-chat-model-catalog-state]")).toBeNull();
+        expect(
+          container.querySelector<HTMLButtonElement>("[data-chat-model-option]")?.disabled,
+        ).toBe(false);
+        expect(container.textContent).toContain("Cached Model");
+      } else {
+        expect(container.querySelector('[data-chat-model-catalog-state="loading"]')).not.toBeNull();
+        expect(container.textContent).toContain("Loading models…");
+      }
+      const freshModels = [{ id: "fresh-model", name: "Fresh Model", provider: "openai" }];
+      catalog.resolve({ models: freshModels });
+      await vi.waitFor(() => expect(state.chatModelCatalog).toEqual(freshModels));
+    },
+  );
 });
