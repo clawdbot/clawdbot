@@ -305,6 +305,7 @@ async function waitForProvisionReady(
 // otherwise the caller cannot release a box it never learned about.
 async function runProvisionSetupAndWaitReady(
   params: ProvisionInspectContext & {
+    phase: string;
     setup: string;
     timeoutMs?: number;
     forwardedEnv?: Record<string, string>;
@@ -316,7 +317,7 @@ async function runProvisionSetupAndWaitReady(
       params.forwardedEnv,
       (names, profilePath, childEnv) =>
         runCrabboxCommand({
-          action: "setup",
+          action: params.phase,
           args: leaseRunArgs({ ...params, id: params.inspect.id }, names, profilePath),
           binary: params.binary,
           env: childEnv,
@@ -329,7 +330,7 @@ async function runProvisionSetupAndWaitReady(
         }),
     );
     if (result.termination !== "exit" || result.code !== 0) {
-      throw permanentCrabboxCommandError("setup", result);
+      throw permanentCrabboxCommandError(params.phase, result);
     }
   } catch (error) {
     return await failProvisionAfterCleanup({ ...params, id: params.inspect.id }, error);
@@ -588,10 +589,7 @@ export function createCrabboxWorkerProvider(
       } catch (error) {
         // Transport failure after warmup is indeterminate; preserve the lease for durable replay.
         if (error instanceof WorkerProviderError) {
-          return await failProvisionAfterCleanup(
-            { binary, id: leaseId, provider: parsed.provider, runCommand },
-            error,
-          );
+          return await failProvisionAfterCleanup({ ...context, id: leaseId, runCommand }, error);
         }
         throw error;
       }
@@ -599,11 +597,10 @@ export function createCrabboxWorkerProvider(
         throw new Error("Crabbox warmup lease was not found during inspection");
       }
       const inspectedParams = {
-        binary,
+        ...context,
         deadline,
         inspect: inspected.inspect,
         profile: parsed,
-        provider: parsed.provider,
         runCommand,
       };
       if (isUnusableProvisionState(inspected.inspect.state)) {
@@ -617,6 +614,7 @@ export function createCrabboxWorkerProvider(
       if (parsed.setup) {
         inspectedParams.inspect = await runProvisionSetupAndWaitReady({
           ...inspectedParams,
+          phase: "profile setup",
           setup: parsed.setup,
           forwardedEnv,
           sleep,
@@ -625,6 +623,7 @@ export function createCrabboxWorkerProvider(
       if (parsed.desktop) {
         inspectedParams.inspect = await runProvisionSetupAndWaitReady({
           ...inspectedParams,
+          phase: "desktop setup",
           setup: createCrabboxWorkerDesktopSetup(leaseId, wallpaperBase64),
           sleep,
         });
@@ -652,6 +651,7 @@ export function createCrabboxWorkerProvider(
       });
       inspectedParams.inspect = await runProvisionSetupAndWaitReady({
         ...inspectedParams,
+        phase: "node enrollment setup",
         setup: nodeEnrollmentSetup.command,
         timeoutMs: CRABBOX_NODE_ENROLLMENT_TIMEOUT_MS,
         ...(nodeEnrollmentSetup.forwardedEnv

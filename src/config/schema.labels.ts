@@ -597,6 +597,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "models.providers.*.models[].mediaInput.image.preferredSidePx": "Model Image Preferred Side",
   "models.providers.*.models[].mediaInput.image.tokenMode": "Model Image Token Mode",
   "agents.defaults.models": "Models",
+  "agents.defaults.modelSelectionScope": "Model Selection Scope",
   "agents.defaults.modelPolicy": "Model Policy",
   "agents.defaults.modelPolicy.allow": "Allowed Models",
   "agents.defaults.models.*.agentRuntime": "Default Agent Model Runtime",

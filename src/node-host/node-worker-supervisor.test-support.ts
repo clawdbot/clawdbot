@@ -84,19 +84,22 @@ const writeResultAndExit = (value) => {
   exitWorker(0);
 };
 const mode = descriptor.assignment.prompt;
-if (mode === "connection-failure") {
-  process.send(
-    {
-      type: "openclaw-worker-connection-failure-v1",
-      cause: "certificate rejected " + descriptor.admission.credential,
-    },
-    () =>
-      fs.writeFileSync(
-        path.join(descriptor.assignment.workspaceDir, "connection-failure-reported"),
-        "reported",
-      ),
-  );
-  setInterval(() => {}, 1000);
+if (mode === "connection-failure" || mode === "connection-deadline") {
+  const target = new URL(descriptor.connectionEndpoint.url).host;
+  const report = (cause) => new Promise((resolve) => process.send(
+    { type: "openclaw-worker-connection-failure-v1", cause }, resolve,
+  ));
+  await report("worker could not reach gateway " + target + ": certificate rejected " +
+    descriptor.admission.credential + "; check TLS pin/publicUrl configuration");
+  if (mode === "connection-deadline") {
+    await report("worker admission deadline exceeded after 3 attempts to " + target +
+      ": connect failed: Opening handshake has timed out " + descriptor.admission.credential);
+    process.stderr.write("worker admission deadline exceeded\n");
+    exitWorker(7);
+  } else {
+    fs.writeFileSync(path.join(descriptor.assignment.workspaceDir, "connection-failure-reported"), "reported");
+    setInterval(() => {}, 1000);
+  }
 } else if (mode === "wait") {
   setInterval(() => {}, 1000);
 } else if (mode === "tree") {

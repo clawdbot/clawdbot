@@ -973,6 +973,7 @@ export async function syncSelectedSessionMessageSubscription(
 
 type LoadChatHistoryOptions = {
   deferBranches?: boolean;
+  supersedeInFlight?: boolean;
   startup?: boolean;
 };
 
@@ -1590,6 +1591,7 @@ export async function loadChatHistory(
   // Live events replace the rendered array while their snapshot is pending;
   // only stable session and connection ownership may start another request.
   if (
+    opts.supersedeInFlight !== true &&
     inFlight.phase === "in-flight" &&
     inFlight.key === requestKey &&
     inFlight.client === client &&

@@ -47,6 +47,7 @@ type SidebarPanelDefinitionParams = {
   pendingQuestion: string | null;
   onClearCompanion: () => void;
   discussion: SessionDiscussionPanelConfig | null;
+  discussionAvailable: boolean;
   discussionOpenUrl: string | null;
   discussionSourceGeneration: number;
 };
@@ -228,7 +229,7 @@ export function sidebarPanelDefinitions(
         : {}),
     }),
     definePanel("discussion", "discussion", icons.messageSquare, discussion, {
-      available: discussion !== null,
+      available: discussion !== null && params?.discussionAvailable === true,
       ...(params?.discussionOpenUrl
         ? {
             headerAction: html`<a

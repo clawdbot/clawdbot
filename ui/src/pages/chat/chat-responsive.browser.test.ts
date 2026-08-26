@@ -1833,15 +1833,11 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             <div class="chat-main">
               <div class="chat-main__conversation-column">
                 <header class="chat-pane__header">Session</header>
-                <div class="chat-topbar-notices" hidden>
-                  <div class="chat-composer-neighbor-card chat-cloud-disk-space-notice">Disk space low</div>
-                </div>
+                <div class="chat-topbar-notices"></div>
                 <div class="chat-main__conversation">
                   <div class="chat-thread" role="log"><div class="chat-thread-inner">Transcript</div></div>
                   <div class="agent-chat__composer-shell">
-                    <div class="agent-chat__composer-overlay" hidden>
-                      <div class="chat-composer-neighbor-card chat-error">Model unavailable</div>
-                    </div>
+                    <div class="agent-chat__composer-overlay"></div>
                     <div class="agent-chat__input">Composer</div>
                   </div>
                 </div>
@@ -1849,6 +1845,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             </div>
           </section>
         </body></html>`);
+        // The card entrance animation moves every measured descendant together.
+        await page.locator(".card.chat").evaluate(async (node) => {
+          await Promise.all(node.getAnimations().map((animation) => animation.finished));
+        });
         await waitForLayoutSettled(page, ".chat-main__conversation, .agent-chat__composer-shell");
 
         const geometry = async () =>
@@ -1867,14 +1867,20 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
               thread: rect(".chat-thread"),
             };
           });
+        expect(await page.locator(".chat-topbar-notices").isVisible()).toBe(false);
+        expect(await page.locator(".agent-chat__composer-overlay").isVisible()).toBe(false);
         const before = await geometry();
-        await page
-          .locator(".chat-topbar-notices")
-          .evaluate((node) => node.removeAttribute("hidden"));
-        await page
-          .locator(".agent-chat__composer-overlay")
-          .evaluate((node) => node.removeAttribute("hidden"));
+        await page.locator(".chat-topbar-notices").evaluate((node) => {
+          node.innerHTML =
+            '<div class="chat-composer-neighbor-card chat-cloud-disk-space-notice">Disk space low</div>';
+        });
+        await page.locator(".agent-chat__composer-overlay").evaluate((node) => {
+          node.innerHTML =
+            '<div class="chat-composer-neighbor-card chat-error">Model unavailable</div>';
+        });
         await waitForLayoutSettled(page, ".chat-main__conversation, .agent-chat__composer-shell");
+        expect(await page.getByText("Disk space low").isVisible()).toBe(true);
+        expect(await page.getByText("Model unavailable").isVisible()).toBe(true);
         const after = await geometry();
 
         for (const key of ["composer", "conversation", "thread"] as const) {

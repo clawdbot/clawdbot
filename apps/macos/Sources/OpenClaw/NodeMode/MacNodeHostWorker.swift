@@ -77,11 +77,15 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
     }
 
     enum WorkerError: LocalizedError {
-        case unavailable(String)
+        case unavailable(reason: String, diagnostic: String? = nil)
 
         var errorDescription: String? {
             switch self {
-            case let .unavailable(message): message
+            case let .unavailable(reason, diagnostic):
+                diagnostic?
+                    .split(separator: "\n", omittingEmptySubsequences: true)
+                    .first
+                    .map { "\(reason): \($0)" } ?? reason
             }
         }
     }
@@ -140,7 +144,8 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
                     return
                 }
                 guard self.startContinuation == nil else {
-                    continuation.resume(throwing: WorkerError.unavailable("node-host worker is already starting"))
+                    continuation.resume(throwing: WorkerError.unavailable(
+                        reason: "node-host worker is already starting"))
                     return
                 }
                 self.startContinuation = continuation
@@ -337,7 +342,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
     private func startLocked(launch: MacNodeHostWorkerLaunch) {
         let command = launch.command
         guard let executable = command.first, !executable.isEmpty else {
-            self.finishStartLocked(.failure(WorkerError.unavailable("node-host worker command missing")))
+            self.finishStartLocked(.failure(WorkerError.unavailable(reason: "node-host worker command missing")))
             return
         }
         if self.process != nil {
@@ -355,7 +360,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
         guard stdinPipe.fileHandleForWriting.disableSIGPIPE() else {
-            self.finishStartLocked(.failure(WorkerError.unavailable("could not protect worker input pipe")))
+            self.finishStartLocked(.failure(WorkerError.unavailable(reason: "could not protect worker input pipe")))
             return
         }
         var environment = ProcessInfo.processInfo.environment.filter { key, _ in
@@ -380,7 +385,8 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
             guard let self else { return }
             let state = self.process?.isRunning == true ? "running" : "exited"
             self.finishStartLocked(.failure(WorkerError.unavailable(
-                "node-host worker startup timed out (process \(state), buffered \(self.stdoutBuffer.count) bytes)")))
+                reason: "node-host worker startup timed out (process \(state), " +
+                    "buffered \(self.stdoutBuffer.count) bytes)")))
             self.stopLocked(reason: "worker startup timed out", notifyUnexpectedExit: true)
         }
         self.startTimer = timer
@@ -468,7 +474,8 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
                       self.processCleanupTask == nil
                 else { return }
                 self.stopLocked(
-                    reason: "worker exited with status \(String(describing: status))",
+                    reason: status.map { String(localized: "worker exited with status \(String(describing: $0))") }
+                        ?? String(localized: "worker exited with unknown status"),
                     notifyUnexpectedExit: true)
             }
         }
@@ -598,7 +605,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
     {
         do {
             guard let paramsJSON = String(bytes: paramsData, encoding: .utf8) else {
-                throw WorkerError.unavailable("node-host worker gateway request was not UTF-8")
+                throw WorkerError.unavailable(reason: "node-host worker gateway request was not UTF-8")
             }
             let data = try await self.session.request(
                 method: method,
@@ -692,7 +699,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
               self.process?.isRunning == true,
               let processGeneration = self.processGeneration
         else {
-            throw WorkerError.unavailable("node-host worker is not running")
+            throw WorkerError.unavailable(reason: "node-host worker is not running")
         }
         var data = try JSONSerialization.data(withJSONObject: object)
         data.append(0x0A)
@@ -732,7 +739,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         // A worker that dies before its ready manifest still needs its stderr
         // surfaced: the raw exit status alone cannot explain a CLI bootstrap
         // refusal (missing runtime, incompatible state database, bad install).
-        let detailedReason = self.stderrHead.isEmpty ? reason : "\(reason): \(self.stderrHead)"
+        let diagnostic = self.stderrHead.nonEmpty
         self.stderrHead = ""
         self.startTimer?.cancel()
         self.startTimer = nil
@@ -742,7 +749,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         self.inventoryData = nil
         self.route = nil
         if !preserveStart {
-            self.finishStartLocked(.failure(WorkerError.unavailable(detailedReason)))
+            self.finishStartLocked(.failure(WorkerError.unavailable(reason: reason, diagnostic: diagnostic)))
         }
         if let processCleanupTask = self.processCleanupTask { return processCleanupTask }
         let pending = self.invokeContinuations

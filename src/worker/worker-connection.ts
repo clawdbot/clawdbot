@@ -38,6 +38,7 @@ import {
   WorkerConnectionInterruptedError,
   WorkerConnectionStoppedError,
   WorkerFencedError,
+  formatWorkerConnectionFailure,
   isFencedCloseReason,
   resolvePositiveTimeout,
   toWorkerConnectionError,
@@ -272,10 +273,11 @@ export class WorkerConnection {
   private async connectUntilReady(): Promise<WorkerHelloOk> {
     const startedAt = Date.now();
     let attempt = 0;
+    let lastFailure: Error | undefined;
     while (!this.isTerminal()) {
       let remainingMs = this.admissionDeadlineMs - (Date.now() - startedAt);
       if (remainingMs <= 0) {
-        throw this.failAdmissionDeadline();
+        throw this.failAdmissionDeadline(attempt, lastFailure);
       }
       if (attempt > 0) {
         this.transition({ kind: "reconnecting", attempt });
@@ -292,7 +294,7 @@ export class WorkerConnection {
         }
         remainingMs = this.admissionDeadlineMs - (Date.now() - startedAt);
         if (remainingMs <= 0) {
-          throw this.failAdmissionDeadline();
+          throw this.failAdmissionDeadline(attempt, lastFailure);
         }
       }
       try {
@@ -306,7 +308,10 @@ export class WorkerConnection {
         if (this.isTerminal()) {
           throw this.terminalError();
         }
-        this.reportConnectionFailure(toWorkerConnectionError(error));
+        lastFailure = toWorkerConnectionError(error);
+        this.reportConnectionFailure(
+          new Error(formatWorkerConnectionFailure(this.options, lastFailure)),
+        );
         if (error instanceof WorkerAdmissionError) {
           if (error.retryable) {
             attempt += 1;
@@ -352,7 +357,6 @@ export class WorkerConnection {
         this.socket = undefined;
         const interrupted = new WorkerConnectionInterruptedError();
         this.frames.rejectPending(interrupted);
-        return interrupted;
       },
       onReadyClose: (reason) => this.handleReadyClose(reason),
     });
@@ -508,11 +512,18 @@ export class WorkerConnection {
     this.resolveExit(exit);
   }
 
-  private failAdmissionDeadline(): Error {
+  private failAdmissionDeadline(attempts: number, lastFailure: Error | undefined): Error {
     if (this.isTerminal()) {
       return this.terminalError();
     }
-    const error = new WorkerAdmissionDeadlineExceededError();
+    const error = new WorkerAdmissionDeadlineExceededError(
+      formatWorkerConnectionFailure(
+        this.options,
+        lastFailure ?? "no connection attempt completed",
+        attempts,
+      ),
+    );
+    this.reportConnectionFailure(error);
     this.finishFailed(error);
     return error;
   }

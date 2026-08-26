@@ -161,6 +161,13 @@ export class DraftGatewayState {
     return this.cloudProfileTask.status === TaskStatus.PENDING;
   }
 
+  get deviceCatalogDisabledReason(): string | undefined {
+    // Cached cloud profiles survive refresh failures; live node capacity does not.
+    return this.cloudProfilesReadyValue && this.cloudProfileTask.status === TaskStatus.COMPLETE
+      ? undefined
+      : t("newSession.placementNotReady");
+  }
+
   get catalogRetrying(): boolean {
     return this.catalogRetryingValue;
   }

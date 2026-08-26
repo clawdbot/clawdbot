@@ -95,6 +95,7 @@ export function createResponse(): {
     headersSent: false,
     statusCode: 200,
     setHeader,
+    removeHeader: vi.fn(),
     end,
   } as unknown as ServerResponse;
   responseEndPromises.set(res, ended);

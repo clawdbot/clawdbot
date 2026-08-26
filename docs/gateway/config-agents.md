@@ -445,6 +445,42 @@ date context. Falls back to the host timezone.
 - Config writers that mutate these fields (for example `/models set`, `/models set-image`, and fallback add/remove commands) save canonical object form and preserve existing fallback lists when possible.
 - `maxConcurrent`: max parallel agent runs across sessions (each session still serialized). By default, OpenClaw uses `min(16, max(8, available CPU parallelism))`, based on `os.availableParallelism()` with `os.cpus().length` as a fallback.
 
+### `agents.defaults.modelSelectionScope`
+
+Optional scope for chat commands and Gateway session model updates without an explicit scope.
+There is no default value: leaving it unset preserves each surface's existing
+behavior.
+
+```json5
+{
+  agents: { defaults: { modelSelectionScope: "session" } },
+}
+```
+
+| Value       | Effect                                                                                                                                                                                                                                             |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `"session"` | Change only the current session's model selection.                                                                                                                                                                                                 |
+| `"agent"`   | Also update the current agent's explicit primary at `agents.entries.<agent>.model`, creating that primary when needed. Never change the shared global fallback.                                                                                    |
+| `"global"`  | Also update the shared `agents.defaults.model` fallback. Do not replace other agents' explicit primaries or other sessions' pins.                                                                                                                  |
+| Unset       | Keep the existing surface behavior: direct owner/admin chat commands, Discord pickers, and Gateway session model updates request an effective configured-default update; Telegram callback pickers and the embedded local TUI remain session-only. |
+
+An effective configured-default update writes the agent's explicit primary when
+one exists, otherwise the shared global fallback. Explicit `/model` flags
+`-s`/`--session`, `-a`/`--agent`, and `-g`/`--global` take precedence over the setting.
+Without owner/admin authority, bare commands remain session-only and explicit
+`-a` or `-g` requests are rejected. Telegram callback pickers and the embedded local TUI remain
+session-only even when this setting is configured. There are no per-agent or
+per-channel overrides of this setting.
+
+Agent and global updates can affect new and existing unpinned sessions and cron
+jobs that inherit the changed default on their next run. They do not rewrite
+other sessions' explicit model selections. `/model default -s` clears only the
+current session's selection so it inherits the current configured default.
+Selecting the effective configured default clears the session model pin, but
+agent/global scope still requests a write to the configured target.
+See [Model selection in chat](/concepts/models#model-in-chat) for persistence,
+permissions, and picker behavior.
+
 ### Runtime policy
 
 ```json5

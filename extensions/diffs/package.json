@@ -23,7 +23,7 @@
     ],
     "install": {
       "npmSpec": "@openclaw/diffs",
-      "localPath": "extensions/diffs",
+      "clawhubSpec": "clawhub:@openclaw/diffs",
       "defaultChoice": "npm",
       "minHostVersion": ">=2026.4.30"
     },

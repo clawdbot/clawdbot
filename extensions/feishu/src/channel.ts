@@ -80,11 +80,13 @@ import {
   listFeishuDirectoryPeers,
 } from "./directory.static.js";
 import { feishuDoctor } from "./doctor.js";
+import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { chunkFeishuMarkdown } from "./markdown.js";
 import { messageActionTargetAliases } from "./message-action-contract.js";
 import { readNativeFeishuCardJson } from "./native-card.js";
 import {
   FEISHU_PROPAGATE_MEDIA_UPLOAD_FAILURE_MARKER,
+  resolveFeishuReplyMode,
   type FeishuOutboundSendMedia,
 } from "./outbound.js";
 import { resolveFeishuGroupToolPolicy } from "./policy.js";
@@ -460,13 +462,12 @@ function describeFeishuMessageTool({
     "channel-info",
     "channel-list",
   ]);
-  if (
-    accountId
-      ? enabledAccounts.some((account) => isFeishuReactionsActionEnabled({ cfg, account }))
-      : areAnyFeishuReactionActionsEnabled(cfg)
-  ) {
+  if (enabledAccounts.some((account) => isFeishuActionEnabled(account, "reactions"))) {
     actions.add("react");
     actions.add("reactions");
+  }
+  if (enabledAccounts.some((account) => isFeishuActionEnabled(account, "sticker"))) {
+    actions.add("sticker");
   }
   return {
     actions: Array.from(actions),
@@ -487,30 +488,14 @@ const feishuConfigAdapter = createHybridChannelConfigAdapter<
   formatAllowFrom: (allowFrom) => formatAllowFromLowercase({ allowFrom }),
 });
 
-function isFeishuReactionsActionEnabled(params: {
-  cfg: ClawdbotConfig;
-  account: ResolvedFeishuAccount;
-}): boolean {
-  if (!params.account.enabled || !params.account.configured) {
+function isFeishuActionEnabled(
+  account: ResolvedFeishuAccount,
+  action: "reactions" | "sticker",
+): boolean {
+  if (!account.enabled || !account.configured) {
     return false;
   }
-  const gate = createActionGate(
-    (params.account.config.actions ??
-      (params.cfg.channels?.feishu as { actions?: unknown } | undefined)?.actions) as Record<
-      string,
-      boolean | undefined
-    >,
-  );
-  return gate("reactions");
-}
-
-function areAnyFeishuReactionActionsEnabled(cfg: ClawdbotConfig): boolean {
-  for (const account of listEnabledFeishuAccounts(cfg)) {
-    if (isFeishuReactionsActionEnabled({ cfg, account })) {
-      return true;
-    }
-  }
-  return false;
+  return createActionGate(account.config.actions)(action, action === "reactions");
 }
 
 function isFeishuGroupTopicSessionKey(sessionKey: string | null | undefined): boolean {
@@ -528,32 +513,55 @@ type FeishuActionReplyAnchor = {
 
 type FeishuSendActionContext = Pick<
   ChannelMessageActionContext,
-  "action" | "params" | "sessionKey" | "toolContext"
+  "action" | "params" | "sessionKey" | "toolContext" | "requesterAccountId" | "reply"
 >;
 
-function resolveFeishuTopicAutoThreadAnchor(ctx: FeishuSendActionContext): string | undefined {
-  if (ctx.action !== "send") {
-    return undefined;
-  }
-  if (!isFeishuGroupTopicSessionKey(ctx.sessionKey)) {
+function resolveFeishuTopicAutoThreadAnchor(
+  ctx: FeishuSendActionContext,
+  accountId: string,
+): string | undefined {
+  const currentTarget =
+    ctx.toolContext?.currentMessagingTarget ?? ctx.toolContext?.currentChannelId;
+  const target = resolveFeishuActionTarget(ctx);
+  // A reply API addresses only the message ID: inheriting it across targets
+  // would send into the source topic while reporting the requested destination.
+  if (
+    !isFeishuGroupTopicSessionKey(ctx.sessionKey) ||
+    ctx.params.topLevel === true ||
+    ctx.params.threadId === null ||
+    (ctx.requesterAccountId && ctx.requesterAccountId !== accountId) ||
+    (ctx.toolContext?.currentChannelProvider &&
+      ctx.toolContext.currentChannelProvider !== "feishu") ||
+    !currentTarget ||
+    !target ||
+    normalizeFeishuTarget(currentTarget) !== normalizeFeishuTarget(target)
+  ) {
     return undefined;
   }
   const inbound = ctx.toolContext?.currentMessageId;
   return typeof inbound === "string" && inbound.length > 0 ? inbound : undefined;
 }
 
-function buildFeishuSendReplyAnchor(ctx: FeishuSendActionContext): FeishuActionReplyAnchor {
+function buildFeishuSendReplyAnchor(
+  ctx: FeishuSendActionContext,
+  accountId: string,
+): FeishuActionReplyAnchor {
   if (ctx.action === "thread-reply") {
     return {
       replyToMessageId: resolveFeishuMessageId(ctx.params),
       replyInThread: true,
     };
   }
-  const autoThreadId = resolveFeishuTopicAutoThreadAnchor(ctx);
-  return {
-    replyToMessageId: autoThreadId,
-    replyInThread: autoThreadId !== undefined,
-  };
+  const threadId =
+    readFirstString(ctx.params, ["threadId"]) ?? resolveFeishuTopicAutoThreadAnchor(ctx, accountId);
+  // Core also writes implicit reply IDs into params; they must not override
+  // native topic delivery. Only an explicit reply can choose normal reply mode.
+  const replyToId = ctx.reply
+    ? ctx.reply.source === "implicit" && threadId
+      ? undefined
+      : ctx.reply.replyToId
+    : readFirstString(ctx.params, ["replyTo", "reply_to"]);
+  return resolveFeishuReplyMode({ replyToId, threadId });
 }
 
 function isSupportedFeishuDirectConversationId(conversationId: string): boolean {
@@ -1070,10 +1078,18 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
         reply: true,
       },
       agentPrompt: {
-        messageToolHints: () => [
+        messageToolHints: ({ cfg, accountId }) => [
           "- Feishu targeting: omit `target` to reply to the current conversation (auto-inferred). Explicit targets: `user:open_id` or `chat:chat_id`.",
           "- Feishu supports interactive cards plus native image, file, audio, and video/media delivery.",
           "- Feishu supports `send`, `read`, `edit`, `thread-reply`, pins, and channel/member lookup, plus reactions when enabled.",
+          ...(describeFeishuMessageTool({
+            cfg,
+            accountId: accountId ?? undefined,
+          }).actions?.includes("sticker")
+            ? [
+                "- Feishu stickers: use `action=sticker` with `fileId` (or the first `stickerId`) from a sticker this bot previously received. Sticker search and upload are not supported.",
+              ]
+            : []),
         ],
       },
       groups: {
@@ -1152,16 +1168,50 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
           });
           if (
             (ctx.action === "react" || ctx.action === "reactions") &&
-            !isFeishuReactionsActionEnabled({ cfg: ctx.cfg, account })
+            !isFeishuActionEnabled(account, "reactions")
           ) {
             throw new Error("Feishu reactions are disabled via actions.reactions.");
+          }
+          if (ctx.action === "sticker") {
+            if (!isFeishuActionEnabled(account, "sticker")) {
+              throw new Error(
+                "Feishu stickers are disabled; enable actions.sticker for a configured account.",
+              );
+            }
+            const to = resolveFeishuActionTarget(ctx);
+            if (!to) {
+              throw new Error("Feishu sticker requires a target (to).");
+            }
+            const fileKey = normalizeFeishuExternalKey(
+              readFirstString(ctx.params, ["fileId"]) ??
+                (Array.isArray(ctx.params.stickerId) ? ctx.params.stickerId[0] : undefined),
+            );
+            if (!fileKey) {
+              throw new Error(
+                "Feishu sticker requires fileId (or first stickerId): use the file_key of a sticker this bot previously received.",
+              );
+            }
+            const anchor = buildFeishuSendReplyAnchor(ctx, account.accountId);
+            const runtime = await loadFeishuChannelRuntime();
+            const result = await runtime.sendStickerFeishu({
+              cfg: ctx.cfg,
+              to,
+              fileKey,
+              accountId: ctx.accountId ?? undefined,
+              replyToMessageId: anchor.replyToMessageId,
+              replyInThread: anchor.replyInThread,
+            });
+            return jsonActionResult({ ok: true, channel: "feishu", action: "sticker", ...result });
           }
           if (ctx.action === "send" || ctx.action === "thread-reply") {
             const to = resolveFeishuActionTarget(ctx);
             if (!to) {
               throw new Error(`Feishu ${ctx.action} requires a target (to).`);
             }
-            const { replyToMessageId, replyInThread } = buildFeishuSendReplyAnchor(ctx);
+            const { replyToMessageId, replyInThread } = buildFeishuSendReplyAnchor(
+              ctx,
+              account.accountId,
+            );
             if (ctx.action === "thread-reply" && !replyToMessageId) {
               throw new Error("Feishu thread-reply requires messageId.");
             }

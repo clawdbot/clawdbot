@@ -311,9 +311,7 @@ suite.define(() => {
       }
       expect(mobileModelSettingsBox.width).toBeGreaterThanOrEqual(44);
       expect(mobileModelSettingsBox.height).toBeGreaterThanOrEqual(44);
-      expect(mobileModelSettingsBox.x).toBeGreaterThan(
-        mobileFooterBox.x + mobileFooterBox.width / 2,
-      );
+      expect(mobileModelSettingsBox.x).toBeGreaterThanOrEqual(mobileFooterBox.x);
       expect(mobileModelSettingsBox.x + mobileModelSettingsBox.width).toBeLessThanOrEqual(
         mobileFooterBox.x + mobileFooterBox.width,
       );

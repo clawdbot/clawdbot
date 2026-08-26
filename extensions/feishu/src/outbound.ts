@@ -364,7 +364,7 @@ type FeishuReplyMode =
   | { normalizedReplyToId: undefined; replyToMessageId: undefined; replyInThread: false };
 
 // Target selection and thread mode are one decision; all payload parts reuse this result.
-function resolveFeishuReplyMode(params: {
+export function resolveFeishuReplyMode(params: {
   replyToId?: string | null;
   threadId?: string | number | null;
 }): FeishuReplyMode {

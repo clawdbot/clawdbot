@@ -21,6 +21,7 @@ export function resolveFeishuReceiptKind(msgType?: string): MessageReceiptPartKi
     case "image":
     case "media":
     case "file":
+    case "sticker":
       return "media";
     case "interactive":
       return "card";

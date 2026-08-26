@@ -226,7 +226,6 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             await state.cronState.cron.stopAndDrain();
           } else {
             state.cronState.cron.stop();
-            state.cronState.stopExitWatchers();
             await state.cronState.stopStreamWatchers();
           }
           startGatewayCronWithLogging({

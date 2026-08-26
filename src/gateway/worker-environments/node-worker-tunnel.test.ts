@@ -249,7 +249,7 @@ describe("node worker tunnel manager", () => {
   it("projects a terminal gateway connection failure into the launch result", async () => {
     const record = environment();
     const errorText =
-      "worker could not reach gateway gateway.example: certificate rejected; check TLS pin/publicUrl configuration";
+      "worker admission deadline exceeded after 3 attempts to gateway.example:18789: connect failed: Opening handshake has timed out";
     const manager = createNodeWorkerTunnelManager({
       gatewayDeviceId: "gateway-device-1",
       getEnvironment: () => record,
