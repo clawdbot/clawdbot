@@ -521,7 +521,6 @@ describe("openshell sandbox backend e2e", () => {
       const scopeSuffix = `${process.pid}-${Date.now()}`;
       const scopeKey = `session:openshell-e2e-deny:${scopeSuffix}`;
       const testRunId = `${process.pid.toString(36)}${Date.now().toString(36)}`;
-      const allowSandboxName = `oc-a-${testRunId.slice(-14)}`;
       const openShellWorkspace = `oc-w-${testRunId.slice(-14)}`;
       let hostPolicyServer: HostPolicyServer | null | undefined;
       let workspaceCreated = false;
@@ -582,6 +581,15 @@ describe("openshell sandbox backend e2e", () => {
         scopeKey: `session:openshell-e2e-mirror:${scopeSuffix}`,
         workspaceDir: mirrorWorkspaceDir,
         agentWorkspaceDir: mirrorWorkspaceDir,
+        cfg: sandboxCfg,
+      });
+      const allowBackend = await createOpenShellSandboxBackendFactory({
+        pluginConfig: { ...pluginConfig, policy: allowPolicyPath },
+      })({
+        sessionKey: `session:openshell-e2e-allow:${scopeSuffix}`,
+        scopeKey: `session:openshell-e2e-allow:${scopeSuffix}`,
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
         cfg: sandboxCfg,
       });
 
@@ -771,37 +779,19 @@ describe("openshell sandbox backend e2e", () => {
           runBackendExec({ backend: mirrorBackend, command: "cat nested/mirror-note.txt" }),
         ).resolves.toMatchObject({ code: 0, stdout: "mirror-write\n" });
 
-        const allowedGetResult = await runCommand({
-          command: OPENCLAW_OPENSHELL_COMMAND,
-          args: [
-            "--workspace",
-            openShellWorkspace,
-            "sandbox",
-            "create",
-            "--name",
-            allowSandboxName,
-            "--from",
-            dockerfilePath,
-            "--policy",
-            allowPolicyPath,
-            "--no-auto-providers",
-            "--no-keep",
-            "--",
-            "curl",
-            "--fail",
-            "--silent",
-            "--show-error",
-            "--max-time",
-            "15",
-            `http://host.openshell.internal:${hostPolicyServer.port}/policy-test`,
-          ],
-          env,
+        const allowedGetResult = await runBackendExec({
+          backend: allowBackend,
+          command: `curl --fail --silent --show-error --max-time 15 "http://host.openshell.internal:${hostPolicyServer.port}/policy-test"`,
           timeoutMs: 60_000,
         });
         expect(allowedGetResult.code).toBe(0);
         expect(allowedGetResult.stdout).toContain('"message":"hello-from-host"');
       } finally {
-        for (const sandboxName of [backend.runtimeId, mirrorBackend.runtimeId, allowSandboxName]) {
+        for (const sandboxName of [
+          backend.runtimeId,
+          mirrorBackend.runtimeId,
+          allowBackend.runtimeId,
+        ]) {
           await runCommand({
             command: OPENCLAW_OPENSHELL_COMMAND,
             args: ["--workspace", openShellWorkspace, "sandbox", "delete", sandboxName],

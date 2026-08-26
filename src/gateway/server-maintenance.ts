@@ -23,6 +23,7 @@ import {
   runScheduledSkillCollectionReviews,
   startSkillCollectionMaintenance,
 } from "../skills/workshop/collection-review.js";
+import { registerSkillUsageTracking } from "../skills/workshop/curator.js";
 import {
   abortChatRunById,
   type ChatAbortControllerEntry,
@@ -228,7 +229,8 @@ export function startGatewayMaintenanceTimers(params: {
 
   let skillCuratorCleanup = () => {};
   if (params.enableSkillCurator) {
-    skillCuratorCleanup = startSkillCollectionMaintenance({
+    const unregisterSkillUsageTracking = registerSkillUsageTracking();
+    const stopSkillCollectionMaintenance = startSkillCollectionMaintenance({
       onError: (err) =>
         params.logHealth.error(`skill collection review failed: ${formatError(err)}`),
       run:
@@ -242,6 +244,10 @@ export function startGatewayMaintenanceTimers(params: {
               ),
           })),
     });
+    skillCuratorCleanup = () => {
+      stopSkillCollectionMaintenance();
+      unregisterSkillUsageTracking();
+    };
   }
 
   // dedupe cache cleanup

@@ -161,6 +161,11 @@ function createHarness(params?: {
   const dropPendingUser = vi.fn();
   const rekeyPendingUser = vi.fn();
   const addSystem = vi.fn();
+  const pendingSystemNotices = new Map<string, string>();
+  const addPendingSystem = vi.fn((runId: string, text: string) => {
+    pendingSystemNotices.set(runId, text);
+  });
+  const dismissPendingSystem = vi.fn((runId: string) => pendingSystemNotices.delete(runId));
   const clearTools = vi.fn();
   const reserveAssistantSlot = vi.fn();
   const requestRender = vi.fn();
@@ -228,6 +233,8 @@ function createHarness(params?: {
       dropPendingUser,
       rekeyPendingUser,
       addSystem,
+      addPendingSystem,
+      dismissPendingSystem,
       clearTools,
       reserveAssistantSlot,
     } as never,
@@ -282,6 +289,9 @@ function createHarness(params?: {
     dropPendingUser,
     rekeyPendingUser,
     addSystem,
+    addPendingSystem,
+    dismissPendingSystem,
+    pendingSystemNotices,
     clearTools,
     reserveAssistantSlot,
     requestRender,
@@ -363,7 +373,14 @@ describe("tui command handlers", () => {
       });
 
       const olderPicker = harness.handleCommand("/models");
+      expect(harness.pendingSystemNotices.size).toBe(1);
+      const olderNoticeId = expectDefined(
+        harness.pendingSystemNotices.keys().next().value,
+        "older model picker notice",
+      );
       await harness.handleCommand(newerCommand);
+      expect(harness.pendingSystemNotices.has(olderNoticeId)).toBe(false);
+      expect(harness.dismissPendingSystem).toHaveBeenCalledWith(olderNoticeId);
       olderModels.resolve([{ provider: "openai", id: "obsolete-model" }]);
       await olderPicker;
 
@@ -3180,15 +3197,17 @@ describe("tui command handlers", () => {
       },
     );
     const listModels = vi.fn(() => listModelsPromise);
-    const { handleCommand, addSystem, openOverlay, requestRender } = createHarness({ listModels });
+    const { handleCommand, addPendingSystem, openOverlay, requestRender } = createHarness({
+      listModels,
+    });
 
     const pending = handleCommand("/models");
     await Promise.resolve();
 
     expect(listModels).toHaveBeenCalledTimes(1);
-    expect(addSystem).toHaveBeenCalledWith("loading models...");
+    expect(addPendingSystem).toHaveBeenCalledWith(expect.any(String), "loading models...");
     expect(openOverlay).not.toHaveBeenCalled();
-    const feedbackOrder = addSystem.mock.invocationCallOrder[0] ?? 0;
+    const feedbackOrder = addPendingSystem.mock.invocationCallOrder[0] ?? 0;
     const renderOrders = requestRender.mock.invocationCallOrder;
     expect(renderOrders.filter((order) => order > feedbackOrder)).not.toEqual([]);
 
@@ -3196,6 +3215,70 @@ describe("tui command handlers", () => {
     await pending;
 
     expect(openOverlay).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    {
+      name: "successful listing",
+      listModels: vi.fn().mockResolvedValue([{ provider: "openai", id: "picker-model" }]),
+      terminalNotice: undefined,
+    },
+    {
+      name: "empty listing",
+      listModels: vi.fn().mockResolvedValue([]),
+      terminalNotice: "no models available",
+    },
+    {
+      name: "failed listing",
+      listModels: vi.fn().mockRejectedValue(new Error("fixture backend unavailable")),
+      terminalNotice: "model list failed: fixture backend unavailable",
+    },
+  ])("removes temporary model feedback after $name", async ({ listModels, terminalNotice }) => {
+    const harness = createHarness({ listModels });
+
+    await harness.handleCommand("/models");
+
+    expect(harness.addPendingSystem).toHaveBeenCalledWith(expect.any(String), "loading models...");
+    expect(harness.pendingSystemNotices.size).toBe(0);
+    expect(harness.dismissPendingSystem).toHaveBeenCalledOnce();
+    if (terminalNotice) {
+      expect(harness.addSystem).toHaveBeenCalledWith(terminalNotice);
+    }
+  });
+
+  it("does not let an older model request remove the newer request's notice", async () => {
+    const olderModels = createDeferred<Array<{ provider: string; id: string }>>();
+    const newerModels = createDeferred<Array<{ provider: string; id: string }>>();
+    const harness = createHarness({
+      listModels: vi
+        .fn()
+        .mockReturnValueOnce(olderModels.promise)
+        .mockReturnValueOnce(newerModels.promise),
+    });
+
+    const olderPicker = harness.handleCommand("/models");
+    const olderNoticeId = expectDefined(
+      harness.pendingSystemNotices.keys().next().value,
+      "older model picker notice",
+    );
+    const newerPicker = harness.handleCommand("/models");
+    const newerNoticeId = expectDefined(
+      harness.pendingSystemNotices.keys().next().value,
+      "newer model picker notice",
+    );
+
+    expect(newerNoticeId).not.toBe(olderNoticeId);
+    expect(harness.pendingSystemNotices.has(olderNoticeId)).toBe(false);
+    expect(harness.pendingSystemNotices.has(newerNoticeId)).toBe(true);
+
+    olderModels.resolve([{ provider: "openai", id: "obsolete-model" }]);
+    await olderPicker;
+    expect(harness.pendingSystemNotices.has(newerNoticeId)).toBe(true);
+
+    newerModels.resolve([{ provider: "openai", id: "current-model" }]);
+    await newerPicker;
+    expect(harness.pendingSystemNotices.size).toBe(0);
+    expect(harness.openOverlay).toHaveBeenCalledOnce();
   });
 
   it("does not open a stale model selector after switching sessions", async () => {
@@ -3206,14 +3289,14 @@ describe("tui command handlers", () => {
     });
 
     const pending = harness.handleCommand("/models");
-    expect(harness.addSystem).toHaveBeenCalledWith("loading models...");
-    harness.addSystem.mockClear();
+    expect(harness.addPendingSystem).toHaveBeenCalledWith(expect.any(String), "loading models...");
     harness.state.currentSessionKey = "agent:main:second";
     deferred.resolve([{ provider: "openai", id: "gpt-5.6-luna" }]);
     await pending;
 
     expect(harness.openOverlay).not.toHaveBeenCalled();
     expect(harness.addSystem).not.toHaveBeenCalled();
+    expect(harness.pendingSystemNotices.size).toBe(0);
   });
 
   it.each([

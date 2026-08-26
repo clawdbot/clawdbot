@@ -15,7 +15,6 @@ export type ChatPermissionPickerProps = {
   disabled?: boolean;
   disabledReason?: string;
   mode?: SessionPermissionMode;
-  sessionRoot?: string;
   onSelect: (mode: PermissionSelection) => unknown;
 };
 

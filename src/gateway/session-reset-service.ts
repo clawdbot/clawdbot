@@ -105,7 +105,6 @@ import {
   type PrepareGatewaySessionLifecycle,
   rollbackGatewaySessionPreparation,
 } from "./session-lifecycle-preparation.js";
-import { resolveSessionPermissionRootError } from "./session-permission-policy.js";
 import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
 import { notifyGatewaySessionReset } from "./session-reset-notifications.js";
 import {
@@ -1203,20 +1202,6 @@ export async function performGatewaySessionReset(params: {
         return;
       }
       preparedResetSessionId = normalizeOptionalString(currentEntry?.sessionId);
-      // Lifecycle preparation can establish a worktree root unless the request clears it.
-      // Reject every other impossible tuple before active work is interrupted.
-      if (params.clearSpawnedCwd || !params.prepareLifecycle) {
-        const permissionRootError = resolveSessionPermissionRootError(
-          params.clearSpawnedCwd
-            ? undefined
-            : (params.permissionMode ?? currentEntry?.permissionMode),
-          params.clearSpawnedCwd ? undefined : (params.sessionRoot ?? currentEntry?.sessionRoot),
-        );
-        if (permissionRootError) {
-          resetPreparationError = errorShape(ErrorCodes.INVALID_REQUEST, permissionRootError);
-          return;
-        }
-      }
       admittedWorkReleased = await interruptSessionWorkAdmissions({
         scope: resetTarget.storePath,
         identities: resetLifecycleIdentities,
@@ -1234,19 +1219,6 @@ export async function performGatewaySessionReset(params: {
           return;
         }
         preparedLifecycle = prepared.value;
-      }
-      if (admittedWorkReleased) {
-        const permissionRootError = resolveSessionPermissionRootError(
-          params.clearSpawnedCwd
-            ? undefined
-            : (params.permissionMode ?? currentEntry?.permissionMode),
-          params.clearSpawnedCwd
-            ? undefined
-            : (preparedLifecycle?.sessionRoot ?? params.sessionRoot ?? currentEntry?.sessionRoot),
-        );
-        if (permissionRootError) {
-          resetPreparationError = errorShape(ErrorCodes.INVALID_REQUEST, permissionRootError);
-        }
       }
     },
     run: async () => {

@@ -806,9 +806,9 @@ Gateway or node host and check `openclaw nodes pending` again.
   loopback hosts (`localhost`, `127.0.0.1`, or `[::1]`) during local development.
   Per-requester MCP OAuth requires this value and uses
   `<publicOrigin>/oauth/mcp/callback` as its callback URL.
-  Slack session-card actions and plugin-generated viewer links also use this
-  origin. Set `gateway.controlUi.basePath` separately when the Control UI is
-  served below a reverse-proxy path prefix.
+  Slack session-card actions, plugin-generated viewer links, and chat deep links
+  into the Control UI also use this origin. Set `gateway.controlUi.basePath`
+  separately when the Control UI is served below a reverse-proxy path prefix.
 - `bind`: `auto`, `loopback` (default), `lan` (`0.0.0.0`), `tailnet` (Tailscale IPv4 when available, otherwise loopback), or `custom` (one IPv4 address). A resolved `tailnet` address and any `custom` address other than `127.0.0.1` or `0.0.0.0` require `127.0.0.1` on the same port for same-host clients; startup fails if either listener cannot bind. Non-loopback exposure remains limited to the selected interface.
 - **Legacy bind aliases**: use bind mode values in `gateway.bind` (`auto`, `loopback`, `lan`, `tailnet`, `custom`), not host aliases (`0.0.0.0`, `127.0.0.1`, `localhost`, `::`, `::1`).
 - **Docker note**: the default `loopback` bind listens on `127.0.0.1` inside the container. With Docker bridge networking (`-p 18789:18789`), traffic arrives on `eth0`, so the gateway is unreachable. Use `--network host`, or set `bind: "lan"` (or `bind: "custom"` with `customBindHost: "0.0.0.0"`) to listen on all interfaces.
@@ -1084,6 +1084,8 @@ Profile changes require a Gateway restart. With the default `gateway.reload.mode
         agentId: "hooks",
         wakeMode: "now",
         name: "Gmail",
+        // One dispatch per pushed email; templates see the current message.
+        forEach: "messages",
         sessionKey: "hook:gmail:{{messages[0].id}}",
         sessionMode: "persistent",
         messageTemplate: "From: {{messages[0].from}}\nSubject: {{messages[0].subject}}\n{{messages[0].snippet}}",
@@ -1131,6 +1133,7 @@ Validation and safety notes:
 - `match.path` matches sub-path after `/hooks` (e.g. `/hooks/gmail` → `gmail`).
 - `match.source` matches a payload field for generic paths.
 - Templates like `{{messages[0].subject}}` read from the payload.
+- `forEach: "<key>"` fans the mapping out over a top-level payload array: one action per element, with templates/transforms seeing a payload whose array holds only that element. The Gmail preset sets `forEach: "messages"` so batched pushes dispatch one run per email.
 - `transform` can point to a JS/TS module returning a hook action.
   - `transform.module` must be a relative path and stays within `hooks.transformsDir` (absolute paths and traversal are rejected).
   - Keep `hooks.transformsDir` under `~/.openclaw/hooks/transforms`; workspace skill directories are rejected. If `openclaw doctor` reports this path as invalid, move the transform module into the hooks transforms directory or remove `hooks.transformsDir`.
@@ -1148,7 +1151,8 @@ Validation and safety notes:
 
 ### Gmail integration
 
-- The built-in Gmail preset uses `sessionKey: "hook:gmail:{{messages[0].id}}"`.
+- The built-in Gmail preset uses `sessionKey: "hook:gmail:{{messages[0].id}}"` with `forEach: "messages"`, so each email in a batched push gets its own isolated run and session.
+- The Gateway sizes the `/hooks/gmail` request-body limit from `hooks.gmail.maxBytes` (default 20 KB per message) times gog's 100-message batch contract; other hook paths keep the shared 256 KiB limit.
 - This per-message key isolates conversation context, not tools or workspace access. Without a custom mapping that sets `agentId`, the preset uses the default agent.
 - For untrusted inboxes, route Gmail to a dedicated reader agent and restrict that agent with [per-agent sandbox and tool policy](/tools/multi-agent-sandbox-tools). If the reader must notify the main agent, constrain the handoff with [`tools.agentToAgent`](/gateway/config-tools#tools-agenttoagent). See [Prompt injection](/gateway/security#prompt-injection) for the recommended threat model and model tier.
 - The setup wizard configures Gmail transport but does not create the reader agent or required session-key policy. Apply the complete [restricted Gmail reader configuration](/automation/cron-jobs#configure-a-restricted-gmail-reader-recommended) before running setup for untrusted mail.
@@ -1303,6 +1307,7 @@ Default-off Gateway-owned substitution for shared-store `secret` entries used by
   secrets: {
     egressProxy: {
       enabled: false,
+      allowedHosts: ["api.example.com"],
       bypassHosts: ["pinned-api.example.com"],
     },
   },
@@ -1310,6 +1315,7 @@ Default-off Gateway-owned substitution for shared-store `secret` entries used by
 ```
 
 - `enabled`: starts the loopback proxy and ephemeral CA at Gateway startup. Default: `false`. Changing it requires a Gateway restart.
+- `allowedHosts`: optional exact-hostname traffic allowlist for proxy requests and CONNECT tunnels. When present, only listed hosts, hosts bound to a registered secret, and `bypassHosts` are reachable. An empty array permits only bound or bypassed hosts. Changing it requires a Gateway restart.
 - `bypassHosts`: optional exact-hostname list for authenticated blind CONNECT tunnels used by certificate-pinned clients. Sentinels are not substituted on bypassed hosts and fail vendor authentication without exposing plaintext.
 
 See [Secret egress proxy](/gateway/secrets#secret-egress-proxy) for subprocess environment wiring, authentication, fail-closed behavior, and limitations.

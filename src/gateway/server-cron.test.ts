@@ -2080,6 +2080,7 @@ describe("buildGatewayCronService", () => {
   it("delivers isolated script notify through the cron announce path", async () => {
     const cfg = createCronConfig("server-cron-script-announce");
     cfg.cron = { ...cfg.cron, triggers: { enabled: true } };
+    cfg.gateway = { publicOrigin: "https://gateway.example", controlUi: { basePath: "/control" } };
     loadConfigMock.mockReturnValue(cfg);
     cronScriptExecutorMock.mockResolvedValueOnce({
       kind: "completed",
@@ -2112,7 +2113,9 @@ describe("buildGatewayCronService", () => {
       expect(sendCronAnnouncePayloadStrictMock).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
           jobId: job.id,
-          payload: { text: "queue changed" },
+          payload: {
+            text: `queue changed\nInspect: https://gateway.example/control/automations?job=${job.id}&run=cron%3A${job.id}%3A${state.cron.getJob(job.id)?.state.lastRunAtMs}`,
+          },
           target: expect.objectContaining({ threadId: 456 }),
         }),
       );
@@ -2421,14 +2424,15 @@ describe("buildGatewayCronService", () => {
     }
   });
 
-  it("redacts command summary secrets before announce delivery", async () => {
+  it("appends the command inspection link after redacting announce delivery secrets and URLs", async () => {
     const cfg = createCronConfig("server-cron-command-announce-redaction");
+    cfg.gateway = { publicOrigin: "https://gateway.example", controlUi: { basePath: "/control" } };
     const state = loadCronService(cfg);
     try {
       const job = await addCommandJob(
         state,
         "announce-redacted-command",
-        "process.stdout.write('Log in with token=opaque-secret-value\\n')",
+        "process.stdout.write('Visit https://private.example/device and log in with token=opaque-secret-value\\n')",
         {
           deleteAfterRun: false,
           delivery: {
@@ -2448,7 +2452,12 @@ describe("buildGatewayCronService", () => {
       const payload = requireRecord(announcePayload.payload, "cron announce reply payload");
       const message = typeof payload.text === "string" ? payload.text : "";
       expect(message).toContain("token=***");
+      expect(message).toContain("[redacted-url]");
       expect(message).not.toContain("opaque-secret-value");
+      expect(message).not.toContain("https://private.example/device");
+      expect(message).toContain(
+        `\nInspect: https://gateway.example/control/automations?job=${job.id}&run=cron%3A${job.id}%3A${state.cron.getJob(job.id)?.state.lastRunAtMs}`,
+      );
       expect(state.cron.getJob(job.id)?.state.lastRunStatus).toBe("ok");
       expect(state.cron.getJob(job.id)?.state.lastDeliveryStatus).toBe("delivered");
     } finally {

@@ -31,6 +31,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Gateway-owned loopback proxy that replaces shared-store secret sentinels only at outbound request time. Restart the Gateway after changing this startup-scoped section.",
   "secrets.egressProxy.enabled":
     "Enables secret egress substitution for Gateway-hosted agent subprocesses. Default: false.",
+  "secrets.egressProxy.allowedHosts":
+    "Opt-in traffic allowlist for requests and CONNECT tunnels. When present, destinations must appear in this list, a per-secret host binding, or bypassHosts. An empty list permits only bound or bypassed hosts. Restart the Gateway after changing it.",
   "secrets.egressProxy.bypassHosts":
     "Exact hostnames that use authenticated blind CONNECT tunnels for certificate-pinned clients. Sentinels remain ciphertext and will fail vendor authentication instead of exposing plaintext.",
   wizard:

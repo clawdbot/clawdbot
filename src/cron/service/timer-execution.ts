@@ -525,16 +525,16 @@ async function executeScriptCronJob(
       });
     }
     if (result.wake) {
-      const eventText = notify ?? `script job ${job.name} completed`;
       if (job.sessionTarget !== "main" || !notify) {
-        enqueueCronSystemEvent(state, eventText, {
+        enqueueCronSystemEvent(state, notify ?? `script job ${job.name} completed`, {
           ...eventOptions,
           contextKey: `cron:${job.id}:script-wake`,
         });
       }
       requestCronHeartbeat(state, {
+        source: result.wake === "now" ? "notifications-event" : "cron",
         intent: result.wake === "now" ? "immediate" : "event",
-        reason: `cron:${job.id}:script`,
+        reason: result.wake === "now" ? "wake" : `cron:${job.id}:script`,
         agentId,
       });
     }

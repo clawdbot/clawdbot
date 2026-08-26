@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { EmbeddedRunTrigger } from "../../agents/embedded-agent-runner/run/params.js";
 import {
   getPreparedModelRuntimePluginGeneration,
   withPreparedModelRuntimePluginGenerationScope,
@@ -20,7 +21,7 @@ function completedRun(
     sessionKey?: string;
     runId?: string;
     mode?: "off" | "propose" | "auto";
-    trigger?: string;
+    trigger?: EmbeddedRunTrigger;
     skillWorkshopAvailable?: boolean;
   } = {},
 ): SkillExperienceReviewParams {
@@ -45,11 +46,18 @@ function completedRun(
       workspaceDir: "/workspace",
       modelProviderId: "openai",
       modelId: "gpt-test",
-      reasoningLevel: "on",
       authProfileId: "openai:work",
       modelIterations: options.modelIterations,
       skillWorkshopAvailable: options.skillWorkshopAvailable ?? true,
-      trigger: options.trigger ?? "user",
+      foregroundPromptContext: {
+        agentId: "main",
+        agentDir: "/agent",
+        workspaceDir: "/workspace",
+        cwd: "/workspace",
+        sandboxSessionKey: options.sessionKey ?? "agent:main:main",
+        trigger: options.trigger ?? "user",
+        reasoningLevel: "on",
+      },
     },
     config: { skills: { workshop: { autonomous: { mode: options.mode ?? "propose" } } } },
   };
@@ -117,7 +125,7 @@ describe("skill experience review scheduler", () => {
         ctx: expect.objectContaining({
           sessionId: "session-1",
           sessionKey: "agent:main:main",
-          reasoningLevel: "on",
+          foregroundPromptContext: expect.objectContaining({ reasoningLevel: "on" }),
         }),
       }),
     );
@@ -228,8 +236,8 @@ describe("skill experience review scheduler", () => {
 
   it("rechecks group policy while preserving main-session sandbox identity", async () => {
     const groupParams = completedRun({ sessionKey: "agent:main:whatsapp:group:safe-room" });
-    groupParams.ctx.messageProvider = "whatsapp";
-    groupParams.ctx.groupId = "safe-room";
+    groupParams.ctx.foregroundPromptContext.messageProvider = "whatsapp";
+    groupParams.ctx.foregroundPromptContext.groupId = "safe-room";
     await expect(
       prepareSkillExperienceReviewCandidate(
         { ctx: groupParams.ctx, config: groupParams.config },
@@ -318,7 +326,7 @@ describe("skill experience review scheduler", () => {
     vi.useFakeTimers();
     const memberRoleIds = Array.from({ length: 150 }, (_, index) => `role-${index}`);
     const params = completedRun();
-    params.ctx.memberRoleIds = memberRoleIds;
+    params.ctx.foregroundPromptContext.memberRoleIds = memberRoleIds;
     const prepareReview = vi.fn(async (candidate) => candidate);
     const runReview = vi.fn().mockResolvedValue(undefined);
     const scheduler = createSkillExperienceReviewScheduler({
@@ -330,8 +338,12 @@ describe("skill experience review scheduler", () => {
     scheduler.schedule(params);
     await vi.advanceTimersByTimeAsync(30_000);
 
-    expect(prepareReview.mock.calls[0]?.[0].ctx.memberRoleIds).toEqual(memberRoleIds);
-    expect(runReview.mock.calls[0]?.[0].ctx.memberRoleIds).toEqual(memberRoleIds);
+    expect(prepareReview.mock.calls[0]?.[0].ctx.foregroundPromptContext.memberRoleIds).toEqual(
+      memberRoleIds,
+    );
+    expect(runReview.mock.calls[0]?.[0].ctx.foregroundPromptContext.memberRoleIds).toEqual(
+      memberRoleIds,
+    );
     scheduler.clear();
   });
 
