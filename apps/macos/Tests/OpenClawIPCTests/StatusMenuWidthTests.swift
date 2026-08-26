@@ -8,6 +8,11 @@ struct StatusMenuWidthTests {
     private static let workerFailure =
         "Mac node degraded — node-host worker stopped after 6 unexpected exits while restarting the local " +
         "capability host and reconnecting its registered native tools"
+    private static let workerDiagnostic = [
+        "[openclaw] bootstrap failed: state database uses a newer schema version than this installed CLI",
+        "[openclaw] run openclaw doctor to inspect the current installation and its persisted local state",
+        "[openclaw] check that the application and worker are using the same installed OpenClaw release",
+    ].joined(separator: "\n")
 
     @Test func `long native and hosted content cannot expand the status menu`() throws {
         let state = AppState(preview: true)
@@ -16,7 +21,7 @@ struct StatusMenuWidthTests {
         let healthStore = HealthStore.shared
         let previousSnapshot = healthStore.snapshot
         let previousError = healthStore.lastError
-        healthStore.__setSnapshotForTest(nil, lastError: Self.workerFailure)
+        healthStore.__setSnapshotForTest(nil, lastError: "\(Self.workerFailure)\n\(Self.workerDiagnostic)")
 
         let cronStore = CronJobsStore.shared
         let previousJobs = cronStore.jobs
@@ -112,7 +117,7 @@ struct StatusMenuWidthTests {
         let header = try #require(menu.items.first?.view)
         let shortHeight = header.frame.height
 
-        healthStore.__setSnapshotForTest(nil, lastError: Self.workerFailure)
+        healthStore.__setSnapshotForTest(nil, lastError: "\(Self.workerFailure)\n\(Self.workerDiagnostic)")
         renderer.reconcile(descriptor)
         let wrappedHeader = try #require(menu.items.first?.view)
 

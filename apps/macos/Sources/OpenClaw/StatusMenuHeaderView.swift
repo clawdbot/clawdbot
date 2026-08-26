@@ -77,7 +77,7 @@ struct StatusMenuHeaderView: View {
         if !problems.isEmpty {
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(problems, id: \.label) { problem in
-                    self.statusLine(label: problem.label, color: problem.color)
+                    self.statusLine(label: problem.label, diagnostic: problem.diagnostic, color: problem.color)
                 }
             }
         }
@@ -202,14 +202,14 @@ struct StatusMenuHeaderView: View {
     /// Operator-actionable trouble only. Healthy, refreshing, pending, and
     /// activity states intentionally produce nothing - the menu stays quiet
     /// and stable instead of narrating routine churn.
-    private var problemLines: [(label: String, color: Color)] {
+    private var problemLines: [(label: String, diagnostic: String?, color: Color)] {
         guard self.state.connectionMode != .unconfigured else { return [] }
-        var lines: [(label: String, color: Color)] = []
+        var lines: [(label: String, diagnostic: String?, color: Color)] = []
 
         if self.state.connectionMode == .local,
            let failure = GatewayProcessManager.shared.lastFailureReason
         {
-            lines.append((failure, .red))
+            lines.append((failure, nil, .red))
         }
         if self.state.connectionMode == .remote {
             let presentation = GatewayConnectionPresentation(state: self.controlChannel.state)
@@ -217,9 +217,9 @@ struct StatusMenuHeaderView: View {
             case .healthy:
                 break
             case .transient:
-                lines.append((presentation.generalSubtitle, .orange))
+                lines.append((presentation.generalSubtitle, nil, .orange))
             case .attention:
-                lines.append((presentation.generalSubtitle, .red))
+                lines.append((presentation.generalSubtitle, nil, .red))
             }
         }
 
@@ -227,9 +227,9 @@ struct StatusMenuHeaderView: View {
         case .ok, .unknown:
             break
         case .linkingNeeded:
-            lines.append((String(localized: "Login required"), .red))
+            lines.append((String(localized: "Login required"), nil, .red))
         case let .degraded(reason):
-            lines.append((self.healthStore.degradedSummary ?? reason, .orange))
+            lines.append((self.healthStore.degradedSummary ?? reason, nil, .orange))
         }
 
         if let macNodeStatus = self.macNodeStatus {
@@ -238,7 +238,7 @@ struct StatusMenuHeaderView: View {
         return lines
     }
 
-    private var macNodeStatus: (label: String, color: Color)? {
+    private var macNodeStatus: (label: String, diagnostic: String?, color: Color)? {
         guard self.state.connectionMode != .unconfigured,
               case .connected = self.controlChannel.state
         else { return nil }
@@ -246,7 +246,7 @@ struct StatusMenuHeaderView: View {
         // The coordinator records why the node channel is down at the connect
         // boundary; prefer that recorded fact over inferring from node listings.
         if let line = self.nodeChannelStatus.state.operatorStatusLine {
-            return (line.label, line.isDegraded ? .orange : .red)
+            return (line.label, line.diagnostic, line.isDegraded ? .orange : .red)
         }
 
         let deviceID: String
@@ -256,12 +256,12 @@ struct StatusMenuHeaderView: View {
         case let .available(id):
             deviceID = id
         case .unavailable:
-            return (String(localized: "Mac identity unavailable"), .red)
+            return (String(localized: "Mac identity unavailable"), nil, .red)
         }
 
         if let node = self.nodesStore.nodes.first(where: { $0.nodeId == deviceID }) {
             guard node.isConnected else {
-                return (String(localized: "Mac capabilities offline"), .orange)
+                return (String(localized: "Mac capabilities offline"), nil, .orange)
             }
             let commands = Set(node.commands ?? [])
             let requiredCommands = [
@@ -270,22 +270,32 @@ struct StatusMenuHeaderView: View {
                 OpenClawSystemCommand.which.rawValue,
             ]
             guard requiredCommands.allSatisfy(commands.contains) else {
-                return (String(localized: "Mac capabilities incomplete"), .orange)
+                return (String(localized: "Mac capabilities incomplete"), nil, .orange)
             }
             return nil
         }
 
         guard !self.nodesStore.isLoading, !self.nodesStore.nodes.isEmpty else { return nil }
-        return (String(localized: "Mac capabilities offline"), .orange)
+        return (String(localized: "Mac capabilities offline"), nil, .orange)
     }
 
-    private func statusLine(label: String, color: Color) -> some View {
-        Text(label)
-            .font(.caption)
-            .foregroundStyle(color)
-            .lineLimit(2)
-            .fixedSize(horizontal: false, vertical: true)
-            .help(label)
+    private func statusLine(label: String, diagnostic: String? = nil, color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(color)
+                .lineLimit(diagnostic == nil ? 3 : 2)
+
+            if let diagnostic {
+                Text(diagnostic)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(4)
+                    .textSelection(.enabled)
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .help(diagnostic.map { "\(label)\n\($0)" } ?? label)
     }
 
     private func pairingRow(_ label: String) -> some View {
