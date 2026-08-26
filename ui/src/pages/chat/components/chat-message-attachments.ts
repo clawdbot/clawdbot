@@ -514,9 +514,13 @@ export function renderAssistantAttachments(
                 : {}),
             })
         : undefined;
+    const svgImage =
+      isSvgImageMediaPath(attachment.url, attachment.mimeType) ||
+      (attachmentUrl !== null && isSvgImageMediaPath(attachmentUrl, attachment.mimeType));
     if (
       attachment.kind === "image" ||
-      (attachment.kind === "document" && isImageMediaPath(attachment.label, attachment.mimeType))
+      (attachment.kind === "document" &&
+        (svgImage || isImageMediaPath(attachment.url, attachment.mimeType)))
     ) {
       if (!attachmentUrl) {
         return renderAssistantAttachmentStatusCard({
@@ -532,7 +536,7 @@ export function renderAssistantAttachments(
         });
       }
       const title = attachment.label.trim() || t("chat.imageLightbox.untitled");
-      if (isSvgImageMediaPath(attachment.label, attachment.mimeType)) {
+      if (svgImage) {
         return html`<openclaw-chat-svg-attachment
           .src=${attachmentUrl}
           .sourceIdentity=${attachment.url}

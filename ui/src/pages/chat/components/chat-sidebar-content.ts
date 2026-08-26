@@ -101,7 +101,9 @@ function renderSidebarAttachment(
     ></openclaw-chat-audio-player>`;
   }
   const blockedExternalSvg =
-    isSvgImageMediaPath(content.title, mimeType) && isCrossOriginHttpSource(src);
+    (isSvgImageMediaPath(content.sourceIdentity ?? "", mimeType) ||
+      isSvgImageMediaPath(src, mimeType)) &&
+    isCrossOriginHttpSource(src);
   if (
     !blockedExternalSvg &&
     (content.attachmentKind === "image" || mimeType.startsWith("image/"))

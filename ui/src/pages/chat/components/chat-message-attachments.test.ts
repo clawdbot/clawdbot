@@ -171,7 +171,7 @@ describe("attachment sidebar source ownership", () => {
     expect(revokeObjectURL).toHaveBeenCalledWith(objectUrl);
   });
 
-  it("keeps a cross-origin SVG compact under the served image CSP", async () => {
+  it("keeps a cross-origin SVG with an extensionless label compact under the image CSP", async () => {
     const source = "https://cdn.example/vector.svg";
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
@@ -183,9 +183,8 @@ describe("attachment sidebar source ownership", () => {
           {
             type: "attachment",
             attachment: {
-              kind: "document",
-              label: "vector.svg",
-              mimeType: "image/svg+xml",
+              kind: "image",
+              label: "diagram",
               url: source,
             },
           },
@@ -203,7 +202,7 @@ describe("attachment sidebar source ownership", () => {
     expect(container.querySelector("img.chat-message-image")).toBeNull();
     container.querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__expand")?.click();
     expect(onOpenSidebar).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: "attachment", attachmentKind: "document", src: source }),
+      expect.objectContaining({ kind: "attachment", attachmentKind: "image", src: source }),
     );
   });
 
