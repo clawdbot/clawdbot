@@ -166,18 +166,38 @@ describe("write acknowledgements redact with the restore-side hint union", () =>
     },
   );
 
-  // No sentinel anywhere in the request. Nothing needs restoring, so a hint union gated on a
-  // sentinel being present would fall back to the persisted hints here -- and hand the retained
-  // value straight back. The oracle does not require submitting a sentinel at all.
-  it.each(["config.set", "config.patch"] as const)(
-    "%s does not echo the retained value when the request carries no sentinel",
-    async (method) => {
-      expectRedactedSuccess(await invoke(method, { ui: { prefs: { theme: REDACTED } }, a: 1 }));
-    },
-  );
+  // No sentinel anywhere in the request, and a real change so the write commits. The commit
+  // acknowledgement echoes the stored config, so a hint set narrower than the one config.get
+  // redacted with hands the retained value straight back -- no sentinel needs to be submitted for
+  // the oracle to work. This is the path through respondWithConfigRestartWrite.
+  // config.set replaces the whole config, so the field has to be carried in the submission for the
+  // response to echo it at all; it is submitted in the clear, with no sentinel anywhere.
+  it("config.set commit response does not echo the retained value when no sentinel is submitted", async () => {
+    expectRedactedSuccess(
+      await invoke("config.set", { ui: { prefs: { theme: RETAINED, density: "compact" } } }),
+    );
+  });
+
+  // config.patch merges, so the stored field is echoed by the commit acknowledgement without ever
+  // appearing in the request.
+  it("config.patch commit response does not echo the retained value when no sentinel is submitted", async () => {
+    expectRedactedSuccess(await invoke("config.patch", { ui: { prefs: { density: "compact" } } }));
+  });
 
   // The pre-validation no-op path: an unchanged patch still echoes the stored config.
-  it("config.patch no-op echoes the stored config redacted", async () => {
+  it("config.patch pre-validation no-op echoes the stored config redacted", async () => {
     expectRedactedSuccess(await invoke("config.patch", {}));
+  });
+
+  // The post-validation no-op path: the patch carries a change that validation normalizes away,
+  // so the early no-op does not fire and a second, separate acknowledgement is built.
+  it("config.patch post-validation no-op echoes the stored config redacted", async () => {
+    configValidationMocks.validateConfigObjectWithPlugins.mockImplementation(() => ({
+      ok: true,
+      config: structuredClone(storedConfig),
+      warnings: [],
+    }));
+
+    expectRedactedSuccess(await invoke("config.patch", { ui: { prefs: { density: "compact" } } }));
   });
 });

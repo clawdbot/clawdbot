@@ -573,6 +573,11 @@ describe("config schema response cache", () => {
   });
 
   it("rebuilds after config writes change schema inputs", async () => {
+    // A serving gateway always has a published runtime snapshot, and config.patch reads the active
+    // runtime schema to redact its acknowledgement. Publishing one here keeps that read a cache hit
+    // -- as it is in production -- so the counts below still measure what this case is about: the
+    // write invalidating the cache for the NEXT request.
+    setAppliedRuntimeConfigSnapshot(storedConfig, storedConfig);
     await invokeConfigSchema();
     const patch = await invokeConfigPatch({ raw: { ui: { prefs: { theme: "knot" } } } });
 
@@ -581,16 +586,11 @@ describe("config schema response cache", () => {
       expect.objectContaining({ ok: true }),
       undefined,
     );
-    // config.patch reads the active runtime schema to redact its acknowledgement, so it builds
-    // here. A serving gateway always has a published runtime snapshot and answers that read from
-    // the cache; this test deliberately runs without one, so the read is a real build. What the
-    // case is actually about — a write invalidating the cache for the NEXT request — is the
-    // increment below.
-    expect(loadGatewayRuntimeConfigSchemaMock).toHaveBeenCalledTimes(2);
+    expect(loadGatewayRuntimeConfigSchemaMock).toHaveBeenCalledTimes(1);
 
     await invokeConfigSchema();
 
-    expect(loadGatewayRuntimeConfigSchemaMock).toHaveBeenCalledTimes(3);
+    expect(loadGatewayRuntimeConfigSchemaMock).toHaveBeenCalledTimes(2);
   });
 
   it("rebuilds when the active plugin registry generation changes", async () => {
