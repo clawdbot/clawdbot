@@ -489,7 +489,7 @@ describe("Gateway GitHub publication", () => {
       return await fallback(argv, options);
     });
 
-    await coordinator.resumeLocalRequests();
+    await coordinator.resumeSessionRequests();
 
     expect(coordinator.read(requestId)).toMatchObject({
       status: "failed",
@@ -659,7 +659,7 @@ describe("Gateway GitHub publication", () => {
     ).rejects.toThrow("idempotency key was reused");
   });
 
-  it("terminalizes snapshot preparation failures without blocking workspace acceptance", async () => {
+  it("defers snapshot preparation failures without blocking workspace acceptance", async () => {
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     const placements = createWorkerSessionPlacementStore({ database });
     const active = seedActivePlacement(placements, {
@@ -700,14 +700,29 @@ describe("Gateway GitHub publication", () => {
     );
 
     await expect(runtime.prepareAcceptedWorkspacePublication(claim)).resolves.toBeUndefined();
-    expect(runtime.coordinator.read(requested.requestId)).toMatchObject({
-      status: "failed",
-      code: "workspace_changed",
+    expect(
+      database.db
+        .prepare(
+          "SELECT claim_id, run_id, environment_id, owner_epoch, placement_generation, gateway_instance_id FROM github_publication_requests WHERE request_id = ?",
+        )
+        .get(requested.requestId),
+    ).toEqual({
+      claim_id: null,
+      run_id: null,
+      environment_id: null,
+      owner_epoch: null,
+      placement_generation: null,
+      gateway_instance_id: null,
     });
     expect(() => placements.acceptWorkspaceResult(claim)).not.toThrow();
-    await expect(runtime.coordinator.processClaim(claim)).resolves.toEqual([
-      expect.objectContaining({ status: "failed", code: "workspace_changed" }),
-    ]);
+    await runtime.coordinator.resumeSessionRequests();
+    expect(runtime.coordinator.read(requested.requestId)).toMatchObject({ status: "requested" });
+    mocks.runCommand.mockImplementation(fallback);
+    placements.completeWorkspaceResultAndReleaseTurn(claim);
+
+    await runtime.coordinator.resumeSessionRequests();
+
+    expect(runtime.coordinator.read(requested.requestId)).toMatchObject({ status: "published" });
   });
 
   it("binds the accepted worker snapshot before acceptance and never recaptures it", async () => {
@@ -919,7 +934,7 @@ describe("Gateway GitHub publication", () => {
         placements: createWorkerSessionPlacementStore({ database: reopened }),
       });
 
-      await resumed.resumeLocalRequests();
+      await resumed.resumeSessionRequests();
 
       expect(resumed.read(requestId)).toEqual({
         requestId,
@@ -938,7 +953,7 @@ describe("Gateway GitHub publication", () => {
         pullRequestExists ? 0 : 1,
       );
       const commandCount = commands.length;
-      await resumed.resumeLocalRequests();
+      await resumed.resumeSessionRequests();
       expect(commands).toHaveLength(commandCount);
     },
   );

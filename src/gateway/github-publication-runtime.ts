@@ -30,8 +30,8 @@ export function createGitHubPublicationRuntime(params: {
   const prepareAcceptedWorkspacePublication = async (claim: WorkerSessionTurnClaim) => {
     try {
       await coordinator.prepareClaimWorkspace(claim);
-    } catch (error) {
-      coordinator.failClaimPreparation(claim, error);
+    } catch {
+      coordinator.deferClaimPreparation(claim);
     }
   };
   const publishAcceptedWorkspace = async (claim: WorkerSessionTurnClaim) => {
@@ -50,6 +50,9 @@ export function createGitHubPublicationRuntime(params: {
       throw error;
     }
     for (const result of results) {
+      if (result.status !== "published" && result.status !== "failed") {
+        continue;
+      }
       await reportDeferred({
         sessionId: placement.sessionId,
         sessionKey: placement.sessionKey,
@@ -60,19 +63,13 @@ export function createGitHubPublicationRuntime(params: {
   };
   const reconcilePublications = async () => {
     try {
-      await coordinator.resumeLocalRequests();
+      coordinator.deferOrphanedRequests();
+      await coordinator.resumeSessionRequests();
     } catch (error) {
       params.warn(`GitHub publication recovery deferred: ${formatErrorMessage(error)}`);
     }
-    const attempted = new Set<string>();
-    for (const publication of coordinator.failOrphanedRequests()) {
-      attempted.add(publication.result.requestId);
-      await reportDeferred(publication);
-    }
     for (const publication of coordinator.listUnreportedResults()) {
-      if (!attempted.has(publication.result.requestId)) {
-        await reportDeferred(publication);
-      }
+      await reportDeferred(publication);
     }
   };
   return {
