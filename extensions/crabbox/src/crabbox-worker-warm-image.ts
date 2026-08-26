@@ -21,7 +21,7 @@ type WarmImageRecord = {
   createdAtMs: number;
   lastUsedAtMs: number;
 };
-type LeaseContext = { binary: string; id: string; provider: string };
+type LeaseContext = { binary: string; id: string; provider: string; captureDeadline?: number };
 type AllocationContext = LeaseContext & {
   profile: CrabboxProfile;
   slug: string;
@@ -146,12 +146,19 @@ export function createCrabboxWarmImageManager(dependencies: {
     timeoutMs = WARM_IMAGE_COMMAND_TIMEOUT_MS,
     input?: string,
   ): Promise<string> => {
+    const remainingTimeoutMs =
+      context.captureDeadline === undefined
+        ? timeoutMs
+        : Math.min(timeoutMs, context.captureDeadline - Date.now());
+    if (remainingTimeoutMs <= 0) {
+      throw new Error("Crabbox warm image capture exceeded its timeout");
+    }
     const result = await runCrabboxCommand({
       action: action === "scrub" ? action : `checkpoint ${action}`,
       args,
       binary: context.binary,
       runCommand: dependencies.runCommand,
-      timeoutMs,
+      timeoutMs: remainingTimeoutMs,
       ...(input === undefined ? {} : { input }),
     });
     if (result.termination !== "exit" || result.code !== 0) {
@@ -292,10 +299,15 @@ export function createCrabboxWarmImageManager(dependencies: {
 
   return {
     async capture(context: LeaseContext & { profile: CrabboxProfile; eligible: boolean }) {
+      // One deadline bounds image GC, verification, eviction, scrub, and capture together.
+      const captureContext = {
+        ...context,
+        captureDeadline: Date.now() + WARM_IMAGE_CAPTURE_TIMEOUT_MS,
+      };
       const key = crabboxWarmImageKey(context.profile);
       let reservation: WarmImageRecord | undefined;
       try {
-        await collectExpiredImages(context);
+        await collectExpiredImages(captureContext);
         const existing = openStore().lookup(key);
         if (existing) {
           if (!existing.checkpointId) {
@@ -310,13 +322,13 @@ export function createCrabboxWarmImageManager(dependencies: {
               return;
             }
           } else {
-            if ((await verifyImage(context, existing.checkpointId)) !== "missing") {
+            if ((await verifyImage(captureContext, existing.checkpointId)) !== "missing") {
               return;
             }
-            await deleteImage(context, key, existing);
+            await deleteImage(captureContext, key, existing);
           }
         }
-        if (!context.eligible || !(await makeRoomForCapture(context))) {
+        if (!context.eligible || !(await makeRoomForCapture(captureContext))) {
           return;
         }
         const now = Date.now();
@@ -332,15 +344,15 @@ export function createCrabboxWarmImageManager(dependencies: {
           return;
         }
         await checkpointCommand(
-          context,
+          captureContext,
           "scrub",
-          dependencies.runArgs(context),
+          dependencies.runArgs(captureContext),
           WARM_IMAGE_CAPTURE_TIMEOUT_MS,
           SCRUB_WORKER_STATE,
         );
         const created = parseCreatedCheckpoint(
           await checkpointCommand(
-            context,
+            captureContext,
             "create",
             [
               "checkpoint",

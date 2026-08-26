@@ -201,7 +201,7 @@ export function parseCrabboxProfile(profile: WorkerProfile): CrabboxProfile {
     setup,
     setupEnv,
     ttl,
-    warmImage: warmImage ?? false,
+    warmImage: warmImage ?? true,
   };
 }
 

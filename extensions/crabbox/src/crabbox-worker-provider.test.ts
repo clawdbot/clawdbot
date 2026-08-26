@@ -38,6 +38,7 @@ const PROFILE = {
   class: "standard",
   ttl: "24h",
   idleTimeout: "60m",
+  warmImage: false,
 };
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.unstubAllEnvs());
