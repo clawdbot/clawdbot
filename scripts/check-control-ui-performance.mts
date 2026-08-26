@@ -29,9 +29,9 @@ const controlUiPerformanceBudgets = {
   // 350 KiB maintainer-approved by Vyctor 2026-08-11 for #121686;
   // #121734 left main 6 B below the prior 319 KiB hard ceiling.
   startupJsGzipBytes: 350 * KIB,
-  // 45 KiB CSS ceilings maintainer-approved 2026-07 alongside the interleaved
-  // sidebar zone styling; headroom over the ~36.5 KiB post-diet baseline.
-  startupCssGzipBytes: 45 * KIB,
+  // 46 KiB CSS ceiling includes the self-hosted Absolutely theme from #129885;
+  // headroom remains bounded above the ~45 KiB merged production bundle.
+  startupCssGzipBytes: 46 * KIB,
   largestJsGzipBytes: 215 * KIB,
   // Composer multiline surface (stack #124301) legitimately grew boot CSS;
   // operator decision 2026-08-25 rejected boot splitting due to precedence risk.
