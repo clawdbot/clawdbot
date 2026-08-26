@@ -149,13 +149,14 @@ function stripVerifiedConversationContext(
       if (!sourceLine) {
         return incompleteMarkdownWrapper.test(line) ? "\n" : `\n${line}`;
       }
-      let contentStart = line.indexOf(sourceLine[0]);
+      const sourceLineStart = sourceLine.charAt(0);
+      let contentStart = line.indexOf(sourceLineStart);
       while (contentStart !== -1) {
         const content = line.slice(contentStart);
         if (sourceLine.startsWith(content) && markdownWrapper.test(line.slice(0, contentStart))) {
           return `\n${content}`;
         }
-        contentStart = line.indexOf(sourceLine[0], contentStart + 1);
+        contentStart = line.indexOf(sourceLineStart, contentStart + 1);
       }
       return incompleteMarkdownWrapper.test(line) ? "\n" : `\n${line}`;
     });
