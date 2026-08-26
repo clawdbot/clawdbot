@@ -9028,6 +9028,21 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
 
     expect(publishPrJob.needs).toEqual(["validate_selected_ref", "publisher_preflight", "publish"]);
     expect(publishPrJob["runs-on"]).toBe("ubuntu-24.04");
+    expect(publishPrJob.permissions).toEqual({ actions: "write", contents: "read" });
+    expect(maturityWorkflow.on.workflow_dispatch.inputs.successor_attempt).toEqual({
+      description: "Internal bounded retry count for stale generated output",
+      required: false,
+      default: "0",
+      type: "string",
+    });
+    expect(maturityWorkflow.on.workflow_call.inputs.successor_attempt).toEqual(
+      maturityWorkflow.on.workflow_dispatch.inputs.successor_attempt,
+    );
+    const validateSelectedRefStep = maturityWorkflow.jobs.validate_selected_ref.steps.find(
+      (step: WorkflowStep) => step.name === "Validate selected ref",
+    );
+    expect(validateSelectedRefStep.env.SUCCESSOR_ATTEMPT).toBe("${{ inputs.successor_attempt }}");
+    expect(validateSelectedRefStep.run).toContain('[[ ! "$SUCCESSOR_ATTEMPT" =~ ^[0-2]$ ]]');
     for (const fragment of [
       "needs.publisher_preflight.result == 'success'",
       "needs.publish.result == 'success'",
@@ -9084,7 +9099,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "working-directory": "selected",
       "commit-message": "docs: update maturity scorecard",
       "pr-title": "docs: update maturity scorecard",
-      "overlap-policy": "fail",
+      "overlap-policy": "defer",
     });
     expect(openDocsPrStep.with["generated-paths"].trim().split("\n")).toEqual(
       MATURITY_GENERATED_PR_PATHS,
@@ -9103,6 +9118,24 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     ]) {
       expect(openDocsPrStep.with["pr-body"]).toContain(heading);
     }
+    const successorStep = publishPrJob.steps.find(
+      (step: WorkflowStep) => step.name === "Dispatch latest-base successor",
+    );
+    expect(successorStep).toMatchObject({
+      env: {
+        ALLOW_FAILURES: "${{ inputs.allow_failures }}",
+        BASE_BRANCH: "${{ needs.validate_selected_ref.outputs.publication_base }}",
+        GH_TOKEN: "${{ github.token }}",
+        SOURCE_SHA: "${{ needs.validate_selected_ref.outputs.selected_revision }}",
+        SUCCESSOR_ATTEMPT: "${{ inputs.successor_attempt }}",
+      },
+      "working-directory": "selected",
+    });
+    expect(successorStep.run).toContain("max_successor_attempts=2");
+    expect(successorStep.run).toContain("gh workflow run maturity-scorecard.yml");
+    expect(successorStep.run).toContain('-f expected_sha="$latest_sha"');
+    expect(successorStep.run).toContain('-f successor_attempt="$next_attempt"');
+    expect(successorStep.run).toContain("remained stale after");
     expect(publishPrJob.steps).not.toContainEqual(
       expect.objectContaining({ name: "Create generated docs PR app token" }),
     );

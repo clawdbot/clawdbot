@@ -27,6 +27,11 @@ on:
         required: false
         default: true
         type: boolean
+      successor_attempt:
+        description: Internal bounded retry count for stale generated output
+        required: false
+        default: "0"
+        type: string
   workflow_call:
     inputs:
       qa_evidence_run_id:
@@ -48,6 +53,11 @@ on:
         required: false
         default: false
         type: boolean
+      successor_attempt:
+        description: Internal bounded retry count for stale generated output
+        required: false
+        default: "0"
+        type: string
     secrets:
       OPENAI_API_KEY:
         description: OpenAI API key used by live QA profile scenarios
@@ -217,6 +227,7 @@ jobs:
           EXPECTED_SHA: ${{ inputs.expected_sha }}
           INPUT_REF: ${{ inputs.ref }}
           PUBLISH_PULL_REQUEST: ${{ inputs.publish_pull_request }}
+          SUCCESSOR_ATTEMPT: ${{ inputs.successor_attempt }}
         shell: bash
         run: |
           set -euo pipefail
@@ -264,6 +275,10 @@ jobs:
 
           if [[ ! "$EVIDENCE_RUN_ID" =~ ^[0-9]+$ ]]; then
             echo "qa_evidence_run_id must be a numeric GitHub Actions run id." >&2
+            exit 1
+          fi
+          if [[ ! "$SUCCESSOR_ATTEMPT" =~ ^[0-2]$ ]]; then
+            echo "successor_attempt must be 0, 1, or 2." >&2
             exit 1
           fi
           publication_base="${DEFAULT_BRANCH}"
@@ -694,7 +709,7 @@ jobs:
         needs.validate_selected_ref.outputs.workflow_repository == 'openclaw/openclaw' }}
     runs-on: ubuntu-24.04
     permissions:
-      actions: read
+      actions: write
       contents: read
     steps:
       - name: Checkout trusted workflow source
@@ -811,7 +826,9 @@ jobs:
             :(exclude)qa/maturity-scores.yaml
             :(exclude)docs/maturity/scorecard.md
             :(exclude)docs/maturity/taxonomy.md
-          overlap-policy: fail
+          # A stale run hands off to the bounded successor step below. Keep all repository
+          # inputs invalidating so the successor always scores one immutable current snapshot.
+          overlap-policy: defer
           pr-body: |
             ## What Problem This Solves
 
@@ -831,3 +848,46 @@ jobs:
             - Source SHA: `${{ needs.validate_selected_ref.outputs.selected_revision }}`
             - QA evidence run: `${{ inputs.qa_evidence_run_id || github.run_id }}`
             - Strict score validation and maturity docs rendering passed.
+
+      - name: Dispatch latest-base successor
+        env:
+          ALLOW_FAILURES: ${{ inputs.allow_failures }}
+          BASE_BRANCH: ${{ needs.validate_selected_ref.outputs.publication_base }}
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.validate_selected_ref.outputs.selected_revision }}
+          SUCCESSOR_ATTEMPT: ${{ inputs.successor_attempt }}
+        working-directory: selected
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin \
+            "+refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}"
+          latest_sha="$(git rev-parse "refs/remotes/origin/${BASE_BRANCH}")"
+          if [[ "$latest_sha" == "$SOURCE_SHA" ]]; then
+            exit 0
+          fi
+
+          max_successor_attempts=2
+          if (( SUCCESSOR_ATTEMPT >= max_successor_attempts )); then
+            echo "::error::Maturity scorecard remained stale after ${SUCCESSOR_ATTEMPT} successor attempts."
+            exit 1
+          fi
+
+          next_attempt="$((SUCCESSOR_ATTEMPT + 1))"
+          successor_url="$(
+            gh workflow run maturity-scorecard.yml \
+              --repo "$GITHUB_REPOSITORY" \
+              --ref main \
+              -f ref="$BASE_BRANCH" \
+              -f expected_sha="$latest_sha" \
+              -f publish_pull_request=true \
+              -f allow_failures="$ALLOW_FAILURES" \
+              -f successor_attempt="$next_attempt"
+          )"
+          {
+            echo "### Stale maturity scorecard handoff"
+            echo
+            echo "- Stale source: \`$SOURCE_SHA\`"
+            echo "- Latest base: \`$latest_sha\`"
+            echo "- Successor attempt: \`$next_attempt/$max_successor_attempts\`"
+            echo "- Successor run: $successor_url"
+          } >> "$GITHUB_STEP_SUMMARY"
