@@ -126,6 +126,9 @@ function resolveSlackActionTarget(
     return { kind: "approval", value: encodeSlackApprovalAction(action) };
   }
   if (action.type === "question") {
+    if ("intent" in action) {
+      return undefined;
+    }
     const value =
       optionIndex === undefined
         ? undefined

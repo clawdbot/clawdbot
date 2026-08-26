@@ -136,31 +136,46 @@ type ResolveQuestionParams = Parameters<typeof questionGatewayRuntime.resolveOpt
 type QuestionResolver = (
   params: ResolveQuestionParams,
 ) => ReturnType<typeof questionGatewayRuntime.resolveOption>;
+type QuestionFeedbackMode = "terminal" | "retry" | "custom-input";
 
 export async function handleTelegramQuestionCallback(params: {
   callback: TelegramQuestionCallback;
   cfg: ResolveQuestionParams["cfg"];
   senderId: string;
-  feedback: (text: string, terminal: boolean) => Promise<unknown>;
+  feedback: (text: string, mode: QuestionFeedbackMode) => Promise<unknown>;
   resolveQuestion?: QuestionResolver;
 }): Promise<void> {
-  let result: Awaited<ReturnType<QuestionResolver>>;
   try {
-    result = await (params.resolveQuestion ?? questionGatewayRuntime.resolveOption)({
+    if (params.callback.intent === "custom-input") {
+      const result = await (params.resolveQuestion ?? questionGatewayRuntime.resolveOption)({
+        cfg: params.cfg,
+        questionId: params.callback.questionId,
+        customInput: true,
+        senderId: params.senderId,
+        clientDisplayName: "Telegram question",
+      });
+      if (result.status === "already-terminal") {
+        await params.feedback("This question was already answered.", "terminal");
+        return;
+      }
+      await params.feedback("Reply with your own answer.", "custom-input");
+      return;
+    }
+    const result = await (params.resolveQuestion ?? questionGatewayRuntime.resolveOption)({
       cfg: params.cfg,
       questionId: params.callback.questionId,
       optionIndex: params.callback.optionIndex,
       senderId: params.senderId,
       clientDisplayName: "Telegram question",
     });
+    await params
+      .feedback(
+        result.status === "answered" ? "Answer submitted." : "This question was already answered.",
+        "terminal",
+      )
+      .catch(() => {});
   } catch (error) {
-    await params.feedback("Could not submit this answer.", false).catch(() => {});
+    await params.feedback("Could not submit this answer.", "retry").catch(() => {});
     throw error;
   }
-  await params
-    .feedback(
-      result.status === "answered" ? "Answer submitted." : "This question was already answered.",
-      true,
-    )
-    .catch(() => {});
 }

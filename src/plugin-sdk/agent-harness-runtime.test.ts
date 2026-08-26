@@ -307,6 +307,24 @@ describe("agent harness user input helpers", () => {
     });
   });
 
+  it("normalizes every selected option in a multi-select answer", () => {
+    expect(
+      buildAgentHarnessUserInputAnswers(
+        [
+          {
+            id: "checks",
+            header: "Checks",
+            question: "Which checks should run?",
+            multiSelect: true,
+            isOther: true,
+            options: [{ label: "Unit" }, { label: "Lint" }, { label: "Deploy preview" }],
+          },
+        ],
+        "1, Deploy preview",
+      ),
+    ).toEqual({ answers: { checks: { answers: ["Unit", "Deploy preview"] } } });
+  });
+
   it("supports runtime-specific text formatting", () => {
     expect(
       formatAgentHarnessUserInputPrompt(

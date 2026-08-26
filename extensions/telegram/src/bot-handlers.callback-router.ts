@@ -294,11 +294,19 @@ export function createTelegramCallbackRouter({
           callback: typedQuestionCallback,
           cfg: runtimeCfg,
           senderId,
-          feedback: async (text, terminal) => {
-            if (terminal) {
+          feedback: async (text, mode) => {
+            if (mode === "terminal" || mode === "custom-input") {
               await actions.clearCallbackButtons().catch(() => {});
             }
-            await actions.replyToCallbackChat(text);
+            await actions.replyToCallbackChat(
+              text,
+              mode === "custom-input"
+                ? {
+                    reply_markup: { force_reply: true, selective: true },
+                    reply_parameters: { message_id: callbackMessage.message_id },
+                  }
+                : undefined,
+            );
           },
         });
         return;

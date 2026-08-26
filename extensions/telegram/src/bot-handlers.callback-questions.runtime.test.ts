@@ -4,6 +4,7 @@ import { handleTelegramQuestionCallback } from "./bot-handlers.callback-actions.
 
 const callback = {
   questionId: "ask_0123456789abcdef0123456789abcdef",
+  intent: "select" as const,
   optionIndex: 1,
 };
 
@@ -26,7 +27,7 @@ describe("handleTelegramQuestionCallback", () => {
       resolveQuestion,
     });
 
-    expect(feedback).toHaveBeenCalledWith(expectedText, true);
+    expect(feedback).toHaveBeenCalledWith(expectedText, "terminal");
   });
 
   it("does not turn a committed answer into an error when feedback fails", async () => {
@@ -48,6 +49,23 @@ describe("handleTelegramQuestionCallback", () => {
       }),
     ).resolves.toBeUndefined();
     expect(feedback).toHaveBeenCalledOnce();
-    expect(feedback).toHaveBeenCalledWith("Answer submitted.", true);
+    expect(feedback).toHaveBeenCalledWith("Answer submitted.", "terminal");
+  });
+
+  it("switches an active question to Telegram force-reply input", async () => {
+    const feedback = vi.fn(async () => undefined);
+
+    await handleTelegramQuestionCallback({
+      callback: { questionId: callback.questionId, intent: "custom-input" },
+      cfg: {} as never,
+      senderId: "42",
+      feedback,
+      resolveQuestion: vi.fn(async () => ({
+        status: "custom-input" as const,
+        questionId: "target",
+      })),
+    });
+
+    expect(feedback).toHaveBeenCalledWith("Reply with your own answer.", "custom-input");
   });
 });

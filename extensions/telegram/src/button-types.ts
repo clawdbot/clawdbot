@@ -24,6 +24,7 @@ import {
 } from "./native-command-callback-data.js";
 import {
   buildTelegramQuestionCallbackData,
+  buildTelegramQuestionCustomInputCallbackData,
   hasTelegramQuestionCallbackPrefix,
 } from "./question-callback-data.js";
 
@@ -163,6 +164,15 @@ function toTelegramInlineButton(
       : recordDroppedControl(button, options, "invalid_action");
   }
   if (action.type === "question") {
+    const hasQuestionContext = options?.questionOptionIndices?.has(action.questionId) === true;
+    if ("intent" in action) {
+      const callbackData = hasQuestionContext
+        ? buildTelegramQuestionCustomInputCallbackData(action.questionId)
+        : undefined;
+      return callbackData
+        ? { text: button.label, callback_data: callbackData, style }
+        : recordDroppedControl(button, options, "question_context_unavailable");
+    }
     const normalizedOptionValue = action.optionValue.trim().toLowerCase();
     const optionIndex = options?.questionOptionIndices
       ?.get(action.questionId)
@@ -216,15 +226,29 @@ function chunkInteractiveButtons(
   rows: TelegramInlineButton[][],
   options?: TelegramButtonBuildOptions,
 ) {
-  for (let i = 0; i < buttons.length; i += TELEGRAM_INTERACTIVE_ROW_SIZE) {
-    const row = buttons
-      .slice(i, i + TELEGRAM_INTERACTIVE_ROW_SIZE)
-      .map((button) => toTelegramInlineButton(button, options))
-      .filter((button): button is TelegramInlineButton => Boolean(button));
+  let row: TelegramInlineButton[] = [];
+  const flush = () => {
     if (row.length > 0) {
       rows.push(row);
+      row = [];
+    }
+  };
+  for (const button of buttons) {
+    const rendered = toTelegramInlineButton(button, options);
+    if (!rendered) {
+      continue;
+    }
+    if (resolveMessagePresentationButtonAction(button)?.type === "question") {
+      flush();
+      rows.push([rendered]);
+      continue;
+    }
+    row.push(rendered);
+    if (row.length === TELEGRAM_INTERACTIVE_ROW_SIZE) {
+      flush();
     }
   }
+  flush();
 }
 
 /** Convert portable presentation controls to Telegram inline keyboard rows. */

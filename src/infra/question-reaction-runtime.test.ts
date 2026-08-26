@@ -39,6 +39,37 @@ describe("question reaction runtime", () => {
     });
   });
 
+  it("keeps declared choices when the presentation also offers custom input", () => {
+    const presentationWithCustomInput = {
+      ...presentation,
+      blocks: [
+        presentation.blocks[0]!,
+        {
+          type: "buttons" as const,
+          buttons: [
+            ...presentation.blocks[1]!.buttons,
+            {
+              label: "Other…",
+              action: { type: "question" as const, questionId, intent: "custom-input" as const },
+            },
+          ],
+        },
+      ],
+    };
+    const payload = prepareQuestionReactionPayloadForDelivery({
+      payload: {
+        channelData: { askUser: { questionId } },
+        presentation: presentationWithCustomInput,
+      },
+      presentation: presentationWithCustomInput,
+    });
+
+    expect(readQuestionReactionBinding(payload ?? {})).toEqual({
+      questionId,
+      optionValues: ["Staging", "Production"],
+    });
+  });
+
   it("keeps a one-option prompt reaction-eligible", () => {
     const singleOptionPresentation = {
       ...presentation,

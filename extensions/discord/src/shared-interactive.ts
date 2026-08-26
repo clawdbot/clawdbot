@@ -77,6 +77,9 @@ function buildDiscordButtonComponent(
     };
   }
   if (action.type === "question") {
+    if ("intent" in action) {
+      return undefined;
+    }
     const internalCustomId = buildDiscordQuestionCustomId({
       questionId: action.questionId,
       optionIndex,
