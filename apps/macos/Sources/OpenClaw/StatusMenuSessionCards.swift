@@ -49,7 +49,7 @@ struct StatusSessionCard: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
-        .frame(width: StatusMenuRenderer.cardWidth, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(self.row.label)
     }
@@ -117,7 +117,7 @@ struct StatusApprovalCard: View {
         .background(.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
         .padding(.horizontal, 10)
         .padding(.vertical, 4)
-        .frame(width: StatusMenuRenderer.cardWidth, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func resolve(_ decision: ExecApprovalDecision) {

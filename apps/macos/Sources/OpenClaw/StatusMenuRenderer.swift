@@ -7,8 +7,6 @@ import SwiftUI
 
 @MainActor
 final class StatusMenuRenderer: NSObject {
-    static let cardWidth: CGFloat = 330
-
     private enum RenderEntry {
         case content(StatusMenuDescriptor.Entry)
         case separator(String)
@@ -39,6 +37,7 @@ final class StatusMenuRenderer: NSObject {
         self.state = state
         super.init()
         menu.autoenablesItems = false
+        menu.minimumWidth = StatusMenuMetrics.width
         StatusMenuAppearance.pin(menu)
     }
 
@@ -121,13 +120,14 @@ final class StatusMenuRenderer: NSObject {
 
         switch content.kind {
         case .header:
-            self.configureHeader(item)
+            Self.configureHostedView(
+                item, rootView: StatusMenuHeaderView(state: self.state, isSleeping: self.isSleeping))
         case let .session(row):
             StatusMenuSessions.shared.configureSessionItem(item, row: row)
         case let .approval(request):
             StatusMenuSessions.shared.configureApprovalItem(item, request: request)
         case let .placeholder(title):
-            item.title = title
+            item.title = StatusMenuMetrics.fittedTitle(title)
             item.isEnabled = false
         case let .action(action):
             self.configureAction(item, action: action)
@@ -138,7 +138,7 @@ final class StatusMenuRenderer: NSObject {
             case .devices: StatusMenuSummaries.shared.configureDevices(item)
             }
         case let .gateway(gateway, isAlternate):
-            StatusMenuSummaries.shared.configureGateway(item, gatewayID: gateway.id, isAlternate: isAlternate)
+            StatusMenuSummaries.shared.configureGateway(item, gateway: gateway, isAlternate: isAlternate)
         case .gatewayHeader:
             item.title = String(localized: "Gateways")
         case .updateReady:
@@ -150,22 +150,21 @@ final class StatusMenuRenderer: NSObject {
         }
     }
 
-    private func configureHeader(_ item: NSMenuItem) {
-        let rootView = StatusMenuHeaderView(state: state, isSleeping: isSleeping)
-        if let hosting = item.view as? NSHostingView<StatusMenuHeaderView> {
-            // Replacing rootView leaves the live AppKit view attached during tracking.
-            hosting.rootView = rootView
-            self.sizeHostingView(hosting)
-            return
+    static func configureHostedView(_ item: NSMenuItem, rootView: some View) {
+        let rootView = AnyView(rootView.frame(width: StatusMenuMetrics.width, alignment: .leading))
+        let hosting: NSHostingView<AnyView>
+        if let existing = item.view as? NSHostingView<AnyView> {
+            // Keep the attached view stable while AppKit tracks an open menu.
+            existing.rootView = rootView
+            existing.invalidateIntrinsicContentSize()
+            hosting = existing
+        } else {
+            hosting = NSHostingView(rootView: rootView)
+            item.view = hosting
         }
-
-        let hosting = NSHostingView(rootView: rootView)
-        self.sizeHostingView(hosting)
-        item.view = hosting
-    }
-
-    private func sizeHostingView(_ hosting: NSHostingView<StatusMenuHeaderView>) {
-        hosting.frame = NSRect(x: 0, y: 0, width: Self.cardWidth, height: hosting.fittingSize.height)
+        hosting.frame = NSRect(
+            origin: .zero,
+            size: NSSize(width: StatusMenuMetrics.width, height: hosting.fittingSize.height))
     }
 
     private func configureAction(_ item: NSMenuItem, action: StatusMenuDescriptor.Action) {
@@ -232,8 +231,8 @@ final class StatusMenuRenderer: NSObject {
     }
 
     private func configureNative(_ item: NSMenuItem, title: String, symbol: String, action: Selector) {
-        item.title = title
         item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
+        item.title = StatusMenuMetrics.fittedTitle(title, hasImage: item.image != nil)
         item.target = self
         item.action = action
         item.isEnabled = true
