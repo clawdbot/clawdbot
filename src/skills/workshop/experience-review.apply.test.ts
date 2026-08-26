@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { EmbeddedForegroundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
 import { resolveSessionBoundaryPromptCacheKey } from "../../agents/embedded-agent-runner/run/session-boundary-prompt-cache-key.js";
 import { runWithCanonicalSkillWorkspace } from "../../agents/skill-workshop-workspace-context.js";
 import { createSkillWorkshopTool } from "../../agents/tools/skill-workshop-tool.js";
@@ -37,6 +38,20 @@ vi.mock("../../agents/sessions/index.js", () => ({
     fromEntries: vi.fn(() => ({})),
   },
 }));
+
+function foregroundPromptContext(
+  workspaceDir: string,
+  sandboxSessionKey = "agent:main:main",
+): EmbeddedForegroundPromptContext {
+  return {
+    agentId: "main",
+    agentDir: workspaceDir,
+    workspaceDir,
+    cwd: workspaceDir,
+    sandboxSessionKey,
+    trigger: "user",
+  };
+}
 
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
@@ -90,9 +105,16 @@ describe("experience review auto apply", () => {
         workspaceDir,
         modelProviderId: "openai",
         modelId: "gpt-test",
-        trigger: "user",
-        reasoningLevel: "on",
-        promptCacheKey: foregroundPromptCacheKey,
+        foregroundPromptContext: {
+          agentId: "main",
+          agentDir: workspaceDir,
+          workspaceDir,
+          cwd: workspaceDir,
+          sandboxSessionKey: "agent:main:main",
+          trigger: "user",
+          promptCacheKey: foregroundPromptCacheKey,
+          reasoningLevel: "on",
+        },
       },
       config: { skills: { workshop: { autonomous: { mode: "auto" } } } },
     };
@@ -144,6 +166,7 @@ describe("experience review auto apply", () => {
           workspaceDir,
           modelProviderId: "openai",
           modelId: "gpt-test",
+          foregroundPromptContext: foregroundPromptContext(workspaceDir, "agent:main:usage"),
         },
         config,
       },
@@ -211,6 +234,7 @@ describe("experience review auto apply", () => {
         workspaceDir: worktreeWorkspaceDir,
         modelProviderId: "openai",
         modelId: "gpt-test",
+        foregroundPromptContext: foregroundPromptContext(worktreeWorkspaceDir),
       },
       config: {
         agents: { list: [{ id: "main", default: true, workspace: canonicalWorkspaceDir }] },
@@ -292,6 +316,7 @@ describe("experience review auto apply", () => {
           workspaceDir,
           modelProviderId: "openai",
           modelId: "gpt-test",
+          foregroundPromptContext: foregroundPromptContext(workspaceDir),
         },
         config,
       },
@@ -354,6 +379,7 @@ describe("experience review auto apply", () => {
         workspaceDir,
         modelProviderId: "openai",
         modelId: "gpt-test",
+        foregroundPromptContext: foregroundPromptContext(workspaceDir),
       },
       config: { skills: { workshop: { autonomous: { mode: "auto" } } } },
     };
@@ -392,6 +418,7 @@ describe("experience review auto apply", () => {
         workspaceDir,
         modelProviderId: "openai",
         modelId: "gpt-test",
+        foregroundPromptContext: foregroundPromptContext(workspaceDir),
       },
       config: { skills: { workshop: { autonomous: { mode: "propose" } } } },
     };
@@ -441,6 +468,7 @@ describe("experience review auto apply", () => {
         workspaceDir,
         modelProviderId: "openai",
         modelId: "gpt-test",
+        foregroundPromptContext: foregroundPromptContext(workspaceDir),
       },
       config: { skills: { workshop: { autonomous: { mode: "auto" } } } },
     };
@@ -488,6 +516,7 @@ describe("experience review auto apply", () => {
         workspaceDir,
         modelProviderId: "openai",
         modelId: "gpt-test",
+        foregroundPromptContext: foregroundPromptContext(workspaceDir),
       },
       config: { skills: { workshop: { autonomous: { mode: "auto" } } } },
     };
@@ -544,6 +573,7 @@ describe("experience review auto apply", () => {
           workspaceDir,
           modelProviderId: "openai",
           modelId: "gpt-test",
+          foregroundPromptContext: foregroundPromptContext(workspaceDir),
         },
         config,
       },

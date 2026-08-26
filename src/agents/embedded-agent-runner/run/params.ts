@@ -17,6 +17,7 @@ import type { SessionEntry, SessionToolOverrides } from "../../../config/session
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { GroupToolPolicyConfig } from "../../../config/types.tools.js";
 import type { CronRuntimeAuthority } from "../../../cron/runtime-authority.js";
+import type { CronScheduledToolCallerOrigin } from "../../../cron/scheduled-tool-policy.js";
 import type { ImageContent } from "../../../llm/types.js";
 import type { MediaFact } from "../../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
@@ -458,4 +459,74 @@ export type RunEmbeddedAgentParams = {
   cleanupBundleMcpOnRunEnd?: boolean;
   /** Mark explicit one-shot local CLI runs so plugin tools can release resources promptly. */
   oneShotCliRun?: boolean;
+};
+
+export type EmbeddedForegroundPromptContext = Pick<
+  RunEmbeddedAgentParams,
+  | "agentDir"
+  | "promptCacheKey"
+  | "reasoningLevel"
+  | "messageChannel"
+  | "messageProvider"
+  | "clientCaps"
+  | "toolBindings"
+  | "chatType"
+  | "agentAccountId"
+  | "trigger"
+  | "messageTo"
+  | "messageThreadId"
+  | "conversationToolPolicy"
+  | "groupId"
+  | "groupChannel"
+  | "groupSpace"
+  | "memberRoleIds"
+  | "messageActionTurnCapability"
+  | "spawnedBy"
+  | "isCanonicalWorkspace"
+  | "senderId"
+  | "senderName"
+  | "senderUsername"
+  | "senderE164"
+  | "senderIsOwner"
+  | "approvalReviewerDeviceId"
+  | "currentChannelId"
+  | "chatId"
+  | "channelContext"
+  | "currentMessagingTarget"
+  | "currentThreadTs"
+  | "currentMessageId"
+  | "currentInboundAudio"
+  | "replyToMode"
+  | "requireExplicitMessageTarget"
+  | "disableMessageTool"
+  | "githubPublicationAvailable"
+  | "conversationRecall"
+  | "toolOverrides"
+  | "skillsSnapshot"
+  | "currentInboundEventKind"
+  | "clientTools"
+  | "disableTools"
+  | "contextWindow"
+  | "promptMode"
+  | "forceMessageTool"
+  | "enableHeartbeatTool"
+  | "forceHeartbeatTool"
+  | "allowGatewaySubagentBinding"
+  | "extraSystemPrompt"
+  | "sourceReplyDeliveryMode"
+  | "taskSuggestionDeliveryMode"
+  | "silentReplyPromptMode"
+  | "ownerNumbers"
+  | "toolsAllow"
+  | "runtimePluginToolGrant"
+  | "inputProvenance"
+  | "scheduledToolPolicy"
+  | "modelThinkingCapability"
+  | "modelFallbacksOverride"
+> & {
+  agentId: string;
+  workspaceDir: string;
+  cwd?: string;
+  sandboxSessionKey: string;
+  cronCreatorCallerOrigin?: CronScheduledToolCallerOrigin;
 };

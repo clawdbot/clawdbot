@@ -394,6 +394,7 @@ export async function completeEmbeddedAttemptAfterTurn(
       ctx: buildEmbeddedAgentEndContext({
         run: attempt,
         agentId: runtime.hookAgentId,
+        agentDir: runtime.agentDir,
         trace: freezeDiagnosticTraceContext(runtime.diagnosticTrace),
         skillWorkshopAvailable: runtime.skillWorkshopAvailable,
         compacted: state.compactionOccurredThisAttempt,

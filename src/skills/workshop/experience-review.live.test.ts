@@ -36,7 +36,14 @@ async function candidate(
       workspaceDir,
       modelProviderId: "openai",
       modelId,
-      trigger: "user",
+      foregroundPromptContext: {
+        agentId: "main",
+        agentDir: workspaceDir,
+        workspaceDir,
+        cwd: workspaceDir,
+        sandboxSessionKey: sessionKey,
+        trigger: "user",
+      },
     },
     config: {
       models: {
