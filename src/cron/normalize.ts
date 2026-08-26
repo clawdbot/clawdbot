@@ -26,7 +26,7 @@ import {
 } from "./session-target.js";
 import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "./stagger.js";
 import { normalizeCronStreamBatching } from "./stream-schedule.js";
-import type { CronJobCreate, CronJobPatch } from "./types.js";
+import { isSystemOwnedCronPayloadKind, type CronJobCreate, type CronJobPatch } from "./types.js";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -539,7 +539,7 @@ export function normalizeCronJobInput(
       // Agent turns bind to the creating conversation by default: the run carries
       // that chat's context and announces its result there. Callers without session
       // context are downgraded to isolated by resolveCronCurrentSessionTarget.
-      if (kind === "systemEvent" || kind === "heartbeat") {
+      if (kind === "systemEvent" || isSystemOwnedCronPayloadKind(kind)) {
         next.sessionTarget = "main";
       } else if (kind === "agentTurn") {
         next.sessionTarget = "current";

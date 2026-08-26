@@ -1,7 +1,7 @@
 import path from "node:path";
 import { createSessionProjection, reduceSessionProjection } from "@openclaw/gateway-client/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import { clearConfigCache } from "../config/config.js";
@@ -19,6 +19,7 @@ import {
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import * as managedOutgoingMedia from "./managed-image-attachments.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 import { installGatewayTestHooks, testState, writeSessionStore } from "./test-helpers.js";
@@ -128,6 +129,25 @@ afterEach(() => {
 });
 
 describe("chat.history cursor catch-up", () => {
+  test.each(["chat.history", "chat.startup"] as const)(
+    "%s does not launch managed outgoing media garbage collection",
+    async (method) => {
+      const { context } = await createCursorSession();
+      const cleanup = vi
+        .spyOn(managedOutgoingMedia, "cleanupManagedOutgoingMediaRecords")
+        .mockResolvedValue({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 0 });
+
+      try {
+        const result = await callChat(context, method);
+
+        expect(result.ok).toBe(true);
+        expect(cleanup).not.toHaveBeenCalled();
+      } finally {
+        cleanup.mockRestore();
+      }
+    },
+  );
+
   test("returns an empty delta at the cached head", async () => {
     const { context } = await createCursorSession();
     const page = await callChat<{ deltaCursor?: string; messages?: unknown[] }>(

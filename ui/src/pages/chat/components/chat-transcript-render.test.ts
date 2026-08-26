@@ -108,7 +108,7 @@ describe("chat transcript rendering", () => {
     transcript.hostDisconnected();
   });
 
-  it("renders interrupted status after a partial assistant reply", async () => {
+  it("leaves interrupted status to the composer after a partial assistant reply", async () => {
     const transcript = createTestTranscript();
     const container = document.body.appendChild(document.createElement("div"));
     const props = {
@@ -134,13 +134,11 @@ describe("chat transcript rendering", () => {
     transcript.hostUpdated();
     await flushDeferredRowPrune();
 
-    const status = requireElement(container, ".chat-turn-terminal-status--interrupted");
-    expect(status.textContent).toContain("Interrupted");
-    expect(status.closest(".chat-group")).toBeNull();
+    expect(container.querySelector(".chat-turn-terminal-status--interrupted")).toBeNull();
     transcript.hostDisconnected();
   });
 
-  it("renders interrupted status after the current turn when it has no assistant reply", async () => {
+  it("leaves interrupted status to the composer when a turn has no assistant reply", async () => {
     const transcript = createTestTranscript();
     const container = document.body.appendChild(document.createElement("div"));
     const props = {
@@ -167,10 +165,7 @@ describe("chat transcript rendering", () => {
     transcript.hostUpdated();
     await flushDeferredRowPrune();
 
-    const status = requireElement(container, ".chat-turn-terminal-status--interrupted");
-    expect(status.textContent).toContain("Interrupted");
-    expect(status.closest(".chat-group")).toBeNull();
-    expect(container.querySelector(".chat-group.assistant")?.contains(status)).toBe(false);
+    expect(container.querySelector(".chat-turn-terminal-status--interrupted")).toBeNull();
     transcript.hostDisconnected();
   });
 

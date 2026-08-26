@@ -360,7 +360,7 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
     },
     // Reload rules invoke these hooks on whatever cronState is live; the lazy
     // proxy must forward every GatewayCronState member or hot reloads silently
-    // no-op until a gateway restart (heartbeat cadence changes never applied).
+    // no-op until a gateway restart (system-owned cron cadence changes never applied).
     async reconcileExitWatchers() {
       await (await load()).state.reconcileExitWatchers();
     },

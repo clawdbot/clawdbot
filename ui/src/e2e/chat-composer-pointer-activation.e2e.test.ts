@@ -147,7 +147,7 @@ describeControlUiE2e("Control UI composer pointer controls", () => {
       await textarea.focus();
       await expect
         .poll(() => composerShell.evaluate((node) => getComputedStyle(node).marginBottom))
-        .toBe("0px");
+        .toBe("48px");
 
       const send = page.getByRole("button", { name: "Send message" });
       await expect.poll(() => send.isVisible()).toBe(true);
@@ -186,7 +186,7 @@ describeControlUiE2e("Control UI composer pointer controls", () => {
       await textarea.focus();
       await expect
         .poll(() => composerShell.evaluate((node) => getComputedStyle(node).marginBottom))
-        .toBe("0px");
+        .toBe("48px");
       await installPointerTrace(page, stop);
       await stop.tap();
       expectStablePointerActivation(await readPointerTrace(page));
@@ -233,7 +233,7 @@ describeControlUiE2e("Control UI composer pointer controls", () => {
       await textarea.focus();
       await expect
         .poll(() => composerShell.evaluate((node) => getComputedStyle(node).marginBottom))
-        .toBe("0px");
+        .toBe("48px");
 
       const send = page.getByRole("button", { name: "Send message" });
       await expect.poll(() => send.isVisible()).toBe(true);

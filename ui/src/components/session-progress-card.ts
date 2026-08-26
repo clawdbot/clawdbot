@@ -7,7 +7,7 @@ import { formatTimeMs } from "../lib/format.ts";
 import { icons } from "./icons.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 
-type SessionProgressCardPlacement = "board" | "composer" | "dock" | "hovercard" | "rail";
+type SessionProgressCardPlacement = "board" | "composer" | "hovercard" | "rail";
 
 const STATUS_LABEL_KEYS: Record<ProgressCardStep["status"], Parameters<typeof t>[0]> = {
   completed: "sessionProgressCard.status.completed",
@@ -197,12 +197,13 @@ export function renderSessionProgressCard(
         </span>
         <span class="session-progress-card__summary-collapsed">
           <span class="session-progress-card__current">${stepLabel}</span>
-          ${counts
-            ? html`<span class="session-progress-card__summary-count"
-                >${currentPosition}/${counts.total}</span
-              >`
-            : nothing}
         </span>
+        ${counts
+          ? html`<span
+              class="session-progress-card__summary-count session-progress-card__summary-count--collapsed"
+              >${currentPosition}/${counts.total}</span
+            >`
+          : nothing}
         <span class="session-progress-card__summary-expanded">
           <span class="session-progress-card__summary-title"
             >${t("sessionProgressCard.composerTitle")}</span

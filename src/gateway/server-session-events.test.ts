@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
+import type { SessionMessageSubscriberRegistry } from "./server-chat-state.js";
 
 const sessionRow = vi.hoisted(() => ({
   key: "agent:main:main",
@@ -80,17 +81,43 @@ function createActiveRun(
   };
 }
 
-function createHandler(projectSessionActive: boolean, executionStarted = true) {
+function fixedStoreRuntimeConfig(ownerAgentId: string, configuredAgentIds: string[]) {
+  return {
+    session: { store: "/tmp/shared.sqlite" },
+    agents: {
+      ownership: "explicit",
+      defaults: { sessionStore: { agentId: ownerAgentId } },
+      entries: Object.fromEntries(configuredAgentIds.map((agentId) => [agentId, {}])),
+    },
+  };
+}
+
+function createHandler(
+  projectSessionActive: boolean,
+  executionStarted = true,
+  getSessionMessageSubscribers: SessionMessageSubscriberRegistry["get"] = () => new Set<string>(),
+) {
   const broadcastToConnIds = vi.fn();
   const handler = createTranscriptUpdateBroadcastHandler({
     broadcastToConnIds,
     sessionEventSubscribers: { getAll: () => new Set(["conn-1"]) },
-    sessionMessageSubscribers: { get: () => new Set<string>() },
+    sessionMessageSubscribers: { get: getSessionMessageSubscribers },
     chatAbortControllers: new Map([
       ["run-before-finalize", createActiveRun(projectSessionActive, executionStarted)],
     ]),
   });
   return { broadcastToConnIds, handler };
+}
+
+const PRIVATE_SESSION_FIELDS =
+  "agentId session message owner goal status hasActiveRun activeRunIds model responseUsage".split(
+    " ",
+  );
+
+function expectPrivateSessionInvalidation(payload: unknown) {
+  for (const field of PRIVATE_SESSION_FIELDS) {
+    expect(payload, field).not.toHaveProperty(field);
+  }
 }
 
 async function emitAssistantTranscriptUpdate(
@@ -203,6 +230,35 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     expect(payload).not.toHaveProperty("storePath");
     expect(payload).not.toHaveProperty("target.storePath");
     expect(readSessionMessageCountAsyncMock).not.toHaveBeenCalled();
+  });
+
+  it("scopes a queued marker update to its final transcript key", async () => {
+    resolveTranscriptSessionKeyBySessionIdMock
+      .mockReturnValueOnce("agent:main:queued")
+      .mockReturnValue("agent:main:current");
+    listAccessorSessionEntriesReadOnlyMock.mockReturnValue([
+      { key: "agent:main:current", entry: { sessionId: "sess-main" } },
+    ]);
+    const getSessionMessageSubscribers = vi.fn((sessionKey: string) =>
+      sessionKey === "agent:main:current" ? new Set(["conn-current"]) : new Set(["conn-stale"]),
+    );
+    const { broadcastToConnIds, handler } = createHandler(
+      false,
+      true,
+      getSessionMessageSubscribers,
+    );
+
+    await handler({
+      sessionFile: "sqlite:main:sess-main:/tmp/explicit-sessions.json",
+    });
+
+    expect(getSessionMessageSubscribers).toHaveBeenCalledWith("agent:main:current");
+    expect(getSessionMessageSubscribers).not.toHaveBeenCalledWith("agent:main:queued");
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.changed",
+      expect.objectContaining({ sessionKey: "agent:main:current" }),
+      new Set(["conn-1", "conn-current"]),
+    );
   });
 
   it("rejects an identity-only invalidation when its custom-store owner was deleted", async () => {
@@ -525,17 +581,10 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
   });
 
   it.each([
-    { name: "routes a bare event without disclosing the persisted owner's goal" },
-    { name: "publishes the qualified owner's goal", agentId: "ops" },
+    { name: "routes the configured persisted owner without publishing its goal" },
+    { name: "publishes the explicit owner's identity and goal", agentId: "ops" },
   ])("$name", async ({ agentId }) => {
-    runtimeConfigState.value = {
-      session: { store: "/tmp/owned-shared.sqlite" },
-      agents: {
-        ownership: "explicit",
-        defaults: { sessionStore: { agentId: "ops" } },
-        entries: { ops: {}, research: {} },
-      },
-    };
+    runtimeConfigState.value = fixedStoreRuntimeConfig("ops", ["ops", "research"]);
     sessionRow.key = "global";
     const goal = {
       schemaVersion: 1 as const,
@@ -591,6 +640,45 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       expect(payload).not.toHaveProperty("goal");
       expect(payload).not.toHaveProperty("session.goal");
     }
+  });
+
+  it("keeps a retired fixed-store owner private instead of routing through another agent", async () => {
+    runtimeConfigState.value = fixedStoreRuntimeConfig("ops", ["research"]);
+    const getSessionMessageSubscribers = vi.fn((sessionKey: string) =>
+      sessionKey === "agent:ops:global"
+        ? new Set(["conn-ops"])
+        : sessionKey === "agent:research:global"
+          ? new Set(["conn-research"])
+          : new Set<string>(),
+    );
+    const { broadcastToConnIds, handler } = createHandler(
+      false,
+      true,
+      getSessionMessageSubscribers,
+    );
+
+    await handler({
+      sessionKey: "global",
+      message: { role: "assistant", content: [{ type: "text", text: "private owner" }] },
+      messageId: "message-retired-owner",
+      messageSeq: 1,
+    });
+
+    expect(getSessionMessageSubscribers).toHaveBeenCalledWith("agent:ops:global");
+    expect(getSessionMessageSubscribers).not.toHaveBeenCalledWith("agent:research:global");
+    expect(loadGatewaySessionRowMock).not.toHaveBeenCalled();
+    expect(broadcastToConnIds).toHaveBeenCalledOnce();
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.changed",
+      expect.objectContaining({ sessionKey: "global", phase: "message" }),
+      new Set(["conn-1", "conn-ops"]),
+      {
+        agentId: "ops",
+        dropIfSlow: true,
+        sessionKeys: ["agent:ops:global"],
+      },
+    );
+    expectPrivateSessionInvalidation(broadcastToConnIds.mock.calls[0]?.[1]);
   });
 
   it("broadcasts user idempotency keys in session.message metadata", async () => {
@@ -909,17 +997,10 @@ describe("createLifecycleEventBroadcastHandler", () => {
   });
 
   it.each([
-    { name: "projects bare active state without disclosing the persisted owner's goal" },
-    { name: "publishes active state and goal for the qualified owner", agentId: "ops" },
+    { name: "projects configured persisted state without publishing its goal" },
+    { name: "publishes active state and goal for the explicit owner", agentId: "ops" },
   ])("$name", ({ agentId }) => {
-    runtimeConfigState.value = {
-      session: { store: "/tmp/owned-shared.sqlite" },
-      agents: {
-        ownership: "explicit",
-        defaults: { sessionStore: { agentId: "ops" } },
-        entries: { ops: {}, research: {} },
-      },
-    };
+    runtimeConfigState.value = fixedStoreRuntimeConfig("ops", ["ops", "research"]);
     sessionRow.key = "global";
     const goal = {
       schemaVersion: 1 as const,
@@ -966,5 +1047,30 @@ describe("createLifecycleEventBroadcastHandler", () => {
       expect(payload).not.toHaveProperty("goal");
       expect(payload).not.toHaveProperty("session.goal");
     }
+  });
+
+  it("publishes only a private invalidation for a retired fixed-store lifecycle owner", () => {
+    runtimeConfigState.value = fixedStoreRuntimeConfig("ops", ["research"]);
+    const broadcastToConnIds = vi.fn();
+    const handler = createLifecycleEventBroadcastHandler({
+      broadcastToConnIds,
+      sessionEventSubscribers: { getAll: () => new Set(["conn-events"]) },
+      chatAbortControllers: new Map(),
+    });
+
+    handler({ sessionKey: "global", reason: "updated" });
+
+    expect(loadGatewaySessionRowMock).not.toHaveBeenCalled();
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.changed",
+      expect.objectContaining({ sessionKey: "global", reason: "updated" }),
+      new Set(["conn-events"]),
+      {
+        agentId: "ops",
+        dropIfSlow: true,
+        sessionKeys: ["agent:ops:global"],
+      },
+    );
+    expectPrivateSessionInvalidation(broadcastToConnIds.mock.calls[0]?.[1]);
   });
 });

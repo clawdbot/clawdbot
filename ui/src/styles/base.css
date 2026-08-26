@@ -33,6 +33,7 @@
   --muted: #8b8b94;
   --muted-strong: #898990;
   --muted-foreground: #8b8b94;
+  --file-icon-glyph: #a3a3a3;
 
   /* Border - Whisper-thin, barely there */
   --border: #1e2028;
@@ -541,6 +542,7 @@
   --muted: #6e6960;
   --muted-strong: #56524a;
   --muted-foreground: #6e6960;
+  --file-icon-glyph: #737373;
 
   --border: #e8e4dc;
   --border-strong: #d6d0c5;
@@ -1289,6 +1291,13 @@ a[href] {
 
 a:hover {
   text-decoration-thickness: 2px;
+}
+
+/* Web Awesome defaults checked switches to brand blue. Keep every switch on
+   the Control UI accent, matching native check controls and custom switches. */
+wa-switch {
+  --wa-form-control-activated-color: var(--accent);
+  --wa-color-focus: var(--ring);
 }
 
 /* Web Awesome dropdown items ship `cursor: pointer` on their shadow host.

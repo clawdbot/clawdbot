@@ -1282,40 +1282,53 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     });
   });
 
-  it("does not dispatch announce delivery for fatal error payloads", async () => {
-    mockRunCronFallbackPassthrough();
-    resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
-    runEmbeddedAgentMock.mockResolvedValue({
-      payloads: [
-        {
-          text: 'Codex error: {"type":"error","error":{"type":"server_error"}}',
-          isError: true,
-        },
-      ],
-      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
-    });
+  it.each([
+    { label: "without a prior message", delivered: false },
+    { label: "after a verified message-tool delivery", delivered: true },
+  ])(
+    "does not dispatch announce delivery for fatal error payloads $label",
+    async ({ delivered }) => {
+      mockRunCronFallbackPassthrough();
+      resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
+      runEmbeddedAgentMock.mockResolvedValue({
+        payloads: [
+          {
+            text: 'Codex error: {"type":"error","error":{"type":"server_error"}}',
+            isError: true,
+          },
+        ],
+        ...(delivered
+          ? {
+              didSendViaMessagingTool: true,
+              messagingToolSentTargets: [{ tool: "message", provider: "messagechat", to: "123" }],
+            }
+          : {}),
+        meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+      });
 
-    const result = await runCronIsolatedAgentTurn({
-      ...makeParams(),
-      job: makeAnnounceMessageToolJob({
-        id: "fatal-error-payload",
-        name: "Fatal Error Payload",
-      }),
-    });
+      const result = await runCronIsolatedAgentTurn({
+        ...makeParams(),
+        job: makeAnnounceMessageToolJob({
+          id: "fatal-error-payload",
+          name: "Fatal Error Payload",
+        }),
+      });
 
-    expect(result.status).toBe("error");
-    expect(result.error).toBe("cron isolated run returned an error payload");
-    expect(result.delivered).toBe(false);
-    expect(result.deliveryAttempted).toBe(false);
-    expect(dispatchCronDeliveryMock).not.toHaveBeenCalled();
-    expect(callGatewayMock).not.toHaveBeenCalled();
-    expectDeliveryFields(result.delivery, {
-      intended: { channel: "messagechat", to: "123", source: "explicit" },
-      resolved: { ok: true, channel: "messagechat", to: "123", source: "explicit" },
-      fallbackUsed: false,
-      delivered: false,
-    });
-  });
+      expect(result.status).toBe("error");
+      expect(result.error).toBe("cron isolated run returned an error payload");
+      expect(result.delivered).toBe(delivered);
+      expect(result.deliveryAttempted).toBe(delivered);
+      expect(dispatchCronDeliveryMock).not.toHaveBeenCalled();
+      expect(callGatewayMock).not.toHaveBeenCalled();
+      expectDeliveryFields(result.delivery, {
+        intended: { channel: "messagechat", to: "123", source: "explicit" },
+        resolved: { ok: true, channel: "messagechat", to: "123", source: "explicit" },
+        ...(delivered ? { messageToolSentTo: [{ channel: "messagechat", to: "123" }] } : {}),
+        fallbackUsed: false,
+        delivered,
+      });
+    },
+  );
 
   it("cleans up deleteAfterRun sessions when suppressing fatal error announces", async () => {
     mockRunCronFallbackPassthrough();

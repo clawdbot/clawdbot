@@ -3,6 +3,7 @@ import { html, nothing } from "lit";
 import { findInlineApproval } from "../../app/approval-presentation.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { cancelQuestionPrompt, submitQuestionPrompt } from "../../app/question-prompt.ts";
+import { patchSettings } from "../../app/settings.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../../app/user-profile.ts";
 import { navigateMarkdownSession } from "../../components/markdown-session-links.ts";
 import { personActivityRouting } from "../../components/person-activity-link.ts";
@@ -234,7 +235,6 @@ export class ChatPane extends ChatPaneLayoutRender {
       state,
       sidebarLayout,
       paneWidth: this.paneWidth,
-      composerGutter: this.composerGutter.width,
       presentationId: this.presentationId,
       presented: this.presented,
       gatewaySnapshot,
@@ -321,9 +321,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       compactionStatus: state.compactionStatus,
       fallbackStatus: state.fallbackStatus,
       progressCard:
-        progressCardPlacement === "rail" || !this.progressCard.card
-          ? null
-          : { card: this.progressCard.card, placement: progressCardPlacement },
+        progressCardPlacement === "rail" || !this.progressCard.card ? null : this.progressCard.card,
       onDismissProgressCard,
       gatewayQuestionPrompts: catalogKey || sessionParticipationBlocked ? [] : this.questionPrompts,
       onGatewayQuestionChange: () => {
@@ -371,6 +369,11 @@ export class ChatPane extends ChatPaneLayoutRender {
       offline: gatewaySnapshot.offlineStable,
       gatewayClient: state.client,
       composerHoldToRecord: state.settings.composerHoldToRecord,
+      onComposerHoldToRecordChange: (enabled) => {
+        state.settings = patchSettings({ composerHoldToRecord: enabled });
+      },
+      onOpenTalkSettings: () => this.context.navigate("talk"),
+      onOpenDictationSettings: () => this.context.navigate("model-setup"),
       suggestionComposer: suggestionViewer,
       typingActors: multiIdentity ? this.typingActorViews() : [],
       onTypingChange: typingEnabled
@@ -527,8 +530,8 @@ export class ChatPane extends ChatPaneLayoutRender {
       },
       onChatScroll: (event) => this.handleTranscriptScroll(event),
       onHistoryIntent: (event) => this.handleTranscriptHistoryIntent(event),
-      // Metadata can resize a committed row; re-enter the scroll owner so the
-      // follow lock wins.
+      // Lazy SVG sizing can resize a committed row; re-enter the scroll owner
+      // so an active follow lock stays pinned to the latest message.
       onAssistantAttachmentLoaded: () => scheduleChatScroll(state),
       getDraft: () => state.chatMessage,
       onDraftChange: state.handleChatDraftChange,
@@ -576,11 +579,6 @@ export class ChatPane extends ChatPaneLayoutRender {
       },
       onDismissRealtimeTalkError: () => {
         dismissRealtimeTalkError(state as never);
-        state.requestUpdate?.();
-      },
-      onDictationError: (message) => {
-        state.lastError = message;
-        state.chatError = message;
         state.requestUpdate?.();
       },
       onAbort: sessionActionCallbacks.onAbort,
@@ -636,6 +634,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       userAvatar: selfUser?.avatarUrl ?? state.userAvatar,
       personActivity: personActivityRouting(this.context),
       localMediaPreviewRoots: state.localMediaPreviewRoots,
+      connectionEpoch: state.connectionEpoch,
       embedSandboxMode: state.embedSandboxMode,
       allowExternalEmbedUrls: state.allowExternalEmbedUrls,
       fetchLinkFavicon,

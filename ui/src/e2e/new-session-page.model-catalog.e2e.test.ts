@@ -142,11 +142,7 @@ suite.define(() => {
       await gateway.waitForRequest("chat.metadata");
 
       const modelSelect = page.locator('[data-chat-model-select="true"]');
-      const errorState = page.locator('[data-chat-model-catalog-state="error"]');
-      await pollLocatorText(
-        errorState.locator(".chat-controls__model-catalog-state-label > span"),
-      ).toBe("Models unavailable");
-      expect(await errorState.count()).toBe(1);
+      await expect.poll(() => modelSelect.getAttribute("title")).toBe("Models unavailable");
       expect(await page.locator("[data-chat-model-option]").count()).toBe(0);
 
       await modelSelect.click();

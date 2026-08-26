@@ -167,6 +167,19 @@ export async function executeJobCore(
       payload: appendCronPayloadText(effectiveJob.payload, options.streamBatch),
     };
   }
+  if (effectiveJob.payload.kind === "skillCollectionReview") {
+    const result = state.deps.runSkillCollectionReview
+      ? await state.deps.runSkillCollectionReview({
+          agentId: resolveCronJobEffectiveAgentId(
+            effectiveJob,
+            state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId,
+          ),
+          ...(abortSignal ? { abortSignal } : {}),
+        })
+      : { status: "skipped" as const, summary: "skill collection review runner unavailable" };
+    return triggerEval ? { ...result, triggerEval } : result;
+  }
+
   const heartbeatTask = isHeartbeatTaskCronJob(effectiveJob) ? effectiveJob : undefined;
   if (effectiveJob.payload.kind === "heartbeat" || heartbeatTask) {
     // Monitors and migrated tasks share the wake bus, keeping coalescing,

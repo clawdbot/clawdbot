@@ -12,7 +12,7 @@ describe("EventHub subscriber ownership", () => {
     const failedRead = failed.next();
     const healthyRead = healthy.next();
 
-    expect(() => hub.publish("first")).not.toThrow();
+    hub.publish("first");
     await expect(failedRead).rejects.toThrow("subscriber filter failed");
     await expect(healthyRead).resolves.toEqual({ done: false, value: "first" });
 

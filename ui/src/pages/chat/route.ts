@@ -73,6 +73,7 @@ function sessionPage(face: BoardFace) {
       Promise.all([
         import("./chat-page.ts"),
         import("../../styles/chat/composer-progress.css"),
+        import("../../styles/chat/composer-queue.css"),
       ]).then(() => ({
         header: true,
         // ChatPage's bounded inner cache owns per-session teardown, so session

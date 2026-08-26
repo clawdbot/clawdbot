@@ -369,7 +369,7 @@ describe("cron service timer seam coverage", () => {
     }
   });
 
-  it.each(["command", "script", "systemEvent", "heartbeat"] as const)(
+  it.each(["command", "script", "systemEvent", "heartbeat", "skillCollectionReview"] as const)(
     "does not run a %s payload when trigger evaluation resolves after cancellation",
     async (kind) => {
       const { storePath } = await makeStorePath();
@@ -382,9 +382,12 @@ describe("cron service timer seam coverage", () => {
       const evaluateCronTrigger = vi.fn(() => evaluation.promise);
       const enqueueSystemEvent = vi.fn();
       const requestHeartbeat = vi.fn();
-      const runCommandJob = vi.fn(async () => ({ status: "ok" as const }));
-      const runScriptJob = vi.fn(async () => ({ status: "ok" as const }));
-      const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+      const runCommandJob = vi.fn(() => Promise.resolve({ status: "ok" as const }));
+      const runScriptJob = vi.fn(() => Promise.resolve({ status: "ok" as const }));
+      const runSkillCollectionReview = vi.fn(() =>
+        Promise.resolve({ status: "ok" as const, summary: "Review complete" }),
+      );
+      const runIsolatedAgentJob = vi.fn(() => Promise.resolve({ status: "ok" as const }));
       const state = createCronServiceState({
         storePath,
         cronEnabled: true,
@@ -396,6 +399,7 @@ describe("cron service timer seam coverage", () => {
         evaluateCronTrigger,
         runCommandJob,
         runScriptJob,
+        runSkillCollectionReview,
         runIsolatedAgentJob,
       });
       const baseJob =
@@ -403,10 +407,10 @@ describe("cron service timer seam coverage", () => {
           ? createDueCommandJob({ now })
           : kind === "script"
             ? createDueScriptJob({ now })
-            : kind === "heartbeat"
+            : kind === "heartbeat" || kind === "skillCollectionReview"
               ? {
                   ...createDueMainJob({ now, wakeMode: "next-heartbeat" }),
-                  payload: { kind: "heartbeat" as const },
+                  payload: { kind },
                 }
               : createDueMainJob({ now, wakeMode: "next-heartbeat" });
       const job: CronJob = {
@@ -425,9 +429,41 @@ describe("cron service timer seam coverage", () => {
       expect(requestHeartbeat).not.toHaveBeenCalled();
       expect(runCommandJob).not.toHaveBeenCalled();
       expect(runScriptJob).not.toHaveBeenCalled();
+      expect(runSkillCollectionReview).not.toHaveBeenCalled();
       expect(runIsolatedAgentJob).not.toHaveBeenCalled();
     },
   );
+
+  it("runs skill collection review payloads through the injected runner", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-07-27T12:00:00.000Z");
+    const runSkillCollectionReview = vi.fn(async ({ agentId }: { agentId: string }) => ({
+      status: "ok" as const,
+      summary: `reviewed ${agentId}`,
+    }));
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      cronConfig: { triggers: { enabled: true } },
+      log: logger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runSkillCollectionReview,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+    const job: CronJob = {
+      ...createDueMainJob({ now, wakeMode: "next-heartbeat" }),
+      agentId: "ops",
+      payload: { kind: "skillCollectionReview" },
+    };
+
+    await expect(executeJobCore(state, job)).resolves.toMatchObject({
+      status: "ok",
+      summary: "reviewed ops",
+    });
+    expect(runSkillCollectionReview).toHaveBeenCalledWith({ agentId: "ops" });
+  });
 
   it("runs command cron jobs without isolated agent setup", async () => {
     const { storePath } = await makeStorePath();
