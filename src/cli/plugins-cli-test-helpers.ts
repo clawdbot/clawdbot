@@ -1,5 +1,4 @@
 // Shared Vitest mocks and runtime capture helpers for plugin CLI command tests.
-import { realpathSync } from "node:fs";
 import { Command } from "commander";
 import type { Mock } from "vitest";
 import { vi } from "vitest";
@@ -7,11 +6,9 @@ import { getRuntimeConfig } from "../config/config.js";
 import type { HookInstallRecord } from "../config/types.hooks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import type { PluginInstallArtifactConsentHandler } from "../plugins/install-types.js";
 import type { InstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { recordPluginManifestInstallOwner } from "../plugins/manifest-install-owner.js";
-import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
-import { withTempDir } from "../test-utils/temp-dir.js";
+import { invokePluginArtifactInstallMock } from "../plugins/test-helpers/install-fixtures.js";
 import type { CliMockOutputRuntime } from "./test-runtime-capture.js";
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
@@ -93,45 +90,6 @@ export function createTestInstalledPluginIndex(params: {
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper preserves mock call and result types.
 function invokeMock<TArgs extends unknown[], TResult>(mock: unknown, ...args: TArgs): TResult {
   return (mock as (...args: TArgs) => TResult)(...args);
-}
-
-async function invokePluginArtifactInstallMock<
-  TResult extends { ok: boolean; pluginId?: string; version?: string },
->(
-  mock: unknown,
-  params: {
-    onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
-    mode?: "install" | "update";
-    dryRun?: boolean;
-    expectedPluginId?: string;
-  },
-): Promise<TResult> {
-  const result = await invokeMock<[typeof params], Promise<TResult>>(mock, params);
-  const reviewArtifact = params.onBeforePluginArtifactCommit;
-  const pluginId = result.pluginId;
-  if (
-    !result.ok ||
-    !pluginId ||
-    !reviewArtifact ||
-    params.dryRun ||
-    (params.expectedPluginId && params.expectedPluginId !== pluginId)
-  ) {
-    return result;
-  }
-  return await withTempDir("openclaw-plugin-cli-staged-", async (rootDir) => {
-    const stagedArtifactDir = realpathSync(rootDir);
-    createColdPluginFixture({
-      rootDir: stagedArtifactDir,
-      pluginId,
-      ...(result.version ? { packageVersion: result.version } : {}),
-    });
-    await reviewArtifact({
-      pluginId,
-      stagedArtifactDir,
-      mode: params.mode ?? "install",
-    });
-    return result;
-  });
 }
 
 export const pluginCliConfigMock: Mock<LoadConfigFn> = vi.fn<LoadConfigFn>(

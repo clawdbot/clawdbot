@@ -226,6 +226,7 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
         }
         const installed = await installPluginFromPluginsCommand({
           raw: pluginsCommand.spec,
+          acceptCapabilities: pluginsCommand.acceptCapabilities,
           force: pluginsCommand.force,
           snapshot: loadedConfig.snapshot,
         });

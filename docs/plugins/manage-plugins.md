@@ -123,6 +123,14 @@ openclaw plugins update <plugin-id> --accept-capabilities
 openclaw plugins enable <plugin-id> --accept-capabilities
 ```
 
+Chat installs also require explicit capability consent. Review the capabilities
+in the reply, then rerun the same command with `--accept-capabilities`:
+
+```text
+/plugins install clawhub:<package> --accept-capabilities
+/plugins install npm:<package> --force --accept-capabilities
+```
+
 Bundled plugins are exempt because they ship with the OpenClaw release rather
 than arriving as separately installed artifacts. Workspace plugins and plugins
 loaded directly from configured paths have no managed install record, so the

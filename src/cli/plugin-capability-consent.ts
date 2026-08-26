@@ -30,7 +30,9 @@ function sanitizeCapabilityValues(values: readonly string[]): string {
   return values.map((value) => sanitizeTerminalText(value)).join(", ");
 }
 
-function formatPluginCapabilityConsentLines(details: PluginCapabilityConsentReview): string[] {
+export function formatPluginCapabilityConsentLines(
+  details: PluginCapabilityConsentReview,
+): string[] {
   const name = sanitizeTerminalText(details.name);
   const pluginId = sanitizeTerminalText(details.pluginId);
   const version = details.version ? ` @ ${sanitizeTerminalText(details.version)}` : "";
