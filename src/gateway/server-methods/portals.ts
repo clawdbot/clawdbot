@@ -69,7 +69,7 @@ export const portalHandlers: GatewayRequestHandlers = {
           { portals: service.list().map(redactPortalSummary) },
           { dropIfSlow: true },
         );
-        respond(true, opened.portal, undefined);
+        respond(true, opened, undefined);
       } catch (error) {
         respond(
           false,

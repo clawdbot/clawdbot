@@ -96,9 +96,9 @@ only injects curated or promoted-trusted entries.
 Each indexed chunk also has SQLite-owned provenance: origin class (`owner`,
 `agent`, `untrusted`, or `system`), session kind, observation time, and an
 optional supersession key. This metadata is stored separately from Markdown
-so recalled prose cannot rewrite its own trust classification. Durable
-entries additionally record their source sessions, which powers admission
-policy and selective deletion — see
+so recalled prose cannot rewrite its own trust classification. Automatic
+session ingestion also records source-session origins for its staged entries,
+which support selective deletion after promotion. For coverage and limits, see
 [Memory provenance and deletion](/concepts/memory-provenance).
 
 - **Index location:** the owning agent database at

@@ -40,7 +40,7 @@ export function describeExecTool(params?: {
     .filter(Boolean)
     .join(" ");
   if (process.platform !== "win32") {
-    return base;
+    return `${base} Quote arguments containing shell metacharacters, including URL query strings with \`?\` or \`&\`.`;
   }
   const lines: string[] = [base];
   lines.push(

@@ -7829,7 +7829,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       uses: SETUP_GO_V6,
       with: {
         cache: false,
-        "go-version": "1.26.6",
+        "go-version": "1.26.7",
       },
     });
     expect(setupGoStep.with).not.toHaveProperty("go-version-file");
@@ -7852,12 +7852,12 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     });
     expect(verifyGoStep).toMatchObject({
       if: "matrix.requires_go == true",
-      run: 'test "$(go env GOVERSION)" = "go1.26.6"',
+      run: 'test "$(go env GOVERSION)" = "go1.26.7"',
     });
 
     const goMod = readTrackedText("scripts/docs-i18n/go.mod");
     expect(goMod).toMatch(/^go 1\.26\.0$/mu);
-    expect(goMod).toMatch(/^toolchain go1\.26\.6$/mu);
+    expect(goMod).toMatch(/^toolchain go1\.26\.7$/mu);
   });
 
   it("fails and retries quiet Node test shard stalls quickly", () => {

@@ -35,6 +35,8 @@ function attachWebSocketUrl(params: {
   if (url.origin !== gateway.origin || url.pathname !== params.expectedAttachPath) {
     throw new Error(`${params.streamName} stream attachPath must stay on the connected gateway`);
   }
+  // Auxiliary streams share the enrolled node's reverse-proxy mount point.
+  url.pathname = `${gateway.pathname.replace(/\/$/u, "")}${url.pathname}`;
   return url.toString();
 }
 
@@ -239,7 +241,8 @@ export async function runNodeStreamTransport(params: {
       // Attach first so a refused target closes a claimed ticket instead of leaving it pending.
       await Promise.race([waitForWebSocketOpen(ws), abort]);
       if (!aborted) {
-        socket.connect(params.port, "127.0.0.1");
+        // Like Gateway-local portals, reach dev servers bound to either localhost family.
+        socket.connect({ port: params.port, host: "localhost", autoSelectFamily: true });
         await Promise.race([waitForSocketConnect(socket), abort]);
       }
     } else {
