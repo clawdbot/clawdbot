@@ -32,6 +32,63 @@ describe("media store detected limits", () => {
     expect(saved.size).toBe(pdf.byteLength);
   });
 
+  it("keeps detected bytes authoritative over declared metadata", async () => {
+    const sourcePath = path.join(tempHome.home, "opaque-upload");
+    await fs.writeFile(sourcePath, createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 0 }));
+
+    const saved = await store.saveMediaSource(sourcePath, undefined, "outbound", 1024, {
+      contentTypeHint: "text/csv",
+      fileNameHint: "report.csv",
+    });
+
+    expect(saved.contentType).toBe("image/png");
+    expect(saved.id).toMatch(/\.png$/u);
+  });
+
+  it("keeps a recognized source extension authoritative over declared metadata", async () => {
+    const sourcePath = path.join(tempHome.home, "report.csv");
+    await fs.writeFile(sourcePath, "id,label\n1,alpha\n");
+
+    const saved = await store.saveMediaSource(sourcePath, undefined, "outbound", 1024, {
+      contentTypeHint: "image/png",
+      fileNameHint: "photo.png",
+    });
+
+    expect(saved.contentType).toBe("text/csv");
+    expect(saved.id).toMatch(/\.csv$/u);
+  });
+
+  it.each([
+    ["MIME", { contentTypeHint: "text/csv" }],
+    ["filename", { fileNameHint: "report.csv" }],
+  ] as const)("uses a declared %s hint for opaque local bytes", async (_label, options) => {
+    const sourcePath = path.join(tempHome.home, `opaque-${_label.toLowerCase()}`);
+    await fs.writeFile(sourcePath, "id,label\n1,alpha\n");
+
+    const saved = await store.saveMediaSource(sourcePath, undefined, "outbound", 1024, options);
+
+    expect(saved.contentType).toBe("text/csv");
+    expect(saved.id).toMatch(/\.csv$/u);
+  });
+
+  it("does not let declared metadata raise the detected stream limit", async () => {
+    await expect(
+      store.saveMediaStream(
+        Readable.from(["id,label\n1,alpha\n"]),
+        undefined,
+        "hinted-stream-limit",
+        1024,
+        undefined,
+        undefined,
+        {
+          contentTypeHint: "image/png",
+          fileNameHint: "photo.png",
+          maxBytesForMime: (mime) => (mime ? 1024 : 8),
+        },
+      ),
+    ).rejects.toThrow("Media exceeds 0MB limit");
+  });
+
   it("applies a byte-detected limit while streaming", async () => {
     const oversizedPng = Buffer.concat([
       createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 0 }),

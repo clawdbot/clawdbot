@@ -1,6 +1,6 @@
 // Media-store ingestion helpers apply bounded MIME-aware limits to files and streams.
 import fs from "node:fs/promises";
-import { detectMime } from "@openclaw/media-core/mime";
+import { detectMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import {
   isFsSafeError,
   openLocalFileSafely,
@@ -16,6 +16,10 @@ export type MediaMaxBytesForMime = (mime: string | undefined) => number;
 
 export type SaveMediaOptions = {
   maxBytesForMime?: MediaMaxBytesForMime;
+  /** Non-authoritative MIME metadata used only when bytes do not identify the payload. */
+  contentTypeHint?: string;
+  /** Non-authoritative filename metadata used for extension-based MIME fallback. */
+  fileNameHint?: string;
 };
 
 export async function writeMediaStreamToFile(params: {
@@ -160,10 +164,16 @@ async function detectLocalMediaSourceMime(source: string): Promise<string | unde
   }
 }
 
+function resolveLocalDetectionFilePath(source: string, fileNameHint?: string): string {
+  return mimeTypeFromFilePath(source) ? source : (fileNameHint ?? source);
+}
+
 export async function readMediaSourceSafely(params: {
   source: string;
   maxBytes: number;
   maxBytesForMime?: MediaMaxBytesForMime;
+  contentTypeHint?: string;
+  fileNameHint?: string;
 }) {
   let effectiveMaxBytes = params.maxBytes;
   try {
@@ -177,7 +187,11 @@ export async function readMediaSourceSafely(params: {
       filePath: params.source,
       maxBytes: effectiveMaxBytes,
     });
-    const mime = await detectMime({ buffer, filePath: params.source });
+    const mime = await detectMime({
+      buffer,
+      additionalMimeHints: [params.contentTypeHint],
+      filePath: resolveLocalDetectionFilePath(params.source, params.fileNameHint),
+    });
     const finalMaxBytes = params.maxBytesForMime
       ? Math.min(effectiveMaxBytes, params.maxBytesForMime(mime))
       : effectiveMaxBytes;

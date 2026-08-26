@@ -5,7 +5,7 @@ import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { maxBytesForKind, mediaKindFromMime, type MediaKind } from "@openclaw/media-core/constants";
-import { mimeTypeFromFilePath } from "@openclaw/media-core/mime";
+import { kindFromMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
   asDateTimestampMs,
@@ -1391,7 +1391,17 @@ export async function createManagedOutgoingMediaBlocks(params: {
     const isDataUrl = trimmedMediaUrl.startsWith("data:");
     const localMediaPath = isDataUrl ? undefined : resolveLocalMediaPath(mediaUrl);
     const label = isDataUrl ? fallbackLabel : deriveAltText(localMediaPath ?? mediaUrl, index);
-    const inferredKind = mediaKindFromMime(mimeTypeFromFilePath(localMediaPath ?? mediaUrl));
+    const sourceKind = mediaKindFromMime(mimeTypeFromFilePath(localMediaPath ?? mediaUrl));
+    const metadataMimeKind = kindFromMime(attachmentMetadata?.mimeType);
+    const metadataNameKind = mediaKindFromMime(mimeTypeFromFilePath(attachmentMetadata?.name));
+    const inferredKinds = [sourceKind, metadataMimeKind, metadataNameKind];
+    // Declared metadata may identify an otherwise opaque document, but it must
+    // never authorize an opaque local file as an image or hide a non-image signal.
+    const inferredKind =
+      inferredKinds.find((kind) => kind && kind !== "image") ??
+      (sourceKind === "image" ? sourceKind : undefined);
+    const hasUnverifiedLocalImageHint =
+      Boolean(localMediaPath) && (metadataMimeKind === "image" || metadataNameKind === "image");
     const hintedKind =
       dataUrlKind === "image" || dataUrlKind === "audio" || dataUrlKind === "video"
         ? dataUrlKind
@@ -1448,7 +1458,17 @@ export async function createManagedOutgoingMediaBlocks(params: {
                 undefined,
                 "outgoing/originals",
                 ingestMaxBytes,
-                { maxBytesForMime: (mime) => maxBytesForManagedMime(mime, limits) },
+                {
+                  maxBytesForMime: (mime) => maxBytesForManagedMime(mime, limits),
+                  contentTypeHint:
+                    localMediaPath && metadataMimeKind === "image"
+                      ? undefined
+                      : attachmentMetadata?.mimeType,
+                  fileNameHint:
+                    localMediaPath && metadataNameKind === "image"
+                      ? undefined
+                      : attachmentMetadata?.name,
+                },
               );
             })();
       savedOriginalPath = savedOriginal.path;
@@ -1456,6 +1476,9 @@ export async function createManagedOutgoingMediaBlocks(params: {
       if (!savedOriginalContentType) {
         await fs.rm(savedOriginal.path, { force: true }).catch(() => {});
         savedOriginalPath = null;
+        if (hasUnverifiedLocalImageHint) {
+          throw new Error("Local image metadata could not be verified from the source");
+        }
         continue;
       }
       const mediaKind = mediaKindFromMime(savedOriginalContentType);

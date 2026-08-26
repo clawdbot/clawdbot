@@ -12,6 +12,7 @@ import {
   detectMime,
   extensionForMime,
   getFileExtension,
+  mimeTypeFromFilePath,
   normalizeMimeType,
 } from "@openclaw/media-core/mime";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
@@ -23,6 +24,7 @@ import type { resolvePinnedHostname } from "../infra/net/ssrf.js";
 import { retryAsync } from "../infra/retry.js";
 import { writeSiblingTempFile } from "../infra/sibling-temp-file.js";
 import { resolveConfigDir } from "../utils.js";
+import { isGenericResponseContentType } from "./fetch-content-type.js";
 import {
   readMediaSourceSafely,
   type SaveMediaOptions,
@@ -403,6 +405,22 @@ function isImageHeaderMime(contentType?: string): boolean {
   return normalizeMimeType(contentType)?.startsWith("image/") === true;
 }
 
+function resolveStreamDetectionFilePaths(params: {
+  originalFilename?: string;
+  detectionFilePathHint?: string;
+  fileNameHint?: string;
+  allowFileNameHint: boolean;
+}): { source?: string; classified?: string } {
+  const sourceHints = [params.originalFilename, params.detectionFilePathHint];
+  const recognizedSource = sourceHints.find((candidate) => mimeTypeFromFilePath(candidate));
+  const source = recognizedSource ?? sourceHints.find(Boolean);
+  return {
+    source,
+    classified:
+      recognizedSource ?? (params.allowFileNameHint ? params.fileNameHint : undefined) ?? source,
+  };
+}
+
 function resolveSavedMediaExtension(params: {
   detectedMime?: string;
   headerExt?: string;
@@ -492,6 +510,8 @@ export async function saveMediaSource(
       subdir,
       maxBytes,
       maxBytesForMime: options.maxBytesForMime,
+      contentTypeHint: options.contentTypeHint,
+      fileNameHint: options.fileNameHint,
       resolvePinnedHostnameForTest,
     });
   }
@@ -500,6 +520,8 @@ export async function saveMediaSource(
     source,
     maxBytes,
     maxBytesForMime: options.maxBytesForMime,
+    contentTypeHint: options.contentTypeHint,
+    fileNameHint: options.fileNameHint,
   });
   const ext = extensionForMime(mime) ?? path.extname(source);
   const id = buildSavedMediaId({ baseId, ext });
@@ -554,6 +576,13 @@ export async function saveMediaStream(
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   const baseId = crypto.randomUUID();
   const headerExt = extensionForAuthoritativeHeaderMime(contentType);
+  const genericContentType = isGenericResponseContentType(contentType);
+  const detectionFilePaths = resolveStreamDetectionFilePaths({
+    originalFilename,
+    detectionFilePathHint,
+    fileNameHint: options.fileNameHint,
+    allowFileNameHint: genericContentType,
+  });
   return await saveMediaSiblingTempFile({
     dir,
     tempPrefix: `.${baseId}`,
@@ -563,14 +592,23 @@ export async function saveMediaStream(
         tempPath,
         maxBytes,
         contentType,
-        detectionFilePathHint: originalFilename ?? detectionFilePathHint,
+        detectionFilePathHint: detectionFilePaths.source,
         maxBytesForMime: options.maxBytesForMime,
       });
       const mime = await detectMime({
         buffer: sniffBuffer,
-        headerMime: contentType,
-        filePath: originalFilename ?? detectionFilePathHint,
+        headerMime: genericContentType ? undefined : contentType,
+        additionalMimeHints: genericContentType
+          ? [options.contentTypeHint, contentType]
+          : [options.contentTypeHint],
+        filePath: detectionFilePaths.classified,
       });
+      const finalMaxBytes = options.maxBytesForMime
+        ? Math.min(maxBytes, options.maxBytesForMime(mime))
+        : maxBytes;
+      if (size > finalMaxBytes) {
+        throw new Error(`Media exceeds ${formatMediaLimitMb(finalMaxBytes)} limit`);
+      }
       const ext = resolveSavedMediaExtension({
         detectedMime: mime,
         headerExt,

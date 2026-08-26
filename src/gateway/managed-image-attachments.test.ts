@@ -2060,6 +2060,26 @@ describe("createManagedOutgoingImageBlocks", () => {
     });
   });
 
+  it("uses structured metadata to ingest an extensionless document", async () => {
+    const sourcePath = path.join(stateDir, "workspace", "opaque-upload");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, "id,label\n1,alpha\n");
+
+    const blocks = await createManagedOutgoingImageBlocks({
+      sessionKey: "agent:main:main",
+      mediaUrls: [sourcePath],
+      attachments: [{ type: "file", name: "report.csv", mimeType: "text/csv" }],
+      stateDir,
+      localRoots: [path.dirname(sourcePath)],
+      allowLocalNonImage: true,
+    });
+
+    const block = requireBlock(blocks);
+    expect(block).toMatchObject({ type: "document", mimeType: "text/csv" });
+    const record = readManagedImageRecord(requireAttachmentIdFromUrl(block.url), stateDir);
+    expect(record?.original.filename).toBe("report.csv");
+  });
+
   it("allows managed inbound image paths before validating explicit roots", async () => {
     const inboundPath = path.join(stateDir, "media", "inbound", "inbound.png");
     await fs.mkdir(path.dirname(inboundPath), { recursive: true });
@@ -2119,6 +2139,51 @@ describe("createManagedOutgoingImageBlocks", () => {
       expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
     }
     expect(originals ?? []).toStrictEqual([]);
+  });
+
+  it("rejects untrusted extensionless documents identified by structured metadata", async () => {
+    const sourcePath = path.join(stateDir, "opaque-document");
+    await fs.writeFile(sourcePath, "id,label\n1,alpha\n");
+
+    await expect(
+      createManagedOutgoingImageBlocks({
+        sessionKey: "agent:main:main",
+        mediaUrls: [sourcePath],
+        attachments: [{ type: "file", name: "report.csv", mimeType: "TEXT/CSV; charset=utf-8" }],
+        stateDir,
+        localRoots: [stateDir],
+      }),
+    ).rejects.toThrow(/Managed document attachment.*could not be prepared/u);
+  });
+
+  it("does not let image metadata weaken a known local document gate", async () => {
+    const sourcePath = path.join(stateDir, "known-document.csv");
+    await fs.writeFile(sourcePath, "id,label\n1,alpha\n");
+
+    await expect(
+      createManagedOutgoingImageBlocks({
+        sessionKey: "agent:main:main",
+        mediaUrls: [sourcePath],
+        attachments: [{ type: "file", name: "photo.png", mimeType: "image/png" }],
+        stateDir,
+        localRoots: [stateDir],
+      }),
+    ).rejects.toThrow(/Managed document attachment.*could not be prepared/u);
+  });
+
+  it("does not let image metadata authorize opaque local bytes", async () => {
+    const sourcePath = path.join(stateDir, "opaque-local-file");
+    await fs.writeFile(sourcePath, "private opaque content\n");
+
+    await expect(
+      createManagedOutgoingImageBlocks({
+        sessionKey: "agent:main:main",
+        mediaUrls: [sourcePath],
+        attachments: [{ type: "file", name: "photo.png", mimeType: "image/png" }],
+        stateDir,
+        localRoots: [stateDir],
+      }),
+    ).rejects.toThrow(/Managed media attachment.*could not be prepared/u);
   });
 
   it("does not apply the configured image cap to managed audio", async () => {
