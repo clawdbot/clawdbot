@@ -136,11 +136,41 @@ function prependPreviousSummaryForRedistill(params: {
  * behind every boundary and turns one compaction into dozens of model calls.
  */
 function collectSessionContextMessages(sessionManager: unknown): AgentMessage[] {
+  return projectBranchEntries(readSessionBranch(sessionManager));
+}
+
+/**
+ * The boundary-scoped range a preparation was meant to cover: everything the
+ * current context holds before its kept tail, minus the prior summary message
+ * (that is re-distilled separately). Bounded by construction — it can never
+ * reach behind the last reset/compaction boundary.
+ */
+function collectPreparationRangeMessages(
+  sessionManager: unknown,
+  firstKeptEntryId: string,
+): AgentMessage[] {
+  const entries = readSessionBranch(sessionManager);
+  const firstKeptIndex = entries.findIndex((entry) => entry.id === firstKeptEntryId);
+  if (firstKeptIndex < 0) {
+    return [];
+  }
+  return projectBranchEntries(entries.slice(0, firstKeptIndex)).filter(
+    (message) => message.role !== "compactionSummary",
+  );
+}
+
+function readSessionBranch(sessionManager: unknown): CoreSessionTreeEntry[] {
   try {
     const entries: unknown = (sessionManager as { getBranch?: () => unknown })?.getBranch?.();
-    return Array.isArray(entries)
-      ? (buildCoreSessionContext(entries as CoreSessionTreeEntry[]).messages as AgentMessage[])
-      : [];
+    return Array.isArray(entries) ? (entries as CoreSessionTreeEntry[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function projectBranchEntries(entries: CoreSessionTreeEntry[]): AgentMessage[] {
+  try {
+    return buildCoreSessionContext(entries).messages as AgentMessage[];
   } catch {
     return [];
   }
@@ -896,12 +926,27 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       thinkingLevel,
       streamFn,
     } = event;
-    const baseMessagesToSummarize = stripRuntimeContextCustomMessages(
+    let baseMessagesToSummarize = stripRuntimeContextCustomMessages(
       preparation.messagesToSummarize,
     );
-    const baseTurnPrefixMessages = stripRuntimeContextCustomMessages(
+    let baseTurnPrefixMessages = stripRuntimeContextCustomMessages(
       preparation.turnPrefixMessages ?? [],
     );
+    if (!containsRealConversation([...baseMessagesToSummarize, ...baseTurnPrefixMessages])) {
+      // Safety net for a preparation that dropped real conversation from the
+      // range it covers: summarize that boundary-scoped range instead. It is
+      // never the raw branch, which re-read every reset and prior compaction.
+      const rangeMessages = stripRuntimeContextCustomMessages(
+        collectPreparationRangeMessages(ctx.sessionManager, preparation.firstKeptEntryId),
+      );
+      if (containsRealConversation(rangeMessages)) {
+        log.info(
+          "Compaction safeguard: summarizing the boundary-scoped preparation range after compaction preparation omitted real conversation content.",
+        );
+        baseMessagesToSummarize = rangeMessages;
+        baseTurnPrefixMessages = [];
+      }
+    }
     // A prepared window of pure tool traffic is still real work when the current
     // context anchors it (a kept user turn or a prior compaction summary); only a
     // context with no real conversation at all gets the anti-loop boundary below.

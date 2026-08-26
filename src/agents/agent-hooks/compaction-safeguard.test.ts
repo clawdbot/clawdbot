@@ -3822,6 +3822,88 @@ describe("compaction-safeguard double-compaction guard", () => {
     expect(JSON.stringify(messages)).not.toContain("behind reset");
   });
 
+  it("recovers real conversation the preparation omitted from its boundary-scoped range", async () => {
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue(summaryResult("range summary"));
+
+    const now = Date.now();
+    const entry = (id: string, parentId: string | null, offset: number, message: AgentMessage) => ({
+      type: "message",
+      id,
+      parentId,
+      timestamp: new Date(now + offset).toISOString(),
+      message: { ...message, timestamp: now + offset },
+    });
+    const omittedUser = { role: "user", content: "verify the deploy status now" } as AgentMessage;
+    const toolCallAssistant = {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "call-1", name: "exec", arguments: {} }],
+    } as AgentMessage;
+    const toolResult = {
+      role: "toolResult",
+      toolCallId: "call-1",
+      toolName: "exec",
+      content: [{ type: "text", text: "deploy green" }],
+    } as AgentMessage;
+    const sessionManager = {
+      ...stubSessionManager(),
+      getBranch: () => [
+        entry("old-user", null, 0, {
+          role: "user",
+          content: "old request behind reset",
+        } as AgentMessage),
+        {
+          type: "reset",
+          id: "reset-1",
+          parentId: "old-user",
+          timestamp: new Date(now + 1).toISOString(),
+          reason: "new",
+          firstKeptEntryId: "reset-1",
+        },
+        entry("omitted-user", "reset-1", 2, omittedUser),
+        entry("assistant-1", "omitted-user", 3, toolCallAssistant),
+        entry("tool-1", "assistant-1", 4, toolResult),
+        entry("kept-user", "tool-1", 5, { role: "user", content: "and then?" } as AgentMessage),
+      ],
+    } as ExtensionContext["sessionManager"];
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model, recentTurnsPreserve: 0 });
+
+    // The preparation covers everything before "kept-user" but lost the user turn.
+    const mockEvent = {
+      preparation: {
+        messagesToSummarize: [toolCallAssistant, toolResult],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "kept-user",
+        tokensBefore: 38085,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 4000 },
+        isSplitTurn: false,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+    const { result } = await runCompactionScenario({
+      sessionManager,
+      event: mockEvent,
+      apiKey: "test-key",
+    });
+
+    expect(expectCompactionResult(result).summary).toContain("range summary");
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
+    const summarizeCall = requireRecord(mockCallArg(mockSummarizeInStages));
+    const messages = requireArray(summarizeCall.messages);
+    expect(messages.map((message) => requireRecord(message).role)).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+    ]);
+    const serialized = JSON.stringify(messages);
+    expect(serialized).toContain("verify the deploy status now");
+    expect(serialized).not.toContain("behind reset");
+    expect(serialized).not.toContain("and then?");
+  });
+
   it("writes the anti-loop boundary for a tool-only window when nothing anchors it", async () => {
     mockSummarizeInStages.mockReset();
     const sessionManager = stubSessionManager();
