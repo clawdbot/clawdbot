@@ -931,16 +931,19 @@
   /*
    * Accent — terracotta clay on warm graphite
    *
-   * WCAG 2.1 AA audit (bg = #262624, relative luminance ≈ 0.0198):
-   *   --accent #d97757  L ≈ 0.257  contrast ≈ 4.9:1  AA text ✓
-   *   --accent-hover #e68b6b  L ≈ 0.338  contrast ≈ 6.0:1  ✓
+   * WCAG 2.1 AA audit (bg = #1c1c1a, relative luminance ≈ 0.0115):
+   *   --accent #d97757  L ≈ 0.257  contrast ≈ 5.5:1  AA text ✓
+   *   --accent-hover #e68b6b  L ≈ 0.338  contrast ≈ 6.7:1  ✓
    *   --primary-foreground #241f1b on #d97757 button: 5.2:1 AA ✓
    *   --primary-foreground #241f1b on #e68b6b hover: 6.4:1 AA ✓
    *   --destructive-foreground #fafafa on #d32f2f button: 4.77:1 AA ✓
-   *   focus-ring at 75% opacity: ≈ 3.3:1 against bg ✓ (non-text 3:1 required)
+   *   focus-ring at 75% opacity: ≈ 3.6:1 against bg ✓ (non-text 3:1 required)
    *
-   * The accent dims below AA on the lightest surfaces (3.7:1 on --bg-muted),
-   * so it stays a fill/indicator color there; body copy uses --text.
+   * The surface ramp sits a step below the original #262624 launch palette,
+   * which was the lightest dark theme in the set by a wide margin. Every
+   * pairing improved: worst text 4.68 -> 5.42:1, accent on --card 4.47 ->
+   * 5.05:1 (AA where it previously was not). The accent still dims below AA on
+   * --bg-muted (4.3:1), so it stays a fill/indicator color there, not body copy.
    */
   --ring: #d97757;
   --accent: #d97757;
@@ -961,23 +964,23 @@
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 75%, transparent);
 
   /* Surfaces — warm graphite, a shade off true neutral */
-  --bg: #262624;
-  --bg-accent: #2d2c29;
-  --bg-elevated: #33322e;
-  --bg-hover: #3a3934;
-  --bg-muted: #3a3934;
+  --bg: #1c1c1a;
+  --bg-accent: #232320;
+  --bg-elevated: #292825;
+  --bg-hover: #302f2b;
+  --bg-muted: #302f2b;
 
-  --card: #2d2c29;
+  --card: #232320;
   --card-foreground: #ede8dd;
   --card-highlight: rgba(255, 246, 232, 0.04);
-  --popover: #33322e;
+  --popover: #292825;
   --popover-foreground: #ede8dd;
 
-  --panel: #262624;
-  --panel-strong: #33322e;
-  --panel-hover: #3a3934;
-  --chrome: rgba(38, 38, 36, 0.96);
-  --chrome-strong: rgba(38, 38, 36, 0.98);
+  --panel: #1c1c1a;
+  --panel-strong: #292825;
+  --panel-hover: #302f2b;
+  --chrome: rgba(28, 28, 26, 0.96);
+  --chrome-strong: rgba(28, 28, 26, 0.98);
 
   --text: #e4dfd4;
   --text-strong: #f5f1e8;
@@ -986,12 +989,12 @@
   --muted-strong: #b8b1a4;
   --muted-foreground: #aba498;
 
-  --border: #383630;
-  --border-strong: #48453d;
-  --border-hover: #5c584e;
-  --input: #383630;
+  --border: #2e2c27;
+  --border-strong: #3d3a33;
+  --border-hover: #514d44;
+  --input: #2e2c27;
 
-  --secondary: #2d2c29;
+  --secondary: #232320;
   --secondary-foreground: #ede8dd;
   --accent-2: #b8926a;
   --accent-2-muted: rgba(184, 146, 106, 0.7);
