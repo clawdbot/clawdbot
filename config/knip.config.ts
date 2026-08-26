@@ -847,7 +847,7 @@ const config = {
       // crypto dependencies. The protocol barrel is the vendored library's
       // public surface, so its exports are intentional even where the channel
       // consumes only a subset.
-      entry: [...bundledPluginEntries, "protocol/index.ts!", "protocol/node.ts!"],
+      entry: [...bundledPluginEntries, "protocol/index.ts!"],
       project: ["**/*.{js,mjs,ts}!"],
       ignoreDependencies: bundledPluginIgnoredRuntimeDependencies,
     },

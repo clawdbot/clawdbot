@@ -144,7 +144,7 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
     const desktopItem = await openLimitedAccessItem(desktopPanel);
     await desktopItem.getByRole("button", { name: "Request admin" }).waitFor();
     await captureProof(desktop, "desktop-inbox-limited-access.png");
-    await desktopItem.getByRole("button", { name: "Dismiss Limited access" }).click();
+    await desktopPanel.getByRole("button", { name: "Dismiss shown" }).click();
     await expect.poll(() => desktopInbox.getAttribute("aria-label")).toBe("0 inbox items");
     await expect.poll(() => desktopItem.count()).toBe(0);
     await desktopPanel.getByRole("tab", { name: "All", exact: true }).waitFor();
@@ -176,7 +176,8 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
     const mobilePanel = mobile.locator("#sidebar-issues-panel");
     await mobilePanel.waitFor();
     await waitForAnimations(mobilePanel);
-    await openLimitedAccessItem(mobilePanel);
+    const mobileItem = await openLimitedAccessItem(mobilePanel);
+    await mobileItem.getByRole("button", { name: "Dismiss Limited access" }).waitFor();
     await captureProof(mobile, "mobile-inbox-limited-access.png");
   });
 

@@ -1746,9 +1746,8 @@ internal fun ChatBubble(
       when (part.type) {
         "text" -> !part.text.isNullOrBlank()
         "image" -> {
-          val displayable = !part.base64.isNullOrBlank() || !part.artifactId.isNullOrBlank()
-          val visible = displayable && visibleImageCount < 4
-          if (displayable) visibleImageCount += 1
+          val visible = visibleImageCount < 4
+          visibleImageCount += 1
           visible
         }
         "canvas" -> normalizedRole == "assistant" && part.widget != null
@@ -1838,20 +1837,15 @@ internal fun ChatBubble(
                   loadMedia = loadMediaArtifact,
                 )
               part.isAudioAttachment() || part.isVideoAttachment() -> ChatMediaAttachmentLabel(content = part)
-              part.type == "image" ->
-                if (!part.base64.isNullOrBlank()) {
-                  ChatBase64Image(
-                    base64 = part.base64,
-                    mimeType = part.mimeType,
-                  )
-                } else {
-                  ChatManagedImage(
-                    artifactId = checkNotNull(part.artifactId),
-                    label = part.alt?.takeIf(String::isNotBlank) ?: part.fileName ?: nativeString("Image"),
-                    resolverReady = inlineWidgetResolverReady,
-                    loadImage = loadImageArtifact,
-                  )
-                }
+              part.type == "image" && !part.base64.isNullOrBlank() ->
+                ChatBase64Image(base64 = part.base64, mimeType = part.mimeType)
+              part.type == "image" && !part.artifactId.isNullOrBlank() ->
+                ChatManagedImage(
+                  artifactId = part.artifactId,
+                  label = part.alt?.takeIf(String::isNotBlank) ?: part.fileName ?: nativeString("Image"),
+                  resolverReady = inlineWidgetResolverReady,
+                  loadImage = loadImageArtifact,
+                )
               part.type == "canvas" && normalizedRole == "assistant" ->
                 ChatInlineWidget(
                   preview = checkNotNull(part.widget),

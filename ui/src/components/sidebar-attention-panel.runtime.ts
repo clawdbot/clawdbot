@@ -60,6 +60,9 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
   const visibleEntries = params.entries.filter((entry) =>
     sidebarInboxEntryMatchesTab(entry, params.selectedTab),
   );
+  const visibleDismissals = visibleEntries.flatMap((entry) =>
+    entry.dismissal ? [entry.dismissal] : [],
+  );
   const tabCounts = sidebarInboxTabCounts(params.entries);
   const custodianItems = params.entries.filter(
     (entry) => entry.type === "attention" && entry.action.kind === "askCustodian",
@@ -130,19 +133,34 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
             >
             ${t("attention.issues")}
           </h2>
-          ${renderSidebarAskOpenClawButton({
-            count: custodianItems.length,
-            severity: custodianSeverity,
-            snapshot: params.context.gateway.snapshot,
-          })}
-          <button
-            type="button"
-            class="sidebar-brand__icon sidebar-issues-panel__mobile-close"
-            aria-label=${t("common.close")}
-            @click=${() => params.onClose(true)}
-          >
-            ${icons.x}
-          </button>
+          <div class="sidebar-issues-panel__header-actions">
+            ${visibleDismissals.length > 0
+              ? html`<button
+                  type="button"
+                  class="btn btn--xs btn--ghost sidebar-issues-panel__dismiss-shown"
+                  @click=${() => {
+                    for (const dismissal of visibleDismissals) {
+                      params.onDismiss(dismissal);
+                    }
+                  }}
+                >
+                  ${t("attention.dismissShown")}
+                </button>`
+              : nothing}
+            ${renderSidebarAskOpenClawButton({
+              count: custodianItems.length,
+              severity: custodianSeverity,
+              snapshot: params.context.gateway.snapshot,
+            })}
+            <button
+              type="button"
+              class="sidebar-brand__icon sidebar-issues-panel__mobile-close"
+              aria-label=${t("common.close")}
+              @click=${() => params.onClose(true)}
+            >
+              ${icons.x}
+            </button>
+          </div>
         </header>
         ${renderHubTabs<IssueTab>({
           id: "sidebar-issues",
