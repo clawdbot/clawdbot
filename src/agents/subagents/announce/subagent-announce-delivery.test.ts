@@ -4720,6 +4720,24 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       expected: missingRequesterFinal,
     },
     {
+      name: "rejects a yielded turn without an accepted next wave",
+      response: { result: { payloads: [], meta: { yielded: true } } },
+      requireVisibleReply: true,
+      expected: missingRequesterFinal,
+    },
+    {
+      name: "accepts an accepted next wave followed by a successful yield",
+      response: {
+        result: {
+          payloads: [],
+          meta: { yielded: true },
+          acceptedSessionSpawns: [{ runId: "run-child", childSessionKey: "agent:main:child" }],
+        },
+      },
+      requireVisibleReply: true,
+      expected: deliveredRequesterFinal,
+    },
+    {
       name: "rejects a cron side effect without a final reply",
       response: { result: { payloads: [], successfulCronAdds: 1 } },
       requireVisibleReply: true,

@@ -21,6 +21,7 @@ import { normalizeAgentRunTerminalDeliverySnapshot } from "../../agent-run-termi
 import {
   getAgentCommandDeliveryFailure,
   getGatewayAgentResult,
+  hasAcceptedSessionSpawnEvidence,
   hasCommittedOutboundDeliveryEvidence,
   hasPayloadOutcomeSendEvidence,
 } from "../../embedded-agent-runner/delivery-evidence.js";
@@ -483,6 +484,11 @@ export async function sendSubagentAnnounceDirectly(params: {
     const hasCompletionSideEffect = Boolean(
       directAnnounceResult && hasCommittedOutboundDeliveryEvidence(directAnnounceResult),
     );
+    const hasYieldedSessionSpawnContinuation = Boolean(
+      directAnnounceResult &&
+      directAnnounceResult.meta?.yielded === true &&
+      hasAcceptedSessionSpawnEvidence(directAnnounceResult.acceptedSessionSpawns),
+    );
     const hasVisibleRequiredCompletionReply =
       hasMessagingToolDelivery ||
       (!requiresMessageToolDelivery && hasVisibleNonSilentGatewayPayload);
@@ -580,7 +586,7 @@ export async function sendSubagentAnnounceDirectly(params: {
       hasIntentionalSilentCompletionReply && !isSubagentCompletion;
     if (
       !hasVisibleCompletionReply &&
-      (params.requireVisibleReply ||
+      ((params.requireVisibleReply && !hasYieldedSessionSpawnContinuation) ||
         (params.expectsCompletionMessage &&
           !shouldDeliverAgentFinal &&
           !requiresMessageToolDelivery &&

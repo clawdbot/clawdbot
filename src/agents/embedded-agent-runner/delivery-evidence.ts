@@ -36,6 +36,7 @@ export type AgentDeliveryEvidence = {
   acceptedSessionSpawns?: unknown;
   successfulCronAdds?: unknown;
   meta?: {
+    yielded?: unknown;
     toolSummary?: {
       calls?: unknown;
     };
@@ -116,7 +117,7 @@ function hasNonEmptyStringArray(value: unknown): boolean {
   return Array.isArray(value) && value.some(hasNonEmptyString);
 }
 
-function hasAcceptedSessionSpawnEvidence(value: unknown): boolean {
+export function hasAcceptedSessionSpawnEvidence(value: unknown): boolean {
   return Array.isArray(value)
     ? value.some((entry) => {
         const spawn = asOptionalRecord(entry);

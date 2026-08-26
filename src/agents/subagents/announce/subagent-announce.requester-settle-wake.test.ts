@@ -438,7 +438,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
 
     expect(woke).toBe(true);
     expect(deliverSpy).toHaveBeenCalledOnce();
-    expect(deliveredCallArg().requireVisibleReply).toBeUndefined();
+    expect(deliveredCallArg().requireVisibleReply).toBe(true);
     const message = String(deliveredCallArg().triggerMessage);
     expect(message).toContain("create the next required subagent(s) and call sessions_yield again");
     expect(message).toContain("do not send a final answer while required work remains");
@@ -531,7 +531,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
 
     expect(woke).toBe(true);
     expect(deliverSpy).toHaveBeenCalledOnce();
-    expect(deliveredCallArg().requireVisibleReply).toBeUndefined();
+    expect(deliveredCallArg().requireVisibleReply).toBe(true);
     const message = String(deliveredCallArg().triggerMessage);
     expect(message).toContain("continue the original request from this resumed turn");
     expect(message).toContain("Otherwise send a truthful user-facing update");
@@ -673,7 +673,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     }
   });
 
-  it("accepts a yielded requester continuation without requiring a visible final", async () => {
+  it("retains a yielded wake when neither a visible reply nor continuation is proven", async () => {
     const child = makeSettledChild({
       runId: "run-b",
       delivery: { status: "delivered" },
@@ -686,16 +686,44 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       },
     });
     registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([child]);
-    const woke = await maybeWakeRequesterAfterAllChildrenSettled(
-      wakeParams({ settledEntry: child }),
-    );
-
-    expect(woke).toBe(true);
-    expect(deliveredCallArg().requireVisibleReply).toBeUndefined();
-    expect(completeBatchSpy).toHaveBeenCalledWith(["run-b"], 1, {
-      delivered: true,
+    deliverSpy.mockResolvedValueOnce({
+      delivered: false,
       path: "direct",
+      reason: "visible_reply_missing",
     });
+
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      await expect(
+        maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: child })),
+      ).resolves.toBe(false);
+      expect(deliveredCallArg().requireVisibleReply).toBe(true);
+      expect(completeBatchSpy).not.toHaveBeenCalled();
+      expect(child.requesterSettleWake).toMatchObject({
+        status: "pending",
+        attemptCount: 1,
+        nextAttemptAt: 30_000,
+        requesterYieldBatch: true,
+        rearmGeneration: 1,
+        lastError: "visible_reply_missing",
+      });
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      await expect(
+        maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: child })),
+      ).resolves.toBe(true);
+      expect(deliverSpy.mock.calls.map(([arg]) => arg.directIdempotencyKey)).toEqual([
+        requesterSettleKey("run-b:yield-1"),
+        requesterSettleKey("run-b:yield-1:retry-1"),
+      ]);
+      expect(completeBatchSpy).toHaveBeenCalledWith(["run-b"], 1, {
+        delivered: true,
+        path: "direct",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("replays an ambiguous transport failure with the same idempotency key", async () => {
