@@ -114,6 +114,14 @@ function normalizeStoredProvenance(
   return value;
 }
 
+function toPublicProvenance(stored: StoredMemoryArtifactProvenance): MemoryArtifactProvenance {
+  return {
+    fileHash: stored.fileHash,
+    originClass: stored.originClass,
+    observedAt: stored.observedAt,
+  };
+}
+
 export async function recordMemoryArtifactWriteProvenance(params: {
   workspaceDir: string;
   relativePath: string;
@@ -188,13 +196,7 @@ export async function readMemoryArtifactProvenance(params: {
     return undefined;
   }
   const stored = normalizeStoredProvenance(openStore().lookup(address.storeKey), address);
-  return stored
-    ? {
-        fileHash: stored.fileHash,
-        originClass: stored.originClass,
-        observedAt: stored.observedAt,
-      }
-    : undefined;
+  return stored ? toPublicProvenance(stored) : undefined;
 }
 
 export async function listMemoryArtifactProvenance(params: {
@@ -213,16 +215,7 @@ export async function listMemoryArtifactProvenance(params: {
       };
       const stored = normalizeStoredProvenance(entry.value, address);
       return stored
-        ? [
-            {
-              relativePath: stored.relativePath,
-              provenance: {
-                fileHash: stored.fileHash,
-                originClass: stored.originClass,
-                observedAt: stored.observedAt,
-              },
-            },
-          ]
+        ? [{ relativePath: stored.relativePath, provenance: toPublicProvenance(stored) }]
         : [];
     });
 }

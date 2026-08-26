@@ -127,6 +127,7 @@ const BOT_PUBLIC_KEY = getPublicKey(Uint8Array.from(Buffer.from(PRIVATE_KEY, "he
 const SENDER_PUBLIC_KEY = getPublicKey(Uint8Array.from(Buffer.from(SENDER_PRIVATE_KEY, "hex")));
 const SENDER_SECRET_KEY = Uint8Array.from(Buffer.from(SENDER_PRIVATE_KEY, "hex"));
 const RELAY_PUBLIC_KEY = "f".repeat(64);
+const BUZZ_RELAY_INFO_MAX_BYTES = 16 * 1024 * 1024;
 const tempDirs = new Set<string>();
 let previousStateDir: string | undefined;
 let stateDir: string;
@@ -209,13 +210,12 @@ describe("Buzz bus lifecycle", () => {
     relayMocks.stallRoomEoseChannelId = undefined;
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => ({
-        ok: true,
-        json: async () => ({
+      vi.fn(async () =>
+        Response.json({
           self: RELAY_PUBLIC_KEY,
           software: "https://github.com/block/buzz",
         }),
-      })),
+      ),
     );
   });
 
@@ -289,6 +289,58 @@ describe("Buzz bus lifecycle", () => {
     expect(fetchSignal?.aborted).toBe(true);
     expect(relayMocks.close).toHaveBeenCalledOnce();
     vi.useRealTimers();
+  });
+
+  it("cancels oversized NIP-11 relay information before consuming the entire response", async () => {
+    relayMocks.auth.mockResolvedValue("ok");
+    const cancel = vi.fn();
+    const chunk = new Uint8Array(1024 * 1024).fill("x".charCodeAt(0));
+    let emittedChunks = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (emittedChunks === 0) {
+          controller.enqueue(
+            new TextEncoder().encode(`{"self":"${RELAY_PUBLIC_KEY}","description":"`),
+          );
+        } else if (emittedChunks <= 17) {
+          controller.enqueue(chunk);
+        } else {
+          controller.enqueue(new TextEncoder().encode('"}'));
+          controller.close();
+        }
+        emittedChunks += 1;
+      },
+      cancel,
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () => new Response(body)),
+    );
+
+    await expect(startTestBus()).rejects.toThrow(
+      `Buzz relay information: JSON response exceeds ${BUZZ_RELAY_INFO_MAX_BYTES} bytes`,
+    );
+
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(emittedChunks).toBeLessThan(19);
+    expect(relayMocks.close).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["truncated JSON", '{"self":'],
+    ["null", "null"],
+    ["an array", "[]"],
+    ["a primitive", "true"],
+  ])("rejects malformed NIP-11 relay information containing %s", async (_label, body) => {
+    relayMocks.auth.mockResolvedValue("ok");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () => new Response(body)),
+    );
+
+    await expect(startTestBus()).rejects.toThrow("Buzz relay information: malformed JSON response");
+
+    expect(relayMocks.close).toHaveBeenCalledOnce();
   });
 
   it("publishes and closes a standalone authenticated send", async () => {

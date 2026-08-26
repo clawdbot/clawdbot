@@ -7,6 +7,7 @@ import "../components/app-sidebar.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "./context.ts";
+import { loadSettings } from "./settings.ts";
 import "./app-host.ts";
 
 type PairingShell = HTMLElement & {
@@ -99,7 +100,7 @@ function createPairingShell(params: {
     agents: { state: { agentsList: null } },
     agentSelection: { state: { selectedId: "main", scopeId: "main" } },
     sessions: { state: { result: null } },
-    theme: { mode: "system" },
+    theme: { mode: "system", settings: loadSettings() },
   } as unknown as ApplicationContext;
   const shell = document.createElement("openclaw-app-shell") as PairingShell;
   shell.runtime = { context, router: {} } as ApplicationRuntime;

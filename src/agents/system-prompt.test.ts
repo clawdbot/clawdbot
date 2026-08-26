@@ -217,7 +217,6 @@ describe("buildAgentSystemPrompt", () => {
       ownerNumbers: ["+123"],
       skillsPrompt:
         "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>",
-      heartbeatPrompt: "ping",
       toolNames: ["message", "memory_search", "read", "exec", "process"],
       docsPath: "/tmp/openclaw/docs",
       extraSystemPrompt: "Subagent details",
@@ -414,11 +413,10 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("[[tts:");
   });
 
-  it("omits the heartbeat section when no heartbeat prompt is provided", () => {
+  it("keeps scheduled heartbeat instructions out of the system prompt", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       promptMode: "full",
-      heartbeatPrompt: undefined,
     });
 
     expect(prompt).not.toContain("## Heartbeats");
@@ -669,14 +667,14 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
-  it("guides visible terminal work separately from quiet exec", () => {
+  it("describes operator-owned terminals and policy-governed agent input", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["exec", "terminal"],
     });
 
     expect(prompt).toContain(
-      "- terminal: Own visible shell. Use for long/interactive jobs user should watch. exec for quiet work",
+      "- terminal: List/read/resize/close operator-opened session terminals; input follows exec policy and may require exact-input approval; never open shells",
     );
   });
 
@@ -1325,7 +1323,6 @@ describe("buildAgentSystemPrompt", () => {
       for (const lineEnding of ["\n", "\r\n"]) {
         const prompt = buildAgentSystemPrompt({
           workspaceDir: "/tmp/openclaw",
-          heartbeatPrompt: "heartbeat probe",
           contextFiles: [
             {
               path: "AGENTS.md",
@@ -1336,8 +1333,7 @@ describe("buildAgentSystemPrompt", () => {
 
         expect(prompt).toContain("Keep this user guidance.");
         expect(prompt).toContain("Keep this too.");
-        expect(prompt).toContain("## Heartbeats");
-        expect(prompt).toContain("NO_REPLY");
+        expect(prompt).not.toContain("## Heartbeats");
         expect(prompt).not.toContain("HEARTBEAT_OK");
         expect(prompt).not.toContain("HEARTBEAT.md");
         expect(prompt).not.toContain(heartbeatPrompt);

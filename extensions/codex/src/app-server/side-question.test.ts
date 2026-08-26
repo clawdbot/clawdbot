@@ -675,6 +675,7 @@ describe("runCodexAppServerSideQuestion", () => {
       "features.code_mode": true,
       "features.code_mode_only": false,
       "features.apply_patch_streaming_events": true,
+      suppress_unstable_features_warning: true,
       "features.standalone_web_search": false,
       web_search: "cached",
     });

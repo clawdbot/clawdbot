@@ -169,8 +169,7 @@ function resolveToolSource(tool: AnyAgentTool): "core" | "plugin" | "channel" {
   return "core";
 }
 
-/** Resolves, authorizes, and invokes one gateway-visible core/plugin/channel tool. */
-export async function invokeGatewayTool(params: {
+type InvokeGatewayToolParams = {
   cfg: OpenClawConfig;
   input: ToolsInvokeInput;
   messageChannel?: string;
@@ -185,7 +184,11 @@ export async function invokeGatewayTool(params: {
   toolCallIdPrefix: string;
   approvalMode?: "request" | "report";
   signal?: AbortSignal;
-}): Promise<ToolsInvokeOutcome> {
+};
+
+async function invokeGatewayToolWithSignal(
+  params: InvokeGatewayToolParams & { signal: AbortSignal },
+): Promise<ToolsInvokeOutcome> {
   const conversationReadOrigin = normalizeConversationReadInvocationOrigin(
     params.conversationReadOrigin,
   );
@@ -455,5 +458,20 @@ export async function invokeGatewayTool(params: {
       toolName,
       error: { type: "tool_error", message: "tool execution failed" },
     };
+  }
+}
+
+/** Resolves, authorizes, and invokes one gateway-visible core/plugin/channel tool. */
+export async function invokeGatewayTool(
+  params: InvokeGatewayToolParams,
+): Promise<ToolsInvokeOutcome> {
+  const requestAbort = new AbortController();
+  const signal = params.signal
+    ? AbortSignal.any([params.signal, requestAbort.signal])
+    : requestAbort.signal;
+  try {
+    return await invokeGatewayToolWithSignal({ ...params, signal });
+  } finally {
+    requestAbort.abort();
   }
 }

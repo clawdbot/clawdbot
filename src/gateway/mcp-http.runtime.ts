@@ -231,6 +231,8 @@ export class McpLoopbackToolCache {
       params.execSession?.execSecurity ?? "",
       params.execSession?.execAsk ?? "",
       params.execSession?.execNode ?? "",
+      params.execSession?.permissionMode ?? "",
+      params.execOverrides?.mode ?? "",
       params.execOverrides?.host ?? "",
       params.execOverrides?.security ?? "",
       params.execOverrides?.ask ?? "",

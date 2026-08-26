@@ -16,6 +16,7 @@ import type {
 } from "../infra/exec-approvals.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import type { AgentRuntimeDelegatedAuthority } from "./agent-runtime-identity-token.js";
+import type { CronStandingGrantMintSpec } from "./operator-approval-standing-grants.js";
 import {
   consumeOperatorApprovalAllowOnce,
   forceDenyOperatorApproval,
@@ -128,6 +129,10 @@ type ExecApprovalManagerOptions<TPayload> = {
     context: { approvalId: string; approvalKind: OperatorApprovalKind; operation: "expire" },
   ) => void;
   onLifecycle?: (event: OperatorApprovalLifecycleEvent) => void;
+  /** Cron-context allow-always requests mint a scoped standing grant in the
+   * durable resolution transaction. Returning null keeps the decision
+   * grant-free (non-cron requests, aborted runs, missing bindings). */
+  resolveStandingGrantMint?: (request: TPayload) => CronStandingGrantMintSpec | null;
   /** Durable timeout expiry can be first observed by a timer, lookup, or replay.
    * Publish from the local settlement owner so every ordering reaches reviewers. */
   onExpired?: (record: OperatorApprovalRecord, liveRecord: ExecApprovalRecord<TPayload>) => void;
@@ -513,6 +518,10 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
       return { outcome: "not-found" };
     }
 
+    const standingGrant =
+      decision === "allow-always" && localEntry
+        ? (this.options.resolveStandingGrantMint?.(localEntry.record.request) ?? undefined)
+        : undefined;
     let result: ResolveOperatorApprovalResult;
     try {
       result = resolveOperatorApproval({
@@ -522,6 +531,7 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
         expectedKind: this.approvalKind,
         runtimeEpoch: persistence.runtimeEpoch,
         databaseOptions: persistence.databaseOptions,
+        ...(standingGrant ? { standingGrant } : {}),
       });
     } catch (error) {
       this.settleLocalStorageFailure(recordId);
