@@ -9,7 +9,6 @@ import {
   SESSION_AGENT_ATTENTION_ICON_IDS,
   SESSION_ICON_GLYPH_IDS,
 } from "../../../packages/gateway-protocol/src/session-agent-status.js";
-import { getRuntimeConfig } from "../../config/config.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -38,10 +37,8 @@ import {
 } from "./in-process-gateway.js";
 import { resolveSessionToolTargetAgentId } from "./scoped-session-access.js";
 import {
-  createAgentToAgentPolicy,
   formatSessionToolAccessDenial,
   recordSessionToolActionFact,
-  resolveEffectiveSessionToolsVisibility,
   resolveSessionToolAccess,
   runSessionToolActionWithConflictReceipt,
 } from "./sessions-access.js";
@@ -305,11 +302,8 @@ async function resolvePatchTarget(
       targetAgentId: agentId,
       targetSessionKey: resolved.key,
       requesterOwned: resolved.requesterOwned === true,
-      visibility: resolveEffectiveSessionToolsVisibility({
-        cfg: context.cfg,
-        sandboxed: opts.sandboxed === true,
-      }),
-      a2aPolicy: createAgentToAgentPolicy(context.cfg),
+      visibility: context.sessionVisibility,
+      a2aPolicy: context.a2aPolicy,
       callGateway,
     });
     if (!access.allowed) {
@@ -349,7 +343,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
       if (action === "reset" || action === "delete") {
         const rawKey = readToolStringParam(params, "sessionKey", { required: true });
         const { agentId, isRequesterSession, key } = await resolvePatchTarget(
-          { ...opts, config: opts.config ?? getRuntimeConfig() },
+          opts,
           rawKey,
           gatewayRequest,
         );
@@ -442,7 +436,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
           throw new ToolInputError("assign_owner requires ownerType and ownerId");
         }
         const { agentId, key, requesterAgentId, requesterSessionKey } = await resolvePatchTarget(
-          { ...opts, config: opts.config ?? getRuntimeConfig() },
+          opts,
           normalizeOptionalString(readToolStringParam(params, "sessionKey")),
           gatewayRequest,
         );
@@ -491,7 +485,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
       }
 
       const { agentId, cfg, isRequesterSession, key } = await resolvePatchTarget(
-        { ...opts, config: opts.config ?? getRuntimeConfig() },
+        opts,
         normalizeOptionalString(readToolStringParam(params, "sessionKey")),
         gatewayRequest,
       );
