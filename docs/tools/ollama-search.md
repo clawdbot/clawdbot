@@ -134,8 +134,9 @@ Direct hosted Ollama Web Search (no local Ollama):
   and `OLLAMA_API_KEY` is set, it retries once against
   `https://ollama.com/api/web_search` with that key — without sending it to
   the local host.
-- OpenClaw warns during setup if Ollama is unreachable or not signed in, but
-  does not block selecting the provider.
+- OpenClaw warns during setup if a local Ollama host is unreachable or not
+  signed in, or if hosted search has no API key. These warnings do not block
+  selecting the provider.
 
 ## Related
 
