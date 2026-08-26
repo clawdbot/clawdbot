@@ -1,5 +1,4 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { GatewaySessionRow } from "../../api/types.ts";
 import {
   loadChatMetadata,
   peekChatMetadata,
@@ -255,12 +254,12 @@ async function refreshChat(
     host.sessionsResult = host.sessions.state.result;
     host.sessionsResultAgentId = host.sessions.state.agentId;
     const sessionsResult = host.sessions.state.result;
-    const rosterRow =
-      sessionsResult?.sessions.find(
-        (row) =>
-          areUiSessionKeysEquivalent(row.key, history.sessionInfo?.key) ||
-          areUiSessionKeysEquivalent(row.key, refreshedSessionKey),
-      ) ?? history.sessionInfo;
+    const sessionInfo = sessionsResult?.sessions.find(
+      (row) =>
+        areUiSessionKeysEquivalent(row.key, history.sessionInfo?.key) ||
+        areUiSessionKeysEquivalent(row.key, refreshedSessionKey),
+    );
+    const rosterRow = sessionInfo ?? history.sessionInfo;
     if (areUiSessionKeysEquivalent(rosterRow.key, refreshedSessionKey)) {
       host.selectedChatSessionArchived = rosterRow.archived === true;
       host.selectedChatSessionIncognito = rosterRow.incognito === true;
@@ -278,11 +277,6 @@ async function refreshChat(
       // timestamp may still describe its prior terminal state during remount.
       return;
     }
-    const sessionInfo = sessionsResult?.sessions.find(
-      (row: GatewaySessionRow) =>
-        areUiSessionKeysEquivalent(row.key, history.sessionInfo?.key) ||
-        row.key === refreshedSessionKey,
-    );
     if (!sessionInfo) {
       return;
     }

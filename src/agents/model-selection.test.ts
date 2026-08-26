@@ -827,6 +827,7 @@ describe("model-selection", () => {
                   id: "Qwen/Qwen3-8B",
                   name: "Qwen 3 8B",
                   reasoning: true,
+                  thinkingLevelMap: { off: null, max: "max" },
                   compat: {
                     thinkingFormat: "qwen-chat-template",
                   },
@@ -843,6 +844,7 @@ describe("model-selection", () => {
       expect(model?.compat).toEqual({ thinkingFormat: "qwen-chat-template" });
       expect(model?.reasoning).toBe(true);
       expect(model?.configuredReasoning).toBe(true);
+      expect(model?.thinkingLevelMap).toEqual({ off: null, max: "max" });
     });
 
     it("carries configured model params into catalog entries for provider policy", () => {

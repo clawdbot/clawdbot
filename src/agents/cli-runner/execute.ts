@@ -168,7 +168,7 @@ export async function executePreparedCliRun(
       ? basePrompt
       : applyPluginTextReplacements(
           appendBootstrapPromptWarning(basePrompt, context.bootstrapPromptWarningLines, {
-            preserveExactPrompt: context.heartbeatPrompt,
+            preserveExactPrompt: params.trigger === "heartbeat" ? params.prompt : undefined,
           }),
           context.backendResolved.textTransforms?.input,
         );

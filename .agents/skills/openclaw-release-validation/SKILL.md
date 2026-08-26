@@ -1,14 +1,17 @@
 ---
 name: openclaw-release-validation
-description: "Safely copy an existing gateway, test the latest OpenClaw main commit, and guide human release-campaign feedback with one Markdown worksheet."
+description: "Test the latest OpenClaw main commit through an isolated OCM copy or an explicitly approved in-place gateway update, then guide structured release feedback."
 user-invocable: true
 disable-model-invocation: true
 ---
 
 # OpenClaw Release Validation
 
-Help a human validate the latest main commit against a copy of a real gateway. Automate only
-fixture setup, finding triage, and reporting. Let the human drive OpenClaw and judge quality.
+Help a human validate the latest main commit against a real gateway's state. By
+default, protect the source with an isolated OCM copy; allow an explicitly
+approved in-place update when the tester prefers less setup. Automate only
+preparation, finding triage, and reporting. Let the human drive OpenClaw and
+judge quality.
 
 For a ready gateway, use one editable Markdown worksheet as the entire run
 record. A blocked upgrade has no worksheet or surface-testing phase; its final
@@ -18,17 +21,20 @@ receipts, or other tracking files.
 ## Start the run
 
 At the start of every **Validate release** run, give a concise introduction:
-this skill creates an isolated copy of a gateway, upgrades that copy to an
-immutable build of the latest `origin/main`, reports upgrade problems, then
-helps the tester manually check it, triage findings, and submit one consolidated
-report to the stable release train's shared issue. The source gateway is not modified.
+this skill finds a gateway, asks whether to protect it with an isolated OCM
+copy or update it in place, moves the selected test gateway to an immutable
+build of the latest `origin/main`, reports update problems, then helps the
+tester manually check it, triage findings, and submit one consolidated report
+to the stable release train's shared issue. OCM isolation is recommended and
+must pass containment checks before any candidate runs; in-place mode modifies
+the selected real gateway only after explicit approval.
 
 Use the agent's available native checklist or plan tool to show progress and
 check items off as they complete. Start with this visible checklist:
 
 1. Confirm the release campaign and main test target
-2. Choose a gateway to copy
-3. Copy, upgrade, and verify readiness
+2. Choose a gateway and test mode
+3. Prepare, update, and verify readiness
 4. Optionally capture local diagnostics
 5. Create the testing worksheet
 6. Test surfaces and record feedback
@@ -47,9 +53,10 @@ Choose the workflow from the request:
   or refreshes the canonical issue for its stable release train. A stable tag
   closes that train's issue. Print the issue URL and stop.
 - **Validate release** is the default human-testing path. Join the existing
-  campaign issue, copy a gateway, build the latest immutable `origin/main`
-  target through OCM, then guide testing and finding triage. This workflow
-  never creates or rewrites the canonical issue body.
+  campaign issue, choose an isolated-copy or in-place lane, move the selected
+  test gateway to the latest immutable `origin/main`, then guide testing and
+  finding triage. This workflow never creates or rewrites the canonical issue
+  body.
 
 Before the upgrade reaches a terminal ready or blocked result, keep tester-facing
 output to the campaign issue, current-beta identity, gateway choice, and upgrade
@@ -113,16 +120,18 @@ existing label:
 For a beta tag:
 
 1. Resolve its stable train, release URL, commit, the previous stable release,
-   and the previous beta in the same train. For beta.1, use the previous stable
-   as both comparison bases.
+   and one immutable guidance SHA from the current `origin/main`. Record that
+   exact SHA; both analysis windows end there.
 2. Fetch `https://docs.openclaw.ai/maturity/scorecard.md`. Extract the live
    surface names, taxonomy links, M-levels, maturity labels, and score-band
    guidance. Stop if it cannot be parsed; never use a hardcoded catalog.
 3. Read complete release notes and source history. Group all user-visible and
    upgrade-sensitive changes under live scorecard surfaces for two windows:
-   previous stable through current beta, and previous beta through current
-   beta. Use PR and commit details for analysis, but publish themes rather than
-   a misleading sample of links.
+   previous stable through the guidance-main SHA, and the current beta commit
+   through that same guidance-main SHA. The first window describes the release
+   train overall; the second highlights what has landed on main since the
+   current beta was cut. Use PR and commit details for analysis, but publish
+   themes rather than a misleading sample of links.
 4. Rank exactly three surfaces for each window using change volume, size,
    complexity, impact, upgrade sensitivity, and maturity expectations. A
    Stable or Clawesome surface carries more regression weight. Duplicate
@@ -140,8 +149,10 @@ For a beta tag:
    ```
 
    Keep **Testing notes** empty. Escape table pipes. Recommended testing must
-   be one bounded, human-driven action with an observable pass condition; use
-   `{{TEST_ENV}}` in OCM commands. Do not say only "use" or "verify."
+   be one bounded, human-driven action with an observable pass condition. Use
+   `{{OPENCLAW}}` wherever the tester should invoke the selected gateway and
+   `{{RESTART_GATEWAY}}` for its restart command. Do not assume OCM, add other
+   execution placeholders, or say only "use" or "verify."
 
 6. Replace the issue title with `OpenClaw <YYYY.M.D> beta feedback`. Render the
    body in this order, with no beta-history section:
@@ -151,6 +162,7 @@ For a beta tag:
 
    - Current beta: [<beta-tag>](release-url)
    - Beta commit: `<full-commit>`
+   - Guidance main commit: `<full-guidance-main-sha>`
    - Test target: latest immutable `origin/main`
 
    > [!NOTE]
@@ -162,7 +174,7 @@ For a beta tag:
 
    <exactly three surface tables>
 
-   ## Priority surfaces since <previous-beta-or-stable>
+   ## Priority surfaces since <current-beta>
 
    <exactly three surface tables>
    <!-- validation-guidance:end -->
@@ -186,74 +198,108 @@ Campaign updating is deliberately last-writer-simple; release orchestration
 does not launch overlapping update tasks. **Update campaign** ends after the
 readback and never waits for human testing.
 
-## 2. Choose and copy a real gateway
+## 2. Choose a real gateway and test mode
 
-First run `ocm --version`. If OCM is unavailable, pause before discovering or
-copying any gateway and say:
+Gateway discovery does not require OCM. Check whether `ocm` is available. If it
+is, read `ocm --version` and discover managed environments once with `ocm env
+list --json`; otherwise continue without installing it. In parallel, inspect
+the plain personal gateway with `openclaw --version` and `openclaw gateway
+status --json --no-probe`. When OCM is available, also use `ocm adopt inspect
+~/.openclaw --json` to resolve aliases safely.
+
+Read only each gateway's display name, OpenClaw version, and running/stopped
+state. Do not expose commands, paths, configuration, credentials, plugins, or
+other internals. If the plain home's resolved path is an OCM environment's
+`stateDir`, show it once as that environment's personal-state alias. Otherwise
+show `Personal ~/.openclaw` with its known version and state. Ask which gateway
+the tester wants to use. Never silently select or modify the personal gateway.
+
+After selection, inspect only that gateway and record its version and commit.
+Then ask:
 
 ```text
-OCM is required to create an isolated, disposable copy of your gateway for
-this release test and is not installed.
+How should I test this gateway?
 
-Would you like me to install OCM now? This installs the OpenClaw Manager CLI
-on this machine. Reply exactly `install OCM` to approve, or install it yourself
-and reply `OCM installed`.
+1. Use an isolated OCM copy (recommended) — tests a disposable copy and fails
+   closed if OCM cannot prove candidate-writable paths stay inside it.
+2. Update the selected gateway in place — changes this real gateway to the
+   latest main build, restarts it, and may update its plugins and state.
+
+Reply exactly `use isolated OCM copy` or `update selected gateway in place`.
 ```
 
-Install OCM only after the tester explicitly replies `install OCM`. Use the
-official release installer, then verify `ocm --version` before continuing:
+Do not infer the mode. The second reply selects the in-place lane but does not
+yet authorize mutation; show its backup/snapshot and dry-run result first, then
+obtain the separate approval required in section 3.
+
+### Isolated OCM copy
+
+If OCM is unavailable only after the tester chooses isolation, say:
+
+```text
+OCM is required for the isolated-copy option and is not installed.
+
+Reply exactly `install OCM` to let me install the OpenClaw Manager CLI, or
+install it yourself and reply `OCM installed`.
+```
+
+Install OCM only after `install OCM`, using the official installer, then verify
+it before continuing:
 
 ```sh
 curl -fsSL https://github.com/openclaw/ocm/releases/latest/download/install.sh | bash
 ocm --version
 ```
 
-If the binary was installed to `~/.local/bin` but that directory is not on the
-current PATH, use `~/.local/bin/ocm` for this run and tell the tester to add it
-to their PATH for future shells. If installation or verification fails, report
-the exact error and remain paused. Do not replace OCM with a manual state copy.
+If the binary lands in `~/.local/bin` outside the current PATH, use its absolute
+path for this run and tell the tester how to update future shells. On an install
+or verification failure, report the exact error and pause. Never replace OCM
+with a manual state copy.
 
-Discover once with `ocm env list --json`. In parallel, inspect the plain home
-with `ocm adopt inspect ~/.openclaw --json` and obtain its version and service
-state with `openclaw --version` and `openclaw gateway status --json --no-probe`.
-Read only the version and running/stopped state from the latter; do not expose
-its command, paths, configuration, or environment. If the plain home's resolved
-path is an OCM environment's `stateDir`, show it once as that environment's
-personal-state alias. Otherwise show `Personal ~/.openclaw` with its known
-version and running state. Keep the overview shallow: do not inspect plugins
-or other gateway internals. Ask which gateway the tester wants to copy. Never
-silently select or modify the personal gateway.
-
-After selection, inspect only that gateway and record its version and commit.
-Preview the disposable target, then import its `.openclaw` state with OCM so
-sessions and other real user state are preserved in the fixture:
+If the source is already an OCM environment, clone it through OCM. If the
+source is the plain personal gateway, preview and import that plain home:
 
 ```sh
-ocm adopt plan --name <test-env> <selected-state-dir> --json
-ocm adopt import --name <test-env> <selected-state-dir> --json
+ocm env clone <source-env> <test-env> --json
+# Plain source only:
+ocm adopt plan --name <test-env> ~/.openclaw --json
+ocm adopt import --name <test-env> ~/.openclaw --json
 ```
 
-Use the `stateDir` returned by `ocm env list --json` for an OCM environment and
-`~/.openclaw` for the plain gateway. Let OCM create the stopped, disposable
-environment and assign a non-conflicting port; do not make an additional staged
-copy. OCM copies a configured repo-backed or symlinked workspace into the
-disposable environment and rewrites the fixture config to that copy; it never
-changes the source repository or workspace. The returned environment name is
-the test environment; use that actual name in every tester-facing command
-rather than the `<test-env>` placeholder. If OCM cannot isolate a config include
-or source path, pause and report that setup blocker conversationally—never make
-a manual state copy or put it in the campaign worksheet. Keep the source
-unchanged. Before activating copied channel credentials, stop the current
-credential owner and restore it when validation ends. For an OCM source, use
-`ocm service stop <source-env>`; for the plain source, use `openclaw gateway
-stop`. There is no `ocm stop` command.
+Do not import an OCM environment through its underlying state path. Let OCM
+create the stopped environment and assign a non-conflicting port; do not make
+an additional staged copy. Use the returned environment name in every command.
+If OCM cannot isolate an include, workspace, or source path, pause and report
+that setup blocker conversationally. Never make a manual copy or put an OCM
+setup failure in campaign feedback.
 
-## 3. Build the latest main target, upgrade, and report errors
+Treat containment as a hard gate, not a warning. Capture stderr even when using
+`--json`. If adopt/import reports `could not be isolated inside the env state`,
+or clone/import/plugin inventory reveals any absolute plugin install or source
+path outside the target environment, do not build, upgrade, or start the
+candidate. Do not normalize or copy the path manually. State that OCM isolation
+could not be proven and offer the tester the mode choice again, including the
+explicit in-place lane. This protects against the unresolved source-state escape
+tracked in `openclaw/ocm#98`.
+
+Before activating copied channel credentials, stop the current credential
+owner and restore it when validation ends. For an OCM source, use `ocm service
+stop <source-env>`; for the plain source, use `openclaw gateway stop`. There is
+no `ocm stop` command.
+
+### In-place gateway
+
+Do not copy the selected gateway. A plain gateway will use its own `openclaw`
+CLI and a managed OCM environment will use that environment's OCM commands.
+Do not install OCM merely for a plain in-place update. Do not stop another
+credential owner: this gateway keeps ownership while its own service restarts.
+
+## 3. Move to the latest main target and report errors
 
 For every **Validate release** run, resolve a fresh immutable main target after
-the campaign issue is known and before building the runtime. Never build from
-the caller's active checkout. Resolve exactly one SHA, create a run-owned
-isolated checkout at that SHA, and prove the checkout did not move:
+the campaign issue and test mode are known. Never use the caller's active
+checkout. Resolve exactly one SHA. For either OCM lane, also create a run-owned
+isolated checkout at that SHA and prove it did not move:
 
 ```sh
 main_sha="$(git ls-remote https://github.com/openclaw/openclaw.git refs/heads/main | awk 'NR == 1 { print $1 }')"
@@ -266,37 +312,80 @@ git -C "$main_checkout" checkout --detach -q FETCH_HEAD
 test "$(git -C "$main_checkout" rev-parse HEAD)" = "$main_sha"
 ```
 
-If resolution, fetch, checkout, or SHA verification fails, report the setup
-blocker conversationally and pause. Do not fall back to a moving branch, a
-caller checkout, or the current beta package.
+If main resolution, fetch, checkout, or SHA verification fails, report the setup
+blocker conversationally and pause. Do not fall back to a moving branch, caller
+checkout, or current beta package.
 
-Give the run-owned runtime a unique name containing the short main SHA and a
-UTC timestamp, then build and verify that exact checkout through OCM. Use the
-same named runtime for the disposable fixture:
+### OCM isolated or OCM-managed in-place lane
+
+Give the run-owned runtime a unique name containing the short main SHA and a UTC
+timestamp, then build and verify the exact checkout:
 
 ```sh
 ocm runtime build-local <run-runtime-name> --repo <main-checkout> --force
 ocm runtime verify <run-runtime-name>
 ocm upgrade <test-env> --runtime <run-runtime-name> --dry-run --json
+```
+
+For an OCM-managed in-place gateway, explain that OCM will create a pre-upgrade
+snapshot and retain a rollback transaction. Show the dry-run summary, then wait
+for the tester to reply exactly `approve in-place update`. Without that reply,
+do not mutate or start anything. The isolated lane needs no additional approval.
+
+Then run:
+
+```sh
 ocm upgrade <test-env> --runtime <run-runtime-name> --json
 ocm service start <test-env>
 ```
 
-Stop any current owner of copied channel credentials immediately before the
-`ocm service start` command. Record `origin/main` and the full `main_sha` in
-the private worksheet as the tested target and commit. Keep the stable train,
-current beta tag, and beta commit as separate worksheet fields.
+In the isolated lane, stop any current owner of copied channel credentials
+immediately before `ocm service start`. Skip the explicit start when the upgrade
+already preserved a running service. Verify `ocm service status <test-env>`,
+`ocm @<test-env> -- --version`, and `ocm logs <test-env> --tail 100`. OCM's
+successful managed upgrade already requires HTTP health and gateway
+reachability.
 
-Verify `ocm service status <test-env>`, `ocm @<test-env> -- --version`, and
-`ocm logs <test-env> --tail 100`. OCM's successful managed upgrade already
-requires HTTP health and gateway reachability.
+### Plain in-place lane
 
-Report every error to the tester immediately, including errors recovered by a
-retry. Retain test-target OpenClaw behavior caused by the upgrade as an
-eligible **Upgrade finding** for the final report; add it to the worksheet only
-when readiness is verified. Keep OCM, copying, local tooling, setup, and cleanup
-problems in the conversation only; they never enter the worksheet or GitHub
-comment.
+First inspect `openclaw update status --json`. Create a full verified backup in
+a private owner-only directory outside `~/.openclaw`, retain its resulting
+archive path, and never expose that path in GitHub output:
+
+```sh
+openclaw backup create --output <private-backup-dir> --verify
+OPENCLAW_UPDATE_DEV_TARGET_REF="$main_sha" openclaw update --channel dev --dry-run --json
+```
+
+Explain that the update switches this real installation to the dev channel,
+builds the pinned main commit, may migrate state and plugins, and restarts the
+gateway. Show the verified backup result and dry-run summary, then wait for the
+tester to reply exactly `approve in-place update`. Without that reply, do not
+mutate the gateway.
+
+Apply and verify:
+
+```sh
+OPENCLAW_UPDATE_DEV_TARGET_REF="$main_sha" openclaw update --channel dev --yes --json
+openclaw update status --json
+openclaw --version
+openclaw gateway status --json
+openclaw plugins list --json
+```
+
+Require the update result to succeed, its `after.sha` and the status result's
+Git SHA to equal `main_sha`, and the managed gateway to be healthy. If any are
+missing or disagree, do not call the gateway ready.
+
+For every lane, record `origin/main` and the full `main_sha` as the tested target
+and commit. Keep the stable train, current beta tag, and beta commit separate.
+
+Report every error immediately, including errors recovered by a retry. OpenClaw
+config migration, update, plugin convergence, startup, and readiness failures
+from the selected test target are eligible **Upgrade findings**. Add them to the
+worksheet only when readiness is later verified. OCM tooling, copying, backup
+plumbing, local build setup, and cleanup failures stay conversational and never
+enter the worksheet or GitHub output.
 
 As soon as an eligible upgrade finding is concrete, run the related-issue
 investigation from section 6 and queue its private draft. Do this before manual
@@ -312,7 +401,7 @@ skipped. Do not create, open, mention, or ask the tester to use a worksheet;
 there is no running gateway to test. State plainly:
 
 ```text
-Upgrade blocked — the copied gateway never started, so manual surface testing cannot begin.
+Upgrade blocked — the selected test gateway never became ready, so manual surface testing cannot begin.
 Reply exactly `finish validation` to prepare a reviewable report of this upgrade finding, or tell me any final feedback to include.
 ```
 
@@ -320,8 +409,9 @@ Then wait for final feedback or `finish validation`.
 
 ## 4. Optional local diagnostics capture
 
-Offer this step only after the test target is ready. It is opt-in and only
-applies to the disposable test environment. Say:
+Offer this step only after an isolated OCM target is ready. For either in-place
+lane, mark diagnostics skipped and say no telemetry plugin will be installed on
+the tester's real gateway. For an isolated target, say:
 
 ```text
 Optional local diagnostics can capture traces, metrics, and logs from this
@@ -448,11 +538,14 @@ gateway, personal OpenClaw home, and shared GitHub issue remain untouched.
 Only when readiness is verified, copy
 [the worksheet asset](assets/validation-worksheet.md) to
 `.artifacts/openclaw-release-validation/<stable-train>-<timestamp>.md`. Fill its
-run identity, source, issue URL, terminal upgrade result, eligible upgrade
-findings, and the current tester's authored PRs between the previous stable and
-current beta. Insert the campaign body's exact marked guidance bytes at
-`{{VALIDATION_GUIDANCE}}`. Replace `{{TEST_ENV}}` in those bytes with the actual
-disposable environment name. No placeholder may remain.
+run identity, test mode, source, issue URL, terminal upgrade result, eligible
+upgrade findings, and the current tester's authored PRs between the previous
+stable and current beta. Insert the campaign body's exact marked guidance bytes
+at `{{VALIDATION_GUIDANCE}}`. In those bytes, replace `{{OPENCLAW}}` with
+`ocm @<test-env> --` for either OCM lane or `openclaw` for the plain in-place
+lane. Replace `{{RESTART_GATEWAY}}` with `ocm service restart <test-env>` for
+either OCM lane or `openclaw gateway restart` for the plain in-place lane. Use
+the actual environment name. No placeholder may remain.
 
 Do not regenerate or reformat the two priority sections. They are the current
 campaign dashboard. The local worksheet may change only in its run fields,
@@ -473,7 +566,8 @@ Then give this compact orientation, using the actual worksheet contents:
 - **What it is:** their private run record and the source for the final
   release-feedback comment; it is not another task to complete.
 - **Priority and scorecard:** the first three surfaces cover the release train
-  overall; the second three cover changes since the previous beta. Their
+  overall; the second three cover changes landed on main since the current beta
+  was cut. Their
   maturity values come from the live scorecard, where higher maturity carries a
   stronger regression expectation. Any scorecard surface may still be tested.
 - **How to use each surface:** **What changed** summarizes the release theme,
@@ -487,9 +581,9 @@ after restart`). The agent adds those notes to that surface's **Testing
 Finish with the exit instruction: **You can stop after any amount of testing;
 you do not need to cover every surface. When you are ready to wrap up, reply
 exactly `finish validation`.** That tells the agent to collect any missing
-promotion feedback, stop the disposable fixture, restore any source gateway it
-stopped, and prepare a reviewable consolidated release-feedback draft. Then ask
-which surface they want to test first.
+promotion feedback, safely end the selected test mode, and prepare a reviewable
+consolidated release-feedback draft. Then ask which surface they want to test
+first.
 
 This worksheet is the only checklist and note store. Readiness is verified at
 this point, so continue to human-driven testing.
@@ -556,12 +650,13 @@ When the tester says `finish validation`:
 2. Collect a small **Test environment** profile for the visible report draft.
    This is diagnostic context, not a finding and never enters the hidden
    structured payload. Include only the OS name and version, CPU architecture,
-   logical CPU count, memory rounded to the nearest whole GiB, and OCM version.
+   logical CPU count, memory rounded to the nearest whole GiB, and OCM version
+   when an OCM lane was used.
    Read those individual values with narrow native commands; omit an unavailable
    value rather than collecting a broader system profile. Never read or report
    the hostname, username, device model, serial number, UUID, network addresses,
    disk layout, installed software, environment, or a raw command output.
-3. If local diagnostics are active, stop the copied gateway first so its OTLP
+3. If local diagnostics are active, stop the isolated gateway first so its OTLP
    exporters flush, wait briefly for the collector's one-second batch flush,
    then stop the run-owned collector. Read only its three private telemetry
    files. Select at most three short snippets that directly corroborate a
@@ -576,16 +671,22 @@ When the tester says `finish validation`:
    the telemetry. Label included prose **Local telemetry evidence** and keep it
    immediately below the finding it corroborates. Do not put telemetry in the
    hidden structured payload.
-5. Restore any source gateway stopped for channel ownership. Ask before
-   destroying the disposable environment. If it is retained, retain the
-   run-owned runtime too and disable `diagnostics-otel`, set
-   `diagnostics.otel.enabled` to `false`, restart the fixture through OCM, and
-   remove the plugin with
-   `ocm @<test-env> -- plugins uninstall diagnostics-otel --force`. If the
-   fixture is destroyed, remove only its run-owned runtime with
-   `ocm runtime remove <run-runtime-name>` after the fixture is gone. Remove the
-   run-owned isolated main checkout after no build or fixture command is using
-   it. Never remove a shared runtime. Remove the run-owned collector in all cases.
+5. For an isolated lane, restore any source gateway stopped for channel
+   ownership and ask before destroying the disposable environment. If it is
+   retained, retain the run-owned runtime too and disable `diagnostics-otel`,
+   set `diagnostics.otel.enabled` to `false`, restart the fixture through OCM,
+   and remove the plugin with `ocm @<test-env> -- plugins uninstall
+diagnostics-otel --force`. If the fixture is destroyed, remove only its
+   run-owned runtime with `ocm runtime remove <run-runtime-name>` after the
+   fixture is gone. For an in-place lane, do not stop, downgrade, restore, or
+   otherwise rewrite the real gateway automatically. Ask whether the tester
+   wants to keep the dev/main installation. If not, explain that newer config
+   or database migrations can make a code-only downgrade unsafe, show a
+   rollback plan using the OCM upgrade transaction or the verified plain-gateway
+   backup as applicable, and require separate explicit approval before any
+   rollback or offline state restoration. Remove the run-owned isolated main
+   checkout after no build command is using it. Never remove a shared or
+   in-use runtime. Remove the run-owned collector in all cases.
 6. Complete or refresh every finding draft using the final sanitized evidence.
    For an eligible upgrade finding, run the same related-issue investigation
    now if it was not already done before manual testing.
@@ -607,7 +708,7 @@ When the tester says `finish validation`:
    - OS: <name and version>
    - CPU: <architecture>, <logical core count> logical cores
    - Memory: <whole GiB> GiB
-   - OCM: <version>
+   - OCM: <version, only when used>
    ```
 
    Omit any unavailable value; do not add substitute device facts. The profile

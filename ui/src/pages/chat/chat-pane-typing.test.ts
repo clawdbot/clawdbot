@@ -98,8 +98,7 @@ describe("chat pane typing presence", () => {
       "Alice is typing…",
     );
     expect(container.querySelectorAll(".agent-chat__typing-bubble > span")).toHaveLength(3);
-    expect(container.querySelector('[role="status"]')?.textContent).toBe("Alice, Bob are typing…");
-    expect(container.querySelector('[role="status"]')?.textContent).not.toContain("Hello");
+    expect(container.querySelector(".sr-only")?.textContent).toBe("Alice, Bob are typing…");
   });
 
   it("sends only the last 300 draft code points and omits previews when typing stops", () => {

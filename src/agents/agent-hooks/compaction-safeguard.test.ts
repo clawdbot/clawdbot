@@ -8,10 +8,11 @@ import { createAssistantMessageEventStream, type Model } from "openclaw/plugin-s
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { CompactionProvider } from "../../plugins/compaction-provider.js";
 import {
-  clearCompactionProviders,
-  registerCompactionProvider,
-} from "../../plugins/compaction-provider.js";
+  requireActivePluginRegistry,
+  resetPluginRuntimeStateForTest,
+} from "../../plugins/runtime.js";
 import * as compactionModule from "../compaction.js";
 import { buildEmbeddedExtensionFactories } from "../embedded-agent-runner/extensions.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
@@ -136,8 +137,12 @@ beforeEach(() => {
 
 afterEach(() => {
   testing.setSummarizeInStagesForTest();
-  clearCompactionProviders();
+  resetPluginRuntimeStateForTest();
 });
+
+function installCompactionProviderForTest(provider: CompactionProvider): void {
+  requireActivePluginRegistry().compactionProviders.push({ provider });
+}
 
 function stubSessionManager(): ExtensionContext["sessionManager"] {
   const stub: ExtensionContext["sessionManager"] = {
@@ -1270,6 +1275,32 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(identifiers).toContain(uniqueTail[10]?.toUpperCase());
   });
 
+  it.each([
+    {
+      name: "decimal and scientific values",
+      input:
+        "metric=0.123456789 scientific=1.23456789e10 exponent=1e-987654321 order_id=246813579 hash=deadbeef1234 ambiguous=12345678e10",
+      expected: ["246813579", "DEADBEEF1234", "12345678E10"], // pragma: allowlist secret
+    },
+    {
+      name: "signed scientific values with long hex-shaped mantissas",
+      input: "negative=12345678e-987654321 positive=12345678e+987654321 ambiguous=12345678e10",
+      expected: ["12345678E10"],
+    },
+    {
+      name: "dotted values with long unit suffixes",
+      input: "latency=0.123456789seconds size=1.23456789e-987654321megabytes metric=12345678.e10",
+      expected: [],
+    },
+    {
+      name: "ambiguous integer tokens and decimal-looking opaque identifiers",
+      input: "order_id=246813579xy duration=123456789ms revision=1.23456789abcdef",
+      expected: ["246813579xy", "123456789ms", "23456789ABCDEF"],
+    },
+  ])("classifies $name", ({ input, expected }) => {
+    expect(extractOpaqueIdentifiers(input)).toStrictEqual(expected);
+  });
+
   it("filters ordinary short numbers and trims wrapped punctuation", () => {
     const identifiers = extractOpaqueIdentifiers(
       "Year 2026 count 42 port 18789 ticket 123456 URL https://example.com/a, path /tmp/x.log, and tiny /a with prose on/off plus typecheck/lint/format.",
@@ -2360,6 +2391,73 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(mockSummarizeInStages).not.toHaveBeenCalled();
   });
 
+  it("ignores truncated numeric tool-result noise in strict all-preserved audits", async () => {
+    mockSummarizeInStages.mockReset();
+    const latestAsk = "report metric status";
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model: createAnthropicModelFixture(),
+      recentTurnsPreserve: 12,
+      qualityGuardEnabled: true,
+      qualityGuardMaxRetries: 1,
+    });
+    const messagesToSummarize: AgentMessage[] = [
+      { role: "user", content: latestAsk, timestamp: 1 },
+      castAgentMessage({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_metric", name: "read", arguments: {} }],
+        timestamp: 2,
+      }),
+      castAgentMessage({
+        role: "toolResult",
+        toolCallId: "call_metric",
+        toolName: "read",
+        content: [
+          {
+            type: "text",
+            text:
+              `${"x".repeat(610)} metric=0.123456789 ` +
+              "negative=12345678e-987654321 positive=12345678e+987654321 " +
+              "latency=0.123456789seconds size=1.23456789e-987654321megabytes metric=12345678.e10",
+          },
+        ],
+        timestamp: 3,
+      }),
+      castAgentMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "metric checked" }],
+        timestamp: 4,
+      }),
+    ];
+    const event = {
+      preparation: {
+        messagesToSummarize,
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1_500,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 4_000 },
+        previousSummary: undefined,
+        isSplitTurn: false,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const { result } = await runCompactionScenario({ sessionManager, event, apiKey: "test-key" });
+
+    const summary = expectCompactionResult(result).summary;
+    expect(summary).toContain(latestAsk);
+    expect(summary).not.toContain("123456789");
+    expect(summary).not.toContain("23456789e");
+    expect(summary).not.toContain("987654321");
+    expect(summary).not.toContain("12345678");
+    expect(mockSummarizeInStages).not.toHaveBeenCalled();
+    expect(mockAuditSummaryQuality).toHaveBeenCalledTimes(1);
+    const auditInput = requireRecord(mockCallArg(mockAuditSummaryQuality));
+    expect(auditInput.identifiers).toEqual([]);
+  });
+
   it("rejects all-preserved fallback output that truncates source facts", async () => {
     mockSummarizeInStages.mockReset();
     const latestAsk = "report deployment status";
@@ -2804,7 +2902,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
       name: "AbortError",
     });
     const failingProviderSummarize = vi.fn().mockRejectedValue(providerAbortErr);
-    registerCompactionProvider({
+    installCompactionProviderForTest({
       id: "disconnecting-provider",
       label: "Disconnecting Provider",
       summarize: failingProviderSummarize,
@@ -2851,7 +2949,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
       name: "AbortError",
     });
     const failingProviderSummarize = vi.fn().mockRejectedValue(providerAbortErr);
-    registerCompactionProvider({
+    installCompactionProviderForTest({
       id: "aborted-provider",
       label: "Aborted Provider",
       summarize: failingProviderSummarize,
@@ -2895,7 +2993,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
   it("passes compaction instructions to providers and preserves suffix context", async () => {
     mockSummarizeInStages.mockReset();
     const providerSummarize = vi.fn().mockResolvedValue("provider summary body");
-    registerCompactionProvider({
+    installCompactionProviderForTest({
       id: "test-provider",
       label: "Test Provider",
       summarize: providerSummarize,
@@ -2970,7 +3068,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
   it("preserves an above-half provider body byte-for-byte when the joined artifact fits", async () => {
     const providerBody = `BODY-START${"b".repeat(4_480)}BODY-MIDDLE${"b".repeat(4_480)}BODY-END`;
     const providerSummarize = vi.fn().mockResolvedValue(providerBody);
-    registerCompactionProvider({
+    installCompactionProviderForTest({
       id: "within-budget-provider",
       label: "Within Budget Provider",
       summarize: providerSummarize,
@@ -3009,7 +3107,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
   it("emits one redacted provider warning when the preserved-turn producer truncates", async () => {
     const sensitiveSentinel = "preserved-secret-never-log";
     const providerSummarize = vi.fn().mockResolvedValue("provider summary body");
-    registerCompactionProvider({
+    installCompactionProviderForTest({
       id: "preserved-overflow-provider",
       label: "Preserved Overflow Provider",
       summarize: providerSummarize,
@@ -3054,7 +3152,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
     const sensitiveSentinel = "credential-sentinel-never-log";
     const providerBody = `BODY-START${"b".repeat(3_400)}BODY-MIDDLE${"b".repeat(3_400)}BODY-END`;
     const providerSummarize = vi.fn().mockResolvedValue(providerBody);
-    registerCompactionProvider({
+    installCompactionProviderForTest({
       id: "overflow-provider",
       label: "Overflow Provider",
       summarize: providerSummarize,
@@ -3108,7 +3206,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
   it("starts a finally trimmed raw split-turn suffix at a complete message boundary", async () => {
     const providerBody = `BODY-START${"b".repeat(6_760)}BODY-END`;
     const providerSummarize = vi.fn().mockResolvedValue(providerBody);
-    registerCompactionProvider({
+    installCompactionProviderForTest({
       id: "boundary-provider",
       label: "Boundary Provider",
       summarize: providerSummarize,
@@ -3155,7 +3253,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
   it("finally trims a raw tool interaction only at its atomic boundary", async () => {
     const providerSummarize = vi.fn().mockResolvedValue(`BODY-START${"b".repeat(9_000)}BODY-END`);
-    registerCompactionProvider({
+    installCompactionProviderForTest({
       id: "tool-boundary-provider",
       label: "Tool Boundary Provider",
       summarize: providerSummarize,

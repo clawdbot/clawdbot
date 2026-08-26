@@ -248,14 +248,6 @@ function hasExplicitImageGenerationModelConfig(cfg?: OpenClawConfig): boolean {
   return hasToolModelConfig(coerceToolModelConfig(cfg?.agents?.defaults?.mediaModels?.image));
 }
 
-function resolveAction(args: Record<string, unknown>): "generate" | "list" | "status" {
-  return resolveGenerateAction({
-    args,
-    allowed: ["generate", "status", "list"],
-    defaultAction: "generate",
-  });
-}
-
 function resolveRequestedCount(args: Record<string, unknown>): number {
   if (readSnakeCaseParamRaw(args, "count") === null) {
     throw new ToolInputError(`count must be between 1 and ${MAX_COUNT}`);
@@ -830,7 +822,7 @@ export function createImageGenerateTool(options?: {
     parameters: ImageGenerateToolSchema,
     execute: async (_toolCallId, args, signal) => {
       const params = args as Record<string, unknown>;
-      const action = resolveAction(params);
+      const action = resolveGenerateAction(params);
       if (action === "list") {
         return createImageGenerateListActionResult({
           cfg,

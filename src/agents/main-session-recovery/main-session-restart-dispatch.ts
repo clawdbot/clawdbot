@@ -356,6 +356,7 @@ export async function resumeMainSession(params: {
   const deliveryContext = resolveRestartRecoveryDeliveryContext({
     cfg: params.cfg,
     entry: params.entry,
+    includeSessionDeliveryFallback: true,
     sessionKey: params.sessionKey,
   });
   const claimedRunId = normalizeOptionalString(params.entry.restartRecoveryDeliveryRunId);
