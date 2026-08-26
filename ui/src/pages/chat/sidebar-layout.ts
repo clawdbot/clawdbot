@@ -122,6 +122,9 @@ export function closeSlot(layout: SidebarLayout, slot: SidebarSlotId): SidebarLa
       next.open = false;
     }
   }
+  if (next.columns.length === 0) {
+    next.open = false;
+  }
   return next;
 }
 

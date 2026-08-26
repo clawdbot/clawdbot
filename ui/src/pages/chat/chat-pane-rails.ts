@@ -24,12 +24,13 @@ export function createChatPaneRails(params: {
   presented: boolean;
   gatewaySnapshot: ChatPaneGatewaySnapshot;
   setObserverVisibility: (visible: boolean) => void;
+  updateSidebarLayout: ChatPageHost["updateSidebarLayout"];
 }) {
   const { state, sidebarLayout } = params;
   const hasPanelSlot = (slot: SidebarSlotId) =>
     sidebarLayout.columns[0]?.panels.some((panel) => panel.slot === slot) === true;
   const openPanelSlot = (slot: SidebarSlotId) => {
-    state.updateSidebarLayout(openSlot(state.sidebarLayout, slot));
+    params.updateSidebarLayout(openSlot(sidebarLayout, slot));
     if (slot === "companion") {
       params.setObserverVisibility(true);
     }
@@ -39,7 +40,7 @@ export function createChatPaneRails(params: {
       params.setObserverVisibility(false);
     }
     releaseAttachmentWorkspaceOwner(state, slot);
-    state.updateSidebarLayout(closeSlot(state.sidebarLayout, slot));
+    params.updateSidebarLayout(closeSlot(sidebarLayout, slot));
   };
   const togglePanelSlot = (slot: SidebarSlotId) =>
     hasPanelSlot(slot) ? closePanelSlot(slot) : openPanelSlot(slot);
