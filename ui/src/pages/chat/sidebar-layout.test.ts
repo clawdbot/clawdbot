@@ -76,6 +76,13 @@ describe("sidebar layout", () => {
     expect(closed).toEqual({ columns: [], open: false });
   });
 
+  it("does not reopen a minimized panel when another tab remains", () => {
+    const minimized = { ...openAll(), open: false };
+    const closed = closeSlot(minimized, "detail");
+    expect(closed.open).toBe(false);
+    expect(closed.columns[0]?.panels.map((panel) => panel.slot)).toEqual(["discussion", "chat"]);
+  });
+
   it("minimizes and expands without discarding tabs", () => {
     const layout = openAll();
     expect(setSidebarOpen(layout, false)).toMatchObject({ columns: layout.columns, open: false });

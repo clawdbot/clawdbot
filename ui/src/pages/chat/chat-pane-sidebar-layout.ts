@@ -196,7 +196,9 @@ export function resolveSidebarLayoutForBoard(params: {
       ? params.board.dock
       : null;
   if (!chatSide) {
+    const open = layout.open;
     layout = closeSlot(layout, "chat");
+    layout = { ...layout, open };
     return fitSidebarLayout(layout, params.paneWidth) ?? layout;
   }
   const explicitlyClosed = layout.columns.length > 0 && layout.open === false;

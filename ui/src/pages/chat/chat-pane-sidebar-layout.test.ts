@@ -197,6 +197,18 @@ describe("chat pane sidebar layout", () => {
     }
   });
 
+  it("preserves owner visibility when Board chat is removed from the projection", () => {
+    for (const open of [true, false]) {
+      const layout = resolveSidebarLayoutForBoard({
+        board: board("hidden", "chat"),
+        layout: { ...openSlot({ columns: [] }, "chat"), open },
+        paneWidth: 1_400,
+      });
+      expect(layout.columns).toEqual([]);
+      expect(layout.open).toBe(open);
+    }
+  });
+
   it("keeps the detail tab when its transient content is no longer available", () => {
     const layout = resolveSidebarLayoutForBoard({
       board: board("hidden", "chat"),

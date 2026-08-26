@@ -122,7 +122,9 @@ export function closeSlot(layout: SidebarLayout, slot: SidebarSlotId): SidebarLa
     .find((entry) => entry.slot === slot);
   if (panel) {
     removePanel(next, panel.id);
-    next.open = next.columns.length > 0;
+    if (next.columns.length === 0) {
+      next.open = false;
+    }
   }
   return next;
 }
