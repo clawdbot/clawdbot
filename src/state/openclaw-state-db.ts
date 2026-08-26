@@ -59,7 +59,9 @@ import {
   assertOpenClawStateDatabaseV6ForMigration,
   assertOpenClawStateDatabaseV7ForMigration,
   assertOpenClawStateDatabaseV8ForMigration,
+  assertOpenClawStateDatabaseV9ForMigration,
   assertSupportedSchemaVersion,
+  markCurrentStateSchemaVersion,
   resolveDatabasePath,
 } from "./openclaw-state-db-maintenance.js";
 import { openUnpublishedStateDatabase } from "./openclaw-state-db-open.js";
@@ -75,9 +77,9 @@ import {
   assertCanonicalStateSchemaShape,
   detectOpenClawStateDatabaseSchemaMigrationsFromDatabase,
   dropLegacyStateTables,
-  markCurrentStateSchemaVersion,
   migrateAgentDatabaseRelativePaths as migrateAgentPaths,
   migrateRetiredCommitmentsSchema,
+  migrateRetiredDeadStateTablesV10,
   migrateWorkerPlacementExecutionModeSchema,
   repairAgentDatabasesCompositePrimaryKey,
   repairLegacyGatewayRestartHandoffsForStrictMigration,
@@ -95,12 +97,16 @@ import { getOpenClawStateRuntimeSchema } from "./openclaw-state-schema-compatibi
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 export { registerOpenClawStateDatabaseLifecycleListener } from "./openclaw-state-db-cache.js";
 
-const STATE_MIGRATION_ASSERTIONS = {
-  5: assertOpenClawStateDatabaseV5ForMigration,
-  6: assertOpenClawStateDatabaseV6ForMigration,
-  7: assertOpenClawStateDatabaseV7ForMigration,
-  8: assertOpenClawStateDatabaseV8ForMigration,
-} as const;
+const STATE_MIGRATION_ASSERTIONS = new Map<
+  number,
+  typeof assertOpenClawStateDatabaseV5ForMigration
+>([
+  [5, assertOpenClawStateDatabaseV5ForMigration],
+  [6, assertOpenClawStateDatabaseV6ForMigration],
+  [7, assertOpenClawStateDatabaseV7ForMigration],
+  [8, assertOpenClawStateDatabaseV8ForMigration],
+  [9, assertOpenClawStateDatabaseV9ForMigration],
+]);
 
 export {
   OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
@@ -193,13 +199,8 @@ function repairOpenClawStateDatabaseSchemaWithWriteAccess(
           assertSqliteSchemaTablesPresent(db, pathname, OPENCLAW_STATE_SCHEMA_SQL, {
             allowedMissingTables: LAZY_ADDITIVE_STATE_TABLES,
           });
-        } else if (
-          previousVersion === 5 ||
-          previousVersion === 6 ||
-          previousVersion === 7 ||
-          previousVersion === 8
-        ) {
-          STATE_MIGRATION_ASSERTIONS[previousVersion](db, { pathname });
+        } else {
+          STATE_MIGRATION_ASSERTIONS.get(previousVersion)?.(db, { pathname });
         }
         if (rebuiltIndexNames.size === 0) {
           assertSqliteIntegrity(db, pathname);
@@ -207,6 +208,9 @@ function repairOpenClawStateDatabaseSchemaWithWriteAccess(
         dropLegacyStateTables(db);
         if (migrateRetiredCommitmentsSchema(db, previousVersion)) {
           applied.push("Retired shared state commitments table and indexes");
+        }
+        if (migrateRetiredDeadStateTablesV10(db, previousVersion)) {
+          applied.push("Retired six dead shared-state tables (v10)");
         }
         if (migrateWorkerPlacementExecutionModeSchema(db, previousVersion)) {
           applied.push("Migrated cloud worker placements to execution modes");
@@ -408,16 +412,12 @@ function ensureSchema(
           });
           ensureAdditiveStateColumns(db);
           assertCurrentStateRuntimeSchema(db, pathname);
-        } else if (
-          previousVersion === 5 ||
-          previousVersion === 6 ||
-          previousVersion === 7 ||
-          previousVersion === 8
-        ) {
-          STATE_MIGRATION_ASSERTIONS[previousVersion](db, { pathname });
+        } else {
+          STATE_MIGRATION_ASSERTIONS.get(previousVersion)?.(db, { pathname });
         }
         dropLegacyStateTables(db);
         migrateRetiredCommitmentsSchema(db, previousVersion);
+        migrateRetiredDeadStateTablesV10(db, previousVersion);
         migrateWorkerPlacementExecutionModeSchema(db, previousVersion);
         const pathMigration: AgentPathSummary = migrateAgentPaths(db, previousVersion, pathname);
         ensureAdditiveStateColumns(db);

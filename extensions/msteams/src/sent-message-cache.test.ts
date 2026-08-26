@@ -140,14 +140,18 @@ describe("msteams sent message cache", () => {
     vi.spyOn(Date, "now").mockReturnValue(1_234_567);
     const register = vi.fn().mockResolvedValue(undefined);
     const lookup = vi.fn().mockResolvedValue(undefined);
-    const openKeyedStore = vi.fn(() => ({
-      register,
-      lookup,
-      consume: vi.fn(),
-      delete: vi.fn(),
-      entries: vi.fn(),
-      clear: vi.fn(),
-    }));
+    const openedNamespaces: string[] = [];
+    const openKeyedStore = vi.fn((options: { namespace: string }) => {
+      openedNamespaces.push(options.namespace);
+      return {
+        register,
+        lookup,
+        consume: vi.fn(),
+        delete: vi.fn(),
+        entries: vi.fn(),
+        clear: vi.fn(),
+      };
+    });
     setMSTeamsRuntime({
       state: { openKeyedStore },
       logging: { getChildLogger: () => ({ warn: vi.fn() }) },
@@ -181,23 +185,26 @@ describe("msteams sent message cache", () => {
     ).resolves.toBe(false);
     const financeKey = lookup.mock.calls[0]?.[0];
     expect(financeKey).toBe("conv-1:msg-1");
-    const namespaces = openKeyedStore.mock.calls.map(([options]) => options.namespace);
-    expect(namespaces).toHaveLength(2);
-    expect(namespaces[0]).toMatch(/^msteams\.sent-messages\.account\.v1\.[a-f0-9]{64}$/);
-    expect(namespaces[1]).toMatch(/^msteams\.sent-messages\.account\.v1\.[a-f0-9]{64}$/);
-    expect(namespaces[1]).not.toBe(namespaces[0]);
+    expect(openedNamespaces).toHaveLength(2);
+    expect(openedNamespaces[0]).toMatch(/^msteams\.sent-messages\.account\.v1\.[a-f0-9]{64}$/);
+    expect(openedNamespaces[1]).toMatch(/^msteams\.sent-messages\.account\.v1\.[a-f0-9]{64}$/);
+    expect(openedNamespaces[1]).not.toBe(openedNamespaces[0]);
   });
 
   it("prevents named-account keys from colliding with legacy default keys", async () => {
     const register = vi.fn().mockResolvedValue(undefined);
-    const openKeyedStore = vi.fn(() => ({
-      register,
-      lookup: vi.fn().mockResolvedValue(undefined),
-      consume: vi.fn(),
-      delete: vi.fn(),
-      entries: vi.fn(),
-      clear: vi.fn(),
-    }));
+    const openedNamespaces: string[] = [];
+    const openKeyedStore = vi.fn((options: { namespace: string }) => {
+      openedNamespaces.push(options.namespace);
+      return {
+        register,
+        lookup: vi.fn().mockResolvedValue(undefined),
+        consume: vi.fn(),
+        delete: vi.fn(),
+        entries: vi.fn(),
+        clear: vi.fn(),
+      };
+    });
     setMSTeamsRuntime({
       state: { openKeyedStore },
       logging: { getChildLogger: () => ({ warn: vi.fn() }) },
@@ -219,10 +226,8 @@ describe("msteams sent message cache", () => {
     expect(defaultKey).toBe("19:conversation:message");
     expect(namedKey).toBe("conversation:message");
     expect(namedKey).not.toBe(defaultKey);
-    expect(openKeyedStore.mock.calls[0]?.[0].namespace).toBe("msteams.sent-messages");
-    expect(openKeyedStore.mock.calls[1]?.[0].namespace).toMatch(
-      /^msteams\.sent-messages\.account\.v1\.[a-f0-9]{64}$/,
-    );
+    expect(openedNamespaces[0]).toBe("msteams.sent-messages");
+    expect(openedNamespaces[1]).toMatch(/^msteams\.sent-messages\.account\.v1\.[a-f0-9]{64}$/);
   });
 
   it("isolates named-account persistent retention across overflow and memory loss", async () => {
@@ -237,7 +242,7 @@ describe("msteams sent message cache", () => {
         register: vi.fn(async (key: string, value: MSTeamsSentMessageRecordForTest) => {
           values?.delete(key);
           values?.set(key, value);
-          while (values && values.size > (options.maxEntries ?? Number.POSITIVE_INFINITY)) {
+          if (values && values.size > (options.maxEntries ?? Number.POSITIVE_INFINITY)) {
             const oldestKey = values.keys().next().value;
             if (oldestKey !== undefined) {
               values.delete(oldestKey);
@@ -274,7 +279,7 @@ describe("msteams sent message cache", () => {
       }),
     ).resolves.toBe(true);
     expect(stores.size).toBe(2);
-    expect([...stores.values()].map((store) => store.size).sort((a, b) => a - b)).toEqual([
+    expect([...stores.values()].map((store) => store.size).toSorted((a, b) => a - b)).toEqual([
       1, 1000,
     ]);
   });

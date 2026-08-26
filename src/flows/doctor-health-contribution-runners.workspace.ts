@@ -1,6 +1,6 @@
 import type { DoctorOptions } from "../commands/doctor-prompter.js";
+import { shouldManageGatewayService } from "../commands/doctor-service-repair-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isGatewayHostServiceEnvironment } from "../infra/gateway-supervision.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 import { resolveDoctorWorkspaceSuggestionScopes } from "./doctor-workspace-suggestion-scopes.js";
 import type { HealthCheckContext, HealthFinding } from "./health-checks.js";
@@ -86,7 +86,7 @@ export async function collectWorkspaceStatusPluginVersionDrift(params: {
   cfg: OpenClawConfig;
   options?: Pick<DoctorOptions, "allowExec" | "deep" | "nonInteractive">;
 }): Promise<PluginVersionDriftReport | undefined> {
-  if (params.cfg.gateway?.mode === "remote" || !isGatewayHostServiceEnvironment()) {
+  if (params.cfg.gateway?.mode === "remote" || !(await shouldManageGatewayService())) {
     return undefined;
   }
   try {

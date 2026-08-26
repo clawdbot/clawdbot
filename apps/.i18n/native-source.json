@@ -19542,7 +19542,7 @@
       "sites": [
         {
           "kind": "ui-localized-call",
-          "path": "apps/ios/Sources/Voice/TalkModeManager+Permissions.swift"
+          "path": "apps/ios/Sources/Voice/VoicePermissionSupport.swift"
         },
         {
           "kind": "ui-localized-call",
@@ -19557,7 +19557,7 @@
       "sites": [
         {
           "kind": "ui-localized-call",
-          "path": "apps/ios/Sources/Voice/TalkModeManager+Permissions.swift"
+          "path": "apps/ios/Sources/Voice/VoicePermissionSupport.swift"
         },
         {
           "kind": "ui-localized-call",
@@ -19572,11 +19572,7 @@
       "sites": [
         {
           "kind": "ui-localized-call",
-          "path": "apps/ios/Sources/Voice/TalkModeManager+Permissions.swift"
-        },
-        {
-          "kind": "ui-localized-call",
-          "path": "apps/ios/Sources/Voice/VoiceWakeManager.swift"
+          "path": "apps/ios/Sources/Voice/VoicePermissionSupport.swift"
         }
       ]
     },
@@ -21619,6 +21615,17 @@
         {
           "kind": "ui-localized-call",
           "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.9864e7976f351268",
+      "source": "Approval Update",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-call",
+          "path": "apps/macos/Sources/OpenClaw/SystemRunSettingsView.swift"
         }
       ]
     },
@@ -35984,6 +35991,17 @@
       ]
     },
     {
+      "id": "native.apple.edece3fab3481d28",
+      "source": "Older generated approvals are inactive because they were not tied to a working directory. Manual rules are unchanged.",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call-concatenated",
+          "path": "apps/macos/Sources/OpenClaw/SystemRunSettingsView.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.b068c147b2ba5118",
       "source": "On",
       "surface": "apple",
@@ -40623,6 +40641,17 @@
       ]
     },
     {
+      "id": "native.apple.7a469247ac8959b0",
+      "source": "Remove Inactive",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-call",
+          "path": "apps/macos/Sources/OpenClaw/SystemRunSettingsView.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.ee0746b2ae37ed14",
       "source": "Remove \\(profile.name)",
       "surface": "apple",
@@ -44522,6 +44551,17 @@
         {
           "kind": "ui-localized-call",
           "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingProgress.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.820504301d33764a",
+      "source": "Some approvals need renewal",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-named-argument",
+          "path": "apps/macos/Sources/OpenClaw/SystemRunSettingsView.swift"
         }
       ]
     },

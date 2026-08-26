@@ -2674,10 +2674,10 @@ describe("gateway server chat", () => {
           8_000,
         );
         blockedReply.resolve();
-        await waitForAgentRunOk(runId);
         const settledEvent = await settledSessionChange.catch(() => {
           throw new Error("Gateway did not publish settled run ownership after chat.send cleanup");
         });
+        await waitForAgentRunOk(runId);
         expectRecordFields(settledEvent.payload, {
           activeRunIds: [],
           hasActiveRun: false,

@@ -233,7 +233,22 @@ beforeEach(() => {
 describe("prepared model runtime Gateway catalog mode", () => {
   it("imports and materializes only configured and auth-candidate providers", async () => {
     const config = {
-      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+      models: {
+        providers: {
+          alpha: {
+            api: "openai-completions" as const,
+            baseUrl: "https://alpha.invalid",
+            models: [],
+          },
+          beta: { api: "openai-completions" as const, baseUrl: "https://beta.invalid", models: [] },
+        },
+      },
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5" },
+          modelPolicy: { allow: ["vllm/*"] },
+        },
+      },
     };
 
     await prepareScopedReadOnlyModelCatalog(
@@ -251,7 +266,7 @@ describe("prepared model runtime Gateway catalog mode", () => {
 
     expect(mocks.prepareStaticCatalog).toHaveBeenCalledWith(
       expect.objectContaining({
-        providerDiscoveryProviderIds: ["anthropic", "local-runtime", "openai"],
+        providerDiscoveryProviderIds: ["anthropic", "local-runtime", "openai", "vllm"],
         staticCatalogProviderIds: ["anthropic", "local-runtime", "openai"],
       }),
     );
@@ -260,7 +275,7 @@ describe("prepared model runtime Gateway catalog mode", () => {
       "/tmp/prepared-static-agent",
       expect.objectContaining({
         providerDiscoveryEntriesOnly: true,
-        providerDiscoveryProviderIds: ["anthropic", "local-runtime", "openai"],
+        providerDiscoveryProviderIds: ["anthropic", "local-runtime", "openai", "vllm"],
       }),
     );
     expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();

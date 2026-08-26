@@ -177,6 +177,8 @@ type InvokeGatewayToolParams = {
   agentTo?: string;
   agentThreadId?: string;
   authenticatedUserProfile?: GatewayClient["authenticatedUserProfile"];
+  /** Host-minted authority from the calling connection; never derived from wire params. */
+  operatorRoleActor?: NonNullable<GatewayClient["internal"]>["operatorRoleActor"];
   operatorScopes?: readonly string[];
   senderIsOwner?: boolean;
   clientCaps?: string[];
@@ -248,11 +250,15 @@ async function invokeGatewayToolWithSignal(
   const authenticatedUserProfile = params.cfg.gateway?.roles
     ? params.authenticatedUserProfile
     : undefined;
+  // The calling connection already resolved its authority at connect (shared-secret
+  // owners mint system authority there). Carry that exact fact forward instead of
+  // re-deriving it from scopes, or role boundaries deny the caller's own dispatch.
+  const operatorRoleActor =
+    params.operatorRoleActor ??
+    (params.senderIsOwner && !authenticatedUserProfile ? { kind: "system" as const } : undefined);
   const client = createSyntheticPluginRuntimeClient({
     ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
-    ...(params.senderIsOwner && !authenticatedUserProfile
-      ? { operatorRoleActor: { kind: "system" as const } }
-      : {}),
+    ...(operatorRoleActor ? { operatorRoleActor } : {}),
     scopes: params.senderIsOwner ? [ADMIN_SCOPE] : [...(params.operatorScopes ?? [])],
   });
   const primarySessionAuthorizationError = authorizeResolvedSessionMutation({

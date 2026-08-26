@@ -55,6 +55,7 @@ function fakeCatalog(params: {
   hostKind?: string;
   onList?: () => unknown;
   onRead?: (threadId: string) => unknown;
+  processHomeFallbackAllowed?: boolean;
 }): ActiveSessionCatalog {
   const host: SessionCatalogHost = {
     hostId: "gateway:local",
@@ -77,6 +78,7 @@ function fakeCatalog(params: {
     pluginId: params.id,
     id: params.id,
     label: params.id,
+    processHomeFallbackAllowed: params.processHomeFallbackAllowed ?? true,
     list: async () => {
       await params.onList?.();
       return [host];
@@ -813,6 +815,28 @@ describe("createBeamMirrorRunner", () => {
     });
     await runner.tick();
     expect(sent).toHaveLength(0);
+  });
+
+  it("warns once when profile isolation disables process-HOME fallback", async () => {
+    const warnings: string[] = [];
+    const catalog = fakeCatalog({
+      id: "claude",
+      sessions: [],
+      processHomeFallbackAllowed: false,
+    });
+    const runner = createBeamMirrorRunner({
+      runtime: fakeRuntime(mirrorConfig({ catalogs: ["claude"] })),
+      logger: { warn: (message) => warnings.push(message), info: () => {} },
+      now: () => NOW,
+      listCatalogs: () => [catalog],
+    });
+
+    await runner.tick();
+    await runner.tick();
+
+    expect(warnings).toEqual([
+      "beam mirror process-HOME fallback disabled: isolated state; only explicit catalog roots can be mirrored",
+    ]);
   });
 
   it("sends one completed upload when a session leaves the active window", async () => {

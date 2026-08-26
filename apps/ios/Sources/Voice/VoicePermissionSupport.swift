@@ -3,25 +3,23 @@ import Foundation
 import OpenClawKit
 import Speech
 
-extension TalkModeManager {
-    nonisolated static func requestMicrophonePermission() async -> Bool {
+enum VoicePermissionSupport {
+    static func requestMicrophonePermission(timeoutErrorDomain: String) async -> Bool {
         switch AVAudioApplication.shared.recordPermission {
         case .granted:
             return true
         case .denied:
             return false
         case .undetermined:
-            return await self.requestPermissionWithTimeout { completion in
-                AVAudioApplication.requestRecordPermission(completionHandler: { ok in
-                    completion(ok)
-                })
+            return await self.requestPermissionWithTimeout(errorDomain: timeoutErrorDomain) { completion in
+                AVAudioApplication.requestRecordPermission(completionHandler: completion)
             }
         @unknown default:
             return false
         }
     }
 
-    nonisolated static func requestSpeechPermission() async -> Bool {
+    static func requestSpeechPermission(timeoutErrorDomain: String) async -> Bool {
         let status = SFSpeechRecognizer.authorizationStatus()
         switch status {
         case .authorized:
@@ -34,29 +32,14 @@ extension TalkModeManager {
             return false
         }
 
-        return await self.requestPermissionWithTimeout { completion in
+        return await self.requestPermissionWithTimeout(errorDomain: timeoutErrorDomain) { completion in
             SFSpeechRecognizer.requestAuthorization { authStatus in
                 completion(authStatus == .authorized)
             }
         }
     }
 
-    private nonisolated static func requestPermissionWithTimeout(
-        _ operation: @escaping @Sendable (@escaping @Sendable (Bool) -> Void) -> Void) async -> Bool
-    {
-        do {
-            return try await AsyncTimeout.withTimeout(
-                seconds: 8,
-                onTimeout: { NSError(domain: "TalkMode", code: 6, userInfo: [
-                    NSLocalizedDescriptionKey: "permission request timed out",
-                ]) },
-                operation: { await PermissionRequestBridge.awaitRequest(operation) })
-        } catch {
-            return false
-        }
-    }
-
-    static func permissionMessage(
+    static func speechPermissionMessage(
         kind: String,
         status: SFSpeechRecognizerAuthorizationStatus) -> String
     {
@@ -81,6 +64,22 @@ extension TalkModeManager {
             return String(
                 format: String(localized: "%@ permission denied"),
                 kind)
+        }
+    }
+
+    private static func requestPermissionWithTimeout(
+        errorDomain: String,
+        operation: @escaping @Sendable (@escaping @Sendable (Bool) -> Void) -> Void) async -> Bool
+    {
+        do {
+            return try await AsyncTimeout.withTimeout(
+                seconds: 8,
+                onTimeout: { NSError(domain: errorDomain, code: 6, userInfo: [
+                    NSLocalizedDescriptionKey: "permission request timed out",
+                ]) },
+                operation: { await PermissionRequestBridge.awaitRequest(operation) })
+        } catch {
+            return false
         }
     }
 }

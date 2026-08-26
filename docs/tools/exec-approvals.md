@@ -404,9 +404,15 @@ argv matching. Prefer the UI or approval flow to regenerate those entries
 instead of hand-editing the encoded value. If OpenClaw cannot parse argv
 for a command segment, entries with `argPattern` do not match.
 
-Generated `allow-always` entries are argv-bound. New generated entries include
-`argPattern`; older generated path-only entries are ignored and need a fresh
-approval. For a manual path-only rule, omit both `source` and `argPattern`.
+Generated `allow-always` entries are bound to both the exact argv and the working
+directory where you approved them. Choosing **Always allow here** authorizes the
+same command only in that directory; running it elsewhere is an allowlist miss.
+
+Older generated entries that were not directory-bound are inactive after an
+upgrade. `openclaw update` removes them during its automatic Doctor pass, or you
+can run `openclaw doctor --fix` yourself. Rerun an affected workflow and choose
+**Always allow here** to create the replacement. Manual allowlist rules are not
+changed. For a manual path-only rule, omit both `source` and `argPattern`.
 
 Each allowlist entry supports:
 
