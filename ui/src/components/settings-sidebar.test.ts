@@ -183,7 +183,9 @@ describe("settings sidebar search", () => {
       ),
     ].map((item) => item.textContent?.trim());
     expect(resultLabels).toEqual(["MCP", "Appearance", "Language"]);
-    expect(container.querySelector(".settings-sidebar__item--active")).toBeNull();
+    const active = container.querySelector(".settings-sidebar__item--active");
+    expect(active?.textContent).toContain("Appearance");
+    expect(active?.getAttribute("aria-current")).toBe("page");
 
     const language = container.querySelector<HTMLAnchorElement>(
       '.settings-sidebar__subitem[href="/settings/appearance?section=__appearance__#settings-language"]',

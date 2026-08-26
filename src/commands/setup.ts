@@ -150,6 +150,16 @@ export async function setupCommand(
   const prepared = await io.readConfigFileSnapshotForWrite();
   const snapshot = prepared.snapshot;
   if (snapshot.exists && !snapshot.valid) {
+    if (opts?.json) {
+      const [{ formatCliJsonFailure }, { normalizeConfigIssues }] = await Promise.all([
+        import("../cli/failure-output.js"),
+        import("../config/issue-format.js"),
+      ]);
+      writeRuntimeJson(runtime, {
+        ...formatCliJsonFailure(`OpenClaw config is invalid: ${shortenHomePath(configPath)}`),
+        issues: normalizeConfigIssues(snapshot.issues),
+      });
+    }
     const formatConfigFilePath = deps.formatConfigFilePath ?? formatDefaultConfigPath;
     runtime.error(
       `Config invalid at ${await formatConfigFilePath(configPath)}. Run \`${formatCliCommand("openclaw doctor")}\` to repair it, then re-run setup.`,

@@ -38,12 +38,10 @@
       "id": "msteams",
       "configuredState": {
         "env": {
-          "anyOf": [
-            "MSTEAMS_APP_ID",
-            "MSTEAMS_APP_PASSWORD",
-            "MSTEAMS_TENANT_ID"
-          ]
-        }
+          "anyOf": ["MSTEAMS_APP_ID", "MSTEAMS_APP_PASSWORD", "MSTEAMS_TENANT_ID"]
+        },
+        "specifier": "./configured-state",
+        "exportName": "hasConfiguredMSTeamsChannelState"
       },
       "label": "Microsoft Teams",
       "selectionLabel": "Microsoft Teams (Teams SDK)",

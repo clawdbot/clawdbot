@@ -12,7 +12,6 @@
   width: fit-content;
   max-width: 100%;
   min-width: 0;
-  box-sizing: border-box;
   padding: 4px 0;
   border: 0;
   border-radius: var(--radius-sm);
@@ -74,7 +73,6 @@
 .chat-activity-group__summary {
   --chat-tool-activity-color: color-mix(in srgb, var(--muted) 88%, transparent);
 
-  font-family: var(--font-body);
   font-size: calc(var(--control-ui-text-sm) + 1px);
   font-weight: 400;
   line-height: 1.5;
@@ -519,32 +517,6 @@
   color: inherit;
 }
 
-/* ── Command token colors (display-only highlighting) ── */
-.chat-cmd--name {
-  color: inherit;
-  font: inherit;
-}
-
-.chat-cmd--str {
-  font: inherit;
-  color: inherit;
-}
-
-.chat-cmd--num {
-  font: inherit;
-  color: inherit;
-}
-
-.chat-cmd--flag {
-  font: inherit;
-  color: inherit;
-}
-
-.chat-cmd--op {
-  font: inherit;
-  color: inherit;
-}
-
 /* ── Key-value args (generic tools) ── */
 .chat-tool-kv {
   display: flex;
@@ -579,7 +551,6 @@
 
 /* ── Expanded tool row body ── */
 .chat-tool-msg-body {
-  box-sizing: border-box;
   min-width: 0;
   max-width: 100%;
   margin-top: 5px;
@@ -621,7 +592,6 @@
 }
 
 .chat-tool-card {
-  box-sizing: border-box;
   min-width: 0;
   max-width: 100%;
 }
@@ -822,7 +792,6 @@
 }
 
 .chat-tool-card__block-content {
-  box-sizing: border-box;
   max-width: 100%;
   min-width: 0;
   margin: 0;

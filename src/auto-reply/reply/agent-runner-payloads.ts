@@ -336,8 +336,22 @@ export async function buildReplyPayloads(params: {
       directlySentTextFragmentsByAssistantMessage.set(assistantMessageIndex, [sentText]);
     }
   }
-  const isDirectlySentBlockPayload = (payload: ReplyPayload) =>
-    Boolean(params.directlySentBlockKeys?.has(createBlockReplyContentKey(payload)));
+  const isDirectlySentBlockPayload = (payload: ReplyPayload) => {
+    const contentKey = createBlockReplyContentKey(payload);
+    if (!params.directlySentBlockKeys?.has(contentKey)) {
+      return false;
+    }
+    const assistantMessageIndex = getReplyPayloadMetadata(payload)?.assistantMessageIndex;
+    return (
+      assistantMessageIndex === undefined ||
+      !params.directlySentBlockPayloads?.length ||
+      params.directlySentBlockPayloads.some(
+        (sentPayload) =>
+          getReplyPayloadMetadata(sentPayload)?.assistantMessageIndex === assistantMessageIndex &&
+          createBlockReplyContentKey(sentPayload) === contentKey,
+      )
+    );
+  };
   const hasDirectlySentText = (payload: ReplyPayload): boolean => {
     if (isDirectlySentBlockPayload(payload)) {
       return true;

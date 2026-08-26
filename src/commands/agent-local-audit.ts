@@ -1,5 +1,6 @@
 /** Direct-local agent audit writer lifecycle shared by CLI entrypoints. */
 import { createAuditEventRecorder } from "../audit/audit-recorder.js";
+import { configureExecutionDecisionWorkSink } from "../audit/execution-decision-work.js";
 import {
   configureExecutionIdentityAdmissionSink,
   hasExecutionIdentityAdmissionSink,
@@ -20,11 +21,15 @@ export function startAgentLocalAuditWriter(
   const clearAdmissionSink = configureExecutionIdentityAdmissionSink(
     recorder.recordExecutionIdentity,
   );
+  const clearDecisionWorkSink = configureExecutionDecisionWorkSink(
+    recorder.recordExecutionDecisionWork,
+  );
   const clearRuntimeActionSink = configureRuntimeActionDecisionSink(
     recorder.recordExecutionDecision,
   );
   return async () => {
     clearRuntimeActionSink();
+    clearDecisionWorkSink();
     clearAdmissionSink();
     await recorder.stop();
   };

@@ -3896,6 +3896,69 @@ test("sessions.create inherits explicit selection without runtime model identity
   expect(storedEntry?.parentSessionKey).toBe("agent:main:main");
 });
 
+test("sessions.create skips inherited active auto fallback model overrides", async () => {
+  const { storePath } = await createSessionStoreDir();
+  testState.agentConfig = { model: { primary: "openai/gpt-primary" } };
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-parent-auto-fallback", {
+        providerOverride: "google-vertex",
+        modelOverride: "gemini-fallback",
+        modelOverrideSource: "auto",
+        modelOverrideFallbackOriginProvider: "openai",
+        modelOverrideFallbackOriginModel: "gpt-primary",
+        agentRuntimeOverride: "vertex-runtime",
+        contextWindow: "1m",
+        authProfileOverride: "google-vertex:fallback",
+        authProfileOverrideSource: "auto",
+        thinkingLevel: "high",
+      }),
+    },
+  });
+
+  const created = await directSessionReq<{
+    key?: string;
+    resolved?: { modelProvider?: string; model?: string };
+    entry?: {
+      parentSessionKey?: string;
+      providerOverride?: string;
+      modelOverride?: string;
+      modelOverrideSource?: string;
+      agentRuntimeOverride?: string;
+      contextWindow?: string;
+      authProfileOverride?: string;
+      authProfileOverrideSource?: string;
+      thinkingLevel?: string;
+    };
+  }>("sessions.create", {
+    agentId: "main",
+    parentSessionKey: "main",
+  });
+
+  expect(created.ok).toBe(true);
+  expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
+  expect(created.payload?.entry?.providerOverride).toBeUndefined();
+  expect(created.payload?.entry?.modelOverride).toBeUndefined();
+  expect(created.payload?.entry?.modelOverrideSource).toBeUndefined();
+  expect(created.payload?.entry?.agentRuntimeOverride).toBeUndefined();
+  expect(created.payload?.entry?.contextWindow).toBe("1m");
+  expect(created.payload?.entry?.authProfileOverride).toBeUndefined();
+  expect(created.payload?.entry?.authProfileOverrideSource).toBeUndefined();
+  expect(created.payload?.entry?.thinkingLevel).toBe("high");
+  expect(created.payload?.resolved).toEqual({ modelProvider: "openai", model: "gpt-primary" });
+
+  const key = created.payload?.key as string;
+  const storedEntry = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
+  expect(storedEntry?.parentSessionKey).toBe("agent:main:main");
+  expect(storedEntry?.providerOverride).toBeUndefined();
+  expect(storedEntry?.modelOverride).toBeUndefined();
+  expect(storedEntry?.agentRuntimeOverride).toBeUndefined();
+  expect(storedEntry?.contextWindow).toBe("1m");
+  expect(storedEntry?.authProfileOverride).toBeUndefined();
+  expect(storedEntry?.authProfileOverrideSource).toBeUndefined();
+  expect(storedEntry?.thinkingLevel).toBe("high");
+});
+
 test("sessions.create resolves the current default instead of inherited runtime identity", async () => {
   const { storePath } = await createSessionStoreDir();
   testState.agentConfig = { model: { primary: "anthropic/current-model" } };

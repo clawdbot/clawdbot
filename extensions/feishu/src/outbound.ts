@@ -1,6 +1,9 @@
 // Feishu plugin module implements outbound behavior.
 import path from "node:path";
-import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  isChannelPartialDeliveryError,
+  createChannelPartialDeliveryError,
+} from "openclaw/plugin-sdk/channel-inbound";
 import { createReplyToFanout } from "openclaw/plugin-sdk/channel-outbound";
 import {
   attachChannelToResult,
@@ -66,6 +69,15 @@ import {
 
 const RENDERED_FEISHU_CARD = Symbol("openclaw.renderedFeishuCard");
 const FEISHU_PRESENTATION_FALLBACK_MARKER = "__openclawPresentationFallback";
+// Carries the direct-send upload-failure policy through the presentation
+// fallback delivery path. The normal `sendMedia` branch sets
+// `propagateMediaUploadFailure` directly; the presentation-fallback branch
+// routes through `sendPayload` (whose shared signature cannot carry the flag),
+// so the direct `send` action stamps this marker on `channelData.feishu` and
+// `sendFeishuFallbackPayload` reads it before calling `sendMedia`. This keeps
+// a direct-send attachment failure visible instead of degrading to a
+// fallback-text `ok:true` receipt (issue #112244, ClawSweeper P1).
+export const FEISHU_PROPAGATE_MEDIA_UPLOAD_FAILURE_MARKER = "__openclawPropagateMediaUploadFailure";
 const FEISHU_TEXT_CHUNK_LIMIT = 4000;
 
 function normalizePossibleLocalImagePath(text: string | undefined): string | null {
@@ -152,6 +164,23 @@ type FeishuOutboundPayload = Parameters<
 type FeishuSendPayloadContext = Parameters<NonNullable<ChannelOutboundAdapter["sendPayload"]>>[0];
 type FeishuSendTextContext = Parameters<NonNullable<ChannelOutboundAdapter["sendText"]>>[0];
 
+// The Feishu sendMedia implementation accepts an optional flag the shared
+// ChannelOutboundAdapter contract does not: when true, a media-upload failure
+// is re-thrown to the caller instead of being converted to a fallback text
+// success. The direct `send` action sets this so an agent that requested an
+// attachment receives a visible failure when it cannot be delivered, rather
+// than an `ok:true` receipt for a text-only fallback (issue #112244).
+//
+// The return type mirrors the shared contract exactly — `ReturnType<...>` is
+// already `Promise<OutboundDeliveryResult>`, so wrapping it in another
+// `Promise` would produce `Promise<Promise<...>>` and break the `async`
+// implementation's single-Promise return (ClawSweeper P1).
+export type FeishuOutboundSendMedia = (
+  params: Parameters<NonNullable<ChannelOutboundAdapter["sendMedia"]>>[0] & {
+    propagateMediaUploadFailure?: boolean;
+  },
+) => ReturnType<NonNullable<ChannelOutboundAdapter["sendMedia"]>>;
+
 function toFeishuOutboundResult<T extends { chatId: string }>(result: T) {
   const { chatId, ...delivery } = result;
   return { ...delivery, target: { kind: "chat" as const, id: chatId } };
@@ -187,6 +216,33 @@ function consumeFeishuPresentationFallbackMarker(payload: FeishuOutboundPayload)
       channelData: Object.keys(nextChannelData).length > 0 ? nextChannelData : undefined,
     },
     presentationFallback: true,
+  };
+}
+
+// Reads (without consuming) the direct-send upload-failure policy stamped on
+// the payload by the presentation-fallback branch. Unlike the presentation
+// fallback marker this is not consumed: a fallback payload may fan out
+// multiple `sendMedia` calls and each must honor the policy.
+function readFeishuPropagateMediaUploadFailure(payload: FeishuOutboundPayload): boolean {
+  const feishuData = isRecord(payload.channelData?.feishu) ? payload.channelData.feishu : undefined;
+  return feishuData?.[FEISHU_PROPAGATE_MEDIA_UPLOAD_FAILURE_MARKER] === true;
+}
+
+// Builds a `channelData.feishu` that carries only the direct-send upload-failure
+// policy marker. The document-comment branch strips native card / interactive
+// channelData before fallback delivery (those cannot render in comments), but
+// it must not drop the propagation marker the direct `send` action stamped —
+// otherwise a media-upload failure on a comment target degrades to a
+// fallback-text `ok:true` receipt again (issue #112244, ClawSweeper P1).
+function buildFeishuPropagationOnlyChannelData(
+  payload: FeishuOutboundPayload,
+): { feishu: Record<string, unknown> } | undefined {
+  const feishuData = isRecord(payload.channelData?.feishu) ? payload.channelData.feishu : undefined;
+  if (feishuData?.[FEISHU_PROPAGATE_MEDIA_UPLOAD_FAILURE_MARKER] !== true) {
+    return undefined;
+  }
+  return {
+    feishu: { [FEISHU_PROPAGATE_MEDIA_UPLOAD_FAILURE_MARKER]: true },
   };
 }
 
@@ -484,12 +540,21 @@ async function sendFeishuFallbackPayload(params: {
   payload: FeishuOutboundPayload;
   separateMediaAndText?: boolean;
 }) {
+  // The direct `send` action stamps this marker when it routes an attachment
+  // through the presentation-fallback path; honor it so an upload failure is
+  // re-thrown instead of degrading to a fallback-text `ok:true` receipt
+  // (issue #112244, ClawSweeper P1). The shared `sendTextMediaPayload` helper
+  // cannot carry the flag, so when propagation is requested and there is media
+  // to deliver, force the explicit fan-out path that calls `sendMedia` with
+  // the flag set.
+  const propagateMediaUploadFailure = readFeishuPropagateMediaUploadFailure(params.payload);
   const ctx = { ...params.ctx, payload: params.payload };
   const mediaUrls = normalizeStringEntries(resolvePayloadMediaUrls(params.payload));
   const text = params.payload.text ?? "";
   const textChunks = text ? chunkFeishuMarkdown(text, FEISHU_TEXT_CHUNK_LIMIT) : [];
   const shouldSeparate =
-    mediaUrls.length > 0 && (params.separateMediaAndText === true || textChunks.length > 1);
+    mediaUrls.length > 0 &&
+    (propagateMediaUploadFailure || params.separateMediaAndText === true || textChunks.length > 1);
   if (!shouldSeparate) {
     return await sendTextMediaPayload({
       channel: "feishu",
@@ -507,7 +572,11 @@ async function sendFeishuFallbackPayload(params: {
     replyToIdSource: ctx.replyToIdSource,
     replyToMode: ctx.replyToMode,
   });
-  const sendMedia = feishuOutbound.sendMedia;
+  // Narrow the optional shared `sendMedia` to the Feishu-specific contract so
+  // the `propagateMediaUploadFailure` flag can be carried on direct-send
+  // fallback delivery (the shared `ChannelOutboundAdapter["sendMedia"]`
+  // signature does not declare it).
+  const sendMedia: FeishuOutboundSendMedia | undefined = feishuOutbound.sendMedia;
   const sendText = feishuOutbound.sendText;
   if (!sendMedia || !sendText) {
     throw new Error("Feishu fallback delivery is not available.");
@@ -523,6 +592,7 @@ async function sendFeishuFallbackPayload(params: {
       mediaUrl,
       replyToId: nextReplyToId(),
       audioAsVoice: params.payload.audioAsVoice ?? ctx.audioAsVoice,
+      ...(propagateMediaUploadFailure ? { propagateMediaUploadFailure: true } : {}),
     });
   }
   for (const chunk of textChunks) {
@@ -589,6 +659,14 @@ async function sendFeishuTtsSupplementPayload(params: {
   return lastResult ?? { channel: "feishu", messageId: "" };
 }
 
+// `feishuOutbound` keeps the shared `ChannelOutboundAdapter` shape (whose
+// `sendMedia` is optional) so the object literal — which spreads
+// `createAttachedChannelResultAdapter` (returning `sendMedia?: ... | undefined`)
+// — type-checks without a `sendMedia: ... | undefined` mismatch. Callers that
+// need the Feishu-specific `propagateMediaUploadFailure` flag narrow the
+// optional `sendMedia` to `FeishuOutboundSendMedia` at the use site
+// (channel.ts direct-send branch, sendFeishuFallbackPayload) instead of
+// forcing a required property here (ClawSweeper P1).
 export const feishuOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: chunkFeishuMarkdown,
@@ -654,7 +732,12 @@ export const feishuOutbound: ChannelOutboundAdapter = {
         text,
         interactive: undefined,
         presentation: undefined,
-        channelData: undefined,
+        // Strip native card / interactive channelData (comments cannot render
+        // them) but preserve the direct-send upload-failure propagation marker
+        // so a media-upload failure on a comment target stays visible instead
+        // of degrading to a fallback-text `ok:true` receipt (issue #112244,
+        // ClawSweeper P1).
+        channelData: buildFeishuPropagationOnlyChannelData(payload),
       };
       return await sendFeishuFallbackPayload({
         ctx,
@@ -930,6 +1013,14 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       replyToMode,
       threadId,
       onDeliveryResult,
+      propagateMediaUploadFailure = false,
+    }: Parameters<NonNullable<ChannelOutboundAdapter["sendMedia"]>>[0] & {
+      /** When true, a media-upload failure is re-thrown to the caller instead of
+       * being converted to a fallback text success. The direct `send` action
+       * sets this so an agent that requested an attachment receives a visible
+       * failure when the attachment cannot be delivered, rather than an `ok:true`
+       * receipt for a text-only fallback (issue #112244). */
+      propagateMediaUploadFailure?: boolean;
     }) => {
       const { normalizedReplyToId } = resolveFeishuReplyMode({
         replyToId,
@@ -949,6 +1040,18 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       };
       const deliveryOptions = { replyToIdSource, replyToMode, onDeliveryResult };
       if (parseFeishuCommentTarget(to)) {
+        // Feishu document comments cannot host a media attachment; the mediaUrl
+        // is rendered as a fallback text link instead. This visible-link
+        // fallback is the established comment-target behavior on main and is
+        // NOT the silent text-only `ok:true` drop issue #112244 removes — the
+        // recipient sees the media URL as a clickable link, so the attachment
+        // intent is visibly delivered even though the comment cannot render the
+        // media inline. The direct-send upload-failure propagation policy
+        // therefore does not apply here: it targets actual media-upload failures
+        // (the `sendMediaFeishu` catch below), and a comment target never
+        // reaches that upload path. Keep the fallback for both `send` and
+        // thread-reply so comment targets retain their visible media-link
+        // delivery (issue #112244, ClawSweeper fourteenth-review P1).
         const commentText = mediaUrl?.trim()
           ? await buildFeishuMediaFallbackText({
               text,
@@ -986,10 +1089,11 @@ export const feishuOutbound: ChannelOutboundAdapter = {
         audioAsVoice,
       });
       let textSent = false;
+      let captionResult: { messageId: string; chatId: string } | undefined;
 
       // Send text first if provided, except for Feishu native voice bubbles.
       if (text?.trim() && !suppressTextForVoiceMedia) {
-        await sendOutboundText({
+        captionResult = await sendOutboundText({
           cfg,
           to,
           text,
@@ -1018,6 +1122,28 @@ export const feishuOutbound: ChannelOutboundAdapter = {
         if (isChannelPartialDeliveryError(err)) {
           // Accepted media is not an upload failure and must never trigger a second send.
           throw err;
+        }
+        if (propagateMediaUploadFailure) {
+          // The direct `send` action requested a controlled failure when the
+          // attachment cannot be delivered, so the agent receives a visible
+          // error instead of an `ok:true` receipt for a text-only fallback
+          // (issue #112244). When the caption was already delivered, preserve
+          // its receipt as the existing partial-delivery outcome so the caller
+          // knows the text is visible and does not retry it (which would
+          // duplicate the caption); only a send with no delivered caption is a
+          // wholly failed send.
+          if (textSent && captionResult) {
+            throw createChannelPartialDeliveryError(err, {
+              messageIds: [captionResult.messageId],
+              visibleReplySent: true,
+            });
+          }
+          throw new Error(
+            `Feishu send could not deliver the requested media attachment: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+            { cause: err },
+          );
         }
         console.error(`[feishu] sendMediaFeishu failed:`, err);
         const fallbackText = await buildFeishuMediaFallbackText({

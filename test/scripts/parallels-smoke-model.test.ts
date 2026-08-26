@@ -622,7 +622,7 @@ describe("Parallels smoke model selection", () => {
     ).toBe(false);
   });
 
-  it("starts the default macOS upgrade without building or packaging the host checkout", () => {
+  it("starts the default macOS upgrade without host networking or packaging the checkout", () => {
     const tempDir = makeTempDir(tempDirs, "openclaw-macos-upgrade-no-pack-");
     writeNodeFakePrlctl(
       tempDir,
@@ -652,8 +652,6 @@ describe("Parallels smoke model selection", () => {
         TS_PATHS.macos,
         "--mode",
         "upgrade",
-        "--host-ip",
-        "127.0.0.1",
         "--latest-version",
         "2026.8.25",
         "--api-key-env",
@@ -666,6 +664,7 @@ describe("Parallels smoke model selection", () => {
         env: {
           ...process.env,
           ...fakePrlctlEnv(tempDir),
+          "BASH_FUNC_ifconfig%%": "() { return 1; }",
           OPENCLAW_PARALLELS_ARTIFACT_ROOT: join(tempDir, "artifacts"),
           OPENCLAW_PARALLELS_SKIP_SNAPSHOT_RESTORE: "1",
           OPENCLAW_PARALLELS_TEST_API_KEY: "fixture-not-a-real-credential",
@@ -1106,8 +1105,6 @@ if (commandArgs[0] === "list") {
           "2026.1.1",
           "--target-package-spec",
           "openclaw@2026.1.1",
-          "--host-ip",
-          "127.0.0.1",
           "--api-key-env",
           "OPENCLAW_PARALLELS_TEST_KEY",
           "--json",
@@ -1118,6 +1115,7 @@ if (commandArgs[0] === "list") {
           env: {
             ...process.env,
             ...fakeEnv,
+            "BASH_FUNC_ifconfig%%": "() { return 1; }",
             NODE_OPTIONS: `${fakeEnv.NODE_OPTIONS} --import=${pathToFileURL(npmBootstrapPath).href}`,
             OPENCLAW_PARALLELS_ARTIFACT_ROOT: tempDir,
             OPENCLAW_PARALLELS_TEST_KEY: "fixture",

@@ -65,6 +65,10 @@ import {
   buildActiveVideoGenerationTaskPromptContextForSession,
 } from "../media-generation-task-status.js";
 import type { SandboxWorkspaceInfo } from "../sandbox/types.js";
+import {
+  captureRoutingDecisionWork,
+  createModelRoutingTestAdmission,
+} from "../test-helpers/model-routing-decision-e2e-fixtures.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import { prepareCliRunContext } from "./prepare.js";
@@ -251,6 +255,38 @@ type CliContextBudgetTestCase = {
 
 describe("prepareCliRunContext", () => {
   let fixture: ReturnType<typeof createCliRunnerPrepareFixture>;
+
+  it("preserves outer fallback route provenance through CLI admission", async () => {
+    const runId = "run-cli-model-fallback-receipt";
+    const cfg = { logging: { audit: { executionIdentity: true } } } satisfies OpenClawConfig;
+    const preparedRunAdmission = createModelRoutingTestAdmission({
+      cfg,
+      runId,
+      agentId: "main",
+      boundary: "cli-prepare-test",
+    });
+
+    const { decisionWork } = await captureRoutingDecisionWork(() =>
+      fixture.prepare({
+        runId,
+        config: cfg,
+        preparedRunAdmission,
+        model: "mock-2",
+        modelRoutingProvenance: {
+          requestedProvider: "openai",
+          requestedModel: "mock-1",
+          stage: "fallback",
+          fallbackReason: "rate_limit",
+        },
+      }),
+    ).finally(preparedRunAdmission.close);
+
+    expect(decisionWork).toHaveLength(1);
+    expect(decisionWork[0]?.receipt).toMatchObject({
+      action: { summary: "Requested openai/mock-1; selected test-cli/mock-2." },
+      decision: { reasonCode: "rate_limit" },
+    });
+  });
 
   it.each(["high", "off"] as const)(
     "passes %s thinking through the CLI backend execution seam",

@@ -24,12 +24,24 @@ configure_prepublish_plugin_registry() {
   local registry_dir="$1"
   local resolved_registry_dir
   resolved_registry_dir="$(cd "$registry_dir" && pwd)"
-  if [ ! -f "$resolved_registry_dir/prepublish-plugin-registry.json" ]; then
+  local manifest="$resolved_registry_dir/prepublish-plugin-registry.json"
+  if [ ! -f "$manifest" ]; then
     echo "Prepublish plugin registry manifest is missing." >&2
     exit 1
   fi
+  local source_sha="${OPENCLAW_DOCKER_E2E_SELECTED_SHA:-}"
+  local candidate_version="${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION:-}"
+  local manifest_sha256="${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256:-}"
+  source_sha="${source_sha:-$(node -e 'process.stdout.write(require(process.argv[1]).sourceSha)' "$manifest")}"
+  candidate_version="${candidate_version:-$(node -e 'process.stdout.write(require(process.argv[1]).candidateVersion)' "$manifest")}"
+  if [ -z "$manifest_sha256" ]; then
+    manifest_sha256="$(node -e 'const fs=require("node:fs"),crypto=require("node:crypto");process.stdout.write(crypto.createHash("sha256").update(fs.readFileSync(process.argv[1])).digest("hex"))' "$manifest")"
+  fi
   PREPUBLISH_PLUGIN_REGISTRY_ARGS=(
     -e OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR=/tmp/openclaw-prepublish-plugin-registry
+    -e OPENCLAW_DOCKER_E2E_SELECTED_SHA="$source_sha"
+    -e OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION="$candidate_version"
+    -e OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256="$manifest_sha256"
     -v "$resolved_registry_dir:/tmp/openclaw-prepublish-plugin-registry:ro"
   )
 }
@@ -94,6 +106,7 @@ if ! docker_e2e_run_with_harness \
 set -euo pipefail
 
 source scripts/lib/openclaw-e2e-instance.sh
+source scripts/e2e/lib/prepublish-plugin-registry.sh
 openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}"
 export NPM_CONFIG_PREFIX="$HOME/.npm-global"
 export npm_config_prefix="$NPM_CONFIG_PREFIX"
@@ -124,53 +137,14 @@ trap cleanup_inner EXIT
 configure_plugin_registry() {
   [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ] || return 0
   local registry_root="/tmp/openclaw-codex-registry"
-  local manifest="$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR/prepublish-plugin-registry.json"
-  local package_name package_version package_tarball
-  IFS=$'\t' read -r package_name package_version package_tarball < <(
-    PREPUBLISH_PLUGIN_REGISTRY_MANIFEST="$manifest" node <<'NODE'
-const fs = require("node:fs");
-const path = require("node:path");
-const manifestPath = process.env.PREPUBLISH_PLUGIN_REGISTRY_MANIFEST;
-const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-const matches = Array.isArray(manifest.packages)
-  ? manifest.packages.filter((entry) => entry?.name === "@openclaw/codex")
-  : [];
-if (matches.length !== 1) {
-  throw new Error("prepublish plugin registry must contain exactly one @openclaw/codex package");
-}
-const entry = matches[0];
-if (
-  typeof entry.version !== "string" ||
-  typeof entry.tarball !== "string" ||
-  path.basename(entry.tarball) !== entry.tarball
-) {
-  throw new Error("invalid @openclaw/codex prepublish plugin registry entry");
-}
-process.stdout.write(
-  `${entry.name}\t${entry.version}\t${path.join(path.dirname(manifestPath), entry.tarball)}\n`,
-);
-NODE
-  )
-  mkdir -p "$registry_root"
-  OPENCLAW_NPM_REGISTRY_DIST_TAGS="latest=0.0.0,beta=$package_version" \
-  OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org \
-    node scripts/e2e/lib/plugins/npm-registry-server.mjs \
-    "$registry_root/port" \
-    "$package_name" "$package_version" "$package_tarball" \
-    >"$registry_root/server.log" 2>&1 &
-  plugin_registry_pid="$!"
-  for _ in $(seq 1 100); do
-    [ -s "$registry_root/port" ] && break
-    openclaw_e2e_process_alive "$plugin_registry_pid" || break
-    sleep 0.1
-  done
-  if [ ! -s "$registry_root/port" ]; then
-    openclaw_e2e_print_log "$registry_root/server.log" >&2
-    echo "Timed out waiting for Codex npm registry." >&2
-    return 1
-  fi
-  export NPM_CONFIG_REGISTRY="http://127.0.0.1:$(cat "$registry_root/port")"
-  export npm_config_registry="$NPM_CONFIG_REGISTRY"
+  OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_REQUIRED_PACKAGES_JSON='["@openclaw/codex"]' \
+    openclaw_prepublish_plugin_registry_start \
+    "$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR" \
+    "${OPENCLAW_DOCKER_E2E_SELECTED_SHA:?missing selected SHA}" \
+    "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION:?missing candidate version}" \
+    "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256:?missing manifest SHA-256}" \
+    "$registry_root" \
+    plugin_registry_pid
 }
 
 mkdir -p "$NPM_CONFIG_PREFIX" "$XDG_CACHE_HOME" "$NPM_CONFIG_CACHE"

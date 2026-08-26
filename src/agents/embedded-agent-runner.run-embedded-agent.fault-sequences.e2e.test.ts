@@ -23,6 +23,10 @@ import {
   installEmbeddedRunnerBaseE2eMocks,
   installEmbeddedRunnerFastRunE2eMocks,
 } from "./test-helpers/embedded-agent-runner-e2e-mocks.js";
+import {
+  captureRoutingDecisionWork,
+  createModelRoutingTestAdmission,
+} from "./test-helpers/model-routing-decision-e2e-fixtures.js";
 
 type ProviderFault =
   | { status: 200; text: string }
@@ -70,6 +74,7 @@ type TestRunEmbeddedAgent = (
   params: Omit<Parameters<ProductionRunEmbeddedAgent>[0], "admittedRunContext">,
 ) => ReturnType<ProductionRunEmbeddedAgent>;
 let runEmbeddedAgent: TestRunEmbeddedAgent;
+let runEmbeddedAgentWithPreparedAdmission: ProductionRunEmbeddedAgent;
 let runWithModelFallback: typeof import("./model-fallback-runner.js").runWithModelFallback;
 
 beforeAll(async () => {
@@ -87,9 +92,9 @@ beforeAll(async () => {
       createResolvedEmbeddedRunnerModel(provider, modelId),
   }));
 
-  runEmbeddedAgent = wrapRunWithTestAdmission(
-    (await import("./embedded-agent-runner/run.js")).runEmbeddedAgent,
-  );
+  runEmbeddedAgentWithPreparedAdmission = (await import("./embedded-agent-runner/run.js"))
+    .runEmbeddedAgent;
+  runEmbeddedAgent = wrapRunWithTestAdmission(runEmbeddedAgentWithPreparedAdmission);
   ({ runWithModelFallback } = await import("./model-fallback-runner.js"));
 });
 
@@ -308,7 +313,100 @@ function expectError(outcome: ScenarioOutcome): Error & { attempts?: unknown[] }
   return outcome.error;
 }
 
+function deferredVoid() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((settled) => {
+    resolve = settled;
+  });
+  return { promise, resolve };
+}
+
+async function expectPreparationInvalidationToDropRoutingWork(
+  mode: "close" | "replace",
+): Promise<void> {
+  await withScenarioWorkspace(async ({ agentDir, workspaceDir }) => {
+    const runId = `route-preparation-${mode}`;
+    const config = makeProviderConfig([]);
+    const auditConfig = { ...config, logging: { audit: { executionIdentity: true } } };
+    writeProfiles(agentDir, { openai: 1 });
+    runEmbeddedAttemptMock.mockResolvedValue(
+      makeEmbeddedRunnerAttempt({
+        assistantTexts: ["unexpected dispatch"],
+        lastAssistant: buildEmbeddedRunnerAssistant({
+          provider: "openai",
+          model: "mock-1",
+          stopReason: "stop",
+          content: [{ type: "text", text: "unexpected dispatch" }],
+        }),
+      }),
+    );
+    const preparedAdmission = createModelRoutingTestAdmission({
+      cfg: auditConfig,
+      runId,
+      boundary: "route-preparation-e2e",
+    });
+    let replacementAdmission: ReturnType<typeof createModelRoutingTestAdmission> | undefined;
+    const reachedPreparation = deferredVoid();
+    const releasePreparation = deferredVoid();
+    const realMkdir = fs.mkdir.bind(fs);
+    const mkdirSpy = vi.spyOn(fs, "mkdir").mockImplementation(async (target, options) => {
+      if (String(target) === workspaceDir) {
+        reachedPreparation.resolve();
+        await releasePreparation.promise;
+      }
+      return await realMkdir(target, options);
+    });
+    try {
+      const { decisionWork } = await captureRoutingDecisionWork(async () => {
+        const run = runEmbeddedAgentWithPreparedAdmission({
+          preparedRunAdmission: preparedAdmission,
+          sessionId: `session:${runId}`,
+          sessionKey: `agent:test:${runId}`,
+          workspaceDir,
+          agentDir,
+          config,
+          prompt: "hello",
+          provider: "openai",
+          model: "mock-1",
+          timeoutMs: 250,
+          runId,
+          enqueue: async (task) => await task(),
+        });
+        await reachedPreparation.promise;
+        if (mode === "close") {
+          preparedAdmission.close();
+        } else {
+          replacementAdmission = createModelRoutingTestAdmission({
+            cfg: auditConfig,
+            runId,
+            boundary: "route-preparation-replacement-e2e",
+          });
+          await replacementAdmission.admit("embedded");
+        }
+        releasePreparation.resolve();
+        await expect(run).rejects.toThrow("admitted run authority is no longer active");
+      });
+
+      expect(decisionWork).toHaveLength(0);
+      expect(runEmbeddedAttemptMock).not.toHaveBeenCalled();
+    } finally {
+      releasePreparation.resolve();
+      replacementAdmission?.close();
+      preparedAdmission.close();
+      mkdirSpy.mockRestore();
+    }
+  });
+}
+
 describe("runEmbeddedAgent provider fault sequences", () => {
+  it("drops routing work when the admitted run closes during attempt preparation", async () => {
+    await expectPreparationInvalidationToDropRoutingWork("close");
+  });
+
+  it("drops routing work when the admitted run is replaced during attempt preparation", async () => {
+    await expectPreparationInvalidationToDropRoutingWork("replace");
+  });
+
   it("429 -> 429 -> 200 consumes two same-model retries without rotating", async () => {
     const faults = [
       { status: 429, window: "short" },

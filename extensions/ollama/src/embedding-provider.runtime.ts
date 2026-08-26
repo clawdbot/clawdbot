@@ -150,7 +150,7 @@ function normalizeEmbeddingModel(model: string, providerId?: string): string {
 }
 
 function applyQueryInstructionTemplate(model: string, queryText: string): string {
-  const normalizedModel = model.trim().toLowerCase();
+  const normalizedModel = model.trim().toLowerCase().replace(/^.*\//, "");
   const match = QUERY_INSTRUCTION_TEMPLATES.find(({ prefix }) =>
     normalizedModel.startsWith(prefix),
   );

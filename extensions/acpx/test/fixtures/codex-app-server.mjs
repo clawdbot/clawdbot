@@ -1,8 +1,16 @@
 #!/usr/bin/env node
+import fs from "node:fs";
 import readline from "node:readline";
 
 let nextRequestId = 1;
 const pending = new Map();
+const tracePath = process.env.OPENCLAW_ACPX_PROCESS_FIXTURE_TRACE;
+
+function trace(method) {
+  if (tracePath) {
+    fs.appendFileSync(tracePath, `${JSON.stringify({ method })}\n`, "utf8");
+  }
+}
 
 function write(message) {
   process.stdout.write(`${JSON.stringify(message)}\n`);
@@ -33,6 +41,7 @@ const model = {
 };
 
 async function handle(method, params) {
+  trace(method);
   if (method === "initialize") {
     return { userAgent: "openclaw-acpx-process-fixture", codexHome: process.cwd() };
   }

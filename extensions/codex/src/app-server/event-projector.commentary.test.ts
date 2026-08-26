@@ -206,6 +206,18 @@ describe("CodexAppServerEventProjector commentary projection", () => {
   it("streams commentary agent messages as keyed progress events", async () => {
     const onAgentEvent = vi.fn();
     const onPartialReply = vi.fn();
+    const commentaryText = [
+      "Checking the app-server stream",
+      "",
+      "| Intent | Command |",
+      "| --- | --- |",
+      "| Session only | `/model opus` |",
+      "",
+      "```text",
+      "BEFORE  /model opus  → persistent",
+      "AFTER   /model opus  → session only",
+      "```",
+    ].join("\n");
     const projector = await createProjector({
       ...(await createParams()),
       onAgentEvent,
@@ -224,7 +236,7 @@ describe("CodexAppServerEventProjector commentary projection", () => {
     );
     await projector.handleNotification(agentMessageDelta("Checking", "msg-commentary"));
     await projector.handleNotification(
-      agentMessageDelta(" the app-server stream", "msg-commentary"),
+      agentMessageDelta(commentaryText.slice("Checking".length), "msg-commentary"),
     );
     await projector.handleNotification(
       turnCompleted([
@@ -232,7 +244,7 @@ describe("CodexAppServerEventProjector commentary projection", () => {
           type: "agentMessage",
           id: "msg-commentary",
           phase: "commentary",
-          text: "Checking the app-server stream",
+          text: commentaryText,
         },
         {
           type: "agentMessage",
@@ -262,7 +274,7 @@ describe("CodexAppServerEventProjector commentary projection", () => {
         kind: "preamble",
         title: "Preamble",
         phase: "update",
-        progressText: "Checking the app-server stream",
+        progressText: commentaryText,
         source: "codex-app-server",
       },
     ]);
@@ -276,9 +288,9 @@ describe("CodexAppServerEventProjector commentary projection", () => {
     );
     expect(commentary).toMatchObject({
       role: "assistant",
-      content: [{ type: "text", text: "Checking the app-server stream" }],
+      content: [{ type: "text", text: commentaryText }],
       openclawStreamFallback: {
-        replacementText: "Checking the app-server stream",
+        replacementText: commentaryText,
         source: "segment",
         itemId: "msg-commentary",
       },

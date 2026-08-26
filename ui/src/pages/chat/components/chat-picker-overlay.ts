@@ -6,6 +6,7 @@ const MOBILE_COMPOSER_OVERLAY_QUERY =
 const pointerOpenedDropdowns = new WeakSet<HTMLElement>();
 const POINTER_RESTORED_FOCUS_ATTRIBUTE = "data-chat-pointer-restored-focus";
 const POINTER_OPENED_PICKER_ATTRIBUTE = "data-chat-pointer-opened-picker";
+const CHAT_COMPOSER_DISMISS_INVOCATIONS_EVENT = "openclaw-composer-dismiss-invocations";
 
 let composerPickerDismissalInstalled = false;
 
@@ -50,6 +51,15 @@ function dismissChatComposerPickersOutside(event: PointerEvent): void {
       closeComposerPicker(picker);
     }
   }
+  for (const menu of document.querySelectorAll<HTMLElement>(
+    ".agent-chat__input > :is(.slash-menu, .skill-menu)",
+  )) {
+    if (!path.includes(menu)) {
+      menu
+        .closest(".agent-chat__input")
+        ?.dispatchEvent(new CustomEvent(CHAT_COMPOSER_DISMISS_INVOCATIONS_EVENT));
+    }
+  }
 }
 
 function dismissChatComposerPickersOnEscape(event: KeyboardEvent): void {
@@ -57,21 +67,26 @@ function dismissChatComposerPickersOnEscape(event: KeyboardEvent): void {
     return;
   }
   const pickers = openChatComposerPickers();
-  if (pickers.length === 0) {
+  const invocationComposer = document
+    .querySelector<HTMLElement>(".agent-chat__input > :is(.slash-menu, .skill-menu)")
+    ?.closest<HTMLElement>(".agent-chat__input");
+  if (pickers.length === 0 && !invocationComposer) {
     return;
   }
   event.preventDefault();
   event.stopPropagation();
-  const lastPicker = pickers.at(-1);
-  if (!lastPicker) {
-    return;
-  }
-  const trigger = pickerTrigger(lastPicker);
+  const trigger = pickers.at(-1);
   pickers.forEach(closeComposerPicker);
-  trigger?.focus({ preventScroll: true });
+  invocationComposer?.dispatchEvent(new CustomEvent(CHAT_COMPOSER_DISMISS_INVOCATIONS_EVENT));
+  invocationComposer
+    ?.querySelector<HTMLTextAreaElement>(".agent-chat__composer-combobox > textarea")
+    ?.focus({ preventScroll: true });
+  if (trigger) {
+    pickerTrigger(trigger)?.focus({ preventScroll: true });
+  }
 }
 
-function ensureChatComposerPickerDismissal(): void {
+export function ensureChatComposerPickerDismissal(): void {
   if (composerPickerDismissalInstalled || typeof document === "undefined") {
     return;
   }

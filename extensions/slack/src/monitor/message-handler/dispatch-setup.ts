@@ -23,7 +23,7 @@ import { resolveSlackStreamingConfig } from "../../stream-mode.js";
 import { resolveSlackThreadTargets } from "../../threading.js";
 import { normalizeSlackAllowOwnerEntry } from "../allow-list.js";
 import { resolveStorePath, updateLastRoute } from "../config.runtime.js";
-import { createSlackReplyDeliveryPlan } from "../replies.js";
+import { createSlackReplyDeliveryPlan, sanitizeSlackMonitorReplyPayload } from "../replies.js";
 import {
   isSlackStreamingEnabled,
   resolveSlackDisableBlockStreaming,
@@ -197,12 +197,7 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     agentId: route.agentId,
     channel: "slack",
     accountId: route.accountId,
-    transformReplyPayload: (payload) => {
-      if (payload.isReasoning === true) {
-        return null;
-      }
-      return payload;
-    },
+    transformReplyPayload: sanitizeSlackMonitorReplyPayload,
     typing: {
       start: async () => {
         if (!threadStatusGate.hasVisibleOutput()) {

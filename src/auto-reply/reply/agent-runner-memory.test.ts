@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
+import type { ModelFallbackAttemptProvenance } from "../../agents/model-fallback.types.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   loadSessionEntry,
@@ -234,12 +235,21 @@ type ModelFallbackParams = {
   run: (
     provider: string,
     model: string,
-    options?: {
+    options: {
       allowTransientCooldownProbe?: boolean;
       isFinalFallbackAttempt?: boolean;
+      modelRoutingProvenance: ModelFallbackAttemptProvenance;
     },
   ) => Promise<EmbeddedAgentRunResult>;
 };
+
+function modelRoutingProvenance(
+  requestedProvider: string,
+  requestedModel: string,
+  stage: ModelFallbackAttemptProvenance["stage"] = "initial",
+): ModelFallbackAttemptProvenance {
+  return { requestedProvider, requestedModel, stage };
+}
 
 type EmbeddedAgentParams = {
   provider?: string;
@@ -393,7 +403,9 @@ describe("runMemoryFlushIfNeeded", () => {
     rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-unit-"));
     registerMemoryFlushPlanResolverForTest(createMemoryFlushPlan);
     runWithModelFallbackMock.mockReset().mockImplementation(async ({ provider, model, run }) => ({
-      result: await run(provider, model),
+      result: await run(provider, model, {
+        modelRoutingProvenance: modelRoutingProvenance(provider, model),
+      }),
       provider,
       model,
       attempts: [],
@@ -430,18 +442,13 @@ describe("runMemoryFlushIfNeeded", () => {
             run: (
               provider: string,
               model: string,
-              options?: ModelFallbackParams["run"] extends (
-                provider: string,
-                model: string,
-                options?: infer TOptions,
-              ) => Promise<EmbeddedAgentRunResult>
-                ? TOptions
-                : never,
+              options: Parameters<ModelFallbackParams["run"]>[2],
             ) =>
               params.runCandidate(provider, model, {
-                allowTransientCooldownProbe: options?.allowTransientCooldownProbe,
-                isFinalFallbackAttempt: options?.isFinalFallbackAttempt,
+                allowTransientCooldownProbe: options.allowTransientCooldownProbe,
+                isFinalFallbackAttempt: options.isFinalFallbackAttempt,
                 isFallbackRetry: false,
+                modelRoutingProvenance: options.modelRoutingProvenance,
                 contextEngineLogicalTurnLease: {} as never,
                 onContextEngineTurnCandidate: () => {},
               }),
@@ -690,10 +697,14 @@ describe("runMemoryFlushIfNeeded", () => {
     const sessionStore = { [sessionKey]: sessionEntry };
     await writeTestSessionStore(storePath, sessionKey, sessionEntry);
     runWithModelFallbackMock.mockImplementationOnce(
-      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => {
-        await params.run("openai", "gpt-5.6-sol");
+      async (params: { run: ModelFallbackParams["run"] }) => {
+        await params.run("openai", "gpt-5.6-sol", {
+          modelRoutingProvenance: modelRoutingProvenance("openai", "gpt-5.6-sol"),
+        });
         return {
-          result: await params.run("demo", "basic"),
+          result: await params.run("demo", "basic", {
+            modelRoutingProvenance: modelRoutingProvenance("openai", "gpt-5.6-sol", "fallback"),
+          }),
           provider: "demo",
           model: "basic",
           attempts: [],
@@ -1266,17 +1277,10 @@ describe("runMemoryFlushIfNeeded", () => {
     };
     const runtimePolicySessionKey = "agent:main:telegram:default:direct:12345";
     runWithModelFallbackMock.mockImplementationOnce(
-      async (params: {
-        provider: string;
-        model: string;
-        run: (
-          provider: string,
-          model: string,
-          options?: { isFinalFallbackAttempt?: boolean },
-        ) => Promise<unknown>;
-      }) => ({
+      async (params: { provider: string; model: string; run: ModelFallbackParams["run"] }) => ({
         result: await params.run(params.provider, params.model, {
           isFinalFallbackAttempt: false,
+          modelRoutingProvenance: modelRoutingProvenance(params.provider, params.model),
         }),
         provider: params.provider,
         model: params.model,

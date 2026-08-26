@@ -4,6 +4,7 @@ import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-c
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import JSON5 from "json5";
+import { rejectConfigNonFiniteNumbers } from "../config/io.read-helpers.js";
 import {
   coerceSecretRef,
   isValidEnvSecretRefId,
@@ -516,11 +517,14 @@ async function readConfigPatchInput(opts: ConfigPatchOptions): Promise<unknown> 
   } else {
     raw = readConfigMutationFileSync(file as string, "--file");
   }
+  let parsed: unknown;
   try {
-    return JSON5.parse(raw);
+    parsed = JSON5.parse(raw);
   } catch (err) {
     throw new Error(`Failed to parse ${sourceLabel} as JSON5: ${String(err)}`, { cause: err });
   }
+  rejectConfigNonFiniteNumbers(parsed);
+  return parsed;
 }
 
 function buildDeleteOperation(path: PathSegment[]): ConfigSetOperation {

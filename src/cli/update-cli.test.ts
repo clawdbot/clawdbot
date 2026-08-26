@@ -11,7 +11,10 @@ import { writePackageDistInventory } from "../../scripts/lib/package-dist-invent
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
+import {
+  GATEWAY_SERVICE_RUNTIME_PID_ENV,
+  GATEWAY_SERVICE_SELECTOR_ENV_KEYS,
+} from "../daemon/constants.js";
 import type { ClawHubRiskAcknowledgementRequest } from "../infra/clawhub-install-trust.js";
 import { isBetaTag } from "../infra/update-channels.js";
 import { applyDevUpdateTargetEnv } from "../infra/update-dev-target.js";
@@ -109,6 +112,7 @@ const serviceEnvSnapshot = captureEnv([
   "OPENCLAW_SERVICE_MARKER",
   "OPENCLAW_SERVICE_KIND",
   GATEWAY_SERVICE_RUNTIME_PID_ENV,
+  ...GATEWAY_SERVICE_SELECTOR_ENV_KEYS,
 ]);
 
 vi.mock("@clack/prompts", () => ({
@@ -644,9 +648,13 @@ describe("update-cli", () => {
     programArguments: Array<string | undefined>,
     environment?: NodeJS.ProcessEnv,
   ): void => {
-    serviceReadCommand.mockResolvedValue({
+    const managedDefinition = {
       programArguments,
       ...(environment === undefined ? {} : { environment }),
+    };
+    serviceReadCommand.mockResolvedValue({
+      ...managedDefinition,
+      managedDefinition,
     });
   };
 
@@ -1505,6 +1513,9 @@ describe("update-cli", () => {
     delete process.env.OPENCLAW_SERVICE_MARKER;
     delete process.env.OPENCLAW_SERVICE_KIND;
     delete process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV];
+    for (const key of GATEWAY_SERVICE_SELECTOR_ENV_KEYS) {
+      delete process.env[key];
+    }
     restartHealthTestControl.snapshot = undefined;
     vi.clearAllMocks();
     serviceEnabled.mockResolvedValue(true);
@@ -1847,17 +1858,14 @@ describe("update-cli", () => {
     const managedRecords = {
       telegram: { source: "npm", spec: "@openclaw/telegram@beta" },
     } satisfies Record<string, PluginInstallRecord>;
-    serviceReadCommand.mockResolvedValue({
-      programArguments: ["node", path.join(process.cwd(), "dist", "index.js"), "gateway", "run"],
-      environment: {
-        OPENCLAW_PROFILE: "work",
-        OPENCLAW_STATE_DIR: managedState,
-        OPENCLAW_CONFIG_PATH: path.join(managedState, "openclaw.json"),
-        OPENCLAW_GATEWAY_PORT: "19222",
-        OPENCLAW_SERVICE_MARKER: "openclaw",
-        OPENCLAW_SERVICE_KIND: "gateway",
-        [GATEWAY_SERVICE_RUNTIME_PID_ENV]: "7777",
-      },
+    primeServiceCommand(["node", path.join(process.cwd(), "dist", "index.js"), "gateway", "run"], {
+      OPENCLAW_PROFILE: "work",
+      OPENCLAW_STATE_DIR: managedState,
+      OPENCLAW_CONFIG_PATH: path.join(managedState, "openclaw.json"),
+      OPENCLAW_GATEWAY_PORT: "19222",
+      OPENCLAW_SERVICE_MARKER: "openclaw",
+      OPENCLAW_SERVICE_KIND: "gateway",
+      [GATEWAY_SERVICE_RUNTIME_PID_ENV]: "7777",
     });
     serviceLoaded.mockResolvedValue(true);
     serviceReadRuntime.mockResolvedValue({ status: "running", pid: 4242, state: "running" });
@@ -1969,14 +1977,11 @@ describe("update-cli", () => {
       }),
     );
     const managedState = path.join(fixtureRoot, "fallback-managed");
-    serviceReadCommand.mockResolvedValue({
-      programArguments: ["node", path.join(process.cwd(), "dist", "index.js"), "gateway", "run"],
-      environment: {
-        OPENCLAW_PROFILE: "work",
-        OPENCLAW_STATE_DIR: managedState,
-        OPENCLAW_CONFIG_PATH: path.join(managedState, "openclaw.json"),
-        OPENCLAW_GATEWAY_PORT: "19222",
-      },
+    primeServiceCommand(["node", path.join(process.cwd(), "dist", "index.js"), "gateway", "run"], {
+      OPENCLAW_PROFILE: "work",
+      OPENCLAW_STATE_DIR: managedState,
+      OPENCLAW_CONFIG_PATH: path.join(managedState, "openclaw.json"),
+      OPENCLAW_GATEWAY_PORT: "19222",
     });
     serviceLoaded.mockResolvedValue(true);
     serviceReadRuntime.mockResolvedValue({ status: "running", pid: 4242, state: "running" });
@@ -2027,14 +2032,11 @@ describe("update-cli", () => {
         candidate === path.join(process.cwd(), "openclaw.mjs"),
     );
     const managedState = path.join(fixtureRoot, "restart-doctor-managed");
-    serviceReadCommand.mockResolvedValue({
-      programArguments: ["node", path.join(process.cwd(), "dist", "index.js"), "gateway", "run"],
-      environment: {
-        OPENCLAW_PROFILE: "work",
-        OPENCLAW_STATE_DIR: managedState,
-        OPENCLAW_CONFIG_PATH: path.join(managedState, "openclaw.json"),
-        OPENCLAW_GATEWAY_PORT: "19222",
-      },
+    primeServiceCommand(["node", path.join(process.cwd(), "dist", "index.js"), "gateway", "run"], {
+      OPENCLAW_PROFILE: "work",
+      OPENCLAW_STATE_DIR: managedState,
+      OPENCLAW_CONFIG_PATH: path.join(managedState, "openclaw.json"),
+      OPENCLAW_GATEWAY_PORT: "19222",
     });
     serviceLoaded.mockResolvedValue(true);
     serviceReadRuntime.mockResolvedValue({ status: "running", pid: 4242, state: "running" });

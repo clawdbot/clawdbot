@@ -453,7 +453,7 @@ extensions/duckduckgo/src/config.ts	1
 extensions/duckduckgo/src/ddg-search-provider.ts	1
 extensions/elevenlabs/config-compat.ts	2
 extensions/elevenlabs/speech-provider.ts	3
-extensions/exa/src/exa-web-search-provider.runtime.ts	11
+extensions/exa/src/exa-web-search-provider.runtime.ts	9
 extensions/fal/image-generation-provider.ts	1
 extensions/fal/music-generation-provider.ts	2
 extensions/fal/video-generation-provider.ts	3
@@ -2263,7 +2263,6 @@ src/auto-reply/usage-bar/translator.ts	4
 src/boards/board-store.ts	1
 src/boards/sqlite-board-codec.ts	7
 src/boards/sqlite-board-store.ts	3
-src/bootstrap/node-extra-ca-certs.ts	2
 src/bootstrap/node-startup-env.ts	1
 src/canvas/documents.ts	2
 src/canvas/serve.runtime.ts	1
@@ -2885,7 +2884,6 @@ src/gateway/conversation-turn.ts	1
 src/gateway/desktop/host-guidance.ts	1
 src/gateway/desktop/managed-linux.ts	1
 src/gateway/desktop/node-source-context.ts	1
-src/gateway/embeddings-http.ts	1
 src/gateway/exec-approval-manager.ts	7
 src/gateway/gateway-cli-backend.live-helpers.ts	4
 src/gateway/gateway-cli-backend.live-probe-helpers.ts	7
@@ -2912,7 +2910,7 @@ src/gateway/node-pairing-ssh-verify.ts	1
 src/gateway/node-registry-private.ts	3
 src/gateway/node-registry.ts	27
 src/gateway/openai-agent-run-usage.ts	1
-src/gateway/openai-http.ts	30
+src/gateway/openai-http.ts	29
 src/gateway/openresponses-http.ts	4
 src/gateway/operator-approval-snapshot.ts	4
 src/gateway/operator-approval-store.ts	8
@@ -3980,7 +3978,7 @@ ui/src/components/app-sidebar-session-catalog-render.ts	4
 ui/src/components/app-sidebar-session-list-render.ts	2
 ui/src/components/app-sidebar-session-menu-renderers.ts	4
 ui/src/components/app-sidebar-session-narration.ts	5
-ui/src/components/app-sidebar-session-row-render.ts	4
+ui/src/components/app-sidebar-session-row-render.ts	2
 ui/src/components/app-sidebar-session-section-header.ts	6
 ui/src/components/app-sidebar.ts	2
 ui/src/components/app-topbar.ts	1
@@ -4036,7 +4034,6 @@ ui/src/components/sensitive-input.ts	2
 ui/src/components/session-data-controller.ts	2
 ui/src/components/session-data-scroll-controller.ts	1
 ui/src/components/session-group-defaults-dialog.ts	1
-ui/src/components/session-menu.ts	1
 ui/src/components/session-organizer-controller.ts	5
 ui/src/components/settings-sidebar.ts	3
 ui/src/components/settings-ui.ts	7
@@ -4142,7 +4139,7 @@ ui/src/pages/chat/components/chat-composer-slash-menu.ts	1
 ui/src/pages/chat/components/chat-composer-view.ts	1
 ui/src/pages/chat/components/chat-composer.ts	5
 ui/src/pages/chat/components/chat-effort-picker.ts	6
-ui/src/pages/chat/components/chat-header-session-menu.ts	2
+ui/src/pages/chat/components/chat-header-session-menu.ts	1
 ui/src/pages/chat/components/chat-message-attachment-availability.ts	1
 ui/src/pages/chat/components/chat-message-bubble.ts	2
 ui/src/pages/chat/components/chat-message-confirmation.ts	2

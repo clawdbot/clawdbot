@@ -35,6 +35,7 @@ import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import { createCronCreatorAuthorityCapability } from "../cron-creator-authority-context.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { FailoverError } from "../failover-error.js";
+import type { ModelFallbackAttemptProvenance } from "../model-fallback.types.js";
 import { attachToolAllowlistIntersection } from "../tool-policy.js";
 import {
   persistAcpTurnTranscript,
@@ -283,9 +284,16 @@ const runAgentAttempt = (params: RunAgentAttemptOverrides) =>
 
 type RunAgentAttemptOverrides = Omit<
   Partial<RunAgentAttemptParams>,
-  "agentDir" | "opts" | "runContext" | "sessionEntry" | "sessionKey" | "workspaceDir"
+  | "agentDir"
+  | "modelRoutingProvenance"
+  | "opts"
+  | "runContext"
+  | "sessionEntry"
+  | "sessionKey"
+  | "workspaceDir"
 > & {
   agentDir: RunAgentAttemptParams["agentDir"];
+  modelRoutingProvenance?: ModelFallbackAttemptProvenance;
   sessionEntry: NonNullable<RunAgentAttemptParams["sessionEntry"]>;
   sessionKey: NonNullable<RunAgentAttemptParams["sessionKey"]>;
   workspaceDir: RunAgentAttemptParams["workspaceDir"];
@@ -295,17 +303,25 @@ type RunAgentAttemptOverrides = Omit<
 
 function makeRunAgentAttemptParams(overrides: RunAgentAttemptOverrides): RunAgentAttemptParams {
   const provider = overrides.providerOverride ?? "openai";
+  const model = overrides.modelOverride ?? "gpt-5.4";
+  const isFallbackRetry = overrides.isFallbackRetry ?? false;
   const runId = overrides.runId ?? `run-${overrides.sessionEntry.sessionId}`;
+  const modelRoutingProvenance: ModelFallbackAttemptProvenance =
+    overrides.modelRoutingProvenance ?? {
+      requestedProvider: overrides.originalProvider ?? provider,
+      requestedModel: model,
+      stage: isFallbackRetry ? "fallback" : "initial",
+    };
   return {
     providerOverride: provider,
     originalProvider: provider,
-    modelOverride: "gpt-5.4",
+    modelOverride: model,
     cfg: {} as OpenClawConfig,
     sessionId: overrides.sessionEntry.sessionId,
     sessionAgentId: "main",
     sessionFile: path.join(overrides.workspaceDir, "session.jsonl"),
     body: "continue",
-    isFallbackRetry: false,
+    isFallbackRetry,
     resolvedThinkLevel: "medium",
     timeoutMs: 1_000,
     runId,
@@ -317,6 +333,7 @@ function makeRunAgentAttemptParams(overrides: RunAgentAttemptOverrides): RunAgen
     authProfileProvider: provider,
     sessionHasHistory: false,
     ...overrides,
+    modelRoutingProvenance,
     pluginGeneration: overrides.pluginGeneration,
     preparedRunAdmission: overrides.preparedRunAdmission ?? createTestPreparedRunAdmission(runId),
     lifecycleGeneration: overrides.lifecycleGeneration ?? "test-generation",
@@ -4056,6 +4073,11 @@ describe("embedded attempt harness pinning", () => {
 
     await runHarnessAttempt({
       originalProvider: "claude-cli",
+      modelRoutingProvenance: {
+        requestedProvider: "claude-cli",
+        requestedModel: "opus",
+        stage: "fallback",
+      },
       cfg: {
         agents: {
           defaults: {

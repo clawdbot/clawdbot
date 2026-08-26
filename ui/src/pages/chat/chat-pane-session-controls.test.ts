@@ -263,6 +263,51 @@ describe("chat pane composer controls", () => {
     }
   });
 
+  it("surfaces a rejected permission change in the rendered error state", async () => {
+    const failure = new Error(
+      "permission mode requires a session root; choose Default or a rooted session",
+    );
+    const state = {
+      chatRunId: null,
+      connected: true,
+      client: {},
+      chatLoading: false,
+      chatModelCatalog: [],
+      sessions: {
+        state: { modelOverrides: {} },
+        patch: vi.fn(async () => {
+          throw failure;
+        }),
+      },
+      chatModelSwitchPromises: {},
+      sessionKey: "agent:main:rootless-permission-test",
+      chatModelsLoading: false,
+      chatSending: false,
+      sessionsResult: null,
+      chatStream: null,
+      lastError: null,
+      chatError: null,
+      requestUpdate: vi.fn(),
+    } as unknown as ChatPageHost;
+
+    const controls = renderChatPaneComposerControls({
+      state,
+      selectedSession: undefined,
+      agentDefaultModel: undefined,
+      modelAccess: { allowed: true, requiredScope: "operator.write" },
+      effortAccess: { allowed: true, requiredScope: "operator.write" },
+      permissionAccess: { allowed: true, requiredScope: "operator.write" },
+      canSelectFull: true,
+      toastAnchor: document.createElement("div"),
+      onModelSetup: vi.fn(),
+    });
+    await controls.permissionPicker.onSelect("full");
+
+    expect(state.chatError).toContain(failure.message);
+    expect(state.lastError).toBe(state.chatError);
+    expect(state.requestUpdate).toHaveBeenCalledOnce();
+  });
+
   it("holds the session send barrier until a Full Access selection settles", async () => {
     const pending = createDeferred<Record<string, never>>();
     const state = {

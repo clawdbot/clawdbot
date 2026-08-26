@@ -421,6 +421,12 @@ export async function processCompletionsStream(
     notifyLlmRequestActivity(options?.signal);
     const chunk = rawChunk as OpenAICompatibleChatCompletionChunk;
     output.responseId ||= chunk.id;
+    // Retain the provider-returned model when it differs from the requested id so
+    // routed/alias responses are not misattributed, matching the direct provider
+    // stream and the anthropic/responses managed transports.
+    if (typeof chunk.model === "string" && chunk.model.length > 0 && chunk.model !== model.id) {
+      output.responseModel ||= chunk.model;
+    }
     let hasReasoningUsageActivity = false;
     if (chunk.usage) {
       output.usage = parseOpenAICompletionsUsage(chunk.usage, model);

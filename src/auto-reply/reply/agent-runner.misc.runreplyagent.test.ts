@@ -10,6 +10,11 @@ import {
   isEmbeddedAgentRunActive,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { testing as embeddedRunTesting } from "../../agents/embedded-agent-runner/runs.test-support.js";
+import {
+  runFallbackModelAttempt,
+  runInitialModelFallbackAttempt,
+  type TestModelFallbackRunnerParams,
+} from "../../agents/test-helpers/model-fallback-runner.test-support.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import { clearRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -98,11 +103,7 @@ const compactState = vi.hoisted(() => ({
 }));
 
 vi.mock("../../agents/model-fallback-runner.js", () => ({
-  runWithModelFallback: (params: {
-    provider: string;
-    model: string;
-    run: (provider: string, model: string) => Promise<unknown>;
-  }) => runWithModelFallbackMock(params),
+  runWithModelFallback: (params: TestModelFallbackRunnerParams) => runWithModelFallbackMock(params),
 }));
 
 vi.mock("../../agents/model-fallback-attempt.js", () => ({
@@ -261,11 +262,7 @@ vi.mock("./private-message-tool-final.js", async (importOriginal) => {
 
 import { runReplyAgent } from "./agent-runner.js";
 
-type RunWithModelFallbackParams = {
-  provider: string;
-  model: string;
-  run: (provider: string, model: string) => Promise<unknown>;
-};
+type RunWithModelFallbackParams = TestModelFallbackRunnerParams;
 
 type BaseRunOptions = {
   context?: Parameters<typeof createTestTemplateContext>[0];
@@ -405,14 +402,12 @@ function setupAgentRunnerMocks(): void {
   loadCronStoreMock.mockResolvedValue({ version: 1, jobs: [] });
 
   // Default: no provider switch; execute the chosen provider+model.
-  runWithModelFallbackMock.mockImplementation(
-    async ({ provider, model, run }: RunWithModelFallbackParams) => ({
-      result: await run(provider, model),
-      provider,
-      model,
-      attempts: [],
-    }),
-  );
+  runWithModelFallbackMock.mockImplementation(async (params: RunWithModelFallbackParams) => ({
+    result: await runInitialModelFallbackAttempt(params),
+    provider: params.provider,
+    model: params.model,
+    attempts: [],
+  }));
 }
 
 beforeEach(setupAgentRunnerMocks);
@@ -871,11 +866,11 @@ describe("runReplyAgent auto-compaction token update", () => {
         meta: { agentMeta: {} },
       });
       runWithModelFallbackMock.mockImplementationOnce(
-        async ({ provider, model, run }: RunWithModelFallbackParams) => {
-          const result = await run(provider, model);
+        async (params: RunWithModelFallbackParams) => {
+          const result = await runInitialModelFallbackAttempt(params);
           markCandidateSettled();
           await fallbackRelease;
-          return { result, provider, model };
+          return { result, provider: params.provider, model: params.model };
         },
       );
       const baseRun = createBaseRun({
@@ -1350,22 +1345,20 @@ describe("runReplyAgent Active Memory inline debug", () => {
       "utf-8",
     );
 
-    runWithModelFallbackMock.mockImplementationOnce(
-      async ({ run }: RunWithModelFallbackParams) => ({
-        result: await run("anthropic", "claude"),
-        provider: "anthropic",
-        model: "claude",
-        attempts: [
-          {
-            provider: "openai",
-            model: "gpt-5.5",
-            error: "LLM request timed out.",
-            reason: "timeout",
-            status: 408,
-          },
-        ],
-      }),
-    );
+    runWithModelFallbackMock.mockImplementationOnce(async (params: RunWithModelFallbackParams) => ({
+      result: await runFallbackModelAttempt(params, "anthropic", "claude", "timeout"),
+      provider: "anthropic",
+      model: "claude",
+      attempts: [
+        {
+          provider: "openai",
+          model: "gpt-5.5",
+          error: "LLM request timed out.",
+          reason: "timeout",
+          status: 408,
+        },
+      ],
+    }));
     runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "Visible reply" }],
       meta: {
@@ -2111,13 +2104,11 @@ describe("runReplyAgent fallback reasoning tags", () => {
       payloads: [{ text: "ok" }],
       meta: {},
     });
-    runWithModelFallbackMock.mockImplementationOnce(
-      async ({ run }: RunWithModelFallbackParams) => ({
-        result: await run("google", "gemini-2.5-pro"),
-        provider: "google",
-        model: "gemini-2.5-pro",
-      }),
-    );
+    runWithModelFallbackMock.mockImplementationOnce(async (params: RunWithModelFallbackParams) => ({
+      result: await runFallbackModelAttempt(params, "google", "gemini-2.5-pro", "unknown"),
+      provider: "google",
+      model: "gemini-2.5-pro",
+    }));
 
     await createRun();
 
@@ -2143,8 +2134,8 @@ describe("runReplyAgent fallback reasoning tags", () => {
       }
       return { payloads: [{ text: "ok" }], meta: {} };
     });
-    runWithModelFallbackMock.mockImplementation(async ({ run }: RunWithModelFallbackParams) => ({
-      result: await run("google-gemini-cli", "gemini-3"),
+    runWithModelFallbackMock.mockImplementation(async (params: RunWithModelFallbackParams) => ({
+      result: await runFallbackModelAttempt(params, "google-gemini-cli", "gemini-3", "unknown"),
       provider: "google-gemini-cli",
       model: "gemini-3",
     }));

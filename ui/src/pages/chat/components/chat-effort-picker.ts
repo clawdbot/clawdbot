@@ -164,35 +164,17 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
                     <span class="chat-controls__effort-heading">
                       ${t("chat.modelControls.effort")}
                     </span>
-                    <span class="chat-controls__reasoning-state">
-                      <span
-                        class="chat-controls__reasoning-value ${hasThinkingOverride
-                          ? ""
-                          : "chat-controls__reasoning-value--inherit"}"
-                      >
-                        ${sliderStops.length > 1
-                          ? html`
-                              <span data-chat-thinking-preview-committed>
-                                ${reasoningValueText}
-                              </span>
-                              ${sliderStops.map(
-                                (stop, index) => html`
-                                  <span data-chat-thinking-preview-index=${index} hidden>
-                                    ${formatEffortLabel(stop.label)}
-                                  </span>
-                                `,
-                              )}
-                            `
-                          : reasoningValueText}
-                      </span>
+                    <span class="sr-only">
+                      <span data-chat-thinking-preview-committed>${reasoningValueText}</span>
+                      ${sliderStops.map(
+                        (stop, index) => html`<span data-chat-thinking-preview-index=${index} hidden
+                          >${formatEffortLabel(stop.label)}</span
+                        >`,
+                      )}
                     </span>
                   </div>
                   ${sliderStops.length > 1
                     ? html`
-                        <div class="chat-controls__effort-scale" aria-hidden="true">
-                          <span>${t("chat.modelControls.faster")}</span>
-                          <span>${t("chat.modelControls.smarter")}</span>
-                        </div>
                         <div class="chat-controls__reasoning-slider">
                           <div class="chat-controls__reasoning-dots" aria-hidden="true">
                             ${sliderStops.map(
@@ -230,6 +212,10 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
                             @blur=${(event: FocusEvent) =>
                               resetSliderPreview(event.currentTarget as HTMLInputElement, true)}
                           />
+                        </div>
+                        <div class="chat-controls__effort-scale" aria-hidden="true">
+                          <span>${t("chat.modelControls.faster")}</span>
+                          <span>${t("chat.modelControls.smarter")}</span>
                         </div>
                       `
                     : onlyStop

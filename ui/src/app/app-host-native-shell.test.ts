@@ -23,7 +23,7 @@ type ShellNavigationState = {
 };
 
 type ShellSettingsEscapeState = ShellKeyboardState & {
-  lastWorkspaceLocation: { routeId: "usage"; pathname: string; search: string };
+  lastWorkspaceLocation: { routeId: "usage"; pathname: string; search: string; hash: string };
   navDrawerOpen: boolean;
   routeState: { routeId: "appearance" };
 };
@@ -115,6 +115,35 @@ describe("OpenClaw native shell", () => {
     expect(navigate).toHaveBeenCalledWith("appearance", undefined);
   });
 
+  it("restores the complete prior workspace URL when Escape leaves Settings", () => {
+    const navigate = vi.fn();
+    const shell = document.createElement(
+      "openclaw-app-shell",
+    ) as unknown as ShellSettingsEscapeState;
+    shell.runtime = {
+      context: {
+        navigate,
+        overlays: { snapshot: { devicePairSetupOpen: false } },
+      } as unknown as ApplicationContext,
+    };
+    shell.lastWorkspaceLocation = {
+      routeId: "usage",
+      pathname: "/usage",
+      search: "?agent=main",
+      hash: "#queue",
+    };
+    shell.navDrawerOpen = false;
+    shell.routeState = { routeId: "appearance" };
+
+    shell.handleDocumentKeydown(new KeyboardEvent("keydown", { key: "Escape", cancelable: true }));
+
+    expect(navigate).toHaveBeenCalledWith("usage", {
+      pathname: "/usage",
+      search: "?agent=main",
+      hash: "#queue",
+    });
+  });
+
   it("keeps the raw config editor unchanged when Escape is pressed", () => {
     const navigate = vi.fn();
     const shell = document.createElement(
@@ -126,7 +155,7 @@ describe("OpenClaw native shell", () => {
         overlays: { snapshot: { devicePairSetupOpen: false } },
       } as unknown as ApplicationContext,
     };
-    shell.lastWorkspaceLocation = { routeId: "usage", pathname: "/usage", search: "" };
+    shell.lastWorkspaceLocation = { routeId: "usage", pathname: "/usage", search: "", hash: "" };
     shell.navDrawerOpen = false;
     shell.routeState = { routeId: "appearance" };
     const rawField = document.body.appendChild(document.createElement("label"));
@@ -162,7 +191,7 @@ describe("OpenClaw native shell", () => {
         overlays: { snapshot: { devicePairSetupOpen: false } },
       } as unknown as ApplicationContext,
     };
-    shell.lastWorkspaceLocation = { routeId: "usage", pathname: "/usage", search: "" };
+    shell.lastWorkspaceLocation = { routeId: "usage", pathname: "/usage", search: "", hash: "" };
     shell.navDrawerOpen = false;
     shell.routeState = { routeId: "appearance" };
     const container = document.body.appendChild(document.createElement("div"));

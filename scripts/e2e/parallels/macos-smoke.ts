@@ -254,12 +254,6 @@ class MacosSmoke {
         : resolveSnapshot(this.options.vmName, this.options.snapshotHint);
       this.latestVersion = resolveLatestVersion(this.options.latestVersion);
       this.installVersion = this.options.installVersion || this.latestVersion;
-      this.hostIp = resolveHostIp(this.options.hostIp);
-      this.hostPort = await resolveHostPort(
-        this.options.hostPort,
-        this.options.hostPortExplicit,
-        defaultOptions().hostPort,
-      );
 
       say(`VM: ${this.options.vmName}`);
       say(`Snapshot hint: ${this.options.snapshotHint}`);
@@ -274,6 +268,12 @@ class MacosSmoke {
       say(`Run logs: ${this.runDir}`);
 
       if (this.needsHostTgz()) {
+        this.hostIp = resolveHostIp(this.options.hostIp);
+        this.hostPort = await resolveHostPort(
+          this.options.hostPort,
+          this.options.hostPortExplicit,
+          defaultOptions().hostPort,
+        );
         this.artifact = await packOpenClaw({
           destination: this.tgzDir,
           packageSpec: this.options.targetPackageSpec,

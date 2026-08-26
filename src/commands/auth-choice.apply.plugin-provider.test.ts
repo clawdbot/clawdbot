@@ -20,6 +20,9 @@ type ResolvePluginSetupProvider =
   typeof import("../plugins/provider-auth-choice.runtime.js").resolvePluginSetupProvider;
 type RunProviderModelSelectedHook =
   typeof import("../plugins/provider-auth-choice.runtime.js").runProviderModelSelectedHook;
+type ModelSelectionRuntimePluginsResult =
+  | { ok: true; cfg: ApplyAuthChoiceParams["config"]; codexInstalled: boolean }
+  | { ok: false; message: string };
 
 const resolvePluginProviders = vi.hoisted(() => vi.fn<() => ProviderPlugin[]>(() => []));
 const resolvePluginSetupProvider = vi.hoisted(() =>
@@ -99,6 +102,31 @@ const ensureOnboardingPluginInstalled = vi.hoisted(() =>
 );
 vi.mock("../commands/onboarding-plugin-install.js", () => ({
   ensureOnboardingPluginInstalled,
+}));
+
+const ensureModelSelectionRuntimePlugins = vi.hoisted(() =>
+  vi.fn(
+    async ({
+      cfg,
+    }: {
+      cfg: ApplyAuthChoiceParams["config"];
+    }): Promise<ModelSelectionRuntimePluginsResult> => ({
+      ok: true,
+      cfg,
+      codexInstalled: false,
+    }),
+  ),
+);
+vi.mock("../commands/runtime-plugin-install.js", () => ({
+  CODEX_RUNTIME_PLUGIN_ID: "codex",
+  ensureModelSelectionRuntimePlugins,
+}));
+
+const offerPostInstallMigrations = vi.hoisted(() =>
+  vi.fn(async ({ config }: { config: ApplyAuthChoiceParams["config"] }) => ({ config })),
+);
+vi.mock("../wizard/setup.post-install-migration.js", () => ({
+  offerPostInstallMigrations,
 }));
 
 const LOCAL_PROVIDER_ID = "local-provider";
@@ -240,6 +268,12 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
       pluginId: entry?.pluginId ?? "missing-plugin",
       status: "skipped",
     }));
+    ensureModelSelectionRuntimePlugins.mockImplementation(async ({ cfg }) => ({
+      ok: true,
+      cfg,
+      codexInstalled: false,
+    }));
+    offerPostInstallMigrations.mockImplementation(async ({ config }) => ({ config }));
   });
 
   it("stages provider profiles until the caller commits them", async () => {
@@ -414,6 +448,83 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     expect(typeof hookParams.prompter.note).toBe("function");
     expect(hookParams.agentDir).toBeUndefined();
     expect(hookParams.workspaceDir).toBe("/tmp/workspace");
+  });
+
+  it.each(["failed", "timed_out"] as const)(
+    "restores the previous model and retries when required Codex is %s",
+    async (status) => {
+      const provider = buildProviderWithDefaultModelPatch();
+      resolvePluginProviders.mockReturnValue([provider]);
+      resolveProviderPluginChoice.mockReturnValue({
+        provider,
+        method: expectDefined(provider.auth[0], "provider.auth[0] test invariant"),
+      });
+      const note = vi.fn(async () => {});
+      const message = `Codex runtime is required but unavailable (status: ${status}). Reason: registry token=***. Retry setup after checking npm and the configured registry.`;
+      ensureModelSelectionRuntimePlugins.mockResolvedValue({ ok: false, message });
+
+      const result = await applyAuthChoiceLoadedPluginProvider(
+        buildParams({
+          config: {
+            agents: { defaults: { model: { primary: EXISTING_DEFAULT_MODEL } } },
+          },
+          prompter: { note } as unknown as ApplyAuthChoiceParams["prompter"],
+        }),
+      );
+
+      expect(result).toEqual({
+        config: {
+          agents: { defaults: { model: { primary: EXISTING_DEFAULT_MODEL } } },
+        },
+        retrySelection: true,
+      });
+      expect(note).toHaveBeenCalledWith(message, "Runtime unavailable");
+      expect(note).toHaveBeenCalledOnce();
+      expect(persistAuthProfileBatch).not.toHaveBeenCalled();
+      expect(runProviderModelSelectedHook).not.toHaveBeenCalled();
+      expect(offerPostInstallMigrations).not.toHaveBeenCalled();
+    },
+  );
+
+  it("restores the exact entry config after provider install and auth staging", async () => {
+    const provider = buildProvider();
+    const entryConfig = {
+      agents: { defaults: { model: { primary: EXISTING_DEFAULT_MODEL } } },
+      wizard: { lastRunVersion: "entry-version" },
+    };
+    resolveProviderInstallCatalogEntry.mockReturnValue(buildLocalProviderInstallCatalogEntry());
+    ensureOnboardingPluginInstalled.mockResolvedValue({
+      ...buildInstalledLocalProviderPluginResult(),
+      cfg: {
+        ...entryConfig,
+        plugins: { entries: { "local-provider-plugin": { enabled: true } } },
+      },
+    });
+    resolvePluginProviders.mockReturnValue([provider]);
+    resolveProviderPluginChoice.mockReturnValueOnce(null).mockReturnValueOnce({
+      provider,
+      method: expectDefined(provider.auth[0], "provider.auth[0] test invariant"),
+    });
+    const note = vi.fn(async () => {});
+    ensureModelSelectionRuntimePlugins.mockResolvedValue({
+      ok: false,
+      message: "GitHub Copilot agent runtime is required but unavailable.",
+    });
+
+    const result = await applyAuthChoiceLoadedPluginProvider(
+      buildParams({
+        config: entryConfig,
+        prompter: { note } as unknown as ApplyAuthChoiceParams["prompter"],
+      }),
+    );
+
+    expect(result).toEqual({ config: entryConfig, retrySelection: true });
+    expect(result?.config).toBe(entryConfig);
+    expect(ensureOnboardingPluginInstalled).toHaveBeenCalledOnce();
+    expect(note).toHaveBeenCalledOnce();
+    expect(runProviderModelSelectedHook).not.toHaveBeenCalled();
+    expect(offerPostInstallMigrations).not.toHaveBeenCalled();
+    expect(persistAuthProfileBatch).not.toHaveBeenCalled();
   });
 
   it("keeps an existing default when provider auth patches its own primary model", async () => {

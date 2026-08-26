@@ -153,6 +153,9 @@ export function buildCloudWorkerUpsertPatch(
   }
   const id = editingId ?? draft.id;
   const existing = isRecord(profiles[id]) ? profiles[id] : {};
+  if (editingId && normalizeOptionalString(existing.provider) !== "crabbox") {
+    return { error: "profileMissing" };
+  }
   const existingSettings = profileSettings(existing);
   const settings = {
     ...existingSettings,
@@ -161,6 +164,11 @@ export function buildCloudWorkerUpsertPatch(
     ttl: draft.ttl.trim(),
     idleTimeout: draft.idleTimeout.trim(),
     setup: draft.setup.trim() || null,
+    ...(draft.setup.trim() ||
+    !Array.isArray(existingSettings.setupEnv) ||
+    existingSettings.setupEnv.length === 0
+      ? {}
+      : { setupEnv: null }),
     desktop: draft.desktop ? true : null,
     binary: draft.binary.trim() || null,
   };

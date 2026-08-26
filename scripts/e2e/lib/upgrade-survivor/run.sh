@@ -5,6 +5,7 @@ set -Eeuo pipefail
 exec 3>&1
 
 source scripts/lib/openclaw-e2e-instance.sh
+source scripts/e2e/lib/prepublish-plugin-registry.sh
 
 SCENARIO="${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base}"
 
@@ -488,41 +489,7 @@ configure_plugin_registry() {
   local fixture_root="$ARTIFACT_ROOT/plugin-registry"
   local package_dir="$fixture_root/package"
   local tarball="$fixture_root/openclaw-brave-plugin-${candidate_version}.tgz"
-  local port_file="$fixture_root/npm-registry-port"
-  local log_file="$fixture_root/npm-registry.log"
   local registry_args=()
-
-  if [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
-    local manifest="$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR/prepublish-plugin-registry.json"
-    local registry_rows
-    registry_rows="$(
-      PREPUBLISH_PLUGIN_REGISTRY_MANIFEST="$manifest" node <<'NODE'
-const fs = require("node:fs");
-const path = require("node:path");
-const manifestPath = process.env.PREPUBLISH_PLUGIN_REGISTRY_MANIFEST;
-const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-if (!Array.isArray(manifest.packages) || manifest.packages.length === 0) {
-  throw new Error("prepublish plugin registry manifest must contain packages");
-}
-for (const entry of manifest.packages) {
-  if (
-    typeof entry.name !== "string" ||
-    typeof entry.version !== "string" ||
-    typeof entry.tarball !== "string" ||
-    path.basename(entry.tarball) !== entry.tarball
-  ) {
-    throw new Error("invalid prepublish plugin registry package entry");
-  }
-  process.stdout.write(
-    `${entry.name}\t${entry.version}\t${path.join(path.dirname(manifestPath), entry.tarball)}\n`,
-  );
-}
-NODE
-    )"
-    while IFS=$'\t' read -r plugin_package_name plugin_package_version plugin_package_tarball; do
-      registry_args+=("$plugin_package_name" "$plugin_package_version" "$plugin_package_tarball")
-    done <<<"$registry_rows"
-  fi
 
   if configured_plugin_installs_enabled; then
     mkdir -p "$package_dir"
@@ -585,21 +552,17 @@ NODE
   fi
 
   if [ "${#registry_args[@]}" -eq 0 ]; then
-    return 0
+    [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ] || return 0
   fi
 
-  mkdir -p "$fixture_root" && rm -f "$port_file"
-  OPENCLAW_NPM_REGISTRY_DIST_TAGS="beta=$candidate_version" \
-  OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org \
-    node scripts/e2e/lib/plugins/npm-registry-server.mjs \
-    "$port_file" \
-    "${registry_args[@]}" \
-    >"$log_file" 2>&1 &
-  plugin_registry_pid="$!"
-
-  wait_for_fixture_port "$plugin_registry_pid" "$port_file" "$log_file" "npm registry"
-  export NPM_CONFIG_REGISTRY="http://127.0.0.1:$(cat "$port_file")"
-  export npm_config_registry="$NPM_CONFIG_REGISTRY"
+  openclaw_prepublish_plugin_registry_start \
+    "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" \
+    "${OPENCLAW_DOCKER_E2E_SELECTED_SHA:-}" \
+    "$candidate_version" \
+    "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256:-}" \
+    "$fixture_root" \
+    plugin_registry_pid \
+    "${registry_args[@]}"
 }
 
 legacy_plugin_dependency_probe_paths() {

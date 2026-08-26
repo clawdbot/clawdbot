@@ -41,6 +41,7 @@ import {
   type ConfigWriteOptions,
   type ConfigWriteResult,
 } from "./io.js";
+import { rejectConfigNonFiniteNumbers } from "./io.read-helpers.js";
 import { warnIfJSON5CommentsWillBeStripped } from "./json5-comments.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import type { ConfigMutationBase } from "./mutation-types.js";
@@ -435,6 +436,7 @@ function snapshotProvesBrokenInclude(snapshot: ConfigFileSnapshot, includePath: 
 }
 
 function formatJsonFileValue(value: unknown): string {
+  rejectConfigNonFiniteNumbers(value);
   return `${JSON.stringify(value, null, 2)}\n`;
 }
 

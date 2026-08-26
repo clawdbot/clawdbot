@@ -441,6 +441,22 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
   });
 
   it.each([
+    { name: "unsupported encoding", option: { encoding_format: "hex" } },
+    { name: "numeric encoding", option: { encoding_format: 1 } },
+    { name: "zero dimensions", option: { dimensions: 0 } },
+    { name: "negative dimensions", option: { dimensions: -1 } },
+    { name: "fractional dimensions", option: { dimensions: 1.5 } },
+    { name: "string dimensions", option: { dimensions: "768" } },
+    { name: "unsafe dimensions", option: { dimensions: Number.MAX_SAFE_INTEGER + 1 } },
+  ])("rejects $name before creating an embedding provider", async ({ option }) => {
+    const providersCreatedBefore = createEmbeddingProviderMock.mock.calls.length;
+    const res = await postEmbeddings({ model: "openclaw/default", input: "hello", ...option });
+
+    await expectInvalidEmbeddingRequest(res);
+    expect(createEmbeddingProviderMock).toHaveBeenCalledTimes(providersCreatedBefore);
+  });
+
+  it.each([
     { name: "an empty string", input: "" },
     { name: "an empty batch", input: [] },
     { name: "an empty batch entry", input: [""] },

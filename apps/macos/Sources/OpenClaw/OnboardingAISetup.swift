@@ -135,6 +135,8 @@ final class OnboardingAISetupModel {
         guard self.configuredGatewayBlocker == nil else { return }
         guard !self.waitingForPendingActivationDeadline else { return }
         if self.pendingActivationVerification {
+            self.detectError = nil
+            self.phase = .detecting
             Task { await self.verifyPendingConfiguredInference() }
             return
         }

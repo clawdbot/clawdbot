@@ -12,6 +12,7 @@ import {
   finalizeTaskRunByRunId,
   startTaskRunByRunId,
 } from "../../../tasks/detached-task-runtime.js";
+import { createSubagentTaskBackingDetail } from "../../../tasks/task-backing-authority.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
@@ -236,6 +237,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
           requesterAgentId: resolveSubagentRequesterAgentId(cfg, registerParams),
           deliveryStatus:
             registerParams.expectsCompletionMessage === false ? "not_applicable" : "pending",
+          detail: createSubagentTaskBackingDetail(generation),
         } as const;
         const task = queued
           ? createQueuedTaskRun(taskParams)

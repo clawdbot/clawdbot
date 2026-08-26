@@ -5,6 +5,7 @@ import {
   resolveAuditMessageMode,
 } from "../audit/audit-config.js";
 import { createAuditEventRecorder } from "../audit/audit-recorder.js";
+import { configureExecutionDecisionWorkSink } from "../audit/execution-decision-work.js";
 import { configureExecutionIdentityAdmissionSink } from "../audit/execution-identity-admission.js";
 import { configureMessageActionDecisionSink } from "../audit/message-action-decision.js";
 import { onTrustedMessageAuditEvent } from "../audit/message-audit-events.js";
@@ -101,6 +102,9 @@ export function startGatewayEventSubscriptions(params: {
   });
   const clearExecutionIdentityAdmissionSink = configureExecutionIdentityAdmissionSink(
     auditRecorder.recordExecutionIdentity,
+  );
+  const clearExecutionDecisionWorkSink = configureExecutionDecisionWorkSink(
+    auditRecorder.recordExecutionDecisionWork,
   );
   const clearChannelAdmissionEvidenceCollection = configureChannelAdmissionEvidenceCollection(
     isExecutionIdentityCollectionEnabled(runtimeConfig),
@@ -374,6 +378,7 @@ export function startGatewayEventSubscriptions(params: {
     unsubscribePrivateAuditEvents?.();
     unsubscribeToolAuditEvents?.();
     unsubscribeMessageAuditEvents?.();
+    clearExecutionDecisionWorkSink();
     clearExecutionIdentityAdmissionSink();
     clearChannelAdmissionEvidenceCollection();
     clearChannelAdmissionDecisionSink();

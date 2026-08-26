@@ -1,6 +1,8 @@
+import { once } from "node:events";
 import net from "node:net";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { describe, expect, it, vi } from "vitest";
-import type { WebSocket } from "ws";
+import { WebSocketServer, type WebSocket } from "ws";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -250,6 +252,137 @@ describe("worker connection endpoint failures", () => {
           }
           resolve();
         });
+      });
+    }
+  });
+});
+
+describe("worker connection reconnect backoff", () => {
+  it("staggers twenty workers recovering from transient Gateway transport loss", async () => {
+    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("test gateway did not allocate a TCP port");
+    }
+
+    let available = true;
+    let transportInterrupted = false;
+    const unavailableWorkers = new Set<string>();
+    const recoveredWorkers = new Set<string>();
+    server.on("connection", (socket) => {
+      socket.on("message", (data) => {
+        const frame = JSON.parse(rawDataToString(data)) as {
+          id: string;
+          params: { admission: WorkerConnectParams["admission"] };
+        };
+        const admission = frame.params.admission;
+        if (!available) {
+          unavailableWorkers.add(admission.environmentId);
+          socket.send(
+            JSON.stringify({
+              type: "res",
+              id: frame.id,
+              ok: false,
+              error: {
+                code: "INVALID_REQUEST",
+                message: "gateway temporarily unavailable",
+                details: { reason: "gateway-unavailable" },
+                retryable: true,
+              },
+            }),
+          );
+          return;
+        }
+        if (transportInterrupted) {
+          recoveredWorkers.add(admission.environmentId);
+        }
+        socket.send(
+          JSON.stringify({
+            type: "res",
+            id: frame.id,
+            ok: true,
+            payload: {
+              type: "worker-hello-ok",
+              environmentId: admission.environmentId,
+              sessionId: admission.sessionId,
+              ownerEpoch: admission.ownerEpoch,
+              rpcSetVersion: admission.rpcSetVersion,
+              protocolFeatures: [...admission.handshake.protocolFeatures],
+              credentialExpiresAtMs: Date.now() + 60_000,
+              policy: { heartbeatIntervalMs: 60_000, maxPayload: 25 * 1024 * 1024 },
+            },
+          }),
+        );
+      });
+    });
+
+    const workers = Array.from({ length: 20 }, (_, index) =>
+      createWorkerConnection({
+        endpoint: {
+          kind: "websocket",
+          url: `ws://127.0.0.1:${address.port}${WORKER_PUBLIC_INGRESS_PATH}`,
+        },
+        connectParams: {
+          ...FRAME_CONNECT_PARAMS,
+          admission: {
+            ...FRAME_CONNECT_PARAMS.admission,
+            environmentId: `reconnect-worker-${index}`,
+          },
+        },
+        admissionDeadlineMs: 10_000,
+      }),
+    );
+
+    let randomDraw = 0;
+    const random = vi
+      .spyOn(Math, "random")
+      .mockImplementation(() => ((randomDraw++ % 20) + 1) / 21);
+    const retryDelays: number[] = [];
+    const originalSetTimeout = globalThis.setTimeout;
+    const timeout = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation((callback, delay, ...args) => {
+        if (typeof delay === "number" && delay >= 250 && delay <= 275) {
+          retryDelays.push(delay);
+        }
+        return originalSetTimeout(callback, delay, ...args);
+      });
+
+    try {
+      await Promise.all(workers.map((worker) => worker.start()));
+      const readyAgain = workers.map(
+        (worker) =>
+          new Promise<void>((resolve) => {
+            const unsubscribe = worker.onReady(() => {
+              unsubscribe();
+              resolve();
+            });
+          }),
+      );
+
+      available = false;
+      transportInterrupted = true;
+      for (const socket of server.clients) {
+        socket.close(1012, "gateway-unavailable");
+      }
+      await vi.waitFor(() => expect(unavailableWorkers.size).toBe(20), {
+        timeout: 3_000,
+        interval: 5,
+      });
+      available = true;
+      await Promise.all(readyAgain);
+
+      expect(recoveredWorkers.size).toBe(20);
+      expect(retryDelays).toHaveLength(20);
+      expect(new Set(retryDelays).size).toBeGreaterThanOrEqual(10);
+      expect(Math.max(...retryDelays)).toBeLessThanOrEqual(30_000);
+    } finally {
+      random.mockRestore();
+      timeout.mockRestore();
+      await Promise.all(workers.map((worker) => worker.stop()));
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
       });
     }
   });

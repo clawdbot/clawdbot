@@ -986,6 +986,27 @@ describe("presentation capability limits", () => {
     ]);
   });
 
+  it("preserves authored button precedence when only action rows are bounded", () => {
+    const presentation = adaptMessagePresentationForChannel({
+      presentation: {
+        blocks: [
+          { type: "buttons", buttons: [{ label: "First", value: "first" }] },
+          {
+            type: "select",
+            placeholder: "Target",
+            options: [{ label: "Later", value: "later" }],
+          },
+        ],
+      },
+      capabilities: { limits: { actions: { maxRows: 1 } } },
+    });
+
+    expect(presentation.blocks).toEqual([
+      { type: "buttons", buttons: [{ label: "First", value: "first" }] },
+      { type: "context", text: "Target:\n- Later" },
+    ]);
+  });
+
   it("splits button blocks by per-row limits even when rows are unlimited", () => {
     const presentation = adaptMessagePresentationForChannel({
       presentation: {

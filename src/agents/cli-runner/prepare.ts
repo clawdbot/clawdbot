@@ -111,6 +111,7 @@ import type { ResolvedProviderAuth } from "../model-auth-runtime-shared.js";
 import { findModelCatalogEntry, loadManifestModelCatalog } from "../model-catalog.js";
 import type { ModelCatalogEntry } from "../model-catalog.types.js";
 import { resolveModelContextWindowProfile } from "../model-context-window.js";
+import { recordAdmittedModelRoutingDecision } from "../model-routing-decision.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
 import { ensureSandboxWorkspaceForSession } from "../sandbox.js";
@@ -1785,6 +1786,24 @@ export async function prepareCliRunContext(
         ...(requireExplicitMessageTarget ? { requireExplicitMessageTarget: true } : {}),
       });
       bindMcpClientGrantAdmission(preparedParams.admittedRunContext);
+      if (!isControlOperation) {
+        recordAdmittedModelRoutingDecision({
+          admittedRunContext: preparedParams.admittedRunContext,
+          abortSignal: preparedParams.abortSignal,
+          requestedProvider:
+            params.modelRoutingProvenance?.requestedProvider ??
+            params.modelProvider ??
+            params.provider,
+          requestedModel:
+            params.modelRoutingProvenance?.requestedModel ?? params.model ?? "default",
+          selectedProvider: params.modelProvider ?? params.provider,
+          selectedModel: normalizedModel,
+          selectionMode: requestedAuthProfileId ? "explicit" : "automatic",
+          credentialProfileId: effectiveAuthProfileId,
+          fallbackSelected: params.modelRoutingProvenance?.stage === "fallback",
+          fallbackReason: params.modelRoutingProvenance?.fallbackReason,
+        });
+      }
 
       return {
         params: preparedParams,
@@ -1878,6 +1897,19 @@ export async function prepareCliRunContext(
       ...(requireExplicitMessageTarget ? { requireExplicitMessageTarget: true } : {}),
     });
     bindMcpClientGrantAdmission(preparedParams.admittedRunContext);
+    recordAdmittedModelRoutingDecision({
+      admittedRunContext: preparedParams.admittedRunContext,
+      abortSignal: preparedParams.abortSignal,
+      requestedProvider:
+        params.modelRoutingProvenance?.requestedProvider ?? params.modelProvider ?? params.provider,
+      requestedModel: params.modelRoutingProvenance?.requestedModel ?? params.model ?? "default",
+      selectedProvider: params.modelProvider ?? params.provider,
+      selectedModel: normalizedModel,
+      selectionMode: requestedAuthProfileId ? "explicit" : "automatic",
+      credentialProfileId: effectiveAuthProfileId,
+      fallbackSelected: params.modelRoutingProvenance?.stage === "fallback",
+      fallbackReason: params.modelRoutingProvenance?.fallbackReason,
+    });
 
     return {
       params: preparedParams,

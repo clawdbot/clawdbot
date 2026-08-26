@@ -20,6 +20,7 @@ import { defaultRuntime } from "../runtime.js";
 import type { runAgentAttempt } from "./command/attempt-execution.runtime.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent.js";
 import type { loadManifestModelCatalog } from "./model-catalog.js";
+import type { ModelFallbackRunOptions } from "./model-fallback-attempt.js";
 import { createAgentRunRestartAbortError } from "./run-termination.js";
 
 type ProviderModelNormalizationParams = { provider: string; context: { modelId: string } };
@@ -175,9 +176,15 @@ vi.mock("./model-fallback-runner.js", () => ({
   runWithModelFallback: async (params: {
     provider: string;
     model: string;
-    run: (provider: string, model: string) => Promise<unknown>;
+    run: (provider: string, model: string, options: ModelFallbackRunOptions) => Promise<unknown>;
   }) => ({
-    result: await params.run(params.provider, params.model),
+    result: await params.run(params.provider, params.model, {
+      modelRoutingProvenance: {
+        requestedProvider: params.provider,
+        requestedModel: params.model,
+        stage: "initial",
+      },
+    }),
     provider: params.provider,
     model: params.model,
     attempts: [],
@@ -302,23 +309,6 @@ function makeResult(params: {
       },
     },
   };
-}
-
-async function readSessionMessages(params: {
-  agentId: string;
-  sessionId: string;
-  storePath: string;
-}) {
-  return (await loadTranscriptEvents(params))
-    .filter(
-      (entry): entry is { message: unknown; type: "message" } =>
-        typeof entry === "object" &&
-        entry !== null &&
-        "message" in entry &&
-        "type" in entry &&
-        entry.type === "message",
-    )
-    .map((entry) => entry.message);
 }
 
 function requireStorePath(): string {
@@ -523,8 +513,13 @@ describe("agentCommand compaction transcript rotation", () => {
       compactionCount: 1,
     });
     await expect(
-      readSessionMessages({ agentId: "main", sessionId: "rotated-session", storePath }),
-    ).resolves.toContainEqual(expect.objectContaining({ role: "assistant" }));
+      loadTranscriptEvents({ agentId: "main", sessionId: "rotated-session", storePath }),
+    ).resolves.toContainEqual(
+      expect.objectContaining({
+        type: "message",
+        message: expect.objectContaining({ role: "assistant" }),
+      }),
+    );
   });
 
   it("keeps embedded transcript ownership and flushes once for gateway ingress", async () => {

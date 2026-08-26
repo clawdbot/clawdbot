@@ -108,8 +108,6 @@ describe("runtime postbuild static assets", () => {
       "dist/extensions/acpx/mcp-command-line.mjs",
       "dist/extensions/acpx/mcp-proxy.mjs",
       "dist/extensions/crabbox/assets/openclaw-worker-wallpaper.png",
-      "dist/extensions/diffs-language-pack/assets/viewer-runtime.js",
-      "dist/extensions/diffs/assets/viewer-runtime.js",
       "dist/extensions/discord/assets/embedded-app-sdk.mjs",
       "dist/extensions/onepassword/onepassword-op-path.js",
       "dist/extensions/onepassword/onepassword-secret-id.js",
@@ -117,8 +115,10 @@ describe("runtime postbuild static assets", () => {
       "dist/extensions/vault/vault-secret-id.js",
       "dist/extensions/vault/vault-secret-ref-resolver.js",
     ]);
-    expect(payload.sources).toContain("extensions/diffs-language-pack/assets/viewer-runtime.js");
-    expect(payload.sources).toContain("extensions/diffs/assets/viewer-runtime.js");
+    expect(payload.sources).not.toContain(
+      "extensions/diffs-language-pack/assets/viewer-runtime.js",
+    );
+    expect(payload.sources).not.toContain("extensions/diffs/assets/viewer-runtime.js");
     expect(payload.sources).toContain("extensions/discord/assets/embedded-app-sdk.mjs");
     expect(payload.sources).toContain("extensions/crabbox/assets/openclaw-worker-wallpaper.png");
   });
@@ -177,7 +177,15 @@ describe("runtime postbuild static assets", () => {
     expect(discoverStaticExtensionAssets({ rootDir })).toEqual([]);
   });
 
-  it("excludes external plugin (bundledDist: false) static assets by default", async () => {
+  it.each([
+    { name: "normal root build", params: {}, included: false },
+    { name: "isolated external build", params: { includeExternalPlugins: true }, included: true },
+    {
+      name: "Docker-selected build",
+      params: { env: { OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS: "external-demo" } },
+      included: true,
+    },
+  ])("$name handles external plugin assets", async ({ params, included }) => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-");
     const packageDir = path.join(rootDir, "extensions", "external-demo");
     await fs.mkdir(packageDir, { recursive: true });
@@ -200,39 +208,17 @@ describe("runtime postbuild static assets", () => {
       "utf8",
     );
 
-    expect(discoverStaticExtensionAssets({ rootDir })).toEqual([]);
-  });
-
-  it("includes external plugin (bundledDist: false) static assets when includeExternalPlugins is true", async () => {
-    const rootDir = createTempDir("openclaw-runtime-postbuild-");
-    const packageDir = path.join(rootDir, "extensions", "external-demo");
-    await fs.mkdir(packageDir, { recursive: true });
-    await fs.writeFile(
-      path.join(packageDir, "package.json"),
-      JSON.stringify({
-        name: "@openclaw/external-demo",
-        openclaw: {
-          build: {
-            bundledDist: false,
-            staticAssets: [
-              {
-                source: "./assets/runtime.js",
-                output: "assets/runtime.js",
-              },
-            ],
-          },
-        },
-      }),
-      "utf8",
+    expect(discoverStaticExtensionAssets({ rootDir, ...params })).toEqual(
+      included
+        ? [
+            {
+              pluginDir: "external-demo",
+              src: "extensions/external-demo/assets/runtime.js",
+              dest: "dist/extensions/external-demo/assets/runtime.js",
+            },
+          ]
+        : [],
     );
-
-    expect(discoverStaticExtensionAssets({ rootDir, includeExternalPlugins: true })).toEqual([
-      {
-        pluginDir: "external-demo",
-        src: "extensions/external-demo/assets/runtime.js",
-        dest: "dist/extensions/external-demo/assets/runtime.js",
-      },
-    ]);
   });
 
   it("copies declared static assets into root and package dist", async () => {

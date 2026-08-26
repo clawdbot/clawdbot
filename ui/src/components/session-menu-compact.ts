@@ -51,6 +51,17 @@ export function renderCompactSessionMenuNavigationItem(params: {
   `;
 }
 
+export function renderCompactSessionMenuFrame(body: TemplateResult | readonly TemplateResult[]) {
+  return html`
+    <wa-dropdown-item class="session-menu__item session-menu__back" value="compact:back">
+      <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.arrowLeft}</span>
+      <span class="session-menu__text">${t("common.back")}</span>
+    </wa-dropdown-item>
+    <div class="session-menu__separator" role="separator"></div>
+    ${body}
+  `;
+}
+
 export function renderCompactSessionMenuView(params: {
   view: CompactSessionMenuView;
   ownerOptions: readonly SessionOwnerOption[];
@@ -80,12 +91,5 @@ export function renderCompactSessionMenuView(params: {
         : params.view === "icon"
           ? params.renderIcon()
           : params.renderGroup();
-  return html`
-    <wa-dropdown-item class="session-menu__item session-menu__back" value="compact:back">
-      <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.arrowLeft}</span>
-      <span class="session-menu__text">${t("common.back")}</span>
-    </wa-dropdown-item>
-    <div class="session-menu__separator" role="separator"></div>
-    ${body}
-  `;
+  return renderCompactSessionMenuFrame(body);
 }

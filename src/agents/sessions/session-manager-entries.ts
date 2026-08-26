@@ -216,6 +216,9 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     this.appendEntry(entry, {
       invalidateSerializedPrefixCache: fromHook === true || details !== undefined,
     });
+    if (this.persistedBoundaryCount !== undefined) {
+      this.persistedBoundaryCount += 1;
+    }
     return entry.id;
   }
 
@@ -229,6 +232,9 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       ...(firstKeptEntryId ? { firstKeptEntryId } : {}),
     };
     this.appendEntry(entry);
+    if (this.persistedBoundaryCount !== undefined) {
+      this.persistedBoundaryCount += 1;
+    }
     return entry.id;
   }
 
@@ -393,8 +399,11 @@ export class SessionManagerEntries extends SessionManagerPersistence {
   }
 
   getBoundaryCount(): number {
-    return this.getBranch().filter((entry) => entry.type === "compaction" || entry.type === "reset")
-      .length;
+    return (
+      this.persistedBoundaryCount ??
+      this.getBranch().filter((entry) => entry.type === "compaction" || entry.type === "reset")
+        .length
+    );
   }
 
   getHeader(): SessionHeader | null {
@@ -446,6 +455,9 @@ export class SessionManagerEntries extends SessionManagerPersistence {
   }
 
   branch(branchFromId: string): void {
+    if (!this.byId.has(branchFromId)) {
+      this.ensureCompletePersistedHistory();
+    }
     const branchTargetId = this.resolveBranchTargetId(branchFromId);
     if (branchTargetId === undefined) {
       throw new Error(`Entry ${branchFromId} not found`);
@@ -469,6 +481,9 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     details?: unknown,
     fromHook?: boolean,
   ): string {
+    if (branchFromId !== null && !this.byId.has(branchFromId)) {
+      this.ensureCompletePersistedHistory();
+    }
     const branchTargetId = branchFromId === null ? null : this.resolveBranchTargetId(branchFromId);
     if (branchTargetId === undefined) {
       throw new Error(`Entry ${branchFromId} not found`);

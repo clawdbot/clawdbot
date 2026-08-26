@@ -58,7 +58,7 @@ const DEFAULT_RECONNECT_BACKOFF: BackoffPolicy = {
   initialMs: 250,
   maxMs: 30_000,
   factor: 2,
-  jitter: 0,
+  jitter: 0.1,
 };
 
 const DEFAULT_ADMISSION_TIMEOUT_MS = DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS;
