@@ -3,10 +3,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatCliCommand } from "../cli/command-format.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import { readConfigMachineState, writeConfigMachineState } from "../state/config-machine-state.js";
 import {
   closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import {
@@ -14,11 +13,6 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import type { GatewayActiveWorkInspectors } from "./gateway-active-work.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "./kysely-sync.js";
 import { writeUpdateInstallReceiptRowSync } from "./restart-sentinel-store.js";
 import type { UpdateCheckResult } from "./update-check.js";
 import { parseDevUpdateTargetEnv } from "./update-dev-target.js";
@@ -138,9 +132,8 @@ vi.mock("./update-managed-service-handoff.js", () => ({
   startManagedServiceUpdateHandoff: startManagedServiceUpdateHandoffMock,
 }));
 
-const UPDATE_CHECK_STATE_KEY = "default";
+const UPDATE_CHECK_STATE_KEY = "update.checkState";
 
-type UpdateCheckStateDatabase = Pick<OpenClawStateKyselyDatabase, "update_check_state">;
 type PersistedUpdateCheckState = {
   lastCheckedAt?: string;
   lastNotifiedVersion?: string;
@@ -156,10 +149,6 @@ type PersistedUpdateCheckState = {
   autoLastSuccessVersion?: string;
   autoLastSuccessAt?: string;
 };
-
-function presentString(value: string | null): string | undefined {
-  return value ?? undefined;
-}
 
 describe("update-startup", () => {
   let tempDir: string;
@@ -186,63 +175,11 @@ describe("update-startup", () => {
   }
 
   function readPersistedUpdateCheckState(): PersistedUpdateCheckState | null {
-    const { db } = openOpenClawStateDatabase();
-    const stateDb = getNodeSqliteKysely<UpdateCheckStateDatabase>(db);
-    const row = executeSqliteQueryTakeFirstSync(
-      db,
-      stateDb
-        .selectFrom("update_check_state")
-        .selectAll()
-        .where("state_key", "=", UPDATE_CHECK_STATE_KEY),
-    );
-    if (!row) {
-      return null;
-    }
-    return {
-      lastCheckedAt: presentString(row.last_checked_at),
-      lastNotifiedVersion: presentString(row.last_notified_version),
-      lastNotifiedTag: presentString(row.last_notified_tag),
-      lastAvailableVersion: presentString(row.last_available_version),
-      lastAvailableTag: presentString(row.last_available_tag),
-      autoInstallId: presentString(row.auto_install_id),
-      autoFirstSeenVersion: presentString(row.auto_first_seen_version),
-      autoFirstSeenTag: presentString(row.auto_first_seen_tag),
-      autoFirstSeenAt: presentString(row.auto_first_seen_at),
-      autoLastAttemptVersion: presentString(row.auto_last_attempt_version),
-      autoLastAttemptAt: presentString(row.auto_last_attempt_at),
-      autoLastSuccessVersion: presentString(row.auto_last_success_version),
-      autoLastSuccessAt: presentString(row.auto_last_success_at),
-    };
+    return readConfigMachineState<PersistedUpdateCheckState>(UPDATE_CHECK_STATE_KEY) ?? null;
   }
 
   function writePersistedUpdateCheckState(state: PersistedUpdateCheckState): void {
-    runOpenClawStateWriteTransaction(({ db }) => {
-      const stateDb = getNodeSqliteKysely<UpdateCheckStateDatabase>(db);
-      executeSqliteQuerySync(
-        db,
-        stateDb.deleteFrom("update_check_state").where("state_key", "=", UPDATE_CHECK_STATE_KEY),
-      );
-      executeSqliteQuerySync(
-        db,
-        stateDb.insertInto("update_check_state").values({
-          state_key: UPDATE_CHECK_STATE_KEY,
-          last_checked_at: state.lastCheckedAt ?? null,
-          last_notified_version: state.lastNotifiedVersion ?? null,
-          last_notified_tag: state.lastNotifiedTag ?? null,
-          last_available_version: state.lastAvailableVersion ?? null,
-          last_available_tag: state.lastAvailableTag ?? null,
-          auto_install_id: state.autoInstallId ?? null,
-          auto_first_seen_version: state.autoFirstSeenVersion ?? null,
-          auto_first_seen_tag: state.autoFirstSeenTag ?? null,
-          auto_first_seen_at: state.autoFirstSeenAt ?? null,
-          auto_last_attempt_version: state.autoLastAttemptVersion ?? null,
-          auto_last_attempt_at: state.autoLastAttemptAt ?? null,
-          auto_last_success_version: state.autoLastSuccessVersion ?? null,
-          auto_last_success_at: state.autoLastSuccessAt ?? null,
-          updated_at_ms: Date.now(),
-        }),
-      );
-    });
+    writeConfigMachineState(UPDATE_CHECK_STATE_KEY, state);
   }
 
   beforeEach(async () => {

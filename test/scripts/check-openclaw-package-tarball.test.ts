@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -51,6 +52,18 @@ function usesLegacyShrinkwrapByDefault(version: string): boolean {
   }
   const [year = 0, month = 0, patch = 0] = match.slice(1).map(Number);
   return year < 2026 || (year === 2026 && (month < 7 || (month === 7 && patch < 2)));
+}
+
+function chmodTreeWorldReadable(dir: string) {
+  chmodSync(dir, 0o755);
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const entryPath = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      chmodTreeWorldReadable(entryPath);
+    } else {
+      chmodSync(entryPath, 0o644);
+    }
+  }
 }
 
 function withTarball(
@@ -148,6 +161,9 @@ function withTarball(
       mkdirSync(dirname(filePath), { recursive: true });
       writeFileSync(filePath, body);
     }
+    // The tarball mode gate requires world-readable entries; pin the fixture
+    // against restrictive host umasks the way the packer normalizes artifacts.
+    chmodTreeWorldReadable(packageRoot);
 
     const tarball = join(root, "openclaw.tgz");
     const pack = spawnSync("tar", ["-czf", tarball, "-C", root, "package"], {
@@ -185,6 +201,35 @@ describe("check-openclaw-package-tarball", () => {
     expect(extra.status).not.toBe(0);
     expect(extra.stderr).toContain("Unexpected OpenClaw package tarball check argument: extra");
     expect(extra.stderr).not.toContain("OpenClaw package tarball does not exist");
+  });
+
+  it.skipIf(process.platform === "win32")("rejects owner-only tar entry modes", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-package-tarball-modes-"));
+    try {
+      const packageRoot = join(root, "package");
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "2026.8.26" }),
+      );
+      writeFileSync(join(packageRoot, "dist", "index.js"), "export {};\n");
+      chmodTreeWorldReadable(packageRoot);
+      chmodSync(join(packageRoot, "dist", "index.js"), 0o600);
+      const tarball = join(root, "openclaw.tgz");
+      const pack = spawnSync("tar", ["-czf", tarball, "-C", root, "package"], {
+        encoding: "utf8",
+      });
+      expect(pack.status, pack.stderr).toBe(0);
+
+      const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        "tar entry is not world-readable (-rw-------): package/dist/index.js",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("accepts tarballs whose entry list exceeds Node's default spawn buffer", () => {

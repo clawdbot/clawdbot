@@ -11,6 +11,7 @@ import { icons } from "./icons.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 
 type SessionProgressCardPlacement = "board" | "composer" | "hovercard";
+type PresentedProgressStepStatus = ProgressCardStep["status"] | "paused";
 
 const STATUS_LABEL_KEYS: Record<ProgressCardStep["status"], Parameters<typeof t>[0]> = {
   completed: "sessionProgressCard.status.completed",
@@ -130,7 +131,7 @@ function currentProgressStep(steps: readonly ProgressCardStep[]): ProgressCardSt
   );
 }
 
-function progressStepMarker(status: ProgressCardStep["status"], sessionStatus?: SessionRunStatus) {
+function progressStepMarker(status: PresentedProgressStepStatus, sessionStatus?: SessionRunStatus) {
   if (status === "in_progress" && sessionStatus === "done") {
     return icons.check;
   }
@@ -145,6 +146,7 @@ function progressStepMarker(status: ProgressCardStep["status"], sessionStatus?: 
       return icons.check;
     case "in_progress":
       return html`<span class="session-run-spinner"></span>`;
+    case "paused":
     case "pending":
       return icons.clock;
   }
@@ -166,7 +168,7 @@ function renderMarkdown(markdown: string | undefined) {
   </div>`;
 }
 
-function renderSteps(card: ProgressCard, sessionStatus?: SessionRunStatus) {
+function renderSteps(card: ProgressCard, hasActiveRun: boolean, sessionStatus?: SessionRunStatus) {
   const steps = card.steps;
   if (!steps?.length) {
     return nothing;
@@ -177,17 +179,26 @@ function renderSteps(card: ProgressCard, sessionStatus?: SessionRunStatus) {
         step.status === "in_progress" && sessionStatus
           ? TERMINAL_STEP_STATUS_LABEL_KEYS[sessionStatus]
           : undefined;
-      const statusLabel = t(terminalStatusKey ?? STATUS_LABEL_KEYS[step.status]);
+      const presentedStatus =
+        step.status === "in_progress" && !hasActiveRun && !terminalStatusKey
+          ? "paused"
+          : step.status;
+      const statusLabel = t(
+        terminalStatusKey ??
+          (presentedStatus === "paused"
+            ? "sessionProgressCard.status.paused"
+            : STATUS_LABEL_KEYS[presentedStatus]),
+      );
       return html`<li
-        class="session-progress-card__step session-progress-card__step--${step.status}"
+        class="session-progress-card__step session-progress-card__step--${presentedStatus}"
         aria-label=${t("sessionProgressCard.stepLabel", { status: statusLabel, step: step.step })}
       >
         <span
           class="session-progress-card__step-marker"
-          data-status=${step.status}
+          data-status=${presentedStatus}
           data-outcome=${terminalStatusKey ? sessionStatus : nothing}
           aria-hidden="true"
-          >${progressStepMarker(step.status, sessionStatus)}</span
+          >${progressStepMarker(presentedStatus, sessionStatus)}</span
         >
         <span class="session-progress-card__step-text">${step.step}</span>
       </li>`;
@@ -195,9 +206,9 @@ function renderSteps(card: ProgressCard, sessionStatus?: SessionRunStatus) {
   </ol>`;
 }
 
-function renderBody(card: ProgressCard, sessionStatus?: SessionRunStatus) {
+function renderBody(card: ProgressCard, hasActiveRun: boolean, sessionStatus?: SessionRunStatus) {
   return html`<div class="session-progress-card__body">
-    ${renderMarkdown(card.markdown)} ${renderSteps(card, sessionStatus)}
+    ${renderMarkdown(card.markdown)} ${renderSteps(card, hasActiveRun, sessionStatus)}
   </div>`;
 }
 
@@ -208,6 +219,7 @@ export function renderSessionProgressCard(
   sessionStatus?: SessionRunStatus,
   startedAt?: number,
   endedAt?: number,
+  hasActiveRun = true,
 ) {
   if (!card) {
     return nothing;
@@ -282,6 +294,10 @@ export function renderSessionProgressCard(
           total: String(counts.total),
         })
       : nothing;
+    const presentedCurrentStatus =
+      currentStep?.status === "in_progress" && !hasActiveRun && !terminalOutcomeKey
+        ? "paused"
+        : currentStep?.status;
     const summaryIndicator =
       effectiveSessionStatus === "done"
         ? icons.check
@@ -292,7 +308,7 @@ export function renderSessionProgressCard(
           : complete
             ? icons.check
             : currentStep?.status === "in_progress"
-              ? html`<span class="session-run-spinner"></span>`
+              ? progressStepMarker(presentedCurrentStatus ?? "pending")
               : icons.clock;
     return html`<details
       class="session-progress-card session-progress-card--composer"
@@ -306,7 +322,7 @@ export function renderSessionProgressCard(
           effectiveSessionStatus === "done"
             ? " session-progress-card__summary-indicator--complete"
             : ""}"
-          data-status=${currentStep?.status ?? "pending"}
+          data-status=${presentedCurrentStatus ?? "pending"}
           data-outcome=${effectiveSessionStatus ?? nothing}
           aria-hidden="true"
         >
@@ -340,7 +356,7 @@ export function renderSessionProgressCard(
         >
       </summary>
       <div class="session-progress-card__body" role="region" aria-label=${composerCountLabel}>
-        ${renderMarkdown(card.markdown)} ${renderSteps(card, effectiveSessionStatus)}
+        ${renderMarkdown(card.markdown)} ${renderSteps(card, hasActiveRun, effectiveSessionStatus)}
       </div>
     </details>`;
   }
@@ -357,6 +373,6 @@ export function renderSessionProgressCard(
         >${dismiss}
       </span>
     </div>
-    ${renderBody(card, effectiveSessionStatus)}
+    ${renderBody(card, hasActiveRun, effectiveSessionStatus)}
   </section>`;
 }

@@ -266,6 +266,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
           activeSession?.status,
           activeSession?.startedAt,
           activeSession?.endedAt,
+          props.progressCardHasActiveRun,
         )}
       </div>`
     : nothing;
@@ -300,8 +301,13 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
         })}
       </div>`
     : nothing;
+  const compoundQuestionComposer = Boolean(questionPanelProps && showComposerInput);
   return html`
-    <div class="agent-chat__composer-shell">
+    <div
+      class="agent-chat__composer-shell ${compoundQuestionComposer
+        ? "agent-chat__composer-shell--question-composer"
+        : ""}"
+    >
       <div class="agent-chat__composer-overlay">
         ${props.anchoredNotices ?? nothing} ${composerAlerts} ${fallbackStatus} ${compactionStatus}
         ${interruptedStatus === nothing

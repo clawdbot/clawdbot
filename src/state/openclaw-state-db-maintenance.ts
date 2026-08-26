@@ -50,6 +50,7 @@ const STATE_MIGRATION_ALLOWED_MISSING_TABLES = {
   8: STATE_V6_ADDITIVE_TABLES,
   9: STATE_V6_ADDITIVE_TABLES,
   10: STATE_V6_ADDITIVE_TABLES,
+  11: STATE_V6_ADDITIVE_TABLES,
 } as const satisfies Record<number, readonly string[]>;
 type OpenClawStateMigrationVersion = keyof typeof STATE_MIGRATION_ALLOWED_MISSING_TABLES;
 
@@ -213,6 +214,14 @@ export function assertOpenClawStateDatabaseV10ForMigration(
   options: { pathname: string },
 ): void {
   assertOpenClawStateDatabaseVersionForMigration(database, { ...options, version: 10 });
+}
+
+/** Require every stable v11 table before singleton state folds into the v12 store. */
+export function assertOpenClawStateDatabaseV11ForMigration(
+  database: DatabaseSync,
+  options: { pathname: string },
+): void {
+  assertOpenClawStateDatabaseVersionForMigration(database, { ...options, version: 11 });
 }
 
 export function markCurrentStateSchemaVersion(

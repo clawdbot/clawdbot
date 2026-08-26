@@ -771,11 +771,13 @@ async function closeBrowserPage(page: Page): Promise<void> {
 
 async function waitForLayoutSettled(page: Page, selector: string): Promise<void> {
   // content-visibility and container queries can defer descendant layout beyond
-  // a fixed rAF pair. Measure the owning geometry until two frames agree.
+  // a fixed rAF pair. Require a short quiet window so a delayed update cannot
+  // land immediately after two coincidentally identical frames.
   await page.evaluate(
-    async ({ maxFrames, selector: targetSelector }) => {
+    async ({ maxFrames, minStableFrames, minStableMs, selector: targetSelector }) => {
       let previousGeometry: string | undefined;
       let stableFrames = 0;
+      let stableSince = performance.now();
       for (let frame = 0; frame < maxFrames; frame += 1) {
         await new Promise<void>((resolve) => {
           requestAnimationFrame(() => resolve());
@@ -790,15 +792,20 @@ async function waitForLayoutSettled(page: Page, selector: string): Promise<void>
             return [rect.x, rect.y, rect.width, rect.height];
           }),
         );
-        stableFrames = geometry === previousGeometry ? stableFrames + 1 : 1;
-        if (stableFrames >= 2) {
+        if (geometry === previousGeometry) {
+          stableFrames += 1;
+        } else {
+          stableFrames = 1;
+          stableSince = performance.now();
+        }
+        if (stableFrames >= minStableFrames && performance.now() - stableSince >= minStableMs) {
           return;
         }
         previousGeometry = geometry;
       }
       throw new Error(`Layout did not stabilize for ${targetSelector} within ${maxFrames} frames`);
     },
-    { maxFrames: 60, selector },
+    { maxFrames: 60, minStableFrames: 4, minStableMs: 50, selector },
   );
 }
 
@@ -879,6 +886,43 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     sharedLayoutContext = null;
     await sharedBrowser?.close();
     sharedBrowser = null;
+  });
+
+  it("waits through delayed layout updates", async () => {
+    const page = await openBrowserPage(320, 568);
+    try {
+      await page.setContent(
+        '<div id="delayed-layout" style="position:absolute;top:0">Layout</div>',
+      );
+      await page.locator("#delayed-layout").evaluate((node) => {
+        const element = node as HTMLElement;
+        const nativeGetBoundingClientRect = element.getBoundingClientRect.bind(element);
+        let scheduled = false;
+        element.getBoundingClientRect = () => {
+          const rect = nativeGetBoundingClientRect();
+          element.dataset.lastObservedTop = String(rect.top);
+          if (!scheduled) {
+            scheduled = true;
+            requestAnimationFrame(() => {
+              requestAnimationFrame(() => {
+                element.style.top = "12px";
+              });
+            });
+          }
+          return rect;
+        };
+      });
+
+      await waitForLayoutSettled(page, "#delayed-layout");
+
+      expect(
+        await page
+          .locator("#delayed-layout")
+          .evaluate((node) => Number((node as HTMLElement).dataset.lastObservedTop)),
+      ).toBe(12);
+    } finally {
+      await closeBrowserPage(page);
+    }
   });
 
   it("keeps transcript search icons compact", async () => {

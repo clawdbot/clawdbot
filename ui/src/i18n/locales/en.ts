@@ -258,6 +258,7 @@ export const en: TranslationMap = {
       completed: "completed",
       failed: "failed",
       inProgress: "in progress",
+      paused: "paused",
       pending: "pending",
       stopped: "stopped",
     },

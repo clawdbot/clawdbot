@@ -206,6 +206,45 @@ describe("Ollama onboarding model selection", () => {
     },
   );
 
+  it("preserves incomplete remote-model-only capabilities during interactive setup", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) =>
+        requestUrl(input).endsWith("/api/tags")
+          ? Response.json({
+              models: [
+                {
+                  name: "deepseek-r1:remote",
+                  remote_model: "upstream-deepseek-r1",
+                  size: 2_000_000_000,
+                  details: { context_length: 32_768 },
+                  capabilities: ["tools"],
+                },
+              ],
+            })
+          : Response.json({}),
+      ),
+    );
+    const prompter = {
+      select: vi.fn().mockResolvedValueOnce("local-only"),
+      text: vi.fn().mockResolvedValueOnce("http://127.0.0.1:11434"),
+      note: vi.fn(async () => undefined),
+      confirm: vi.fn().mockResolvedValue(false),
+    } as unknown as WizardPrompter;
+
+    const result = await promptAndConfigureOllama({ cfg: {}, prompter });
+
+    expect(result.defaultModel).toBe("ollama/deepseek-r1:remote");
+    expect(result.config.models?.providers?.ollama?.models).toContainEqual(
+      expect.objectContaining({
+        id: "deepseek-r1:remote",
+        contextWindow: 32_768,
+        reasoning: true,
+        compat: expect.objectContaining({ supportsTools: true }),
+      }),
+    );
+  });
+
   it("aborts pending model discovery with the setup signal", async () => {
     const controller = new AbortController();
     vi.stubGlobal(

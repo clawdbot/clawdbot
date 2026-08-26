@@ -18,7 +18,13 @@ import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-provider
 import type { MemoryEmbeddingProvider } from "../plugins/memory-embedding-providers.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { sendJson, sendMissingScopeForbidden, watchClientDisconnect } from "./http-common.js";
+import {
+  parseGatewayJsonRequest,
+  sendInvalidRequest,
+  sendJson,
+  sendMissingScopeForbidden,
+  watchClientDisconnect,
+} from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import {
   authorizeOpenAiCompatibleHttpModelOverride,
@@ -328,52 +334,30 @@ export async function handleOpenAiEmbeddingsHttpRequest(
     return true;
   }
 
-  const parsed = EmbeddingsRequestSchema.safeParse(handled.body);
-  if (!parsed.success) {
-    const issue = parsed.error.issues[0];
-    sendJson(res, 400, {
-      error: {
-        message: issue ? `${issue.path.join(".")}: ${issue.message}` : "Invalid request body",
-        type: "invalid_request_error",
-      },
-    });
+  const payload = parseGatewayJsonRequest(res, handled.body, EmbeddingsRequestSchema);
+  if (!payload) {
     return true;
   }
-  const payload = parsed.data;
   const requestModel = normalizeOptionalString(payload.model) ?? "";
   if (!requestModel) {
-    sendJson(res, 400, {
-      error: { message: "Missing `model`.", type: "invalid_request_error" },
-    });
+    sendInvalidRequest(res, "Missing `model`.");
     return true;
   }
 
   const cfg = getRuntimeConfig();
   if (!isOpenClawAgentModelId(requestModel)) {
-    sendJson(res, 400, {
-      error: {
-        message: "Invalid `model`. Use `openclaw` or `openclaw/<agentId>`.",
-        type: "invalid_request_error",
-      },
-    });
+    sendInvalidRequest(res, "Invalid `model`. Use `openclaw` or `openclaw/<agentId>`.");
     return true;
   }
 
   const texts = resolveInputTexts(payload.input);
   if (!texts) {
-    sendJson(res, 400, {
-      error: {
-        message: "`input` must be a string or an array of strings.",
-        type: "invalid_request_error",
-      },
-    });
+    sendInvalidRequest(res, "`input` must be a string or an array of strings.");
     return true;
   }
   const inputError = validateInputTexts(texts);
   if (inputError) {
-    sendJson(res, 400, {
-      error: { message: inputError, type: "invalid_request_error" },
-    });
+    sendInvalidRequest(res, inputError);
     return true;
   }
 
@@ -382,9 +366,7 @@ export async function handleOpenAiEmbeddingsHttpRequest(
     agentId = resolveAgentIdForRequest({ req, model: requestModel });
   } catch (err) {
     if (isAgentSelectionRequiredError(err) || isUnknownGatewayAgentError(err)) {
-      sendJson(res, 400, {
-        error: { message: err.message, type: "invalid_request_error" },
-      });
+      sendInvalidRequest(res, err.message);
       return true;
     }
     throw err;
@@ -401,12 +383,7 @@ export async function handleOpenAiEmbeddingsHttpRequest(
     configuredProvider,
   });
   if ("errorMessage" in target) {
-    sendJson(res, 400, {
-      error: {
-        message: target.errorMessage,
-        type: "invalid_request_error",
-      },
-    });
+    sendInvalidRequest(res, target.errorMessage);
     return true;
   }
   const providerScopeKey = JSON.stringify([agentId, target.provider]);
