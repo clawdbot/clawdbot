@@ -110,13 +110,17 @@ describe("memory-core manifest config schema", () => {
     // The schema-driven Control UI renders an unset boolean from `schema.default`
     // and shows false when it is missing. Without this, an untouched install would
     // display machine-only mode while the gateway still writes Dream Diary prose.
-    const dreaming = manifest.configSchema?.properties?.dreaming as
-      | { properties?: Record<string, { default?: unknown }> }
-      | undefined;
-
-    expect(dreaming?.properties?.humanReadable?.default).toBe(true);
-    expect(dreaming?.properties?.humanReadable?.default).toBe(
-      dreaming?.properties?.enabled?.default,
-    );
+    // `enabled` is asserted alongside it because both must read as the same
+    // default-on surface for an untouched configuration.
+    expect(manifest.configSchema).toMatchObject({
+      properties: {
+        dreaming: {
+          properties: {
+            enabled: { default: true },
+            humanReadable: { default: true },
+          },
+        },
+      },
+    });
   });
 });
