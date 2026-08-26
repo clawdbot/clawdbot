@@ -328,6 +328,8 @@ export const validateTalkClientTranscriptParams = compile(S.TalkClientTranscript
 export const validateTalkClientSteerParams = compile(S.TalkClientSteerParamsSchema);
 export const validateTalkSessionCreateParams = compile(S.TalkSessionCreateParamsSchema);
 export const validateTalkSessionAppendAudioParams = compile(S.TalkSessionAppendAudioParamsSchema);
+export const validateTalkSessionCommitAudioParams = compile(S.TalkSessionCommitAudioParamsSchema);
+export const validateTalkSessionCommitAudioResult = compile(S.TalkSessionCommitAudioResultSchema);
 export const validateTalkSessionAcknowledgeMarkParams = compile(
   S.TalkSessionAcknowledgeMarkParamsSchema,
 );

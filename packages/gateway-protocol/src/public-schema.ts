@@ -416,6 +416,8 @@ export {
   TalkConfigParamsSchema,
   TalkConfigResultSchema,
   TalkSessionAppendAudioParamsSchema,
+  TalkSessionCommitAudioParamsSchema,
+  TalkSessionCommitAudioResultSchema,
   TalkSessionAcknowledgeMarkParamsSchema,
   TalkSessionCancelOutputParamsSchema,
   TalkSessionCancelOutputResultSchema,

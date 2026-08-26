@@ -112,7 +112,7 @@ export type RealtimeVoiceSessionHarness<TForcedConsultContext = unknown> = {
   close(): void;
   createBridge(params: RealtimeVoiceBridgeSessionParams): RealtimeVoiceBridgeSession;
   emit<TPayload>(input: TalkEventInput<TPayload>): TalkEvent<TPayload>;
-  ensureTurn(): string;
+  ensureTurn(turnId?: string): string;
   endTurn(reason?: string): void;
   finishResponse(outcome: RealtimeVoiceResponseOutcome): TalkTurnResult;
   finishOutputAudio(reason: string): void;
@@ -178,8 +178,11 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
       })
     : undefined;
 
-  const ensureTurn = () => {
-    const turnId = talk.ensureTurn({ payload: params.talkPayloads.turnStarted() }).turnId;
+  const ensureTurn = (requestedTurnId?: string) => {
+    const turnId = talk.ensureTurn({
+      payload: params.talkPayloads.turnStarted(),
+      ...(requestedTurnId ? { turnId: requestedTurnId } : {}),
+    }).turnId;
     responseOwnerTurnId ??= turnId;
     return turnId;
   };

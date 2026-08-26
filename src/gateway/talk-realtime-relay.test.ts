@@ -29,6 +29,7 @@ import { MAX_RELAY_TOOL_CALL_IDENTITIES } from "./talk-realtime-relay-tool-call-
 import {
   acknowledgeTalkRealtimeRelayMark,
   cancelTalkRealtimeRelayTurn,
+  commitTalkRealtimeRelayAudio,
   createTalkRealtimeRelaySession as createTalkRealtimeRelaySessionRaw,
   ensureTalkRealtimeRelayVoiceSession,
   flushTalkRealtimeRelayVoiceWrites,
@@ -89,6 +90,196 @@ function ensureActiveRelayTurnId(relaySessionId: string): string {
 }
 
 describe("talk realtime gateway relay", () => {
+  it("runs speech-only relay turns with manual commit, strict ownership, and idempotency", async () => {
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    const commitInputAudio = vi.fn();
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "relay-test",
+      label: "Relay Test",
+      isConfigured: () => true,
+      createBridge: (request) => {
+        bridgeRequest = request;
+        return makeRelayTransport({ commitInputAudio });
+      },
+    };
+    const session = createTalkRealtimeRelaySession({
+      context: { broadcastToConnIds: vi.fn() } as never,
+      connId: "conn-owner",
+      provider,
+      providerConfig: {},
+      instructions: "Speech only.",
+      brain: "none",
+      toolPolicy: "none",
+      tools: [],
+    });
+    await Promise.resolve();
+
+    expect(session.toolsEnabled).toBe(false);
+    expect(bridgeRequest).toMatchObject({
+      autoRespondToAudio: false,
+      inputAudioTurnDetection: "manual",
+      instructions: "Speech only.",
+      tools: [],
+    });
+    expect(bridgeRequest).not.toHaveProperty("runAgentConsult");
+
+    void sendTalkRealtimeRelayAudio({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-owner",
+      turnId: "turn-client-1",
+      audioBase64: Buffer.from("audio").toString("base64"),
+    });
+    expect(
+      commitTalkRealtimeRelayAudio({
+        relaySessionId: session.relaySessionId,
+        connId: "conn-owner",
+        turnId: "turn-client-1",
+      }),
+    ).toEqual({ status: "committed", turnId: "turn-client-1" });
+    expect(
+      commitTalkRealtimeRelayAudio({
+        relaySessionId: session.relaySessionId,
+        connId: "conn-owner",
+        turnId: "turn-client-1",
+      }),
+    ).toEqual({ status: "duplicate", turnId: "turn-client-1" });
+    expect(commitInputAudio).toHaveBeenCalledTimes(1);
+    expect(relaySessions.has(session.relaySessionId)).toBe(true);
+
+    expect(
+      () =>
+        void sendTalkRealtimeRelayAudio({
+          relaySessionId: session.relaySessionId,
+          connId: "conn-owner",
+          turnId: "turn-client-1",
+          audioBase64: Buffer.from("late").toString("base64"),
+        }),
+    ).toThrow("Realtime relay turn has already been committed");
+    expect(relaySessions.has(session.relaySessionId)).toBe(true);
+    expect(() =>
+      submitTalkRealtimeRelayToolResult({
+        relaySessionId: session.relaySessionId,
+        connId: "conn-owner",
+        callId: "call-1",
+        result: { ok: true },
+      }),
+    ).toThrow("Speech-only realtime relay sessions do not accept tool results");
+    await expect(
+      steerTalkRealtimeRelayAgentRun({
+        relaySessionId: session.relaySessionId,
+        connId: "conn-owner",
+        text: "do something",
+      }),
+    ).rejects.toThrow("Speech-only realtime relay sessions do not accept agent steering");
+    expect(() =>
+      commitTalkRealtimeRelayAudio({
+        relaySessionId: session.relaySessionId,
+        connId: "conn-foreign",
+        turnId: "turn-client-1",
+      }),
+    ).toThrow("Unknown realtime relay session");
+  });
+
+  it("keeps speech-only playback cancellation and mark acknowledgement enabled", async () => {
+    vi.useFakeTimers();
+    const acknowledgeMark = vi.fn();
+    const handleBargeIn = vi.fn();
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "relay-test",
+      label: "Relay Test",
+      isConfigured: () => true,
+      createBridge: () =>
+        makeRelayTransport({ acknowledgeMark, commitInputAudio: vi.fn(), handleBargeIn }),
+    };
+    const session = createTalkRealtimeRelaySession({
+      context: { broadcastToConnIds: vi.fn() } as never,
+      connId: "conn-1",
+      provider,
+      providerConfig: {},
+      instructions: "Speech only.",
+      brain: "none",
+      toolPolicy: "none",
+      tools: [],
+    });
+    void sendTalkRealtimeRelayAudio({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      turnId: "turn-client-1",
+      audioBase64: "AQI=",
+    });
+
+    acknowledgeTalkRealtimeRelayMark({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      markName: "mark-1",
+    });
+    const cancellation = cancelTalkRealtimeRelayTurn({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      reason: "button-cancelled",
+      turnId: "turn-client-1",
+    });
+
+    expect(acknowledgeMark).toHaveBeenCalledWith("mark-1");
+    expect(handleBargeIn).toHaveBeenCalledWith({ audioPlaybackActive: true });
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(cancellation).resolves.toEqual({
+      status: "applied",
+      turnId: "turn-client-1",
+    });
+  });
+
+  it("rejects empty, stale, and closed manual realtime commits", () => {
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "relay-test",
+      label: "Relay Test",
+      isConfigured: () => true,
+      createBridge: () => makeRelayTransport({ commitInputAudio: vi.fn() }),
+    };
+    const session = createTalkRealtimeRelaySession({
+      context: { broadcastToConnIds: vi.fn() } as never,
+      connId: "conn-1",
+      provider,
+      providerConfig: {},
+      instructions: "Speech only.",
+      brain: "none",
+      toolPolicy: "none",
+      tools: [],
+    });
+
+    expect(() =>
+      commitTalkRealtimeRelayAudio({
+        relaySessionId: session.relaySessionId,
+        connId: "conn-1",
+        turnId: "turn-empty",
+      }),
+    ).toThrow("Realtime relay input audio buffer is empty");
+    void sendTalkRealtimeRelayAudio({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      turnId: "turn-live",
+      audioBase64: "AQI=",
+    });
+    expect(() =>
+      commitTalkRealtimeRelayAudio({
+        relaySessionId: session.relaySessionId,
+        connId: "conn-1",
+        turnId: "turn-stale",
+      }),
+    ).toThrow("Realtime relay commit turn does not match the active turn");
+    stopTalkRealtimeRelaySession({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+    });
+    expect(() =>
+      commitTalkRealtimeRelayAudio({
+        relaySessionId: session.relaySessionId,
+        connId: "conn-1",
+        turnId: "turn-live",
+      }),
+    ).toThrow("Unknown realtime relay session");
+  });
+
   it.each([
     [
       { status: "failed" as const, responseId: "response-1", message: "provider failed" },

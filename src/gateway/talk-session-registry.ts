@@ -12,6 +12,7 @@ type UnifiedTalkSessionRecord =
       kind: "realtime-relay";
       connId: string;
       relaySessionId: string;
+      toolsEnabled: boolean;
     }
   | {
       kind: "transcription-relay";

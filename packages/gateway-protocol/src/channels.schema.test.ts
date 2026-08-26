@@ -3,7 +3,11 @@ import { Compile } from "typebox/compile";
 import { describe, expect, it } from "vitest";
 import {
   ChannelsStatusResultSchema,
+  TalkSessionAppendAudioParamsSchema,
   TalkSessionCancelOutputResultSchema,
+  TalkSessionCommitAudioParamsSchema,
+  TalkSessionCommitAudioResultSchema,
+  TalkSessionCreateParamsSchema,
   WebLoginWaitParamsSchema,
 } from "./schema/channels.js";
 
@@ -59,6 +63,54 @@ describe("TalkSessionCancelOutputResultSchema", () => {
     ]) {
       expect(validate.Check(value)).toBe(false);
     }
+  });
+});
+
+describe("TalkSessionCommitAudioResultSchema", () => {
+  const validate = Compile(TalkSessionCommitAudioResultSchema);
+
+  it("accepts only closed manual-commit outcomes", () => {
+    for (const status of ["committed", "duplicate"]) {
+      expect(validate.Check({ ok: true, status, turnId: "turn-7" })).toBe(true);
+    }
+    for (const value of [
+      {},
+      { ok: true, status: "committed" },
+      { ok: false, status: "committed", turnId: "turn-7" },
+      { ok: true, status: "stale", turnId: "turn-7" },
+      { ok: true, status: "committed", turnId: "" },
+      { ok: true, status: "committed", turnId: "turn-7", extra: true },
+    ]) {
+      expect(validate.Check(value)).toBe(false);
+    }
+  });
+});
+
+describe("manual realtime input schemas", () => {
+  const validateCreate = Compile(TalkSessionCreateParamsSchema);
+  const validateAppend = Compile(TalkSessionAppendAudioParamsSchema);
+  const validateCommit = Compile(TalkSessionCommitAudioParamsSchema);
+
+  it("accepts only the explicit no-tools session policy", () => {
+    expect(
+      validateCreate.Check({
+        mode: "realtime",
+        transport: "gateway-relay",
+        brain: "none",
+        toolPolicy: "none",
+      }),
+    ).toBe(true);
+    expect(validateCreate.Check({ toolPolicy: "auto" })).toBe(false);
+    expect(validateCreate.Check({ toolPolicy: true })).toBe(false);
+  });
+
+  it("bounds client-owned manual turn ids", () => {
+    expect(
+      validateAppend.Check({ sessionId: "session-1", turnId: "turn-7", audioBase64: "AQI=" }),
+    ).toBe(true);
+    expect(validateCommit.Check({ sessionId: "session-1", turnId: "turn-7" })).toBe(true);
+    expect(validateCommit.Check({ sessionId: "session-1", turnId: "" })).toBe(false);
+    expect(validateCommit.Check({ sessionId: "session-1", turnId: "x".repeat(129) })).toBe(false);
   });
 });
 

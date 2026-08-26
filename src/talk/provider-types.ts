@@ -227,6 +227,8 @@ export type RealtimeVoiceBridgeCreateRequest = RealtimeVoiceBridgeCallbacks & {
   instructions?: string;
   language?: string;
   autoRespondToAudio?: boolean;
+  /** `manual` disables provider VAD so the host owns the input-audio turn boundary. */
+  inputAudioTurnDetection?: "server-vad" | "manual";
   interruptResponseOnInputAudio?: boolean;
   tools?: RealtimeVoiceTool[];
   /** Host-injected agent delegation runner for provider-owned realtime control channels. */
@@ -324,6 +326,8 @@ export type RealtimeVoiceBridge = {
   handlesInputAudioBargeIn?: boolean;
   connect(): Promise<void>;
   sendAudio(audio: Buffer): void;
+  /** Atomically commits buffered input audio and requests exactly one provider response. */
+  commitInputAudio?(): void;
   setMediaTimestamp(ts: number): void;
   sendUserMessage?(
     text: string,

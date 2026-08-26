@@ -111,6 +111,18 @@ then 2 s). If those attempts are exhausted, the overlay reports
 `Realtime disconnected repeatedly — using native speech` and the next start bypasses realtime.
 Losing the microphone mid-session closes the relay and takes the same route.
 
+### Speech-only manual push to talk
+
+Thin clients can create a realtime Gateway relay with `toolPolicy: "none"` and `brain: "none"`.
+The response must report `toolsEnabled: false`; these sessions have no agent session, tools, or
+steering authority. Send every PCM frame with one client-owned `turnId`, then release the button by
+calling `talk.session.commitAudio` with that same id. The Gateway disables provider VAD and sends
+the provider's input-buffer commit before requesting exactly one response. Retrying an accepted
+commit is idempotent and returns `duplicate`.
+
+Speech-only sessions still support `talk.session.cancelOutput`,
+`talk.session.acknowledgeMark`, and `talk.session.close` for playback lifecycle control.
+
 Relay output cancellation is turn-scoped. Clients copy the current `turnId` from the
 `talk.event` audio envelope. Matching ids return `applied`, stale ids return `stale`, and
 sessions without an active turn return `idle`. Older clients that omit `turnId` still cancel

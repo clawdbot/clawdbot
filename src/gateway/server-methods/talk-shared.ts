@@ -400,6 +400,19 @@ export function buildRealtimeInstructions(configuredInstructions?: string): stri
   return `${DEFAULT_REALTIME_INSTRUCTIONS}\n\nAdditional realtime instructions:\n${extra}`;
 }
 
+const DEFAULT_REALTIME_SPEECH_ONLY_INSTRUCTIONS = [
+  "You are OpenClaw's speech-only realtime voice interface. Keep spoken replies concise and natural.",
+  "This session has no tools, OpenClaw agent context, workspace access, or action authority.",
+  "Do not claim to inspect private or current state or to perform actions; briefly say when a request requires unavailable capabilities.",
+].join(" ");
+
+export function buildRealtimeSpeechOnlyInstructions(configuredInstructions?: string): string {
+  const extra = normalizeOptionalString(configuredInstructions);
+  return extra
+    ? `${DEFAULT_REALTIME_SPEECH_ONLY_INSTRUCTIONS}\n\nAdditional speech-only instructions:\n${extra}`
+    : DEFAULT_REALTIME_SPEECH_ONLY_INSTRUCTIONS;
+}
+
 type RealtimeVoiceLaunchOptions = {
   model?: string;
   voice?: string;
@@ -466,6 +479,7 @@ export function resolveTalkRealtimeGatewayRelayLaunch(params: {
   cfg: OpenClawConfig;
   launchOptions: RealtimeVoiceLaunchOptions;
   consultRouting?: string;
+  manualTurnCompletion?: boolean;
 }) {
   const forceAgentConsultOnFinalTranscript = params.consultRouting === "force-agent-consult";
   const providerConfig = withRealtimeBrowserOverrides(params.providerConfig, params.launchOptions);
@@ -477,7 +491,8 @@ export function resolveTalkRealtimeGatewayRelayLaunch(params: {
       cfg: params.cfg,
       providerConfig,
       model: params.launchOptions.model,
-      autoRespondToAudio: !forceAgentConsultOnFinalTranscript,
+      autoRespondToAudio:
+        !forceAgentConsultOnFinalTranscript && params.manualTurnCompletion !== true,
     }),
   };
 }

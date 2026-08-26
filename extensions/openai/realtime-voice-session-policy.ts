@@ -177,7 +177,7 @@ export type RealtimeEvent = {
   error?: unknown;
 };
 
-export type RealtimeTurnDetectionConfig = {
+type RealtimeTurnDetectionConfig = {
   type: "server_vad";
   threshold: number;
   prefix_padding_ms: number;
@@ -185,6 +185,8 @@ export type RealtimeTurnDetectionConfig = {
   create_response: boolean;
   interrupt_response?: boolean;
 };
+
+export type RealtimeInputTurnDetection = RealtimeTurnDetectionConfig | null;
 
 type RealtimeGaSessionPolicy = {
   type: "realtime";
@@ -194,7 +196,7 @@ type RealtimeGaSessionPolicy = {
   audio: {
     input: {
       format: OpenAICompatibleRealtimeAudioFormat;
-      turn_detection: RealtimeTurnDetectionConfig;
+      turn_detection: RealtimeInputTurnDetection;
       noise_reduction: { type: "near_field" } | null;
       transcription: { model: string; language?: string };
     };
@@ -222,7 +224,7 @@ export type RealtimeAzureDeploymentSessionUpdate = {
     input_audio_format: "g711_ulaw" | "pcm16";
     output_audio_format: "g711_ulaw" | "pcm16";
     input_audio_transcription?: { model: string; language?: string };
-    turn_detection: RealtimeTurnDetectionConfig;
+    turn_detection: RealtimeInputTurnDetection;
     temperature: number;
     tools?: RealtimeVoiceTool[];
     tool_choice?: string;
@@ -435,11 +437,15 @@ export function buildOpenAIRealtimeTurnDetectionConfig(params: {
   autoRespondToAudio?: boolean;
   createResponse?: boolean;
   includeInterruptResponse?: boolean;
+  inputAudioTurnDetection?: "server-vad" | "manual";
   interruptResponseOnInputAudio?: boolean;
   prefixPaddingMs?: number;
   silenceDurationMs?: number;
   vadThreshold?: number;
-}): RealtimeTurnDetectionConfig {
+}): RealtimeInputTurnDetection {
+  if (params.inputAudioTurnDetection === "manual") {
+    return null;
+  }
   const configuredAutoResponse = params.autoRespondToAudio ?? true;
   return {
     type: "server_vad",
@@ -460,6 +466,7 @@ export function buildOpenAIRealtimeGaSessionPolicy(params: {
   autoRespondToAudio?: boolean;
   instructions?: string;
   interruptResponseOnInputAudio?: boolean;
+  inputAudioTurnDetection?: "server-vad" | "manual";
   language?: string;
   model: string;
   noiseReduction: { type: "near_field" } | null;
@@ -467,6 +474,7 @@ export function buildOpenAIRealtimeGaSessionPolicy(params: {
   reasoningEffort?: string;
   silenceDurationMs?: number;
   tools?: RealtimeVoiceTool[];
+  toolChoice?: "auto" | "none";
   vadThreshold?: number;
   voice: OpenAIRealtimeVoice;
 }): RealtimeGaSessionPolicy {
@@ -489,6 +497,7 @@ export function buildOpenAIRealtimeGaSessionPolicy(params: {
         turn_detection: buildOpenAIRealtimeTurnDetectionConfig({
           autoRespondToAudio: params.autoRespondToAudio,
           includeInterruptResponse: true,
+          inputAudioTurnDetection: params.inputAudioTurnDetection,
           interruptResponseOnInputAudio: params.interruptResponseOnInputAudio,
           prefixPaddingMs: params.prefixPaddingMs,
           silenceDurationMs: params.silenceDurationMs,
@@ -501,7 +510,7 @@ export function buildOpenAIRealtimeGaSessionPolicy(params: {
       },
     },
     ...(params.reasoningEffort ? { reasoning: { effort: params.reasoningEffort } } : {}),
-    ...(params.tools ? { tools: params.tools, tool_choice: "auto" } : {}),
+    ...(params.tools ? { tools: params.tools, tool_choice: params.toolChoice ?? "auto" } : {}),
   };
 }
 

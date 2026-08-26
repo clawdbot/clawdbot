@@ -20,7 +20,7 @@ import {
   type OpenAIRealtimeVoiceBridgeConfig,
   type RealtimeAzureDeploymentSessionUpdate,
   type RealtimeGaSessionUpdate,
-  type RealtimeTurnDetectionConfig,
+  type RealtimeInputTurnDetection,
 } from "./realtime-voice-session-policy.js";
 
 export abstract class OpenAIRealtimeProtocol {
@@ -120,6 +120,8 @@ export abstract class OpenAIRealtimeProtocol {
 
   protected buildGaSessionUpdate(): RealtimeGaSessionUpdate {
     const cfg = this.config;
+    const tools = normalizeOpenAIRealtimeTools(cfg.tools);
+    const explicitNoTools = cfg.tools?.length === 0;
     return {
       type: "session.update",
       session:
@@ -129,13 +131,15 @@ export abstract class OpenAIRealtimeProtocol {
           autoRespondToAudio: cfg.autoRespondToAudio,
           instructions: cfg.instructions,
           interruptResponseOnInputAudio: cfg.interruptResponseOnInputAudio,
+          inputAudioTurnDetection: cfg.inputAudioTurnDetection,
           language: cfg.language,
           model: cfg.model ?? OPENAI_REALTIME_DEFAULT_MODEL,
           noiseReduction: null,
           prefixPaddingMs: cfg.prefixPaddingMs,
           reasoningEffort: cfg.reasoningEffort,
           silenceDurationMs: cfg.silenceDurationMs,
-          tools: normalizeOpenAIRealtimeTools(cfg.tools),
+          tools: explicitNoTools ? [] : tools,
+          toolChoice: explicitNoTools ? "none" : "auto",
           vadThreshold: cfg.vadThreshold,
           voice: cfg.voice ?? "alloy",
         }),
@@ -149,10 +153,12 @@ export abstract class OpenAIRealtimeProtocol {
   protected buildAzureDeploymentSessionUpdate(): RealtimeAzureDeploymentSessionUpdate {
     const cfg = this.config;
     const format = this.resolveLegacyRealtimeAudioFormat();
-    const tools = normalizeOpenAIRealtimeTools(
+    const normalizedTools = normalizeOpenAIRealtimeTools(
       cfg.tools,
       AZURE_OPENAI_REALTIME_TOOL_NAME_MAX_LENGTH,
     );
+    const explicitNoTools = cfg.tools?.length === 0;
+    const tools = explicitNoTools ? [] : normalizedTools;
     return {
       type: "session.update",
       session: {
@@ -170,7 +176,7 @@ export abstract class OpenAIRealtimeProtocol {
         ...(tools
           ? {
               tools,
-              tool_choice: "auto",
+              tool_choice: explicitNoTools ? "none" : "auto",
             }
           : {}),
       },
@@ -180,11 +186,12 @@ export abstract class OpenAIRealtimeProtocol {
   protected buildTurnDetectionConfig(options?: {
     createResponse?: boolean;
     includeInterruptResponse?: boolean;
-  }): RealtimeTurnDetectionConfig {
+  }): RealtimeInputTurnDetection {
     return buildOpenAIRealtimeTurnDetectionConfig({
       autoRespondToAudio: this.config.autoRespondToAudio,
       createResponse: options?.createResponse,
       includeInterruptResponse: options?.includeInterruptResponse,
+      inputAudioTurnDetection: this.config.inputAudioTurnDetection,
       interruptResponseOnInputAudio: this.config.interruptResponseOnInputAudio,
       prefixPaddingMs: this.config.prefixPaddingMs,
       silenceDurationMs: this.config.silenceDurationMs,

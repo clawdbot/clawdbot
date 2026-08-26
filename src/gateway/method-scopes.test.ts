@@ -15,6 +15,21 @@ import { coreGatewayHandlers } from "./server-methods.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
 
 const RESERVED_ADMIN_PLUGIN_METHOD = "config.plugin.inspect";
+const UNIFIED_TALK_METHODS = [
+  "talk.client.create",
+  "talk.client.transcript",
+  "talk.client.close",
+  "talk.client.toolCall",
+  "talk.client.steer",
+  "talk.session.create",
+  "talk.session.appendAudio",
+  "talk.session.commitAudio",
+  "talk.session.cancelOutput",
+  "talk.session.acknowledgeMark",
+  "talk.session.submitToolResult",
+  "talk.session.steer",
+  "talk.session.close",
+] as const;
 const pluginHandler: GatewayRequestHandler = ({ respond }) => respond(true, {});
 
 function setPluginGatewayMethodScope(
@@ -127,18 +142,6 @@ describe("method scope resolution", () => {
     ["skills.curator.restore", ["operator.admin"]],
     ["node.pair.approve", ["operator.pairing"]],
     ["poll", ["operator.write"]],
-    ["talk.client.create", ["operator.talk"]],
-    ["talk.client.transcript", ["operator.talk"]],
-    ["talk.client.close", ["operator.talk"]],
-    ["talk.client.toolCall", ["operator.talk"]],
-    ["talk.client.steer", ["operator.talk"]],
-    ["talk.session.create", ["operator.talk"]],
-    ["talk.session.appendAudio", ["operator.talk"]],
-    ["talk.session.cancelOutput", ["operator.talk"]],
-    ["talk.session.acknowledgeMark", ["operator.talk"]],
-    ["talk.session.submitToolResult", ["operator.talk"]],
-    ["talk.session.steer", ["operator.talk"]],
-    ["talk.session.close", ["operator.talk"]],
     ["update.status", ["operator.admin"]],
     ["update.hold", ["operator.admin"]],
     ["secrets.store.list", ["operator.admin"]],
@@ -164,6 +167,10 @@ describe("method scope resolution", () => {
     ["conversations.turn.cancel", ["operator.admin"]],
   ])("resolves least-privilege scopes for %s", (method, expected) => {
     expect(resolveLeastPrivilegeOperatorScopesForMethod(method)).toEqual(expected);
+  });
+
+  it.each(UNIFIED_TALK_METHODS)("resolves Talk scope for %s", (method) => {
+    expect(resolveLeastPrivilegeOperatorScopesForMethod(method)).toEqual(["operator.talk"]);
   });
 
   it("leaves node-only pending drain outside operator scopes", () => {
@@ -845,20 +852,7 @@ describe("operator scope authorization", () => {
   });
 
   it("allows operator.talk and legacy operator.write clients to use unified Talk sessions", () => {
-    for (const method of [
-      "talk.client.create",
-      "talk.client.transcript",
-      "talk.client.close",
-      "talk.client.toolCall",
-      "talk.client.steer",
-      "talk.session.create",
-      "talk.session.appendAudio",
-      "talk.session.cancelOutput",
-      "talk.session.acknowledgeMark",
-      "talk.session.submitToolResult",
-      "talk.session.steer",
-      "talk.session.close",
-    ]) {
+    for (const method of UNIFIED_TALK_METHODS) {
       expect(authorizeOperatorScopesForMethod(method, ["operator.talk"])).toEqual({
         allowed: true,
       });

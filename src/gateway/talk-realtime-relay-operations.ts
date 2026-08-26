@@ -62,6 +62,9 @@ export function ensureTalkRealtimeRelayVoiceSession(params: {
   sessionKey: string;
 }): void {
   const session = getRelaySession(params.relaySessionId, params.connId);
+  if (!session.toolsEnabled) {
+    throw new Error("Speech-only realtime relay sessions do not accept agent sessions");
+  }
   bindRelaySessionKey(session, params.sessionKey);
   if (!ensureRelayVoiceSession(session)) {
     throw new Error("Realtime relay voice session could not be created");
@@ -186,7 +189,7 @@ export function enforceRelaySessionLimits(connId: string): void {
   }
 }
 
-function getRelaySession(relaySessionId: string, connId: string): RelaySession {
+export function getRelaySession(relaySessionId: string, connId: string): RelaySession {
   return requireActiveTalkRelaySession({
     sessions: relaySessions,
     sessionId: relaySessionId,
@@ -201,6 +204,7 @@ export function sendTalkRealtimeRelayAudio(params: {
   relaySessionId: string;
   connId: string;
   audioBase64: string;
+  turnId?: string;
   timestamp?: number;
 }): void | Promise<void> {
   if (params.audioBase64.length > MAX_AUDIO_BASE64_BYTES) {
@@ -211,8 +215,20 @@ export function sendTalkRealtimeRelayAudio(params: {
     return session.outputOwnership.drain!.promise.then(() => sendTalkRealtimeRelayAudio(params));
   }
   const audio = decodeTalkRelayAudioBase64(params.audioBase64, "Realtime relay");
-  const turnId = ensureRelayTurn(session);
+  const requestedTurnId = normalizeOptionalString(params.turnId);
+  if (session.inputAudioTurnDetection === "manual") {
+    if (!requestedTurnId) {
+      throw new Error("Speech-only realtime relay audio requires a turn id");
+    }
+    if (session.committedManualTurnIds.has(requestedTurnId)) {
+      throw new Error("Realtime relay turn has already been committed");
+    }
+  }
+  const turnId = ensureRelayTurn(session, requestedTurnId);
   session.bridge.sendAudio(audio);
+  if (session.inputAudioTurnDetection === "manual") {
+    session.manualInputAudioBytes += audio.byteLength;
+  }
   broadcastToOwner(session.context, session.connId, {
     relaySessionId: session.id,
     type: "inputAudio",
@@ -247,6 +263,9 @@ export function submitTalkRealtimeRelayToolResult(params: {
   options?: RealtimeVoiceToolResultOptions;
 }): void | Promise<void> {
   const session = getRelaySession(params.relaySessionId, params.connId);
+  if (!session.toolsEnabled) {
+    throw new Error("Speech-only realtime relay sessions do not accept tool results");
+  }
   if (session.toolCalls.isAgentCompleted(params.callId)) {
     return;
   }
@@ -371,6 +390,9 @@ export function registerTalkRealtimeRelayAgentRun(params: {
   callId?: string;
 }): void {
   const session = getRelaySession(params.relaySessionId, params.connId);
+  if (!session.toolsEnabled) {
+    throw new Error("Speech-only realtime relay sessions do not accept agent runs");
+  }
   const callId = params.callId?.trim();
   if (callId && session.toolCalls.isAgentCompleted(callId)) {
     // Provider cancellation can win while chat.send is still acknowledging. Abort
@@ -479,6 +501,9 @@ export async function steerTalkRealtimeRelayAgentRun(params: {
   mode?: string;
 }): Promise<RealtimeVoiceAgentControlResult> {
   const session = getRelaySession(params.relaySessionId, params.connId);
+  if (!session.toolsEnabled) {
+    throw new Error("Speech-only realtime relay sessions do not accept agent steering");
+  }
   const sessionKey = session.sessionKey;
   if (!sessionKey) {
     throw new Error("Realtime relay steering requires a session key");

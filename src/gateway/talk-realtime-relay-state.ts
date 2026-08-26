@@ -22,6 +22,7 @@ export const RELAY_SESSION_TTL_MS = 30 * 60 * 1000;
 export const MAX_AUDIO_BASE64_BYTES = 512 * 1024;
 export const MAX_RELAY_SESSIONS_PER_CONN = 2;
 export const MAX_RELAY_SESSIONS_GLOBAL = 64;
+export const MAX_MANUAL_COMMITTED_TURN_IDS = 1_024;
 const RELAY_EVENT = "talk.event";
 export const RELAY_TRANSCRIPT_ECHO_LOOKBACK_MS = 12_000;
 
@@ -157,7 +158,7 @@ export class TalkRealtimeRelayOutputOwnership {
     return cancelled ? "cancelled" : "completed";
   }
 
-  bind(provider: RelayProvider, runAgentConsult: RealtimeVoiceAgentConsultRunner): RelayProvider {
+  bind(provider: RelayProvider, runAgentConsult?: RealtimeVoiceAgentConsultRunner): RelayProvider {
     return {
       ...provider,
       createBridge: (request) =>
@@ -173,7 +174,7 @@ export class TalkRealtimeRelayOutputOwnership {
             }
             request.onEvent?.(event);
           },
-          runAgentConsult,
+          ...(runAgentConsult ? { runAgentConsult } : {}),
         }),
     };
   }
@@ -186,6 +187,11 @@ export type RelaySession = {
   bridge: RealtimeVoiceBridgeSession;
   harness: RealtimeVoiceSessionHarness;
   outputOwnership: TalkRealtimeRelayOutputOwnership;
+  brain: "agent-consult" | "none";
+  toolsEnabled: boolean;
+  inputAudioTurnDetection: "server-vad" | "manual";
+  manualInputAudioBytes: number;
+  committedManualTurnIds: Set<string>;
   sessionKey?: string;
   agentId?: string;
   expiresAtMs: number;
@@ -215,7 +221,7 @@ export type RelaySession = {
   pendingVoiceTranscripts: Array<{ role: "user" | "assistant"; text: string }>;
 };
 
-export type CreateTalkRealtimeRelaySessionParams = {
+type CreateTalkRealtimeRelaySessionBaseParams = {
   context: GatewayRequestContext;
   connId: string;
   cfg?: OpenClawConfig;
@@ -223,13 +229,29 @@ export type CreateTalkRealtimeRelaySessionParams = {
   provider: RealtimeVoiceProviderPlugin;
   providerConfig: RealtimeVoiceProviderConfig;
   instructions: string;
-  tools: RealtimeVoiceTool[];
   model?: string;
-  sessionKey?: string;
   voice?: string;
   language?: string;
+};
+
+type CreateTalkRealtimeRelayAgentSessionParams = {
+  brain?: "agent-consult";
+  toolPolicy?: undefined;
+  tools: RealtimeVoiceTool[];
+  sessionKey?: string;
   forceAgentConsultOnFinalTranscript?: boolean;
 };
+
+type CreateTalkRealtimeRelaySpeechOnlySessionParams = {
+  brain: "none";
+  toolPolicy: "none";
+  tools: [];
+  sessionKey?: never;
+  forceAgentConsultOnFinalTranscript?: never;
+};
+
+export type CreateTalkRealtimeRelaySessionParams = CreateTalkRealtimeRelaySessionBaseParams &
+  (CreateTalkRealtimeRelayAgentSessionParams | CreateTalkRealtimeRelaySpeechOnlySessionParams);
 
 export type TalkRealtimeRelaySessionResult = {
   provider: string;
@@ -238,6 +260,7 @@ export type TalkRealtimeRelaySessionResult = {
   audio: RealtimeVoiceBrowserAudioContract;
   model?: string;
   voice?: string;
+  toolsEnabled: boolean;
   expiresAt: number;
 };
 
@@ -311,8 +334,13 @@ function relayEventDeliveryOptions(
   }
 }
 
-export function ensureRelayTurn(session: RelaySession): string {
-  const turn = session.harness.talk.ensureTurn();
+export function ensureRelayTurn(session: RelaySession, requestedTurnId?: string): string {
+  const activeTurnId = session.harness.talk.activeTurnId;
+  if (requestedTurnId && activeTurnId && requestedTurnId !== activeTurnId) {
+    throw new Error("Realtime relay turn does not match the active turn");
+  }
+  const turn = session.harness.talk.ensureTurn(requestedTurnId ? { turnId: requestedTurnId } : {});
+  session.harness.ensureTurn(turn.turnId);
   if (turn.event) {
     broadcastToOwner(session.context, session.connId, {
       relaySessionId: session.id,

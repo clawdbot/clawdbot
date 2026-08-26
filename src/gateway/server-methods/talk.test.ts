@@ -54,6 +54,7 @@ const mocks = vi.hoisted(() => ({
   sendTalkRealtimeRelayAudio: vi.fn(),
   acknowledgeTalkRealtimeRelayMark: vi.fn(),
   cancelTalkRealtimeRelayTurn: vi.fn(),
+  commitTalkRealtimeRelayAudio: vi.fn(),
   stopTalkRealtimeRelaySession: vi.fn(),
   registerTalkRealtimeRelayAgentRun: vi.fn(),
   flushTalkRealtimeRelayVoiceWrites: vi.fn(async () => undefined),
@@ -201,6 +202,7 @@ vi.mock("../talk-realtime-relay.js", async (importOriginal) => {
     ...actual,
     acknowledgeTalkRealtimeRelayMark: mocks.acknowledgeTalkRealtimeRelayMark,
     cancelTalkRealtimeRelayTurn: mocks.cancelTalkRealtimeRelayTurn,
+    commitTalkRealtimeRelayAudio: mocks.commitTalkRealtimeRelayAudio,
     createTalkRealtimeRelaySession: mocks.createTalkRealtimeRelaySession,
     ensureTalkRealtimeRelayVoiceSession: mocks.ensureTalkRealtimeRelayVoiceSession,
     flushTalkRealtimeRelayVoiceWrites: mocks.flushTalkRealtimeRelayVoiceWrites,
@@ -1820,6 +1822,7 @@ describe("talk.session unified handlers", () => {
       mode: "realtime",
       transport: "gateway-relay",
       brain: "agent-consult",
+      toolsEnabled: true,
     });
 
     const inputRespond = vi.fn();
@@ -1977,6 +1980,202 @@ describe("talk.session unified handlers", () => {
       connId: "conn-1",
     });
     expect(closeRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+  });
+
+  it("creates a speech-only manual relay without agent context and rejects agent controls", async () => {
+    const provider = {
+      id: "openai",
+      label: "OpenAI Realtime",
+      isConfigured: () => true,
+      createBridge: vi.fn(),
+    };
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+      provider,
+      providerConfig: { apiKey: "openai-key" },
+    });
+    mocks.createTalkRealtimeRelaySession.mockReturnValue({
+      provider: "openai",
+      transport: "gateway-relay",
+      relaySessionId: "relay-speech-only-1",
+      audio: {
+        inputEncoding: "pcm16",
+        inputSampleRateHz: 24000,
+        outputEncoding: "pcm16",
+        outputSampleRateHz: 24000,
+      },
+      toolsEnabled: false,
+      expiresAt: 1_797_986_400,
+    });
+    const createRespond = vi.fn();
+
+    await callTalkHandler("talk.session.create", {
+      params: {
+        mode: "realtime",
+        transport: "gateway-relay",
+        brain: "none",
+        toolPolicy: "none",
+        provider: "openai",
+        model: "gpt-realtime-2.1",
+      },
+      respond: createRespond,
+      client: { connId: "conn-1", connect: { scopes: ["operator.talk"] } },
+      context: {
+        getRuntimeConfig: () =>
+          ({
+            agents: { entries: { main: { default: true } } },
+            talk: {
+              realtime: {
+                provider: "openai",
+                providers: { openai: { apiKey: "openai-key" } },
+                instructions: "Keep answers short.",
+              },
+            },
+          }) as OpenClawConfig,
+      },
+    });
+
+    expect(mocks.ensureClientVoiceAgentSessionEntry).not.toHaveBeenCalled();
+    expect(mocks.resolveRealtimeBootstrapContextInstructions).not.toHaveBeenCalled();
+    const relayCreateInput = mockCallArg(mocks.createTalkRealtimeRelaySession) as Record<
+      string,
+      unknown
+    >;
+    expectRecordFields(relayCreateInput, {
+      brain: "none",
+      toolPolicy: "none",
+      tools: [],
+    });
+    expect(relayCreateInput).not.toHaveProperty("sessionKey");
+    expect(String(relayCreateInput.instructions)).toContain("speech-only");
+    expect(String(relayCreateInput.instructions)).toContain("Keep answers short.");
+    expectRespondOk(createRespond, {
+      sessionId: "relay-speech-only-1",
+      relaySessionId: "relay-speech-only-1",
+      brain: "none",
+      toolsEnabled: false,
+    });
+
+    const appendRespond = vi.fn();
+    await callTalkHandler("talk.session.appendAudio", {
+      params: {
+        sessionId: "relay-speech-only-1",
+        turnId: "turn-1",
+        audioBase64: "AQI=",
+      },
+      respond: appendRespond,
+      context: {},
+    });
+    expect(mocks.sendTalkRealtimeRelayAudio).toHaveBeenCalledWith({
+      relaySessionId: "relay-speech-only-1",
+      connId: "conn-1",
+      turnId: "turn-1",
+      audioBase64: "AQI=",
+      timestamp: undefined,
+    });
+
+    mocks.commitTalkRealtimeRelayAudio.mockReturnValue({
+      status: "committed",
+      turnId: "turn-1",
+    });
+    const commitRespond = vi.fn();
+    await callTalkHandler("talk.session.commitAudio", {
+      params: { sessionId: "relay-speech-only-1", turnId: "turn-1" },
+      respond: commitRespond,
+      context: {},
+    });
+    expect(mocks.commitTalkRealtimeRelayAudio).toHaveBeenCalledWith({
+      relaySessionId: "relay-speech-only-1",
+      connId: "conn-1",
+      turnId: "turn-1",
+    });
+    expectRespondOk(commitRespond, {
+      ok: true,
+      status: "committed",
+      turnId: "turn-1",
+    });
+
+    mocks.cancelTalkRealtimeRelayTurn.mockResolvedValueOnce({
+      status: "applied",
+      turnId: "turn-1",
+    });
+    const cancelRespond = vi.fn();
+    await callTalkHandler("talk.session.cancelOutput", {
+      params: {
+        sessionId: "relay-speech-only-1",
+        turnId: "turn-1",
+        reason: "button-cancelled",
+      },
+      respond: cancelRespond,
+      context: {},
+    });
+    expect(mocks.cancelTalkRealtimeRelayTurn).toHaveBeenCalledWith({
+      relaySessionId: "relay-speech-only-1",
+      connId: "conn-1",
+      reason: "button-cancelled",
+      turnId: "turn-1",
+    });
+    expectRespondOk(cancelRespond, { ok: true, status: "applied", turnId: "turn-1" });
+
+    const markRespond = vi.fn();
+    await callTalkHandler("talk.session.acknowledgeMark", {
+      params: { sessionId: "relay-speech-only-1", markName: "mark-1" },
+      respond: markRespond,
+      context: {},
+    });
+    expect(mocks.acknowledgeTalkRealtimeRelayMark).toHaveBeenCalledWith({
+      relaySessionId: "relay-speech-only-1",
+      connId: "conn-1",
+      markName: "mark-1",
+    });
+    expectRespondOk(markRespond, { ok: true });
+
+    for (const method of ["talk.session.submitToolResult", "talk.session.steer"] as const) {
+      const respond = vi.fn();
+      await callTalkHandler(method, {
+        params:
+          method === "talk.session.steer"
+            ? { sessionId: "relay-speech-only-1", text: "do it" }
+            : { sessionId: "relay-speech-only-1", callId: "call-1", result: {} },
+        respond,
+        context: {},
+      });
+      expectRespondError(respond, { code: ErrorCodes.INVALID_REQUEST });
+    }
+    expect(mocks.submitTalkRealtimeRelayToolResult).not.toHaveBeenCalled();
+    expect(mocks.steerTalkRealtimeRelayAgentRun).not.toHaveBeenCalled();
+
+    const closeRespond = vi.fn();
+    await callTalkHandler("talk.session.close", {
+      params: { sessionId: "relay-speech-only-1" },
+      respond: closeRespond,
+      context: {},
+    });
+    expect(mocks.stopTalkRealtimeRelaySession).toHaveBeenCalledWith({
+      relaySessionId: "relay-speech-only-1",
+      connId: "conn-1",
+    });
+    expectRespondOk(closeRespond, { ok: true });
+  });
+
+  it("rejects the speech-only tool policy outside realtime mode", async () => {
+    const respond = vi.fn();
+
+    await callTalkHandler("talk.session.create", {
+      params: {
+        mode: "transcription",
+        transport: "gateway-relay",
+        brain: "none",
+        toolPolicy: "none",
+      },
+      respond,
+      context: {},
+    });
+
+    expectRespondError(respond, {
+      code: ErrorCodes.INVALID_REQUEST,
+      message: 'talk.session.create toolPolicy="none" is only supported for realtime sessions',
+    });
+    expect(mocks.createTalkTranscriptionRelaySession).not.toHaveBeenCalled();
   });
 
   it("uses talk.agentId for a bare realtime session in an explicit fleet", async () => {

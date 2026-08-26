@@ -116,6 +116,26 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
     });
   }
 
+  commitInputAudio(): void {
+    if (this.config.inputAudioTurnDetection !== "manual") {
+      throw new Error("OpenAI realtime input audio is not configured for manual commit");
+    }
+    if (!this.lifecycle.isReady() || this.ws?.readyState !== WebSocket.OPEN) {
+      throw new Error("OpenAI realtime connection is not ready for input audio commit");
+    }
+    if (
+      this.responseActive ||
+      this.responseCreateInFlight ||
+      this.responseCancelInFlight ||
+      this.continuingToolCallIds.size > 0 ||
+      this.pendingToolCallIds.size > 0
+    ) {
+      throw new Error("Cannot commit realtime input audio while a response is active");
+    }
+    this.sendEvent({ type: "input_audio_buffer.commit" });
+    this.requestResponseCreate();
+  }
+
   sendUserMessage(text: string, options?: OpenAIRealtimeUserMessageOptions): void {
     if (
       options?.toolChoice &&

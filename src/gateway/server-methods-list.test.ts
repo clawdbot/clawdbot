@@ -383,6 +383,7 @@ describe("listGatewayMethods", () => {
     expect(methods).toContain("talk.client.steer");
     expect(methods).toContain("talk.session.create");
     expect(methods).toContain("talk.session.appendAudio");
+    expect(methods).toContain("talk.session.commitAudio");
     expect(methods).toContain("talk.session.cancelOutput");
     expect(methods).toContain("talk.session.acknowledgeMark");
     expect(methods).toContain("talk.session.submitToolResult");

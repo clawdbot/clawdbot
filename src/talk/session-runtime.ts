@@ -41,6 +41,7 @@ export type RealtimeVoiceBridgeSession = {
   close(options?: RealtimeVoiceCloseOptions): void;
   connect(): Promise<void>;
   sendAudio(audio: Buffer): void;
+  commitInputAudio(): void;
   sendUserMessage(text: string): void;
   handleBargeIn(options?: RealtimeVoiceBargeInOptions): void;
   setMediaTimestamp(ts: number): void;
@@ -67,6 +68,7 @@ export type RealtimeVoiceBridgeSessionParams = {
   language?: string;
   initialGreetingInstructions?: string;
   autoRespondToAudio?: boolean;
+  inputAudioTurnDetection?: "server-vad" | "manual";
   interruptResponseOnInputAudio?: boolean;
   markStrategy?: RealtimeVoiceMarkStrategy;
   triggerGreetingOnReady?: boolean;
@@ -138,6 +140,16 @@ export function createRealtimeVoiceBridgeSession(
         requireBridge().sendAudio(audio);
       }
     },
+    commitInputAudio: () => {
+      if (!isAdmitting()) {
+        throw new Error("Realtime voice session is closed");
+      }
+      const bridge = requireBridge();
+      if (!bridge.commitInputAudio) {
+        throw new Error("Realtime provider does not support manual input audio commit");
+      }
+      bridge.commitInputAudio();
+    },
     sendUserMessage: (text) => requireBridge().sendUserMessage?.(text),
     handleBargeIn: (options) => requireBridge().handleBargeIn?.(options),
     setMediaTimestamp: (ts) => requireBridge().setMediaTimestamp(ts),
@@ -173,6 +185,7 @@ export function createRealtimeVoiceBridgeSession(
     instructions: params.instructions,
     language: params.language,
     autoRespondToAudio: params.autoRespondToAudio,
+    inputAudioTurnDetection: params.inputAudioTurnDetection,
     interruptResponseOnInputAudio: params.interruptResponseOnInputAudio,
     tools: params.tools,
     onAudio: (audio) => {
@@ -240,6 +253,12 @@ export function createRealtimeVoiceBridgeSession(
     },
   });
   bridgeRef.current = bridge;
+
+  if (params.inputAudioTurnDetection === "manual" && !bridge.commitInputAudio) {
+    phase = "disposed";
+    bridge.close();
+    throw new Error("Realtime provider does not support manual input audio commit");
+  }
 
   return session;
 }

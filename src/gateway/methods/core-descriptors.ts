@@ -148,6 +148,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["talk.client.steer", "talk", "operator.talk", "<=2026.7"],
   ["talk.session.create", "talk", "operator.talk", "<=2026.7"],
   ["talk.session.appendAudio", "talk", "operator.talk", "<=2026.7"],
+  ["talk.session.commitAudio", "talk", "operator.talk", "2026.8"],
   ["talk.session.cancelOutput", "talk", "operator.talk", "<=2026.7"],
   ["talk.session.acknowledgeMark", "talk", "operator.talk", "<=2026.7"],
   ["talk.session.submitToolResult", "talk", "operator.talk", "<=2026.7"],

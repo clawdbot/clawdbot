@@ -166,6 +166,38 @@ describe("OpenAI realtime voice response control", () => {
     );
   });
 
+  it("commits one VAD-disabled audio turn before creating exactly one response", async () => {
+    const bridge = createNativeBridge({
+      autoRespondToAudio: false,
+      inputAudioTurnDetection: "manual",
+      tools: [],
+    });
+    const socket = await connectReadyBridge(bridge);
+
+    const initialSession = requireNestedRecord(parseSent(socket)[0]?.session, ["audio", "input"]);
+    expect(initialSession.turn_detection).toBeNull();
+    expect(parseSent(socket)[0]?.session).toMatchObject({ tools: [], tool_choice: "none" });
+
+    bridge.sendAudio(Buffer.from("held-button-audio"));
+    bridge.commitInputAudio?.();
+
+    expect(parseSent(socket).slice(-3)).toEqual([
+      {
+        type: "input_audio_buffer.append",
+        audio: Buffer.from("held-button-audio").toString("base64"),
+      },
+      { type: "input_audio_buffer.commit" },
+      expectedResponseCreateEvent(),
+    ]);
+    expect(parseSent(socket).filter((event) => event.type === "response.create")).toHaveLength(1);
+    expect(() => bridge.commitInputAudio?.()).toThrow(
+      "Cannot commit realtime input audio while a response is active",
+    );
+    expect(
+      parseSent(socket).filter((event) => event.type === "input_audio_buffer.commit"),
+    ).toHaveLength(1);
+  });
+
   it("forces one host-selected function on an otherwise automatic response", async () => {
     const bridge = createNativeBridge();
     const socket = await connectReadyBridge(bridge);

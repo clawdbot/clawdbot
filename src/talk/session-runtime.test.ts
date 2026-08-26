@@ -628,6 +628,44 @@ describe("realtime voice bridge session runtime", () => {
     expect(submitToolResult).not.toHaveBeenCalled();
   });
 
+  it("requires and forwards manual input-audio commit support", () => {
+    const close = vi.fn();
+    const unsupportedProvider: RealtimeVoiceProviderPlugin = {
+      id: "unsupported",
+      label: "Unsupported",
+      isConfigured: () => true,
+      createBridge: () => makeBridge({ close }),
+    };
+
+    expect(() =>
+      createRealtimeVoiceBridgeSession({
+        provider: unsupportedProvider,
+        providerConfig: {},
+        inputAudioTurnDetection: "manual",
+        audioSink: { sendAudio: vi.fn() },
+      }),
+    ).toThrow("Realtime provider does not support manual input audio commit");
+    expect(close).toHaveBeenCalledOnce();
+
+    const commitInputAudio = vi.fn();
+    const supportedProvider: RealtimeVoiceProviderPlugin = {
+      id: "supported",
+      label: "Supported",
+      isConfigured: () => true,
+      createBridge: () => makeBridge({ commitInputAudio }),
+    };
+    const session = createRealtimeVoiceBridgeSession({
+      provider: supportedProvider,
+      providerConfig: {},
+      inputAudioTurnDetection: "manual",
+      audioSink: { sendAudio: vi.fn() },
+    });
+
+    session.commitInputAudio();
+
+    expect(commitInputAudio).toHaveBeenCalledOnce();
+  });
+
   it("does not expose session callbacks until the provider returns its bridge", () => {
     let callbacks: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
     const bridge = makeBridge();

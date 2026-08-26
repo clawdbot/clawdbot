@@ -3,6 +3,7 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString, SecretInputSchema } from "./primitives.js";
+import { withSince } from "./since.js";
 
 /**
  * Channel and Talk protocol schemas.
@@ -300,14 +301,30 @@ export const TalkSessionCreateParamsSchema = closedObject({
   mode: Type.Optional(TalkModeSchema),
   transport: Type.Optional(TalkTransportSchema),
   brain: Type.Optional(TalkBrainSchema),
+  /** Explicitly disables every realtime provider and OpenClaw agent tool. */
+  toolPolicy: Type.Optional(withSince("2026.8", Type.Literal("none"))),
   ttlMs: Type.Optional(Type.Integer({ minimum: 1000, maximum: 3600000 })),
 });
 
 /** Appends base64 audio to an active Talk session. */
 export const TalkSessionAppendAudioParamsSchema = closedObject({
   sessionId: NonEmptyString,
+  turnId: Type.Optional(withSince("2026.8", Type.String({ minLength: 1, maxLength: 128 }))),
   audioBase64: NonEmptyString,
   timestamp: Type.Optional(Type.Number()),
+});
+
+/** Commits one manually framed realtime input-audio turn and requests its response. */
+export const TalkSessionCommitAudioParamsSchema = closedObject({
+  sessionId: NonEmptyString,
+  turnId: Type.String({ minLength: 1, maxLength: 128 }),
+});
+
+/** Reports whether manual input finalization was newly applied or already accepted. */
+export const TalkSessionCommitAudioResultSchema = closedObject({
+  ok: Type.Literal(true),
+  status: Type.Union([Type.Literal("committed"), Type.Literal("duplicate")]),
+  turnId: Type.String({ minLength: 1, maxLength: 128 }),
 });
 
 /** Cancels currently streaming Talk output without necessarily ending the turn. */
@@ -424,6 +441,7 @@ export const TalkSessionCreateResultSchema = closedObject({
   mode: TalkModeSchema,
   transport: TalkTransportSchema,
   brain: TalkBrainSchema,
+  toolsEnabled: Type.Optional(withSince("2026.8", Type.Boolean())),
   relaySessionId: Type.Optional(NonEmptyString),
   transcriptionSessionId: Type.Optional(NonEmptyString),
   handoffId: Type.Optional(NonEmptyString),
@@ -749,6 +767,8 @@ export type TalkClientMutationResult = Static<typeof TalkClientMutationResultSch
 export type TalkSessionCreateParams = Static<typeof TalkSessionCreateParamsSchema>;
 export type TalkSessionCreateResult = Static<typeof TalkSessionCreateResultSchema>;
 export type TalkSessionAppendAudioParams = Static<typeof TalkSessionAppendAudioParamsSchema>;
+export type TalkSessionCommitAudioParams = Static<typeof TalkSessionCommitAudioParamsSchema>;
+export type TalkSessionCommitAudioResult = Static<typeof TalkSessionCommitAudioResultSchema>;
 export type TalkSessionCancelOutputParams = Static<typeof TalkSessionCancelOutputParamsSchema>;
 export type TalkSessionCancelOutputResult = Static<typeof TalkSessionCancelOutputResultSchema>;
 export type TalkSessionSteerParams = Static<typeof TalkSessionSteerParamsSchema>;

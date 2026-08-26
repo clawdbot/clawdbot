@@ -8,6 +8,7 @@ import {
   validateTalkSessionAppendAudioParams,
   validateTalkSessionCancelOutputParams,
   validateTalkSessionCloseParams,
+  validateTalkSessionCommitAudioParams,
   validateTalkSessionCreateParams,
   validateTalkSessionSteerParams,
   validateTalkSessionSubmitToolResultParams,
@@ -29,6 +30,7 @@ import { resolveTalkAgentConsultAuthority } from "../talk-client-gateway-control
 import { createTalkHandoff, getTalkHandoff, revokeTalkHandoff } from "../talk-handoff.js";
 import {
   cancelTalkRealtimeRelayTurn,
+  commitTalkRealtimeRelayAudio,
   createTalkRealtimeRelaySession,
   sendTalkRealtimeRelayAudio,
   steerTalkRealtimeRelayAgentRun,
@@ -51,6 +53,7 @@ import { acknowledgeTalkSessionMark } from "./talk-session-mark.js";
 import {
   broadcastTalkRoomEvents,
   buildRealtimeInstructions,
+  buildRealtimeSpeechOnlyInstructions,
   buildRealtimeVoiceLaunchOptions,
   buildTalkRealtimeConfig,
   buildTalkTranscriptionConfig,
@@ -137,7 +140,18 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
 
     const mode = normalizeTalkSessionMode(params);
     const transport = normalizeTalkSessionTransport({ mode, transport: params.transport });
-    const brain = normalizeTalkSessionBrain({ mode, brain: params.brain });
+    const brain = normalizeTalkSessionBrain({
+      mode,
+      brain: params.toolPolicy === "none" && params.brain === undefined ? "none" : params.brain,
+    });
+
+    if (params.toolPolicy === "none" && mode !== "realtime") {
+      respondInvalidRequest(
+        respond,
+        `talk.session.create toolPolicy="none" is only supported for realtime sessions`,
+      );
+      return;
+    }
 
     if (transport === "webrtc" || transport === "provider-websocket") {
       respondInvalidRequest(
@@ -234,10 +248,86 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
       }
 
       if (mode === "realtime") {
-        if (transport !== "gateway-relay" || brain !== "agent-consult") {
+        if (transport !== "gateway-relay") {
           return respondInvalidRequest(
             respond,
-            `realtime talk.session.create requires transport="gateway-relay" and brain="agent-consult"`,
+            `realtime talk.session.create requires transport="gateway-relay"`,
+          );
+        }
+        const speechOnly = params.toolPolicy === "none";
+        if (speechOnly) {
+          if (brain !== "none") {
+            return respondInvalidRequest(
+              respond,
+              `realtime talk.session.create toolPolicy="none" requires brain="none"`,
+            );
+          }
+          if (
+            normalizeOptionalString(params.sessionKey) ||
+            normalizeOptionalString(params.spawnedBy)
+          ) {
+            return respondInvalidRequest(
+              respond,
+              `speech-only realtime sessions do not accept sessionKey or spawnedBy`,
+            );
+          }
+          const runtimeConfig = context.getRuntimeConfig();
+          const realtimeConfig = buildTalkRealtimeConfig(runtimeConfig, params.provider);
+          const launchOptions = buildRealtimeVoiceLaunchOptions({
+            requested: params,
+            defaults: realtimeConfig,
+          });
+          assertSecretOwnerAvailable("capability", "talk:realtime");
+          const resolution = resolveConfiguredRealtimeVoiceProvider({
+            configuredProviderId: realtimeConfig.provider,
+            providerConfigs: realtimeConfig.providers,
+            providerConfigOverrides: launchOptions.model ? { model: launchOptions.model } : {},
+            cfg: runtimeConfig,
+            defaultModel: realtimeConfig.model,
+            surface: "gateway-relay",
+          });
+          const relayLaunch = resolveTalkRealtimeGatewayRelayLaunch({
+            ...resolution,
+            cfg: runtimeConfig,
+            launchOptions,
+            manualTurnCompletion: true,
+          });
+          if (relayLaunch.error) {
+            return respondInvalidRequest(respond, relayLaunch.error);
+          }
+          const session = createTalkRealtimeRelaySession({
+            context,
+            connId,
+            cfg: runtimeConfig,
+            provider: resolution.provider,
+            providerConfig: relayLaunch.providerConfig,
+            instructions: buildRealtimeSpeechOnlyInstructions(realtimeConfig.instructions),
+            tools: [],
+            brain: "none",
+            toolPolicy: "none",
+            model: launchOptions.model,
+            voice: launchOptions.voice,
+            language: normalizeOptionalLowercaseString(params.language),
+          });
+          rememberUnifiedTalkSession(session.relaySessionId, {
+            kind: "realtime-relay",
+            connId,
+            relaySessionId: session.relaySessionId,
+            toolsEnabled: false,
+          });
+          return respondOk(respond, {
+            ...session,
+            sessionId: session.relaySessionId,
+            voiceSessionId: session.relaySessionId,
+            mode,
+            brain,
+            toolsEnabled: false,
+          });
+        }
+        if (brain !== "agent-consult") {
+          return respondInvalidRequest(
+            respond,
+            `realtime talk.session.create requires brain="agent-consult" or toolPolicy="none" with brain="none"`,
           );
         }
         const runtimeConfig = context.getRuntimeConfig();
@@ -325,6 +415,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           kind: "realtime-relay",
           connId,
           relaySessionId: session.relaySessionId,
+          toolsEnabled: true,
         });
         return respondOk(respond, {
           ...session,
@@ -332,6 +423,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           voiceSessionId: session.relaySessionId,
           mode,
           brain,
+          toolsEnabled: true,
         });
       }
 
@@ -397,6 +489,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           relaySessionId: session.relaySessionId,
           connId,
           audioBase64: params.audioBase64,
+          turnId: params.turnId,
           timestamp: params.timestamp,
         });
         respondOk(respond);
@@ -416,6 +509,44 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
         respond,
         "talk.session.appendAudio is not supported for managed-room sessions",
       );
+    } catch (err) {
+      respondUnavailable(respond, err);
+    }
+  },
+  "talk.session.commitAudio": async ({ params, respond, client }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateTalkSessionCommitAudioParams,
+        "talk.session.commitAudio",
+        respond,
+      )
+    ) {
+      return;
+    }
+    try {
+      const session = getUnifiedTalkSession(params.sessionId);
+      if (session.kind !== "realtime-relay") {
+        respondInvalidRequest(
+          respond,
+          "talk.session.commitAudio requires a speech-only realtime relay",
+        );
+        return;
+      }
+      const connId = requireUnifiedTalkSessionConn(session, client?.connId);
+      if (session.toolsEnabled) {
+        respondInvalidRequest(
+          respond,
+          "talk.session.commitAudio requires a speech-only realtime relay",
+        );
+        return;
+      }
+      const result = commitTalkRealtimeRelayAudio({
+        relaySessionId: session.relaySessionId,
+        connId,
+        turnId: params.turnId,
+      });
+      respondOk(respond, { ok: true, ...result });
     } catch (err) {
       respondUnavailable(respond, err);
     }
@@ -471,6 +602,13 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
         return;
       }
       const connId = requireUnifiedTalkSessionConn(session, client?.connId);
+      if (!session.toolsEnabled) {
+        respondInvalidRequest(
+          respond,
+          "talk.session.submitToolResult is disabled for speech-only realtime sessions",
+        );
+        return;
+      }
       await submitTalkRealtimeRelayToolResult({
         relaySessionId: session.relaySessionId,
         connId,
@@ -491,6 +629,13 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
       const session = getUnifiedTalkSession(params.sessionId);
       if (session.kind === "realtime-relay") {
         const connId = requireUnifiedTalkSessionConn(session, client?.connId);
+        if (!session.toolsEnabled) {
+          respondInvalidRequest(
+            respond,
+            "talk.session.steer is disabled for speech-only realtime sessions",
+          );
+          return;
+        }
         const result = await steerTalkRealtimeRelayAgentRun({
           relaySessionId: session.relaySessionId,
           connId,
