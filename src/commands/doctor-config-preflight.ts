@@ -9,6 +9,7 @@ import {
   recoverConfigFromLastKnownGood,
 } from "../config/io.js";
 import type { ConfigSnapshotReadMeasure } from "../config/io.js";
+import { logConfigWarningsOnce } from "../config/io.warnings.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -17,6 +18,7 @@ import type {
   MigrationCheckpointIdentity,
   StartupMigrationLease,
 } from "../infra/startup-migration-checkpoint.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -53,6 +55,8 @@ const loadDoctorStateMigrations = createLazyRuntimeModule(
 const loadLegacyCronRepair = createLazyRuntimeModule(
   () => import("./doctor/cron/legacy-repair.js"),
 );
+
+const configLog = createSubsystemLogger("config");
 
 export type DoctorConfigPreflightResult = {
   snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
@@ -418,7 +422,12 @@ export async function runDoctorConfigPreflight(
 
     const warnings = snapshot.warnings ?? [];
     if (warnings.length > 0) {
-      note(formatConfigIssueLines(warnings, "-").join("\n"), "Config warnings");
+      // Non-interactive Gateway stdout is a log stream; preserve its structured logging contract.
+      if (process.stdout.isTTY) {
+        note(formatConfigIssueLines(warnings, "-").join("\n"), "Config warnings");
+      } else {
+        logConfigWarningsOnce({ configPath: snapshot.path, warnings, logger: configLog });
+      }
     }
 
     const baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
