@@ -24,9 +24,11 @@ import { FailoverError, resolveFailoverStatus } from "../../failover-error.js";
 import { shouldUseTransientCooldownProbeSlot } from "../../failover-policy.js";
 import { renderAuthProfileFailoverCopy } from "../../failover/user-copy.js";
 import {
+  createRuntimeProviderAuthLookup,
   getApiKeyForModelCore,
   MissingProviderAuthError,
   type ResolvedProviderAuth,
+  type RuntimeProviderAuthLookup,
 } from "../../model-auth.js";
 import { buildProviderAuthRecoveryHint } from "../../provider-auth-recovery-hint.js";
 import { providerModelRouteAcceptsAuthMode } from "../../provider-model-route-auth.js";
@@ -505,11 +507,25 @@ export function createEmbeddedRunAuthController(params: {
     throw new Error(message);
   };
 
+  let runtimeAuthLookup: RuntimeProviderAuthLookup | undefined;
+  const resolveRuntimeAuthLookup = () =>
+    (runtimeAuthLookup ??= createRuntimeProviderAuthLookup({
+      cfg: params.config,
+      workspaceDir: params.workspaceDir,
+    }));
+
   const resolveApiKeyForCandidate = async (
     candidate?: string,
     model = params.getRuntimeModel(),
     allowAuthProfileFallback?: boolean,
   ) => {
+    // Provider plugin synthetic-auth (e.g. GCP-ADC) is a provider-owned hook,
+    // not stored-profile discovery. An isolated direct attempt (prepared route
+    // disabled profile fallback) keeps it reachable on its own flag, with
+    // eligibility scoped by the prepared runtimeLookup. The ordinary profile
+    // path intentionally passes neither so its pre-existing unrestricted
+    // behavior is unchanged.
+    const isolatedDirectAttempt = allowAuthProfileFallback === false;
     return getApiKeyForModelCore({
       model,
       cfg: params.config,
@@ -519,6 +535,9 @@ export function createEmbeddedRunAuthController(params: {
       workspaceDir: params.workspaceDir,
       lockedProfile: candidate != null && candidate === params.lockedProfileId,
       allowAuthProfileFallback,
+      ...(isolatedDirectAttempt
+        ? { allowPluginSyntheticAuth: true, runtimeLookup: resolveRuntimeAuthLookup() }
+        : {}),
       secretSentinels: true,
     });
   };

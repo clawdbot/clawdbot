@@ -22,6 +22,7 @@ import type { RuntimeAuthState } from "./helpers.js";
 const mocks = vi.hoisted(() => ({
   prepareProviderRuntimeAuth: vi.fn(),
   getApiKeyForModelCore: vi.fn(),
+  createRuntimeProviderAuthLookup: vi.fn(),
 }));
 
 vi.mock("../../../plugins/provider-runtime.js", async () => {
@@ -39,6 +40,7 @@ vi.mock("../../model-auth.js", async () => {
   return {
     ...actual,
     getApiKeyForModelCore: mocks.getApiKeyForModelCore,
+    createRuntimeProviderAuthLookup: mocks.createRuntimeProviderAuthLookup,
   };
 });
 
@@ -176,6 +178,7 @@ describe("createEmbeddedRunAuthController", () => {
   beforeEach(() => {
     mocks.prepareProviderRuntimeAuth.mockReset();
     mocks.getApiKeyForModelCore.mockReset();
+    mocks.createRuntimeProviderAuthLookup.mockReset();
   });
 
   it("commits a prepared route only after its credential resolves", async () => {
@@ -245,6 +248,77 @@ describe("createEmbeddedRunAuthController", () => {
       "api-key credentials are incompatible with the selected subscription route",
     );
     expect(commit).not.toHaveBeenCalled();
+  });
+
+  // Regression coverage for the ordinary embedded path (review follow-up on
+  // #110179): with profile fallback enabled the controller must not attach the
+  // prepared synthetic-auth lookup, so pre-existing unrestricted behavior is
+  // unchanged.
+  it("leaves the ordinary profile path without a prepared synthetic-auth lookup", async () => {
+    const harness = createMutableAuthControllerHarness();
+    mocks.getApiKeyForModelCore.mockResolvedValue({
+      apiKey: "platform-key",
+      mode: "api-key",
+      source: "config",
+    });
+
+    const controller = createMutableEmbeddedRunAuthController({
+      harness,
+      setRuntimeApiKey: vi.fn(),
+      profileCandidates: ["default"],
+      // No prepared route metadata: profile fallback stays enabled.
+      prepareModelForAuthProfile: async () => ({
+        runtimeModel: createTestModel(),
+        commit: () => undefined,
+      }),
+    });
+
+    await controller.initializeAuthProfile();
+    const calls = mocks.getApiKeyForModelCore.mock.calls;
+    expect(calls).toHaveLength(1);
+    const call = calls[0]![0] as Record<string, unknown>;
+    expect(call.allowAuthProfileFallback).toBeUndefined();
+    expect("allowPluginSyntheticAuth" in call).toBe(false);
+    expect("runtimeLookup" in call).toBe(false);
+    expect(mocks.createRuntimeProviderAuthLookup).not.toHaveBeenCalled();
+  });
+
+  // The isolated direct attempt is the path the lookup exists for: a prepared
+  // route that disabled profile fallback keeps plugin synthetic-auth reachable
+  // on its own flag, scoped by the prepared runtimeLookup.
+  it("passes plugin synthetic-auth and a prepared lookup on an isolated direct attempt", async () => {
+    const harness = createMutableAuthControllerHarness();
+    mocks.getApiKeyForModelCore.mockResolvedValue({
+      apiKey: "gcp-adc-token",
+      mode: "oauth",
+      source: "plugin-synthetic",
+    });
+    const lookup = {
+      envApiKey: { skipSetupProviderFallback: true },
+      syntheticAuthProviderRefs: ["anthropic-vertex"],
+      syntheticAuthProviderRefsComplete: true,
+    };
+    mocks.createRuntimeProviderAuthLookup.mockReturnValue(lookup);
+
+    const controller = createMutableEmbeddedRunAuthController({
+      harness,
+      setRuntimeApiKey: vi.fn(),
+      profileCandidates: ["default"],
+      prepareModelForAuthProfile: async () => ({
+        runtimeModel: createTestModel(),
+        allowAuthProfileFallback: false,
+        commit: () => undefined,
+      }),
+    });
+
+    await controller.initializeAuthProfile();
+    expect(mocks.getApiKeyForModelCore).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowAuthProfileFallback: false,
+        allowPluginSyntheticAuth: true,
+        runtimeLookup: lookup,
+      }),
+    );
   });
 
   it("applies runtime request overrides on the first auth exchange", async () => {

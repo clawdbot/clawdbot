@@ -303,11 +303,22 @@ export function resolveSyntheticLocalProviderAuth(params: {
   modelApi?: string;
   secretSentinels?: boolean;
   allowPluginSyntheticAuth?: boolean;
+  runtimeLookup?: RuntimeProviderAuthLookup;
 }): ResolvedProviderAuth | null {
   // Prepared direct attempts may use local no-auth config, but must not widen
-  // back into an unprepared plugin-owned credential source.
-  const syntheticProviderAuth =
-    params.allowPluginSyntheticAuth === false ? {} : resolveProviderSyntheticRuntimeAuth(params);
+  // back into an unprepared plugin-owned credential source. When a prepared
+  // runtime lookup is present, scope plugin synthetic-auth to eligible refs.
+  const allowPluginSyntheticAuth =
+    params.allowPluginSyntheticAuth !== false &&
+    shouldResolvePluginSyntheticAuth({
+      cfg: params.cfg,
+      provider: params.provider,
+      modelApi: params.modelApi,
+      runtimeLookup: params.runtimeLookup,
+    });
+  const syntheticProviderAuth = allowPluginSyntheticAuth
+    ? resolveProviderSyntheticRuntimeAuth(params)
+    : {};
   if (syntheticProviderAuth.auth) {
     return syntheticProviderAuth.auth;
   }
