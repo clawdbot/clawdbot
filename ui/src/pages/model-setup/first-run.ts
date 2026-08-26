@@ -2,24 +2,17 @@ import type { RouteLocation, RouterHistory } from "@openclaw/uirouter";
 import { sameRouteLocation, type RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { readSessionDefaults } from "../../app/gateway-store.ts";
-import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
-import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 
 export function isDefaultChatLanding(
   location: RouteLocation,
   basePath: string,
   routeIdFromPath: (pathname: string, basePath: string) => string | null,
 ): boolean {
-  if (
-    new URLSearchParams(location.search).has("session") ||
-    new URLSearchParams(location.hash.slice(1)).has("session")
-  ) {
-    return false;
-  }
-  const routeId = routeIdFromPath(location.pathname, basePath);
   return (
-    routeId === null ||
-    (routeId === "chat" && /^\/chat(?:\/main)?\/?$/u.test(location.pathname.slice(basePath.length)))
+    !new URLSearchParams(location.search + "&" + location.hash.slice(1)).has("session") &&
+    (routeIdFromPath(location.pathname, basePath) === null ||
+      /^\/chat(?:\/main)?\/?$/u.test(location.pathname.slice(basePath.length)))
   );
 }
 
@@ -48,21 +41,10 @@ export async function startModelSetupFirstRunRedirectAfterLocation(params: {
     params.onInitialDecision?.();
     return () => undefined;
   }
-  return startModelSetupFirstRunRedirect({
-    context: params.context,
-    isStillDefaultLanding: () => sameRouteLocation(params.history.location(), initialLocation),
-    redirect:
-      params.redirect ?? (() => params.context.replace("model-setup", { search: "?firstRun=1" })),
-    onInitialDecision: params.onInitialDecision,
-  });
-}
-
-function startModelSetupFirstRunRedirect(params: {
-  context: ApplicationContext<RouteId>;
-  isStillDefaultLanding: () => boolean;
-  redirect: () => void;
-  onInitialDecision?: () => void;
-}): () => void {
+  const { context } = params;
+  const isStillDefaultLanding = () => sameRouteLocation(params.history.location(), initialLocation);
+  const redirect =
+    params.redirect ?? (() => context.replace("model-setup", { search: "?firstRun=1" }));
   let initialDecisionSettled = false;
   const settleInitialDecision = () => {
     if (!initialDecisionSettled) {
@@ -86,24 +68,23 @@ function startModelSetupFirstRunRedirect(params: {
       return;
     }
     const defaults = snapshot.hello ? readSessionDefaults(snapshot.hello) : undefined;
-    const selectedAgentId = params.context.agentSelection.state.selectedId?.trim() || null;
+    const selectedAgentId = context.agentSelection.state.selectedId?.trim() || null;
     if (
-      hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
-      isGatewayMethodAdvertised(snapshot, "openclaw.setup.detect") === true &&
+      canCallGatewayMethod(snapshot, "openclaw.setup.detect", "operator.admin") &&
       (!selectedAgentId || selectedAgentId === defaults?.defaultAgentId?.trim()) &&
-      params.isStillDefaultLanding()
+      isStillDefaultLanding()
     ) {
       if (defaults?.modelConfigured === false) {
-        params.redirect();
+        redirect();
       } else if (defaults?.modelConfigured) {
         try {
           if (localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")) {
-            const ownerRevision = params.context.gateway.connectionRevision;
+            const ownerRevision = context.gateway.connectionRevision;
             // Crypto stays lazy; only an existing receipt suspends startup.
             void import("./model-setup-page.ts")
               .then(({ resumeFirstRunActivation }) =>
                 resumeFirstRunActivation(
-                  params,
+                  { context, isStillDefaultLanding, redirect },
                   snapshot,
                   ownerRevision,
                   selectedAgentId,
@@ -121,8 +102,8 @@ function startModelSetupFirstRunRedirect(params: {
     }
     settleInitialDecision();
   };
-  const unsubscribe = params.context.gateway.subscribe(handleSnapshot);
-  handleSnapshot(params.context.gateway.snapshot);
+  const unsubscribe = context.gateway.subscribe(handleSnapshot);
+  handleSnapshot(context.gateway.snapshot);
   return () => {
     unsubscribe();
     settleInitialDecision();
