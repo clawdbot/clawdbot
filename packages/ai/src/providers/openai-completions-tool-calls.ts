@@ -3,6 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import { measureUtf8AppendBytes } from "../transports/openai-transport-shared.js";
 import { finalizeTerminalToolCallArguments } from "../transports/transport-stream-shared.js";
+import type { ToolCall } from "../types.js";
 
 type ChatCompletionToolCallDelta = ChatCompletionChunk.Choice.Delta.ToolCall;
 const MAX_BUFFERED_TOOL_CALL_ARGUMENT_BYTES = 256_000;
@@ -20,13 +21,11 @@ type OpenAICompletionsToolCallFinalizationOptions<TBlock extends object> = {
 };
 
 /** Keep encrypted provider reasoning attached to the first matching tool call. */
-export function createOpenAIEncryptedToolCallReasoningTracker<
-  TBlock extends { thoughtSignature?: string },
->() {
-  const firstBlocks = new Map<string, TBlock>();
+export function createOpenAIEncryptedToolCallReasoningTracker() {
+  const firstBlocks = new Map<string, ToolCall>();
   const pendingDetails = new Map<string, string>();
   return {
-    rememberToolCall(id: string, block: TBlock) {
+    rememberToolCall(id: string, block: ToolCall) {
       if (!id || firstBlocks.has(id)) {
         return;
       }

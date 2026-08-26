@@ -129,7 +129,7 @@ export async function processCompletionsStream(
   const toolCallBlocksByIndex = new Map<number, ToolCallBlock>();
   const toolCallBlocksById = new Map<string, ToolCallBlock>();
   const encryptedReasoning = directMode
-    ? createOpenAIEncryptedToolCallReasoningTracker<ToolCallBlock>()
+    ? createOpenAIEncryptedToolCallReasoningTracker()
     : undefined;
   // Preview schedules are per active tool call; WeakMap keys die with the block.
   const toolArgumentPreviewSchedules = new WeakMap<ToolCallBlock, ToolArgumentPreviewSchedule>();
