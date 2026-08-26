@@ -1148,7 +1148,11 @@ const signalSpawnedProcess = (
   }
 };
 
-const waitForSpawnedProcess = async (childProcess: RunNodeChild, deps: RunNodeDeps) => {
+const waitForSpawnedProcess = async (
+  childProcess: RunNodeChild,
+  deps: RunNodeDeps,
+  acceptShutdownGrace = false,
+) => {
   let forwardedSignal: NodeJS.Signals | null = null;
   let forceKillTimer: NodeJS.Timeout | null = null;
   let cleanedForwardedSignalGroup = false;
@@ -1200,7 +1204,9 @@ const waitForSpawnedProcess = async (childProcess: RunNodeChild, deps: RunNodeDe
     forwardSignal("SIGTERM");
   };
 
-  childProcess.on("message", onMessage);
+  if (acceptShutdownGrace) {
+    childProcess.on("message", onMessage);
+  }
   deps.process.on("SIGINT", onSigInt);
   deps.process.on("SIGTERM", onSigTerm);
 
@@ -1250,20 +1256,25 @@ const getInterruptedSpawnExitCode = (res: SpawnedProcessResult) => {
 
 const runNodeChild = async (deps: RunNodeDeps, args: string[]) => {
   const useProcessGroup = shouldUseRunNodeChildProcessGroup(deps);
+  // The parent route grants lifecycle IPC; generic children must not extend
+  // the launcher's five-second force-kill boundary with a shaped message.
+  const acceptShutdownGrace = deps.args.slice(0, 3).join(" ") === "qa mantis run";
   const nodeProcess = asRunNodeChild(
     deps.spawn(deps.execPath, args, {
       cwd: deps.cwd,
       detached: useProcessGroup,
       env: deps.env,
-      // IPC lets trusted child commands declare a bounded cleanup grace while
-      // keeping the launcher's five-second default for every other command.
       stdio: deps.outputTee
-        ? ["inherit", "pipe", "pipe", "ipc"]
-        : ["inherit", "inherit", "inherit", "ipc"],
+        ? acceptShutdownGrace
+          ? ["inherit", "pipe", "pipe", "ipc"]
+          : ["inherit", "pipe", "pipe"]
+        : acceptShutdownGrace
+          ? ["inherit", "inherit", "inherit", "ipc"]
+          : "inherit",
     }),
   );
   pipeSpawnedOutput(nodeProcess, deps);
-  const res = await waitForSpawnedProcess(nodeProcess, deps);
+  const res = await waitForSpawnedProcess(nodeProcess, deps, acceptShutdownGrace);
   const interruptedExitCode = getInterruptedSpawnExitCode(res);
   if (interruptedExitCode !== null) {
     return interruptedExitCode;
