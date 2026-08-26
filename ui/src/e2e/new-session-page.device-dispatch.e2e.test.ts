@@ -101,6 +101,68 @@ suite.define(() => {
     }
   });
 
+  it.each(deviceTargets)(
+    "does not dispatch the $name device from stale capacity during a topology refresh",
+    async ({ value }) => {
+      const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+      const page = await context.newPage();
+      const environment = {
+        id: "node:paired-runner",
+        type: "node",
+        label: "Paired runner",
+        status: "available",
+        sessionHost: true,
+        workerSlots: { total: 2, available: 1 },
+      };
+      const gateway = await installMockGateway(page, {
+        operatorScopes: ["operator.read", "operator.write"],
+        workspace: WORKSPACE,
+        workspaceGit: true,
+        methodResponses: {
+          "environments.list": { environments: [environment], profiles: [] },
+          "sessions.create": { key: "agent:main:stale-device-capacity" },
+        },
+      });
+
+      try {
+        await page.goto(`${suite.server.baseUrl}new`);
+        await gateway.waitForRequest("environments.list");
+        const where = page.locator("#new-session-where-trigger");
+        await where.click();
+        await page.locator(`[data-value="${value}"]`).click();
+        await page.locator(".new-session-page__message").fill("require current worker capacity");
+        const start = page.getByRole("button", { name: "Start session" });
+        await expect.poll(() => start.isEnabled()).toBe(true);
+
+        await gateway.deferNext("environments.list");
+        const requestsBeforeRefresh = (await gateway.getRequests("environments.list")).length;
+        await gateway.emitGatewayEvent("node.runnerInventory.changed", {
+          nodeId: "paired-runner",
+        });
+        await gateway.waitForRequest("environments.list", { after: requestsBeforeRefresh });
+        await expect.poll(() => start.isDisabled()).toBe(true);
+        expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+        await expect
+          .poll(() =>
+            where.getAttribute(value === "auto-device" ? "data-auto-device" : "data-device-id"),
+          )
+          .toBe(value === "auto-device" ? "true" : "paired-runner");
+
+        await gateway.resolveDeferred("environments.list", {
+          environments: [{ ...environment, workerSlots: { total: 2, available: 0 } }],
+          profiles: [],
+        });
+        await expect.poll(() => start.isDisabled()).toBe(true);
+        await expect
+          .poll(() => start.locator("xpath=..").getAttribute("content"))
+          .toContain("No worker slots are available");
+        expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+      } finally {
+        await context.close();
+      }
+    },
+  );
+
   it.each([
     {
       name: "paired device",
