@@ -318,6 +318,7 @@ export function handlePortalProxyRequest(params: {
         // send the token-bearing portal URL to every third-party origin it references.
         res.setHeader("Referrer-Policy", PORTAL_REFERRER_POLICY);
         res.statusCode = proxyRes.statusCode ?? 502;
+        proxyRes.once("error", () => res.destroy());
         proxyRes.pipe(res);
       });
       proxyReq.once("error", () => {
@@ -332,7 +333,8 @@ export function handlePortalProxyRequest(params: {
           respondPortalWaiting(req, res, targetPort);
         }
       });
-      req.once("aborted", () => proxyReq.destroy());
+      // A browser can leave after its request body ended (for example during SSE).
+      res.once("close", () => proxyReq.destroy());
       req.pipe(proxyReq);
     },
     () => {

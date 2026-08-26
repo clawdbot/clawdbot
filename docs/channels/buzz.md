@@ -137,6 +137,9 @@ While the Gateway is connected, OpenClaw publishes and refreshes the bot's
 ephemeral Buzz presence every 30 seconds. Buzz removes the presence when the
 last authenticated Gateway connection for that bot identity closes, so
 multiple Gateway instances do not incorrectly mark one another offline.
+If the relay stops acknowledging presence, OpenClaw reconnects the affected
+Buzz account instead of leaving an open but stalled connection marked ready.
+An explicit presence rejection remains a warning, not a reconnect trigger.
 
 The local Buzz `just dev` relay does not require separate relay membership by
 default. A hosted or closed relay may require the bot public key to be added to
@@ -310,9 +313,18 @@ Buzz applies two independent controls:
 
 Fresh guided setup allows normal messages from current members of the selected
 rooms. OpenClaw loads Buzz's relay-signed room roster before accepting messages,
-checks membership in memory before persistent dedupe or agent work, and refreshes
-the roster after Buzz membership-change events. There is no per-message relay
-query or Gateway polling.
+checks membership before queuing and again after asynchronous admission, and
+follows live relay-signed roster updates, including role changes. A removal
+invalidates queued messages immediately; cancelled admission is not committed as
+processed. Bounded snapshot refreshes confirm membership-change notifications.
+There is no per-message relay query or Gateway polling.
+Removing a sender does not cancel a room turn already admitted for that sender;
+losing the bot's own Bot role or stopping its connection still fences output.
+
+Startup and reconnect recover eligible messages from the last 24 hours, but
+never from before that room's first activation by this Buzz account. That
+activation floor survives restarts; sender-supplied timestamps do not advance it.
+Replay deduplication prevents completed messages from running again.
 
 Use `groupPolicy: "allowlist"` with `groupAllowFrom` in manual configuration
 when only specific room members should be able to activate the agent.

@@ -5,6 +5,7 @@ import {
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { WORKER_PROTOCOL_FEATURES } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
+import type { SpawnResult } from "../../process/exec.js";
 import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js";
 import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
@@ -78,4 +79,17 @@ export function workspaceTransfer(): NodeWorkspaceTransferService {
     close: vi.fn(async () => {}),
     revoke: vi.fn(),
   } as unknown as NodeWorkspaceTransferService;
+}
+
+export function workspaceCommandPayload(workspaceDir: string, result: Partial<SpawnResult>) {
+  return JSON.stringify({
+    workspaceDir,
+    stdout: "",
+    stderr: "",
+    code: 0,
+    signal: null,
+    killed: false,
+    termination: "exit",
+    ...result,
+  });
 }

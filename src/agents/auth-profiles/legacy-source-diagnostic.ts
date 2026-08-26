@@ -24,8 +24,8 @@ function isCredentialSource(source: LegacyAuthProfileSource): boolean {
   return source.kind !== "auth-state";
 }
 
-function resolveAuthProfileOwnerPath(agentDir?: string): string {
-  return agentDir ? resolveAuthProfileDatabasePath(agentDir) : resolveSharedAuthStorePath();
+function resolveAuthProfileOwnerPath(agentDir?: string, env?: NodeJS.ProcessEnv): string {
+  return agentDir ? resolveAuthProfileDatabasePath(agentDir) : resolveSharedAuthStorePath(env);
 }
 
 export function hasLegacyAuthProfileCredentialSource(agentDir?: string): boolean {
@@ -121,9 +121,9 @@ export class AuthProfileStoreUnreadableError extends Error {
   readonly code = "AUTH_PROFILE_STORE_UNREADABLE" as const;
   readonly action = AUTH_PROFILE_MIGRATION_COMMAND;
 
-  constructor(agentDir?: string) {
+  constructor(agentDir?: string, env?: NodeJS.ProcessEnv) {
     super(
-      `Auth profile store ${shortenHomePath(resolveAuthProfileOwnerPath(agentDir))} is unreadable; run ${AUTH_PROFILE_MIGRATION_COMMAND}.`,
+      `Auth profile store ${shortenHomePath(resolveAuthProfileOwnerPath(agentDir, env))} is unreadable; run ${AUTH_PROFILE_MIGRATION_COMMAND}.`,
     );
     this.name = "AuthProfileStoreUnreadableError";
   }

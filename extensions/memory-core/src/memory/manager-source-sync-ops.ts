@@ -313,7 +313,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
         this.advanceSyncProgress(params.progress);
         return null;
       }
-      return entry;
+      return { ...entry, sessionId: corpusEntryForPath(absPath).sessionId };
     };
 
     if (params.deferIndex) {

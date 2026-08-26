@@ -11,6 +11,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
+  buildFileEntry,
   buildMultimodalChunkForIndexing,
   chunkMarkdown,
   extractProjectKeysFromCuratedEntry,
@@ -33,6 +34,8 @@ import { MAX_TIMER_TIMEOUT_MS, resolveTimerTimeoutMs } from "openclaw/plugin-sdk
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { runSqliteImmediateTransactionSync } from "openclaw/plugin-sdk/sqlite-runtime";
 import { chunkItems } from "openclaw/plugin-sdk/text-chunking";
+import { hasMemorySessionTombstone } from "../memory-entry-origins.js";
+import { withMemoryWorkspaceLock } from "../memory-workspace-lock.js";
 import { readSessionResetRecallCutoffMetadata } from "../session-reset-recall-metadata.js";
 import type { EmbeddingProvider } from "./embeddings.js";
 import {
@@ -383,12 +386,13 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     this.syncProviderGeneration = provider
       ? {
           kind: "semantic",
+          database: this.db,
           provider,
           ...(runtime ? { runtime } : {}),
           providerKey,
           identities,
         }
-      : { kind: "fts-only", provider: null, providerKey, identities };
+      : { kind: "fts-only", database: this.db, provider: null, providerKey, identities };
     this.syncProviderGenerationRelease = provider ? this.acquireProviderUse(provider) : null;
     this.syncProviderGenerationOwners = 1;
   }
@@ -432,20 +436,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       .run(excess);
   }
 
-  private upsertEmbeddingCacheEntries(
-    entries: Array<{ hash: string; embedding: number[] }>,
-    generation: MemorySemanticProviderGeneration,
-  ): void {
-    upsertMemoryEmbeddingCache({
-      db: this.db,
-      enabled: this.cache.enabled,
-      provider: generation.provider,
-      providerKey: generation.providerKey,
-      entries,
-      tableName: EMBEDDING_CACHE_TABLE,
-    });
-  }
-
   private async embedChunksInBatches(
     chunks: IndexedMemoryChunk[],
     generation: MemorySemanticProviderGeneration,
@@ -481,16 +471,13 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
             batch.map((chunk) => chunk.text),
             generation,
           );
-      const batchCacheEntries: Array<{ hash: string; embedding: number[] }> = [];
       for (let i = 0; i < batch.length; i += 1) {
         const item = missing[cursor + i];
         const embedding = batchEmbeddings[i] ?? [];
         if (item) {
           embeddings[item.index] = embedding;
-          batchCacheEntries.push({ hash: item.chunk.hash, embedding });
         }
       }
-      this.upsertEmbeddingCacheEntries(batchCacheEntries, generation);
       cursor += batch.length;
     }
     return embeddings;
@@ -527,7 +514,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
 
   private async embedChunksWithBatch(
     chunks: IndexedMemoryChunk[],
-    _entry: MemoryIndexEntry,
     source: string,
     generation: MemorySemanticProviderGeneration,
     debugContext: Record<string, unknown> = {},
@@ -563,7 +549,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     if (!batchResult) {
       return this.embedChunksInBatches(chunks, generation);
     }
-    const toCache: Array<{ hash: string; embedding: number[] }> = [];
     for (let index = 0; index < missing.length; index += 1) {
       const item = missing[index];
       const embedding = batchResult[index] ?? [];
@@ -571,9 +556,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         continue;
       }
       embeddings[item.index] = embedding;
-      toCache.push({ hash: item.chunk.hash, embedding });
     }
-    this.upsertEmbeddingCacheEntries(toCache, generation);
     return embeddings;
   }
 
@@ -952,22 +935,60 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       .run(pathname, source);
   }
 
-  /**
-   * Write chunks (and optional embeddings) for a file into the index.
-   * Handles both the chunks table, the vector table, and the FTS table.
-   * Pass an empty embeddings array to skip vector writes (FTS-only mode).
-   */
-  private writeChunks(
+  private assertMemoryFileSnapshot(entry: MemoryIndexEntry, currentHash: string | undefined): void {
+    if (currentHash === entry.hash) {
+      return;
+    }
+    this.markFailedFullReindexRetry({ memory: true, sessions: false });
+    throw new Error(`Memory source ${entry.path} changed while indexing; retry the memory index.`);
+  }
+
+  private async writeChunks(
     entry: MemoryIndexEntry,
     source: MemorySource,
-    model: string,
+    generation: MemorySyncProviderGeneration | null,
+    chunks: IndexedMemoryChunk[],
+    embeddings: number[][],
+    vectorReady: boolean,
+  ): Promise<void> {
+    await withMemoryWorkspaceLock(this.workspaceDir, async () => {
+      if (source === "memory") {
+        // The lock excludes purge and promotion writers while the exact file
+        // snapshot is validated and its derived index records are committed.
+        const current = await buildFileEntry(
+          entry.absPath,
+          this.workspaceDir,
+          this.settings.multimodal,
+        );
+        this.assertMemoryFileSnapshot(entry, current?.hash);
+      }
+      this.commitIndexChunks(entry, source, generation, chunks, embeddings, vectorReady);
+    });
+  }
+
+  private commitIndexChunks(
+    entry: MemoryIndexEntry,
+    source: MemorySource,
+    generation: MemorySyncProviderGeneration | null,
     chunks: IndexedMemoryChunk[],
     embeddings: number[][],
     vectorReady: boolean,
   ): void {
     const now = Date.now();
+    const model = generation?.provider?.model ?? "fts-only";
     const needsVectorRebuild = !vectorReady && embeddings.some((embedding) => embedding.length > 0);
     runSqliteImmediateTransactionSync(this.db, () => {
+      if (source === "sessions") {
+        const sessionId = expectDefined(entry.sessionId, "memory index session identity");
+        // Embedding and vector setup may await while a purge completes. Read the
+        // live owner, never the shadow index, immediately before publishing.
+        if (hasMemorySessionTombstone(generation?.database ?? this.db, this.agentId, sessionId)) {
+          this.markFailedFullReindexRetry({ memory: false, sessions: true });
+          throw new Error(
+            "A session was forgotten while memory indexing was running; retry the memory index.",
+          );
+        }
+      }
       this.clearIndexedFileData(entry.path, source);
       for (const [i, chunk] of chunks.entries()) {
         const embedding = embeddings[i] ?? [];
@@ -1048,6 +1069,18 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
             .run(chunk.text, id, entry.path, source, model, chunk.startLine, chunk.endLine);
         }
       }
+      upsertMemoryEmbeddingCache({
+        db: this.db,
+        enabled: this.cache.enabled,
+        provider: generation?.provider ?? null,
+        providerKey: generation?.providerKey ?? null,
+        entries: chunks.map((chunk, index) => ({
+          hash: chunk.hash,
+          embedding: embeddings[index] ?? [],
+        })),
+        now,
+        tableName: EMBEDDING_CACHE_TABLE,
+      });
       this.upsertFileRecord(entry, source);
       if (needsVectorRebuild) {
         this.markVectorRebuildRequired();
@@ -1064,6 +1097,16 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   }
 
   private async prepareIndexEntry(
+    entry: MemoryIndexEntry,
+    options: { source: MemorySource; content?: string },
+    generation: MemorySyncProviderGeneration | null,
+  ): Promise<PreparedMemoryIndexEntry | null> {
+    return await withMemoryWorkspaceLock(this.workspaceDir, () =>
+      this.prepareLockedIndexEntry(entry, options, generation),
+    );
+  }
+
+  private async prepareLockedIndexEntry(
     entry: MemoryIndexEntry,
     options: { source: MemorySource; content?: string },
     generation: MemorySyncProviderGeneration | null,
@@ -1107,6 +1150,9 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         () => fs.readFile(entry.absPath, "utf-8"),
         `read memory markdown for indexing ${entry.absPath}`,
       ));
+    if (options.source === "memory") {
+      this.assertMemoryFileSnapshot(entry, hashText(content));
+    }
     const normalizedEntryPath = entry.path.replaceAll("\\", "/");
     const perEntry =
       options.source === "memory" &&
@@ -1247,8 +1293,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     let preparedRequestCount = 0;
     let sourceWideBatchGroup = 0;
     const flushPrepared = async (reason: "max-files" | "max-requests" | "end") => {
-      const firstEntry = prepared[0]?.entry;
-      if (!firstEntry) {
+      if (prepared.length === 0) {
         return;
       }
       const current = prepared;
@@ -1277,7 +1322,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       for (let requestIndex = 0; requestIndex < chunkBatches.length; requestIndex += 1) {
         const chunkBatch = chunkBatches[requestIndex] ?? [];
         embeddings.push(
-          ...(await this.embedChunksWithBatch(chunkBatch, firstEntry, source, generation, {
+          ...(await this.embedChunksWithBatch(chunkBatch, source, generation, {
             sourceWideFiles: current.length,
             sourceWideSources: sourceCounts,
             sourceWideBatchGroup,
@@ -1292,10 +1337,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       for (const item of current) {
         const fileEmbeddings = embeddings.slice(offset, offset + item.chunks.length);
         offset += item.chunks.length;
-        this.writeChunks(
+        await this.writeChunks(
           item.entry,
           item.source,
-          generation.provider.model,
+          generation,
           item.chunks,
           fileEmbeddings,
           vectorReady,
@@ -1362,7 +1407,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         return;
       }
       const prepared = await this.prepareIndexEntry(entry, options, null);
-      this.writeChunks(entry, options.source, "fts-only", prepared?.chunks ?? [], [], false);
+      await this.writeChunks(entry, options.source, generation, prepared?.chunks ?? [], [], false);
       return;
     }
 
@@ -1374,7 +1419,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     let embeddings: number[][];
     try {
       embeddings = this.batch.enabled
-        ? await this.embedChunksWithBatch(prepared.chunks, entry, options.source, generation)
+        ? await this.embedChunksWithBatch(prepared.chunks, options.source, generation)
         : await this.embedChunksInBatches(prepared.chunks, generation);
     } catch (err) {
       const message = formatErrorMessage(err);
@@ -1392,18 +1437,17 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           model: generation.provider.model,
           error: message,
         });
-        this.clearIndexedFileData(entry.path, options.source);
-        this.upsertFileRecord(entry, options.source);
+        await this.writeChunks(entry, options.source, generation, [], [], false);
         return;
       }
       throw err;
     }
     const sample = embeddings.find((embedding) => embedding.length > 0);
     const vectorReady = sample ? await this.ensureVectorReady(sample.length) : false;
-    this.writeChunks(
+    await this.writeChunks(
       entry,
       options.source,
-      generation.provider.model,
+      generation,
       prepared.chunks,
       embeddings,
       vectorReady,

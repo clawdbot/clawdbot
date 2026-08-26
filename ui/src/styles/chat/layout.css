@@ -5592,7 +5592,7 @@ button.chat-pr__diff {
   padding-block-start: 10px;
   padding-block-end: 5px;
   padding-inline: 10px;
-  margin-bottom: 8px;
+  margin-bottom: 2px;
   overflow-x: auto;
   overflow-y: hidden;
   overscroll-behavior-inline: contain;
@@ -5632,7 +5632,7 @@ button.chat-pr__diff {
   corner-shape: superellipse(1.5);
   overflow: hidden;
   border: 1px solid var(--border);
-  background: var(--panel);
+  background: var(--chat-composer-surface, var(--popover));
   transition:
     border-color var(--duration-fast) ease,
     background var(--duration-fast) ease;
@@ -5644,13 +5644,13 @@ button.chat-pr__diff {
 }
 
 .chat-attachment-thumb--file {
-  width: 220px;
-  height: 82px;
+  width: 162px;
+  height: 56px;
 }
 
 .chat-attachment-thumb--pasted-text {
-  width: min(220px, calc(100vw - 64px));
-  background: transparent;
+  width: min(162px, calc(100vw - 64px));
+  background: var(--chat-composer-surface, var(--popover));
 }
 
 .chat-attachment-thumb--browser-annotation {
@@ -5661,7 +5661,7 @@ button.chat-pr__diff {
   max-width: min(300px, calc(100vw - 64px));
   min-width: 0;
   height: 56px;
-  background: transparent;
+  background: var(--chat-composer-surface, var(--popover));
 }
 
 .chat-browser-annotation-card__preview {
@@ -5723,7 +5723,7 @@ button.chat-pr__diff {
   object-fit: cover;
 }
 
-.chat-attachment-image-button {
+.chat-attachment-image-button.chat-attachment-image-button {
   position: relative;
   width: 100%;
   height: 100%;
@@ -5731,11 +5731,12 @@ button.chat-pr__diff {
   corner-shape: superellipse(1.5);
 }
 
-.chat-attachment-image-button::after {
+.chat-attachment-image-button.chat-attachment-image-button::after {
   content: "";
   position: absolute;
   inset: 0;
-  border-radius: inherit;
+  border-radius: calc(var(--chat-attachment-radius) - 1px);
+  corner-shape: superellipse(1.5);
   background: color-mix(in srgb, var(--text-strong) 8%, transparent);
   opacity: 0;
   pointer-events: none;
@@ -5754,7 +5755,8 @@ button.chat-pr__diff {
   width: 20px;
   height: 20px;
   padding: 0;
-  border-radius: 50%;
+  border-radius: calc(7px * var(--openclaw-corner-radius-scale));
+  corner-shape: superellipse(1.5);
   border: none;
   background: color-mix(in srgb, var(--bg) 82%, transparent);
   color: var(--text-strong);
@@ -5796,11 +5798,11 @@ button.chat-pr__diff {
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  gap: 9px;
-  width: fit-content;
+  gap: 10px;
+  width: 100%;
   max-width: 100%;
   height: 100%;
-  padding: 7px 10px;
+  padding: 8px 12px;
   overflow: hidden;
   font-size: 0.72rem;
   color: var(--text);
@@ -5811,13 +5813,13 @@ button.chat-pr__diff {
 }
 
 .chat-attachment-thumb--file:is(:hover, :focus-within) .chat-attachment-file {
-  background: color-mix(in srgb, var(--panel) 86%, var(--text));
+  background: color-mix(in srgb, var(--chat-composer-surface, var(--popover)) 86%, var(--text));
 }
 
 .chat-attachment-file--pasted-text {
   justify-content: flex-start;
-  gap: 8px;
-  padding: 10px 42px 10px 10px;
+  gap: 10px;
+  padding: 8px 32px 8px 12px;
   background: transparent;
 }
 
@@ -5826,11 +5828,19 @@ button.chat-pr__diff {
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  color: var(--muted);
 }
 
-.chat-attachment-file--pasted-text .chat-attachment-file__icon {
-  width: 16px;
-  height: 16px;
+.chat-attachment-file__icon svg {
+  width: 20px;
+  height: 20px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .chat-attachment-file__name {
@@ -5842,17 +5852,26 @@ button.chat-pr__diff {
 }
 
 .chat-attachment-file--pasted-text .chat-attachment-file__name {
-  font-size: 0.86rem;
-  line-height: 1.2;
+  font-size: 0.72rem;
+  line-height: 1.15;
 }
 
 .chat-attachment-file__body {
   display: flex;
   min-width: 0;
-  max-width: 220px;
+  max-width: 100%;
   flex-direction: column;
   justify-content: center;
   gap: 3px;
+}
+
+.chat-attachment-file__type {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.64rem;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chat-attachment-text-action {
@@ -5867,10 +5886,14 @@ button.chat-pr__diff {
   background: transparent;
   cursor: var(--cursor-action);
   font: inherit;
+  overflow: hidden;
+  font-size: 0.64rem;
   line-height: 1.15;
   text-align: left;
+  text-overflow: ellipsis;
   text-decoration: underline;
   text-underline-offset: 2px;
+  white-space: nowrap;
 }
 
 .chat-attachment-text-action:hover {

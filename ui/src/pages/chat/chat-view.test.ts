@@ -5872,11 +5872,11 @@ describe("chat attachment picker", () => {
     expect(preview.querySelector(".chat-attachment-file__name")?.textContent).toBe("brief.pdf");
   });
 
-  it("accepts video file attachments with the generic file preview", async () => {
+  it("infers video preview glyphs from filenames when MIME is absent", async () => {
     const onAttachmentsChange = vi.fn();
     const container = renderChatView({ onAttachmentsChange });
     const input = container.querySelector<HTMLInputElement>(".agent-chat__file-input");
-    const file = new File(["video"], "clip.mp4", { type: "video/mp4" });
+    const file = new File(["video"], "clip.mp4");
 
     expect(input).toBeInstanceOf(HTMLInputElement);
     expect(input?.accept).toContain("video/*");
@@ -5886,7 +5886,7 @@ describe("chat attachment picker", () => {
       const attachments = requireFirstAttachmentsChange(onAttachmentsChange);
       expect(attachments).toHaveLength(1);
       expect(attachments[0]?.fileName).toBe("clip.mp4");
-      expect(attachments[0]?.mimeType).toBe("video/mp4");
+      expect(attachments[0]?.mimeType).toBe("application/octet-stream");
       expect(attachments[0]?.sizeBytes).toBe(file.size);
     });
 
@@ -5894,6 +5894,10 @@ describe("chat attachment picker", () => {
     const preview = renderChatView({ attachments: nextAttachments });
     expect(preview.querySelectorAll(".chat-attachment-thumb--file")).toHaveLength(1);
     expect(preview.querySelector(".chat-attachment-file__name")?.textContent).toBe("clip.mp4");
+    expect(preview.querySelector(".chat-attachment-file__icon")?.getAttribute("data-family")).toBe(
+      "video",
+    );
+    expect(preview.querySelector(".chat-attachment-file__type")?.textContent).toBe("MP4");
   });
 });
 

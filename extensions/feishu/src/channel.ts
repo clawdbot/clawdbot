@@ -2035,21 +2035,13 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
           },
         },
       },
-      renderPresentation: async (ctx) => {
-        const runtime = await loadFeishuChannelRuntime();
-        const renderPresentation = runtime.feishuOutbound.renderPresentation;
-        return renderPresentation ? await renderPresentation(ctx) : null;
-      },
-      sendPayload: async (ctx) => {
-        const runtime = await loadFeishuChannelRuntime();
-        const sendPayload = runtime.feishuOutbound.sendPayload;
-        if (!sendPayload) {
-          throw new Error("Feishu payload sending is not available.");
-        }
-        return await sendPayload(ctx);
-      },
       ...createRuntimeOutboundDelegates({
         getRuntime: loadFeishuChannelRuntime,
+        renderPresentation: { resolve: (runtime) => runtime.feishuOutbound.renderPresentation },
+        sendPayload: {
+          resolve: (runtime) => runtime.feishuOutbound.sendPayload,
+          unavailableMessage: "Feishu payload sending is not available.",
+        },
         sendText: { resolve: (runtime) => runtime.feishuOutbound.sendText },
         sendMedia: { resolve: (runtime) => runtime.feishuOutbound.sendMedia },
       }),
