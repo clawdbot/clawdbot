@@ -33,6 +33,7 @@ import type { buildContextEnginePromptCacheInfo } from "./attempt-context-engine
 import { buildAfterTurnRuntimeContextFromUsage } from "./attempt-prompt-helpers.js";
 import { shouldPersistCompletedBootstrapTurn } from "./attempt-thread-helpers.js";
 import {
+  type AttemptTrajectorySessionEnded,
   resolveAttemptTrajectoryTerminal,
   resolveTerminalAssistantTexts,
 } from "./attempt-trajectory-status.js";
@@ -55,6 +56,9 @@ type FinalizeEmbeddedAttemptParams = {
   emptyAssistantReplyIsSilent: boolean;
   hasTerminalOutput: boolean;
   silentExpected?: boolean;
+  /** Capture the session.ended payload for deferred emission after cleanup.
+   *  When omitted, session.ended is recorded here (pre-cleanup behavior). */
+  onTrajectoryTerminal?: (payload: AttemptTrajectorySessionEnded) => void;
 };
 
 /** Classifies the completed attempt and records its terminal trajectory artifacts. */
@@ -157,7 +161,7 @@ export function finalizeEmbeddedAttempt(
       lastToolError: result.lastToolError,
     }),
   );
-  trajectoryRecorder.recordEvent("session.ended", {
+  const sessionEnded: AttemptTrajectorySessionEnded = {
     status: terminal.status,
     aborted: terminalState.aborted,
     externalAbort: terminalState.externalAbort,
@@ -169,7 +173,14 @@ export function finalizeEmbeddedAttempt(
     promptError,
     terminalError: terminal.terminalError,
     stopReason,
-  });
+  };
+  if (params.onTrajectoryTerminal) {
+    // session.ended is recorded after attempt cleanup so its wall-clock
+    // timestamp reflects real session termination, not model.completed (#102014).
+    params.onTrajectoryTerminal(sessionEnded);
+  } else {
+    trajectoryRecorder.recordEvent("session.ended", sessionEnded);
+  }
 
   return result;
 }

@@ -49,7 +49,7 @@ export async function finalizeCodexAttempt(
   requestRuntime: Awaited<ReturnType<typeof prepareCodexAttemptTurnRequest>>,
   activeTurn: CodexAttemptActiveTurn,
 ): Promise<EmbeddedRunAttemptResult> {
-  const { prompt, state: resourceState, trajectoryRecorder, markTrajectoryEndRecorded } = resources;
+  const { prompt, state: resourceState, trajectoryRecorder, captureTrajectoryTerminal } = resources;
   const { context, systemPromptReport } = prompt;
   const { runtime, attemptTools, activeTranscriptTarget, hookContext } = context;
   const { hookContextWindowFields, hookRunner } = context;
@@ -463,7 +463,9 @@ export async function finalizeCodexAttempt(
     timedOut: effectiveTimedOut,
     yieldDetected: toolState.yieldDetected,
   });
-  trajectoryRecorder?.recordEvent("session.ended", {
+  // session.ended is recorded by cleanup after teardown, so its wall-clock
+  // timestamp reflects real session termination, not model.completed (#102014).
+  captureTrajectoryTerminal({
     status: finalPromptError
       ? "error"
       : finalAborted || effectiveTimedOut
@@ -475,7 +477,6 @@ export async function finalizeCodexAttempt(
     yieldDetected: toolState.yieldDetected,
     promptError: normalizeCodexTrajectoryError(finalPromptError),
   });
-  markTrajectoryEndRecorded();
   const terminalAssistantText = collectTerminalAssistantText(result);
   if (
     terminalAssistantText &&

@@ -35,6 +35,21 @@ import type { CodexAppServerThreadLifecycleBinding } from "./thread-lifecycle.js
 import { createCodexTrajectoryRecorder } from "./trajectory.js";
 import type { CodexAppServerTurnRouter, CodexThreadRouteReservation } from "./turn-router.js";
 
+/**
+ * session.ended payload captured at finalize/startup-failure and emitted only
+ * after attempt teardown, so its wall-clock timestamp reflects real session
+ * termination rather than model.completed (#102014).
+ */
+export type CodexTrajectorySessionEnded = {
+  status: "success" | "error" | "interrupted" | "cleanup";
+  threadId?: string;
+  turnId?: string;
+  timedOut?: boolean;
+  aborted?: boolean;
+  yieldDetected?: boolean;
+  promptError?: string | null;
+};
+
 export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
   const { context, turnState, buildRenderedCodexDeveloperInstructions } = prompt;
   const { runtime, attemptTools } = context;
@@ -75,6 +90,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     routeActivated: false,
     detachRouteAbort: (() => undefined) as () => void,
     trajectoryEndRecorded: false,
+    trajectoryTerminal: null as CodexTrajectorySessionEnded | null,
     nativeHookRelay: undefined as CodexNativeHookRelay | undefined,
     nativeSubagentMonitor: undefined as
       | ReturnType<typeof codexNativeSubagentMonitorRuntime.register>
@@ -301,6 +317,10 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     projectorRef,
     pendingNativePreToolUseFailures,
     markTrajectoryEndRecorded: () => {
+      state.trajectoryEndRecorded = true;
+    },
+    captureTrajectoryTerminal: (payload: CodexTrajectorySessionEnded) => {
+      state.trajectoryTerminal = payload;
       state.trajectoryEndRecorded = true;
     },
     activateNativePreToolUseFailureFallback,

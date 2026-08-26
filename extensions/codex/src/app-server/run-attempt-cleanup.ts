@@ -61,18 +61,6 @@ export async function cleanupCodexAttempt(
         timedOut: state.timedOut,
       }),
     });
-    if (trajectoryRecorder && !resourceState.trajectoryEndRecorded) {
-      trajectoryRecorder.recordEvent("session.ended", {
-        status:
-          state.timedOut || (runAbortController.signal.aborted && !state.clientClosedAbort)
-            ? "interrupted"
-            : "cleanup",
-        threadId: resourceState.thread.threadId,
-        turnId: activeTurnId,
-        timedOut: state.timedOut,
-        aborted: runAbortController.signal.aborted && !state.clientClosedAbort,
-      });
-    }
     await runCleanupStep("codex-trajectory-flush", () => trajectoryRecorder?.flush());
     const retainLiveIncognitoThread =
       terminalState.turnSucceeded && isIncognitoSessionKey(params.sessionKey);
@@ -186,5 +174,31 @@ export async function cleanupCodexAttempt(
     await runCleanupStep("codex-active-run-clear", () => {
       clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
     });
+    // Terminal trajectory recording lives in the finally block so a teardown
+    // failure can never skip session.ended, and so its wall-clock timestamp
+    // reflects real session termination rather than model.completed (#102014).
+    await runCleanupStep("codex-trajectory-terminal", () => {
+      if (!trajectoryRecorder) {
+        return;
+      }
+      if (resourceState.trajectoryTerminal) {
+        trajectoryRecorder.recordEvent("session.ended", resourceState.trajectoryTerminal);
+        resourceState.trajectoryTerminal = null;
+        return;
+      }
+      if (!resourceState.trajectoryEndRecorded) {
+        trajectoryRecorder.recordEvent("session.ended", {
+          status:
+            state.timedOut || (runAbortController.signal.aborted && !state.clientClosedAbort)
+              ? "interrupted"
+              : "cleanup",
+          threadId: resourceState.thread.threadId,
+          turnId: activeTurnId,
+          timedOut: state.timedOut,
+          aborted: runAbortController.signal.aborted && !state.clientClosedAbort,
+        });
+      }
+    });
+    await runCleanupStep("codex-trajectory-flush-terminal", () => trajectoryRecorder?.flush());
   }
 }

@@ -12,6 +12,7 @@ import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.
 import { flushEmbeddedAttemptTrajectoryRecorder } from "./attempt-finalize.js";
 import type { EmitDiagnosticRunCompleted } from "./attempt-setup.js";
 import { cleanupEmbeddedAttemptResources } from "./attempt-subscription-cleanup.js";
+import type { AttemptTrajectorySessionEnded } from "./attempt-trajectory-status.js";
 import type { createEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -80,6 +81,8 @@ type CleanupEmbeddedAttemptSessionInput = {
   buildAbortSettlePromise: () => Promise<void> | null;
   trajectoryRecorder: TrajectoryRecorder | null;
   trajectoryEndRecorded: boolean;
+  /** Terminal payload captured at finalize; emitted here after cleanup (#102014). */
+  trajectoryTerminal: AttemptTrajectorySessionEnded | null;
   cleanupYieldAborted: boolean;
   emitDiagnosticRunCompleted?: EmitDiagnosticRunCompleted;
   readState: () => {
@@ -99,26 +102,6 @@ export async function cleanupEmbeddedAttemptSessionPhase(
   input: CleanupEmbeddedAttemptSessionInput,
 ): Promise<void> {
   const { attempt } = input;
-  const initialState = input.readState();
-  if (input.trajectoryRecorder && !input.trajectoryEndRecorded) {
-    input.trajectoryRecorder.recordEvent("session.ended", {
-      status: initialState.promptError
-        ? "error"
-        : initialState.aborted || initialState.timedOut
-          ? "interrupted"
-          : "cleanup",
-      aborted: initialState.aborted,
-      externalAbort: initialState.externalAbort,
-      timedOut: initialState.timedOut,
-      idleTimedOut: initialState.idleTimedOut,
-      timedOutDuringCompaction: initialState.timedOutDuringCompaction,
-      timedOutDuringToolExecution: initialState.timedOutDuringToolExecution,
-      timedOutByRunBudget: initialState.timedOutByRunBudget,
-      promptError: initialState.promptError
-        ? formatErrorMessage(initialState.promptError)
-        : undefined,
-    });
-  }
   await flushEmbeddedAttemptTrajectoryRecorder({
     runId: attempt.runId,
     sessionId: attempt.sessionId,
@@ -174,6 +157,44 @@ export async function cleanupEmbeddedAttemptSessionPhase(
 
   const finalState = input.readState();
   const cleanupFailure = cleanupError;
+  if (input.trajectoryRecorder) {
+    if (input.trajectoryTerminal) {
+      // Captured at finalize; recorded only after cleanup so its wall-clock
+      // timestamp reflects real session termination, not model.completed (#102014).
+      input.trajectoryRecorder.recordEvent("session.ended", {
+        ...input.trajectoryTerminal,
+        status: cleanupFailure ? "error" : input.trajectoryTerminal.status,
+      });
+    } else if (!input.trajectoryEndRecorded) {
+      // Startup-failure path: finalize never ran, so derive the terminal event here.
+      input.trajectoryRecorder.recordEvent("session.ended", {
+        status: cleanupFailure
+          ? "error"
+          : finalState.promptError
+            ? "error"
+            : finalState.aborted || finalState.timedOut
+              ? "interrupted"
+              : "cleanup",
+        aborted: finalState.aborted,
+        externalAbort: finalState.externalAbort,
+        timedOut: finalState.timedOut,
+        idleTimedOut: finalState.idleTimedOut,
+        timedOutDuringCompaction: finalState.timedOutDuringCompaction,
+        timedOutDuringToolExecution: finalState.timedOutDuringToolExecution,
+        timedOutByRunBudget: finalState.timedOutByRunBudget,
+        promptError: finalState.promptError
+          ? formatErrorMessage(finalState.promptError)
+          : undefined,
+      });
+    }
+    // Persist the terminal event before any cleanup failure propagates.
+    await flushEmbeddedAttemptTrajectoryRecorder({
+      runId: attempt.runId,
+      sessionId: attempt.sessionId,
+      log,
+      trajectoryRecorder: input.trajectoryRecorder,
+    });
+  }
   const beforeAgentRunBlocked = finalState.beforeAgentRunBlockedBy !== undefined;
   const diagnosticTerminalAborted =
     finalState.aborted || finalState.timedOut || finalState.idleTimedOut;

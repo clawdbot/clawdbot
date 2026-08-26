@@ -56,6 +56,7 @@ function createInput(overrides: Record<string, unknown> = {}) {
     buildAbortSettlePromise: () => null,
     trajectoryRecorder,
     trajectoryEndRecorded: false,
+    trajectoryTerminal: null,
     cleanupYieldAborted: false,
     emitDiagnosticRunCompleted,
     readState: () => state,
@@ -70,7 +71,7 @@ describe("cleanupEmbeddedAttemptSessionPhase", () => {
     hoisted.flushEmbeddedAttemptTrajectoryRecorder.mockResolvedValue(undefined);
   });
 
-  it("records the terminal event before transcript-safe resource cleanup", async () => {
+  it("records the fallback terminal event after cleanup when finalize never ran", async () => {
     const input = createInput();
 
     await cleanupEmbeddedAttemptSessionPhase(input as never);
@@ -78,6 +79,15 @@ describe("cleanupEmbeddedAttemptSessionPhase", () => {
     expect(input.trajectoryRecorder.recordEvent).toHaveBeenCalledWith(
       "session.ended",
       expect.objectContaining({ status: "cleanup", aborted: false }),
+    );
+    // The terminal event is emitted after teardown so its wall-clock timestamp
+    // reflects real session termination (#102014).
+    const recordOrder = input.trajectoryRecorder.recordEvent.mock.invocationCallOrder[0];
+    expect(recordOrder).toBeGreaterThan(
+      hoisted.cleanupEmbeddedAttemptResources.mock.invocationCallOrder[0] ?? 0,
+    );
+    expect(recordOrder).toBeGreaterThan(
+      input.transcriptLifecycle.dispose.mock.invocationCallOrder[0] ?? 0,
     );
     expect(hoisted.flushEmbeddedAttemptTrajectoryRecorder).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -95,6 +105,65 @@ describe("cleanupEmbeddedAttemptSessionPhase", () => {
     expect(input.transcriptLifecycle.beginCleanup).toHaveBeenCalledOnce();
     expect(input.transcriptLifecycle.dispose).toHaveBeenCalledOnce();
     expect(input.emitDiagnosticRunCompleted).toHaveBeenCalledWith("completed", null, undefined);
+  });
+
+  it("defers the captured finalize payload until after attempt cleanup", async () => {
+    const terminal = {
+      status: "success" as const,
+      aborted: false,
+      externalAbort: false,
+      timedOut: false,
+      idleTimedOut: false,
+      timedOutDuringCompaction: false,
+      timedOutDuringToolExecution: false,
+      timedOutByRunBudget: false,
+      stopReason: "stop",
+    };
+    const input = createInput({
+      trajectoryEndRecorded: true,
+      trajectoryTerminal: terminal,
+    });
+
+    await cleanupEmbeddedAttemptSessionPhase(input as never);
+
+    expect(input.trajectoryRecorder.recordEvent).toHaveBeenCalledTimes(1);
+    expect(input.trajectoryRecorder.recordEvent).toHaveBeenCalledWith("session.ended", terminal);
+    const recordOrder = input.trajectoryRecorder.recordEvent.mock.invocationCallOrder[0];
+    expect(recordOrder).toBeGreaterThan(
+      hoisted.cleanupEmbeddedAttemptResources.mock.invocationCallOrder[0] ?? 0,
+    );
+    expect(recordOrder).toBeGreaterThan(
+      input.transcriptLifecycle.dispose.mock.invocationCallOrder[0] ?? 0,
+    );
+  });
+
+  it("still records the terminal event and marks it error when cleanup throws", async () => {
+    hoisted.cleanupEmbeddedAttemptResources.mockRejectedValueOnce(new Error("teardown boom"));
+    const terminal = {
+      status: "success" as const,
+      aborted: false,
+      externalAbort: false,
+      timedOut: false,
+      idleTimedOut: false,
+      timedOutDuringCompaction: false,
+      timedOutDuringToolExecution: false,
+      timedOutByRunBudget: false,
+    };
+    const input = createInput({
+      trajectoryEndRecorded: true,
+      trajectoryTerminal: terminal,
+    });
+
+    await expect(cleanupEmbeddedAttemptSessionPhase(input as never)).rejects.toThrow(
+      "teardown boom",
+    );
+
+    expect(input.trajectoryRecorder.recordEvent).toHaveBeenCalledWith("session.ended", {
+      ...terminal,
+      status: "error",
+    });
+    // The terminal event is flushed before the cleanup failure propagates.
+    expect(hoisted.flushEmbeddedAttemptTrajectoryRecorder).toHaveBeenCalledTimes(2);
   });
 
   it("keeps compaction timeout observations abort-like only for cleanup", async () => {

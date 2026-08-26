@@ -96,6 +96,7 @@ function createFixture(
     beforeAgentRunBlockedBy: undefined,
     terminal: { kind: "ok" as const },
     trajectoryEndRecorded: false,
+    trajectoryTerminal: null,
   };
   const sessionRuntime = {
     agentSession: {
