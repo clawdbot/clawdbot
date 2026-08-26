@@ -2223,6 +2223,61 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(consumeCompactionSafeguardCancelReason(sessionManager)).toBeNull();
   });
 
+  it("keeps real sections when a re-distilled identifier list outgrows the budget", async () => {
+    mockSummarizeInStages.mockReset();
+    const latestAsk = "preserve the pending deployment status";
+    const identifier = "/tmp/source-only-compaction-id.log";
+    // A model that hoards every identifier it has ever seen: the list alone is
+    // larger than the whole artifact budget while the real sections stay small.
+    const hoardedIdentifiers = Array.from(
+      { length: 400 },
+      (_, index) => `- /home/vac/clawd/tmp/session-artifacts/run-${index}/output.log`,
+    ).join("\n");
+    const generatedSummary = [
+      "## Decisions",
+      "Deployment stays paused until the backup is verified.",
+      "## Open TODOs",
+      "Verify the backup.",
+      "## Constraints/Rules",
+      "Preserve exact context.",
+      "## Pending user asks",
+      latestAsk,
+      "## Exact identifiers",
+      hoardedIdentifiers,
+    ].join("\n");
+    expect(generatedSummary.length).toBeGreaterThan(MAX_COMPACTION_SUMMARY_CHARS);
+    mockSummarizeInStages.mockResolvedValue(summaryResult(generatedSummary));
+
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model: createAnthropicModelFixture(),
+      recentTurnsPreserve: 0,
+      qualityGuardEnabled: true,
+      qualityGuardMaxRetries: 1,
+    });
+    const event = createCompactionEvent({
+      messageText: `${latestAsk} ${identifier}`,
+      tokensBefore: 1_500,
+    });
+    (event.preparation as { settings?: { reserveTokens: number } }).settings = {
+      reserveTokens: 4_000,
+    };
+
+    const { result } = await runCompactionScenario({ sessionManager, event, apiKey: "test-key" });
+
+    const summary = expectCompactionResult(result).summary;
+    expect(summary.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+    expect(summary).toContain(
+      "## Decisions\nDeployment stays paused until the backup is verified.",
+    );
+    expect(summary).toContain("## Open TODOs\nVerify the backup.");
+    expect(summary).toContain(`## Pending user asks\n${latestAsk}`);
+    expect(summary).toContain(identifier);
+    expect(summary).toContain("run-0/output.log");
+    expect(summary).not.toContain("run-399/output.log");
+    expect(consumeCompactionSafeguardCancelReason(sessionManager)).toBeNull();
+  });
+
   it("restores source identifiers omitted by a generated summary that fits the budget", async () => {
     mockSummarizeInStages.mockReset();
     const latestAsk = "preserve the pending deployment status";

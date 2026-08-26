@@ -20,6 +20,9 @@ const REQUIRED_SUMMARY_SECTIONS = [
   "## Exact identifiers",
 ] as const;
 const QUALITY_PROTECTED_SECTION_START = 3;
+const PENDING_ASK_SECTION_INDEX = 3;
+const EXACT_IDENTIFIERS_SECTION_INDEX = 4;
+const MAX_PROTECTED_SECTION_CONTENT_SHARE = 0.25;
 const STRICT_EXACT_IDENTIFIERS_INSTRUCTION =
   "For ## Exact identifiers, preserve literal values exactly as seen (IDs, URLs, file paths, ports, hashes, dates, times).";
 const POLICY_OFF_EXACT_IDENTIFIERS_INSTRUCTION =
@@ -123,7 +126,14 @@ function parseRequiredSummarySectionContents(summary: string): string[] | null {
   return contents.map((lines) => lines.join("\n").trim());
 }
 
-/** Plan truncation that keeps audit-required headings, pending asks, and exact identifiers. */
+/**
+ * Plan truncation that keeps the audit facts and lets everything else shrink.
+ * Only the headings, the bounded latest-ask context, and the audited source
+ * identifiers are untrimmable. Model-written section text — including the
+ * "## Exact identifiers" list — is optional content; protecting it verbatim let
+ * a re-distilled identifier dump grow past the whole artifact budget while the
+ * real sections were starved to empty headings.
+ */
 export function createSummaryQualityRetentionPlan(
   summary: string,
   truncatedMarker: string,
@@ -144,41 +154,52 @@ export function createSummaryQualityRetentionPlan(
   if (!hasAskOverlap(auditSummary, params.latestAsk)) {
     return null;
   }
-  const pendingAsk = contents[QUALITY_PROTECTED_SECTION_START] ?? "";
   const requiredAskContext = params.requiredAskContext?.trim() ?? "";
-  const exactIdentifiers = contents[QUALITY_PROTECTED_SECTION_START + 1] ?? "";
-  // Source identifiers are audit facts, not model-owned output. Restore them
-  // here so a model omission cannot disable the retention plan that repairs it.
-  const missingIdentifiers = enforceIdentifiers
-    ? params.identifiers.filter(
-        (identifier) => !summaryIncludesIdentifier(exactIdentifiers, identifier),
-      )
-    : [];
-  const protectedContents = [
-    [
-      pendingAsk,
-      requiredAskContext && !pendingAsk.includes(requiredAskContext) ? requiredAskContext : "",
-    ]
-      .filter(Boolean)
-      .join("\n"),
-    [exactIdentifiers, ...missingIdentifiers].filter(Boolean).join("\n"),
-  ];
+  const auditedIdentifiers = enforceIdentifiers ? params.identifiers : [];
   const marker = truncatedMarker.trim();
-  const protectedBlocks = REQUIRED_SUMMARY_SECTIONS.slice(QUALITY_PROTECTED_SECTION_START).map(
-    (heading, index) => {
-      const content = protectedContents[index];
+  // Protected tails render after each section's optional content so the audit
+  // facts survive regardless of how much model text the budget keeps.
+  const protectedTails = REQUIRED_SUMMARY_SECTIONS.map((_, index) =>
+    index === PENDING_ASK_SECTION_INDEX
+      ? requiredAskContext
+      : index === EXACT_IDENTIFIERS_SECTION_INDEX
+        ? auditedIdentifiers.join("\n")
+        : "",
+  );
+  const bodyHasIdentifiers = auditedIdentifiers.every((identifier) =>
+    summaryIncludesIdentifier(summary, identifier),
+  );
+  const renderSections = (sectionContents: string[]) =>
+    REQUIRED_SUMMARY_SECTIONS.map((heading, index) => {
+      const content = sectionContents[index];
       return content ? `${heading}\n${content}` : heading;
-    },
+    });
+  const joinSectionContent = (index: number, optional: string) => {
+    const tail = protectedTails[index] ?? "";
+    if (!tail) {
+      return optional;
+    }
+    if (index === PENDING_ASK_SECTION_INDEX && optional.includes(tail)) {
+      return optional;
+    }
+    if (index === EXACT_IDENTIFIERS_SECTION_INDEX) {
+      const missing = auditedIdentifiers.filter(
+        (identifier) => !summaryIncludesIdentifier(optional, identifier),
+      );
+      return [optional, ...missing].filter(Boolean).join("\n");
+    }
+    return [optional, tail].filter(Boolean).join("\n");
+  };
+  // Reserve every heading/content/tail separator up front so trimmed optional
+  // text can never push the rendered artifact past `maxChars`.
+  const minimumBlocks = REQUIRED_SUMMARY_SECTIONS.map(
+    (heading, index) => `${heading}\n\n${protectedTails[index] ?? ""}`,
   );
-  const optionalHeadings = REQUIRED_SUMMARY_SECTIONS.slice(0, QUALITY_PROTECTED_SECTION_START);
-  const optionalContents = contents.slice(0, QUALITY_PROTECTED_SECTION_START);
-  const optionalScaffolds = optionalHeadings.map((heading, index) =>
-    optionalContents[index] ? `${heading}\n` : heading,
-  );
-  const minimumSummary = [...optionalScaffolds, marker, ...protectedBlocks].join("\n\n");
-  const bodyHasIdentifiers =
-    !enforceIdentifiers ||
-    params.identifiers.every((identifier) => summaryIncludesIdentifier(summary, identifier));
+  const minimumSummary = [
+    ...minimumBlocks.slice(0, QUALITY_PROTECTED_SECTION_START),
+    marker,
+    ...minimumBlocks.slice(QUALITY_PROTECTED_SECTION_START),
+  ].join("\n\n");
 
   return {
     minimumChars: minimumSummary.length,
@@ -192,33 +213,42 @@ export function createSummaryQualityRetentionPlan(
         return null;
       }
       const contentBudget = maxChars - minimumSummary.length;
-      const totalContentChars = optionalContents.reduce(
-        (total, content) => total + content.length,
+      // Audit-bearing sections (pending asks, exact identifiers) are funded first
+      // so a runaway earlier section cannot starve them, but each is capped: an
+      // uncapped identifier list re-distills into the whole budget and leaves
+      // every other section as a bare heading.
+      const protectedCap = Math.floor(contentBudget * MAX_PROTECTED_SECTION_CONTENT_SHARE);
+      const allocations = contents.map((content, index) =>
+        index >= QUALITY_PROTECTED_SECTION_START ? Math.min(content.length, protectedCap) : 0,
+      );
+      const optionalBudget = Math.max(
         0,
+        contentBudget - allocations.reduce((total, chars) => total + chars, 0),
       );
-      const allocations = optionalContents.map((content) =>
-        totalContentChars > 0
-          ? Math.floor((contentBudget * content.length) / totalContentChars)
-          : 0,
-      );
-      let remainder = contentBudget - allocations.reduce((total, chars) => total + chars, 0);
+      const optionalContents = contents.slice(0, QUALITY_PROTECTED_SECTION_START);
+      const optionalTotal = optionalContents.reduce((total, content) => total + content.length, 0);
       for (const [index, content] of optionalContents.entries()) {
+        allocations[index] =
+          optionalTotal > 0 ? Math.floor((optionalBudget * content.length) / optionalTotal) : 0;
+      }
+      let remainder = contentBudget - allocations.reduce((total, chars) => total + chars, 0);
+      for (const [index, content] of contents.entries()) {
         const allocation = allocations[index] ?? 0;
         const extra = Math.min(remainder, Math.max(0, content.length - allocation));
         allocations[index] = allocation + extra;
         remainder -= extra;
       }
-      const optionalBlocks = optionalHeadings.map((heading, index) => {
-        const content = truncateUtf16Safe(optionalContents[index] ?? "", allocations[index] ?? 0);
-        return content ? `${heading}\n${content}` : heading;
-      });
-      // The marker only belongs in an artifact that actually lost body text;
-      // an under-budget rebuild that merely restores audited facts is complete.
-      const trimmed = optionalContents.some(
-        (content, index) => content.length > (allocations[index] ?? 0),
+      const trimmed = contents.some((content, index) => content.length > (allocations[index] ?? 0));
+      const sectionContents = contents.map((content, index) =>
+        joinSectionContent(index, truncateUtf16Safe(content, allocations[index] ?? 0)),
       );
+      const blocks = renderSections(sectionContents);
       return {
-        text: [...optionalBlocks, ...(trimmed ? [marker] : []), ...protectedBlocks].join("\n\n"),
+        text: [
+          ...blocks.slice(0, QUALITY_PROTECTED_SECTION_START),
+          ...(trimmed ? [marker] : []),
+          ...blocks.slice(QUALITY_PROTECTED_SECTION_START),
+        ].join("\n\n"),
         trimmed,
       };
     },
