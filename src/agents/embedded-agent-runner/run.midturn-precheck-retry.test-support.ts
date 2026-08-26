@@ -58,8 +58,10 @@ function expectRetryContinuesFromTranscript(): void {
 function makeReplayUnsafeMidTurnOverflow(params?: {
   activeCount?: number;
   asyncStarted?: boolean;
+  resultRecorded?: boolean;
 }) {
   const activeCount = params?.activeCount ?? 0;
+  const resultRecorded = params?.resultRecorded ?? true;
   return makeAttemptResult({
     promptError: makeOverflowError("Context overflow: prompt too large (mid-turn precheck)."),
     promptErrorSource: "precheck",
@@ -71,7 +73,9 @@ function makeReplayUnsafeMidTurnOverflow(params?: {
     assistantTexts: [],
     lastAssistant: settledExecAssistant,
     currentAttemptAssistant: settledExecAssistant,
-    messagesSnapshot: [settledExecAssistant, settledExecResult],
+    messagesSnapshot: resultRecorded
+      ? [settledExecAssistant, settledExecResult]
+      : [settledExecAssistant],
     toolMetas: [
       {
         toolName: "exec",
@@ -187,8 +191,33 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
     expect(result.meta.error).toBeUndefined();
   });
 
+  it("compacts while a code-mode exec still waits on nested tool work", async () => {
+    // exec returned status "waiting" (result persisted) but its nested call keeps
+    // a lifecycle item active; the run stays resumable through `wait`.
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(makeReplayUnsafeMidTurnOverflow({ activeCount: 1 }))
+      .mockResolvedValueOnce(makeAttemptResult());
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "Compacted while exec waits",
+        firstKeptEntryId: "entry-waiting-exec",
+        tokensBefore: 201_000,
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      runId: "run-midturn-waiting-exec",
+    });
+
+    expect(mockedCompactDirect).toHaveBeenCalledOnce();
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expectRetryContinuesFromTranscript();
+    expect(result.meta.error).toBeUndefined();
+  });
+
   it.each([
-    ["an unsettled tool", { activeCount: 1 }, true],
+    ["a tool call without a recorded result", { resultRecorded: false }, true],
     ["asynchronous tool activity", { asyncStarted: true }, false],
   ])("keeps %s fail-closed", async (_label, attemptParams, expectsWarning) => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeReplayUnsafeMidTurnOverflow(attemptParams));
