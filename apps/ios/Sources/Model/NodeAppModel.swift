@@ -1030,12 +1030,7 @@ final class NodeAppModel {
 
         self.voiceWake.configure { [weak self] cmd in
             guard let self else { return }
-            let sessionKey = await MainActor.run { self.mainSessionKey }
-            do {
-                try await self.sendVoiceTranscript(text: cmd, sessionKey: sessionKey)
-            } catch {
-                // Best-effort only.
-            }
+            try await self.sendVoiceTranscript(text: cmd, sessionKey: self.mainSessionKey)
         }
         self.voiceNoteRecorder.onRecordingActiveChanged = { [weak self] isActive in
             self?.voiceWake.setSuppressedByVoiceNote(isActive)

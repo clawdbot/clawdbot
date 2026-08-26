@@ -19,6 +19,7 @@ import {
   resolveLmstudioInferenceBase,
   resolveLmstudioServerBase,
 } from "./models.js";
+import { hasLmstudioAuthorizationHeader } from "./provider-auth.js";
 import {
   buildLmstudioAuthHeaders,
   resolveLmstudioConfiguredApiKeyForProvider,
@@ -55,16 +56,6 @@ function normalizeLmstudioModel(model: string, providerId?: string): string {
     defaultModel: DEFAULT_LMSTUDIO_EMBEDDING_MODEL,
     prefixes: [`${providerId?.trim() || LMSTUDIO_PROVIDER_ID}/`, `${LMSTUDIO_PROVIDER_ID}/`],
   });
-}
-
-function hasAuthorizationHeader(headers: Record<string, string> | undefined): boolean {
-  if (!headers) {
-    return false;
-  }
-  return Object.entries(headers).some(
-    ([headerName, value]) =>
-      headerName.trim().toLowerCase() === "authorization" && value.trim().length > 0,
-  );
 }
 
 /** Resolves API key (real or synthetic placeholder) from runtime/provider auth config. */
@@ -217,7 +208,7 @@ export async function createLmstudioEmbeddingProvider(
     providerHeaders,
     !isFallbackActivation ? sanitizeLmstudioStringHeaders(options.remote?.headers) : undefined,
   );
-  const apiKey = hasAuthorizationHeader(headerOverrides)
+  const apiKey = hasLmstudioAuthorizationHeader(headerOverrides)
     ? undefined
     : !isFallbackActivation
       ? remoteApiKey?.trim() ||
