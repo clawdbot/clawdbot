@@ -47,11 +47,7 @@ import {
 import { WorkerConnectionEndpointError } from "./worker-connection-endpoint.js";
 import { WorkerConnectionFrameDispatcher } from "./worker-connection-frames.js";
 
-export {
-  WorkerConnectionInterruptedError,
-  WorkerConnectionStoppedError,
-  WorkerFencedError,
-} from "./worker-connection-contract.js";
+export { WorkerConnectionInterruptedError } from "./worker-connection-contract.js";
 export type { WorkerConnectionState } from "./worker-connection-contract.js";
 
 const DEFAULT_RECONNECT_BACKOFF: BackoffPolicy = {
@@ -160,6 +156,14 @@ export class WorkerConnection {
   onStateChange(listener: (state: WorkerConnectionState) => void): () => void {
     this.stateListeners.add(listener);
     return () => this.stateListeners.delete(listener);
+  }
+
+  onTerminalError(listener: (error: Error) => void): () => void {
+    return this.onStateChange(() => {
+      if (this.isTerminal()) {
+        listener(this.terminalError());
+      }
+    });
   }
 
   onInferenceEvent(listener: (frame: WorkerInferenceEventFrame) => void): () => void {
