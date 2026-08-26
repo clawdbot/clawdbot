@@ -536,6 +536,95 @@ describe("Slack durable ingress", () => {
     });
   });
 
+  it("serializes channel-ID migration behind an already routed message through Bolt", async () => {
+    await withQueue(async (queue) => {
+      let markMessageStarted: () => void = () => {};
+      let releaseMessage: () => void = () => {};
+      let releaseMigration: () => void = () => {};
+      const messageStarted = new Promise<void>((resolve) => {
+        markMessageStarted = resolve;
+      });
+      const messageGate = new Promise<void>((resolve) => {
+        releaseMessage = resolve;
+      });
+      const migrationGate = new Promise<void>((resolve) => {
+        releaseMigration = resolve;
+      });
+      const starts: string[] = [];
+      const ingress = createSlackDurableIngress({
+        accountId: "default",
+        queue,
+        pollIntervalMs: 60_000,
+        adoptionStallTimeoutMs: 5_000,
+      });
+      const harness = createReceiverHarness();
+      const app = new App({
+        receiver: ingress.wrapReceiver(harness.receiver),
+        authorize: async () => ({
+          botToken: "xoxb-test",
+          botId: "B_BOT",
+          botUserId: "U_BOT",
+          teamId: "T_TEST",
+        }),
+        convoStore: false,
+        ignoreSelf: false,
+      });
+      app.event("message", async ({ context }) => {
+        const lifecycle = resolveSlackIngressTurnLifecycle(context);
+        await lifecycle?.onSessionRouted?.("agent:main:slack:thread:C_NEW");
+        starts.push("message");
+        markMessageStarted();
+        await messageGate;
+        await lifecycle?.onAdopted();
+      });
+      app.event("channel_id_changed", async ({ context }) => {
+        starts.push("channel_id_changed");
+        await migrationGate;
+        await resolveSlackIngressTurnLifecycle(context)?.onAdopted();
+      });
+      ingress.start();
+
+      try {
+        await harness.receive(
+          createReceiverEventWithBody({
+            ...createSlackEnvelope("Ev-routed-before-migration"),
+            event: {
+              type: "message",
+              channel: "C_NEW",
+              channel_type: "channel",
+              user: "U_TEST",
+              ts: "1700000000.000200",
+              thread_ts: "1700000000.000100",
+              text: "before migration",
+            },
+          }),
+        );
+        await messageStarted;
+        await harness.receive(
+          createReceiverEventWithBody(
+            createChannelIdChangedEnvelope("Ev-migration-after-route", "C_OLD", "C_NEW"),
+          ),
+        );
+        await vi.waitFor(async () => {
+          expect((await queue.listClaims()).map((claim) => claim.id)).toEqual([
+            "Ev-routed-before-migration",
+            "Ev-migration-after-route",
+          ]);
+        });
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(starts).toEqual(["message"]);
+
+        releaseMessage();
+        await vi.waitFor(() => expect(starts).toEqual(["message", "channel_id_changed"]));
+      } finally {
+        releaseMessage();
+        releaseMigration();
+        await ingress.waitForIdle();
+        await ingress.stop();
+      }
+    });
+  });
+
   it("drains a durable event when its acknowledgement fails", async () => {
     await withQueue(async (queue) => {
       const processEvent = vi.fn(async (event: ReceiverEvent) => {

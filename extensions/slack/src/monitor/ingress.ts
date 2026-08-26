@@ -226,6 +226,7 @@ export function createSlackDurableIngress(
   let app: App | undefined;
   let relayDispatch: SlackRelayIngressDispatch | undefined;
   const activeSessionTurns = new Map<string, Promise<void>>();
+  const activeChannelTurns = new Map<string, Set<Promise<void>>>();
   const monitor = createChannelIngressMonitor<
     SlackIngressRawEvent,
     SlackIngressBody,
@@ -275,9 +276,11 @@ export function createSlackDurableIngress(
         await raw.afterDurableAdmission?.();
       }
     },
-    deliver: async (raw, lifecycle) => {
+    deliver: async (raw, lifecycle, claim) => {
+      const laneKey = claim.laneKey ?? inspectSlackIngress(raw).laneKey;
       let releaseSession: (() => void) | undefined;
       let routedSession: string | undefined;
+      let migrationAwaitedChannelTurns = false;
       let downstreamDeferred = false;
       let settled = false;
       const settleSession = () => {
@@ -304,6 +307,9 @@ export function createSlackDurableIngress(
             ? previousTurn.then(() => releasedCurrentTurn)
             : releasedCurrentTurn;
           activeSessionTurns.set(sessionKey, currentTurn);
+          const channelTurns = activeChannelTurns.get(laneKey) ?? new Set<Promise<void>>();
+          channelTurns.add(currentTurn);
+          activeChannelTurns.set(laneKey, channelTurns);
           const releaseCurrentSession = () => {
             lifecycle.abortSignal.removeEventListener("abort", releaseCurrentSession);
             resolveCurrentTurn();
@@ -311,6 +317,10 @@ export function createSlackDurableIngress(
           void currentTurn.then(() => {
             if (activeSessionTurns.get(sessionKey) === currentTurn) {
               activeSessionTurns.delete(sessionKey);
+            }
+            channelTurns.delete(currentTurn);
+            if (channelTurns.size === 0 && activeChannelTurns.get(laneKey) === channelTurns) {
+              activeChannelTurns.delete(laneKey);
             }
           });
           releaseSession = releaseCurrentSession;
@@ -349,6 +359,18 @@ export function createSlackDurableIngress(
         },
       };
       try {
+        const event = raw.kind === "events-api" ? asOptionalRecord(raw.body)?.event : undefined;
+        if (asOptionalRecord(event)?.type === "channel_id_changed") {
+          const channelTurns = activeChannelTurns.get(laneKey);
+          if (channelTurns && channelTurns.size > 0) {
+            // A migration owns the channel lane while earlier routed sessions
+            // settle; later channel traffic cannot overtake the config change.
+            migrationAwaitedChannelTurns = true;
+            lifecycle.onAdoptionFinalizing();
+            await Promise.all(channelTurns);
+            lifecycle.abortSignal.throwIfAborted();
+          }
+        }
         if (raw.kind === "relay") {
           if (!relayDispatch) {
             // Transient by design: a claim recovered before the relay source
@@ -370,7 +392,11 @@ export function createSlackDurableIngress(
             },
           });
         }
-        if (routedSession !== undefined && !settled && !downstreamDeferred) {
+        if (
+          (routedSession !== undefined || migrationAwaitedChannelTurns) &&
+          !settled &&
+          !downstreamDeferred
+        ) {
           await routedLifecycle.onAdopted();
         }
       } catch (error) {
