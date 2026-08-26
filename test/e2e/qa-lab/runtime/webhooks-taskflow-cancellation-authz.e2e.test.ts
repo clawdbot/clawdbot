@@ -8,7 +8,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import acpxPlugin from "../../../../extensions/acpx/index.js";
 import webhooksPlugin from "../../../../extensions/webhooks/index.js";
 import {
@@ -180,6 +180,14 @@ async function projectChild(params: {
     task: `Managed projection ${params.runId}`,
   });
   expect(response).toMatchObject({ status: 200, body: { ok: true } });
+}
+
+async function readAcpTraceMethods(tracePath: string): Promise<string[]> {
+  return (await fs.readFile(tracePath, "utf8"))
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => (JSON.parse(line) as { method: string }).method);
 }
 
 describe("webhooks TaskFlow child cancellation authority", () => {
@@ -555,10 +563,7 @@ describe("webhooks TaskFlow child cancellation authority", () => {
             });
             expect(getTaskFlowById(acpReplacementFlowId)).toMatchObject({ status: "queued" });
             expect(getTaskFlowById(acpReplacementFlowId)?.cancelRequestedAt).toBeUndefined();
-            acpxMethodsBeforeRelease = (await fs.readFile(acpxTracePath, "utf8"))
-              .trim()
-              .split("\n")
-              .map((line) => (JSON.parse(line) as { method: string }).method);
+            acpxMethodsBeforeRelease = await readAcpTraceMethods(acpxTracePath);
             expect(acpxMethodsBeforeRelease).toContain("turn/start");
             expect(acpxMethodsBeforeRelease).not.toContain("turn/interrupt");
           } finally {
@@ -568,6 +573,100 @@ describe("webhooks TaskFlow child cancellation authority", () => {
           if (!acpReplacement) {
             throw new Error("missing ACP replacement cancellation response");
           }
+
+          const queuedAcpChild = "agent:main:acp:webhook-queued-successor";
+          const queuedAcpRunId = "run-webhook-acp-queued";
+          replaceSessionEntrySync(
+            {
+              sessionKey: queuedAcpChild,
+              storePath: resolveSessionStorePathCore(config.session?.store, { agentId: "main" }),
+            },
+            {
+              sessionId: "session-webhook-acp-queued-successor",
+              updatedAt: Date.now(),
+              spawnedBy: ROUTE_OWNER,
+              parentSessionKey: ROUTE_OWNER,
+            },
+          );
+          await acpManager.initializeSession({
+            cfg: config,
+            sessionKey: queuedAcpChild,
+            agent: "codex",
+            mode: "persistent",
+            backendId: "acpx",
+          });
+          const queuedTargetEntered = createDeferred<void>();
+          const releaseQueuedTarget = createDeferred<void>();
+          const queuedTargetTurn = acpManager.runTurn({
+            admittedRunContext: createTestAdmittedRunContext(queuedAcpRunId),
+            cfg: config,
+            sessionKey: queuedAcpChild,
+            provenance: "system",
+            text: "Keep the target active while its same-id successor queues.",
+            mode: "prompt",
+            requestId: queuedAcpRunId,
+            onElicitation: async () => {
+              queuedTargetEntered.resolve();
+              await releaseQueuedTarget.promise;
+              return { action: "accept", content: { question: "cancel target" } };
+            },
+          });
+          await queuedTargetEntered.promise;
+          const queuedFlowId = await createFlow(origin, "Cancel target before queued successor");
+          await projectChild({
+            origin,
+            flowId: queuedFlowId,
+            runtime: "acp",
+            childSessionKey: queuedAcpChild,
+            runId: queuedAcpRunId,
+          });
+          const interruptsBeforeQueuedCancel = (await readAcpTraceMethods(acpxTracePath)).filter(
+            (method) => method === "turn/interrupt",
+          ).length;
+          const queuedSuccessorEntered = createDeferred<void>();
+          const releaseQueuedSuccessor = createDeferred<void>();
+          const queuedSuccessorTurn = acpManager.runTurn({
+            admittedRunContext: createTestAdmittedRunContext(queuedAcpRunId),
+            cfg: config,
+            sessionKey: queuedAcpChild,
+            provenance: "system",
+            text: "Complete the same-id successor without inheriting cancellation.",
+            mode: "prompt",
+            requestId: queuedAcpRunId,
+            onElicitation: async () => {
+              queuedSuccessorEntered.resolve();
+              await releaseQueuedSuccessor.promise;
+              return { action: "accept", content: { question: "complete successor" } };
+            },
+          });
+          const queuedCancelPromise = postWebhook(origin, {
+            action: "cancel_flow",
+            flowId: queuedFlowId,
+          });
+          await vi.waitFor(
+            async () => {
+              const interruptCount = (await readAcpTraceMethods(acpxTracePath)).filter(
+                (method) => method === "turn/interrupt",
+              ).length;
+              expect(interruptCount - interruptsBeforeQueuedCancel).toBeGreaterThan(0);
+            },
+            { interval: 10, timeout: 10_000 },
+          );
+          releaseQueuedTarget.resolve();
+          const queuedCancel = await queuedCancelPromise;
+          expect(queuedCancel).toMatchObject({ status: 200, body: { ok: true } });
+          const interruptsAfterTargetCancel = (await readAcpTraceMethods(acpxTracePath)).filter(
+            (method) => method === "turn/interrupt",
+          ).length;
+          expect(interruptsAfterTargetCancel - interruptsBeforeQueuedCancel).toBeGreaterThan(0);
+          await queuedTargetTurn;
+          await queuedSuccessorEntered.promise;
+          const interruptsWhileSuccessorActive = (await readAcpTraceMethods(acpxTracePath)).filter(
+            (method) => method === "turn/interrupt",
+          ).length;
+          expect(interruptsWhileSuccessorActive - interruptsAfterTargetCancel).toBe(0);
+          releaseQueuedSuccessor.resolve();
+          await queuedSuccessorTurn;
 
           console.info(
             "webhooks-taskflow-authority-proof",
@@ -602,6 +701,14 @@ describe("webhooks TaskFlow child cancellation authority", () => {
                   (method) => method === "turn/interrupt",
                 ).length,
                 replacementStatus: "completed",
+              },
+              acpQueuedSuccessor: {
+                transport: "process",
+                httpStatus: queuedCancel.status,
+                targetInterruptRequests: interruptsAfterTargetCancel - interruptsBeforeQueuedCancel,
+                successorInterruptRequests:
+                  interruptsWhileSuccessorActive - interruptsAfterTargetCancel,
+                successorStatus: "completed",
               },
             }),
           );

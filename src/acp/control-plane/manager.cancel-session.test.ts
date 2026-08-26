@@ -100,6 +100,89 @@ describe("AcpSessionManager cancelSession", () => {
     });
   });
 
+  it("keeps a queued same-id successor outside the active-turn cancellation", async () => {
+    await withAcpManagerTaskStateDir(async () => {
+      const runtimeState = createRuntime();
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeState.runtime,
+      });
+      mockParentedAcpSessionEntries({
+        childSessionKey: "agent:codex:acp:child-1",
+        parentSessionKey: "agent:main:main",
+      });
+
+      let runCount = 0;
+      let firstEntered = false;
+      let secondEntered = false;
+      let secondSignal: AbortSignal | undefined;
+      let releaseSecond: (() => void) | undefined;
+      runtimeState.runTurn.mockImplementation(async function* (input: { signal?: AbortSignal }) {
+        runCount += 1;
+        if (runCount === 1) {
+          firstEntered = true;
+          await new Promise<void>((resolve) => {
+            if (input.signal?.aborted) {
+              resolve();
+              return;
+            }
+            input.signal?.addEventListener("abort", () => resolve(), { once: true });
+          });
+          yield { type: "done" as const, stopReason: "cancel" };
+          return;
+        }
+        secondEntered = true;
+        secondSignal = input.signal;
+        await new Promise<void>((resolve) => {
+          releaseSecond = resolve;
+        });
+        yield { type: "done" as const, stopReason: "end_turn" };
+      });
+
+      const manager = new AcpSessionManager();
+      const firstRun = manager.runTurn({
+        provenance: "system",
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:child-1",
+        text: "first task",
+        mode: "prompt",
+        requestId: "run-shared",
+      });
+      await vi.waitFor(() => expect(firstEntered).toBe(true), { interval: 1 });
+      const taskDetail = asOptionalRecord(requireTaskByRunId("run-shared").detail);
+      const instanceId = typeof taskDetail?.instanceId === "string" ? taskDetail.instanceId : "";
+      expect(instanceId).not.toBe("");
+
+      const successorRun = manager.runTurn({
+        provenance: "system",
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:child-1",
+        text: "queued successor",
+        mode: "prompt",
+        requestId: "run-shared",
+      });
+      await Promise.resolve();
+      expect(secondEntered).toBe(false);
+
+      await manager.cancelSession({
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:child-1",
+        reason: "cancel-first",
+        expectedRunId: "run-shared",
+        expectedInstanceId: instanceId,
+        expectedOwnerKey: "agent:main:main",
+      });
+      await firstRun;
+      await vi.waitFor(() => expect(secondEntered).toBe(true), { interval: 1 });
+
+      expect(runtimeState.cancel).toHaveBeenCalledTimes(1);
+      expect(secondSignal?.aborted).toBe(false);
+      releaseSecond?.();
+      await successorRun;
+      expect(runtimeState.cancel).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("does not cancel a replacement active turn", async () => {
     await withAcpManagerTaskStateDir(async () => {
       const runtimeState = createRuntime();
