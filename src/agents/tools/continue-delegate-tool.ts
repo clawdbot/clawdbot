@@ -21,7 +21,7 @@ import {
 } from "../../auto-reply/continuation/targeting.js";
 import type { PendingContinuationDelegate } from "../../auto-reply/continuation/types.js";
 import { getRuntimeConfig } from "../../config/config.js";
-import { formatActiveContinuationTraceparent } from "../../infra/continuation-tracer.js";
+import { formatCurrentSpanContinuationTraceparent } from "../../infra/continuation-tracer.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import {
@@ -481,8 +481,8 @@ export function createContinueDelegateTool(opts: {
         );
       }
       // Trace context is runtime-owned. Ignore hidden/raw `traceparent` input
-      // just like the public schema does, and capture only the active context.
-      const traceparent = formatActiveContinuationTraceparent();
+      // just like the public schema does, and capture only the current turn.
+      const traceparent = formatCurrentSpanContinuationTraceparent();
       const traceContextFields = traceparent ? { traceparent } : {};
 
       const modelOverride = normalizeToolModelOverride(readToolStringParam(params, "model"));

@@ -5,7 +5,7 @@ import {
   resolveContinuationRuntimeConfig,
 } from "../../auto-reply/continuation/config.js";
 import type { ContinueWorkRequest } from "../../auto-reply/continuation/types.js";
-import { formatActiveContinuationTraceparent } from "../../infra/continuation-tracer.js";
+import { formatCurrentSpanContinuationTraceparent } from "../../infra/continuation-tracer.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readToolStringParam, ToolInputError } from "./common.js";
@@ -65,7 +65,7 @@ export function createContinueWorkTool(opts: ContinueWorkToolOpts): AnyAgentTool
         throw new ToolInputError("delaySeconds must be a non-negative number.");
       }
       const delaySeconds = parsedDelaySeconds ?? 0;
-      const traceparent = formatActiveContinuationTraceparent();
+      const traceparent = formatCurrentSpanContinuationTraceparent();
       const traceContextFields = traceparent ? { traceparent } : {};
 
       log.debug(
