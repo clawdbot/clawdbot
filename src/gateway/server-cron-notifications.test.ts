@@ -227,6 +227,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
 
   it("cancels an unread webhook response before releasing its guard", async () => {
     const cleanupOrder: string[] = [];
+    const onDeliveryAttempt = vi.fn();
     const response = new Response(
       new ReadableStream({
         cancel() {
@@ -255,9 +256,11 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
       channel: "last",
       mode: "webhook",
       to: "https://example.invalid/cron",
+      onDeliveryAttempt,
     });
 
     expect(cleanupOrder).toEqual(["cancel", "release"]);
+    expect(onDeliveryAttempt).toHaveBeenCalledExactlyOnceWith(true);
   });
 
   it("releases Gateway admission when webhook response cancellation never settles", async () => {
@@ -303,6 +306,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
   });
 
   it("preserves the primary topic on scheduler-authorized alerts", async () => {
+    const onDeliveryAttempt = vi.fn();
     const job = createWebhookJob({
       mode: "announce",
       channel: "telegram",
@@ -322,10 +326,12 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
       accountId: "bot-a",
       threadId: 42,
       mode: "announce",
+      onDeliveryAttempt,
     });
 
     expect(mocks.sendCronAnnouncePayloadStrict).toHaveBeenCalledWith(
       expect.objectContaining({
+        onDeliveryAttempt,
         target: expect.objectContaining({
           channel: "telegram",
           to: "-1001234567890",
@@ -543,18 +549,33 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
   });
 
   it.each([
-    { description: "honors cancellation", honorsCancellation: true },
-    { description: "ignores cancellation", honorsCancellation: false },
+    { description: "honors cancellation", honorsCancellation: true, recipientReached: false },
+    { description: "ignores cancellation", honorsCancellation: false, recipientReached: false },
+    {
+      description: "ignores cancellation after reaching the recipient",
+      honorsCancellation: false,
+      recipientReached: true,
+    },
   ])(
     "releases failure alert admission when a stalled sender $description",
-    async ({ honorsCancellation }) => {
+    async ({ honorsCancellation, recipientReached }) => {
       vi.useFakeTimers();
       try {
         let deliverySignal: AbortSignal | undefined;
+        const onDeliveryAttempt = vi.fn();
         mocks.sendCronAnnouncePayloadStrict.mockImplementationOnce(
-          ({ abortSignal }: { abortSignal: AbortSignal }) =>
+          ({
+            abortSignal,
+            onDeliveryAttempt: reportDeliveryAttempt,
+          }: {
+            abortSignal: AbortSignal;
+            onDeliveryAttempt?: (reachedRecipient: boolean) => void;
+          }) =>
             new Promise<void>((_resolve, reject) => {
               deliverySignal = abortSignal;
+              if (recipientReached) {
+                reportDeliveryAttempt?.(true);
+              }
               if (honorsCancellation) {
                 abortSignal.addEventListener(
                   "abort",
@@ -580,6 +601,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
           channel: "discord",
           to: "channel:ops",
           mode: "announce",
+          onDeliveryAttempt,
         });
         const deliveryOutcome = delivery.then(
           () => undefined,
@@ -593,12 +615,14 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
         await vi.advanceTimersByTimeAsync(9_999);
         expect(getActiveGatewayRootWorkCount()).toBe(1);
         expect(deliverySignal?.aborted).toBe(false);
+        expect(onDeliveryAttempt).toHaveBeenCalledTimes(recipientReached ? 1 : 0);
 
         await vi.advanceTimersByTimeAsync(1);
         expect(deliverySignal?.aborted).toBe(true);
         await expect(deliveryOutcome).resolves.toEqual(
           expect.objectContaining({ message: "cron: failure alert announcement timed out" }),
         );
+        expect(onDeliveryAttempt).toHaveBeenCalledTimes(recipientReached ? 1 : 0);
         expect(getActiveGatewayRootWorkCount()).toBe(0);
         expect(vi.getTimerCount()).toBe(0);
       } finally {

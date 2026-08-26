@@ -46,6 +46,8 @@ const cliMocks = vi.hoisted(() => ({
 const sandboxMocks = vi.hoisted(() => ({
   runSshSandboxCommand: vi.fn(),
   disposeSshSandboxSession: vi.fn(),
+  prepareSshSandboxExec: vi.fn(),
+  cleanupPreparedExec: vi.fn(),
   remoteRoot: "",
   remoteAgentRoot: "",
 }));
@@ -61,6 +63,7 @@ async function installOpenShellBackendMocks() {
     return {
       ...actual,
       disposeSshSandboxSession: sandboxMocks.disposeSshSandboxSession,
+      prepareSshSandboxExec: sandboxMocks.prepareSshSandboxExec,
       runSshSandboxCommand: sandboxMocks.runSshSandboxCommand,
     };
   });
@@ -89,6 +92,23 @@ function resetOpenShellBackendMocks() {
     configPath: "/tmp/openclaw-openshell-test-ssh-config",
     host: "openshell-test",
   });
+  sandboxMocks.cleanupPreparedExec.mockResolvedValue(undefined);
+  sandboxMocks.prepareSshSandboxExec.mockImplementation(
+    async (params: {
+      session: { command: string; configPath: string; host: string };
+      tty?: boolean;
+    }) => ({
+      argv: [
+        params.session.command,
+        "-F",
+        params.session.configPath,
+        ...(params.tty ? ["-tt", "-o", "RequestTTY=force"] : ["-T", "-o", "RequestTTY=no"]),
+        params.session.host,
+        "'/bin/sh' '/tmp/openclaw-synthetic-staging/run.sh'",
+      ],
+      cleanup: sandboxMocks.cleanupPreparedExec,
+    }),
+  );
   sandboxMocks.runSshSandboxCommand.mockImplementation(
     async (params: { remoteCommand: string; stdin?: Buffer | string; allowFailure?: boolean }) => {
       const remoteCommand = params.remoteCommand
@@ -135,16 +155,13 @@ describe("openshell cli helpers", () => {
     expect(shellEscape(`a'b`)).toBe(`'a'"'"'b'`);
   });
 
-  it("wraps exec commands with env and workdir", () => {
+  it("wraps exec commands with workdir when no environment is supplied", () => {
     const command = buildExecRemoteCommand({
       command: "pwd && printenv TOKEN",
       workdir: "/sandbox/project",
-      env: {
-        TOKEN: "abc 123",
-      },
+      env: {},
     });
-    expect(command).toContain(`'env'`);
-    expect(command).toContain(`'TOKEN=abc 123'`);
+    expect(command).not.toContain(`'env'`);
     expect(command).toContain(`'cd '"'"'/sandbox/project'"'"' && pwd && printenv TOKEN'`);
   });
 
@@ -711,6 +728,86 @@ describe("openshell backend manager", () => {
       }),
     ).rejects.toThrow(/unresolved placeholder token <name>/);
     expect(cliMocks.runOpenShellCli).not.toHaveBeenCalled();
+  });
+
+  it.each(["completed", "failed"] as const)(
+    "stages exec environment outside SSH argv and finalizes %s before session disposal",
+    async (status) => {
+      const sentinel = "synthetic-openshell-env-value";
+      cliMocks.runOpenShellCli.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
+      sandboxMocks.runSshSandboxCommand.mockResolvedValueOnce({
+        stdout: Buffer.from("1\n"),
+        stderr: Buffer.alloc(0),
+        code: 0,
+      });
+      const backend = await createOpenShellBackendFixture({
+        workspaceDir: "/tmp/openclaw-synthetic-workspace",
+        mode: "remote",
+      });
+
+      const execSpec = await backend.buildExecSpec({
+        command: "printenv SYNTHETIC_VALUE",
+        workdir: "/sandbox",
+        env: { SYNTHETIC_VALUE: sentinel },
+        usePty: true,
+      });
+
+      expect(sandboxMocks.prepareSshSandboxExec).toHaveBeenCalledWith({
+        session: expect.objectContaining({ host: "openshell-test" }),
+        remoteCommand: expect.stringContaining("printenv SYNTHETIC_VALUE"),
+        env: { SYNTHETIC_VALUE: sentinel },
+        tty: true,
+      });
+      expect(execSpec.argv.join(" ")).not.toContain(sentinel);
+      expect(execSpec.argv).toContain("-tt");
+      expect(execSpec.argv.join(" ")).not.toContain("SetEnv");
+      expect(execSpec.stdinMode).toBe("pipe-open");
+
+      sandboxMocks.disposeSshSandboxSession.mockClear();
+      await backend.finalizeExec?.({
+        status,
+        exitCode: status === "completed" ? 0 : 1,
+        timedOut: false,
+        token: execSpec.finalizeToken,
+      });
+
+      expect(sandboxMocks.cleanupPreparedExec).toHaveBeenCalledOnce();
+      expect(sandboxMocks.disposeSshSandboxSession).toHaveBeenCalledWith(
+        expect.objectContaining({ host: "openshell-test" }),
+      );
+      expect(sandboxMocks.cleanupPreparedExec.mock.invocationCallOrder[0]).toBeLessThan(
+        expectDefined(
+          sandboxMocks.disposeSshSandboxSession.mock.invocationCallOrder[0],
+          "OpenShell SSH session disposal invocation",
+        ),
+      );
+    },
+  );
+
+  it("disposes the OpenShell SSH session when secure exec staging fails", async () => {
+    cliMocks.runOpenShellCli.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
+    sandboxMocks.runSshSandboxCommand.mockResolvedValueOnce({
+      stdout: Buffer.from("1\n"),
+      stderr: Buffer.alloc(0),
+      code: 0,
+    });
+    sandboxMocks.prepareSshSandboxExec.mockRejectedValueOnce(
+      new Error("synthetic staging failure"),
+    );
+    const backend = await createOpenShellBackendFixture({
+      workspaceDir: "/tmp/openclaw-synthetic-workspace",
+      mode: "remote",
+    });
+
+    await expect(
+      backend.buildExecSpec({
+        command: "true",
+        env: { SYNTHETIC_VALUE: "synthetic-openshell-env-value" },
+        usePty: false,
+      }),
+    ).rejects.toThrow("synthetic staging failure");
+
+    expect(sandboxMocks.disposeSshSandboxSession).toHaveBeenCalledTimes(2);
   });
 
   it("preserves a local sandbox skills shadow when mirror sync crosses filesystems", async () => {

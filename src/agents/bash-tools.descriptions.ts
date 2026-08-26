@@ -34,7 +34,7 @@ export function describeExecTool(params?: {
         ];
   const base = [
     ...continuation,
-    params?.hasCronTool ? "No sleep/delay loops for reminders/follow-ups; use cron." : undefined,
+    params?.hasCronTool ? "No sleep loops for reminders/follow-ups; use automations." : undefined,
     "TTY CLI/UI/coding agent: pty=true.",
   ]
     .filter(Boolean)
@@ -83,7 +83,7 @@ export function describeProcessTool(params?: { hasCronTool?: boolean }): string 
     "Control existing exec: list, poll, log, write, send-keys, submit, paste, kill.",
     "poll/log: status, output, quiet success, completion without auto-wake, input hints. Others: input/intervention.",
     params?.hasCronTool
-      ? "No polling as timer/reminder; scheduled follow-up uses cron."
+      ? "No polling as timer/reminder; scheduled follow-up uses automations."
       : undefined,
   ]
     .filter(Boolean)

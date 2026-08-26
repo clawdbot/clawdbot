@@ -98,8 +98,7 @@ function seedChatModelCatalogFromStore(host: ChatPageHost, client: GatewayBrowse
   if (!Array.isArray(cached?.models)) {
     return;
   }
-  // A warm snapshot turns mount-time loading into refreshing; the in-flight
-  // request still owns the authoritative apply.
+  // A warm snapshot stays interactive; the in-flight request owns the authoritative apply.
   host.chatModelCatalog = cached.models;
   host.chatModelCatalogError = null;
 }
@@ -130,8 +129,8 @@ export async function refreshChatMetadata(
   const client = host.client;
   const agentId = resolveChatAgentId(host);
   const request = { host, client, agentId, version: requestVersion };
-  host.chatModelsLoading = true;
   seedChatModelCatalogFromStore(host, client);
+  host.chatModelsLoading = host.chatModelCatalog.length === 0;
   try {
     const result = await loadChatMetadata(client, agentId);
     if (!ownsChatMetadataRequest(request)) {
@@ -186,7 +185,7 @@ export async function refreshChatModelCatalogOnDemand(host: ChatPageHost): Promi
     host.connected &&
     host.connectionEpoch === connectionEpoch &&
     resolveChatAgentId(host) === agentId;
-  host.chatModelsLoading = true;
+  host.chatModelsLoading = host.chatModelCatalog.length === 0;
   host.chatModelCatalogError = null;
   host.requestUpdate?.();
   try {
@@ -334,8 +333,8 @@ export function refreshPageChat(host: ChatPageHost, opts?: ChatRefreshOptions) {
     ? ++host.chatMetadataRequestVersion
     : null;
   if (ownsStartupMetadata && host.client) {
-    host.chatModelsLoading = true;
     seedChatModelCatalogFromStore(host, host.client);
+    host.chatModelsLoading = host.chatModelCatalog.length === 0;
   }
 
   const refresh = refreshChat(host, {

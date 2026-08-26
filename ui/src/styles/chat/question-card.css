@@ -9,7 +9,6 @@ openclaw-chat-question-panel {
 .chat-question-panel {
   display: grid;
   gap: 12px;
-  box-sizing: border-box;
   max-height: min(58vh, 36rem);
   overflow-y: auto;
   padding: 14px;
@@ -280,7 +279,6 @@ openclaw-chat-question-panel {
 }
 
 .chat-question-panel__other {
-  box-sizing: border-box;
   width: 100%;
   min-width: 0;
   min-height: 24px;

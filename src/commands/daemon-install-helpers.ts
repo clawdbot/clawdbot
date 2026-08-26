@@ -804,7 +804,7 @@ export async function buildGatewayInstallPlan(params: {
   runtime: GatewayDaemonRuntime;
   existingEnvironment?: Record<string, string | undefined>;
   devMode?: boolean;
-  nodePath?: string;
+  runtimePath?: string;
   wrapperPath?: string;
   platform?: NodeJS.Platform;
   warn?: DaemonInstallWarnFn;
@@ -817,11 +817,11 @@ export async function buildGatewayInstallPlan(params: {
   >;
 }): Promise<GatewayInstallPlan> {
   const platform = params.platform ?? process.platform;
-  const { devMode, nodePath } = await resolveDaemonInstallRuntimeInputs({
+  const { devMode, runtimePath } = await resolveDaemonInstallRuntimeInputs({
     env: params.env,
     runtime: params.runtime,
     devMode: params.devMode,
-    nodePath: params.nodePath,
+    runtimePath: params.runtimePath,
   });
   const wrapperInput = params.wrapperPath ?? params.env[OPENCLAW_WRAPPER_ENV_KEY];
   const wrapperPointsAtWindowsTaskScript =
@@ -844,7 +844,8 @@ export async function buildGatewayInstallPlan(params: {
   const { programArguments, workingDirectory } = await resolveGatewayProgramArguments({
     port: params.port,
     dev: devMode,
-    nodePath,
+    runtime: params.runtime,
+    runtimePath,
     wrapperPath,
   });
   await emitDaemonInstallRuntimeWarning({
@@ -864,7 +865,7 @@ export async function buildGatewayInstallPlan(params: {
         : undefined,
     platform,
     extraPathDirs: resolveDaemonServicePathDirs({
-      nodePath,
+      runtimePath,
       env: serviceInputEnv,
       platform,
     }),

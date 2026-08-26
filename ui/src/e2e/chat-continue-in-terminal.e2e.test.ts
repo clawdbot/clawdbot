@@ -172,9 +172,13 @@ suite.define(() => {
           sessionKey,
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        await page.getByText("Mobile session menu proof.", { exact: true }).waitFor();
+        const activePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
+        await activePane
+          .getByRole("paragraph")
+          .filter({ hasText: /^Mobile session menu proof\.$/ })
+          .waitFor();
 
-        const menuTrigger = page.getByRole("button", {
+        const menuTrigger = activePane.getByRole("button", {
           name: "Actions for Terminal continuation",
         });
         await menuTrigger.press("Enter");
