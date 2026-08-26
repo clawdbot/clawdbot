@@ -585,6 +585,7 @@ export function registerBrowserAgentSnapshotRoutes(
             format: type,
             quality: type === "jpeg" ? 85 : undefined,
             timeoutMs,
+            headless: ctx.state().profiles.get(profileCtx.profile.name)?.running?.headless,
           });
         }
 

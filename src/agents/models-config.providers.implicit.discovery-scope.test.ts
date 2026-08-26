@@ -32,7 +32,16 @@ vi.mock("../plugins/provider-discovery.js", () => ({
   }: {
     provider: ProviderPlugin;
     result?: { provider?: unknown; providers?: Record<string, unknown> } | null;
-  }) => result?.providers ?? (result?.provider ? { [provider.id]: result.provider } : {}),
+  }) =>
+    result?.providers ??
+    (result?.provider
+      ? Object.fromEntries(
+          [provider.id, ...(provider.aliases ?? []), ...(provider.hookAliases ?? [])].map((id) => [
+            id.trim().toLowerCase(),
+            result.provider,
+          ]),
+        )
+      : {}),
   prepareProviderStaticCatalog: mocks.prepareProviderStaticCatalog,
 }));
 
@@ -164,6 +173,27 @@ describe("resolveImplicitProviders startup discovery scope", () => {
     expect(prepared.providers).toEqual([openai, anthropic]);
   });
 
+  it("prepares a sole family hook for a selected catalog identity", async () => {
+    const byteplus = { ...createStaticOnlyProvider("byteplus"), pluginId: "byteplus" };
+    mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([byteplus]);
+
+    await prepareImplicitProviderStaticCatalog({
+      config: {},
+      env: {} as NodeJS.ProcessEnv,
+      pluginMetadataSnapshot: {
+        index: { plugins: [] } as never,
+        manifestRegistry: { plugins: [], diagnostics: [] },
+        owners: metadataOwners({
+          modelCatalogProviders: new Map([["byteplus-plan", ["byteplus"]]]),
+        }),
+      },
+      providerDiscoveryProviderIds: ["byteplus-plan"],
+      staticCatalogProviderIds: ["byteplus-plan"],
+    });
+
+    expect(mocks.prepareProviderStaticCatalog).toHaveBeenCalledWith({ providers: [byteplus] });
+  });
+
   it("passes startup provider scopes as plugin owner filters", async () => {
     await resolveImplicitProviders({
       agentDir: "/tmp/openclaw-agent",
@@ -190,6 +220,139 @@ describe("resolveImplicitProviders startup discovery scope", () => {
       timeoutMs?: number;
     };
     expect(catalogOptions?.timeoutMs).toBe(1234);
+  });
+
+  it("treats an explicit empty provider scope as no discovery", async () => {
+    const providers = await resolveImplicitProviders({
+      agentDir: "/tmp/openclaw-agent",
+      config: {},
+      env: {} as NodeJS.ProcessEnv,
+      explicitProviders: {},
+      providerDiscoveryProviderIds: [],
+    });
+
+    expect(mocks.resolveRuntimePluginDiscoveryProviders).not.toHaveBeenCalled();
+    expect(mocks.runProviderCatalog).not.toHaveBeenCalled();
+    expect(mocks.runProviderStaticCatalog).not.toHaveBeenCalled();
+    expect(providers).toEqual({});
+  });
+
+  it("runs only the selected catalog hook within a shared plugin owner", async () => {
+    const alpha = { ...createProvider("alpha"), pluginId: "shared" };
+    const beta = { ...createProvider("beta"), pluginId: "shared" };
+    mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([alpha, beta]);
+    mocks.runProviderCatalog.mockImplementation(
+      async ({ provider }: { provider: ProviderPlugin }) => ({
+        providers: {
+          [provider.id]: {
+            baseUrl: `https://${provider.id}.example.test`,
+            api: "openai-completions",
+            models: [],
+          },
+        },
+      }),
+    );
+
+    const providers = await resolveImplicitProviders({
+      agentDir: "/tmp/openclaw-agent",
+      config: {},
+      env: {} as NodeJS.ProcessEnv,
+      explicitProviders: {},
+      pluginMetadataSnapshot: {
+        index: { plugins: [] } as never,
+        manifestRegistry: { plugins: [], diagnostics: [] },
+        owners: metadataOwners({
+          providers: new Map([
+            ["alpha", ["shared"]],
+            ["beta", ["shared"]],
+          ]),
+        }),
+      },
+      providerDiscoveryProviderIds: ["alpha"],
+    });
+
+    expect(mocks.runProviderCatalog).toHaveBeenCalledTimes(1);
+    expect(mocks.runProviderCatalog).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: alpha, providerIds: ["alpha"] }),
+    );
+    expect(Object.keys(providers ?? {})).toEqual(["alpha"]);
+  });
+
+  it("filters a shared catalog hook result to its selected identity", async () => {
+    const family = {
+      ...createProvider("family"),
+      pluginId: "family",
+      hookAliases: ["family-plan"],
+    };
+    mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([family]);
+    mocks.runProviderCatalog.mockResolvedValue({
+      providers: {
+        family: {
+          baseUrl: "https://family.example.test",
+          api: "openai-completions",
+          models: [],
+        },
+        "family-plan": {
+          baseUrl: "https://family-plan.example.test",
+          api: "openai-completions",
+          models: [],
+        },
+      },
+    });
+
+    const providers = await resolveImplicitProviders({
+      agentDir: "/tmp/openclaw-agent",
+      config: {},
+      env: {} as NodeJS.ProcessEnv,
+      explicitProviders: {},
+      pluginMetadataSnapshot: {
+        index: { plugins: [] } as never,
+        manifestRegistry: { plugins: [], diagnostics: [] },
+        owners: metadataOwners({
+          modelCatalogProviders: new Map([
+            ["family", ["family"]],
+            ["family-plan", ["family"]],
+          ]),
+        }),
+      },
+      providerDiscoveryProviderIds: ["family-plan"],
+    });
+
+    expect(mocks.runProviderCatalog).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: family, providerIds: ["family-plan"] }),
+    );
+    expect(Object.keys(providers ?? {})).toEqual(["family-plan"]);
+  });
+
+  it("retains a single-provider catalog under its selected registered alias", async () => {
+    const canonical = { ...createProvider("canonical"), pluginId: "canonical" };
+    canonical.aliases = ["alias"];
+    mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([canonical]);
+    mocks.runProviderCatalog.mockResolvedValue({
+      provider: {
+        baseUrl: "https://canonical.example.test",
+        api: "openai-completions",
+        models: [],
+      },
+    });
+
+    const providers = await resolveImplicitProviders({
+      agentDir: "/tmp/openclaw-agent",
+      config: {},
+      env: {} as NodeJS.ProcessEnv,
+      explicitProviders: {},
+      pluginMetadataSnapshot: {
+        index: { plugins: [] } as never,
+        manifestRegistry: { plugins: [], diagnostics: [] },
+        owners: metadataOwners({ providers: new Map([["alias", ["canonical"]]]) }),
+      },
+      providerDiscoveryProviderIds: ["alias"],
+    });
+
+    expect(mocks.runProviderCatalog).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: canonical, providerIds: ["alias"] }),
+    );
+    expect(Object.keys(providers ?? {})).toEqual(["alias"]);
   });
 
   it.each([
@@ -374,6 +537,11 @@ describe("resolveImplicitProviders startup discovery scope", () => {
                 openai: {
                   baseUrl: "https://api.openai.com/v1",
                   api: "openai-responses",
+                  models: [],
+                },
+                unrelated: {
+                  baseUrl: "https://unrelated.example.test",
+                  api: "openai-completions",
                   models: [],
                 },
               },

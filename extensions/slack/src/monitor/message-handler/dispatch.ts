@@ -164,9 +164,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     payload: ReplyPayload,
     info: { kind: ReplyDispatchKind },
   ): Promise<{ visibleReplySent: false } | void> => {
-    if (payload.isReasoning === true) {
-      return { visibleReplySent: false };
-    }
     if (info.kind === "final" && slackStreaming.mode === "progress" && progress.isProgressMode) {
       if (progress.useNativeProgressStreaming) {
         await progress.deliverNativeFinal(payload, info.kind);

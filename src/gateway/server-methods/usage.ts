@@ -4,6 +4,10 @@ import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
+  GATEWAY_CLIENT_CAPS,
+  hasGatewayClientCap,
+} from "../../../packages/gateway-protocol/src/client-info.js";
+import {
   ErrorCodes,
   errorShape,
   validateSessionsUsageParams,
@@ -1138,9 +1142,21 @@ export const testApi = {
 export type { SessionUsageEntry, SessionsUsageAggregates, SessionsUsageResult };
 
 export const usageHandlers: GatewayRequestHandlers = {
-  "usage.status": async ({ respond, context }) => {
+  "usage.status": async ({ respond, context, client }) => {
+    // Only clients with bounded retry machinery may receive an incomplete cold result.
+    // In-process dispatch reuses the originating request's client, capabilities
+    // included, so a plugin proxying this method inside a capable UI request
+    // would inherit the marker without any way to converge it. Such a caller
+    // must pass a capless client, the way board bindings force `client: null`.
+    const coldRead = hasGatewayClientCap(
+      client?.connect?.caps,
+      GATEWAY_CLIENT_CAPS.USAGE_REFRESHING,
+    )
+      ? ("refresh-marker" as const)
+      : undefined;
     const summary = await loadUsageStatusStaleWhileRevalidate({
       config: context.getRuntimeConfig(),
+      coldRead,
     });
     respond(true, summary, undefined);
   },

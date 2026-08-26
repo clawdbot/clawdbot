@@ -1,3 +1,4 @@
+import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 /** Removes retired provider profiles and repairs legacy OAuth profile ids. */
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
@@ -29,6 +30,14 @@ function sanitizePromptLabel(label: string | undefined): string | undefined {
   return sanitized || undefined;
 }
 
+function configSelectsProvider(cfg: OpenClawConfig, providerIds: readonly string[]): boolean {
+  const selectedProviders = new Set(providerIds);
+  return collectConfiguredModelRefs(cfg).some(({ value }) => {
+    const separator = value.indexOf("/");
+    return separator > 0 && selectedProviders.has(value.slice(0, separator));
+  });
+}
+
 /**
  * Applies provider-declared OAuth profile id repairs to config after prompting.
  *
@@ -50,9 +59,15 @@ export async function maybeRepairLegacyOAuthProfileIds(
   const repairCandidates = listAuthProfileRepairCandidates(nextCfg, process.env);
   for (const provider of providers) {
     for (const profileId of provider.deprecatedProfileIds ?? []) {
-      const profileStores = repairCandidates.filter((candidate) =>
-        Boolean(loadPersistedAuthProfileStore(candidate.agentDir)?.profiles[profileId]),
-      );
+      const storedProfileProviders = new Set<string>();
+      const profileStores = repairCandidates.filter((candidate) => {
+        const profile = loadPersistedAuthProfileStore(candidate.agentDir)?.profiles[profileId];
+        if (!profile) {
+          return false;
+        }
+        storedProfileProviders.add(profile.provider);
+        return true;
+      });
       if (profileStores.length === 0 && !configReferencesAuthProfile(nextCfg, profileId)) {
         continue;
       }
@@ -69,13 +84,20 @@ export async function maybeRepairLegacyOAuthProfileIds(
       if (!apply) {
         continue;
       }
-      // Preserve provider-owned runtime selection while the retired profile still
-      // identifies it. Removing the profile first loses that migration signal.
-      nextCfg = applyProviderConfigDefaultsForConfig({
-        provider: provider.id,
-        config: nextCfg,
-        env: process.env,
-      });
+      const configuredProfileProvider = nextCfg.auth?.profiles?.[profileId]?.provider;
+      const selectedProviderIds = new Set([provider.id, ...storedProfileProviders]);
+      if (configuredProfileProvider) {
+        selectedProviderIds.add(configuredProfileProvider);
+      }
+      if (configSelectsProvider(nextCfg, [...selectedProviderIds])) {
+        // Preserve a selected provider's runtime routing before removing the
+        // retired profile that still identifies its native CLI migration.
+        nextCfg = applyProviderConfigDefaultsForConfig({
+          provider: provider.id,
+          config: nextCfg,
+          env: process.env,
+        });
+      }
       nextCfg = removeAuthProfileConfig(nextCfg, profileId);
       for (const candidate of profileStores) {
         retiredProfileCleanupPlans.push({

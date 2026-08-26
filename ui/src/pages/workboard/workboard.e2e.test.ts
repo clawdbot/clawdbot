@@ -26,6 +26,7 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not installed at ${executablePath}. Run \`pnpm --dir ui exec playwright install chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
 });
 
+const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/workboard");
 const viewport = { height: 1000, width: 2400 };
 const baseTime = Date.parse("2026-06-01T18:00:00.000Z");
@@ -299,20 +300,18 @@ async function newRecordedPage(
   label: string,
   options: { hasTouch?: boolean } = {},
 ): Promise<RecordedPage> {
-  await mkdir(artifactDir, { recursive: true });
   const rawVideoDir = path.join(artifactDir, `${label}-raw`);
-  await rm(rawVideoDir, { force: true, recursive: true });
-  await mkdir(rawVideoDir, { recursive: true });
+  if (captureUiProofEnabled) {
+    await rm(rawVideoDir, { force: true, recursive: true });
+    await mkdir(rawVideoDir, { recursive: true });
+  }
   let context: BrowserContext | undefined;
   let page: Page | undefined;
   try {
     context = await suite.browser.newContext({
       hasTouch: options.hasTouch,
       locale: "en-US",
-      recordVideo: {
-        dir: rawVideoDir,
-        size: viewport,
-      },
+      recordVideo: captureUiProofEnabled ? { dir: rawVideoDir, size: viewport } : undefined,
       serviceWorkers: "block",
       viewport,
     });
@@ -322,7 +321,9 @@ async function newRecordedPage(
   } catch (error) {
     await page?.close().catch(() => {});
     await context?.close().catch(() => {});
-    await rm(rawVideoDir, { force: true, recursive: true });
+    if (captureUiProofEnabled) {
+      await rm(rawVideoDir, { force: true, recursive: true });
+    }
     throw error;
   }
 }
@@ -332,6 +333,9 @@ async function captureScreenshot(
   artifacts: ProofArtifacts,
   name: string,
 ): Promise<void> {
+  if (!captureUiProofEnabled) {
+    return;
+  }
   const screenshotPath = path.join(artifactDir, `${name}.png`);
   await page.screenshot({ fullPage: true, path: screenshotPath });
   artifacts.screenshots.push(screenshotPath);
@@ -353,13 +357,17 @@ async function closeRecordedPage(
     await copyFile(rawVideoPath, videoPath);
     artifacts.videos.push(videoPath);
   } finally {
-    await rm(recorded.rawVideoDir, { force: true, recursive: true });
+    if (captureUiProofEnabled) {
+      await rm(recorded.rawVideoDir, { force: true, recursive: true });
+    }
   }
 }
 
 suite.define(() => {
   it("persists Workboard create, edit, running move, lifecycle sync, reload, and read-only state", async () => {
-    await rm(artifactDir, { force: true, recursive: true });
+    if (captureUiProofEnabled) {
+      await rm(artifactDir, { force: true, recursive: true });
+    }
     const artifacts: ProofArtifacts = { screenshots: [], videos: [] };
     const createdCard = card({
       id: "card-1",
@@ -743,11 +751,13 @@ suite.define(() => {
       await closeRecordedPage(readOnly, artifacts, "workboard-read-only");
     }
 
-    await writeFile(
-      path.join(artifactDir, "manifest.json"),
-      `${JSON.stringify(artifacts, null, 2)}\n`,
-      "utf-8",
-    );
+    if (captureUiProofEnabled) {
+      await writeFile(
+        path.join(artifactDir, "manifest.json"),
+        `${JSON.stringify(artifacts, null, 2)}\n`,
+        "utf-8",
+      );
+    }
   });
 
   it("keeps card titles visible when a column overflows its height", async () => {

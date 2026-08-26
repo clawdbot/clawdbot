@@ -126,7 +126,12 @@ Doctor removes the retired `memory.backend`, `memory.qmd`, and
 `memory.search.qmd` settings, including agent-scoped `memory.search.qmd`
 forms. It preserves QMD paths and extra collections as the corresponding
 `memory.search.extraPaths` entries, including `{ path, pattern }` globs. When
-Memory Core finds a retired per-agent QMD workspace under
+QMD session indexing was enabled, Doctor also enables builtin session indexing
+and adds `sessions` to `memory.search.sources` without enabling broader
+cross-conversation recall. Retained session-reset transcripts remain in the
+agent's sessions directory and are indexed from those original artifacts.
+
+When Memory Core finds a retired per-agent QMD workspace under
 `~/.openclaw/agents/<agentId>/qmd/`, Doctor also offers to remove its derived
 indexes, model downloads, collection metadata, and session exports.
 

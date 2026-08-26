@@ -1924,7 +1924,10 @@ describe("task-registry", () => {
     });
   });
 
-  it("rejects parent flow links for terminal flows", async () => {
+  it.each([
+    { status: "cancelled" as const, endedAt: undefined },
+    { status: "blocked" as const, endedAt: 42 },
+  ])("rejects parent flow links for $status flows", async ({ status, endedAt }) => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest({ persist: false });
       resetTaskFlowRegistryForTests({ persist: false });
@@ -1934,7 +1937,8 @@ describe("task-registry", () => {
         ownerKey: "agent:main:main",
         controllerId: "tests/task-registry",
         goal: "Completed flow",
-        status: "cancelled",
+        status,
+        endedAt,
       });
 
       expect(() =>
@@ -1945,13 +1949,18 @@ describe("task-registry", () => {
           runId: "terminal-flow-link",
           task: "Should be denied",
         }),
-      ).toThrow("Parent flow is already cancelled.");
+      ).toThrow(`Parent flow is already ${status}.`);
     });
   });
 
   it("queues delegated ACP completion to the requester session when a delivery origin exists", async () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest();
+      const resolveTaskControlUiSessionUrl = vi.fn(() => "https://dashboard.example/chat/task");
+      setTaskRegistryDeliveryRuntimeForTests({
+        sendMessage: hoisted.sendMessageMock,
+        resolveTaskControlUiSessionUrl,
+      });
       hoisted.sendMessageMock.mockResolvedValue({
         channel: "notifychat",
         to: "notifychat:123",
@@ -1987,6 +1996,8 @@ describe("task-registry", () => {
       expect(peekSystemEvents("agent:main:main")).toEqual([
         expect.stringContaining("Background task ready for review: ACP background task"),
       ]);
+      expect(peekSystemEvents("agent:main:main")[0]).not.toContain("Inspect:");
+      expect(resolveTaskControlUiSessionUrl).not.toHaveBeenCalled();
     });
   });
 
@@ -2031,21 +2042,43 @@ describe("task-registry", () => {
     );
   });
 
-  it("delivers non-delegated ACP completion to the requester channel when a delivery origin exists", async () => {
+  it.each([
+    {
+      name: "with an inspection link when the child session is linkable",
+      childSessionKey: "agent:worker:acp:child",
+      inspectUrl: "https://dashboard.example/chat/agent%3Aworker%3Aacp%3Achild",
+    },
+    {
+      name: "without an inspection link when no public Control UI is configured",
+      childSessionKey: "agent:worker:acp:child",
+      inspectUrl: undefined,
+    },
+    {
+      name: "without an inspection link when the task has no child session",
+      childSessionKey: undefined,
+      inspectUrl: "https://dashboard.example/chat/unused",
+    },
+  ])("delivers ACP completion directly to a requester thread $name", async (testCase) => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest();
+      const resolveTaskControlUiSessionUrl = vi.fn(() => testCase.inspectUrl);
+      setTaskRegistryDeliveryRuntimeForTests({
+        sendMessage: hoisted.sendMessageMock,
+        resolveTaskControlUiSessionUrl,
+      });
       hoisted.sendMessageMock.mockResolvedValue({
-        channel: "notifychat",
-        to: "notifychat:123",
+        channel: "discord",
+        to: "channel:123",
         via: "direct",
       });
 
       createTaskFixture("acp", {
         requesterOrigin: {
-          channel: "notifychat",
-          to: "notifychat:123",
+          channel: "discord",
+          to: "channel:123",
           threadId: "321",
         },
+        childSessionKey: testCase.childSessionKey,
         runId: "run-direct-delivery",
         task: "Investigate issue",
         deliveryStatus: "pending",
@@ -2070,11 +2103,28 @@ describe("task-registry", () => {
       await waitForAssertion(() => expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(1));
       const message = sentMessageCall();
       expectRecordFields(message, {
-        channel: "notifychat",
-        to: "notifychat:123",
+        channel: "discord",
+        to: "channel:123",
         threadId: "321",
       });
-      expect(String(message.content)).toContain("Background task done: ACP background task");
+      expect(String(message.content)).toContain(
+        testCase.childSessionKey
+          ? "Background task ready for review: ACP background task"
+          : "Background task done: ACP background task",
+      );
+      if (testCase.childSessionKey) {
+        expect(resolveTaskControlUiSessionUrl).toHaveBeenCalledWith({
+          sessionKey: testCase.childSessionKey,
+          fallbackAgentId: "worker",
+        });
+      } else {
+        expect(resolveTaskControlUiSessionUrl).not.toHaveBeenCalled();
+      }
+      if (testCase.childSessionKey && testCase.inspectUrl) {
+        expect(String(message.content).endsWith(`\nInspect: ${testCase.inspectUrl}`)).toBe(true);
+      } else {
+        expect(String(message.content)).not.toContain("Inspect:");
+      }
       expectRecordFields(message.mirror, {
         sessionKey: "agent:main:main",
       });
@@ -3561,6 +3611,35 @@ describe("task-registry", () => {
         status: "running",
       });
     });
+  });
+
+  it("prunes expired ended TaskFlows during scheduled maintenance", async () => {
+    await withTaskRegistryTempDir(
+      async () => {
+        vi.useFakeTimers();
+        const endedAt = Date.now() - 8 * 24 * 60 * 60_000;
+        const flow = createManagedTaskFlow({
+          ownerKey: "agent:main:main",
+          controllerId: "tests/scheduled-task-flow-maintenance",
+          goal: "Completed without a usable result",
+          status: "blocked",
+          createdAt: endedAt,
+          updatedAt: endedAt,
+          endedAt,
+        });
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+
+        try {
+          startTaskRegistryMaintenance();
+          await vi.advanceTimersByTimeAsync(5_000);
+          await waitForFast(() => expect(getTaskFlowById(flow.flowId)).toBeUndefined());
+        } finally {
+          stopTaskRegistryMaintenance();
+        }
+      },
+      { durableStore: true },
+    );
   });
 
   it("keeps scheduled maintenance root-admitted until session cleanup inspection settles", async () => {

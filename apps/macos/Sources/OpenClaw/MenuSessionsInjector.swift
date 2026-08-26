@@ -29,6 +29,11 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
     private var cachedUsageSummary: GatewayUsageSummary?
     private var usageCacheUpdatedAt: Date?
     private let usageRefreshIntervalSeconds: TimeInterval = 30
+    private var usageRetryTask: Task<Void, Never>?
+    private var usageRetryAttempts = 0
+    private var usageLoadGeneration = 0
+    private var usageRetryIntervalSeconds: TimeInterval = 5
+    private let usageRetryLimit = 3
     private var cachedCostSummary: GatewayCostUsageSummary?
     private var cachedCostErrorText: String?
     private var costCacheUpdatedAt: Date?
@@ -36,6 +41,9 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
     private let nodesStore = NodesStore.shared
     #if DEBUG
     private var testControlChannelConnected: Bool?
+    private var testUsageLoad: (() async throws -> GatewayUsageSummary)?
+    private var testUsageLoadDidFinish: (@MainActor () -> Void)?
+    private var testUsageRetryDidExhaust: (@MainActor () -> Void)?
     #endif
 
     func install(into statusItem: NSStatusItem) {
@@ -58,6 +66,9 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
 
     func menuWillOpen(_ menu: NSMenu) {
         self.originalDelegate?.menuWillOpen?(menu)
+        // Repainting tracked rows can re-enter this callback without closing the menu.
+        // Keep refresh and retry state scoped to one closed-to-open transition.
+        guard !self.isMenuOpen else { return }
         self.isMenuOpen = true
         self.menuOpenWidth = self.currentMenuWidth(for: menu)
 
@@ -95,6 +106,10 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         self.originalDelegate?.menuDidClose?(menu)
         self.isMenuOpen = false
         self.menuOpenWidth = nil
+        self.usageRetryTask?.cancel()
+        self.usageRetryTask = nil
+        self.usageRetryAttempts = 0
+        self.usageLoadGeneration += 1
         self.cancelPreviewTasks()
     }
 
@@ -420,7 +435,8 @@ extension MenuSessionsInjector {
 
     private func insertUsageSection(into menu: NSMenu, at cursor: Int, width: CGFloat) -> Int {
         let rows = self.usageRows
-        if rows.isEmpty {
+        let stalled = self.isUsageStalled
+        if rows.isEmpty, !stalled {
             return cursor
         }
 
@@ -443,6 +459,19 @@ extension MenuSessionsInjector {
             highlighted: false)
         menu.insertItem(headerItem, at: cursor)
         cursor += 1
+
+        if rows.isEmpty {
+            let retryMessage = "Usage did not finish loading. Close and reopen this menu to retry."
+            let retryItem = self.makeMessageItem(
+                text: retryMessage,
+                symbolName: "exclamationmark.triangle",
+                width: width)
+            retryItem.title = retryMessage
+            menu.insertItem(
+                retryItem,
+                at: cursor)
+            return cursor + 1
+        }
 
         if let selectedProvider = self.selectedUsageProviderId,
            let primary = rows.first(where: { $0.providerId.lowercased() == selectedProvider }),
@@ -514,6 +543,17 @@ extension MenuSessionsInjector {
     private var usageRows: [UsageRow] {
         guard let summary = self.cachedUsageSummary else { return [] }
         return summary.primaryRows()
+    }
+
+    /// Retry budget spent with the cold marker still set. The empty row list is
+    /// the Gateway saying "not loaded", so the menu must not hide the section
+    /// the way it does for an operator who genuinely has no usage providers.
+    /// Requires a live control channel: while disconnected the honest answer is
+    /// the disconnected state, not a usage-specific warning.
+    private var isUsageStalled: Bool {
+        self.isControlChannelConnected
+            && self.cachedUsageSummary?.refreshing == true
+            && self.usageRetryAttempts >= self.usageRetryLimit
     }
 
     private func buildUsageOverflowMenu(rows: [UsageRow], width: CGFloat) -> NSMenu {
@@ -776,17 +816,78 @@ extension MenuSessionsInjector {
             return
         }
 
+        self.usageLoadGeneration += 1
+        let generation = self.usageLoadGeneration
+
         guard self.isControlChannelConnected else {
             self.usageCacheUpdatedAt = Date()
             return
         }
 
+        self.usageRetryTask?.cancel()
+        self.usageRetryTask = nil
+        self.usageRetryAttempts = 0
+        await self.loadUsageSummaryOnce(generation: generation)
+    }
+
+    private func loadUsageSummaryOnce(generation: Int) async {
+        #if DEBUG
+        defer { self.testUsageLoadDidFinish?() }
+        #endif
         do {
-            self.cachedUsageSummary = try await UsageLoader.loadSummary()
+            let summary = try await self.loadUsageSummary()
+            guard generation == self.usageLoadGeneration else { return }
+            self.cachedUsageSummary = summary
+            if summary.refreshing == true {
+                // A cold Gateway marker is not a cacheable answer; converge with bounded retries.
+                self.usageCacheUpdatedAt = nil
+                self.scheduleUsageRetry(generation: generation)
+                return
+            }
         } catch {
+            guard generation == self.usageLoadGeneration else { return }
+            if self.cachedUsageSummary?.refreshing == true {
+                // A rejected retry is still unresolved. Preserve the marker and spend
+                // the same bounded budget, or the menu silently drops its Usage section.
+                self.usageCacheUpdatedAt = nil
+                self.scheduleUsageRetry(generation: generation)
+                return
+            }
             self.cachedUsageSummary = nil
         }
         self.usageCacheUpdatedAt = Date()
+    }
+
+    private func scheduleUsageRetry(generation: Int) {
+        guard self.usageRetryAttempts < self.usageRetryLimit else {
+            #if DEBUG
+            self.testUsageRetryDidExhaust?()
+            #endif
+            return
+        }
+        self.usageRetryAttempts += 1
+        let interval = self.usageRetryIntervalSeconds
+        self.usageRetryTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+            guard let self,
+                  !Task.isCancelled,
+                  self.isControlChannelConnected,
+                  generation == self.usageLoadGeneration
+            else { return }
+            await self.loadUsageSummaryOnce(generation: generation)
+            // The final attempt leaves the marker set, so repaint on exhaustion
+            // too or an operator watching the open menu never sees the outcome.
+            if self.cachedUsageSummary?.refreshing != true || self.isUsageStalled {
+                await self.repaintOpenMenu(self.statusItem?.menu)
+            }
+        }
+    }
+
+    private func loadUsageSummary() async throws -> GatewayUsageSummary {
+        #if DEBUG
+        if let load = self.testUsageLoad { return try await load() }
+        #endif
+        return try await UsageLoader.loadSummary()
     }
 
     private func refreshCostUsageCache(force: Bool) async {
@@ -1293,6 +1394,34 @@ extension MenuSessionsInjector {
     func setTestingUsageSummary(_ summary: GatewayUsageSummary?) {
         self.cachedUsageSummary = summary
         self.usageCacheUpdatedAt = Date()
+    }
+
+    func setTestingUsageLoader(_ load: (() async throws -> GatewayUsageSummary)?) {
+        self.testUsageLoad = load
+    }
+
+    func setTestingUsageLoadDidFinish(_ didFinish: (@MainActor () -> Void)?) {
+        self.testUsageLoadDidFinish = didFinish
+    }
+
+    func setTestingUsageRetryDidExhaust(_ didExhaust: (@MainActor () -> Void)?) {
+        self.testUsageRetryDidExhaust = didExhaust
+    }
+
+    func setTestingUsageRetryInterval(_ seconds: TimeInterval) {
+        self.usageRetryIntervalSeconds = seconds
+    }
+
+    func refreshUsageCacheForTesting(force: Bool) async {
+        await self.refreshUsageCache(force: force)
+    }
+
+    var testingCachedUsageSummary: GatewayUsageSummary? {
+        self.cachedUsageSummary
+    }
+
+    var testingUsageCacheUpdatedAt: Date? {
+        self.usageCacheUpdatedAt
     }
 
     func setTestingCostUsageSummary(_ summary: GatewayCostUsageSummary?, errorText: String? = nil) {

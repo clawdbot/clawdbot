@@ -70,6 +70,149 @@ describe("perplexity web search provider", () => {
   });
 
   it.each([
+    {
+      name: "country before every other unsupported chat option",
+      structured: false,
+      args: {
+        country: "US",
+        language: "en",
+        date_after: "2024-01-01",
+        domain_filter: ["a.test"],
+        max_tokens: 1,
+      },
+      error: "unsupported_country",
+      message:
+        "country filtering is only supported by the native Perplexity Search API path. Remove Perplexity baseUrl/model overrides or use a direct PERPLEXITY_API_KEY to enable it.",
+    },
+    {
+      name: "language before unsupported chat dates, domains, and budget",
+      structured: false,
+      args: { language: "en", date_after: "2024-01-01", domain_filter: ["a.test"], max_tokens: 1 },
+      error: "unsupported_language",
+      message:
+        "language filtering is only supported by the native Perplexity Search API path. Remove Perplexity baseUrl/model overrides or use a direct PERPLEXITY_API_KEY to enable it.",
+    },
+    {
+      name: "date before unsupported chat domains and budget",
+      structured: false,
+      args: { date_after: "2024-01-01", domain_filter: ["a.test"], max_tokens: 1 },
+      error: "unsupported_date_filter",
+      message:
+        "date_after/date_before are only supported by the native Perplexity Search API path. Remove Perplexity baseUrl/model overrides or use a direct PERPLEXITY_API_KEY to enable them.",
+    },
+    {
+      name: "unsupported chat language before language validation and dates",
+      structured: false,
+      args: { language: "invalid", date_after: "2024-01-01" },
+      error: "unsupported_language",
+      message:
+        "language filtering is only supported by the native Perplexity Search API path. Remove Perplexity baseUrl/model overrides or use a direct PERPLEXITY_API_KEY to enable it.",
+    },
+    {
+      name: "unsupported chat date before a valid freshness conflict",
+      structured: false,
+      args: { freshness: "day", date_after: "2024-01-01" },
+      error: "unsupported_date_filter",
+      message:
+        "date_after/date_before are only supported by the native Perplexity Search API path. Remove Perplexity baseUrl/model overrides or use a direct PERPLEXITY_API_KEY to enable them.",
+    },
+    {
+      name: "domain before unsupported chat content budget",
+      structured: false,
+      args: { domain_filter: ["a.test"], max_tokens: 1 },
+      error: "unsupported_domain_filter",
+      message:
+        "domain_filter is only supported by the native Perplexity Search API path. Remove Perplexity baseUrl/model overrides or use a direct PERPLEXITY_API_KEY to enable it.",
+    },
+    {
+      name: "unsupported chat content budget",
+      structured: false,
+      args: { max_tokens_per_page: 1 },
+      error: "unsupported_content_budget",
+      message:
+        "max_tokens and max_tokens_per_page are only supported by the native Perplexity Search API path. Remove Perplexity baseUrl/model overrides or use a direct PERPLEXITY_API_KEY to enable them.",
+    },
+    {
+      name: "invalid freshness before reading an invalid native budget",
+      structured: true,
+      args: { freshness: "invalid", max_tokens: 0 },
+      error: "invalid_freshness",
+      message: "freshness must be day, week, month, or year.",
+    },
+    {
+      name: "invalid freshness before reading an invalid chat budget",
+      structured: false,
+      args: { freshness: "invalid", country: "US", max_tokens: 0 },
+      error: "invalid_freshness",
+      message: "freshness must be day, week, month, or year.",
+    },
+    {
+      name: "invalid native language before conflicting date filters",
+      structured: true,
+      args: { language: "invalid", freshness: "day", date_after: "invalid" },
+      error: "invalid_language",
+      message: "language must be a 2-letter ISO 639-1 code like 'en', 'de', or 'fr'.",
+    },
+    {
+      name: "conflicting freshness before invalid date format",
+      structured: true,
+      args: { freshness: "day", date_after: "invalid" },
+      error: "conflicting_time_filters",
+      message:
+        "freshness and date_after/date_before cannot be used together. Use either freshness (day/week/month/year) or a date range (date_after/date_before), not both.",
+    },
+    {
+      name: "invalid date_after before invalid date_before",
+      structured: true,
+      args: { date_after: "invalid", date_before: "also-invalid" },
+      error: "invalid_date",
+      message: "date_after must be YYYY-MM-DD format.",
+    },
+    {
+      name: "invalid date_before after valid date_after",
+      structured: true,
+      args: { date_after: "2024-01-01", date_before: "invalid" },
+      error: "invalid_date",
+      message: "date_before must be YYYY-MM-DD format.",
+    },
+    {
+      name: "invalid chronological date range",
+      structured: true,
+      args: { date_after: "2024-06-01", date_before: "2024-01-01" },
+      error: "invalid_date_range",
+      message: "date_after must be before date_before.",
+    },
+    {
+      name: "invalid date before mixed native domain filters",
+      structured: true,
+      args: { date_after: "invalid", domain_filter: ["allowed.test", "-denied.test"] },
+      error: "invalid_date",
+      message: "date_after must be YYYY-MM-DD format.",
+    },
+  ])(
+    "preserves provider validation precedence: $name",
+    async ({ structured, args, error, message }) => {
+      await expect(
+        createConfiguredPerplexityTool(structured).execute({ query: "validation", ...args }),
+      ).resolves.toEqual({
+        error,
+        message,
+        docs: "https://docs.openclaw.ai/tools/web",
+      });
+    },
+  );
+
+  it("validates chat token budgets before unsupported country precedence", async () => {
+    await expect(
+      createConfiguredPerplexityTool(false).execute({
+        query: "validation",
+        country: "US",
+        max_tokens: 0,
+      }),
+    ).rejects.toThrow("max_tokens must be a positive integer.");
+  });
+
+  it.each([
     { name: "native Search API", webSearch: { apiKey: "pplx-test" } },
     {
       name: "chat completions",

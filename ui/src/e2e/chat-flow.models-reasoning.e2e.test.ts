@@ -677,7 +677,20 @@ suite.define(() => {
     }
   });
 
-  it("shows a pending send while a model override update is still pending", async () => {
+  it.each([
+    {
+      label: "model override",
+      trigger: '[data-chat-model-select="true"]',
+      option: '[data-chat-model-option="bedrock/claude-opus-4.5"]',
+      patch: { model: "bedrock/claude-opus-4.5" },
+    },
+    {
+      label: "Full Access permission",
+      trigger: '[data-chat-permission-select="true"]',
+      option: '[data-chat-permission-option="full"]',
+      patch: { permissionMode: "full" },
+    },
+  ])("shows a pending send while a $label update is still pending", async (setting) => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -687,7 +700,15 @@ suite.define(() => {
     const gateway = await installMockGateway(page, {
       deferredMethods: ["sessions.patch"],
       methodResponses: {
-        "sessions.list": chatSessionListResponse(),
+        "sessions.list": chatSessionListResponse([
+          {
+            key: "agent:main:session-a",
+            kind: "direct",
+            label: "Session A",
+            permissionMode: "workspace",
+            updatedAt: 2,
+          },
+        ]),
       },
       models: [
         { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
@@ -700,11 +721,15 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
 
       const main = page.getByRole("main");
-      await main.locator('[data-chat-model-select="true"]').click();
-      await main.locator('[data-chat-model-option="bedrock/claude-opus-4.5"]').click();
-      await gateway.waitForRequest("sessions.patch");
+      await main.locator(setting.trigger).click();
+      await main.locator(setting.option).click();
+      const patchRequest = await gateway.waitForRequest("sessions.patch");
+      expect(requireRecord(patchRequest.params)).toMatchObject({
+        key: "agent:main:session-a",
+        ...setting.patch,
+      });
 
-      const prompt = "send while the model save is pending";
+      const prompt = `send while the ${setting.label} save is pending`;
       await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
       await page.getByRole("button", { name: "Send message" }).click();
 

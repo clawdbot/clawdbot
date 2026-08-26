@@ -1709,7 +1709,7 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const prompt = expectEmbeddedRunPrompt();
     const unattendedPreamble =
-      "This is an unattended scheduled run. Nobody is present to clarify or approve, so complete the task with what you have. Your final reply is the deliverable — not a plan, an acknowledgement, or a request for input. If nothing needs doing, reply exactly HEARTBEAT_OK. If something failed, state plainly what failed and what you tried — the scheduler owns retries and failure alerts. Where the job's own instructions conflict with this preamble, the job's instructions win (a question or plan the job explicitly requests is a valid deliverable). If this job is no longer needed, you may remove it with the automations tool.";
+      "This is an unattended scheduled run. Nobody is present to clarify or approve, so complete the task with what you have. Your final reply is the deliverable — not a plan, an acknowledgement, or a request for input. If nothing needs doing, reply exactly NO_REPLY. If something failed, state plainly what failed and what you tried — the scheduler owns retries and failure alerts. Where the job's own instructions conflict with this preamble, the job's instructions win (a question or plan the job explicitly requests is a valid deliverable). If this job is no longer needed, you may remove it with the automations tool.";
     expect(prompt).toContain(unattendedPreamble);
     expect(prompt).not.toContain("Use the message tool");
     expect(prompt).toContain("Your response will be delivered automatically");
@@ -1912,7 +1912,7 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const prompt = expectEmbeddedRunPrompt();
     expect(prompt).toContain("This is an unattended scheduled run.");
-    expect(prompt).toContain("reply exactly HEARTBEAT_OK");
+    expect(prompt).toContain("reply exactly NO_REPLY");
     expect(prompt).not.toContain("Return your response as plain text");
     expect(prompt).not.toContain("Your response will be delivered automatically");
     expect(prompt).not.toContain("it will be delivered automatically");

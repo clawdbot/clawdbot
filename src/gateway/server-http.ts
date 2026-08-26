@@ -140,17 +140,6 @@ function isWebSocketUpgradeRequest(req: IncomingMessage): boolean {
 
 type GatewayHttpRequestStage = () => Promise<boolean> | boolean;
 
-async function runGatewayHttpRequestStages(
-  stages: readonly GatewayHttpRequestStage[],
-): Promise<boolean> {
-  for (const stage of stages) {
-    if (await stage()) {
-      return true;
-    }
-  }
-  return false;
-}
-
 /** Creates the gateway HTTP/HTTPS server and ordered request-stage router. */
 export function createGatewayHttpServer(opts: {
   clients: Set<GatewayWsClient>;
@@ -640,8 +629,11 @@ export function createGatewayHttpServer(opts: {
       );
       addRequestStage(controlUiEnabled, handleControlUiRequest);
 
-      if (await runGatewayHttpRequestStages(requestStages)) {
-        return;
+      // A completed or disconnected response owns the request even when a stage reports fallthrough.
+      for (const stage of requestStages) {
+        if ((await stage()) || res.destroyed || res.writableEnded) {
+          return;
+        }
       }
 
       // Startup owns sidecar readiness. The plugin registry is still empty here, so an

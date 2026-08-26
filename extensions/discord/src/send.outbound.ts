@@ -450,7 +450,7 @@ export async function sendStickerDiscord(
   const context = await resolveDiscordStructuredSendContext(to, opts);
   const { rewrittenContent, suppressEmbeds } = context;
   const stickers = normalizeStickerIds(stickerIds);
-  const flags = resolveDiscordMessageFlags({ suppressEmbeds });
+  const flags = resolveDiscordMessageFlags({ silent: opts.silent, suppressEmbeds });
   const body = {
     content: rewrittenContent || undefined,
     sticker_ids: stickers,

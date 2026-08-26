@@ -8,9 +8,10 @@ import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes
 import { cloneAuthProfileStore } from "./auth-profiles/clone.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
-import type {
-  PreparedModelRuntimeAuth,
-  PreparedModelRuntimeAuthScope,
+import {
+  setPreparedModelFullCatalogAuth,
+  type PreparedModelRuntimeAuth,
+  type PreparedModelRuntimeAuthScope,
 } from "./prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.catalog-contract.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
@@ -61,22 +62,6 @@ export type PreparedModelWorkerResult =
       authModes: PreparedAgentCredentialModes;
     }>
   | Readonly<{ status: "failed"; requestId: number; error: string }>;
-
-const authByFullCatalog = new WeakMap<
-  object,
-  Readonly<{ authStore: AuthProfileStore; authModes: PreparedAgentCredentialModes }>
->();
-
-function setPreparedModelFullCatalogAuth(
-  modelCatalog: object,
-  auth: Readonly<{ authStore: AuthProfileStore; authModes: PreparedAgentCredentialModes }>,
-): void {
-  authByFullCatalog.set(modelCatalog, auth);
-}
-
-export function getPreparedModelFullCatalogAuth(modelCatalog: object) {
-  return authByFullCatalog.get(modelCatalog);
-}
 
 // Cold source/plugin loading can take well over a minute. Three minutes preserves exact full-view
 // discovery while bounding a wedged provider; expiry rejects and never returns partial results.

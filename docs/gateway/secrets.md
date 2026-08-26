@@ -348,6 +348,7 @@ Equivalent config:
   secrets: {
     egressProxy: {
       enabled: true,
+      allowedHosts: ["api.openai.com"],
       bypassHosts: ["pinned-api.example.com"],
     },
   },
@@ -373,8 +374,21 @@ The CA is generated once per Gateway start under the state directory. Its direct
 
 `bypassHosts` contains exact hostnames that must remain end-to-end TLS for certificate-pinned clients. Those hosts use an authenticated blind CONNECT tunnel. No substitution is possible inside the tunnel; a sentinel sent there is safe by construction because it is authenticated ciphertext rather than a credential, so the vendor sees an invalid credential and rejects it.
 
+### Traffic allowlist
+
+Destination binding protects secrets, not traffic: a request that carries no sentinel can reach any host once a run holds proxy credentials. Set `secrets.egressProxy.allowedHosts` to also restrict where non-sentinel traffic may go:
+
+```bash
+openclaw config set secrets.egressProxy.allowedHosts '["api.openai.com"]' --strict-json
+```
+
+When the list is present, the proxy forwards only to hostnames in the list, hosts bound to a secret registered for the current agent run, and `bypassHosts`, so an existing `--allow-host` binding keeps working without listing its host twice. A request or CONNECT tunnel to any other host is refused with `Host "<host>" is not in the secret egress proxy traffic allowlist. Add it to secrets.egressProxy.allowedHosts or bind a store secret to it with: openclaw secrets store set <NAME> --allow-host <host>, then restart the Gateway.`
+
+An empty array is lockdown mode: only per-secret bound hosts and `bypassHosts` remain reachable. Omitting `allowedHosts` leaves traffic unrestricted. Hostnames follow the same rules as secret bindings: exact lowercase ASCII/punycode match, no wildcards or ports. Restart the Gateway after changing the allowlist.
+
 Current limits:
 
+- The traffic allowlist constrains only cooperating clients that honor the proxy environment (`HTTPS_PROXY` and the CA variables). A subprocess can ignore those variables and open raw sockets, so the allowlist is defense in depth; destination-bound sentinels remain the primary defense because they survive proxy bypass.
 - HTTP/2 upstream connections are not supported; the proxy uses HTTP/1.1 upstream.
 - WebSocket rewriting is not supported.
 - Non-443 HTTPS substitution is not a supported compatibility target.

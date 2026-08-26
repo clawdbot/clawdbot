@@ -260,6 +260,80 @@ test("sessions.create assigns and registers its requested group", async () => {
   );
 });
 
+test.each([
+  ["sessions.create", "create"],
+  ["sessions.patch", "patch"],
+  ["sessions.patchMany", "patch-many"],
+] as const)(
+  "required operator sandbox follows new %s session ownership",
+  async (method, suffix) => {
+    const { storePath } = await createSessionStoreDir();
+    const profile = ensureProfileForEmail(`sandboxed-session-${suffix}@example.com`);
+    setUserProfileRole(profile.id, "guest");
+    const cfg = {
+      ...getRuntimeConfig(),
+      session: { ...getRuntimeConfig().session, store: storePath },
+      gateway: {
+        ...getRuntimeConfig().gateway,
+        roles: {
+          default: "guest",
+          definitions: {
+            guest: {
+              sessions: { others: "view" as const },
+              agents: ["main"],
+              scopes: ["operator.read" as const, "operator.write" as const],
+              sandbox: "required" as const,
+            },
+          },
+        },
+      },
+    };
+    const client = {
+      connect: { role: "operator", scopes: ["operator.read", "operator.write"] },
+      authenticatedUserProfile: {
+        profileId: profile.id,
+        displayName: profile.displayName,
+        hasAvatar: false,
+        updatedAt: profile.updatedAt,
+      },
+    } as never;
+    const key = `agent:main:dashboard:role-sandbox-${suffix}`;
+    const request =
+      method === "sessions.create"
+        ? { agentId: "main", key }
+        : method === "sessions.patch"
+          ? { key, label: "Guest session" }
+          : { patch: { label: "Guest session" }, targets: [{ key }] };
+
+    const created = await directSessionReq<{ outcomes?: Array<{ ok: boolean }> }>(method, request, {
+      client,
+      context: { getRuntimeConfig: () => cfg },
+    });
+
+    expect(created.ok, JSON.stringify(created.error)).toBe(true);
+    if (method === "sessions.patchMany") {
+      expect(created.payload?.outcomes).toEqual([{ ok: true, key }]);
+    }
+    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toMatchObject({
+      createdActor: { type: "human", id: profile.id },
+      sandbox: "required",
+    });
+
+    for (const forgedSandbox of [null, "inherit"] as const) {
+      const forged = await directSessionReq(
+        "sessions.patch",
+        { key, sandbox: forgedSandbox },
+        { client, context: { getRuntimeConfig: () => cfg } },
+      );
+
+      expect(forged).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+    }
+    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toMatchObject({
+      sandbox: "required",
+    });
+  },
+);
+
 test("operator role agent allowlists protect creation without blocking existing sessions", async () => {
   const { storePath } = await createSessionStoreDir();
   const profile = ensureProfileForEmail("restricted-session-creator@example.com");
@@ -3894,6 +3968,69 @@ test("sessions.create inherits explicit selection without runtime model identity
   expect(storedEntry?.modelProvider).toBeUndefined();
   expect(storedEntry?.model).toBeUndefined();
   expect(storedEntry?.parentSessionKey).toBe("agent:main:main");
+});
+
+test("sessions.create skips inherited active auto fallback model overrides", async () => {
+  const { storePath } = await createSessionStoreDir();
+  testState.agentConfig = { model: { primary: "openai/gpt-primary" } };
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-parent-auto-fallback", {
+        providerOverride: "google-vertex",
+        modelOverride: "gemini-fallback",
+        modelOverrideSource: "auto",
+        modelOverrideFallbackOriginProvider: "openai",
+        modelOverrideFallbackOriginModel: "gpt-primary",
+        agentRuntimeOverride: "vertex-runtime",
+        contextWindow: "1m",
+        authProfileOverride: "google-vertex:fallback",
+        authProfileOverrideSource: "auto",
+        thinkingLevel: "high",
+      }),
+    },
+  });
+
+  const created = await directSessionReq<{
+    key?: string;
+    resolved?: { modelProvider?: string; model?: string };
+    entry?: {
+      parentSessionKey?: string;
+      providerOverride?: string;
+      modelOverride?: string;
+      modelOverrideSource?: string;
+      agentRuntimeOverride?: string;
+      contextWindow?: string;
+      authProfileOverride?: string;
+      authProfileOverrideSource?: string;
+      thinkingLevel?: string;
+    };
+  }>("sessions.create", {
+    agentId: "main",
+    parentSessionKey: "main",
+  });
+
+  expect(created.ok).toBe(true);
+  expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
+  expect(created.payload?.entry?.providerOverride).toBeUndefined();
+  expect(created.payload?.entry?.modelOverride).toBeUndefined();
+  expect(created.payload?.entry?.modelOverrideSource).toBeUndefined();
+  expect(created.payload?.entry?.agentRuntimeOverride).toBeUndefined();
+  expect(created.payload?.entry?.contextWindow).toBe("1m");
+  expect(created.payload?.entry?.authProfileOverride).toBeUndefined();
+  expect(created.payload?.entry?.authProfileOverrideSource).toBeUndefined();
+  expect(created.payload?.entry?.thinkingLevel).toBe("high");
+  expect(created.payload?.resolved).toEqual({ modelProvider: "openai", model: "gpt-primary" });
+
+  const key = created.payload?.key as string;
+  const storedEntry = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
+  expect(storedEntry?.parentSessionKey).toBe("agent:main:main");
+  expect(storedEntry?.providerOverride).toBeUndefined();
+  expect(storedEntry?.modelOverride).toBeUndefined();
+  expect(storedEntry?.agentRuntimeOverride).toBeUndefined();
+  expect(storedEntry?.contextWindow).toBe("1m");
+  expect(storedEntry?.authProfileOverride).toBeUndefined();
+  expect(storedEntry?.authProfileOverrideSource).toBeUndefined();
+  expect(storedEntry?.thinkingLevel).toBe("high");
 });
 
 test("sessions.create resolves the current default instead of inherited runtime identity", async () => {

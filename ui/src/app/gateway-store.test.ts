@@ -423,6 +423,19 @@ describe("createApplicationGateway connection phase", () => {
     expect(gateway.snapshot.phase).toBe("connecting");
   });
 
+  it("advances the connection revision only when credentials change", () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+    current().opts.onHello?.(HELLO);
+
+    expect(gateway.connectionRevision).toBe(0);
+    gateway.connect({ sessionKey: "agent:main:other" });
+    expect(gateway.connectionRevision).toBe(0);
+
+    gateway.connect({ token: "replacement-token" });
+    expect(gateway.connectionRevision).toBe(1);
+  });
+
   it("keeps a newly selected Gateway's first retry at the login gate", () => {
     const { gateway, current } = createStore();
     gateway.start();

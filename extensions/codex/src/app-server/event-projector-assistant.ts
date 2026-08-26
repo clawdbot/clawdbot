@@ -47,6 +47,9 @@ export class CodexAssistantProjection {
   // invalidation has to be recorded from the first item notification for each
   // native or dynamic handoff, or a later coda would revive every pre-tool final.
   private persistableAssistantBarrier = 0;
+  // A completed answer mirrored before a steer is already durable. Do not
+  // replay it as the enclosing turn's terminal answer if Codex emits no coda.
+  private persistedAssistantBoundary = false;
   private readonly persistableAssistantBarrierItemIds = new Set<string>();
 
   constructor(
@@ -345,6 +348,9 @@ export class CodexAssistantProjection {
     if (afterHandoff.length > 0) {
       return afterHandoff.slice(-1);
     }
+    if (this.persistedAssistantBoundary) {
+      return [];
+    }
     const recoveredAudible = this.collectPersistableAssistantTexts(0).filter(
       (text) => !isSilentReplyPayloadText(text),
     );
@@ -391,6 +397,41 @@ export class CodexAssistantProjection {
         },
       ];
     });
+  }
+
+  createCompletedAssistantBoundaryMessage(
+    completedItemIds: ReadonlySet<string>,
+    options: AssistantMessageOptions,
+  ): { itemId: string; message: AssistantMessage } | undefined {
+    const itemId = this.latestCompletedTerminalAssistantItemId;
+    const text = itemId ? this.assistantTextByItem.get(itemId)?.trim() : undefined;
+    const itemIndex = itemId ? this.assistantItemOrder.indexOf(itemId) : -1;
+    if (
+      !itemId ||
+      !completedItemIds.has(itemId) ||
+      itemIndex < this.persistableAssistantBarrier ||
+      !text ||
+      isSilentReplyPayloadText(text) ||
+      this.isToolProgressEchoText(itemId, text)
+    ) {
+      return undefined;
+    }
+    const message = this.createAssistantMessage(text, options);
+    return {
+      itemId,
+      message: {
+        ...message,
+        timestamp: this.assistantTimestampByItem.get(itemId) ?? message.timestamp,
+      },
+    };
+  }
+
+  markAssistantBoundaryPersisted(itemId: string): void {
+    const index = this.assistantItemOrder.indexOf(itemId);
+    if (index >= 0) {
+      this.persistableAssistantBarrier = Math.max(this.persistableAssistantBarrier, index + 1);
+      this.persistedAssistantBoundary = true;
+    }
   }
 
   finalizeAnswerCandidate(turn: { status?: string; items?: CodexThreadItem[] }): void {
@@ -514,7 +555,7 @@ export class CodexAssistantProjection {
   }
 
   private emitCommentaryProgress(params: { itemId: string; text: string }): void {
-    const progressText = params.text.replace(/\s+/g, " ").trim();
+    const progressText = params.text.trim();
     if (
       !progressText ||
       this.lastCommentaryProgressTextByItem.get(params.itemId) === progressText

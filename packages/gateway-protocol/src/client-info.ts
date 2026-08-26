@@ -92,6 +92,7 @@ export const GATEWAY_CLIENT_CAPS = {
   TERMINAL_OFFSET_SEQ: "terminal-offset-seq",
   TOOL_EVENTS: "tool-events",
   UI_COMMANDS: "ui-commands",
+  USAGE_REFRESHING: "usage-refreshing",
 } as const;
 
 /** Optional capability advertised by clients during gateway handshake. */

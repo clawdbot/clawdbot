@@ -516,9 +516,16 @@ describe("MCP App standalone host", () => {
     expect(runtime.callTool).not.toHaveBeenCalled();
   });
 
-  it("keeps reconstructed views read-only while preserving resource reads", async () => {
+  it("denies resource reads from reconstructed read-only views", async () => {
     Object.assign(view, { readOnly: true });
     const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs, secret });
+    const payload = await request({
+      url: "/__openclaw__/mcp-app/view",
+      authorization: `MCP-App ${issued.ticket}`,
+    });
+    expect(JSON.parse(String(payload.end.mock.calls[0]?.[0]))).toMatchObject({
+      serverResources: false,
+    });
     const invoke = (body: unknown) =>
       request({
         url: "/__openclaw__/mcp-app/view",
@@ -533,10 +540,11 @@ describe("MCP App standalone host", () => {
     expect(
       (await invoke({ method: "resources/read", params: { uri: "ui://demo/state" } })).res
         .statusCode,
-    ).toBe(200);
+    ).toBe(403);
+    expect(runtime.readResource).not.toHaveBeenCalled();
   });
 
-  it("does not accept standalone tool operations without explicit run authority", async () => {
+  it("does not accept standalone server operations without explicit run authority", async () => {
     Object.assign(view, { allowedAppToolNames: undefined });
     const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs, secret });
     const invoke = (body: unknown) =>
@@ -555,7 +563,7 @@ describe("MCP App standalone host", () => {
     expect(
       (await invoke({ method: "resources/read", params: { uri: "ui://demo/state" } })).res
         .statusCode,
-    ).toBe(200);
+    ).toBe(403);
     expect(runtime.callTool).not.toHaveBeenCalled();
   });
 

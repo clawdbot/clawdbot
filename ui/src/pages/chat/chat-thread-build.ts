@@ -30,7 +30,7 @@ import {
   shouldRenderQueuedSendInThread,
 } from "./chat-progress.ts";
 import { chatMessagesContainQueuedSend } from "./chat-send-support.ts";
-import { coalesceToolActivityMessages, groupMessages } from "./chat-thread-grouping.ts";
+import { groupMessages } from "./chat-thread-grouping.ts";
 import {
   appendCanvasBlockToAssistantMessage,
   buildMessageKeys,
@@ -62,6 +62,7 @@ import {
   optionalRunIdentity,
   resolveRunInsertionBounds,
 } from "./chat-thread-run-identity.ts";
+import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
 import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
 import { resolveSystemNoticeKind } from "./system-notice-kinds.ts";
 import { isLiveTerminalForRun } from "./terminal-message-identity.ts";
@@ -117,18 +118,6 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   });
   const searchFiltering = props.searchOpen === true && Boolean(props.searchQuery?.trim());
   const persistedCanvasIdentities = new Set<string>();
-  for (const message of history) {
-    const source = extractChatMessagePreview(message);
-    if (!source) {
-      continue;
-    }
-    const baseIdentity = canvasPreviewBaseIdentity(message, source);
-    if (baseIdentity) {
-      // fetchMcpAppView assigns a fresh viewId to every invocation. Matching the call and
-      // view therefore identifies the same preview while still tolerating a reused call ID.
-      persistedCanvasIdentities.add(baseIdentity);
-    }
-  }
   for (let i = 0; i < history.length; i++) {
     const msg = projectContextCompactionActivity(history[i]);
     const itemKey = historyKeys[i] ?? messageKey(msg, i);
@@ -158,6 +147,12 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
 
     const isToolResult = normalized.role.toLowerCase() === "toolresult";
     const persistedCanvasSource = isToolResult ? extractChatMessagePreview(msg) : null;
+    if (persistedCanvasSource) {
+      const identity = canvasPreviewBaseIdentity(msg, persistedCanvasSource);
+      if (identity) {
+        persistedCanvasIdentities.add(identity);
+      }
+    }
     const renderPersistedPreview =
       persistedCanvasSource != null &&
       (!searchFiltering || turnHasMatchingAssistant(history, i, props.searchQuery ?? ""));
@@ -180,7 +175,10 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     if (props.searchOpen && searchQuery.trim() && !messageMatchesSearchQuery(msg, searchQuery)) {
       continue;
     }
-    if (!hasRenderableNormalizedMessage(msg) && normalized.role.toLowerCase() !== "assistant") {
+    if (
+      !hasRenderableNormalizedMessage(msg, normalized) &&
+      normalized.role.toLowerCase() !== "assistant"
+    ) {
       continue;
     }
 

@@ -4,7 +4,9 @@ import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
-import { getChannel, getGuild, getGuildMember, getUser } from "./api.js";
+import { getGuild, getGuildMember } from "./api.guild.js";
+import { getChannel } from "./api.messages.js";
+import { getUser } from "./api.users.js";
 import type { RequestClient } from "./rest.js";
 import { Guild, GuildMember, User, channelFactory, type StructureClient } from "./structures.js";
 

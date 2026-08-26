@@ -206,8 +206,12 @@ export function noteClaudeCliHealth(
     ((rawCommand: string, nextEnv?: NodeJS.ProcessEnv) =>
       resolveExecutablePath(rawCommand, { env: nextEnv }));
   const commandPath = resolveCommandPath(command, env);
+  const authEnv = { ...env };
+  for (const envName of backend?.config.clearEnv ?? []) {
+    delete authEnv[envName];
+  }
   const authenticated = commandPath
-    ? (deps?.isAuthenticated ?? isClaudeCliAuthenticated)(commandPath, env)
+    ? (deps?.isAuthenticated ?? isClaudeCliAuthenticated)(commandPath, authEnv)
     : false;
   const defaultAgentId = tryResolveDefaultAgentId(cfg);
   const showAgentLabels =

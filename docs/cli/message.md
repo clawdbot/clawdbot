@@ -168,7 +168,7 @@ openclaw message poll --channel discord \
 - `--poll-option <choice>`: repeat 2-12 times.
 - `--poll-multi`: allow multiple selections.
 - Discord: `--poll-duration-hours`, `--silent`, `--message`.
-- Telegram: `--poll-duration-seconds <n>` (5-600), `--silent`,
+- Telegram: `--poll-duration-seconds <n>` (5-604800; up to seven days), `--silent`,
   `--poll-anonymous` / `--poll-public`, `--thread-id`.
 
 ```bash

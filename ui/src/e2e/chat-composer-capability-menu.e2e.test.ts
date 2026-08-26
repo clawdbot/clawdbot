@@ -178,6 +178,10 @@ async function openMenu(page: Page) {
   return composer;
 }
 
+function webSearchItem(menu: import("playwright").Locator) {
+  return menu.locator('wa-dropdown-item[value="toggle-web-search"]');
+}
+
 suite.define(() => {
   it("renders the root stack, proxies attachments, patches sparse overrides, and clears the pill", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
@@ -228,9 +232,7 @@ suite.define(() => {
             expect.stringContaining("Manage plugins"),
           ]),
         );
-      await expect
-        .poll(() => dropdown.getByRole("menuitemcheckbox", { name: "Web search" }).isVisible())
-        .toBe(true);
+      await expect.poll(() => webSearchItem(dropdown).isVisible()).toBe(true);
       const skillsRoot = dropdown.getByRole("menuitem", { name: /^Skills/ });
       await skillsRoot.focus();
       await skillsRoot.evaluate((item) => {
@@ -239,14 +241,7 @@ suite.define(() => {
           ?.dispatchEvent(new CustomEvent("wa-select", { bubbles: true, detail: { item } }));
       });
       await expect.poll(() => dropdown.getAttribute("data-view")).toBe("skills");
-      await expect
-        .poll(() => dropdown.locator("wa-dropdown-item:focus").textContent())
-        .toContain("Back");
-      await dropdown.locator("wa-dropdown-item:focus").evaluate((item) => {
-        item
-          .closest("wa-dropdown")
-          ?.dispatchEvent(new CustomEvent("wa-select", { bubbles: true, detail: { item } }));
-      });
+      await dropdown.getByRole("menuitem", { name: "Back" }).click();
       await expect.poll(() => dropdown.getAttribute("data-view")).toBe("root");
       await expect
         .poll(() => dropdown.locator("wa-dropdown-item:focus").textContent())
@@ -305,14 +300,26 @@ suite.define(() => {
         .toBe(false);
 
       await menu.getByRole("menuitem", { name: "Back" }).click();
-      const webSearch = menu.getByRole("menuitemcheckbox", { name: "Web search" });
-      await expect.poll(() => webSearch.getAttribute("aria-checked")).toBe("true");
-      await webSearch.click();
+      const webSearch = webSearchItem(menu);
+      await expect
+        .poll(() =>
+          webSearch.evaluate((node) => (node as HTMLElement & { checked: boolean }).checked),
+        )
+        .toBe(true);
+      await webSearchItem(menu).click();
       await expect.poll(() => latestToolOverrides(gateway)).toEqual({ webSearch: false });
-      await expect.poll(() => webSearch.getAttribute("aria-checked")).toBe("false");
-      await webSearch.click();
+      await expect
+        .poll(() =>
+          webSearch.evaluate((node) => (node as HTMLElement & { checked: boolean }).checked),
+        )
+        .toBe(false);
+      await webSearchItem(menu).click();
       await expect.poll(() => latestToolOverrides(gateway)).toEqual({});
-      await expect.poll(() => webSearch.getAttribute("aria-checked")).toBe("true");
+      await expect
+        .poll(() =>
+          webSearch.evaluate((node) => (node as HTMLElement & { checked: boolean }).checked),
+        )
+        .toBe(true);
 
       const themeBackgrounds: string[] = [];
       for (const mode of ["dark", "light"] as const) {
@@ -579,9 +586,7 @@ suite.define(() => {
       const clear = composer.getByRole("button", { name: "Clear session overrides" });
       await expect.poll(() => clear.isDisabled()).toBe(true);
       await expect.poll(() => clear.getAttribute("title")).toContain("operator.admin access");
-      await expect
-        .poll(() => menu.getByRole("menuitemcheckbox", { name: "Web search" }).isDisabled())
-        .toBe(true);
+      await expect.poll(() => webSearchItem(menu).isDisabled()).toBe(true);
       await menu.getByRole("menuitem", { name: /^Skills/ }).click();
       const docs = menu.getByRole("menuitem", { name: /^Docs/ });
       await expect.poll(() => docs.isDisabled()).toBe(true);
@@ -620,7 +625,7 @@ suite.define(() => {
       ]);
       const composer = await openMenu(page);
       const menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
-      const webSearch = menu.getByRole("menuitemcheckbox", { name: "Web search" });
+      const webSearch = webSearchItem(menu);
       await expect.poll(() => webSearch.isDisabled()).toBe(true);
       await expect.poll(() => webSearch.getAttribute("title")).toBe("Loading…");
       await webSearch.evaluate((item) => {
@@ -637,13 +642,13 @@ suite.define(() => {
           webSearch: true,
         }),
       );
-      await expect.poll(() => webSearch.isDisabled()).toBe(true);
-      await expect.poll(() => webSearch.getAttribute("title")).toBe("Loading…");
+      await expect.poll(() => webSearchItem(menu).isDisabled()).toBe(true);
+      await expect.poll(() => webSearchItem(menu).getAttribute("title")).toBe("Loading…");
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
 
       await gateway.resolveDeferred("config.get", configResponse({}, false));
-      await expect.poll(() => webSearch.isDisabled()).toBe(false);
-      await webSearch.click();
+      await expect.poll(() => webSearchItem(menu).isDisabled()).toBe(false);
+      await webSearchItem(menu).click();
       await expect
         .poll(() => latestToolOverrides(gateway))
         .toEqual({
@@ -669,9 +674,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       const composer = await openMenu(page);
       const menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
-      await expect
-        .poll(() => menu.getByRole("menuitemcheckbox", { name: "Web search" }).count())
-        .toBe(1);
+      await expect.poll(() => webSearchItem(menu).count()).toBe(1);
       await menu.getByRole("menuitem", { name: /^Skills/ }).click();
       await expect.poll(() => menu.getByText("No skills available.").isVisible()).toBe(true);
       await menu.getByRole("menuitem", { name: "Back" }).click();

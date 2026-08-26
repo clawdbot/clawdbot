@@ -1206,9 +1206,8 @@ dynamic calls; submit several `sessions_spawn` calls in a bounded loop rather
 than expecting `Promise.all` to launch them concurrently. Already-accepted
 children can still overlap while later calls are submitted. See
 [Swarm](/tools/swarm#use-swarm-from-other-harnesses) for a complete pattern.
-Heartbeat collaboration instructions
-tell Codex to search for `heartbeat_respond` before ending a heartbeat turn
-when the tool is not already loaded.
+Scheduled heartbeat user messages identify `heartbeat_respond` when structured
+responses are enabled; the tool remains discoverable through Codex tool search.
 
 Set `codexDynamicToolsLoading: "direct"` only when connecting to a custom
 Codex app-server that cannot search deferred dynamic tools or when

@@ -5,7 +5,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import type { GatewayCronServiceContract } from "./server-cron-contract.js";
-import type { GatewayCronState } from "./server-cron.js";
+import type { GatewayCronExitWatcherHandoff, GatewayCronState } from "./server-cron.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 
 type LazyGatewayCronParams = {
@@ -38,6 +38,8 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
   const cronEnabled = env.OPENCLAW_SKIP_CRON !== "1" && params.cfg.cron?.enabled !== false;
   let loaded: LoadedGatewayCronState | null = null;
   let stopped = false;
+  let preserveExitWatchersOnStop = false;
+  let exitWatcherHandoffStop: Promise<void> | undefined;
   let lifecycleGeneration = 0;
   let schedulingPaused = false;
   const schedulingResumeWaiters = new Set<() => void>();
@@ -84,6 +86,48 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
     // Share the same import promise across concurrent API calls so only one
     // scheduler instance is built for a Gateway process.
     return await cronStateLoader.load();
+  };
+
+  const stopResolvedCron = async (
+    resolved: LoadedGatewayCronState,
+    preserveExitWatchers: boolean,
+  ): Promise<void> => {
+    resolved.phase = "stopped";
+    resolved.underlyingStarted = false;
+    const handoff = preserveExitWatchers
+      ? await resolved.state.prepareExitWatcherHandoff?.()
+      : undefined;
+    if (handoff) {
+      await handoff.stopOwner();
+    } else if (resolved.state.cron.stopAndDrain) {
+      await resolved.state.cron.stopAndDrain();
+    } else {
+      resolved.state.cron.stop();
+      await resolved.state.stopStreamWatchers();
+    }
+  };
+
+  const stopResolvedCronOnce = (
+    resolved: LoadedGatewayCronState,
+    preserveExitWatchers: boolean,
+  ): Promise<void> => {
+    if (!preserveExitWatchers) {
+      return stopResolvedCron(resolved, false);
+    }
+    exitWatcherHandoffStop ??= stopResolvedCron(resolved, true);
+    return exitWatcherHandoffStop;
+  };
+
+  const stopLoadedCronAndDrain = async (preserveExitWatchers = false): Promise<void> => {
+    stopped = true;
+    preserveExitWatchersOnStop ||= preserveExitWatchers;
+    lifecycleGeneration += 1;
+    releaseSchedulingResumeWaiters();
+    const loading = cronStateLoader.peek();
+    const resolved = loaded ?? (loading ? await loading : null);
+    if (resolved) {
+      await stopResolvedCronOnce(resolved, preserveExitWatchersOnStop);
+    }
   };
 
   const cron: GatewayCronServiceContract = {
@@ -140,10 +184,7 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
           resolved.underlyingStartInFlight = false;
         }
         if (startCancelled()) {
-          resolved.phase = "stopped";
-          resolved.underlyingStarted = false;
-          resolved.state.cron.stop();
-          await resolved.state.stopStreamWatchers();
+          await stopResolvedCronOnce(resolved, preserveExitWatchersOnStop);
           return;
         }
         if (schedulingPaused) {
@@ -164,10 +205,7 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
           throw err;
         }
         if (startCancelled()) {
-          resolved.phase = "stopped";
-          resolved.underlyingStarted = false;
-          resolved.state.cron.stop();
-          await resolved.state.stopStreamWatchers();
+          await stopResolvedCronOnce(resolved, preserveExitWatchersOnStop);
           return;
         }
         resolved.phase = "started";
@@ -209,21 +247,7 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
       }
     },
     async stopAndDrain() {
-      stopped = true;
-      lifecycleGeneration += 1;
-      releaseSchedulingResumeWaiters();
-      const resolved = loaded ?? (cronStateLoader.peek() ? await cronStateLoader.peek() : null);
-      if (!resolved) {
-        return;
-      }
-      resolved.phase = "stopped";
-      resolved.underlyingStarted = false;
-      if (resolved.state.cron.stopAndDrain) {
-        await resolved.state.cron.stopAndDrain();
-      } else {
-        resolved.state.cron.stop();
-        await resolved.state.stopStreamWatchers();
-      }
+      await stopLoadedCronAndDrain();
     },
     pauseScheduling() {
       schedulingPaused = true;
@@ -320,6 +344,20 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
     cron,
     storePath,
     cronEnabled,
+    prepareExitWatcherHandoff: async (): Promise<GatewayCronExitWatcherHandoff | undefined> => {
+      const loading = cronStateLoader.peek();
+      const resolved = loaded ?? (loading ? await loading : null);
+      const handoff = await resolved?.state.prepareExitWatcherHandoff?.();
+      if (!handoff) {
+        return undefined;
+      }
+      return {
+        ...handoff,
+        stopOwner: async () => {
+          await stopLoadedCronAndDrain(true);
+        },
+      };
+    },
     // Reload rules invoke these hooks on whatever cronState is live; the lazy
     // proxy must forward every GatewayCronState member or hot reloads silently
     // no-op until a gateway restart (heartbeat cadence changes never applied).

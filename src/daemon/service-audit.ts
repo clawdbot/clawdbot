@@ -15,6 +15,7 @@ import { parseKeyValueOutput } from "./runtime-parse.js";
 import {
   isSystemNodePath,
   isVersionManagedNodePath,
+  resolveBunRuntimeInfo,
   resolveSystemNodePath,
 } from "./runtime-paths.js";
 import { getMinimalServicePathPartsFromEnv, SERVICE_PROXY_ENV_KEYS } from "./service-env.js";
@@ -552,12 +553,16 @@ async function auditGatewayRuntime(
   }
 
   if (isBunRuntime(execPath)) {
-    issues.push({
-      code: SERVICE_AUDIT_CODES.gatewayRuntimeBun,
-      message: "Gateway service uses Bun; OpenClaw runtime state requires node:sqlite.",
-      detail: execPath,
-      level: "recommended",
-    });
+    const runtime = await resolveBunRuntimeInfo(execPath);
+    if (!runtime.supported) {
+      issues.push({
+        code: SERVICE_AUDIT_CODES.gatewayRuntimeBun,
+        message:
+          "Gateway service uses an unsupported Bun runtime; Bun 1.4+ with WAL-reset-safe node:sqlite is required.",
+        detail: execPath,
+        level: "recommended",
+      });
+    }
     return;
   }
 

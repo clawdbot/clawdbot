@@ -670,6 +670,9 @@ class SessionsPage extends OpenClawLightDomElement {
     if (!scope) {
       return;
     }
+    // Snapshot identity and archive authority before a replacement can change them.
+    const rowsByKey = new Map(this.result?.sessions.map((row) => [row.key, row]) ?? []);
+    const rows = keys.map((key) => rowsByKey.get(key) ?? { key });
     const message = t(
       keys.length === 1
         ? "sessionsView.deleteSelectedConfirmOne"
@@ -686,10 +689,7 @@ class SessionsPage extends OpenClawLightDomElement {
     ) {
       return;
     }
-    const rowsByKey = new Map(this.result?.sessions.map((row) => [row.key, row]) ?? []);
-    // Only current row state may opt into write-scoped archive deletion.
-    // Unknown selections stay unflagged and therefore admin-only.
-    await this.deleteSessions(keys.map((key) => rowsByKey.get(key) ?? { key }));
+    await this.deleteSessions(rows);
   }
 
   private async deleteSessions(

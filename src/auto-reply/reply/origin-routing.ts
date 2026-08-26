@@ -11,19 +11,3 @@ export function resolveOriginMessageProvider(params: {
     normalizeMessageChannel(params.originatingChannel) ?? normalizeMessageChannel(params.provider)
   );
 }
-
-/** Resolves the original message target before reply redirection. */
-export function resolveOriginMessageTo(params: {
-  originatingTo?: string;
-  to?: string;
-}): string | undefined {
-  return params.originatingTo ?? params.to;
-}
-
-/** Resolves the original account id before reply redirection. */
-export function resolveOriginAccountId(params: {
-  originatingAccountId?: string;
-  accountId?: string;
-}): string | undefined {
-  return params.originatingAccountId ?? params.accountId;
-}

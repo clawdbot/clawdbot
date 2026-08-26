@@ -24,7 +24,7 @@ import {
   trackServiceCronRunReceiptSettlement,
 } from "./run-receipts.js";
 import type { CronServiceState } from "./state.js";
-import { tryUpdateCronTaskRunSession, withCronTaskRunId } from "./task-runs.js";
+import { tryUpdateCronTaskRunSession } from "./task-runs.js";
 import { resolveCronJobTimeoutMs } from "./timeout-policy.js";
 import {
   type CronJobRunResult,
@@ -273,9 +273,7 @@ async function executeJobCoreWithTimeoutUnfinalized(
         assertRunCurrent,
         executionIdentity: opts?.executionIdentity,
       };
-      const corePromise = withCronTaskRunId(opts?.runId, () =>
-        executeJobCore(state, job, runAbortController.signal, coreOptions),
-      );
+      const corePromise = executeJobCore(state, job, runAbortController.signal, coreOptions);
       const runPromise = corePromise.then(async (result) => {
         progress.completedCoreResult = result;
         return await deliverPrimaryWebhook(
@@ -360,9 +358,7 @@ async function executeJobCoreWithTimeoutUnfinalized(
       assertRunCurrent,
       executionIdentity: opts?.executionIdentity,
     };
-    const corePromise = withCronTaskRunId(opts?.runId, () =>
-      executeJobCore(state, job, runAbortController.signal, coreOptions),
-    );
+    const corePromise = executeJobCore(state, job, runAbortController.signal, coreOptions);
     watchdog.start();
     const runPromise = corePromise.then(async (result) => {
       progress.completedCoreResult = result;

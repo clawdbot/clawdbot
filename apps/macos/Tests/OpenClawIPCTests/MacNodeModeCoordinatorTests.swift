@@ -123,6 +123,37 @@ private actor CoordinatorNodeHostWorkerProbe: MacNodeHostWorking {
     }
 }
 
+private actor CoordinatorFailingStartWorkerProbe: MacNodeHostWorking {
+    private var startCalls = 0
+
+    func start(launch _: MacNodeHostWorkerLaunch) async throws -> MacNodeHostManifest {
+        self.startCalls += 1
+        throw MacNodeHostWorker.WorkerError.unavailable(
+            "state database uses newer schema version 10")
+    }
+
+    func supports(_: String) async -> Bool {
+        false
+    }
+
+    func invoke(_ request: BridgeInvokeRequest) async -> BridgeInvokeResponse {
+        BridgeInvokeResponse(id: request.id, ok: false)
+    }
+
+    func handleInput(invokeId _: String, seq _: Int, payloadJSON _: String) async {}
+    func cancel(invokeId _: String) async {}
+    func setRoute(_: GatewayNodeSessionRoute?, authorityGeneration _: UInt64) async -> Bool {
+        true
+    }
+
+    func publishInventory(ifCurrentRoute _: GatewayNodeSessionRoute) async {}
+    func stop() async {}
+
+    func startCallCount() -> Int {
+        self.startCalls
+    }
+}
+
 private final class CoordinatorRetrySleeperProbe: @unchecked Sendable {
     private let entered = AsyncTestGate()
     private let releaseGate = AsyncTestGate()
@@ -323,6 +354,50 @@ struct MacNodeModeCoordinatorTests {
 
         try coordinator.prepareNodeHostWorkerRetryForTesting(command: command)
         await coordinator.stopAndWait()
+    }
+
+    // Regression: an exhausted node-host worker must degrade the connect to
+    // native capabilities with a visible reason. Before this, retry exhaustion
+    // (and any startup-scoped worker failure) aborted the whole connection
+    // attempt, so the node channel never dialed and the operator saw nothing.
+    @Test @MainActor func `worker retry exhaustion degrades the node connect instead of blocking it`() async throws {
+        let worker = CoordinatorFailingStartWorkerProbe()
+        let session = GatewayNodeSession()
+        let coordinator = MacNodeModeCoordinator(
+            session: session,
+            runtime: MacNodeRuntime(nodeHostWorker: worker),
+            nodeHostWorker: worker,
+            notificationCenter: NotificationCenter(),
+            nodeHostWorkerRetryPolicy: MacNodeHostWorkerRetryPolicy(maximumRetryCount: 0))
+
+        try coordinator.prepareNodeHostWorkerRetryForTesting(
+            command: ["/usr/local/bin/openclaw", "node", "worker"])
+        coordinator.handleNodeHostWorkerFailureForTesting()
+        await coordinator.waitForRouteInvalidationForTesting()
+
+        let resolved = try await coordinator.resolveWorkerManifestForConnectionForTesting()
+        #expect(resolved.manifest == nil)
+        #expect(resolved.unavailableReason?.contains("unexpected exits") == true)
+        // The exhausted budget must also stop worker respawn attempts.
+        #expect(await worker.startCallCount() == 0)
+        await coordinator.stopAndWait()
+    }
+
+    @Test func `node channel states map to operator status lines`() {
+        #expect(MacNodeChannelState.idle.operatorStatusLine == nil)
+        #expect(MacNodeChannelState.connected(workerUnavailableReason: nil).operatorStatusLine == nil)
+
+        let degraded = MacNodeChannelState
+            .connected(workerUnavailableReason: "worker exited: schema mismatch")
+            .operatorStatusLine
+        #expect(degraded?.label == "Mac node degraded — worker exited: schema mismatch")
+        #expect(degraded?.isDegraded == true)
+
+        let unavailable = MacNodeChannelState
+            .unavailable(reason: "state database uses newer schema version 10\nTry: openclaw doctor")
+            .operatorStatusLine
+        #expect(unavailable?.label == "Mac node unavailable — state database uses newer schema version 10")
+        #expect(unavailable?.isDegraded == false)
     }
 
     @Test func `paused node state requires route disconnect`() {

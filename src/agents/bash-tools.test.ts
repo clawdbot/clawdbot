@@ -688,7 +688,7 @@ const runNotifyNoopCase = async ({ label, defaults, expectNotification }: Notify
 };
 
 describe("tool descriptions", () => {
-  it("adds cron-specific deferred follow-up guidance only when cron is available", () => {
+  it("adds automation follow-up guidance only when the scheduler is available", () => {
     const execWithCron = createTestExecTool({ hasCronTool: true });
     const processWithCron = createProcessTool({ hasCronTool: true });
 
@@ -698,10 +698,10 @@ describe("tool descriptions", () => {
     expect(processWithCron.description).toContain("completion without auto-wake");
     expect(processWithCron.description).toContain("write, send-keys, submit, paste, kill");
     expect(execWithCron.description).toContain(
-      "No sleep/delay loops for reminders/follow-ups; use cron.",
+      "No sleep loops for reminders/follow-ups; use automations.",
     );
     expect(processWithCron.description).toContain(
-      "No polling as timer/reminder; scheduled follow-up uses cron.",
+      "No polling as timer/reminder; scheduled follow-up uses automations.",
     );
     expect(execTool.description).not.toContain("use cron instead");
     expect(processTool.description).not.toContain("scheduled follow-ups");

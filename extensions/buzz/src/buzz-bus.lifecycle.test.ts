@@ -1,7 +1,8 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { finalizeEvent, getPublicKey, type Event, type Filter } from "nostr-tools";
+import { finalizeEvent, getPublicKey, verifyEvent, type Event, type Filter } from "nostr-tools";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const relayMocks = vi.hoisted(() => ({
@@ -111,11 +112,15 @@ vi.mock("nostr-tools", async (importOriginal) => {
 });
 
 import { sendBuzzTextOneShot, startBuzzBus, type BuzzBus } from "./buzz-bus.js";
+import { handleBuzzInbound } from "./inbound.js";
 import {
   BUZZ_DIFF_MESSAGE_KIND,
   BUZZ_INBOUND_MESSAGE_KINDS,
+  BUZZ_TYPING_INDICATOR_KIND,
   type BuzzInboundMessage,
 } from "./message-event.js";
+import { setBuzzRuntime } from "./runtime.js";
+import type { ResolvedBuzzAccount } from "./types.js";
 
 const BUZZ_RICH_MESSAGE_KIND = 40_002;
 const PRIVATE_KEY = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
@@ -127,6 +132,7 @@ const BOT_PUBLIC_KEY = getPublicKey(Uint8Array.from(Buffer.from(PRIVATE_KEY, "he
 const SENDER_PUBLIC_KEY = getPublicKey(Uint8Array.from(Buffer.from(SENDER_PRIVATE_KEY, "hex")));
 const SENDER_SECRET_KEY = Uint8Array.from(Buffer.from(SENDER_PRIVATE_KEY, "hex"));
 const RELAY_PUBLIC_KEY = "f".repeat(64);
+const BUZZ_RELAY_INFO_MAX_BYTES = 16 * 1024 * 1024;
 const tempDirs = new Set<string>();
 let previousStateDir: string | undefined;
 let stateDir: string;
@@ -209,13 +215,12 @@ describe("Buzz bus lifecycle", () => {
     relayMocks.stallRoomEoseChannelId = undefined;
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => ({
-        ok: true,
-        json: async () => ({
+      vi.fn(async () =>
+        Response.json({
           self: RELAY_PUBLIC_KEY,
           software: "https://github.com/block/buzz",
         }),
-      })),
+      ),
     );
   });
 
@@ -291,6 +296,58 @@ describe("Buzz bus lifecycle", () => {
     vi.useRealTimers();
   });
 
+  it("cancels oversized NIP-11 relay information before consuming the entire response", async () => {
+    relayMocks.auth.mockResolvedValue("ok");
+    const cancel = vi.fn();
+    const chunk = new Uint8Array(1024 * 1024).fill("x".charCodeAt(0));
+    let emittedChunks = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (emittedChunks === 0) {
+          controller.enqueue(
+            new TextEncoder().encode(`{"self":"${RELAY_PUBLIC_KEY}","description":"`),
+          );
+        } else if (emittedChunks <= 17) {
+          controller.enqueue(chunk);
+        } else {
+          controller.enqueue(new TextEncoder().encode('"}'));
+          controller.close();
+        }
+        emittedChunks += 1;
+      },
+      cancel,
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () => new Response(body)),
+    );
+
+    await expect(startTestBus()).rejects.toThrow(
+      `Buzz relay information: JSON response exceeds ${BUZZ_RELAY_INFO_MAX_BYTES} bytes`,
+    );
+
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(emittedChunks).toBeLessThan(19);
+    expect(relayMocks.close).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["truncated JSON", '{"self":'],
+    ["null", "null"],
+    ["an array", "[]"],
+    ["a primitive", "true"],
+  ])("rejects malformed NIP-11 relay information containing %s", async (_label, body) => {
+    relayMocks.auth.mockResolvedValue("ok");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () => new Response(body)),
+    );
+
+    await expect(startTestBus()).rejects.toThrow("Buzz relay information: malformed JSON response");
+
+    expect(relayMocks.close).toHaveBeenCalledOnce();
+  });
+
   it("publishes and closes a standalone authenticated send", async () => {
     relayMocks.auth.mockResolvedValue("ok");
 
@@ -344,6 +401,80 @@ describe("Buzz bus lifecycle", () => {
     relayMocks.send.mockClear();
     await bus.sendTyping({ channelId: CHANNEL_ID });
     expect(relayMocks.send).not.toHaveBeenCalled();
+  });
+
+  it("anchors signed threaded replies and typing while preserving top-level replies", async () => {
+    relayMocks.auth.mockResolvedValue("ok");
+    const runtime = createPluginRuntimeMock();
+    setBuzzRuntime(runtime);
+    const account: ResolvedBuzzAccount = {
+      accountId: ACCOUNT_ID,
+      name: "OpenClaw",
+      enabled: true,
+      configured: true,
+      relayUrl: "wss://buzz.example.com",
+      privateKey: PRIVATE_KEY,
+      authTag: "",
+      publicKey: BOT_PUBLIC_KEY,
+      config: {
+        groupPolicy: "open",
+        groups: { [CHANNEL_ID]: { requireMention: false } },
+      },
+    };
+    const bus = await startTestBus({
+      onMessage: async (message, activeBus, signal) =>
+        await handleBuzzInbound({ account, cfg: {}, bus: activeBus, message, signal }),
+    });
+
+    try {
+      const rootId = "a".repeat(64);
+      const messageSubscription = relayMocks.subscriptions.find((entry) =>
+        subscriptionIncludesKind(entry, 9),
+      );
+      for (const [index, parentId] of ["b".repeat(64), "c".repeat(64), undefined].entries()) {
+        const inbound = signSenderEvent({
+          kind: 9,
+          created_at: 1_700_000_000 + index,
+          content: `follow-up ${index + 1}`,
+          tags: [
+            ["h", CHANNEL_ID],
+            ...(parentId
+              ? [
+                  ["e", rootId, "", "root"],
+                  ["e", parentId, "", "reply"],
+                ]
+              : []),
+          ],
+        });
+        messageSubscription?.handlers.onevent(inbound);
+        await vi.waitFor(() =>
+          expect(runtime.channel.inbound.dispatch).toHaveBeenCalledTimes(index + 1),
+        );
+        const dispatch = vi.mocked(runtime.channel.inbound.dispatch).mock.calls[index]?.[0];
+        await dispatch?.delivery.deliver({ text: `reply ${index + 1}` }, { kind: "final" });
+        await dispatch?.replyPipeline?.typing?.start();
+
+        const published = relayMocks.publish.mock.calls.find(
+          ([event]) => event.kind === 9 && event.content === `reply ${index + 1}`,
+        )?.[0];
+        const typing = relayMocks.send.mock.calls
+          .map(([frame]) => JSON.parse(frame) as [string, Event])
+          .filter(
+            ([frameType, event]) =>
+              frameType === "EVENT" && event.kind === BUZZ_TYPING_INDICATOR_KIND,
+          )[index]?.[1];
+        const expectedTags = [
+          ["h", CHANNEL_ID],
+          ["e", parentId ? rootId : inbound.id, "", "reply"],
+        ];
+        expect(published?.tags).toEqual(expectedTags);
+        expect(typing?.tags).toEqual(expectedTags);
+        expect(published && verifyEvent(published)).toBe(true);
+        expect(typing && verifyEvent(typing)).toBe(true);
+      }
+    } finally {
+      await bus.close();
+    }
   });
 
   it("drops typing while the active relay is disconnected", async () => {

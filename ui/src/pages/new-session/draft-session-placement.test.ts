@@ -57,6 +57,7 @@ describe("new-session placement target", () => {
           key: "agent:main:cloud",
           agentId: "main",
           message: "",
+          permissionMode: "guarded",
           visibility: "draft",
           toolOverrides: { skills: { release: false } },
           worktree: true,
@@ -64,6 +65,7 @@ describe("new-session placement target", () => {
       }),
     ).toMatchObject({
       draft: {
+        permissionMode: "guarded",
         visibility: "draft",
         toolOverrides: { skills: { release: false } },
       },

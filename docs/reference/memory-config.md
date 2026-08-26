@@ -501,6 +501,10 @@ allows it).
 separate runtime-only authorization limited to same-agent private
 transcripts during the bounded Active Memory pass.
 
+An explicit `memory_search` request for the `sessions` corpus requires session
+search to be enabled for that agent. If it is unavailable, OpenClaw explains
+how to enable session indexing instead of silently searching memory files.
+
 The examples below place these settings under top-level `memory.search`. You can also
 apply equivalent settings in a per-agent `memory.search` override when only one
 agent should index and search session transcripts.

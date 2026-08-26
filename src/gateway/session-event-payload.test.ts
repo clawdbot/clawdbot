@@ -1,5 +1,8 @@
 import { expect, it } from "vitest";
-import { buildGatewaySessionEventFields } from "./session-event-payload.js";
+import {
+  buildGatewaySessionEventFields,
+  buildGatewaySessionSnapshot,
+} from "./session-event-payload.js";
 
 it("projects session actors and explicitly clears absent attribution", () => {
   expect(
@@ -60,4 +63,102 @@ it("projects the prepared permission boundary only for an explicit mode", () => 
       },
     }),
   ).toMatchObject({ permissionMode: "workspace", sessionRoot: "/workspace/project" });
+});
+
+it("serializes merge tombstones without flattening row-only execution fields", () => {
+  // oxlint-disable-next-line unicorn/prefer-structured-clone -- verify the gateway JSON wire shape
+  const snapshot = JSON.parse(
+    JSON.stringify(
+      buildGatewaySessionSnapshot({
+        sessionRow: {
+          key: "agent:main:project",
+          kind: "direct",
+          updatedAt: 5,
+          traceLevel: "full",
+          worktree: { id: "wt-1", branch: "feature", repoRoot: "/private/repo" },
+          execNode: "private-node",
+          execCwd: "/private/cwd",
+        },
+        includeSession: true,
+      }),
+    ),
+  ) as Record<string, unknown>;
+
+  expect(snapshot).toMatchObject({
+    agentStatus: null,
+    observerDigest: null,
+    traceLevel: "full",
+    session: {
+      agentStatus: null,
+      observerDigest: null,
+      traceLevel: "full",
+      worktree: { id: "wt-1", branch: "feature", repoRoot: "/private/repo" },
+      execNode: "private-node",
+      execCwd: "/private/cwd",
+    },
+  });
+  for (const field of ["worktree", "execNode", "execCwd", "placement"]) {
+    expect(snapshot, field).not.toHaveProperty(field);
+  }
+});
+
+it("scopes the global goal to its resolved agent", () => {
+  const sessionRow = {
+    key: "global",
+    kind: "global" as const,
+    updatedAt: 6,
+    goal: {
+      schemaVersion: 1 as const,
+      id: "goal-1",
+      objective: "Scoped objective",
+      status: "active" as const,
+      createdAt: 1,
+      updatedAt: 2,
+      tokenStart: 0,
+      tokensUsed: 3,
+      continuationTurns: 0,
+    },
+  };
+
+  const unscoped = buildGatewaySessionSnapshot({ sessionRow, includeSession: true });
+  expect(unscoped).not.toHaveProperty("goal");
+  expect(unscoped).not.toHaveProperty("session.goal");
+
+  const scoped = buildGatewaySessionSnapshot({ sessionRow, agentId: "main", includeSession: true });
+  expect(scoped).toMatchObject({ goal: sessionRow.goal, session: { goal: sessionRow.goal } });
+});
+
+it("preserves active run id ownership across omitted, liveness, and exact states", () => {
+  const build = (activeRunState?: { active: boolean; runIds?: string[] }) =>
+    // oxlint-disable-next-line unicorn/prefer-structured-clone -- verify the gateway JSON wire shape
+    JSON.parse(
+      JSON.stringify(
+        buildGatewaySessionSnapshot({
+          sessionRow: { key: "agent:main:main", kind: "global", updatedAt: 7 },
+          includeSession: true,
+          activeRunState,
+        }),
+      ),
+    ) as Record<string, unknown>;
+
+  const omitted = build();
+  expect(omitted).not.toHaveProperty("hasActiveRun");
+  expect(omitted).not.toHaveProperty("activeRunIds");
+  expect(omitted).not.toHaveProperty("session.hasActiveRun");
+  expect(omitted).not.toHaveProperty("session.activeRunIds");
+  expect(build({ active: true })).toMatchObject({
+    hasActiveRun: true,
+    activeRunIds: null,
+    session: { hasActiveRun: true, activeRunIds: null },
+  });
+  expect(build({ active: false, runIds: [] })).toMatchObject({
+    hasActiveRun: false,
+    activeRunIds: [],
+    session: { hasActiveRun: false, activeRunIds: [] },
+  });
+  expect(build({ active: true, runIds: ["run-1"] })).toMatchObject({
+    hasActiveRun: true,
+    activeRunIds: ["run-1"],
+    session: { hasActiveRun: true, activeRunIds: ["run-1"] },
+  });
 });

@@ -404,9 +404,15 @@ argv matching. Prefer the UI or approval flow to regenerate those entries
 instead of hand-editing the encoded value. If OpenClaw cannot parse argv
 for a command segment, entries with `argPattern` do not match.
 
-Generated `allow-always` entries are argv-bound. New generated entries include
-`argPattern`; older generated path-only entries are ignored and need a fresh
-approval. For a manual path-only rule, omit both `source` and `argPattern`.
+Generated `allow-always` entries are bound to both the exact argv and the working
+directory where you approved them. Choosing **Always allow here** authorizes the
+same command only in that directory; running it elsewhere is an allowlist miss.
+
+Older generated entries that were not directory-bound are inactive after an
+upgrade. `openclaw update` removes them during its automatic Doctor pass, or you
+can run `openclaw doctor --fix` yourself. Rerun an affected workflow and choose
+**Always allow here** to create the replacement. Manual allowlist rules are not
+changed. For a manual path-only rule, omit both `source` and `argPattern`.
 
 Each allowlist entry supports:
 
@@ -420,6 +426,32 @@ Each allowlist entry supports:
 | `lastUsedAt`       | Last-used timestamp                                                      |
 | `lastUsedCommand`  | Last command that matched; omitted for generated hashed argv entries     |
 | `lastResolvedPath` | Last resolved binary path                                                |
+
+## Cron standing grants
+
+Approvals raised by gateway-host cron runs are delivered only to connected
+approval surfaces (Control UI, TUI, macOS app) — never to chat channels, which
+would repeat a card on every occurrence. While a reviewer surface is
+connected, the scheduled run waits for the decision like an interactive run;
+cron jobs are single-flight, so at most one card per job is pending at a
+time. With no approval surface connected, the request is denied immediately
+and the run's error explains the policy fix, exactly as before. Node-host
+cron execs keep the fully headless policy (no cards) until node execution
+gains its own standing-grant path.
+
+When an approval originates from a cron job's isolated run, resolving it with
+**allow always** does not write a JSON allowlist entry. Instead the Gateway
+mints a scoped standing grant bound to that exact agent, cron job, job
+configuration, and operation (command text, working directory, and requested
+environment). Later occurrences of the same job execute that exact operation
+without prompting while the grant is valid.
+
+A grant expires 30 days after the approval and fails closed back to a normal
+prompt whenever anything changed: the job was edited or deleted, the command,
+working directory, or environment differs, the grant expired or was revoked,
+or the original approval record is gone. Mutable file operands and commands
+that require explicit review (heredocs, strict inline eval, audit
+suppression) keep prompting per occurrence. Non-cron approvals are unchanged.
 
 ## Auto-allow skill CLIs
 

@@ -52,12 +52,7 @@ import {
 } from "./bash-tools.exec-output.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
-import {
-  buildDockerExecArgs,
-  chunkString,
-  clampWithDefault,
-  readEnvInt,
-} from "./bash-tools.shared.js";
+import { chunkString, clampWithDefault, readEnvInt } from "./bash-tools.shared.js";
 import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { createSessionSlug } from "./session-slug.js";
@@ -66,6 +61,19 @@ import { createStreamingBinaryOutputSanitizer, getShellConfig } from "./shell-ut
 export { applyPathPrepend, normalizePathPrepend } from "../infra/path-prepend.js";
 
 export { execSchema } from "./bash-tools.schemas.js";
+
+export class ExecProcessPreflightError extends Error {
+  constructor(readonly result: AgentToolResult<ExecToolDetails>) {
+    super("exec denied by final preflight");
+  }
+
+  static unwrap(error: unknown): AgentToolResult<ExecToolDetails> {
+    if (error instanceof ExecProcessPreflightError) {
+      return error.result;
+    }
+    throw error;
+  }
+}
 
 const SMKX = "\x1b[?1h";
 const RMKX = "\x1b[?1l";
@@ -242,9 +250,23 @@ export function resolveExecTarget(params: {
   requestedTarget?: ExecTarget | null;
   elevatedRequested: boolean;
   sandboxAvailable: boolean;
+  sandboxRequired?: boolean;
 }) {
-  const configuredTarget = params.configuredTarget ?? "auto";
+  const sandboxRequired = params.sandboxRequired === true;
+  if (sandboxRequired && !params.sandboxAvailable) {
+    throw new Error("This session requires a sandbox, but its sandbox runtime is unavailable.");
+  }
+  if (sandboxRequired && params.elevatedRequested) {
+    throw new Error("Elevated execution is unavailable because this session requires a sandbox.");
+  }
+  // Session isolation outranks every agent, session, and request-scoped host preference.
+  const configuredTarget = sandboxRequired ? "auto" : (params.configuredTarget ?? "auto");
   const requestedTarget = params.requestedTarget ?? null;
+  if (sandboxRequired && (requestedTarget === "gateway" || requestedTarget === "node")) {
+    throw new Error(
+      `exec host not allowed (requested ${renderExecTargetLabel(requestedTarget)}; this session requires a sandbox).`,
+    );
+  }
   if (
     requestedTarget &&
     !isRequestedExecTargetAllowed({
@@ -657,6 +679,8 @@ export async function runExecProcess(opts: {
   onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void;
   /** Runs after process finalization and before the exit wake is queued. */
   onSettledBeforeNotify?: (outcome: ExecProcessOutcome) => void;
+  /** Revalidates authorization after async preparation, immediately before each spawn attempt. */
+  beforeSpawn?: () => Promise<AgentToolResult<ExecToolDetails> | undefined>;
 }): Promise<ExecProcessHandle> {
   const startedAt = Date.now();
   const sessionId = createSessionSlug(isProcessSessionIdTaken);
@@ -836,32 +860,24 @@ export async function runExecProcess(opts: {
 
   const prepareSpawnSpec = async () => {
     if (opts.sandbox) {
-      const backendExecSpec = await opts.sandbox.buildExecSpec?.({
+      if (!opts.sandbox.buildExecSpec) {
+        throw new Error("sandbox backend does not provide buildExecSpec");
+      }
+      const backendExecSpec = await opts.sandbox.buildExecSpec({
         command: execCommand,
         workdir: opts.containerWorkdir ?? opts.sandbox.containerWorkdir,
         env: shellRuntimeEnv,
         usePty: opts.usePty,
       });
-      sandboxFinalizeToken = backendExecSpec?.finalizeToken;
+      sandboxFinalizeToken = backendExecSpec.finalizeToken;
       // Cleanup ownership transfers only after buildExecSpec resolves: moving this earlier can
       // double-finalize backend failures, while removing it leaks the registered exec session.
       sandboxPrepared = true;
       return {
         mode: "child" as const,
-        argv: backendExecSpec?.argv ?? [
-          "docker",
-          ...buildDockerExecArgs({
-            containerName: opts.sandbox.containerName,
-            command: execCommand,
-            workdir: opts.containerWorkdir ?? opts.sandbox.containerWorkdir,
-            env: shellRuntimeEnv,
-            tty: opts.usePty,
-          }),
-        ],
-        env: backendExecSpec?.env ?? process.env,
-        stdinMode:
-          backendExecSpec?.stdinMode ??
-          (opts.usePty ? ("pipe-open" as const) : ("pipe-closed" as const)),
+        argv: backendExecSpec.argv,
+        env: backendExecSpec.env,
+        stdinMode: backendExecSpec.stdinMode,
       };
     }
     const { shell, args: shellArgs } = getShellConfig();
@@ -916,6 +932,13 @@ export async function runExecProcess(opts: {
     handleStdout(chunk);
   };
 
+  const assertPreSpawnAuthorized = async () => {
+    const denied = await opts.beforeSpawn?.();
+    if (denied) {
+      throw new ExecProcessPreflightError(denied);
+    }
+  };
+
   try {
     const spawnSpec = await prepareSpawnSpec();
     usingPty = spawnSpec.mode === "pty";
@@ -933,6 +956,7 @@ export async function runExecProcess(opts: {
     };
     if (spawnSpec.mode === "pty") {
       try {
+        await assertPreSpawnAuthorized();
         managedRun = await supervisor.spawn({
           ...spawnBase,
           mode: "pty",
@@ -945,6 +969,7 @@ export async function runExecProcess(opts: {
         );
         opts.warnings.push(warning);
         usingPty = false;
+        await assertPreSpawnAuthorized();
         managedRun = await supervisor.spawn({
           ...spawnBase,
           mode: "child",
@@ -954,6 +979,7 @@ export async function runExecProcess(opts: {
         });
       }
     } else {
+      await assertPreSpawnAuthorized();
       managedRun = await supervisor.spawn({
         ...spawnBase,
         mode: "child",

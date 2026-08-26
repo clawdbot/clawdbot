@@ -58,6 +58,7 @@ const SUPPORTED_PLUGIN_SCAFFOLD_TYPES = [
   "provider",
 ] as const satisfies readonly PluginScaffoldType[];
 const CLAWHUB_PACKAGE_PUBLISH_WORKFLOW_REF = "9d49df109d4ad3dc8a6ecf05d26b39f46d294721";
+const TOOL_PLUGIN_API_RANGE = ">=2026.5.17";
 
 const toolPluginEntryModuleLoaders = createPluginModuleLoaderCache();
 
@@ -449,6 +450,12 @@ function createConfigSchema() {
   };
 }
 
+const createPluginPackageMetadata = (pluginApi: string) => ({
+  extensions: ["./dist/index.js"],
+  compat: { pluginApi },
+  build: { openclawVersion: VERSION },
+});
+
 function buildScaffoldTsconfig(type: PluginScaffoldType): JsonObject {
   return {
     compilerOptions: {
@@ -493,7 +500,7 @@ function writeToolPluginScaffold(params: { rootDir: string; id: string; name: st
     },
     files: ["dist", "openclaw.plugin.json", "README.md"],
     peerDependencies: {
-      openclaw: ">=2026.5.17",
+      openclaw: TOOL_PLUGIN_API_RANGE,
     },
     dependencies: {
       typebox: "^1.1.38",
@@ -503,9 +510,7 @@ function writeToolPluginScaffold(params: { rootDir: string; id: string; name: st
       typescript: "^5.9.0",
       vitest: "^3.2.0",
     },
-    openclaw: {
-      extensions: ["./dist/index.js"],
-    },
+    openclaw: createPluginPackageMetadata(TOOL_PLUGIN_API_RANGE),
   };
   const idLiteral = jsStringLiteral(params.id);
   const nameLiteral = jsStringLiteral(params.name);
@@ -603,17 +608,11 @@ function writeProviderPluginScaffold(params: { rootDir: string; id: string; name
       vitest: "^3.2.0",
     },
     openclaw: {
-      extensions: ["./dist/index.js"],
+      ...createPluginPackageMetadata(`>=${VERSION}`),
       install: {
         clawhubSpec: `clawhub:${packageName}`,
         defaultChoice: "clawhub",
         minHostVersion: `>=${VERSION}`,
-      },
-      compat: {
-        pluginApi: `>=${VERSION}`,
-      },
-      build: {
-        openclawVersion: VERSION,
       },
       release: {
         publishToClawHub: true,

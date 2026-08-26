@@ -105,7 +105,9 @@ final class OnboardingAISetupModel {
 
     private func updateBusyReason() {
         // Every connection attempt must make quitting mid-setup confirmable.
-        OnboardingController.shared.busyReason = if self.phase == .testing || self.manualTesting {
+        OnboardingController.shared.busyReason = if self.phase == .testing || self.manualTesting ||
+            self.phase == .detecting && self.pendingActivationVerification
+        {
             "OpenClaw is testing your AI connection."
         } else if self.activeAuthOption != nil {
             self.isPreparingModel
@@ -133,6 +135,8 @@ final class OnboardingAISetupModel {
         guard self.configuredGatewayBlocker == nil else { return }
         guard !self.waitingForPendingActivationDeadline else { return }
         if self.pendingActivationVerification {
+            self.detectError = nil
+            self.phase = .detecting
             Task { await self.verifyPendingConfiguredInference() }
             return
         }

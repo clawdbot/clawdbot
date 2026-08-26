@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { EmbeddedForegroundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
+import { resolveSessionBoundaryPromptCacheKey } from "../../agents/embedded-agent-runner/run/session-boundary-prompt-cache-key.js";
 import { runWithCanonicalSkillWorkspace } from "../../agents/skill-workshop-workspace-context.js";
 import { createSkillWorkshopTool } from "../../agents/tools/skill-workshop-tool.js";
 import {
@@ -37,6 +39,20 @@ vi.mock("../../agents/sessions/index.js", () => ({
   },
 }));
 
+function foregroundPromptContext(
+  workspaceDir: string,
+  sandboxSessionKey = "agent:main:main",
+): EmbeddedForegroundPromptContext {
+  return {
+    agentId: "main",
+    agentDir: workspaceDir,
+    workspaceDir,
+    cwd: workspaceDir,
+    sandboxSessionKey,
+    trigger: "user",
+  };
+}
+
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
 
@@ -56,6 +72,11 @@ afterEach(async () => {
 describe("experience review auto apply", () => {
   it("applies the isolated reviewer proposal after the reviewer completes", async () => {
     const workspaceDir = await tempDirs.make("openclaw-experience-auto-apply-workspace-");
+    const foregroundPromptCacheKey = resolveSessionBoundaryPromptCacheKey({
+      api: "openai-responses",
+      boundaryCount: 0,
+      sessionId: "foreground-session",
+    });
     runEmbeddedAgent.mockImplementation(async (params) => {
       const tool = createSkillWorkshopTool({
         workspaceDir: params.workspaceDir,
@@ -84,7 +105,16 @@ describe("experience review auto apply", () => {
         workspaceDir,
         modelProviderId: "openai",
         modelId: "gpt-test",
-        reasoningLevel: "on",
+        foregroundPromptContext: {
+          agentId: "main",
+          agentDir: workspaceDir,
+          workspaceDir,
+          cwd: workspaceDir,
+          sandboxSessionKey: "agent:main:main",
+          trigger: "user",
+          promptCacheKey: foregroundPromptCacheKey,
+          reasoningLevel: "on",
+        },
       },
       config: { skills: { workshop: { autonomous: { mode: "auto" } } } },
     };
@@ -108,11 +138,45 @@ describe("experience review auto apply", () => {
         skillWorkshopAutonomousCapture: true,
         toolExecutionAllow: ["skill_workshop"],
         sessionPersistence: "detached",
+        promptCacheKey: foregroundPromptCacheKey,
+        trigger: "user",
         reasoningLevel: "on",
       }),
     );
     expect(runEmbeddedAgent.mock.calls[0]?.[0]).not.toHaveProperty("disableMessageTool");
     expect(runEmbeddedAgent.mock.calls[0]?.[0]).not.toHaveProperty("cleanupBundleMcpOnRunEnd");
+  });
+
+  it("records provider input buckets for the detached review run", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-experience-usage-");
+    runEmbeddedAgent.mockResolvedValue({
+      meta: {
+        agentMeta: {
+          usage: { input: 43, cacheRead: 12_000, cacheWrite: 200, output: 91 },
+        },
+      },
+    });
+    const config = { skills: { workshop: { autonomous: { mode: "auto" as const } } } };
+
+    await runSkillExperienceReview(
+      {
+        ctx: {
+          sessionId: "foreground-session",
+          sessionKey: "agent:main:usage",
+          workspaceDir,
+          modelProviderId: "openai",
+          modelId: "gpt-test",
+          foregroundPromptContext: foregroundPromptContext(workspaceDir, "agent:main:usage"),
+        },
+        config,
+      },
+      { getCurrentConfig: () => config },
+    );
+
+    expect(Object.values(readSkillReviewOutcomes().experienceReviews)[0]).toMatchObject({
+      outcome: "nothing",
+      usage: { inputTokens: 12_243, cachedInputTokens: 12_000, outputTokens: 91 },
+    });
   });
 
   it("auto-applies updates to the durable workspace from a session worktree", async () => {
@@ -170,6 +234,7 @@ describe("experience review auto apply", () => {
         workspaceDir: worktreeWorkspaceDir,
         modelProviderId: "openai",
         modelId: "gpt-test",
+        foregroundPromptContext: foregroundPromptContext(worktreeWorkspaceDir),
       },
       config: {
         agents: { list: [{ id: "main", default: true, workspace: canonicalWorkspaceDir }] },
@@ -251,6 +316,7 @@ describe("experience review auto apply", () => {
           workspaceDir,
           modelProviderId: "openai",
           modelId: "gpt-test",
+          foregroundPromptContext: foregroundPromptContext(workspaceDir),
         },
         config,
       },
@@ -313,6 +379,7 @@ describe("experience review auto apply", () => {
         workspaceDir,
         modelProviderId: "openai",
         modelId: "gpt-test",
+        foregroundPromptContext: foregroundPromptContext(workspaceDir),
       },
       config: { skills: { workshop: { autonomous: { mode: "auto" } } } },
     };
@@ -351,6 +418,7 @@ describe("experience review auto apply", () => {
         workspaceDir,
         modelProviderId: "openai",
         modelId: "gpt-test",
+        foregroundPromptContext: foregroundPromptContext(workspaceDir),
       },
       config: { skills: { workshop: { autonomous: { mode: "propose" } } } },
     };
@@ -400,6 +468,7 @@ describe("experience review auto apply", () => {
         workspaceDir,
         modelProviderId: "openai",
         modelId: "gpt-test",
+        foregroundPromptContext: foregroundPromptContext(workspaceDir),
       },
       config: { skills: { workshop: { autonomous: { mode: "auto" } } } },
     };
@@ -447,6 +516,7 @@ describe("experience review auto apply", () => {
         workspaceDir,
         modelProviderId: "openai",
         modelId: "gpt-test",
+        foregroundPromptContext: foregroundPromptContext(workspaceDir),
       },
       config: { skills: { workshop: { autonomous: { mode: "auto" } } } },
     };
@@ -503,6 +573,7 @@ describe("experience review auto apply", () => {
           workspaceDir,
           modelProviderId: "openai",
           modelId: "gpt-test",
+          foregroundPromptContext: foregroundPromptContext(workspaceDir),
         },
         config,
       },

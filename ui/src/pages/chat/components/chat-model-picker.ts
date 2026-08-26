@@ -1,8 +1,12 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { icons } from "../../../components/icons.ts";
-import { providerDisplayLabel } from "../../../components/provider-icon.ts";
 import "../../../components/tooltip.ts";
+import {
+  hasProviderBrandIcon,
+  providerDisplayLabel,
+  renderProviderBrandIcon,
+} from "../../../components/provider-icon.ts";
 import { t } from "../../../i18n/index.ts";
 import {
   type ChatContextWindowControlParams,
@@ -15,17 +19,18 @@ import {
   type ChatModelPickerOption,
   type ChatModelPickerTargetGroup,
 } from "./chat-model-picker-options.ts";
-import { syncChatPickerOverlay } from "./chat-picker-overlay.ts";
+import { handleChatComposerDetailsToggle, syncChatPickerOverlay } from "./chat-picker-overlay.ts";
 
 export type ChatModelCatalogState = {
   hasSnapshot: boolean;
-  status: "idle" | "loading" | "refreshing" | "ready" | "error" | "offline";
+  status: "idle" | "loading" | "ready" | "error" | "offline";
 };
 
 type ChatModelPickerParams = {
   contextWindow?: ChatContextWindowControlParams;
   disabled: boolean;
   disabledReason?: string;
+  mobileSecondary?: { disabled: boolean; label: string; value: string };
   modelCatalogState?: ChatModelCatalogState;
   modelSelectionLocked: boolean;
   modelOptions: ChatModelPickerOption[];
@@ -246,15 +251,13 @@ function renderCatalogState(
   const label =
     state.status === "offline"
       ? t("common.offline")
-      : state.status === "refreshing"
-        ? t("chat.modelControls.refreshingModels")
-        : state.status === "error"
-          ? errorLabel
-          : state.status === "ready"
-            ? hasOptions
-              ? `${t("modelSetup.failure.auth")}. ${t("modelSetup.failureGuidance.auth")}`
-              : t("chat.modelControls.noModelsAvailable")
-            : t("chat.modelControls.loadingModels");
+      : state.status === "error"
+        ? errorLabel
+        : state.status === "ready"
+          ? hasOptions
+            ? `${t("modelSetup.failure.auth")}. ${t("modelSetup.failureGuidance.auth")}`
+            : t("chat.modelControls.noModelsAvailable")
+          : t("chat.modelControls.loadingModels");
   return html`
     <div
       class="chat-controls__model-catalog-state ${hasOptions
@@ -323,6 +326,20 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
   ]
     .filter(Boolean)
     .join(" · ");
+  // Brand mark ahead of the model name, and only when one actually ships:
+  // hasProviderBrandIcon gates out the lettered fallback badge, so a provider
+  // without a mark renders nothing rather than a placeholder — the trigger's gap
+  // sits between boxes that exist, so nothing reserves space either. A status
+  // label replaces the model name outright, and a provider mark next to
+  // "Loading..." would claim an identity the trigger is not showing.
+  const triggerProviderIcon =
+    !params.triggerStatusLabel &&
+    activeModelOption &&
+    hasProviderBrandIcon(activeModelOption.provider)
+      ? renderProviderBrandIcon(activeModelOption.provider, {
+          className: "chat-controls__trigger-provider-icon",
+        })
+      : nothing;
   const providerGroups = new Map<string, ChatModelPickerOption[]>();
   for (const option of params.modelOptions) {
     const existing = providerGroups.get(option.provider);
@@ -369,7 +386,9 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
     const details = (event.currentTarget as HTMLElement).closest<HTMLDetailsElement>("details");
     if (details) {
       details.open = false;
-      details.querySelector<HTMLElement>("summary")?.focus();
+      if (event.detail === 0) {
+        details.querySelector<HTMLElement>("summary")?.focus({ preventScroll: true });
+      }
     }
   };
   const selectTarget = (groupId: string, value: string, event: MouseEvent) => {
@@ -382,7 +401,9 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
     const details = (event.currentTarget as HTMLElement).closest<HTMLDetailsElement>("details");
     if (details) {
       details.open = false;
-      details.querySelector<HTMLElement>("summary")?.focus();
+      if (event.detail === 0) {
+        details.querySelector<HTMLElement>("summary")?.focus({ preventScroll: true });
+      }
     }
   };
   const highlightOption = (row: HTMLButtonElement) => {
@@ -391,12 +412,35 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
       highlightModelRow(menu, row);
     }
   };
+  const openEffortPicker = (event: MouseEvent) => {
+    event.stopPropagation();
+    if (params.mobileSecondary?.disabled !== false) {
+      return;
+    }
+    // SAFETY: Lit binds this handler directly to the effort button rendered below.
+    const modelPicker = (event.currentTarget as HTMLElement).closest<HTMLDetailsElement>(
+      ".chat-controls__model-picker",
+    );
+    const effortPicker = modelPicker?.parentElement?.querySelector<HTMLDetailsElement>(
+      ".chat-controls__effort-picker",
+    );
+    if (!modelPicker || !effortPicker) {
+      return;
+    }
+    effortPicker.setAttribute("data-chat-focus-panel", "");
+    modelPicker.open = false;
+    effortPicker.open = true;
+  };
+  const settingsLabel = params.mobileSecondary
+    ? `${t("chat.selectors.model")}: ${triggerTitle}; ${params.mobileSecondary.label}: ${params.mobileSecondary.value}`
+    : `${t("chat.selectors.model")}: ${triggerTitle}`;
   return html`
     <details
       class="chat-controls__inline-select chat-controls__model-picker"
       @keydown=${handleModelPickerKeydown}
       @toggle=${(event: Event) => {
         const details = event.currentTarget as HTMLDetailsElement;
+        handleChatComposerDetailsToggle(event);
         syncChatPickerOverlay(details);
         if (!details.open) {
           resetModelSearch(details);
@@ -416,10 +460,11 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
           ? "chat-controls__inline-select-trigger--disabled"
           : ""}"
         data-chat-model-select="true"
+        data-chat-model-settings="true"
         data-chat-model-locked=${params.modelSelectionLocked ? "true" : "false"}
         data-chat-select-value=${params.selectedModelValue}
         data-chat-model-tools=${modelToolsUnavailable ? "unavailable" : "available"}
-        aria-label=${`${t("chat.selectors.model")}: ${triggerTitle}`}
+        aria-label=${settingsLabel}
         aria-disabled=${params.disabled ? "true" : "false"}
         title=${params.disabledReason ?? triggerTitle}
         @click=${(event: MouseEvent) => {
@@ -430,6 +475,9 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
           (event.currentTarget as HTMLElement).focus({ preventScroll: true });
         }}
       >
+        <span class="chat-controls__model-settings-icon" aria-hidden="true"
+          >${icons.slidersHorizontal}</span
+        >
         ${modelToolsUnavailable
           ? html`
               <openclaw-tooltip .content=${t("chat.modelControls.chatOnlyHelp")}>
@@ -440,6 +488,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
               </openclaw-tooltip>
             `
           : nothing}
+        ${triggerProviderIcon}
         <span class="chat-controls__inline-select-label">
           ${params.triggerStatusLabel ?? params.triggerModelLabel}
         </span>
@@ -453,12 +502,28 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
               </span>
             `
           : nothing}
+        <span class="chat-controls__inline-select-chevron" aria-hidden="true"
+          >${icons.chevronUp}</span
+        >
       </summary>
       <wa-popup data-anchored-overlay>
         <div
           class="chat-controls__inline-select-menu chat-controls__model-menu"
           aria-label=${t("chat.selectors.model")}
         >
+          ${params.mobileSecondary
+            ? html`
+                <button
+                  class="chat-controls__inline-select-option chat-controls__mobile-effort-option"
+                  type="button"
+                  ?disabled=${params.mobileSecondary.disabled}
+                  @click=${openEffortPicker}
+                >
+                  <span>${params.mobileSecondary.label}</span>
+                  <span>${params.mobileSecondary.value}</span>
+                </button>
+              `
+            : nothing}
           ${params.modelSelectionLocked
             ? html`
                 <div
@@ -605,6 +670,42 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                       ${params.modelOptions.length > 0 && params.selectedModelValue !== ""
                         ? html`<footer class="chat-controls__model-provenance">
                             <span>${t("chat.modelControls.sessionOverride")}</span>
+                            <openclaw-tooltip
+                              .content=${t("chat.modelControls.resetToDefault", {
+                                model: defaultModelOption?.label ?? params.triggerModelLabel,
+                              })}
+                            >
+                              <button
+                                class="chat-controls__model-reset"
+                                data-chat-model-reset="true"
+                                type="button"
+                                ?disabled=${params.disabled}
+                                @click=${(event: MouseEvent) => {
+                                  event.stopPropagation();
+                                  if (params.disabled) {
+                                    event.preventDefault();
+                                    return;
+                                  }
+                                  commitModel("");
+                                  const resetButton = event.currentTarget;
+                                  if (!(resetButton instanceof HTMLElement)) {
+                                    return;
+                                  }
+                                  const details =
+                                    resetButton.closest<HTMLDetailsElement>("details");
+                                  if (details) {
+                                    details.open = false;
+                                    if (event.detail === 0) {
+                                      details
+                                        .querySelector<HTMLElement>("summary")
+                                        ?.focus({ preventScroll: true });
+                                    }
+                                  }
+                                }}
+                              >
+                                ${t("chat.modelControls.useDefault")}
+                              </button>
+                            </openclaw-tooltip>
                           </footer>`
                         : nothing}
                     `
