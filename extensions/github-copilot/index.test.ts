@@ -423,6 +423,19 @@ describe("github-copilot plugin", () => {
       expectedDomain: "github.com",
     },
     {
+      label: "a public OAuth account with stale enterprise configuration",
+      profile: {
+        type: "oauth" as const,
+        provider: "github-copilot",
+        access: "short-lived-copilot-token",
+        refresh: "durable-github-token",
+        expires: Date.now() + 60_000,
+      },
+      expectedToken: "durable-github-token",
+      expectedDomain: "github.com",
+      configuredDomain: "other.ghe.com",
+    },
+    {
       label: "an enterprise OAuth account",
       profile: {
         type: "oauth" as const,

@@ -15,6 +15,7 @@ import {
   resolveConfiguredSecretInputWithFallback,
   resolveRequiredConfiguredSecretRefInputString,
 } from "openclaw/plugin-sdk/secret-input-runtime";
+import { PUBLIC_GITHUB_COPILOT_DOMAIN } from "./domain.js";
 import { PROVIDER_ID } from "./models.js";
 import { formatGithubCopilotApiKey, parseGithubCopilotApiKey } from "./oauth.js";
 
@@ -95,8 +96,14 @@ export async function resolveFirstGithubToken(params: {
         })[0];
   const profile = profileId ? authStore.profiles[profileId] : undefined;
   if (profile?.type === "oauth") {
+    const formatted = formatGithubCopilotApiKey(profile);
+    if (!normalizeOptionalSecretInput(profile.refresh)) {
+      return { githubToken: "", hasProfile };
+    }
+    const parsed = parseGithubCopilotApiKey(formatted);
     return {
-      ...parseGithubCopilotApiKey(formatGithubCopilotApiKey(profile)),
+      ...parsed,
+      githubDomain: parsed.githubDomain ?? PUBLIC_GITHUB_COPILOT_DOMAIN,
       hasProfile,
     };
   }
