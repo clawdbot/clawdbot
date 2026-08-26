@@ -534,13 +534,6 @@
   white-space: nowrap;
 }
 
-.session-progress-card__count {
-  color: var(--muted);
-  font-family: var(--mono);
-  font-size: var(--control-ui-text-xs);
-  font-variant-numeric: tabular-nums;
-}
-
 .session-progress-card__dismiss {
   width: 22px;
   min-width: 22px;

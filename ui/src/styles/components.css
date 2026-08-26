@@ -2564,12 +2564,6 @@ openclaw-chat-session-rail {
   background: var(--warn-subtle);
 }
 
-.chip-danger {
-  color: var(--danger);
-  border-color: color-mix(in srgb, var(--danger) 30%, transparent);
-  background: var(--danger-subtle);
-}
-
 /* ===========================================
    Data Table
    =========================================== */
