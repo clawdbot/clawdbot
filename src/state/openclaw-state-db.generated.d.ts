@@ -737,23 +737,6 @@ export interface GithubPublicationRequests {
   worktree_id: string;
 }
 
-export interface InstalledPluginIndex {
-  compat_registry_version: string;
-  diagnostics_json: string;
-  generated_at_ms: number;
-  host_contract_version: string;
-  index_key: string;
-  install_records_json: string;
-  migration_version: number;
-  plugins_json: string;
-  policy_hash: string;
-  refresh_reason: string | null;
-  updated_at_ms: number;
-  version: number;
-  warning: string | null;
-  workspace_dir: string | null;
-}
-
 export interface MacosPortGuardianRecords {
   command: string;
   mode: string;
@@ -1585,7 +1568,6 @@ export interface DB {
   gateway_restart_intent: GatewayRestartIntent;
   gateway_restart_sentinel: GatewayRestartSentinel;
   github_publication_requests: GithubPublicationRequests;
-  installed_plugin_index: InstalledPluginIndex;
   macos_port_guardian_records: MacosPortGuardianRecords;
   managed_outgoing_image_records: ManagedOutgoingImageRecords;
   mcp_oauth_pending_authorizations: McpOauthPendingAuthorizations;

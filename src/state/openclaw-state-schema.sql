@@ -944,25 +944,7 @@ CREATE TABLE IF NOT EXISTS clawhub_promotion_claims (
   claimed_at_ms INTEGER NOT NULL
 ) STRICT;
 
-CREATE TABLE IF NOT EXISTS installed_plugin_index (
-  index_key TEXT NOT NULL PRIMARY KEY,
-  version INTEGER NOT NULL,
-  host_contract_version TEXT NOT NULL,
-  compat_registry_version TEXT NOT NULL,
-  migration_version INTEGER NOT NULL,
-  policy_hash TEXT NOT NULL,
-  generated_at_ms INTEGER NOT NULL,
-  workspace_dir TEXT,
-  refresh_reason TEXT,
-  install_records_json TEXT NOT NULL,
-  plugins_json TEXT NOT NULL,
-  diagnostics_json TEXT NOT NULL,
-  warning TEXT,
-  updated_at_ms INTEGER NOT NULL
-) STRICT;
 
-CREATE INDEX IF NOT EXISTS idx_installed_plugin_index_generated
-  ON installed_plugin_index(generated_at_ms DESC, index_key);
 
 CREATE TABLE IF NOT EXISTS official_external_plugin_catalog_snapshots (
   feed_url TEXT NOT NULL PRIMARY KEY,

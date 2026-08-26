@@ -114,6 +114,47 @@ export function migrateJsonCanonicalWideRowsV13(
     rebuildJsonCanonicalTable(db, "cron_jobs");
     migrated = true;
   }
+  if (tableExists(db, "installed_plugin_index")) {
+    // Fold the singleton index row (revision lived in updated_at_ms) into the KV.
+    const row = db
+      .prepare(
+        `SELECT version, warning, host_contract_version, compat_registry_version,
+                migration_version, policy_hash, generated_at_ms, workspace_dir,
+                refresh_reason, install_records_json, plugins_json, diagnostics_json,
+                updated_at_ms
+           FROM installed_plugin_index
+          WHERE index_key = 'installed-plugin-index'`,
+      )
+      .get();
+    if (row) {
+      const index = {
+        version: Number(row.version),
+        ...(typeof row.warning === "string" && row.warning ? { warning: row.warning } : {}),
+        hostContractVersion: row.host_contract_version,
+        compatRegistryVersion: row.compat_registry_version,
+        migrationVersion: Number(row.migration_version),
+        policyHash: row.policy_hash,
+        generatedAtMs: Number(row.generated_at_ms),
+        ...(typeof row.workspace_dir === "string" ? { workspaceDir: row.workspace_dir } : {}),
+        ...(typeof row.refresh_reason === "string" && row.refresh_reason
+          ? { refreshReason: row.refresh_reason }
+          : {}),
+        installRecords: JSON.parse(String(row.install_records_json)) as unknown,
+        plugins: JSON.parse(String(row.plugins_json)) as unknown,
+        diagnostics: JSON.parse(String(row.diagnostics_json)) as unknown,
+      };
+      db.prepare(
+        `INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
+         VALUES (?, ?, ?) ON CONFLICT(state_key) DO NOTHING`,
+      ).run(
+        "plugins.installedIndex",
+        JSON.stringify({ revision: Number(row.updated_at_ms), index }),
+        Number(row.updated_at_ms),
+      );
+    }
+    db.exec("DROP TABLE installed_plugin_index;");
+    migrated = true;
+  }
   if (tableExists(db, "subagent_runs") && tableHasColumn(db, "subagent_runs", "task")) {
     // Shipped pending-delivery columns can hold the only surviving result text.
     repairLegacySubagentRetainedResults(db);
