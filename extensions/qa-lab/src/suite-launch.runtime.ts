@@ -104,6 +104,7 @@ const MAX_ISOLATED_FLOW_CONCURRENCY = 8;
 // Raising it risks cleanup overlap and shared port/listener contention.
 const MAX_PARALLEL_SCRIPT_CONCURRENCY = 3;
 const MAX_NATIVE_OUTPUT_LINE_LENGTH = 16_384;
+const MAX_NATIVE_OUTPUT_MARKER_SUFFIX_LENGTH = 256;
 const ISOLATED_FLOW_WORKER_START_STAGGER_MS = 1_500;
 const QA_SUITE_INFRA_RETRY_LIMIT = 1;
 const QA_SUITE_INFRA_RETRY_NETWORK_ERROR_CODES = new Set([
@@ -419,9 +420,28 @@ async function resolveSuiteExecutionPlan(
 }
 
 function createQaNativeOutputForwarder() {
-  const outputs = {
-    stdout: { decoder: new StringDecoder("utf8"), pending: "", dropping: false },
-    stderr: { decoder: new StringDecoder("utf8"), pending: "", dropping: false },
+  type MultilineSecret = "pem" | "authTag";
+  type OutputState = {
+    decoder: StringDecoder;
+    dropping?: MultilineSecret | "line";
+    droppedSuffix?: string;
+    multiline?: MultilineSecret;
+    pending: string;
+  };
+  const outputs: Record<"stderr" | "stdout", OutputState> = {
+    stdout: { decoder: new StringDecoder("utf8"), pending: "" },
+    stderr: { decoder: new StringDecoder("utf8"), pending: "" },
+  };
+  const endsMultilineSecret = (kind: MultilineSecret, text: string) =>
+    kind === "pem" ? /-----END [A-Z ]*PRIVATE KEY-----/u.test(text) : /\]\s*[,}\r\n]*$/u.test(text);
+  const detectMultilineSecret = (text: string): MultilineSecret | undefined => {
+    if (/-----BEGIN [A-Z ]*PRIVATE KEY-----/u.test(text)) {
+      return "pem";
+    }
+    if (/(?:^|[^\w])"?authTag"?\s*[:=]\s*\[/u.test(text)) {
+      return "authTag";
+    }
+    return undefined;
   };
 
   return {
@@ -434,20 +454,55 @@ function createQaNativeOutputForwarder() {
         const segment = complete ? text.slice(0, newline + 1) : text;
         text = complete ? text.slice(newline + 1) : "";
         if (output.dropping) {
-          output.dropping = !complete;
+          const discarded = (output.droppedSuffix ?? "") + segment;
+          if (output.dropping === "line") {
+            const multiline = detectMultilineSecret(discarded);
+            if (multiline) {
+              output.dropping = multiline;
+            }
+          }
+          if (
+            complete &&
+            (output.dropping === "line" || endsMultilineSecret(output.dropping, discarded))
+          ) {
+            output.dropping = undefined;
+            output.droppedSuffix = undefined;
+          } else {
+            output.droppedSuffix = complete
+              ? undefined
+              : discarded.slice(-MAX_NATIVE_OUTPUT_MARKER_SUFFIX_LENGTH);
+          }
           continue;
         }
-        // Secrets and CI commands may span chunks; never flush an incomplete line.
+        // Redaction needs complete lines and whole multiline secrets, never partial chunks.
         if (output.pending.length + segment.length > MAX_NATIVE_OUTPUT_LINE_LENGTH) {
+          const discarded = output.pending + segment;
+          const multiline = output.multiline ?? detectMultilineSecret(discarded);
           process[stream].write("[qa-suite] native output line omitted: exceeded safe limit\n");
           output.pending = "";
-          output.dropping = !complete;
+          output.dropping =
+            multiline && (!complete || !endsMultilineSecret(multiline, segment))
+              ? multiline
+              : undefined;
+          if (!complete) {
+            output.dropping ??= "line";
+          }
+          output.droppedSuffix =
+            output.dropping === "line"
+              ? discarded.slice(-MAX_NATIVE_OUTPUT_MARKER_SUFFIX_LENGTH)
+              : undefined;
+          output.multiline = undefined;
           continue;
         }
         output.pending += segment;
         if (complete) {
+          output.multiline ??= detectMultilineSecret(output.pending);
+          if (output.multiline && !endsMultilineSecret(output.multiline, output.pending)) {
+            continue;
+          }
           process[stream].write(redactQaGatewayDebugText(output.pending));
           output.pending = "";
+          output.multiline = undefined;
         }
       }
     },
@@ -456,7 +511,8 @@ function createQaNativeOutputForwarder() {
         const output = outputs[stream];
         output.pending += output.decoder.end();
         if (output.pending && !output.dropping) {
-          process[stream].write(redactQaGatewayDebugText(output.pending));
+          // Independent partitions must never concatenate unredactable partial secrets.
+          process[stream].write("[qa-suite] unterminated native output omitted\n");
         }
         output.pending = "";
       }

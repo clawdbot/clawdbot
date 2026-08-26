@@ -2010,6 +2010,39 @@ describe("qa suite runtime launcher", () => {
       params.onCommandOutput?.("stderr", Buffer.from("rer synthetic-bearer-secret-987654321\n"));
       params.onCommandOutput?.("stderr", Buffer.from("#"));
       params.onCommandOutput?.("stderr", Buffer.from("#[error]attacker\n"));
+      params.onCommandOutput?.("stdout", Buffer.from("prefix -----BEGIN RSA PRIVATE KEY-----\n"));
+      params.onCommandOutput?.("stdout", Buffer.from("synthetic-pem-secret-body-22334455\n"));
+      params.onCommandOutput?.("stdout", Buffer.from("-----END RSA PRIVATE KEY-----\n"));
+      params.onCommandOutput?.(
+        "stdout",
+        Buffer.from(`${"x".repeat(16_384)}-----BEGIN EC PRIVATE KEY-----\n`),
+      );
+      params.onCommandOutput?.("stdout", Buffer.from("synthetic-oversized-pem-secret-body\n"));
+      params.onCommandOutput?.(
+        "stdout",
+        Buffer.from("-----END EC PRIVATE KEY-----\nsafe PEM recovery\n"),
+      );
+      params.onCommandOutput?.("stdout", Buffer.from(`${"x".repeat(16_380)}-----BE`));
+      params.onCommandOutput?.("stdout", Buffer.from("GIN OPENSSH PRIVATE KEY-----\n"));
+      params.onCommandOutput?.("stdout", Buffer.from("synthetic-split-oversized-pem-secret\n"));
+      params.onCommandOutput?.("stdout", Buffer.from("-----END OPENSSH PRI"));
+      params.onCommandOutput?.("stdout", Buffer.from("VATE KEY-----\nsafe split PEM recovery\n"));
+      params.onCommandOutput?.("stderr", Buffer.from("channels.buzz.authTag: [\r\n"));
+      params.onCommandOutput?.("stderr", Buffer.from('  "synthetic-auth-tag-secret",\r\n'));
+      params.onCommandOutput?.("stderr", Buffer.from('  "synthetic-auth-signature"\r\n]\r\n'));
+      params.onCommandOutput?.("stderr", Buffer.from('  "authTag": [\n'));
+      params.onCommandOutput?.("stderr", Buffer.from('    "synthetic-json-auth-tag-secret"\n]\n'));
+      params.onCommandOutput?.(
+        "stderr",
+        Buffer.from(`${"x".repeat(16_384)} channels.buzz.authTag: [\n`),
+      );
+      params.onCommandOutput?.("stderr", Buffer.from('"synthetic-oversized-auth-tag-secret"\n]\n'));
+      params.onCommandOutput?.("stderr", Buffer.from(`${"x".repeat(16_375)} channels.buzz.auth`));
+      params.onCommandOutput?.("stderr", Buffer.from("Tag: [\n"));
+      params.onCommandOutput?.(
+        "stderr",
+        Buffer.from('"synthetic-split-oversized-auth-secret"\n]\n'),
+      );
       params.onCommandOutput?.("stderr", Buffer.from(`OPENAI_API_KEY=${"x".repeat(20_000)}`));
       params.onCommandOutput?.("stderr", Buffer.from("discarded-secret\nsafe output resumed\n"));
       params.onCommandOutput?.("stdout", Buffer.from("OPENAI_API_KEY="));
@@ -2024,6 +2057,24 @@ describe("qa suite runtime launcher", () => {
         outputDir: ".artifacts/qa-e2e/safe-native-output",
         scenarioIds: ["docker-npm-onboard-channel-agent"],
       });
+      const unsafeTailFragments = [
+        "OPENAI_API_K",
+        "EY=synthetic-cross-forwarder-secret-55667788",
+        ":",
+        ":stop-commands::cross-forwarder-attacker",
+        "-----BEGIN OPENSSH PRIVATE KEY-----\nsynthetic-incomplete-private-key",
+      ];
+      for (const [index, fragment] of unsafeTailFragments.entries()) {
+        runQaTestFileScenarios.mockImplementationOnce(async (params) => {
+          params.onCommandOutput?.("stdout", Buffer.from(fragment));
+          return await defaultTestFileImplementation(params);
+        });
+        await runQaSuite({
+          repoRoot,
+          outputDir: `.artifacts/qa-e2e/safe-native-output-${index}`,
+          scenarioIds: ["docker-npm-onboard-channel-agent"],
+        });
+      }
 
       const stdout = stdoutWrite.mock.calls.map(([chunk]) => String(chunk)).join("");
       const stderr = stderrWrite.mock.calls.map(([chunk]) => String(chunk)).join("");
@@ -2031,12 +2082,26 @@ describe("qa suite runtime launcher", () => {
       expect(stdout).toContain(": :stop-commands::attacker");
       expect(stdout).not.toContain("synthetic-split-secret-123456789");
       expect(stdout).not.toContain("synthetic-trailing-secret-1122334455");
+      expect(stdout).not.toContain("synthetic-pem-secret-body-22334455");
+      expect(stdout).not.toContain("synthetic-oversized-pem-secret-body");
+      expect(stdout).toContain("safe PEM recovery");
+      expect(stdout).not.toContain("synthetic-split-oversized-pem-secret");
+      expect(stdout).toContain("safe split PEM recovery");
+      expect(stdout).not.toContain("synthetic-cross-forwarder-secret-55667788");
+      expect(stdout).not.toContain("synthetic-incomplete-private-key");
+      expect(stdout).not.toContain("cross-forwarder-attacker");
       expect(stdout).not.toContain("::stop-commands::");
       expect(stderr).toContain("Bearer <redacted>");
       expect(stderr).toContain("# #[error]attacker");
+      expect(stderr).toContain("channels.buzz.authTag: <redacted>");
       expect(stderr).toContain("native output line omitted: exceeded safe limit");
       expect(stderr).toContain("safe output resumed");
       expect(stderr).not.toContain("synthetic-bearer-secret-987654321");
+      expect(stderr).not.toContain("synthetic-auth-tag-secret");
+      expect(stderr).not.toContain("synthetic-auth-signature");
+      expect(stderr).not.toContain("synthetic-json-auth-tag-secret");
+      expect(stderr).not.toContain("synthetic-oversized-auth-tag-secret");
+      expect(stderr).not.toContain("synthetic-split-oversized-auth-secret");
       expect(stderr).not.toContain("discarded-secret");
       expect(stderr).not.toContain("##[error]");
     } finally {
