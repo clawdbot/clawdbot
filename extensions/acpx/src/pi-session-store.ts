@@ -352,12 +352,13 @@ async function readPiSessionFileWithinLimit(file: string): Promise<string> {
     if (stats.size > MAX_SESSION_BYTES) {
       throw new RangeError("Pi session exceeds the 32 MiB read safety limit");
     }
-    const readLimit = MAX_SESSION_BYTES + 1;
-    // Keep one capped owner buffer live; resizing near the limit retains two large buffers.
+    const observedSize = Math.min(stats.size, MAX_SESSION_BYTES);
+    const readLimit = observedSize + 1;
+    // The extra byte detects growth after stat without reserving the full cap for small files.
     const storage = Buffer.allocUnsafe(readLimit);
     let totalBytes = 0;
     let position = 0;
-    while (totalBytes <= MAX_SESSION_BYTES) {
+    while (totalBytes < readLimit) {
       const { bytesRead } = await handle.read(
         storage,
         totalBytes,
@@ -369,7 +370,7 @@ async function readPiSessionFileWithinLimit(file: string): Promise<string> {
       }
       totalBytes += bytesRead;
       position += bytesRead;
-      if (totalBytes > MAX_SESSION_BYTES) {
+      if (totalBytes > observedSize) {
         throw new RangeError("Pi session exceeds the 32 MiB read safety limit");
       }
     }
