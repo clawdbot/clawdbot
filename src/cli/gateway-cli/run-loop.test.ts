@@ -1023,7 +1023,7 @@ describe("runGatewayLoop", () => {
         setImmediate(resolve);
       });
 
-      expectRestartCloseCall(close, 15_000);
+      expectRestartCloseCall(close, 315_000);
       expect(start).toHaveBeenCalledTimes(2);
 
       sigint();
@@ -1067,7 +1067,7 @@ describe("runGatewayLoop", () => {
       await vi.waitFor(() => expect(start).toHaveBeenCalledTimes(2));
 
       expect(waitForGatewayActiveWork).toHaveBeenCalledWith(undefined, expect.any(Object));
-      expectRestartCloseCall(close, 15_000);
+      expectRestartCloseCall(close, 315_000);
 
       sigint();
       await expect(exited).resolves.toBe(0);

@@ -363,7 +363,8 @@ describe("createTelegramIngressMonitor", () => {
         accountId: "default",
         dispatch: async () => {
           participant.current =
-            createTelegramSpooledReplayDeferredParticipant("test:aborted-non-retryable") ?? undefined;
+            createTelegramSpooledReplayDeferredParticipant("test:aborted-non-retryable") ??
+            undefined;
         },
       });
 
@@ -423,11 +424,11 @@ describe("createTelegramIngressMonitor", () => {
 
       await vi.waitFor(async () =>
         expect(await queue.listPending({ limit: "all" })).toMatchObject([
-            {
-              id: eventId,
-              attempts: 0,
-              lastError: "turn-abandoned",
-            },
+          {
+            id: eventId,
+            attempts: 0,
+            lastError: "turn-abandoned",
+          },
         ]),
       );
       expect((await queue.enqueue(eventId, payload, { laneKey })).kind).not.toBe("completed");

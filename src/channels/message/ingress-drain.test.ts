@@ -680,7 +680,7 @@ describe("channel ingress drain", () => {
     });
   });
 
-  it("keeps retry-accounted abandonment pending beyond the failure threshold", async () => {
+  it("does not spend retry attempts on repeated abandonment", async () => {
     await withTempState(async (stateDir) => {
       let clock = 1;
       const queue = createTestIngressQueue(stateDir, { now: () => clock });
@@ -705,7 +705,7 @@ describe("channel ingress drain", () => {
       expect(await queue.listPending()).toEqual([
         expect.objectContaining({
           id: "abandoned",
-          attempts: 3,
+          attempts: 0,
           lastError: "turn-abandoned",
         }),
       ]);
