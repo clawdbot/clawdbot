@@ -156,8 +156,8 @@ export function stripInlineDirectiveTagsForDelivery(text: string): StripInlineDi
   if (!text) {
     return { text, changed: false };
   }
-  // Malformed prefixes are untrusted text, not reply intent. The regex keeps
-  // complete tags distinguishable while the code-region scanner preserves examples.
+  // Only malformed prefixes at the absolute message start are control text; keep
+  // the regex non-multiline while code-region scanning preserves literal examples.
   const stripped = replaceOutsideCodeRegions(text, INLINE_DIRECTIVE_TAG_WITH_PADDING_RE, (match) =>
     match.includes("]]") ? " " : "",
   );
