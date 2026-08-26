@@ -226,5 +226,4 @@ describe.runIf(browserMode)("file preview modal responsive layout", () => {
 
     expect(dialog.getBoundingClientRect().width).toBeCloseTo(expectedWidth, 0);
   });
-
 });

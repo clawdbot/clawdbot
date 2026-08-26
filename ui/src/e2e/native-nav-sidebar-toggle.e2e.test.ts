@@ -512,6 +512,54 @@ suite.define(() => {
     await page.locator(".cmd-palette__input").waitFor({ state: "visible" });
   });
 
+  it("opens the mobile drawer by swipe across the full mobile-layout range", async () => {
+    const page = await openPage({ hasTouch: true, height: 393, nativeNav: false, width: 852 });
+    const shell = page.locator(".shell");
+    await expect.poll(() => shell.getAttribute("class")).toContain("shell--mobile-nav");
+
+    await page.locator(".content").evaluate((content) => {
+      const touch = (clientX: number, clientY: number) =>
+        new Touch({
+          identifier: 1,
+          target: content,
+          clientX,
+          clientY,
+          pageX: clientX,
+          pageY: clientY,
+          screenX: clientX,
+          screenY: clientY,
+        });
+      content.dispatchEvent(
+        new TouchEvent("touchstart", {
+          bubbles: true,
+          composed: true,
+          touches: [touch(24, 180)],
+          changedTouches: [touch(24, 180)],
+        }),
+      );
+      content.dispatchEvent(
+        new TouchEvent("touchmove", {
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+          touches: [touch(210, 184)],
+          changedTouches: [touch(210, 184)],
+        }),
+      );
+      content.dispatchEvent(
+        new TouchEvent("touchend", {
+          bubbles: true,
+          composed: true,
+          touches: [],
+          changedTouches: [touch(210, 184)],
+        }),
+      );
+    });
+
+    await expect.poll(() => shell.getAttribute("class")).toContain("shell--nav-drawer-open");
+    await expect.poll(() => page.locator(".shell-nav.nav-drawer").isVisible()).toBe(true);
+  });
+
   it("keeps the mobile drawer modal, keyboard-contained, and focus-restoring", async () => {
     const page = await openPage({
       nativeNav: false,

@@ -30,7 +30,9 @@ function activeModalToastLayer() {
 }
 
 function restingToastLayer() {
-  return document.querySelector(".shell-nav[aria-modal='true']") ?? document.querySelector(".shell");
+  return (
+    document.querySelector(".shell-nav[aria-modal='true']") ?? document.querySelector(".shell")
+  );
 }
 
 // Outcomes reported during startup (a restored post-update result, for example)

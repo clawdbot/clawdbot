@@ -150,8 +150,7 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   will-change: transform;
 }
 
-.shell--mobile-nav
-  .shell-nav-backdrop:is([data-nav-drawer-dragging], [data-nav-drawer-settling]) {
+.shell--mobile-nav .shell-nav-backdrop:is([data-nav-drawer-dragging], [data-nav-drawer-settling]) {
   will-change: opacity;
 }
 
