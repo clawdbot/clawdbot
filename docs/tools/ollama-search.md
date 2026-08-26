@@ -17,6 +17,11 @@ Ollama host plus `ollama signin`. Direct hosted search (no local Ollama) needs
 
 ## Setup
 
+If you already use Ollama for models, Ollama Web Search reuses the same
+configured host.
+
+### Local Ollama
+
 <Steps>
   <Step title="Start Ollama">
     Make sure Ollama is installed and running.
@@ -36,8 +41,15 @@ Ollama host plus `ollama signin`. Direct hosted search (no local Ollama) needs
   </Step>
 </Steps>
 
-If you already use Ollama for models, Ollama Web Search reuses the same
-configured host.
+### Hosted Ollama
+
+1. Create an [Ollama API key](https://docs.ollama.com/api/authentication#api-keys)
+   and set `OLLAMA_API_KEY` in the Gateway environment.
+2. Set `models.providers.ollama.baseUrl` to `https://ollama.com`; see
+   [Config](#config).
+3. Run `openclaw configure --section web` and select **Ollama Web Search**.
+
+Hosted search does not require a local Ollama daemon or `ollama signin`.
 
 <Note>
   OpenClaw never auto-selects Ollama Web Search over a higher-priority
