@@ -1,11 +1,11 @@
 /**
  * Trusted diagnostics emitted around Codex dynamic tool execution lifecycle.
  */
+import { runWithDiagnosticTraceContext } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import {
   createDiagnosticTraceContextFromActiveScope,
   emitTrustedDiagnosticEvent,
   freezeDiagnosticTraceContext,
-  runWithDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import type { CodexDynamicToolCallParams, CodexDynamicToolCallResponse } from "./protocol.js";
