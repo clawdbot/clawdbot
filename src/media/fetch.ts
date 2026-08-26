@@ -22,7 +22,7 @@ import { retryAsync, type RetryOptions } from "../infra/retry.js";
 import { isTransientNetworkError } from "../infra/retryable-network-errors.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
-import { saveMediaStream, type SavedMedia } from "./store.js";
+import { saveMediaStream, type MediaMaxBytesForMime, type SavedMedia } from "./store.js";
 
 /** Default remote media fetch cap shared by buffer reads and store writes. */
 const DEFAULT_FETCH_MEDIA_MAX_BYTES = MAX_DOCUMENT_BYTES;
@@ -116,6 +116,7 @@ type SaveResponseMediaOptions = {
   fallbackContentType?: string;
   subdir?: string;
   originalFilename?: string;
+  maxBytesForMime?: MediaMaxBytesForMime;
 };
 
 /** Options for guarded URL fetches that are saved directly into the media store. */
@@ -123,6 +124,7 @@ type SaveRemoteMediaOptions = FetchMediaOptions & {
   fallbackContentType?: string;
   subdir?: string;
   originalFilename?: string;
+  maxBytesForMime?: MediaMaxBytesForMime;
 };
 
 type GuardedMediaResponse = {
@@ -551,6 +553,7 @@ async function saveOkMediaResponse(params: {
   fallbackContentType?: string;
   subdir?: string;
   originalFilename?: string;
+  maxBytesForMime?: MediaMaxBytesForMime;
 }): Promise<SavedRemoteMedia> {
   assertMediaContentLength({
     res: params.res,
@@ -578,6 +581,7 @@ async function saveOkMediaResponse(params: {
       params.maxBytes,
       params.originalFilename,
       detectionFilePathHint,
+      { maxBytesForMime: params.maxBytesForMime },
     );
     return { ...saved, ...(fileName ? { fileName } : {}) };
   } catch (err) {
@@ -660,6 +664,7 @@ export async function saveResponseMedia(
     fallbackContentType: options.fallbackContentType,
     subdir: options.subdir,
     originalFilename: options.originalFilename,
+    maxBytesForMime: options.maxBytesForMime,
   });
 }
 
@@ -688,6 +693,7 @@ async function saveRemoteMediaOnce(options: SaveRemoteMediaOptions): Promise<Sav
       fallbackContentType: options.fallbackContentType,
       subdir: options.subdir,
       originalFilename: options.originalFilename,
+      maxBytesForMime: options.maxBytesForMime,
     });
   } finally {
     if (release) {

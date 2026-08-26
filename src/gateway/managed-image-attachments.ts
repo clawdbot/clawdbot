@@ -39,7 +39,7 @@ import {
   resolvePlaybackModeForSource,
   resolvePlaybackTranscode,
 } from "../media/playback-transcode.js";
-import { getMediaDir, MEDIA_MAX_BYTES, saveMediaBuffer, saveMediaSource } from "../media/store.js";
+import { getMediaDir, saveMediaBuffer, saveMediaSource } from "../media/store.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import { buildAssistantMediaContentDisposition } from "./assistant-media-content-disposition.js";
@@ -317,6 +317,16 @@ function maxBytesForManagedMediaKind(
   imageLimits: ManagedImageAttachmentLimits,
 ): number {
   return kind === "image" ? imageLimits.maxBytes : maxBytesForKind(kind);
+}
+
+function maxBytesForManagedMime(
+  mime: string | undefined,
+  imageLimits: ManagedImageAttachmentLimits,
+): number {
+  const kind = mediaKindFromMime(mime);
+  return kind === "image" || kind === "audio" || kind === "video" || kind === "document"
+    ? maxBytesForManagedMediaKind(kind, imageLimits)
+    : Math.max(imageLimits.maxBytes, maxBytesForKind("unknown"));
 }
 
 function createManagedMediaByteLimitError(params: {
@@ -1432,17 +1442,13 @@ export async function createManagedOutgoingMediaBlocks(params: {
               // File URLs have already been normalized for display metadata and policy checks.
               // Pass that path to the store instead of treating URI syntax as a filename.
               const ingestSource = localMediaPath ?? mediaUrl;
+              const ingestMaxBytes = Math.max(limits.maxBytes, maxBytesForKind("unknown"));
               return await saveMediaSource(
                 ingestSource,
                 undefined,
                 "outgoing/originals",
-                Math.max(
-                  limits.maxBytes,
-                  maxBytesForKind("audio"),
-                  maxBytesForKind("video"),
-                  maxBytesForKind("document"),
-                  MEDIA_MAX_BYTES,
-                ),
+                ingestMaxBytes,
+                { maxBytesForMime: (mime) => maxBytesForManagedMime(mime, limits) },
               );
             })();
       savedOriginalPath = savedOriginal.path;

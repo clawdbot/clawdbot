@@ -2,6 +2,7 @@
 import "../infra/fs-safe-defaults.js";
 import {
   FsSafeError,
+  openLocalFileSafely as openLocalFileSafelyImpl,
   readLocalFileSafely as readLocalFileSafelyImpl,
   type FsSafeErrorCode,
 } from "../infra/fs-safe.js";
@@ -14,6 +15,9 @@ export type FsSafeLikeError = {
 
 /** fs-safe local file reader re-exported for media-store test/runtime injection. */
 export const readLocalFileSafely = readLocalFileSafelyImpl;
+
+/** fs-safe local file opener re-exported for bounded media MIME sniffing. */
+export const openLocalFileSafely = openLocalFileSafelyImpl;
 
 /** Narrows fs-safe failures without exposing the full infra error class to store callers. */
 export function isFsSafeError(error: unknown): error is FsSafeLikeError {

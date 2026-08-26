@@ -2037,6 +2037,29 @@ describe("createManagedOutgoingImageBlocks", () => {
     expect(requireBlock(blocks).type).toBe("image");
   });
 
+  it("keeps byte detection authoritative after hinted-kind ingestion", async () => {
+    const sourcePath = path.join(stateDir, "workspace", "report.png");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(
+      sourcePath,
+      Buffer.concat([Buffer.from("%PDF-1.4\n% test\n"), Buffer.alloc(128)]),
+    );
+
+    const blocks = await createManagedOutgoingImageBlocks({
+      sessionKey: "agent:main:main",
+      mediaUrls: [sourcePath],
+      stateDir,
+      localRoots: [path.dirname(sourcePath)],
+      allowLocalNonImage: true,
+      limits: { maxBytes: 32 },
+    });
+
+    expect(requireBlock(blocks)).toMatchObject({
+      type: "document",
+      mimeType: "application/pdf",
+    });
+  });
+
   it("allows managed inbound image paths before validating explicit roots", async () => {
     const inboundPath = path.join(stateDir, "media", "inbound", "inbound.png");
     await fs.mkdir(path.dirname(inboundPath), { recursive: true });

@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 
 const mocks = vi.hoisted(() => ({
+  openLocalFileSafely: vi.fn(),
   readLocalFileSafely: vi.fn(),
   isFsSafeError: vi.fn(
     (error: unknown) => typeof error === "object" && error !== null && "code" in error,
@@ -13,6 +14,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./store.runtime.js", () => {
   return {
+    openLocalFileSafely: mocks.openLocalFileSafely,
     readLocalFileSafely: mocks.readLocalFileSafely,
     isFsSafeError: mocks.isFsSafeError,
   };
