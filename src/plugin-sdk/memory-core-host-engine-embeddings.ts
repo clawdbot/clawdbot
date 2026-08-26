@@ -36,11 +36,13 @@ export {
   hasNonTextEmbeddingParts,
   isEmbeddingBatchUnavailableError,
   isMissingEmbeddingApiKeyError,
+  isRemoteProviderQuotaError,
   mapBatchEmbeddingsByIndex,
   normalizeBatchBaseUrl,
   normalizeEmbeddingModelWithPrefixes,
   postJsonWithRetry,
   readEmbeddingBatchJsonl,
+  readRemoteProviderErrorFacts,
   resolveEmbeddingEndpointUrl,
   resolveBatchCompletionFromStatus,
   resolveCompletedBatchResult,
@@ -64,6 +66,7 @@ export type {
   ProviderBatchOutputLine,
   RemoteEmbeddingClient,
   RemoteEmbeddingProviderId,
+  RemoteProviderErrorFacts,
 } from "../../packages/memory-host-sdk/src/engine-embeddings.js";
 export {
   getMemoryEmbeddingProvider,

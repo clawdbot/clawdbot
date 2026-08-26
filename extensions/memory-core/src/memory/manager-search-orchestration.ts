@@ -290,7 +290,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
           if (opts?.signal?.aborted) {
             throw err;
           }
-          this.markLocalEmbeddingProviderDegraded(err);
+          this.markEmbeddingProviderDegraded(err);
           const message = formatErrorMessage(err);
           const activatedFallback = this.shouldFallbackOnError(err)
             ? await this.activateFallbackProvider(message).catch((fallbackErr: unknown) => {
@@ -332,13 +332,19 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
             } catch (fallbackErr) {
               releaseFallbackProvider();
               if (!opts?.signal?.aborted) {
-                this.markLocalEmbeddingProviderDegraded(fallbackErr);
+                this.markEmbeddingProviderDegraded(fallbackErr);
               }
               throw fallbackErr;
             } finally {
               releaseFallbackProvider();
             }
-          } else if (!this.provider && this.fts.enabled && this.fts.available) {
+          } else if (
+            // Degradation may retain the provider handle for later recovery;
+            // the bootstrap-failure record still means keyword-only for now.
+            (!this.provider || this.embeddingBootstrapFailure !== undefined) &&
+            this.fts.enabled &&
+            this.fts.available
+          ) {
             this.assertRequiredProviderAvailable("search");
             log.warn(
               `memory search: embeddings unavailable; using keyword-only results: ${message}`,

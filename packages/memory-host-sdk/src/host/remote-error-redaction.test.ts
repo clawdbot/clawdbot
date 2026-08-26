@@ -166,7 +166,6 @@ describe.sequential("memory remote error redaction", () => {
         ssrfPolicy: buildRemoteBaseUrlPolicy(baseUrl),
         body: {},
         errorPrefix: "post failed",
-        attachStatus: true,
         parse: (payload) => payload,
       });
 

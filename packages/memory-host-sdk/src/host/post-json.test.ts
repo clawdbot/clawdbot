@@ -1,6 +1,6 @@
 // Memory Host SDK tests cover post json behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { postJson } from "./post-json.js";
+import { isRemoteProviderQuotaError, postJson, readRemoteProviderErrorFacts } from "./post-json.js";
 import { withRemoteHttpResponse } from "./remote-http.js";
 
 vi.mock("./remote-http.js", () => ({
@@ -119,7 +119,7 @@ describe("postJson", () => {
     expect(canceled).toBe(true);
   });
 
-  it("attaches status to thrown error when requested", async () => {
+  it("attaches status to every thrown non-ok error", async () => {
     remoteHttpMock.mockImplementationOnce(async (params) => {
       return await params.onResponse(textResponse("bad gateway", 502));
     });
@@ -131,7 +131,6 @@ describe("postJson", () => {
         headers: {},
         body: {},
         errorPrefix: "post failed",
-        attachStatus: true,
         parse: () => ({}),
       });
     } catch (caught) {
@@ -141,6 +140,65 @@ describe("postJson", () => {
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toBe("post failed: 502 bad gateway");
     expect((error as { status?: unknown }).status).toBe(502);
+    expect((error as { code?: unknown }).code).toBeUndefined();
+    expect((error as { retryAfterMs?: unknown }).retryAfterMs).toBeUndefined();
+  });
+
+  it("attaches provider error code, type, and Retry-After delay to quota errors", async () => {
+    remoteHttpMock.mockImplementationOnce(async (params) => {
+      return await params.onResponse(
+        new Response(
+          JSON.stringify({
+            error: {
+              message: "You have no credits remaining.",
+              type: "insufficient_quota",
+              code: "credit_balance_exhausted",
+            },
+          }),
+          { status: 429, headers: { "retry-after": "17" } },
+        ),
+      );
+    });
+
+    let error: unknown;
+    try {
+      await postJson({
+        url: "https://memory.example/v1/post",
+        headers: {},
+        body: {},
+        errorPrefix: "openai embeddings failed",
+        parse: () => ({}),
+      });
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("openai embeddings failed: 429");
+    expect((error as { status?: unknown }).status).toBe(429);
+    expect((error as { code?: unknown }).code).toBe("credit_balance_exhausted");
+    expect((error as { errorType?: unknown }).errorType).toBe("insufficient_quota");
+    expect((error as { retryAfterMs?: unknown }).retryAfterMs).toBe(17_000);
+    expect(isRemoteProviderQuotaError(error)).toBe(true);
+  });
+
+  it("ignores prose-shaped error body codes", async () => {
+    remoteHttpMock.mockImplementationOnce(async (params) => {
+      return await params.onResponse(
+        new Response(JSON.stringify({ error: { code: "not a machine code!" } }), { status: 400 }),
+      );
+    });
+
+    const error: unknown = await postJson({
+      url: "https://memory.example/v1/post",
+      headers: {},
+      body: {},
+      errorPrefix: "post failed",
+      parse: () => ({}),
+    }).catch((caught: unknown) => caught);
+
+    expect((error as { status?: unknown }).status).toBe(400);
+    expect((error as { code?: unknown }).code).toBeUndefined();
   });
 
   it("bounds non-ok response bodies before formatting the error", async () => {
@@ -260,5 +318,43 @@ describe("postJson", () => {
       }),
     ).rejects.toThrow("post failed: response body too large");
     expect(canceled).toBe(true);
+  });
+});
+
+describe("readRemoteProviderErrorFacts", () => {
+  it("reads facts through wrapper cause chains", () => {
+    const transport = Object.assign(new Error("openai embeddings failed: 429 no credits"), {
+      status: 429,
+      code: "credit_balance_exhausted",
+      errorType: "insufficient_quota",
+      retryAfterMs: 12_000,
+    });
+    const wrapped = Object.assign(new Error(transport.message), {
+      code: "MEMORY_EMBEDDING_OPERATION_FAILED",
+      cause: transport,
+    });
+
+    expect(readRemoteProviderErrorFacts(wrapped)).toEqual({
+      status: 429,
+      code: "credit_balance_exhausted",
+      errorType: "insufficient_quota",
+      retryAfterMs: 12_000,
+    });
+    expect(isRemoteProviderQuotaError(wrapped)).toBe(true);
+  });
+
+  it("recognizes legacy responses that only carry the insufficient_quota code", () => {
+    expect(
+      isRemoteProviderQuotaError(
+        Object.assign(new Error("quota"), { status: 429, code: "insufficient_quota" }),
+      ),
+    ).toBe(true);
+  });
+
+  it("returns no facts for errors without a numeric status", () => {
+    expect(readRemoteProviderErrorFacts(new Error("fetch failed"))).toEqual({});
+    expect(isRemoteProviderQuotaError(new Error("insufficient_quota mentioned in prose"))).toBe(
+      false,
+    );
   });
 });

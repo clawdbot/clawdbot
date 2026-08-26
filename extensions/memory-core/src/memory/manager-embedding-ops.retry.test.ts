@@ -5,7 +5,7 @@ import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
 type EmbeddingQueryRetryHarness = {
   provider: EmbeddingProvider;
   embedQueryWithRetry: (text: string, signal?: AbortSignal) => Promise<number[]>;
-  markLocalEmbeddingProviderDegraded: (error: unknown) => void;
+  markEmbeddingProviderDegraded: ReturnType<typeof vi.fn>;
   resolveEmbeddingTimeout: () => number;
   withProviderUse: <T>(provider: EmbeddingProvider, run: () => Promise<T>) => Promise<T>;
 };
@@ -26,7 +26,7 @@ function createEmbeddingQueryRetryHarness(
   return Object.assign(Object.create(MemoryManagerEmbeddingOps.prototype), {
     provider,
     resolveEmbeddingTimeout: () => timeoutMs,
-    markLocalEmbeddingProviderDegraded: vi.fn(),
+    markEmbeddingProviderDegraded: vi.fn(),
     withProviderUse: async <T>(_provider: EmbeddingProvider, run: () => Promise<T>) => await run(),
   }) as EmbeddingQueryRetryHarness;
 }
@@ -107,5 +107,23 @@ describe("memory embedding query retry cancellation", () => {
       true,
     );
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("fails exhausted-quota provider errors after a single attempt", async () => {
+    const embedQuery = vi.fn<EmbeddingProvider["embedQuery"]>().mockRejectedValue(
+      Object.assign(new Error("openai embeddings failed: 429 You have no credits remaining."), {
+        status: 429,
+        code: "insufficient_quota",
+      }),
+    );
+    const manager = createEmbeddingQueryRetryHarness(embedQuery);
+
+    await expect(manager.embedQueryWithRetry("search terms")).rejects.toMatchObject({
+      code: "MEMORY_EMBEDDING_OPERATION_FAILED",
+      operation: "query",
+    });
+
+    expect(embedQuery).toHaveBeenCalledOnce();
+    expect(manager.markEmbeddingProviderDegraded).toHaveBeenCalledOnce();
   });
 });

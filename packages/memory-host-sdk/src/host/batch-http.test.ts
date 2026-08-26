@@ -1,7 +1,8 @@
 // Memory Host SDK tests cover batch http behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("./post-json.js", () => ({
+vi.mock("./post-json.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./post-json.js")>()),
   postJson: vi.fn(),
 }));
 
@@ -17,7 +18,6 @@ type PostJsonParams = {
   headers?: unknown;
   body?: unknown;
   errorPrefix?: unknown;
-  attachStatus?: unknown;
 };
 
 function requirePostJsonParams(
@@ -78,7 +78,6 @@ describe("postJsonWithRetry", () => {
     expect(postJsonParams.headers).toEqual({ Authorization: "Bearer test" });
     expect(postJsonParams.body).toEqual({ chunks: ["a", "b"] });
     expect(postJsonParams.errorPrefix).toBe("memory batch failed");
-    expect(postJsonParams.attachStatus).toBe(true);
 
     const retryOptions = requireFirstRetryOptions(retryAsyncMock);
     expect(retryOptions.attempts).toBe(3);
@@ -87,6 +86,8 @@ describe("postJsonWithRetry", () => {
     expect(retryOptions.shouldRetry({ status: 429 })).toBe(true);
     expect(retryOptions.shouldRetry({ status: 503 })).toBe(true);
     expect(retryOptions.shouldRetry({ status: 400 })).toBe(false);
+    // Exhausted quota is terminal even though it arrives as a 429.
+    expect(retryOptions.shouldRetry({ status: 429, code: "insufficient_quota" })).toBe(false);
   });
 
   it("attaches status to non-ok errors", async () => {

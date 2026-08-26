@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   MEMORY_CHUNKING_VERSION,
+  type MemorySearchRuntimeDebug,
   type MemorySyncParams,
   type MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -74,6 +75,10 @@ const log = createSubsystemLogger("memory");
 export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
   private fallbackProviderInitPromise: Promise<boolean> | null = null;
   protected syncProviderGeneration: MemorySyncProviderGeneration | null = null;
+  protected abstract embeddingBootstrapFailure?: NonNullable<
+    MemorySearchRuntimeDebug["embeddingBootstrap"]
+  >;
+  protected abstract clearEmbeddingBootstrapFailureAfterRecovery(): void;
 
   protected beginSyncProviderGeneration(_options?: { forceFtsOnly?: boolean }): void {}
   protected endSyncProviderGeneration(): void {}
@@ -143,7 +148,12 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     ) {
       return;
     }
-    this.resetProviderInitializationForRetry();
+    // A recorded degradation keeps the provider handle and its backoff-until
+    // probe entry for recovery; resetting here would flip the lifecycle back
+    // to pending and re-create the provider on every blocked sync tick.
+    if (this.embeddingBootstrapFailure === undefined) {
+      this.resetProviderInitializationForRetry();
+    }
     throw new Error(
       `Memory sync aborted: embedding provider "${this.settings.provider}" is configured but unavailable. ` +
         `Refusing to run sync in fts-only fallback mode to protect existing vector index (current model: ${existingMeta.model}).`,
@@ -490,6 +500,9 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     this.providerLifecycle = fallbackState.lifecycle;
     this.providerKey = this.computeProviderKey();
     this.batch = this.resolveBatchConfig();
+    // Any bootstrap-failure record and cached failed probe describe the
+    // retired primary; a healthy fallback must not stay keyword-only on them.
+    this.clearEmbeddingBootstrapFailureAfterRecovery();
     log.warn(`memory embeddings: switched to fallback provider (${fallbackRequest.provider})`, {
       reason,
     });

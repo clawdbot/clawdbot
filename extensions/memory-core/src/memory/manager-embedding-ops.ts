@@ -52,6 +52,7 @@ import {
   filterNonEmptyMemoryChunks,
   isRetryableMemoryEmbeddingError,
   isSplittableMemoryEmbeddingTransportError,
+  MEMORY_EMBEDDING_RETRY_MAX_DELAY_MS,
   resolveMemoryEmbeddingRetryDelay,
   runMemoryEmbeddingBatchRetryWithSplit,
   runMemoryEmbeddingRetryLoop,
@@ -79,7 +80,6 @@ const EMBEDDING_BATCH_MAX_TOKENS = 8000;
 const EMBEDDING_INDEX_CONCURRENCY = 4;
 const EMBEDDING_RETRY_MAX_ATTEMPTS = 3;
 const EMBEDDING_RETRY_BASE_DELAY_MS = 500;
-const EMBEDDING_RETRY_MAX_DELAY_MS = 8000;
 const EMBEDDING_QUERY_TIMEOUT_REMOTE_MS = 60_000;
 const EMBEDDING_QUERY_TIMEOUT_LOCAL_MS = 5 * 60_000;
 const EMBEDDING_BATCH_TIMEOUT_REMOTE_MS = 2 * 60_000;
@@ -313,7 +313,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   protected abstract batchFailureLastError?: string;
   protected abstract batchFailureLastProvider?: string;
   protected abstract batchFailureLock: Promise<void>;
-  protected abstract markLocalEmbeddingProviderDegraded(err: unknown): void;
+  protected abstract markEmbeddingProviderDegraded(err: unknown): void;
   private activeProviderUses = new Map<EmbeddingProvider, number>();
   private providerIdleWaiters = new Map<EmbeddingProvider, Set<() => void>>();
   private syncProviderGenerationRelease: (() => void) | null = null;
@@ -702,7 +702,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           error: formatErrorMessage(err),
         });
       }
-      this.markLocalEmbeddingProviderDegraded(err);
+      this.markEmbeddingProviderDegraded(err);
       throw createMemoryEmbeddingOperationError({
         operation: params.operation,
         providerId: provider.id,
@@ -719,7 +719,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     const waitMs = resolveMemoryEmbeddingRetryDelay(
       delayMs,
       Math.random(),
-      EMBEDDING_RETRY_MAX_DELAY_MS,
+      MEMORY_EMBEDDING_RETRY_MAX_DELAY_MS,
     );
     log.warn(`memory embeddings retryable error; ${action} in ${waitMs}ms`);
     await sleepWithAbort(waitMs, signal);
@@ -777,7 +777,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       );
     } catch (err) {
       if (markDegraded) {
-        this.markLocalEmbeddingProviderDegraded(err);
+        this.markEmbeddingProviderDegraded(err);
       }
       throw createMemoryEmbeddingOperationError({
         operation: "query",

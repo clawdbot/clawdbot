@@ -129,6 +129,16 @@ still indexes text for keyword search, and `memory_search` includes the
 redacted embedding-bootstrap reason in `debug.embeddingBootstrap` even when
 there are no matches.
 
+**Provider quota and auth failures.** Account-level rejections (an exhausted
+quota such as OpenAI's `insufficient_quota`, billing, or auth failures) are
+terminal: the engine does not retry them, marks the provider degraded in
+`memory status` (with the provider error code and the next retry time), and
+pauses embedding attempts for 10 minutes before probing again. Keyword search
+keeps working, an existing semantic index is preserved rather than rewritten,
+and indexing resumes automatically once the provider recovers. Genuine
+rate-limit 429s are still retried and honor the provider's `Retry-After` hint
+(capped at 30 seconds).
+
 **Explicit provider unavailable.** If you name any other provider explicitly
 (for example `openai`, `ollama`, `gemini`) and it becomes unavailable at
 request time (bad auth, network failure), `memory_search` reports memory as

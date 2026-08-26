@@ -1,5 +1,9 @@
 // Memory Core plugin module implements manager embedding policy behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  isRemoteProviderQuotaError,
+  readRemoteProviderErrorFacts,
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 
 type MemoryEmbeddingTextPart = {
@@ -82,8 +86,11 @@ export function buildMemoryEmbeddingBatches<T extends MemoryEmbeddingChunk>(
   return batches;
 }
 
+// Message fallback for providers that throw plain errors without a structured
+// status (Bedrock, Copilot, local runtimes). Status numbers must sit next to
+// an HTTP-ish marker so payload numbers ("512 dimensions") never match.
 const RETRYABLE_MEMORY_EMBEDDING_SERVICE_ERROR_RE =
-  /(rate[_ ]limit|too many requests|429|resource has been exhausted|5\d\d|cloudflare|tokens per day)/i;
+  /(rate[_ ]limit|too many requests|resource has been exhausted|cloudflare|tokens per day|(?::\s*|\bhttp\s+|\bstatus\s+|\bcode\s+|\()(?:429|5\d\d)\b)/i;
 
 const RETRYABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE =
   /(fetch failed|other side closed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|UND_ERR_|socket hang up|socket terminated|network error|read ECONN|timed out|connection (?:reset|refused|aborted|timed out)|EHOSTUNREACH|ENETUNREACH|ECONNABORTED|EAI_AGAIN)/i;
@@ -99,12 +106,42 @@ export function isSplittableMemoryEmbeddingTransportError(message: string): bool
   return SPLITTABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE.test(message);
 }
 
-export function isRetryableMemoryEmbeddingError(message: string): boolean {
+export function isRetryableMemoryEmbeddingError(err: unknown): boolean {
+  // Exhausted quota is a terminal 429: retrying burns paid requests that can
+  // never succeed until an operator restores billing.
+  if (isRemoteProviderQuotaError(err)) {
+    return false;
+  }
+  const status = readRemoteProviderErrorFacts(err).status;
+  if (status !== undefined) {
+    // 408/429/5xx are transient by HTTP contract; any other 4xx means the
+    // provider definitively rejected this request or credential.
+    return status === 408 || status === 429 || status >= 500;
+  }
+  const message = formatErrorMessage(err);
   return (
     RETRYABLE_MEMORY_EMBEDDING_SERVICE_ERROR_RE.test(message) ||
     isRetryableMemoryEmbeddingTransportError(message)
   );
 }
+
+/**
+ * Account-level provider rejections (quota, billing, auth) that keep failing
+ * until an operator acts; callers pause embeddings instead of retrying them
+ * on every sync.
+ */
+export function isMemoryEmbeddingProviderAccessError(err: unknown): boolean {
+  if (isRemoteProviderQuotaError(err)) {
+    return true;
+  }
+  const status = readRemoteProviderErrorFacts(err).status;
+  return status === 401 || status === 402 || status === 403;
+}
+
+// Caps both jittered backoff and honored Retry-After hints. Retry sleeps run
+// inside the single-flight sync slot, so an unbounded server hint would starve
+// every queued session sync behind it.
+export const MEMORY_EMBEDDING_RETRY_MAX_DELAY_MS = 30_000;
 
 export function resolveMemoryEmbeddingRetryDelay(
   delayMs: number,
@@ -116,7 +153,7 @@ export function resolveMemoryEmbeddingRetryDelay(
 
 export async function runMemoryEmbeddingRetryLoop<T>(params: {
   run: () => Promise<T>;
-  isRetryable: (message: string) => boolean;
+  isRetryable: (err: unknown) => boolean;
   waitForRetry: (delayMs: number) => Promise<void>;
   maxAttempts: number;
   baseDelayMs: number;
@@ -129,7 +166,11 @@ export async function runMemoryEmbeddingRetryLoop<T>(params: {
     maxDelayMs: Number.MAX_SAFE_INTEGER,
     // Caller cancellation wins even when its timeout resembles a retryable
     // provider error; otherwise abandoned searches start another request.
-    shouldRetry: (err) => !params.signal?.aborted && params.isRetryable(formatErrorMessage(err)),
+    shouldRetry: (err) => !params.signal?.aborted && params.isRetryable(err),
+    // A genuine rate-limit hint beats exponential guessing at when the
+    // provider will accept the next request.
+    retryAfterMs: (err) => readRemoteProviderErrorFacts(err).retryAfterMs,
+    retryAfterMaxDelayMs: MEMORY_EMBEDDING_RETRY_MAX_DELAY_MS,
     sleep: params.waitForRetry,
   });
 }
@@ -137,7 +178,7 @@ export async function runMemoryEmbeddingRetryLoop<T>(params: {
 export async function runMemoryEmbeddingBatchRetryWithSplit<TInput, TOutput>(params: {
   items: TInput[];
   run: (items: TInput[]) => Promise<TOutput[]>;
-  isRetryable: (message: string) => boolean;
+  isRetryable: (err: unknown) => boolean;
   isSplittable: (message: string) => boolean;
   waitForRetry: (delayMs: number) => Promise<void>;
   maxAttempts: number;

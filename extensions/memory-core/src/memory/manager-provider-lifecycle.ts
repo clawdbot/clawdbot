@@ -6,6 +6,7 @@ import {
   toErrorObject,
 } from "openclaw/plugin-sdk/error-runtime";
 import { listRegisteredMemoryEmbeddingProviderAdapters } from "openclaw/plugin-sdk/memory-core-host-embedding-registry";
+import { readRemoteProviderErrorFacts } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
   createSubsystemLogger,
   resolveAgentDir,
@@ -27,6 +28,7 @@ import {
   type EmbeddingProviderResult,
 } from "./embeddings.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
+import { isMemoryEmbeddingProviderAccessError } from "./manager-embedding-policy.js";
 import {
   createDegradedMemoryProviderLifecycle,
   createPendingMemoryProviderLifecycle,
@@ -36,6 +38,10 @@ import {
 import type { MemoryIndexIdentityState } from "./manager-reindex-state.js";
 
 const EMBEDDING_PROBE_CACHE_TTL_MS = 30_000;
+// Backoff for account-level provider rejections (quota, billing, auth). These
+// only clear when an operator acts, so re-probing every 30s would burn one
+// doomed paid request per sync tick; one probe per backoff window is enough.
+const EMBEDDING_ACCESS_ERROR_BACKOFF_MS = 10 * 60_000;
 const log = createSubsystemLogger("memory");
 
 export type MemoryEmbeddingProviderRequirement = {
@@ -55,6 +61,13 @@ const EMBEDDING_PROBE_CACHE = new Map<string, EmbeddingProbeCacheEntry>();
 
 export function clearMemoryEmbeddingProbeCache(): void {
   EMBEDDING_PROBE_CACHE.clear();
+}
+
+/** Probe-failure TTL doubles as the retry backoff for the failed provider. */
+function resolveEmbeddingProbeFailureBackoffMs(err: unknown): number {
+  return isMemoryEmbeddingProviderAccessError(err)
+    ? EMBEDDING_ACCESS_ERROR_BACKOFF_MS
+    : EMBEDDING_PROBE_CACHE_TTL_MS;
 }
 
 export function resolveEffectiveMemorySearchSettings(
@@ -113,7 +126,6 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
   protected abstract readonly requestedProvider: EmbeddingProviderRequest;
   protected abstract providerInitPromise: Promise<void> | null;
   protected abstract providerInitialized: boolean;
-  protected abstract embeddingBootstrapFailure?: MemoryEmbeddingBootstrapDebug;
   protected abstract providerRetirementPromise: Promise<void>;
   protected abstract providersPendingRetirement: Set<EmbeddingProvider>;
   protected abstract closing: boolean;
@@ -163,17 +175,21 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
       this.provider = null;
       this.providerRuntime = undefined;
     }
+    const backoffMs = resolveEmbeddingProbeFailureBackoffMs(err);
+    const errorFacts = readRemoteProviderErrorFacts(err);
     this.providerInitialized = true;
     this.providerUnavailableReason = reason;
     this.providerLifecycle = createDegradedMemoryProviderLifecycle({
       providerId: provider,
       reason,
+      code: errorFacts.code ?? errorFacts.errorType,
+      retryAtMs: Date.now() + backoffMs,
     });
     this.embeddingBootstrapFailure = debug;
     this.providerKey = this.computeProviderKey();
     this.batch = this.resolveBatchConfig();
     this.vector.semanticAvailable = false;
-    this.cacheProbeResult({ ok: false, error: reason });
+    this.cacheProbeResult({ ok: false, error: reason }, { ttlMs: backoffMs });
     return debug;
   }
 
@@ -337,24 +353,43 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     this.providerLifecycle = createPendingMemoryProviderLifecycle(this.requestedProvider);
   }
 
-  protected markLocalEmbeddingProviderDegraded(err: unknown): void {
-    if (this.provider?.id !== "local") {
+  protected markEmbeddingProviderDegraded(err: unknown): void {
+    if (this.provider?.id === "local") {
+      const message = formatErrorMessage(err);
+      const degradedProvider = this.provider;
+      void this.retireCurrentProvider();
+      this.providerUnavailableReason = `Local embeddings degraded: ${message}`;
+      this.providerLifecycle = createDegradedMemoryProviderLifecycle({
+        providerId: degradedProvider.id,
+        reason: message,
+      });
+      EMBEDDING_PROBE_CACHE.delete(this.cacheKey);
+      this.providerKey = this.computeProviderKey();
+      this.batch = this.resolveBatchConfig();
+      this.vector.semanticAvailable = false;
+      log.warn("memory embeddings: local provider degraded after transport failure", {
+        error: message,
+      });
       return;
     }
-    const message = formatErrorMessage(err);
-    const degradedProvider = this.provider;
-    void this.retireCurrentProvider();
-    this.providerUnavailableReason = `Local embeddings degraded: ${message}`;
-    this.providerLifecycle = createDegradedMemoryProviderLifecycle({
-      providerId: degradedProvider.id,
-      reason: message,
+    // Remote providers degrade only on account-level rejections (quota,
+    // billing, auth): request-scoped 4xx must not pause the whole provider,
+    // and required mode stays fail-fast so a broken explicit provider remains
+    // operator-visible instead of silently dropping to keyword search.
+    if (
+      !this.provider ||
+      this.providerRequirement.mode !== "optional" ||
+      !isMemoryEmbeddingProviderAccessError(err)
+    ) {
+      return;
+    }
+    this.markEmbeddingBootstrapFailure(err, {
+      retainProvider: true,
+      provider: this.provider.id,
     });
-    EMBEDDING_PROBE_CACHE.delete(this.cacheKey);
-    this.providerKey = this.computeProviderKey();
-    this.batch = this.resolveBatchConfig();
-    this.vector.semanticAvailable = false;
-    log.warn("memory embeddings: local provider degraded after transport failure", {
-      error: message,
+    log.warn("memory embeddings: provider access error; pausing embeddings until backoff expires", {
+      provider: this.provider.id,
+      error: this.providerUnavailableReason,
     });
   }
 
@@ -541,12 +576,15 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     return await this.ensureVectorReady();
   }
 
-  protected cacheProbeResult(result: MemoryEmbeddingProbeResult): MemoryEmbeddingProbeResult {
+  protected cacheProbeResult(
+    result: MemoryEmbeddingProbeResult,
+    options?: { ttlMs?: number },
+  ): MemoryEmbeddingProbeResult {
     const checkedAtMs = Date.now();
     EMBEDDING_PROBE_CACHE.set(this.cacheKey, {
       result,
       checkedAtMs,
-      expireAtMs: checkedAtMs + EMBEDDING_PROBE_CACHE_TTL_MS,
+      expireAtMs: checkedAtMs + (options?.ttlMs ?? EMBEDDING_PROBE_CACHE_TTL_MS),
     });
     return result;
   }
@@ -590,7 +628,10 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
         return this.cacheProbeResult({ ok: true });
       } catch (err) {
         const message = formatErrorMessage(err);
-        return this.cacheProbeResult({ ok: false, error: message });
+        return this.cacheProbeResult(
+          { ok: false, error: message },
+          { ttlMs: resolveEmbeddingProbeFailureBackoffMs(err) },
+        );
       }
     });
   }

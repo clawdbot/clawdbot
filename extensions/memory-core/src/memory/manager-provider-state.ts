@@ -34,6 +34,8 @@ export type MemoryProviderLifecycleState =
       providerId: string;
       reason: string;
       code?: string;
+      /** When the manager may attempt the degraded provider again. */
+      retryAtMs?: number;
     }
   | {
       mode: "fallback-active";
@@ -57,12 +59,14 @@ export function createDegradedMemoryProviderLifecycle(params: {
   providerId: string;
   reason: string;
   code?: string;
+  retryAtMs?: number;
 }): MemoryProviderLifecycleState {
   return {
     mode: "degraded",
     providerId: params.providerId,
     reason: params.reason,
     ...(params.code ? { code: params.code } : {}),
+    ...(params.retryAtMs !== undefined ? { retryAtMs: params.retryAtMs } : {}),
   };
 }
 

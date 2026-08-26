@@ -379,9 +379,14 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       try {
         await runGeneration(forceFtsOnly);
       } catch (err) {
+        // Account-level provider failures mark the bootstrap failure mid-run
+        // (markEmbeddingProviderDegraded); finish this sync keyword-only
+        // instead of failing it and re-hitting the provider on the next tick.
         const canDegrade =
           this.providerRequirement.mode === "optional" &&
-          (options?.allowEmbeddingBootstrapFallback || hadBootstrapFailure) &&
+          (options?.allowEmbeddingBootstrapFallback ||
+            hadBootstrapFailure ||
+            this.embeddingBootstrapFailure !== undefined) &&
           this.shouldFallbackOnError(err);
         if (!canDegrade) {
           throw err;

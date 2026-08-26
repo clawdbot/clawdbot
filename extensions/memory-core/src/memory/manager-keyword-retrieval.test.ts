@@ -332,7 +332,7 @@ describe("memory index", () => {
         embedBatch: (texts: string[]) => Promise<number[][]>;
         close: () => Promise<void>;
       } | null;
-      markLocalEmbeddingProviderDegraded: (err: unknown) => void;
+      markEmbeddingProviderDegraded: (err: unknown) => void;
     };
     const provider = degraded.provider;
     if (!provider) {
@@ -341,7 +341,7 @@ describe("memory index", () => {
     provider.embedQuery = async () => {
       throw providerFixture.createLocalWorkerExitError();
     };
-    degraded.markLocalEmbeddingProviderDegraded = () => {
+    degraded.markEmbeddingProviderDegraded = () => {
       degraded.provider = null;
     };
 

@@ -1,8 +1,10 @@
 // Memory Core tests cover manager provider lifecycle availability behavior.
+import fs from "node:fs/promises";
 import path from "node:path";
 import { hashText } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it, vi } from "vitest";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
+import { clearMemoryEmbeddingProbeCache } from "./manager-provider-lifecycle.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 
@@ -87,14 +89,101 @@ describe("memory index", () => {
 
     (
       manager as unknown as {
-        markLocalEmbeddingProviderDegraded: (err: unknown) => void;
+        markEmbeddingProviderDegraded: (err: unknown) => void;
       }
-    ).markLocalEmbeddingProviderDegraded(providerFixture.createLocalWorkerExitError());
+    ).markEmbeddingProviderDegraded(providerFixture.createLocalWorkerExitError());
 
     expect(manager.getCachedEmbeddingAvailability()).toBeNull();
     await expect(manager.probeEmbeddingAvailability()).resolves.toMatchObject({
       ok: false,
       error: expect.stringContaining("Local embeddings degraded"),
+    });
+  });
+
+  it("pauses remote embeddings with backoff after an exhausted-quota sync failure", async () => {
+    const cfg = createCfg({
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+
+    const fields = manager as unknown as {
+      dirty: boolean;
+      provider: {
+        id: string;
+        model: string;
+        embedQuery: (text: string) => Promise<number[]>;
+        embedBatch: (texts: string[]) => Promise<number[][]>;
+        close: () => Promise<void>;
+      } | null;
+    };
+    let quotaCalls = 0;
+    const quotaExhaustedError = () =>
+      Object.assign(new Error("openai embeddings failed: 429 You have no credits remaining."), {
+        status: 429,
+        code: "credit_balance_exhausted",
+        errorType: "insufficient_quota",
+      });
+    const failingProvider = {
+      id: "mock",
+      model: "mock-embed",
+      embedQuery: async (): Promise<number[]> => {
+        quotaCalls += 1;
+        throw quotaExhaustedError();
+      },
+      embedBatch: async (): Promise<number[][]> => {
+        quotaCalls += 1;
+        throw quotaExhaustedError();
+      },
+      close: async () => {},
+    };
+    fields.provider = failingProvider;
+    await fs.writeFile(
+      path.join(fixture.paths.memory, "2026-01-13.md"),
+      "# Log\nAlpha quota incident note.",
+    );
+    fields.dirty = true;
+
+    // The failing sync must degrade after a single attempt (no retry storm)
+    // and refuse the keyword-only rewrite that would wipe semantic vectors.
+    await expect(manager.sync({ reason: "interval" })).rejects.toThrow(
+      /Refusing to run sync in fts-only fallback mode/,
+    );
+    expect(quotaCalls).toBe(1);
+
+    const degradedState = manager.status().custom?.providerState as {
+      mode: string;
+      code?: string;
+      retryAtMs?: number;
+    };
+    expect(degradedState.mode).toBe("degraded");
+    expect(degradedState.code).toBe("credit_balance_exhausted");
+    // Access errors back off far longer than the ordinary 30s probe window.
+    expect(degradedState.retryAtMs ?? 0).toBeGreaterThan(Date.now() + 60_000);
+
+    // Keyword-only search remains usable while embeddings are paused.
+    await expect(manager.search("alpha")).resolves.not.toStrictEqual([]);
+    expect(quotaCalls).toBe(1);
+
+    // Syncs inside the backoff window make no provider requests at all.
+    fields.dirty = true;
+    await expect(manager.sync({ reason: "interval" })).rejects.toThrow(
+      /Refusing to run sync in fts-only fallback mode/,
+    );
+    expect(quotaCalls).toBe(1);
+
+    // Once the backoff expires, the next sync retries and recovers.
+    clearMemoryEmbeddingProbeCache();
+    fields.provider = {
+      ...failingProvider,
+      embedQuery: async (text: string) => [text.length, 0, 0, 0],
+      embedBatch: async (texts: string[]) => texts.map((text) => [text.length, 0, 0, 0]),
+    };
+    fields.dirty = true;
+    await expect(manager.sync({ reason: "interval" })).resolves.toBeUndefined();
+    expect(manager.status().custom?.providerState).toMatchObject({
+      mode: "active",
+      providerId: "mock",
     });
   });
 
@@ -115,7 +204,7 @@ describe("memory index", () => {
         embedBatch: (texts: string[]) => Promise<number[][]>;
         close: () => Promise<void>;
       } | null;
-      markLocalEmbeddingProviderDegraded: (err: unknown) => void;
+      markEmbeddingProviderDegraded: (err: unknown) => void;
       activateFallbackProvider: (reason: string) => Promise<boolean>;
       withTimeout: <T>(promise: Promise<T>, timeoutMs: number, message: string) => Promise<T>;
     };
@@ -123,7 +212,7 @@ describe("memory index", () => {
       throw new Error("Expected a test embedding provider");
     }
     fields.provider.id = "local";
-    fields.markLocalEmbeddingProviderDegraded(providerFixture.createLocalWorkerExitError());
+    fields.markEmbeddingProviderDegraded(providerFixture.createLocalWorkerExitError());
     await vi.waitFor(() => expect(providerFixture.providerCloseCalls).toBe(1));
 
     const callsBeforeFallback = providerFixture.providerCalls.length;
@@ -268,7 +357,7 @@ describe("memory index", () => {
       providerKey: string;
       computeProviderKey: () => string;
       ensureProviderInitialized: () => Promise<void>;
-      markLocalEmbeddingProviderDegraded: (err: unknown) => void;
+      markEmbeddingProviderDegraded: (err: unknown) => void;
       activateFallbackProvider: (reason: string) => Promise<boolean>;
       withTimeout: <T>(promise: Promise<T>, timeoutMs: number, message: string) => Promise<T>;
       indexFile: (
@@ -378,7 +467,7 @@ describe("memory index", () => {
         5_000,
         "concurrent embeddings did not start",
       );
-      fields.markLocalEmbeddingProviderDegraded(providerFixture.createLocalWorkerExitError());
+      fields.markEmbeddingProviderDegraded(providerFixture.createLocalWorkerExitError());
       await vi.waitFor(() => expect(fields.provider).toBeNull());
       fallbackPromise = fields.activateFallbackProvider("local worker exited");
       releaseFirstEmbedding();

@@ -33,7 +33,7 @@ describe("memory index", () => {
       providerKey: string;
       computeProviderKey: () => string;
       ensureProviderInitialized: () => Promise<void>;
-      markLocalEmbeddingProviderDegraded: (err: unknown) => void;
+      markEmbeddingProviderDegraded: (err: unknown) => void;
       activateFallbackProvider: (reason: string) => Promise<boolean>;
       beginSyncProviderGeneration: () => void;
       endSyncProviderGeneration: () => void;
@@ -53,7 +53,7 @@ describe("memory index", () => {
     }
     fields.provider.id = "local";
     fields.providerKey = fields.computeProviderKey();
-    fields.markLocalEmbeddingProviderDegraded(providerFixture.createLocalWorkerExitError());
+    fields.markEmbeddingProviderDegraded(providerFixture.createLocalWorkerExitError());
     await vi.waitFor(() => {
       expect(fields.provider).toBeNull();
       expect(providerFixture.providerCloseCalls).toBe(1);

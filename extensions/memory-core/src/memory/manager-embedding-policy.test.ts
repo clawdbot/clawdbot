@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildMemoryEmbeddingBatches,
   filterNonEmptyMemoryChunks,
+  isMemoryEmbeddingProviderAccessError,
   isRetryableMemoryEmbeddingError,
   isSplittableMemoryEmbeddingTransportError,
   resolveMemoryEmbeddingRetryDelay,
@@ -18,6 +19,21 @@ function chunk(text: string) {
     text,
     hash: text,
   };
+}
+
+function providerHttpError(
+  status: number,
+  message: string,
+  extra?: { code?: string; errorType?: string; retryAfterMs?: number },
+) {
+  return Object.assign(new Error(message), { status, ...extra });
+}
+
+function quotaExhaustedError() {
+  return providerHttpError(429, "openai embeddings failed: 429 You have no credits remaining.", {
+    code: "credit_balance_exhausted",
+    errorType: "insufficient_quota",
+  });
 }
 
 describe("memory embedding policy", () => {
@@ -180,6 +196,143 @@ describe("memory embedding policy", () => {
     );
     expect(isRetryableMemoryEmbeddingError("worker terminated by user")).toBe(false);
     expect(isRetryableMemoryEmbeddingError("embedding validation failed")).toBe(false);
+  });
+
+  it("classifies structured provider statuses ahead of message text", () => {
+    expect(isRetryableMemoryEmbeddingError(quotaExhaustedError())).toBe(false);
+    // Legacy shape: some responses only carry insufficient_quota as the code.
+    expect(
+      isRetryableMemoryEmbeddingError(
+        providerHttpError(429, "openai embeddings failed: 429 quota", {
+          code: "insufficient_quota",
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isRetryableMemoryEmbeddingError(
+        providerHttpError(429, "openai embeddings failed: 429 rate limited"),
+      ),
+    ).toBe(true);
+    expect(
+      isRetryableMemoryEmbeddingError(providerHttpError(503, "voyage embeddings failed: 503 busy")),
+    ).toBe(true);
+    // A definitive 4xx is terminal even when its body mentions a retryable phrase.
+    expect(
+      isRetryableMemoryEmbeddingError(
+        providerHttpError(400, "openai embeddings failed: 400 rate limit docs at ..."),
+      ),
+    ).toBe(false);
+  });
+
+  it("reads structured facts through operation-error wrappers", () => {
+    const wrapped = Object.assign(new Error("wrapped"), {
+      code: "MEMORY_EMBEDDING_OPERATION_FAILED",
+      cause: quotaExhaustedError(),
+    });
+
+    expect(isRetryableMemoryEmbeddingError(wrapped)).toBe(false);
+    expect(isMemoryEmbeddingProviderAccessError(wrapped)).toBe(true);
+  });
+
+  it("does not treat payload numbers in provider messages as HTTP statuses", () => {
+    expect(
+      isRetryableMemoryEmbeddingError(
+        "gemini embeddings failed: expected 512 dimensions, received 3",
+      ),
+    ).toBe(false);
+    expect(isRetryableMemoryEmbeddingError("chunk 4290 of 5000 rejected")).toBe(false);
+    expect(
+      isRetryableMemoryEmbeddingError("GitHub Copilot model discovery HTTP 429: slow down"),
+    ).toBe(true);
+    expect(isRetryableMemoryEmbeddingError("request failed with status code 502")).toBe(true);
+  });
+
+  it("classifies account-level access errors for degradation", () => {
+    expect(isMemoryEmbeddingProviderAccessError(quotaExhaustedError())).toBe(true);
+    expect(isMemoryEmbeddingProviderAccessError(providerHttpError(401, "unauthorized"))).toBe(true);
+    expect(isMemoryEmbeddingProviderAccessError(providerHttpError(402, "payment required"))).toBe(
+      true,
+    );
+    expect(isMemoryEmbeddingProviderAccessError(providerHttpError(403, "forbidden"))).toBe(true);
+    expect(isMemoryEmbeddingProviderAccessError(providerHttpError(429, "plain rate limit"))).toBe(
+      false,
+    );
+    expect(isMemoryEmbeddingProviderAccessError(providerHttpError(500, "server error"))).toBe(
+      false,
+    );
+    expect(isMemoryEmbeddingProviderAccessError(new Error("fetch failed"))).toBe(false);
+  });
+
+  it("stops retrying exhausted-quota provider errors after the first attempt", async () => {
+    const run = vi.fn(async () => {
+      throw quotaExhaustedError();
+    });
+    const waitForRetry = vi.fn(async () => {});
+
+    await expect(
+      runMemoryEmbeddingRetryLoop({
+        run,
+        isRetryable: isRetryableMemoryEmbeddingError,
+        waitForRetry,
+        maxAttempts: 3,
+        baseDelayMs: 500,
+      }),
+    ).rejects.toThrow("You have no credits remaining");
+
+    expect(run).toHaveBeenCalledOnce();
+    expect(waitForRetry).not.toHaveBeenCalled();
+  });
+
+  it("honors Retry-After hints for genuine rate-limit 429s", async () => {
+    const waits: number[] = [];
+    let calls = 0;
+
+    const result = await runMemoryEmbeddingRetryLoop({
+      run: async () => {
+        calls += 1;
+        if (calls === 1) {
+          throw providerHttpError(429, "openai embeddings failed: 429 rate limited", {
+            retryAfterMs: 20_000,
+          });
+        }
+        return "ok";
+      },
+      isRetryable: isRetryableMemoryEmbeddingError,
+      waitForRetry: async (delayMs) => {
+        waits.push(delayMs);
+      },
+      maxAttempts: 3,
+      baseDelayMs: 500,
+    });
+
+    expect(result).toBe("ok");
+    expect(calls).toBe(2);
+    expect(waits).toEqual([20_000]);
+  });
+
+  it("caps oversized Retry-After hints so the sync slot cannot be camped", async () => {
+    const waits: number[] = [];
+    let calls = 0;
+
+    await runMemoryEmbeddingRetryLoop({
+      run: async () => {
+        calls += 1;
+        if (calls === 1) {
+          throw providerHttpError(429, "openai embeddings failed: 429 rate limited", {
+            retryAfterMs: 120_000,
+          });
+        }
+        return "ok";
+      },
+      isRetryable: isRetryableMemoryEmbeddingError,
+      waitForRetry: async (delayMs) => {
+        waits.push(delayMs);
+      },
+      maxAttempts: 2,
+      baseDelayMs: 500,
+    });
+
+    expect(waits).toEqual([30_000]);
   });
 
   it("splits OpenAI 431 oversized embedding batches without retrying the same request", async () => {

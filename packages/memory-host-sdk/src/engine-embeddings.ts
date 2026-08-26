@@ -69,6 +69,11 @@ export {
 } from "./host/embeddings-remote-provider.js";
 export { fetchRemoteEmbeddingVectors } from "./host/embeddings-remote-fetch.js";
 export {
+  isRemoteProviderQuotaError,
+  readRemoteProviderErrorFacts,
+  type RemoteProviderErrorFacts,
+} from "./host/post-json.js";
+export {
   estimateStructuredEmbeddingInputBytes,
   estimateUtf8Bytes,
 } from "./host/embedding-input-limits.js";
