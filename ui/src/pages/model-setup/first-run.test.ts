@@ -82,7 +82,7 @@ describe("model setup first-run redirect", () => {
     vi.unstubAllGlobals();
   });
 
-  it("recognizes only the implicit chat landing without a session deep link", () => {
+  it("recognizes default chat landings without accepting session deep links", () => {
     expect(isDefaultChatLanding({ pathname: "/", search: "", hash: "" }, "", routeIdFromPath)).toBe(
       true,
     );
@@ -105,6 +105,30 @@ describe("model setup first-run redirect", () => {
     ).toBe(false);
     expect(
       isDefaultChatLanding({ pathname: "/chat/main", search: "", hash: "" }, "", routeIdFromPath),
+    ).toBe(true);
+    expect(
+      isDefaultChatLanding({ pathname: "/chat/main/", search: "", hash: "" }, "", routeIdFromPath),
+    ).toBe(true);
+    expect(
+      isDefaultChatLanding(
+        { pathname: "/openclaw/chat/main", search: "", hash: "" },
+        "/openclaw",
+        routeIdFromPath,
+      ),
+    ).toBe(true);
+    expect(
+      isDefaultChatLanding(
+        { pathname: "/chat/research", search: "", hash: "" },
+        "",
+        routeIdFromPath,
+      ),
+    ).toBe(false);
+    expect(
+      isDefaultChatLanding(
+        { pathname: "/chat/main/existing-session", search: "", hash: "" },
+        "",
+        routeIdFromPath,
+      ),
     ).toBe(false);
     expect(
       isDefaultChatLanding(
@@ -154,6 +178,20 @@ describe("model setup first-run redirect", () => {
     expect(replaceLocation).toHaveBeenCalledWith(canonicalLocation);
     expect(subscribe).not.toHaveBeenCalled();
     expect(replaceRoute).not.toHaveBeenCalled();
+  });
+
+  it("redirects a restored default chat when no model has been configured", async () => {
+    const { context, replace } = createConnectedContext();
+
+    const dispose = await startModelSetupFirstRunRedirectAfterLocation({
+      context,
+      enabled: isDefaultChatLanding(defaultLanding, "", routeIdFromPath),
+      history: { location: () => defaultLanding, replace: () => undefined },
+      initialLocationReady: Promise.resolve(defaultLanding),
+    });
+
+    expect(replace).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
+    dispose();
   });
 
   it.each([

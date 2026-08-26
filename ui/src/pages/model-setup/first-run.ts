@@ -1,5 +1,4 @@
 import type { RouteLocation, RouterHistory } from "@openclaw/uirouter";
-import { sessionRouteNamespaceFromPath } from "../../app-route-paths.ts";
 import { sameRouteLocation, type RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { readSessionDefaults } from "../../app/gateway-store.ts";
@@ -19,8 +18,8 @@ export function isDefaultChatLanding(
   }
   const routeId = routeIdFromPath(location.pathname, basePath);
   return (
-    (routeId === null || routeId === "chat") &&
-    sessionRouteNamespaceFromPath(location.pathname, basePath) === null
+    routeId === null ||
+    (routeId === "chat" && /^\/chat(?:\/main)?\/?$/u.test(location.pathname.slice(basePath.length)))
   );
 }
 

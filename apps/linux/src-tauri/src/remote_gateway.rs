@@ -155,10 +155,10 @@ fn read_config(path: &Path) -> Result<Option<Value>, String> {
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err("OpenClaw configuration must be a regular file, not a symlink.".to_string());
     }
-    let bytes = fs::read(path)
+    let raw = fs::read_to_string(path)
         .map_err(|error| format!("Could not read OpenClaw configuration: {error}"))?;
-    let value: Value = serde_json::from_slice(&bytes).map_err(|_| {
-        "OpenClaw configuration is not valid JSON. Run `openclaw doctor --fix`, then try again."
+    let value: Value = tauri_utils::config::parse::parse_json5_value(&raw, path).map_err(|_| {
+        "OpenClaw configuration is not valid JSON5. Run `openclaw doctor --fix`, then try again."
             .to_string()
     })?;
     if !value.is_object() {
@@ -704,6 +704,59 @@ mod tests {
         assert_eq!(restored.url.as_deref(), Some(url.as_str()));
         assert_eq!(restored.token.as_deref(), Some("test-token"));
         assert!(restored.password.is_none());
+        fs::remove_dir_all(path.parent().unwrap()).expect("cleanup");
+    }
+
+    fn existing_json5_config(path: &Path) {
+        fs::create_dir_all(path.parent().unwrap()).expect("test directory");
+        fs::write(
+            path,
+            r#"{
+              // Operators may annotate the canonical JSON5 configuration.
+              agents: { defaults: { workspace: 'keep-this-workspace', }, },
+              gateway: {
+                mode: 'remote',
+                remote: {
+                  url: 'ws://127.0.0.1:18789',
+                  token: 'existing-fixture-token', /* trailing commas are valid */
+                },
+              },
+            }"#,
+        )
+        .expect("existing JSON5 configuration");
+    }
+
+    #[test]
+    fn saved_remote_config_accepts_documented_json5_syntax() {
+        let path = isolated_path();
+        existing_json5_config(&path);
+
+        let restored = load_saved_remote_at(&path)
+            .expect("documented JSON5 should load")
+            .expect("remote mode");
+
+        assert_eq!(restored.url.as_deref(), Some("ws://127.0.0.1:18789"));
+        assert_eq!(restored.token.as_deref(), Some("existing-fixture-token"));
+        fs::remove_dir_all(path.parent().unwrap()).expect("cleanup");
+    }
+
+    #[test]
+    fn remote_config_updates_preserve_unrelated_json5_settings() {
+        let path = isolated_path();
+        existing_json5_config(&path);
+        let input = request();
+        let url = normalize_gateway_url(input.url.as_deref().unwrap()).expect("Gateway URL");
+
+        save_config_at(&path, &input, &url).expect("update documented JSON5 configuration");
+
+        let saved: Value = serde_json::from_slice(&fs::read(&path).expect("config"))
+            .expect("changed config is canonically rewritten as JSON");
+        assert_eq!(
+            saved["agents"]["defaults"]["workspace"],
+            "keep-this-workspace"
+        );
+        assert_eq!(saved["gateway"]["remote"]["url"], url.as_str());
+        assert_eq!(saved["gateway"]["remote"]["token"], "test-token");
         fs::remove_dir_all(path.parent().unwrap()).expect("cleanup");
     }
 
