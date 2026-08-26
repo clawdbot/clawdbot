@@ -439,6 +439,7 @@ export async function killLatestSubagentRun(params: {
   entry: SubagentRunRecord;
   cache: Map<string, Record<string, SessionEntry>>;
   suppressTaskDelivery?: boolean;
+  expectedRunId?: string;
 }): Promise<{
   entry: SubagentRunRecord;
   result: Awaited<ReturnType<typeof killSubagentRun>>;
@@ -451,6 +452,11 @@ export async function killLatestSubagentRun(params: {
     }
     const latest = getLatestLiveSubagentRunByChildSessionKey(entry.childSessionKey);
     if (!latest || latest === entry) {
+      return { entry, result };
+    }
+    // A task-scoped kill is bound to its exact run. Recovery may replace that
+    // run while cancellation awaits lifecycle admission, but cannot inherit its authority.
+    if (params.expectedRunId) {
       return { entry, result };
     }
     if (entry.execution.restartRecovery?.idempotencyKey !== latest.runId) {

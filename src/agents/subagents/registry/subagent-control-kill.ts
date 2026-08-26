@@ -292,6 +292,7 @@ export async function killSubagentRunAdmin(params: {
     cfg: params.cfg,
     entry,
     cache: killCache,
+    expectedRunId: params.expectedRunId?.trim() || undefined,
   });
   const stopResult = stopped.result;
   if (stopResult.error) {

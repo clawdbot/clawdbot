@@ -1,6 +1,6 @@
 // Covers task executor runtime selection, lifecycle updates, and error paths.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resetAgentEventsForTest } from "../infra/agent-events.js";
+import { emitAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 import { resetSystemEventsForTest } from "../infra/system-events.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { captureEnv } from "../test-utils/env.js";
@@ -23,6 +23,7 @@ import {
   createManagedTaskFlow as createManagedTaskFlowOrNull,
   getTaskFlowById,
   listTaskFlowRecords,
+  requestFlowCancel,
 } from "./task-flow-registry.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import {
@@ -1223,6 +1224,106 @@ describe("task-executor", () => {
 
       expect(getTaskById(backing.taskId)?.status).toBe("failed");
       expect(getTaskById(projection.taskId)?.status).toBe("running");
+    });
+  });
+
+  it("does not apply agent lifecycle events to a foreign managed projection", async () => {
+    await withTaskExecutorStateDir(async () => {
+      createRunningTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:victim",
+        scopeKind: "session",
+        childSessionKey: "agent:main:subagent:victim-child",
+        runId: "run-agent-event-foreign-child",
+        task: "Victim subagent task",
+        deliveryStatus: "pending",
+      });
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/foreign-agent-event",
+        goal: "Foreign agent-event projection",
+      });
+      const projected = runTaskInFlow({
+        flowId: flow.flowId,
+        runtime: "subagent",
+        childSessionKey: "agent:main:subagent:victim-child",
+        runId: "run-agent-event-foreign-child",
+        task: "Forged agent-event projection",
+        status: "running",
+      });
+      if (!projected.created) {
+        throw new Error(projected.reason);
+      }
+      const projection = requireCreatedFlowTask(projected);
+      const currentFlow = getTaskFlowById(flow.flowId);
+      if (!currentFlow) {
+        throw new Error("Expected managed flow");
+      }
+      const cancelRequest = requestFlowCancel({
+        flowId: flow.flowId,
+        expectedRevision: currentFlow.revision,
+      });
+      if (!cancelRequest.applied) {
+        throw new Error(cancelRequest.reason);
+      }
+      const beforeFlow = getTaskFlowById(flow.flowId);
+
+      emitAgentEvent({
+        runId: "run-agent-event-foreign-child",
+        sessionKey: "agent:main:subagent:victim-child",
+        stream: "lifecycle",
+        data: { phase: "end", endedAt: 40 },
+      });
+
+      expect(getTaskFlowById(flow.flowId)).toMatchObject({
+        status: beforeFlow?.status,
+        revision: beforeFlow?.revision,
+        cancelRequestedAt: beforeFlow?.cancelRequestedAt,
+      });
+      expect(getTaskById(projection.taskId)?.status).toBe("running");
+    });
+  });
+
+  it("applies agent lifecycle events to an owner-matched managed projection", async () => {
+    await withTaskExecutorStateDir(async () => {
+      createRunningTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:main:subagent:owned-child",
+        runId: "run-agent-event-owned-child",
+        task: "Owned subagent task",
+        deliveryStatus: "pending",
+      });
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/owned-agent-event",
+        goal: "Owned agent-event projection",
+      });
+      const projected = runTaskInFlow({
+        flowId: flow.flowId,
+        runtime: "subagent",
+        childSessionKey: "agent:main:subagent:owned-child",
+        runId: "run-agent-event-owned-child",
+        task: "Owned agent-event projection",
+        status: "running",
+      });
+      if (!projected.created) {
+        throw new Error(projected.reason);
+      }
+      const projection = requireCreatedFlowTask(projected);
+
+      emitAgentEvent({
+        runId: "run-agent-event-owned-child",
+        sessionKey: "agent:main:subagent:owned-child",
+        stream: "lifecycle",
+        data: { phase: "end", endedAt: 40 },
+      });
+
+      expect(getTaskById(projection.taskId)).toMatchObject({
+        status: "succeeded",
+        endedAt: 40,
+      });
     });
   });
 });
