@@ -1,5 +1,6 @@
 /** Tests ACP manager cancellation of active turns and idle sessions. */
 import type { AcpRuntimeEvent } from "@openclaw/acp-core/runtime/types";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import {
   requireTaskByRunId,
@@ -64,11 +65,17 @@ describe("AcpSessionManager cancelSession", () => {
         },
         { interval: 1 },
       );
+      const taskDetail = asOptionalRecord(requireTaskByRunId("run-1").detail);
+      const instanceId = typeof taskDetail?.instanceId === "string" ? taskDetail.instanceId : "";
+      expect(instanceId).not.toBe("");
 
       await manager.cancelSession({
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:child-1",
         reason: "manual-cancel",
+        expectedRunId: "run-1",
+        expectedInstanceId: instanceId,
+        expectedOwnerKey: "agent:main:main",
       });
       await runPromise;
 
@@ -123,13 +130,30 @@ describe("AcpSessionManager cancelSession", () => {
         requestId: "run-current",
       });
       await vi.waitFor(() => expect(enteredRun).toBe(true), { interval: 1 });
+      const taskDetail = asOptionalRecord(requireTaskByRunId("run-current").detail);
+      const instanceId = typeof taskDetail?.instanceId === "string" ? taskDetail.instanceId : "";
+      expect(instanceId).not.toBe("");
+
+      await expect(
+        manager.cancelSession({
+          cfg: baseCfg,
+          sessionKey: "agent:codex:acp:child-1",
+          reason: "foreign-owner-cancel",
+          expectedRunId: "run-current",
+          expectedInstanceId: instanceId,
+          expectedOwnerKey: "agent:main:other",
+        }),
+      ).rejects.toThrow("ACP task owner could not be verified.");
+      expect(runtimeState.cancel).not.toHaveBeenCalled();
 
       await expect(
         manager.cancelSession({
           cfg: baseCfg,
           sessionKey: "agent:codex:acp:child-1",
           reason: "stale-task-cancel",
-          expectedRunId: "run-stale",
+          expectedRunId: "run-current",
+          expectedInstanceId: "instance-from-prior-turn",
+          expectedOwnerKey: "agent:main:main",
         }),
       ).rejects.toThrow("ACP task is no longer the active run.");
       expect(runtimeState.cancel).not.toHaveBeenCalled();

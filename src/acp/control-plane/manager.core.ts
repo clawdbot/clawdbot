@@ -341,23 +341,21 @@ export class AcpSessionManager {
     sessionKey: string;
     reason?: string;
     expectedRunId?: string;
+    expectedInstanceId?: string;
+    expectedOwnerKey?: string;
   }): Promise<void> {
     const sessionKey = canonicalizeAcpSessionKey(params);
     if (!sessionKey) {
       throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP session key is required.");
     }
     await this.evictIdleRuntimeHandles();
-    const expectedRunId = params.expectedRunId?.trim();
-    if (
-      expectedRunId &&
-      this.activeTurnBySession.get(normalizeActorKey(sessionKey))?.requestId !== expectedRunId
-    ) {
-      throw new AcpRuntimeError("ACP_TURN_FAILED", "ACP task is no longer the active run.");
-    }
     await runManagerCancelSession({
       cfg: params.cfg,
       sessionKey,
       reason: params.reason,
+      expectedRunId: params.expectedRunId,
+      expectedInstanceId: params.expectedInstanceId,
+      expectedOwnerKey: params.expectedOwnerKey,
       activeTurnBySession: this.activeTurnBySession,
       withSessionActor: this.withSessionActor.bind(this),
       resolveSession: this.resolveSession.bind(this),

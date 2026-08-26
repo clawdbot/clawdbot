@@ -21,7 +21,10 @@ import {
   recordTaskProgressByRunId,
   setTaskRunDeliveryStatusByRunId,
 } from "./runtime-internal.js";
-import { hasAuthoritativeTaskBacking } from "./task-backing-authority.js";
+import {
+  hasAuthoritativeTaskBacking,
+  resolveManagedTaskBackingDetail,
+} from "./task-backing-authority.js";
 import {
   isProvisionalSubagentKillTask,
   isTaskFlowCancellationPending,
@@ -363,6 +366,31 @@ function runTaskInFlow(params: RunTaskInFlowParams): RunTaskInFlowResult {
     };
   }
 
+  const childSessionKey = params.childSessionKey?.trim();
+  const runId = params.runId?.trim();
+  const managedBackingDetail =
+    childSessionKey && runId && (params.runtime === "acp" || params.runtime === "subagent")
+      ? resolveManagedTaskBackingDetail({
+          runtime: params.runtime,
+          scopeKind: "session",
+          ownerKey: flow.ownerKey,
+          childSessionKey,
+          runId,
+        })
+      : undefined;
+  if (
+    childSessionKey &&
+    (params.runtime === "acp" || params.runtime === "subagent") &&
+    !managedBackingDetail
+  ) {
+    return {
+      found: true,
+      created: false,
+      reason: "Task backing ownership could not be verified.",
+      flow,
+    };
+  }
+
   const common = {
     runtime: params.runtime,
     sourceId: params.sourceId,
@@ -379,6 +407,7 @@ function runTaskInFlow(params: RunTaskInFlowParams): RunTaskInFlowResult {
     preferMetadata: params.preferMetadata,
     notifyPolicy: params.notifyPolicy,
     deliveryStatus: params.deliveryStatus ?? "pending",
+    ...(managedBackingDetail !== undefined ? { detail: managedBackingDetail } : {}),
   };
   let task: TaskRecord | null;
   try {

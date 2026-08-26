@@ -89,7 +89,11 @@ export async function runManagerTurn(params: {
         })
       : null;
   const taskRecord = taskContext
-    ? createBackgroundTaskRecord(taskContext, turnStartedAt)
+    ? createBackgroundTaskRecord(
+        taskContext,
+        turnStartedAt,
+        input.admittedRunContext.operationalRunInstance.instanceId,
+      )
     : undefined;
   let taskExecutionBound = false;
   let taskProgressSummary = "";
@@ -244,6 +248,7 @@ export async function runManagerTurn(params: {
 
           activeTurn = {
             requestId: input.requestId,
+            instanceId: input.admittedRunContext.operationalRunInstance.instanceId,
             runtime,
             handle,
             abortController: internalAbortController,

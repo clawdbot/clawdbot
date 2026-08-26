@@ -130,6 +130,7 @@ describe("ACP background task execution binding", () => {
             task: "private",
           },
           100,
+          admitted.operationalRunInstance.instanceId,
         );
         const task = findTaskByRunId("run-acp");
         if (!record || !task?.parentFlowId) {
@@ -189,6 +190,7 @@ describe("ACP background task execution binding", () => {
               task: "private",
             },
             100,
+            admitted.operationalRunInstance.instanceId,
           );
           const task = findTaskByRunId("run-acp");
           if (!record || !task?.parentFlowId) {

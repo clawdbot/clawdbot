@@ -26,6 +26,8 @@ import {
   testing as subagentRegistryTesting,
 } from "../../../../src/agents/subagents/registry/subagent-registry.test-helpers.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../../../src/config/config.js";
+import { resolveSessionStorePathCore } from "../../../../src/config/sessions/paths.js";
+import { replaceSessionEntrySync } from "../../../../src/config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { cancelActiveCronTaskRun } from "../../../../src/cron/service/active-run-cancellation.js";
 import { startGatewayServer } from "../../../../src/gateway/server.js";
@@ -37,9 +39,11 @@ import {
   resetPluginRuntimeStateForTest,
 } from "../../../../src/plugins/runtime.js";
 import { createPluginRuntime } from "../../../../src/plugins/runtime/index.js";
+import { createSubagentTaskBackingDetail } from "../../../../src/tasks/task-backing-authority.js";
+import { createAcpTaskBackingDetailForTest } from "../../../../src/tasks/task-backing-authority.test-support.js";
 import { createRunningTaskRunCore } from "../../../../src/tasks/task-executor.js";
 import { getTaskFlowById } from "../../../../src/tasks/task-flow-registry.js";
-import { listTasksForFlowId } from "../../../../src/tasks/task-registry.js";
+import { findTaskByRunId, listTasksForFlowId } from "../../../../src/tasks/task-registry.js";
 import {
   resetTaskFlowRegistryForTests,
   setTaskRegistryControlRuntimeForTests,
@@ -102,6 +106,7 @@ function registerRunningSubagent(params: {
   ownerKey: string;
 }) {
   const startedAt = Date.now();
+  const generation = (getSubagentRunByRunId(params.runId)?.generation ?? 0) + 1;
   addSubagentRunForTests({
     runId: params.runId,
     childSessionKey: params.childSessionKey,
@@ -110,6 +115,7 @@ function registerRunningSubagent(params: {
     requesterDisplayKey: params.ownerKey,
     task: `Running child ${params.runId}`,
     cleanup: "keep",
+    generation,
     createdAt: startedAt,
     startedAt,
   });
@@ -122,10 +128,12 @@ function registerRunningSubagent(params: {
     task: `Running child ${params.runId}`,
     startedAt,
     deliveryStatus: "pending",
+    detail: createSubagentTaskBackingDetail(generation),
   });
   if (!task) {
     throw new Error(`failed to create canonical task for ${params.runId}`);
   }
+  return { generation, task };
 }
 
 async function postWebhook(
@@ -340,18 +348,41 @@ describe("webhooks TaskFlow child cancellation authority", () => {
 
           const foreignRunId = "run-webhook-foreign";
           const foreignChild = "agent:main:subagent:webhook-foreign";
-          registerRunningSubagent({
+          const foreignBacking = registerRunningSubagent({
             runId: foreignRunId,
             childSessionKey: foreignChild,
             ownerKey: "agent:main:foreign-owner",
           });
           const foreignFlowId = await createFlow(origin, "Reject foreign child");
-          await projectChild({
-            origin,
+          const foreignAdmission = await postWebhook(origin, {
+            action: "run_task",
             flowId: foreignFlowId,
+            runtime: "subagent",
             childSessionKey: foreignChild,
             runId: foreignRunId,
+            task: "Reject foreign child projection",
           });
+          expect(foreignAdmission).toMatchObject({
+            status: 409,
+            body: { ok: false, code: "task_not_created" },
+          });
+          const forgedProjection = createRunningTaskRunCore({
+            runtime: "subagent",
+            ownerKey: ROUTE_OWNER,
+            scopeKind: "session",
+            parentFlowId: foreignFlowId,
+            childSessionKey: foreignChild,
+            runId: foreignRunId,
+            task: "Persisted foreign child projection",
+            startedAt: Date.now(),
+            detail: {
+              ...createSubagentTaskBackingDetail(foreignBacking.generation),
+              taskId: foreignBacking.task.taskId,
+            },
+          });
+          if (!forgedProjection) {
+            throw new Error("failed to create persisted foreign child projection");
+          }
           const foreign = await postWebhook(origin, {
             action: "cancel_flow",
             flowId: foreignFlowId,
@@ -392,18 +423,61 @@ describe("webhooks TaskFlow child cancellation authority", () => {
             flowId: replacedFlowId,
           });
           expect(replaced).toMatchObject({
-            status: 202,
-            body: { ok: true, code: "cancel_pending" },
+            status: 409,
+            body: { ok: false, code: "cancel_rejected" },
           });
           expect(getSubagentRunByRunId(replacementRunId)).toMatchObject({
             execution: { status: "running" },
           });
           expect(getSubagentRunByRunId(replacementRunId)?.execution.endedAt).toBeUndefined();
 
+          const reusedRunId = "run-webhook-reused";
+          const reusedChild = "agent:main:subagent:webhook-reused";
+          registerRunningSubagent({
+            runId: reusedRunId,
+            childSessionKey: reusedChild,
+            ownerKey: ROUTE_OWNER,
+          });
+          const reusedFlowId = await createFlow(origin, "Reject reused-id replacement child");
+          await projectChild({
+            origin,
+            flowId: reusedFlowId,
+            childSessionKey: reusedChild,
+            runId: reusedRunId,
+          });
+          registerRunningSubagent({
+            runId: reusedRunId,
+            childSessionKey: reusedChild,
+            ownerKey: ROUTE_OWNER,
+          });
+          const reused = await postWebhook(origin, {
+            action: "cancel_flow",
+            flowId: reusedFlowId,
+          });
+          expect(reused).toMatchObject({
+            status: 409,
+            body: { ok: false, code: "cancel_rejected" },
+          });
+          expect(getSubagentRunByRunId(reusedRunId)).toMatchObject({
+            execution: { status: "running" },
+          });
+          expect(getSubagentRunByRunId(reusedRunId)?.execution.endedAt).toBeUndefined();
+
           const acpChild = "agent:main:acp:webhook-replacement";
-          const staleAcpRunId = "run-webhook-acp-stale";
-          const currentAcpRunId = "run-webhook-acp-current";
+          const reusedAcpRunId = "run-webhook-acp-reused";
           const acpManager = getAcpSessionManager();
+          replaceSessionEntrySync(
+            {
+              sessionKey: acpChild,
+              storePath: resolveSessionStorePathCore(config.session?.store, { agentId: "main" }),
+            },
+            {
+              sessionId: "session-webhook-acp-replacement",
+              updatedAt: Date.now(),
+              spawnedBy: ROUTE_OWNER,
+              parentSessionKey: ROUTE_OWNER,
+            },
+          );
           await acpManager.initializeSession({
             cfg: config,
             sessionKey: acpChild,
@@ -411,16 +485,56 @@ describe("webhooks TaskFlow child cancellation authority", () => {
             mode: "persistent",
             backendId: "acpx",
           });
-          const elicitationEntered = createDeferred<void>();
-          const releaseElicitation = createDeferred<void>();
-          const activeAcpTurn = acpManager.runTurn({
-            admittedRunContext: createTestAdmittedRunContext(currentAcpRunId),
+          const firstAcpAdmission = createTestAdmittedRunContext(reusedAcpRunId);
+          await acpManager.runTurn({
+            admittedRunContext: firstAcpAdmission,
             cfg: config,
             sessionKey: acpChild,
             provenance: "system",
-            text: "Keep this replacement turn active for cancellation fencing proof.",
+            text: "Complete the first same-id turn before replacement.",
             mode: "prompt",
-            requestId: currentAcpRunId,
+            requestId: reusedAcpRunId,
+            onElicitation: async () => ({
+              action: "accept",
+              content: { question: "complete normally" },
+            }),
+          });
+          const firstAcpTask = findTaskByRunId(reusedAcpRunId);
+          if (!firstAcpTask) {
+            throw new Error("first ACP turn created no canonical task");
+          }
+          const acpReplacementFlowId = await createFlow(origin, "Reject same-id ACP replacement");
+          const staleAcpProjection = createRunningTaskRunCore({
+            runtime: "acp",
+            ownerKey: ROUTE_OWNER,
+            scopeKind: "session",
+            parentFlowId: acpReplacementFlowId,
+            childSessionKey: acpChild,
+            runId: reusedAcpRunId,
+            task: "Persisted first-generation ACP projection",
+            startedAt: Date.now(),
+            detail: {
+              ...createAcpTaskBackingDetailForTest(
+                firstAcpAdmission.operationalRunInstance.instanceId,
+                1,
+              ),
+              taskId: firstAcpTask.taskId,
+            },
+          });
+          if (!staleAcpProjection) {
+            throw new Error("failed to create persisted ACP projection");
+          }
+
+          const elicitationEntered = createDeferred<void>();
+          const releaseElicitation = createDeferred<void>();
+          const replacementAcpTurn = acpManager.runTurn({
+            admittedRunContext: createTestAdmittedRunContext(reusedAcpRunId),
+            cfg: config,
+            sessionKey: acpChild,
+            provenance: "system",
+            text: "Keep the same-id replacement active for cancellation fencing proof.",
+            mode: "prompt",
+            requestId: reusedAcpRunId,
             onElicitation: async () => {
               elicitationEntered.resolve();
               await releaseElicitation.promise;
@@ -431,35 +545,16 @@ describe("webhooks TaskFlow child cancellation authority", () => {
           let acpxMethodsBeforeRelease: string[] = [];
           try {
             await elicitationEntered.promise;
-            const staleCanonicalTask = createRunningTaskRunCore({
-              runtime: "acp",
-              ownerKey: ROUTE_OWNER,
-              scopeKind: "session",
-              childSessionKey: acpChild,
-              runId: staleAcpRunId,
-              task: "Stale ACP child projection",
-              startedAt: Date.now(),
-              deliveryStatus: "pending",
-            });
-            if (!staleCanonicalTask) {
-              throw new Error("failed to create stale ACP canonical task");
-            }
-            const acpReplacementFlowId = await createFlow(origin, "Reject replaced ACP child");
-            await projectChild({
-              origin,
-              flowId: acpReplacementFlowId,
-              runtime: "acp",
-              childSessionKey: acpChild,
-              runId: staleAcpRunId,
-            });
             acpReplacement = await postWebhook(origin, {
               action: "cancel_flow",
               flowId: acpReplacementFlowId,
             });
             expect(acpReplacement).toMatchObject({
-              status: 202,
-              body: { ok: true, code: "cancel_pending" },
+              status: 409,
+              body: { ok: false, code: "cancel_rejected" },
             });
+            expect(getTaskFlowById(acpReplacementFlowId)).toMatchObject({ status: "queued" });
+            expect(getTaskFlowById(acpReplacementFlowId)?.cancelRequestedAt).toBeUndefined();
             acpxMethodsBeforeRelease = (await fs.readFile(acpxTracePath, "utf8"))
               .trim()
               .split("\n")
@@ -468,7 +563,7 @@ describe("webhooks TaskFlow child cancellation authority", () => {
             expect(acpxMethodsBeforeRelease).not.toContain("turn/interrupt");
           } finally {
             releaseElicitation.resolve();
-            await activeAcpTurn;
+            await replacementAcpTurn;
           }
           if (!acpReplacement) {
             throw new Error("missing ACP replacement cancellation response");
@@ -483,6 +578,7 @@ describe("webhooks TaskFlow child cancellation authority", () => {
                 childStatus: getSubagentRunByRunId(allowedRunId)?.execution.status,
               },
               foreign: {
+                admissionStatus: foreignAdmission.status,
                 httpStatus: foreign.status,
                 code: foreign.body.code,
                 flowStatus: getTaskFlowById(foreignFlowId)?.status,
@@ -492,6 +588,11 @@ describe("webhooks TaskFlow child cancellation authority", () => {
                 httpStatus: replaced.status,
                 code: replaced.body.code,
                 replacementStatus: getSubagentRunByRunId(replacementRunId)?.execution.status,
+              },
+              reusedId: {
+                httpStatus: reused.status,
+                code: reused.body.code,
+                replacementStatus: getSubagentRunByRunId(reusedRunId)?.execution.status,
               },
               acpReplacement: {
                 transport: "process",

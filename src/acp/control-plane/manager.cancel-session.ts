@@ -2,7 +2,7 @@
 import type { AcpRuntime, AcpRuntimeHandle } from "@openclaw/acp-core/runtime/types";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  type AcpRuntimeError,
+  AcpRuntimeError,
   toAcpRuntimeError,
   withAcpRuntimeErrorBoundary,
 } from "../runtime/errors.js";
@@ -20,6 +20,9 @@ export async function runManagerCancelSession(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   reason?: string;
+  expectedRunId?: string;
+  expectedInstanceId?: string;
+  expectedOwnerKey?: string;
   activeTurnBySession: Map<string, ActiveTurnState>;
   withSessionActor: WithManagerSessionActor;
   resolveSession: ResolveManagerSession;
@@ -28,6 +31,23 @@ export async function runManagerCancelSession(params: {
 }): Promise<void> {
   const actorKey = normalizeActorKey(params.sessionKey);
   const activeTurn = params.activeTurnBySession.get(actorKey);
+  const expectedRunId = params.expectedRunId?.trim();
+  const expectedInstanceId = params.expectedInstanceId?.trim();
+  const expectedOwnerKey = params.expectedOwnerKey?.trim();
+  if (
+    (expectedRunId && activeTurn?.requestId !== expectedRunId) ||
+    (expectedInstanceId && activeTurn?.instanceId !== expectedInstanceId)
+  ) {
+    throw new AcpRuntimeError("ACP_TURN_FAILED", "ACP task is no longer the active run.");
+  }
+  if (expectedOwnerKey) {
+    const resolution = params.resolveSession({ cfg: params.cfg, sessionKey: params.sessionKey });
+    const entry = resolution.kind === "ready" ? resolution.entry : undefined;
+    const ownerKey = entry?.spawnedBy?.trim() || entry?.parentSessionKey?.trim();
+    if (ownerKey !== expectedOwnerKey) {
+      throw new AcpRuntimeError("ACP_TURN_FAILED", "ACP task owner could not be verified.");
+    }
+  }
   if (activeTurn) {
     await cancelManagerActiveTurn({
       activeTurn,

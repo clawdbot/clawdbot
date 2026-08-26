@@ -274,6 +274,8 @@ export async function killSubagentRunAdmin(params: {
   sessionKey: string;
   agentId?: string;
   expectedRunId?: string;
+  expectedGeneration?: number;
+  expectedOwnerKey?: string;
 }) {
   const targetSessionKey = params.sessionKey.trim();
   if (!targetSessionKey) {
@@ -286,6 +288,13 @@ export async function killSubagentRunAdmin(params: {
   if (params.expectedRunId?.trim() && entry.runId !== params.expectedRunId.trim()) {
     return { found: false as const, killed: false as const };
   }
+  if (
+    (params.expectedGeneration !== undefined && entry.generation !== params.expectedGeneration) ||
+    (params.expectedOwnerKey?.trim() &&
+      entry.requesterSessionKey !== params.expectedOwnerKey.trim())
+  ) {
+    return { found: false as const, killed: false as const };
+  }
 
   const killCache = new Map<string, Record<string, SessionEntry>>();
   const stopped = await killLatestSubagentRun({
@@ -293,6 +302,7 @@ export async function killSubagentRunAdmin(params: {
     entry,
     cache: killCache,
     expectedRunId: params.expectedRunId?.trim() || undefined,
+    expectedGeneration: params.expectedGeneration,
   });
   const stopResult = stopped.result;
   if (stopResult.error) {

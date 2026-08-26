@@ -720,6 +720,41 @@ describe("killSubagentRunAdmin", () => {
     expect(getSubagentRunByChildSessionKey(childSessionKey)?.execution.endedAt).toBeUndefined();
   });
 
+  it("does not kill a same-id replacement generation", async () => {
+    const childSessionKey = "agent:main:subagent:same-id-replacement";
+    addSubagentRunForTests({
+      runId: "run-reused",
+      childSessionKey,
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "replacement work",
+      cleanup: "keep",
+      generation: 2,
+      createdAt: Date.now() - 1_000,
+      startedAt: Date.now() - 900,
+    });
+
+    const result = await killSubagentRunAdmin({
+      cfg: cfgWithSessionStore(),
+      sessionKey: childSessionKey,
+      expectedRunId: "run-reused",
+      expectedGeneration: 1,
+      expectedOwnerKey: "agent:main:main",
+    });
+    const foreignOwner = await killSubagentRunAdmin({
+      cfg: cfgWithSessionStore(),
+      sessionKey: childSessionKey,
+      expectedRunId: "run-reused",
+      expectedGeneration: 2,
+      expectedOwnerKey: "agent:main:other",
+    });
+
+    expect(result).toEqual({ found: false, killed: false });
+    expect(foreignOwner).toEqual({ found: false, killed: false });
+    expect(getSubagentRunByChildSessionKey(childSessionKey)?.execution.endedAt).toBeUndefined();
+  });
+
   it("does not adopt a restart-recovery successor when an exact run id is required", async () => {
     const childSessionKey = "agent:main:subagent:fenced-recovery-successor";
     const sessionId = "sess-fenced-recovery-successor";

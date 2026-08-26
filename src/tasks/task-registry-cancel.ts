@@ -4,7 +4,10 @@ import { isBackgroundExecTask } from "./background-exec-task-contract.js";
 import { CRON_TASK_KIND } from "./cron-task-contract.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
 import { isHarnessOwnedSubagentTask } from "./harness-owned-subagent-task.js";
-import { hasAuthoritativeTaskBacking } from "./task-backing-authority.js";
+import {
+  getManagedTaskBackingInstance,
+  hasAuthoritativeTaskBacking,
+} from "./task-backing-authority.js";
 import { isProvisionalSubagentKillTask } from "./task-cancellation-state.js";
 import { isTerminalTaskStatus } from "./task-executor-policy.js";
 import { ensureLinkedTaskFlowRegistryReady } from "./task-registry-common.js";
@@ -79,6 +82,7 @@ export async function cancelTaskById(params: {
         task: cloneTaskRecord(task),
       };
     }
+    const managedBacking = getManagedTaskBackingInstance(task);
     ensureTaskCancellationReady(task);
     // A direct kill is only a provisional terminal projection. Re-read the
     // owning subagent run before promotion so its canonical completion can win.
@@ -136,6 +140,9 @@ export async function cancelTaskById(params: {
           sessionKey: childSessionKey,
           reason: params.reason?.trim() || "task-cancel",
           expectedRunId: task.runId,
+          ...(managedBacking?.runtime === "acp"
+            ? { expectedInstanceId: managedBacking.instanceId, expectedOwnerKey: task.ownerKey }
+            : {}),
         });
       } else if (task.runtime === "subagent") {
         const { killSubagentRunAdmin } = await loadTaskRegistryControlRuntime();
@@ -143,6 +150,9 @@ export async function cancelTaskById(params: {
           cfg: params.cfg,
           sessionKey: childSessionKey,
           expectedRunId: task.runId,
+          ...(managedBacking?.runtime === "subagent"
+            ? { expectedGeneration: managedBacking.generation, expectedOwnerKey: task.ownerKey }
+            : {}),
         });
         const current = tasks.get(task.taskId);
         if (current?.status === "cancelled" && current.error === SUBAGENT_KILL_TASK_ERROR) {
