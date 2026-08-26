@@ -24,6 +24,9 @@ import {
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 
 const skipBundledAiRuntime = async (): Promise<() => Promise<void>> => async () => {};
+// Fake-tarball tests write placeholder bytes that the real mode normalizer
+// could not parse as a gzip archive.
+const skipTarballModeNormalization = { normalizeTarballModes: async (): Promise<void> => {} };
 const skipDocsMapLifecycle = {
   prepareDocsMap: async (): Promise<void> => {},
   restoreDocsMap: async (): Promise<void> => {},
@@ -493,6 +496,47 @@ describe("package-openclaw-for-docker", () => {
     expect(entries).not.toContain("package/dist/runtime-OLDHASH.js");
   });
 
+  it.skipIf(process.platform === "win32")(
+    "normalizes owner-only packed modes to world-readable entries",
+    async () => {
+      const sourceDir = tempDirs.make("openclaw-package-modes-source-");
+      const outputDir = tempDirs.make("openclaw-package-modes-output-");
+      const distDir = path.join(sourceDir, "dist");
+      // A restrictive-umask build host leaves owner-only sources on disk;
+      // npm pack copies these modes verbatim into the tarball.
+      fs.mkdirSync(distDir, { mode: 0o700 });
+      fs.writeFileSync(path.join(distDir, "index.js"), "export {};\n", { mode: 0o600 });
+      fs.writeFileSync(path.join(sourceDir, "openclaw.mjs"), "#!/usr/bin/env node\n", {
+        mode: 0o700,
+      });
+      fs.writeFileSync(
+        path.join(sourceDir, "package.json"),
+        `${JSON.stringify({
+          bin: { openclaw: "openclaw.mjs" },
+          files: ["dist", "openclaw.mjs"],
+          name: "openclaw",
+          version: "2026.8.26",
+        })}\n`,
+      );
+
+      const tarball = await packOpenClawPackageForDocker(sourceDir, outputDir, {
+        ...skipDocsMapLifecycle,
+        prepareBundledAiRuntime: skipBundledAiRuntime,
+        prepareChangelog: async () => {},
+        restoreChangelog: async () => {},
+      });
+
+      const entryModes = new Map<string, number>();
+      await tar.t({
+        file: tarball,
+        onentry: (entry) => entryModes.set(entry.path, (entry.mode ?? 0) & 0o777),
+      });
+      expect(entryModes.get("package/dist/index.js")).toBe(0o644);
+      expect(entryModes.get("package/openclaw.mjs")).toBe(0o755);
+      expect(entryModes.get("package/package.json")).toBe(0o644);
+    },
+  );
+
   it("rejects loose package artifact timeout env values", async () => {
     const previousTimeout = process.env.OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS;
     try {
@@ -698,6 +742,7 @@ describe("package-openclaw-for-docker", () => {
     try {
       const tarball = await packOpenClawPackageForDocker(sourceDir, outputDir, {
         ...skipDocsMapLifecycle,
+        ...skipTarballModeNormalization,
         prepareBundledAiRuntime: async (_source, _output, _runCapture, options) => {
           const aiDir = path.dirname(aiPackageJsonPath);
           expect(options).toBeDefined();
@@ -800,6 +845,7 @@ describe("package-openclaw-for-docker", () => {
   it("trims and restores the changelog around ignore-scripts package artifacts", async () => {
     const calls: string[] = [];
     const tarball = await packOpenClawPackageForDocker("/repo", "/out", {
+      ...skipTarballModeNormalization,
       prepareBundledAiRuntime: skipBundledAiRuntime,
       prepareChangelog: async (cwd: string) => {
         calls.push(`prepare:${cwd}`);
@@ -905,6 +951,7 @@ describe("package-openclaw-for-docker", () => {
 
     try {
       const tarball = await packOpenClawPackageForDocker(sourceDir, outputDir, {
+        ...skipTarballModeNormalization,
         allowUnreleasedChangelog: true,
         prepareBundledAiRuntime: skipBundledAiRuntime,
         runCaptureImpl: async () => {
@@ -946,6 +993,7 @@ describe("package-openclaw-for-docker", () => {
 
     try {
       const tarball = await packOpenClawPackageForDocker(sourceDir, outputDir, {
+        ...skipTarballModeNormalization,
         prepareBundledAiRuntime: skipBundledAiRuntime,
         prepareChangelog: async () => {},
         restoreChangelog: async () => {},
@@ -973,6 +1021,7 @@ describe("package-openclaw-for-docker", () => {
     try {
       const tarball = await packOpenClawPackageForDocker("/repo", outputDir, {
         ...skipDocsMapLifecycle,
+        ...skipTarballModeNormalization,
         pnpmPack: true,
         prepareBundledAiRuntime: skipBundledAiRuntime,
         prepareChangelog: async () => {},
@@ -1018,6 +1067,7 @@ describe("package-openclaw-for-docker", () => {
     try {
       const tarball = await packOpenClawPackageForDocker(sourceDir, outputDir, {
         ...skipDocsMapLifecycle,
+        ...skipTarballModeNormalization,
         outputName: "openclaw-current.tgz",
         packJsonPath,
         prepareBundledAiRuntime: skipBundledAiRuntime,
@@ -1071,6 +1121,7 @@ describe("package-openclaw-for-docker", () => {
         try {
           const packPromise = packOpenClawPackageForDocker("/repo", outputDir, {
             ...skipDocsMapLifecycle,
+            ...skipTarballModeNormalization,
             packJsonPath: path.join(outputDir, "pack.json"),
             prepareBundledAiRuntime: skipBundledAiRuntime,
             prepareChangelog: async () => {},
@@ -1149,6 +1200,7 @@ describe("package-openclaw-for-docker", () => {
       await expect(
         packOpenClawPackageForDocker("/repo", outputDir, {
           ...skipDocsMapLifecycle,
+          ...skipTarballModeNormalization,
           prepareBundledAiRuntime: skipBundledAiRuntime,
           prepareChangelog: async () => {},
           restoreChangelog: async () => {},
@@ -1171,6 +1223,7 @@ describe("package-openclaw-for-docker", () => {
       await expect(
         packOpenClawPackageForDocker("/repo", outputDir, {
           ...skipDocsMapLifecycle,
+          ...skipTarballModeNormalization,
           prepareBundledAiRuntime: skipBundledAiRuntime,
           prepareChangelog: async () => {},
           restoreChangelog: async () => {},
