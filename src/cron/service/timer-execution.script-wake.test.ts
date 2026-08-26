@@ -90,7 +90,6 @@ describe("cron script immediate wake", () => {
         cfg,
         readCurrentConfig: () => cfg,
         runOnce,
-        stableSchedulerSeed: "script-wake-without-heartbeat-cadence",
       });
 
       try {
