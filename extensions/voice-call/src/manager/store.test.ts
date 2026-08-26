@@ -16,6 +16,7 @@ import { setVoiceCallStateRuntime } from "../runtime-state.js";
 import { CallRecordSchema } from "../types.js";
 import { MAX_CALL_REPLAY_KEYS } from "./replay-keys.js";
 import {
+  findCallByProviderCallIdInStore,
   findCallMatchesInStore,
   getCallHistoryFromStore,
   loadActiveCallsFromStore,
@@ -272,5 +273,50 @@ describe("voice-call call record store", () => {
       callId: "call-target",
       state: "completed",
     });
+  });
+
+  it("resolves a provider alias to the newest snapshot for the logical call", async () => {
+    const storePath = createTestStorePath();
+    // Plivo lifecycle: outbound created with request_uuid, later callbacks carry
+    // CallUUID. The store appends per event, so the logical call is retained under
+    // both ids across a non-terminal -> terminal transition.
+    persistCallRecord(
+      storePath,
+      CallRecordSchema.parse(
+        makePersistedCall({
+          callId: "call-alias",
+          providerCallId: "request-uuid",
+          state: "initiated",
+        }),
+      ),
+    );
+    persistCallRecord(
+      storePath,
+      CallRecordSchema.parse(
+        makePersistedCall({
+          callId: "call-alias",
+          providerCallId: "CallUUID",
+          state: "completed",
+        }),
+      ),
+    );
+
+    // Sync helper (webhook fold path): the old alias must resolve to the terminal
+    // snapshot, not the stale pre-terminal one it directly matches.
+    const resolved = findCallByProviderCallIdInStore(storePath, "request-uuid");
+    expect(resolved?.state).toBe("completed");
+    expect(resolved?.providerCallId).toBe("CallUUID");
+
+    // Async sibling (inspect path): same invariant.
+    const matches = await findCallMatchesInStore(storePath, "request-uuid");
+    expect(matches.byProviderCallId).toMatchObject({
+      callId: "call-alias",
+      state: "completed",
+      providerCallId: "CallUUID",
+    });
+
+    // The canonical id resolves directly to the terminal snapshot too.
+    const canonical = findCallByProviderCallIdInStore(storePath, "CallUUID");
+    expect(canonical?.state).toBe("completed");
   });
 });

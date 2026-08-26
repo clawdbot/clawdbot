@@ -397,6 +397,23 @@ function readCallHistoryFromStore(storePath: string): CallRecord[] {
   return [];
 }
 
+// Plivo transitions a call's providerCallId from request_uuid to CallUUID across
+// its lifecycle (plivo.ts), and the store appends a snapshot per event, so one
+// logical call is retained under both ids. Resolve a lookup by the old alias to
+// the newest snapshot for that call (the terminal one a late callback folds
+// into), not the stale pre-terminal alias match (#130145). A no-op for
+// telnyx/twilio, which use one stable id.
+function resolveNewestByProviderCallId(
+  calls: readonly CallRecord[],
+  providerCallId: string,
+): CallRecord | undefined {
+  const aliasMatch = calls.findLast((call) => call.providerCallId === providerCallId);
+  if (!aliasMatch) {
+    return undefined;
+  }
+  return calls.findLast((call) => call.callId === aliasMatch.callId);
+}
+
 /** Find the newest retained snapshots matching each call identifier namespace. */
 export async function findCallMatchesInStore(
   storePath: string,
@@ -405,7 +422,7 @@ export async function findCallMatchesInStore(
   const calls = readCallHistoryFromStore(storePath);
   return {
     byCallId: calls.findLast((call) => call.callId === callId),
-    byProviderCallId: calls.findLast((call) => call.providerCallId === callId),
+    byProviderCallId: resolveNewestByProviderCallId(calls, callId),
   };
 }
 
@@ -414,9 +431,7 @@ export function findCallByProviderCallIdInStore(
   storePath: string,
   providerCallId: string,
 ): CallRecord | undefined {
-  return readCallHistoryFromStore(storePath).findLast(
-    (call) => call.providerCallId === providerCallId,
-  );
+  return resolveNewestByProviderCallId(readCallHistoryFromStore(storePath), providerCallId);
 }
 
 /** Return the newest persisted call history rows up to the requested limit. */

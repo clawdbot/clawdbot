@@ -284,7 +284,15 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): Process
   };
 
   try {
-    if (event.providerCallId && event.providerCallId !== activeCall.providerCallId) {
+    // Update the record when a callback reveals the canonical provider id
+    // (e.g. a Plivo CallUUID arriving on a record still keyed by request_uuid).
+    // Skip the mutation for a folded terminal echo: that record already carries
+    // its newest canonical id, and a stale-alias callback must not downgrade it.
+    if (
+      event.providerCallId &&
+      event.providerCallId !== activeCall.providerCallId &&
+      !foldedTerminalRecord
+    ) {
       activeCall.providerCallId = event.providerCallId;
     }
     if (shouldCommitReplayKey) {

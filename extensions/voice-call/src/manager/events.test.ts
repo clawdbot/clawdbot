@@ -11,7 +11,7 @@ import { processEvent } from "./events.js";
 import { finalizeCall } from "./lifecycle.js";
 import { speakInitialMessage } from "./outbound.js";
 import { MAX_CALL_REPLAY_KEYS } from "./replay-keys.js";
-import { findCallMatchesInStore, getCallHistoryFromStore } from "./store.js";
+import { findCallMatchesInStore, getCallHistoryFromStore, persistCallRecord } from "./store.js";
 
 const logSpy = vi.hoisted(() => {
   const logEntries: string[] = [];
@@ -639,6 +639,85 @@ describe("processEvent (functional)", () => {
     expect(owner).toBeDefined();
     expect(owner!.callId).toBe("call-real-inbound");
     expect(owner!.agentId).toBe("agent-sales");
+  });
+
+  it("folds a late alias callback into the terminal snapshot instead of the stale pre-terminal one", async () => {
+    // Sibling coverage for #130145 Finding 2: Plivo transitions a call's
+    // providerCallId from request_uuid to CallUUID across its lifecycle, and
+    // the store appends a snapshot per event rather than upserting. After a
+    // restart clears the in-memory maps, a late status callback still carrying
+    // the old request_uuid must resolve to the terminal snapshot (and absorb) —
+    // not the stale pre-terminal snapshot it directly matches, which would
+    // re-run call.initiated side effects (answerCall) on an already-ended call.
+    const now = Date.now();
+    const answerCalls: AnswerCallInput[] = [];
+    const provider = createProvider({
+      answerCall: async (input: AnswerCallInput): Promise<void> => {
+        answerCalls.push(input);
+      },
+    });
+    const ctx = createContext({
+      config: VoiceCallConfigSchema.parse({
+        enabled: true,
+        provider: "plivo",
+        fromNumber: "+15550000000",
+        inboundPolicy: "open",
+      }),
+      provider,
+    });
+    const callId = "call-plivo-alias";
+    // R1: the snapshot persisted under the original request_uuid (pre-terminal).
+    const requestUuidSnapshot: CallRecord = {
+      callId,
+      providerCallId: "request-uuid",
+      provider: "plivo",
+      direction: "inbound",
+      state: "initiated",
+      from: "+15550001234",
+      to: "+15550000000",
+      agentId: "agent-sales",
+      startedAt: now - 30_000,
+      transcript: [],
+      processedEventIds: [],
+    };
+    persistCallRecord(ctx.storePath, requestUuidSnapshot);
+    // R3: the terminal snapshot a later CallUUID callback finalized under.
+    persistCallRecord(ctx.storePath, {
+      ...requestUuidSnapshot,
+      providerCallId: "CallUUID",
+      state: "completed",
+      answeredAt: now - 25_000,
+      endedAt: now - 5_000,
+      endReason: "completed",
+    });
+
+    // In-memory maps are empty (post-restart); the late callback still carries
+    // the old request_uuid alias and must consult the store.
+    const result = processEvent(ctx, {
+      id: "evt-late-alias",
+      type: "call.initiated",
+      callId: "request-uuid",
+      providerCallId: "request-uuid",
+      timestamp: now,
+      direction: "inbound",
+      from: "+15550001234",
+      to: "+15550000000",
+    });
+
+    expect(result.kind).toBe("processed");
+    // Pre-fix: the old alias resolves to the stale initiated snapshot, which is
+    // non-terminal, so the switch re-runs and queues answerCall (1). Post-fix:
+    // the alias resolves to the terminal snapshot and absorbs (0).
+    expect(answerCalls).toHaveLength(0);
+
+    // The folded record keeps the canonical CallUUID, and the store still owns
+    // only the real call's snapshots (no phantom, no canonical-id downgrade).
+    const matches = await findCallMatchesInStore(ctx.storePath, "request-uuid");
+    const owner = matches.byProviderCallId;
+    expect(owner).toBeDefined();
+    expect(owner!.callId).toBe(callId);
+    expect(owner!.state).toBe("completed");
+    expect(owner!.providerCallId).toBe("CallUUID");
   });
 
   it.each([
