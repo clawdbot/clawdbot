@@ -1,5 +1,4 @@
 // Control UI module implements presenter behavior.
-import { isSystemOwnedCronPayloadKind } from "../../../src/cron/types.js";
 import type { CronJob, GatewaySessionRow } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { resolveCronJobLastRunStatus } from "../lib/cron-status.ts";
@@ -81,8 +80,11 @@ export function formatCronPayload(job: CronJob) {
   if (p.kind === "script") {
     return `Script: ${p.script}`;
   }
-  if (isSystemOwnedCronPayloadKind(p.kind)) {
-    return p.kind === "heartbeat" ? "Heartbeat monitor" : "Skill collection review";
+  if (p.kind === "heartbeat") {
+    return "Heartbeat monitor";
+  }
+  if (p.kind === "skillCollectionReview") {
+    return "Skill collection review";
   }
   const base = `Agent: ${p.message}`;
   const delivery = job.delivery;

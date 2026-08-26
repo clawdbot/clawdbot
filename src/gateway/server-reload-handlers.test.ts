@@ -1581,6 +1581,7 @@ describe("gateway hot reload model state", () => {
       await expect(
         applyHotReload(buildGatewayReloadPlan(["skills.workshop.autonomous.mode"]), nextConfig, {
           sourceConfig: previousConfig,
+          isCurrent: () => true,
           publish: async (commit) => await commit(),
         }),
       ).resolves.toBeUndefined();
