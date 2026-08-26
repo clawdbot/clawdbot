@@ -462,7 +462,7 @@ export function evaluateFilePolicyConstraints(input: FilePolicyInput): FilePolic
 /** Persist an exact standing grant only after node canonical-path validation. */
 export async function persistLiteralGrant(input: FileTransferLiteralGrant): Promise<void> {
   if (!isFileTransferCommand(input.command)) {
-    throw new Error(`unsupported file-transfer command: ${input.command}`);
+    throw new Error("unsupported file-transfer command");
   }
   if (!input.nodeId || !input.requestedPath || !input.canonicalPath) {
     throw new Error("file-transfer literal grant requires node, requested, and canonical paths");
