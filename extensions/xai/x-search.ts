@@ -130,7 +130,7 @@ export function createXSearchTool(options?: {
   const runtimeConfig = options?.runtimeConfig ?? getRuntimeConfigSnapshot();
   if (
     !isXaiToolEnabled({
-      enabled: xSearchConfig?.enabled as boolean | undefined,
+      enabled: typeof xSearchConfig?.enabled === "boolean" ? xSearchConfig.enabled : undefined,
       runtimeConfig: (runtimeConfig ?? undefined) as never,
       sourceConfig: options?.config as never,
       auth: options?.auth,
