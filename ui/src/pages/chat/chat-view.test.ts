@@ -618,10 +618,6 @@ function getThinkingReasoningValueLabel(container: Element): string {
   return preview?.textContent?.trim() ?? "";
 }
 
-function getThinkingResetButton(container: Element): HTMLButtonElement | null {
-  return container.querySelector<HTMLButtonElement>('[data-chat-thinking-option=""]');
-}
-
 function requireElement(container: Element, selector: string, label: string): Element {
   const element = container.querySelector(selector);
   if (element === null) {
@@ -7386,11 +7382,11 @@ describe("chat model controls", () => {
     const container = renderModelControls(state);
 
     expect(getThinkingSliderValues(container)).toEqual(["off", "adaptive", "xhigh", "max"]);
-    expect(getThinkingResetButton(container)).toBeNull();
+    expect(container.querySelector('[data-chat-thinking-option=""]')).toBeNull();
   });
 
-  it("clears a reasoning override from the icon reset", async () => {
-    const { state, request } = createReasoningHeaderState();
+  it("shows a reasoning override without a separate reset action", () => {
+    const { state } = createReasoningHeaderState();
     const sessionsResult = expectDefined(state.sessionsResult, "reasoning sessions");
     sessionsResult.sessions[0] = {
       ...sessionsResult.sessions[0]!,
@@ -7399,17 +7395,7 @@ describe("chat model controls", () => {
     const container = renderModelControls(state);
 
     expect(getThinkingReasoningValueLabel(container)).toBe("Low");
-    const reset = getThinkingResetButton(container);
-    expect(reset).toBeInstanceOf(HTMLButtonElement);
-    expect(reset?.disabled).toBe(false);
-    reset?.click();
-
-    await waitForFast(() => {
-      expect(request).toHaveBeenCalledWith("sessions.patch", {
-        key: "main",
-        thinkingLevel: null,
-      });
-    });
+    expect(container.querySelector('[data-chat-thinking-option=""]')).toBeNull();
   });
 
   it("lets an unanchored slider select its first stop directly", async () => {
