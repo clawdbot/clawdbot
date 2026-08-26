@@ -38,14 +38,20 @@ type HookRunner = ReturnType<typeof getGlobalHookRunner>;
 export function createMcpAttemptCarryover() {
   let latestMcpAppChannelView: EmbeddedRunAttemptResult["latestMcpAppChannelView"];
   let latestMcpConnectAction: EmbeddedRunAttemptResult["latestMcpConnectAction"];
+  let mcpToolMaterialization: EmbeddedRunAttemptResult["mcpToolMaterialization"];
   return {
     apply(
-      attempt: Pick<EmbeddedRunAttemptResult, "latestMcpAppChannelView" | "latestMcpConnectAction">,
+      attempt: Pick<
+        EmbeddedRunAttemptResult,
+        "latestMcpAppChannelView" | "latestMcpConnectAction" | "mcpToolMaterialization"
+      >,
     ): void {
       latestMcpAppChannelView = attempt.latestMcpAppChannelView ?? latestMcpAppChannelView;
       attempt.latestMcpAppChannelView = latestMcpAppChannelView;
       latestMcpConnectAction = attempt.latestMcpConnectAction ?? latestMcpConnectAction;
       attempt.latestMcpConnectAction = latestMcpConnectAction;
+      mcpToolMaterialization = attempt.mcpToolMaterialization ?? mcpToolMaterialization;
+      attempt.mcpToolMaterialization = mcpToolMaterialization;
     },
   };
 }

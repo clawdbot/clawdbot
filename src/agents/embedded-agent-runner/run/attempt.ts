@@ -6,6 +6,7 @@ import {
 import { resolveContextEngineOwnerPluginId } from "../../../context-engine/registry.js";
 import { createBundleLspToolRuntime } from "../../agent-bundle-lsp-runtime.js";
 import { materializeBundleMcpToolsForRun } from "../../agent-bundle-mcp-tools.js";
+import type { McpToolMaterializationFact } from "../../agent-bundle-mcp-types.js";
 import { AgentRunTerminalOutcomeError } from "../../agent-run-terminal-error.js";
 import {
   buildAgentRunTerminalOutcomeFromAttempt,
@@ -14,6 +15,7 @@ import {
   type AgentRunAttemptTerminal,
 } from "../../agent-run-terminal-outcome.js";
 import { resolveAgentDir } from "../../agent-scope.js";
+import { withMcpToolMaterialization } from "../../failover-error.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import type { AgentSession } from "../../sessions/index.js";
 import {
@@ -96,6 +98,7 @@ export async function runEmbeddedAttempt(
   };
   let emitDiagnosticRunCompleted: EmitDiagnosticRunCompleted | undefined;
   let bundleMcpRuntime: Awaited<ReturnType<typeof materializeBundleMcpToolsForRun>> | undefined;
+  let mcpToolMaterialization: McpToolMaterializationFact | undefined;
   let bundleLspRuntime: Awaited<ReturnType<typeof createBundleLspToolRuntime>> | undefined;
   let toolSearchCatalogRef: ToolSearchCatalogRef | undefined;
   let toolSearchCatalogApplied = false;
@@ -280,6 +283,7 @@ export async function runEmbeddedAttempt(
       { config: params.config },
     );
     bundleMcpRuntime = preparedBundleTools.bundleMcpRuntime;
+    mcpToolMaterialization = preparedBundleTools.mcpToolMaterialization;
     bundleLspRuntime = preparedBundleTools.bundleLspRuntime;
     const { clientTools, uncompactedEffectiveTools } = preparedBundleTools;
     // Catalog preparation registers global run state before tool projection and
@@ -503,6 +507,7 @@ export async function runEmbeddedAttempt(
       return {
         ...executionResult,
         codeModeEngaged: codeModeControlsEnabledForRun,
+        ...(mcpToolMaterialization ? { mcpToolMaterialization } : {}),
         ...(catalogSession
           ? {
               bridgeCalls: {
@@ -538,14 +543,15 @@ export async function runEmbeddedAttempt(
       });
     }
   } catch (error) {
+    const terminalError = withMcpToolMaterialization(error, mcpToolMaterialization);
     const terminalOutcome = buildAgentRunTerminalOutcomeFromAttempt({
       terminal: executionState.terminal,
       abortSignal: params.abortSignal,
     });
     if (terminalOutcome.status === "timeout") {
-      throw new AgentRunTerminalOutcomeError(error, terminalOutcome);
+      throw new AgentRunTerminalOutcomeError(terminalError, terminalOutcome);
     }
-    throw error;
+    throw terminalError;
   } finally {
     const cleanupTerminal = projectAgentRunAttemptTerminal(executionState.terminal);
     const cleanupReason =

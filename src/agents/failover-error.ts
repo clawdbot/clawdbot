@@ -7,6 +7,7 @@ import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/numb
 import { formatCliCommand } from "../cli/command-format.js";
 import { isAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
 import { collectErrorGraphCandidates, readErrorName } from "../infra/errors.js";
+import type { McpToolMaterializationFact } from "./agent-bundle-mcp-types.js";
 import {
   classifyFailoverSignal,
   extractFailoverSignalDetails,
@@ -58,6 +59,7 @@ export class FailoverError extends Error {
   readonly cliTimeout?: CliTimeoutContext;
   readonly attempts?: readonly FallbackAttemptRecord[];
   readonly soonestCooldownExpiry?: number | null;
+  readonly mcpToolMaterialization?: McpToolMaterializationFact;
 
   constructor(
     message: string,
@@ -78,6 +80,7 @@ export class FailoverError extends Error {
       cliTimeout?: CliTimeoutContext;
       attempts?: readonly FallbackAttemptRecord[];
       soonestCooldownExpiry?: number | null;
+      mcpToolMaterialization?: McpToolMaterializationFact;
     },
   ) {
     super(message, { cause: params.cause });
@@ -97,6 +100,7 @@ export class FailoverError extends Error {
     this.cliTimeout = params.cliTimeout;
     this.attempts = params.attempts;
     this.soonestCooldownExpiry = params.soonestCooldownExpiry;
+    this.mcpToolMaterialization = params.mcpToolMaterialization;
   }
 }
 
@@ -238,6 +242,35 @@ function findErrorProperty<T>(
     findErrorProperty(candidate.error, reader, seen) ??
     findErrorProperty(candidate.cause, reader, seen)
   );
+}
+
+export function findMcpToolMaterialization(err: unknown): McpToolMaterializationFact | undefined {
+  return findErrorProperty(err, (candidate) => {
+    if (!candidate || typeof candidate !== "object") {
+      return undefined;
+    }
+    // SAFETY: only withMcpToolMaterialization and FailoverError construct this internal fact.
+    return (candidate as { mcpToolMaterialization?: McpToolMaterializationFact })
+      .mcpToolMaterialization;
+  });
+}
+
+export function withMcpToolMaterialization(
+  err: unknown,
+  materialization: McpToolMaterializationFact | undefined,
+): unknown {
+  if (!materialization) {
+    return err;
+  }
+  const carrier =
+    err && typeof err === "object" && Object.isExtensible(err)
+      ? err
+      : new Error(String(err), { cause: err });
+  Object.defineProperty(carrier, "mcpToolMaterialization", {
+    configurable: true,
+    value: materialization,
+  });
+  return carrier;
 }
 
 function readDirectStatusCode(err: unknown): number | undefined {
@@ -851,6 +884,7 @@ export function coerceToFailoverError(
         cliTimeout: sourceError.cliTimeout,
         attempts: sourceError.attempts,
         soonestCooldownExpiry: sourceError.soonestCooldownExpiry,
+        mcpToolMaterialization: findMcpToolMaterialization(sourceError),
       });
     }
     return sourceError;
@@ -882,6 +916,7 @@ export function coerceToFailoverError(
     rawError: message,
     cause: err instanceof Error ? err : undefined,
     suspend: shouldSuspend,
+    mcpToolMaterialization: findMcpToolMaterialization(sourceError),
   });
 }
 

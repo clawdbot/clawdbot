@@ -13,3 +13,21 @@ export type AttemptFailureSource = Extract<
   { kind: "failed" }
 >["source"];
 export const attemptTerminal = agentHarnessAttemptTerminal;
+
+export function withMcpToolMaterialization(
+  error: unknown,
+  materialization: EmbeddedRunAttemptResult["mcpToolMaterialization"],
+): unknown {
+  if (!materialization) {
+    return error;
+  }
+  const carrier =
+    error && typeof error === "object" && Object.isExtensible(error)
+      ? error
+      : new Error(String(error), { cause: error });
+  Object.defineProperty(carrier, "mcpToolMaterialization", {
+    configurable: true,
+    value: materialization,
+  });
+  return carrier;
+}

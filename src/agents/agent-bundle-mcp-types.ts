@@ -22,6 +22,14 @@ export type BundleMcpToolRuntime = {
   dispose: () => Promise<void>;
 };
 
+/** Exact MCP surface observed after the run's explicit tool cap was applied. */
+export type McpToolMaterializationFact = {
+  provider: string;
+  model: string;
+  materializedToolCount: number;
+  toolsAllowMatchedToolCount: number;
+};
+
 /** Catalog metadata for one configured MCP server. */
 export type McpServerCatalog = {
   serverName: string;

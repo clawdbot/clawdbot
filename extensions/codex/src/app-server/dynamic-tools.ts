@@ -107,6 +107,7 @@ type CodexToolResultHookContext = Omit<CodexDynamicToolHookContext, "config">;
 
 type ProjectedCodexDynamicTool = {
   tool: AnyAgentTool;
+  sourceName: string;
   name: string;
   description: string;
   inputSchema: JsonSchemaObject & JsonValue;
@@ -460,6 +461,54 @@ const CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE = "openclaw";
 const CODEX_DYNAMIC_TOOL_NAME_MAX_CHARS = 128;
 const CODEX_DYNAMIC_TOOL_NAME_PATTERN = /^[a-zA-Z0-9_-]+$/u;
 
+function needsCodexDynamicToolNameAlias(name: string): boolean {
+  return name === "mcp" || name.startsWith("mcp__");
+}
+
+function createCodexDynamicToolNameProjection(
+  toolSets: ReadonlyArray<readonly AnyAgentTool[]>,
+): (sourceName: string) => string {
+  const usedNames = new Set<string>();
+  for (const tools of toolSets) {
+    for (const index of tools.keys()) {
+      try {
+        const name = tools[index]?.name;
+        if (
+          typeof name === "string" &&
+          name.length <= CODEX_DYNAMIC_TOOL_NAME_MAX_CHARS &&
+          CODEX_DYNAMIC_TOOL_NAME_PATTERN.test(name) &&
+          !needsCodexDynamicToolNameAlias(name)
+        ) {
+          usedNames.add(name);
+        }
+      } catch {
+        // Descriptor projection below records unreadable entries for diagnostics.
+      }
+    }
+  }
+  const projectedNames = new Map<string, string>();
+  return (sourceName) => {
+    if (!needsCodexDynamicToolNameAlias(sourceName)) {
+      return sourceName;
+    }
+    const existing = projectedNames.get(sourceName);
+    if (existing) {
+      return existing;
+    }
+    const base = `openclaw_${sourceName}`;
+    let ordinal = 1;
+    let projected = base.slice(0, CODEX_DYNAMIC_TOOL_NAME_MAX_CHARS);
+    while (usedNames.has(projected)) {
+      ordinal += 1;
+      const suffix = `_${ordinal}`;
+      projected = `${base.slice(0, CODEX_DYNAMIC_TOOL_NAME_MAX_CHARS - suffix.length)}${suffix}`;
+    }
+    usedNames.add(projected);
+    projectedNames.set(sourceName, projected);
+    return projected;
+  };
+}
+
 // Keep OpenClaw control-path tools directly callable even when Codex tool_search
 // is unavailable or resolves a connector-only universe. Developer instructions
 // still steer normal Codex subagents to native spawn_agent.
@@ -527,16 +576,21 @@ export function createCodexDynamicToolBridge(params: {
     contextWindowTokens > 0
       ? Math.max(1, resolveLiveToolResultMaxChars({ contextWindowTokens }))
       : DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
+  const projectToolName = createCodexDynamicToolNameProjection([
+    params.tools,
+    params.registeredTools ?? [],
+  ]);
   const availableProjection = projectCodexExecutableDynamicToolSurface(
     params.tools,
     params.hookContext,
+    projectToolName,
   );
   const registeredProjection = params.registeredTools
-    ? projectCodexDynamicTools(params.registeredTools)
+    ? projectCodexDynamicTools(params.registeredTools, projectToolName)
     : availableProjection;
   const availableTools = availableProjection.tools;
   const quarantinedAvailableToolNames = new Set(
-    availableProjection.quarantinedTools.map((tool) => tool.tool),
+    availableProjection.quarantinedTools.map((tool) => projectToolName(tool.tool)),
   );
   const registeredSpecTools = (
     params.registeredTools ? registeredProjection.tools : availableTools
@@ -588,10 +642,11 @@ export function createCodexDynamicToolBridge(params: {
     snapshot?: ExecutionSnapshot;
   };
   const executionSnapshotStates = new Map<string, ExecutionSnapshotState>();
-  const directToolNames = new Set([
-    ...ALWAYS_DIRECT_DYNAMIC_TOOL_NAMES,
-    ...(params.directToolNames ?? []),
-  ]);
+  const directToolNames = new Set(
+    [...ALWAYS_DIRECT_DYNAMIC_TOOL_NAMES, ...(params.directToolNames ?? [])].map((name) =>
+      projectToolName(name),
+    ),
+  );
   let readRemoteWorkspaceFile: CodexRemoteWorkspaceFileReader | undefined;
   return {
     availableTools: availableTools.map((entry) => entry.tool),
@@ -649,7 +704,7 @@ export function createCodexDynamicToolBridge(params: {
           executionStarted: false,
         });
       }
-      const { tool, name: toolName } = toolEntry;
+      const { tool, sourceName: toolName } = toolEntry;
       const rawArguments = call.arguments;
       const args = asNonArrayRecord(rawArguments);
       const startedAt = Date.now();
@@ -1002,11 +1057,12 @@ export function createCodexDynamicToolBridge(params: {
 function projectCodexExecutableDynamicToolSurface(
   tools: readonly AnyAgentTool[],
   hookContext: CodexDynamicToolHookContext | undefined,
+  projectToolName: (sourceName: string) => string,
 ): {
   tools: ProjectedCodexDynamicTool[];
   quarantinedTools: CodexDynamicToolSchemaQuarantine[];
 } {
-  const projected = projectCodexDynamicTools(tools);
+  const projected = projectCodexDynamicTools(tools, projectToolName);
   const wrapped = wrapProjectedCodexDynamicTools(projected.tools, hookContext);
   return {
     tools: wrapped.tools,
@@ -1025,7 +1081,11 @@ export function projectCodexExecutableDynamicTools(params: {
   availableTools: AnyAgentTool[];
   quarantinedTools: CodexDynamicToolSchemaQuarantine[];
 } {
-  const projected = projectCodexExecutableDynamicToolSurface(params.tools, params.hookContext);
+  const projected = projectCodexExecutableDynamicToolSurface(
+    params.tools,
+    params.hookContext,
+    createCodexDynamicToolNameProjection([params.tools]),
+  );
   return {
     availableTools: projected.tools.map((entry) => entry.tool),
     quarantinedTools: projected.quarantinedTools,
@@ -1155,7 +1215,10 @@ function createCodexDynamicToolFunctionSpec(params: {
   };
 }
 
-function projectCodexDynamicTools(tools: readonly AnyAgentTool[]): {
+function projectCodexDynamicTools(
+  tools: readonly AnyAgentTool[],
+  projectToolName: (sourceName: string) => string,
+): {
   tools: ProjectedCodexDynamicTool[];
   quarantinedTools: CodexDynamicToolSchemaQuarantine[];
 } {
@@ -1209,7 +1272,8 @@ function projectCodexDynamicTools(tools: readonly AnyAgentTool[]): {
     }
     projectedTools.push({
       tool,
-      name: descriptor.name,
+      sourceName: descriptor.name,
+      name: projectToolName(descriptor.name),
       description: descriptor.description,
       inputSchema: projection.schema,
     });
@@ -1256,8 +1320,6 @@ function readCodexDynamicToolDescriptor(
       nameViolation = `${rawName}.name must match ^[a-zA-Z0-9_-]+$`;
     } else if (rawName.length > CODEX_DYNAMIC_TOOL_NAME_MAX_CHARS) {
       nameViolation = `${rawName}.name must be at most ${CODEX_DYNAMIC_TOOL_NAME_MAX_CHARS} characters`;
-    } else if (rawName === "mcp" || rawName.startsWith("mcp__")) {
-      nameViolation = `${rawName}.name is reserved by Codex app-server`;
     }
     if (nameViolation) {
       return {

@@ -4,6 +4,8 @@ import {
   getOrCreateSessionMcpRuntime,
   materializeBundleMcpToolsForRun,
 } from "../../agent-bundle-mcp-tools.js";
+import type { McpToolMaterializationFact } from "../../agent-bundle-mcp-types.js";
+import { withMcpToolMaterialization } from "../../failover-error.js";
 import { filterLocalModelLeanTools } from "../../local-model-lean.js";
 import { normalizeAgentRuntimeTools } from "../../runtime-plan/tools.js";
 import { isRuntimeToolAllowed } from "../../tool-policy-match.js";
@@ -124,7 +126,21 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       })
     : undefined;
   let bundleLspRuntime: Awaited<ReturnType<typeof createBundleLspToolRuntime>> | undefined;
+  let mcpToolMaterialization: McpToolMaterializationFact | undefined;
   try {
+    const allowedBundleMcpTools = applyEmbeddedAttemptToolsAllow(
+      bundleMcpRuntime?.tools ?? [],
+      effectiveToolsAllow,
+      { toolMeta: (tool) => getPluginToolMeta(tool) },
+    );
+    mcpToolMaterialization = bundleMcpRuntime
+      ? {
+          provider: params.attempt.provider,
+          model: params.attempt.modelId,
+          materializedToolCount: bundleMcpRuntime.tools.length,
+          toolsAllowMatchedToolCount: allowedBundleMcpTools.length,
+        }
+      : undefined;
     const bundleLspEnabled =
       !params.attempt.forceRestartSafeTools &&
       !params.attempt.forceCodeModeReconciliationTools &&
@@ -145,11 +161,6 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
           ],
         })
       : undefined;
-    const allowedBundleMcpTools = applyEmbeddedAttemptToolsAllow(
-      bundleMcpRuntime?.tools ?? [],
-      effectiveToolsAllow,
-      { toolMeta: (tool) => getPluginToolMeta(tool) },
-    );
     const allowedBundleLspTools = applyEmbeddedAttemptToolsAllow(
       bundleLspRuntime?.tools ?? [],
       effectiveToolsAllow,
@@ -239,6 +250,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       bundleLspRuntime,
       bundleMcpRuntime,
       clientTools,
+      mcpToolMaterialization,
       tools,
       uncompactedEffectiveTools: [...schemaProjection.tools],
     };
@@ -253,6 +265,6 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     } catch {
       // Preserve the preparation error; cleanup is best-effort.
     }
-    throw error;
+    throw withMcpToolMaterialization(error, mcpToolMaterialization);
   }
 }

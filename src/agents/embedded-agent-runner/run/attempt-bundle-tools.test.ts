@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setPluginToolMeta } from "../../../plugins/tools.js";
+import { findMcpToolMaterialization } from "../../failover-error.js";
 import { attachToolAllowlistIntersection } from "../../tool-policy.js";
 
 const mocks = vi.hoisted(() => ({
@@ -217,6 +218,77 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     expect(inheritedToolAllowlist).not.toContain("server__delete");
   });
 
+  it.each([
+    { cap: "notes__missing", materializedName: "notes__search" },
+    { cap: "notes__search", materializedName: "notes__search-2" },
+  ])(
+    "records zero post-materialization matches for cap $cap against $materializedName",
+    async ({ cap, materializedName }) => {
+      mocks.getOrCreateSessionMcpRuntime.mockResolvedValue({});
+      mocks.materializeBundleMcpToolsForRun.mockResolvedValue({
+        tools: [{ name: materializedName }],
+      });
+      const input = createInput([], []);
+      input.attempt.toolsAllow = [cap];
+      input.preparedToolBase.effectiveToolsAllow = [cap];
+
+      const result = await prepareEmbeddedAttemptBundleTools(input);
+
+      expect(result.mcpToolMaterialization).toEqual({
+        provider: "provider",
+        model: "model",
+        materializedToolCount: 1,
+        toolsAllowMatchedToolCount: 0,
+      });
+    },
+  );
+
+  it("records explicit-cap matches before conversation policy removes the tool", async () => {
+    mocks.getOrCreateSessionMcpRuntime.mockResolvedValue({});
+    mocks.materializeBundleMcpToolsForRun.mockResolvedValue({
+      tools: [{ name: "notes__search" }],
+    });
+    mocks.applyFinalEffectiveToolPolicy.mockReturnValue([]);
+    const input = createInput([], []);
+    input.attempt.toolsAllow = ["notes__search"];
+    input.preparedToolBase.effectiveToolsAllow = ["notes__search"];
+
+    const result = await prepareEmbeddedAttemptBundleTools(input);
+
+    expect(result.mcpToolMaterialization).toEqual({
+      provider: "provider",
+      model: "model",
+      materializedToolCount: 1,
+      toolsAllowMatchedToolCount: 1,
+    });
+    expect(result.tools).toEqual([]);
+  });
+
+  it("carries post-cap materialization when later LSP setup fails", async () => {
+    const disposeMcp = vi.fn(async () => {});
+    const setupError = new Error("LSP setup failed after MCP materialization");
+    mocks.getOrCreateSessionMcpRuntime.mockResolvedValue({});
+    mocks.materializeBundleMcpToolsForRun.mockResolvedValue({
+      tools: [{ name: "notes__search" }],
+      dispose: disposeMcp,
+    });
+    mocks.createBundleLspToolRuntime.mockRejectedValue(setupError);
+    const input = createInput([], []);
+    input.attempt.toolsAllow = ["notes__missing", "lsp_probe"];
+    input.preparedToolBase.effectiveToolsAllow = input.attempt.toolsAllow;
+
+    const error = await prepareEmbeddedAttemptBundleTools(input).catch((caught: unknown) => caught);
+
+    expect(error).toBe(setupError);
+    expect(findMcpToolMaterialization(error)).toEqual({
+      provider: "provider",
+      model: "model",
+      materializedToolCount: 1,
+      toolsAllowMatchedToolCount: 0,
+    });
+    expect(disposeMcp).toHaveBeenCalledOnce();
+  });
+
   it("captures the post-quarantine creator cap with plugin ownership", async () => {
     const coreTool = { name: "automations" };
     const allowedMcpTool = { name: "mail__read" };
@@ -250,20 +322,16 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     });
   });
 
-  it("disposes prepared bundle runtimes when later policy setup fails", async () => {
+  it("carries post-cap materialization when later schema projection fails", async () => {
     const disposeMcp = vi.fn(async () => {});
-    const disposeLsp = vi.fn(async () => {});
+    const setupError = new Error("bundle policy failed");
     mocks.getOrCreateSessionMcpRuntime.mockResolvedValue({});
     mocks.materializeBundleMcpToolsForRun.mockResolvedValue({
-      tools: [],
+      tools: [{ name: "notes__search" }],
       dispose: disposeMcp,
     });
-    mocks.createBundleLspToolRuntime.mockResolvedValue({
-      tools: [],
-      dispose: disposeLsp,
-    });
-    mocks.applyFinalEffectiveToolPolicy.mockImplementation(() => {
-      throw new Error("bundle policy failed");
+    mocks.filterRuntimeCompatibleTools.mockImplementation(() => {
+      throw setupError;
     });
 
     const input = {
@@ -276,6 +344,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
         runId: "run",
         runtimePlan: {},
         sessionId: "session",
+        toolsAllow: ["notes__missing"],
       },
       effectiveWorkspace: "/tmp/workspace",
       getCurrentAttemptPluginMetadataSnapshot: () => undefined,
@@ -283,7 +352,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
       isRawModelRun: false,
       preparedToolBase: {
         cronCreatorToolAllowlist: [],
-        effectiveToolsAllow: undefined,
+        effectiveToolsAllow: ["notes__missing"],
         localModelLeanPreserveToolNames: [],
         runtimeCapabilityProfile: undefined,
         toolsEnabled: true,
@@ -292,11 +361,16 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
       sessionAgentId: "main",
     } as unknown as Parameters<typeof prepareEmbeddedAttemptBundleTools>[0];
 
-    await expect(prepareEmbeddedAttemptBundleTools(input)).rejects.toThrow("bundle policy failed");
-    expect(mocks.applyFinalEffectiveToolPolicy).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceDir: "/tmp/workspace" }),
-    );
+    const error = await prepareEmbeddedAttemptBundleTools(input).catch((caught: unknown) => caught);
+
+    expect(error).toBe(setupError);
+    expect(findMcpToolMaterialization(error)).toEqual({
+      provider: "provider",
+      model: "model",
+      materializedToolCount: 1,
+      toolsAllowMatchedToolCount: 0,
+    });
+    expect(mocks.filterRuntimeCompatibleTools).toHaveBeenCalledOnce();
     expect(disposeMcp).toHaveBeenCalledOnce();
-    expect(disposeLsp).toHaveBeenCalledOnce();
   });
 });

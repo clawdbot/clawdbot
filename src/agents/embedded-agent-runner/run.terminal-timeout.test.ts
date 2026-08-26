@@ -69,6 +69,20 @@ describe("resolveEmbeddedRunTerminalTimeout", () => {
     ]);
   });
 
+  it("preserves MCP materialization evidence in timeout replacement results", () => {
+    const materialization = {
+      provider: "openai",
+      model: "gpt-5.4",
+      materializedToolCount: 1,
+      toolsAllowMatchedToolCount: 0,
+    };
+    const result = resolveEmbeddedRunTerminalTimeout(
+      makeTimeoutInput(makeTimedOutAttempt({ mcpToolMaterialization: materialization })),
+    );
+
+    expect(result?.mcpToolMaterialization).toEqual(materialization);
+  });
+
   it("preserves an accepted child spawn while surfacing the parent timeout", () => {
     const acceptedSessionSpawns = [
       { runId: "run-child", childSessionKey: "agent:claude:subagent:child" },

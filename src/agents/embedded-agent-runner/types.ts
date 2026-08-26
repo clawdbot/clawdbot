@@ -9,6 +9,7 @@ import type {
 } from "../../config/sessions/types.js";
 import type { DiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import type { AcceptedSessionSpawn } from "../accepted-session-spawn.js";
+import type { McpToolMaterializationFact } from "../agent-bundle-mcp-types.js";
 import type { AgentRunTerminalReceipt } from "../agent-run-terminal-receipt.js";
 import type { AgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.js";
 import type {
@@ -20,6 +21,8 @@ import type { McpAppChannelView } from "../mcp-ui-resource.js";
 import type { FallbackAttempt } from "../model-fallback.types.js";
 import type { AgentRunTimeoutPhase } from "../run-timeout-attribution.js";
 import type { NormalizedUsage } from "../usage.js";
+
+export type { McpToolMaterializationFact };
 
 export type BlockReplyFlushContext =
   | {
@@ -235,6 +238,7 @@ export type EmbeddedAgentRunMeta = {
 export type EmbeddedAgentRunResult = {
   latestMcpAppChannelView?: McpAppChannelView;
   latestMcpConnectAction?: McpConnectAction;
+  mcpToolMaterialization?: McpToolMaterializationFact;
   payloads?: Array<{
     text?: string;
     mediaUrl?: string;

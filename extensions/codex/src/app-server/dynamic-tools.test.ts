@@ -1389,20 +1389,6 @@ describe("createCodexDynamicToolBridge", () => {
       source: "registered" as const,
       diagnosticTool: "a".repeat(129),
     },
-    {
-      label: "reserved mcp name",
-      name: "mcp",
-      placement: "direct" as const,
-      source: "both" as const,
-      diagnosticTool: "mcp",
-    },
-    {
-      label: "reserved mcp namespace prefix",
-      name: "mcp__read",
-      placement: "searchable" as const,
-      source: "both" as const,
-      diagnosticTool: "mcp__read",
-    },
   ])("quarantines Codex-invalid dynamic tool names: $label", async (testCase) => {
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     const execute = vi.fn(async () => textToolResult("healthy sibling executed"));
@@ -1500,14 +1486,14 @@ describe("createCodexDynamicToolBridge", () => {
   it("reports an empty final surface when all dynamic tool names are invalid", () => {
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     const bridge = createCodexDynamicToolBridge({
-      tools: [createTool({ name: "bad.name" }), createTool({ name: "mcp" })],
+      tools: [createTool({ name: "bad.name" })],
       signal: new AbortController().signal,
     });
 
     expect(bridge.availableTools).toEqual([]);
     expect(bridge.availableSpecs).toEqual([]);
     expect(bridge.specs).toEqual([]);
-    expect(bridge.telemetry.quarantinedTools.map((tool) => tool.tool)).toEqual(["bad.name", "mcp"]);
+    expect(bridge.telemetry.quarantinedTools.map((tool) => tool.tool)).toEqual(["bad.name"]);
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining("retained 0 available and 0 registered tools"),
       expect.objectContaining({
@@ -1515,6 +1501,53 @@ describe("createCodexDynamicToolBridge", () => {
         registeredToolCount: 0,
       }),
     );
+  });
+
+  it("remaps only exact lowercase Codex MCP namespace hazards", async () => {
+    const execute = vi.fn(async () => textToolResult("mcp tool executed"));
+    const sourceNames = ["mcp", "mcp_", "mcp__read", "MCP", "MCP__read"];
+    const tools = sourceNames.map((name) => createTool({ name, execute }));
+    const bridge = createCodexDynamicToolBridge({
+      tools,
+      signal: new AbortController().signal,
+      loading: "direct",
+      directToolNames: sourceNames,
+    });
+
+    expect(bridge.availableTools.map((tool) => tool.name)).toEqual(sourceNames);
+    expect(specNames(bridge.availableSpecs)).toEqual([
+      "openclaw_mcp",
+      "mcp_",
+      "openclaw_mcp__read",
+      "MCP",
+      "MCP__read",
+    ]);
+    expect(bridge.telemetry.quarantinedTools).toEqual([]);
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-mcp",
+      namespace: null,
+      tool: "openclaw_mcp__read",
+      arguments: {},
+    });
+    expect(result.success).toBe(true);
+    expect(execute).toHaveBeenCalledOnce();
+  });
+
+  it("uses one collision allocator for available and registered Codex projections", () => {
+    const safeCollision = createTool({ name: "openclaw_mcp" });
+    const reserved = createTool({ name: "mcp" });
+    const bridge = createCodexDynamicToolBridge({
+      tools: [safeCollision, reserved],
+      registeredTools: [reserved, safeCollision],
+      signal: new AbortController().signal,
+      loading: "direct",
+    });
+
+    expect(specNames(bridge.availableSpecs)).toEqual(["openclaw_mcp", "openclaw_mcp_2"]);
+    expect(specNames(bridge.specs)).toEqual(["openclaw_mcp_2", "openclaw_mcp"]);
   });
 
   it("uses the bridge's executable projection for authority snapshots", () => {

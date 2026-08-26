@@ -9,6 +9,7 @@ import {
   captureFinalCodexCronCreatorToolAllowlist,
   materializeStaticMcpToolsForScheduledHarnessRun,
 } from "openclaw/plugin-sdk/codex-mcp-projection";
+import { withMcpToolMaterialization } from "./attempt-terminal.js";
 import { resolveCodexPluginsPolicy, shouldAutoApproveCodexAppServerApprovals } from "./config.js";
 import {
   buildDynamicTools,
@@ -324,6 +325,8 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     ? await materializeStaticMcpToolsForScheduledHarnessRun({
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
+        provider: params.provider,
+        model: params.modelId,
         workspaceDir: effectiveWorkspace,
         agentDir: policyContext.agentDir,
         cfg: params.config,
@@ -491,6 +494,8 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         try {
           materialized = await materializeStaticMcpToolsForScheduledHarnessRun({
             sessionId: authorityRuntimeId,
+            provider: params.provider,
+            model: params.modelId,
             workspaceDir: effectiveWorkspace,
             agentDir: policyContext.agentDir,
             cfg: params.config,
@@ -566,9 +571,17 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
   } catch (error) {
     // Materialized runtimes are attempt-owned only after this function returns.
     // Dispose here when filtering, schema projection, or bridge setup fails first.
-    await scopedMcpTools?.dispose();
-    await scheduledConfiguredMcp?.dispose();
-    throw error;
+    try {
+      await scopedMcpTools?.dispose();
+    } catch {
+      // Preserve the tool-setup error; cleanup is best-effort.
+    }
+    try {
+      await scheduledConfiguredMcp?.dispose();
+    } catch {
+      // Preserve the tool-setup error; cleanup is best-effort.
+    }
+    throw withMcpToolMaterialization(error, scheduledConfiguredMcp?.mcpToolMaterialization);
   }
 }
 

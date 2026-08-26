@@ -212,6 +212,32 @@ describe("terminal resolution", () => {
     ).toEqual({ viewId: "view-latest" });
   });
 
+  it("preserves MCP materialization evidence through terminal cancellation", async () => {
+    const materialization = {
+      provider: "openai",
+      model: "gpt-5.4",
+      materializedToolCount: 1,
+      toolsAllowMatchedToolCount: 0,
+    };
+    const assistant = emptyAssistant({ stopReason: "aborted" });
+    const attempt = makeEmbeddedRunnerAttempt({
+      terminal: { kind: "aborted", source: "external" },
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+    });
+    attempt.mcpToolMaterialization = materialization;
+
+    const resolved = await resolveEmbeddedRunTerminal(
+      makeTerminalInput({ attempt, attemptAssistant: assistant }),
+    );
+
+    expect(resolved.action).toBe("complete");
+    if (resolved.action === "complete") {
+      expect(resolved.result.mcpToolMaterialization).toEqual(materialization);
+    }
+  });
+
   it("retries a required empty reply even when deliberate silence is enabled", async () => {
     const activateInternalPrompt = vi.fn();
     const input = makeTerminalInput({

@@ -22,7 +22,7 @@ import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
 import { abortable } from "./embedded-agent-runner/run/abortable.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
-import { FailoverError } from "./failover-error.js";
+import { FailoverError, withMcpToolMaterialization } from "./failover-error.js";
 import { resetFallbackSkipCacheForTest } from "./fallback-skip-cache.test-support.js";
 import {
   AgentHarnessPreflightError,
@@ -2896,6 +2896,55 @@ describe("runWithModelFallback", () => {
       }),
     ).rejects.toThrow("something weird");
     expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the terminal candidate MCP materialization carrier in the all-failed summary", async () => {
+    const terminalMaterialization = {
+      provider: "anthropic",
+      model: "claude-haiku-3-5",
+      materializedToolCount: 2,
+      toolsAllowMatchedToolCount: 0,
+    };
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new FailoverError("primary failed", {
+          reason: "overloaded",
+          provider: "openai",
+          model: "gpt-4.1-mini",
+          mcpToolMaterialization: {
+            provider: "openai",
+            model: "gpt-4.1-mini",
+            materializedToolCount: 1,
+            toolsAllowMatchedToolCount: 1,
+          },
+        }),
+      )
+      .mockRejectedValueOnce(
+        withMcpToolMaterialization(
+          new FailoverError("fallback failed", {
+            reason: "auth",
+            provider: "anthropic",
+            model: "claude-haiku-3-5",
+          }),
+          terminalMaterialization,
+        ),
+      );
+
+    const error = await runWithModelFallback({
+      cfg: makeCfg(),
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(FailoverError);
+    expect(error).toMatchObject({
+      provider: "anthropic",
+      model: "claude-haiku-3-5",
+      mcpToolMaterialization: terminalMaterialization,
+    });
+    expect(run).toHaveBeenCalledTimes(2);
   });
 
   it("treats LiveSessionModelSwitchError as failover on last candidate (#58496 family)", async () => {

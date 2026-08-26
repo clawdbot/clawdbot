@@ -397,14 +397,13 @@ export async function resolveEmbeddedRunTerminal(input: {
   retryState.compactionContinuationInstruction = null;
 
   if (reasoningOnlyRetriesExhausted && !input.finalAssistantVisibleText) {
-    const incompletePayloadText = "⚠️ Agent couldn't generate a response. Please try again.";
     log.warn(
       `reasoning-only retries exhausted: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
         `provider=${input.activeErrorContext.provider}/${input.activeErrorContext.model} attempts=${retryState.reasoningOnlyAttempts}/${input.maxReasoningOnlyRetryAttempts} — surfacing incomplete-turn error`,
     );
     return surfaceIncompleteTurn({
       ...input,
-      text: incompletePayloadText,
+      text: "⚠️ Agent couldn't generate a response. Please try again.",
       payloadCount: 0,
       incompleteTurnFallbackSafe,
       terminalToolPresentation,
@@ -716,6 +715,7 @@ export function copyAttemptDeliveryState(attempt: EmbeddedRunAttemptResult) {
   return {
     latestMcpAppChannelView: attempt.latestMcpAppChannelView,
     latestMcpConnectAction: attempt.latestMcpConnectAction,
+    mcpToolMaterialization: attempt.mcpToolMaterialization,
     didSendViaMessagingTool: attempt.didSendViaMessagingTool,
     didDeliverSourceReplyViaMessageTool: attempt.didDeliverSourceReplyViaMessageTool === true,
     didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,

@@ -499,6 +499,12 @@ export async function finalizeCodexAttempt(
   );
   const finalizedResult: EmbeddedRunAttemptResult = {
     ...result,
+    ...(prompt.context.attemptTools.scheduledConfiguredMcp?.mcpToolMaterialization
+      ? {
+          mcpToolMaterialization:
+            prompt.context.attemptTools.scheduledConfiguredMcp.mcpToolMaterialization,
+        }
+      : {}),
     ...(toolState.yieldAcknowledgment
       ? { yieldAcknowledgment: toolState.yieldAcknowledgment }
       : {}),

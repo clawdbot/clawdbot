@@ -14,6 +14,7 @@ import {
   FailoverError,
   buildFailoverRemediationHint,
   describeFailoverError,
+  findMcpToolMaterialization,
   isFailoverError,
   isNonProviderRuntimeCoordinationError,
   resolveModelFallbackError,
@@ -648,6 +649,7 @@ export function throwFallbackFailureSummary(params: {
     lane: params.attribution?.lane,
     attempts,
     soonestCooldownExpiry: params.soonestCooldownExpiry ?? null,
+    mcpToolMaterialization: findMcpToolMaterialization(params.lastError),
   });
 }
 

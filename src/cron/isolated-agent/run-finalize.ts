@@ -34,7 +34,11 @@ import {
 import type { CronDeliveryTrace, CronRunTelemetry } from "../types.js";
 import { resolveCronChannelOutputPolicy } from "./channel-output-policy.js";
 import { resolveCronPayloadOutcome } from "./helpers.js";
-import { buildCronDeliveryTrace, loadCronDeliveryRuntime } from "./run-delivery-trace.js";
+import {
+  buildCronDeliveryTrace,
+  createCronMcpToolsAllowDiagnostics,
+  loadCronDeliveryRuntime,
+} from "./run-delivery-trace.js";
 import type { PreparedCronRunContext } from "./run-prepare.js";
 import {
   adoptCronRunSessionMetadata,
@@ -46,6 +50,7 @@ import {
   deriveSessionTotalTokens,
   hasNonzeroUsage,
   isCliProvider,
+  resolveEffectiveAgentRuntime,
 } from "./run.runtime.js";
 import type { RunCronAgentTurnResult } from "./run.types.js";
 import { cleanupCronRunSessionAfterRun } from "./session-cleanup.js";
@@ -104,6 +109,30 @@ export async function finalizeCronRun(params: {
     finalRunResult.meta?.agentMeta?.provider ??
     execution.fallbackProvider ??
     execution.liveSelection.provider;
+  const terminalProvider = execution.fallbackProvider ?? execution.liveSelection.provider;
+  const terminalModel = execution.fallbackModel ?? execution.liveSelection.model;
+  const terminalMcpDiagnostics = await createCronMcpToolsAllowDiagnostics({
+    cfg: prepared.cfgWithAgentDefaults,
+    jobId: prepared.input.job.id,
+    provider: terminalProvider,
+    model: terminalModel,
+    agentId: prepared.agentId,
+    workspaceDir: prepared.workspaceDir,
+    agentPayload: prepared.agentPayload,
+    agentRuntime: resolveEffectiveAgentRuntime({
+      cfg: prepared.cfgWithAgentDefaults,
+      provider: terminalProvider,
+      modelId: terminalModel,
+      agentId: prepared.agentId,
+      sessionKey: prepared.runSessionKey,
+      sessionEntry: prepared.cronSession.sessionEntry,
+    }),
+    materialization: finalRunResult.mcpToolMaterialization,
+  });
+  const preflightAndMcpDiagnostics = mergeCronRunDiagnostics(
+    prepared.preflightDiagnostics,
+    terminalMcpDiagnostics,
+  );
   const runtimeContextTokens = resolvePositiveContextTokens(
     finalRunResult.meta?.agentMeta?.contextTokens,
   );
@@ -298,6 +327,11 @@ export async function finalizeCronRun(params: {
   } else {
     telemetry = { model: modelUsed, provider: providerUsed };
   }
+  const terminalTelemetry: CronRunTelemetry = {
+    ...telemetry,
+    model: terminalModel,
+    provider: terminalProvider,
+  };
   await prepared.persistSessionEntry();
   await prepared.runContinuationSession?.seal({ basePersisted: true });
 
@@ -306,11 +340,11 @@ export async function finalizeCronRun(params: {
       status: "error",
       error: params.abortReason(),
       diagnostics: mergeCronRunDiagnostics(
-        prepared.preflightDiagnostics,
+        preflightAndMcpDiagnostics,
         createCronRunDiagnosticsFromAgentResult(finalRunResult, { finalStatus: "error" }),
         createCronRunDiagnosticsFromError("cron-setup", params.abortReason()),
       ),
-      ...telemetry,
+      ...terminalTelemetry,
     });
   }
   const cronPayloadOutcome = resolveCronPayloadOutcome({
@@ -332,11 +366,11 @@ export async function finalizeCronRun(params: {
       status: "error",
       error,
       diagnostics: mergeCronRunDiagnostics(
-        prepared.preflightDiagnostics,
+        preflightAndMcpDiagnostics,
         createCronRunDiagnosticsFromAgentResult(finalRunResult, { finalStatus: "error" }),
         createCronRunDiagnosticsFromError("agent-run", error),
       ),
-      ...telemetry,
+      ...terminalTelemetry,
     });
   }
   const {
@@ -361,7 +395,7 @@ export async function finalizeCronRun(params: {
   const agentDiagnostics = createCronRunDiagnosticsFromAgentResult(finalRunResult, {
     finalStatus: hasFatalErrorPayload ? "error" : "ok",
   });
-  const runDiagnostics = mergeCronRunDiagnostics(prepared.preflightDiagnostics, agentDiagnostics);
+  const runDiagnostics = mergeCronRunDiagnostics(preflightAndMcpDiagnostics, agentDiagnostics);
   const resolveRunOutcome = (result?: {
     delivered?: boolean;
     deliveryAttempted?: boolean;
@@ -391,7 +425,7 @@ export async function finalizeCronRun(params: {
           ? createCronRunDiagnosticsFromError("delivery", result.deliveryError)
           : undefined,
       ),
-      ...telemetry,
+      ...terminalTelemetry,
     });
   const failPendingPresentationWarningUnlessDelivered = (delivered?: boolean) => {
     if (pendingPresentationWarningError && delivered !== true) {
@@ -471,7 +505,7 @@ export async function finalizeCronRun(params: {
         runDiagnostics,
         createCronRunDiagnosticsFromError("agent-run", error),
       ),
-      ...telemetry,
+      ...terminalTelemetry,
     });
   }
   if (hasFatalStructuredErrorPayload && prepared.deliveryRequested) {
@@ -522,7 +556,7 @@ export async function finalizeCronRun(params: {
     ttsAuto: prepared.cronSession.sessionEntry.ttsAuto,
     summary,
     outputText,
-    telemetry,
+    telemetry: terminalTelemetry,
     abortSignal: prepared.input.abortSignal ?? prepared.input.signal,
     isAborted: params.isAborted,
     abortReason: params.abortReason,

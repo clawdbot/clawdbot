@@ -26,6 +26,7 @@ const mcpMocks = vi.hoisted(() => ({
   staticDiagnosticNotice: undefined as string | undefined,
   staticFailure: undefined as Error | undefined,
   staticFailureGate: undefined as Promise<void> | undefined,
+  staticMatchedToolCount: undefined as number | undefined,
   staticCalls: [] as Array<Record<string, unknown>>,
   staticToolExecutes: [] as ReturnType<typeof vi.fn>[],
   threadConfigCalls: [] as Array<Record<string, unknown>>,
@@ -95,16 +96,24 @@ vi.mock("openclaw/plugin-sdk/codex-mcp-projection", async (importOriginal) => {
       }));
       mcpMocks.staticToolExecutes.push(execute);
       return {
-        tools: mcpMocks.staticDiagnosticNotice
-          ? []
-          : [
-              {
-                name: "fake__show",
-                description: "Show the configured MCP fixture result.",
-                parameters: { type: "object", properties: {} },
-                execute,
-              },
-            ],
+        tools:
+          mcpMocks.staticDiagnosticNotice || mcpMocks.staticMatchedToolCount === 0
+            ? []
+            : [
+                {
+                  name: "fake__show",
+                  description: "Show the configured MCP fixture result.",
+                  parameters: { type: "object", properties: {} },
+                  execute,
+                },
+              ],
+        mcpToolMaterialization: {
+          provider: String(params.provider),
+          model: String(params.model),
+          materializedToolCount: 1,
+          toolsAllowMatchedToolCount:
+            mcpMocks.staticMatchedToolCount ?? (mcpMocks.staticDiagnosticNotice ? 0 : 1),
+        },
         appTools: [
           {
             name: "fake__app_only",
@@ -178,6 +187,7 @@ beforeEach(() => {
   mcpMocks.staticDiagnosticNotice = undefined;
   mcpMocks.staticFailure = undefined;
   mcpMocks.staticFailureGate = undefined;
+  mcpMocks.staticMatchedToolCount = undefined;
   mcpMocks.dispose.mockClear();
   mcpMocks.captureFacade.mockClear();
   mcpMocks.staticFacade.mockClear();
@@ -281,6 +291,8 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
     expect(JSON.stringify(threadStart?.dynamicTools ?? [])).toContain("fake__show");
     expect(mcpMocks.staticCalls[0]).not.toHaveProperty("requesterSenderId");
     expect(mcpMocks.staticCalls[0]).toMatchObject({
+      provider: params.provider,
+      model: params.modelId,
       toolsAllow: ["*"],
       manifestRegistry: params.preparedModelRuntime?.metadataSnapshot.manifestRegistry,
       autoApproveCodexAppServerApprovals: true,
@@ -304,7 +316,14 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
     expect(mcpMocks.staticToolExecutes[0]).toHaveBeenCalledOnce();
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
+    const result = await run;
+
+    expect(result.mcpToolMaterialization).toEqual({
+      provider: params.provider,
+      model: params.modelId,
+      materializedToolCount: 1,
+      toolsAllowMatchedToolCount: 1,
+    });
 
     expect(mcpMocks.captureCalls).toHaveLength(1);
     expect(mcpMocks.captureCalls[0]).toMatchObject({
@@ -319,6 +338,70 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
     expect(binding).toMatchObject({ configuredMcpOwnershipVersion: 1 });
     expect(binding).not.toHaveProperty("mcpServersFingerprint");
     expect(binding).not.toHaveProperty("userMcpServersFingerprint");
+  });
+
+  it("carries exact-selector materialization through a post-setup turn failure", async () => {
+    const sessionFile = path.join(tempDir, "session-scheduled-static-mcp-turn-failure.jsonl");
+    const params = createParams(
+      sessionFile,
+      path.join(tempDir, "workspace-scheduled-static-mcp-turn-failure"),
+    );
+    configureFakeMcp(params);
+    params.trigger = "cron";
+    params.toolsAllow = ["fake__missing"];
+    params.scheduledToolPolicy = { version: 1, mode: "trusted" };
+    mcpMocks.staticMatchedToolCount = 0;
+
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "turn/start") {
+        throw new Error("turn start failed after MCP materialization");
+      }
+      return undefined;
+    });
+
+    await expect(runCodexAppServerAttempt(params)).rejects.toMatchObject({
+      message: "turn start failed after MCP materialization",
+      mcpToolMaterialization: {
+        provider: params.provider,
+        model: params.modelId,
+        materializedToolCount: 1,
+        toolsAllowMatchedToolCount: 0,
+      },
+    });
+    const threadStart = harness.requests.find((request) => request.method === "thread/start")
+      ?.params as { dynamicTools?: Array<{ name?: string }> } | undefined;
+    expect(threadStart?.dynamicTools?.map((tool) => tool.name)).not.toContain("fake__show");
+  });
+
+  it("carries exact-selector materialization through tool projection setup failure", async () => {
+    const sessionFile = path.join(tempDir, "session-scheduled-static-mcp-projection-failure.jsonl");
+    const params = createParams(
+      sessionFile,
+      path.join(tempDir, "workspace-scheduled-static-mcp-projection-failure"),
+    );
+    const setupError = new Error("dynamic tool projection failed after MCP materialization");
+    configureFakeMcp(params);
+    params.trigger = "cron";
+    params.toolsAllow = ["fake__missing"];
+    params.scheduledToolPolicy = { version: 1, mode: "trusted" };
+    mcpMocks.staticMatchedToolCount = 0;
+    mcpMocks.captureFacade.mockImplementationOnce(() => {
+      throw setupError;
+    });
+    mcpMocks.dispose.mockRejectedValueOnce(new Error("configured MCP disposal failed"));
+
+    const error = await runCodexAppServerAttempt(params).catch((caught: unknown) => caught);
+
+    expect(error).toBe(setupError);
+    expect(error).toMatchObject({
+      mcpToolMaterialization: {
+        provider: params.provider,
+        model: params.modelId,
+        materializedToolCount: 1,
+        toolsAllowMatchedToolCount: 0,
+      },
+    });
+    expect(mcpMocks.dispose).toHaveBeenCalledOnce();
   });
 
   it("preserves bounded canonical continuity when scheduled MCP replaces ordinary ownership", async () => {

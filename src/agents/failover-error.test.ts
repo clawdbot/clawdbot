@@ -4,6 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { createAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
+import { AgentRunTerminalOutcomeError } from "./agent-run-terminal-error.js";
 import {
   buildFailoverRemediationHint,
   buildProviderReauthCommand,
@@ -11,12 +12,14 @@ import {
   describeFailoverError,
   FailoverError,
   findCliTimeoutError,
+  findMcpToolMaterialization,
   isNonProviderRuntimeCoordinationError,
   isSignalTimeoutReason,
   isTimeoutError,
   resolveFailoverReasonFromError,
   resolveFailoverStatus,
   resolveModelFallbackError,
+  withMcpToolMaterialization,
 } from "./failover-error.js";
 
 // OpenAI 429 example shape: https://help.openai.com/en/articles/5955604-how-can-i-solve-429-too-many-requests-errors
@@ -42,6 +45,42 @@ const OPENAI_SERVER_ERROR_PAYLOAD =
   'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request."},"sequence_number":2}';
 
 describe("failover-error", () => {
+  it("preserves MCP materialization through timeout and auth wrappers", () => {
+    const materialization = {
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      materializedToolCount: 2,
+      toolsAllowMatchedToolCount: 0,
+    };
+    const enrichedRawError = withMcpToolMaterialization(
+      new Error("HTTP 503: provider unavailable"),
+      materialization,
+    );
+    const nestedFailover = new FailoverError("terminal candidate failed", {
+      reason: "timeout",
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      cause: enrichedRawError,
+    });
+    const terminal = new AgentRunTerminalOutcomeError(enrichedRawError, {
+      reason: "hard_timeout",
+      status: "timeout",
+      timeoutPhase: "provider",
+      providerStarted: true,
+    });
+
+    expect(findMcpToolMaterialization(terminal)).toEqual(materialization);
+    expect(
+      coerceToFailoverError(terminal, {
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+      })?.mcpToolMaterialization,
+    ).toEqual(materialization);
+    expect(
+      coerceToFailoverError(nestedFailover, { authMode: "oauth" })?.mcpToolMaterialization,
+    ).toEqual(materialization);
+  });
+
   it("finds structured CLI timeout context through aggregate wrappers", () => {
     const timeout = new FailoverError("CLI exceeded timeout", {
       reason: "timeout",

@@ -253,6 +253,25 @@ describe("attempt result projection", () => {
     expect(latest.latestMcpConnectAction.authorizationUrl).toBe("https://auth.example/latest");
   });
 
+  it("carries MCP materialization evidence across an internal retry", () => {
+    const carryover = createMcpAttemptCarryover();
+    const materialization = {
+      provider: "openai",
+      model: "gpt-5.4",
+      materializedToolCount: 2,
+      toolsAllowMatchedToolCount: 0,
+    };
+    const first: Parameters<typeof carryover.apply>[0] = {
+      mcpToolMaterialization: materialization,
+    };
+    const retry: Parameters<typeof carryover.apply>[0] = {};
+
+    carryover.apply(first);
+    carryover.apply(retry);
+
+    expect(retry.mcpToolMaterialization).toEqual(materialization);
+  });
+
   it("keeps completed client tool calls in reserved source order", () => {
     expect(
       completeResult({

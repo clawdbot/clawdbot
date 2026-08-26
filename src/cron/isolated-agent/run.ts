@@ -1,4 +1,5 @@
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
+import { findMcpToolMaterialization, isFailoverError } from "../../agents/failover-error.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../browser-lifecycle-cleanup.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
@@ -32,10 +33,11 @@ import type {
   CronAgentExecutionStarted,
   CronStoredJob,
 } from "../types.js";
+import { createCronMcpToolsAllowDiagnostics } from "./run-delivery-trace.js";
 import { finalizeCronRun } from "./run-finalize.js";
 import { prepareCronRunContext } from "./run-prepare.js";
 import { CronSessionLifecycleClaimError, type MutableCronSession } from "./run-session-state.js";
-import { logWarn } from "./run.runtime.js";
+import { logWarn, resolveEffectiveAgentRuntime } from "./run.runtime.js";
 import type { RunCronAgentTurnResult } from "./run.types.js";
 import { cleanupCronRunSessionAfterRun } from "./session-cleanup.js";
 
@@ -292,6 +294,32 @@ export async function runCronIsolatedAgentTurn(params: {
     const error = isCronLaneTimeout ? abortReason() : normalizeCronRunErrorText(err);
     outcome = "error";
     outcomeError = error;
+    const terminalProvider =
+      (isFailoverError(err) ? err.provider : undefined) ??
+      prepared.context.cronSession.sessionEntry.modelProvider ??
+      prepared.context.liveSelection.provider;
+    const terminalModel =
+      (isFailoverError(err) ? err.model : undefined) ??
+      prepared.context.cronSession.sessionEntry.model ??
+      prepared.context.liveSelection.model;
+    const terminalMcpDiagnostics = await createCronMcpToolsAllowDiagnostics({
+      cfg: prepared.context.cfgWithAgentDefaults,
+      jobId: params.job.id,
+      provider: terminalProvider,
+      model: terminalModel,
+      agentId: prepared.context.agentId,
+      workspaceDir: prepared.context.workspaceDir,
+      agentPayload: prepared.context.agentPayload,
+      agentRuntime: resolveEffectiveAgentRuntime({
+        cfg: prepared.context.cfgWithAgentDefaults,
+        provider: terminalProvider,
+        modelId: terminalModel,
+        agentId: prepared.context.agentId,
+        sessionKey: prepared.context.runSessionKey,
+        sessionEntry: prepared.context.cronSession.sessionEntry,
+      }),
+      materialization: findMcpToolMaterialization(err),
+    });
     return prepared.context.withRunSession({
       status: "error",
       error,
@@ -308,10 +336,11 @@ export async function runCronIsolatedAgentTurn(params: {
       // Task-run history keeps provider/model attribution instead of looking like
       // an un-attributed cron timeout. finalizeCronRun does the same via
       // telemetry on the aborted path; this catch never reaches it.
-      provider: prepared.context.liveSelection.provider,
-      model: prepared.context.liveSelection.model,
+      provider: terminalProvider,
+      model: terminalModel,
       diagnostics: mergeCronRunDiagnostics(
         prepared.context.preflightDiagnostics,
+        terminalMcpDiagnostics,
         createCronRunDiagnosticsFromError(
           isCronLaneTimeout ? "cron-setup" : "agent-run",
           isCronLaneTimeout ? error : err,

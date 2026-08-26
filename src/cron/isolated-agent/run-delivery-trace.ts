@@ -1,6 +1,8 @@
 import { resolveStaticSessionMcpServerNames } from "../../agents/agent-bundle-mcp-runtime-config.js";
 import { resolveCodexMcpToolOverridesForAgent } from "../../agents/cli-runner/bundle-mcp-codex.js";
 /** Delivery planning, prompt policy, and delivery trace construction for cron runs. */
+import { shouldCreateBundleMcpRuntimeForAttempt } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
+import type { McpToolMaterializationFact } from "../../agents/embedded-agent-runner/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   SourceDeliveryOutcome,
@@ -147,6 +149,76 @@ export function buildCronDeliveryTrace(params: {
     fallbackUsed: params.fallbackUsed,
     delivered: params.delivered,
   };
+}
+
+const MCP_TOOLS_ALLOW_SUPPRESSION_WARNING =
+  "This automation's explicit toolsAllow suppressed every configured MCP tool, so no configured MCP tools were exposed. Add bundle-mcp, group:plugins, an exact post-materialization <server>__<tool> selector, or * to the automation's tool cap.";
+
+export async function createCronMcpToolsAllowDiagnostics(params: {
+  cfg: OpenClawConfig;
+  jobId: string;
+  provider: string;
+  model: string;
+  agentId?: string;
+  workspaceDir: string;
+  agentPayload: Extract<CronJob["payload"], { kind: "agentTurn" }> | null;
+  agentRuntime: string;
+  materialization?: McpToolMaterializationFact;
+}): Promise<CronRunDiagnostics | undefined> {
+  const toolsAllow = params.agentPayload?.toolsAllow;
+  if (
+    toolsAllow === undefined ||
+    toolsAllow.length === 0 ||
+    params.agentPayload?.toolsAllowIsDefault === true ||
+    toolsAllow.includes("*")
+  ) {
+    return undefined;
+  }
+  const materialization = params.materialization;
+  if (materialization?.provider === params.provider && materialization.model === params.model) {
+    return materialization.materializedToolCount > 0 &&
+      materialization.toolsAllowMatchedToolCount === 0
+      ? createCronRunDiagnosticsFromError("cron-preflight", MCP_TOOLS_ALLOW_SUPPRESSION_WARNING, {
+          severity: "warn",
+        })
+      : undefined;
+  }
+  if (
+    shouldCreateBundleMcpRuntimeForAttempt({
+      toolsEnabled: true,
+      disableTools: false,
+      toolsAllow,
+    })
+  ) {
+    // Exact/group selectors require the post-materialization fact above. Never
+    // synthesize tool IDs from config to guess whether a selector matched.
+    return undefined;
+  }
+  try {
+    const toolOverrides =
+      params.agentRuntime === "codex"
+        ? resolveCodexMcpToolOverridesForAgent(params.cfg, {
+            agentId: params.agentId,
+            toolOverrides: undefined,
+          })
+        : undefined;
+    const hasEnabledStaticMcp =
+      resolveStaticSessionMcpServerNames({
+        workspaceDir: params.workspaceDir,
+        cfg: params.cfg,
+        toolOverrides,
+      }).length > 0;
+    return hasEnabledStaticMcp
+      ? createCronRunDiagnosticsFromError("cron-preflight", MCP_TOOLS_ALLOW_SUPPRESSION_WARNING, {
+          severity: "warn",
+        })
+      : undefined;
+  } catch (error) {
+    logWarn(
+      `[cron:${params.jobId}] Failed to inspect configured MCP for toolsAllow diagnostics: ${String(error)}`,
+    );
+    return undefined;
+  }
 }
 
 export async function createCronToolsAllowPreflightDiagnostics(params: {

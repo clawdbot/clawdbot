@@ -32,7 +32,7 @@ import type { AuthStorage, ModelRegistry } from "../../sessions/index.js";
 import type { ToolErrorSummary } from "../../tool-error-summary.js";
 import type { NormalizedUsage } from "../../usage.js";
 import type { EmbeddedRunReplayMetadata, EmbeddedRunReplayState } from "../replay-state.js";
-import type { EmbeddedRunLivenessState } from "../types.js";
+import type { EmbeddedRunLivenessState, McpToolMaterializationFact } from "../types.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js";
 
@@ -187,6 +187,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
 
 export type EmbeddedRunAttemptResult = {
   terminal: AgentRunAttemptTerminal;
+  /** Exact MCP surface observed after this attempt's explicit tool cap. */
+  mcpToolMaterialization?: McpToolMaterializationFact;
   /** True when the runtime made the authoritative final-assistant transcript decision. */
   assistantTranscriptOwned?: boolean;
   /** Exact idempotency key for the runtime-owned final-assistant transcript row. */

@@ -23,6 +23,8 @@ import {
 } from "./conversation-capability-profile.js";
 import { applyFinalEffectiveToolPolicy } from "./embedded-agent-runner/effective-tool-policy.js";
 import { applyEmbeddedAttemptToolsAllow } from "./embedded-agent-runner/run/attempt-tool-construction-plan.js";
+import type { McpToolMaterializationFact } from "./embedded-agent-runner/types.js";
+import { withMcpToolMaterialization } from "./failover-error.js";
 import { requiresMcpCodexToolApproval } from "./mcp-codex-tool-approval.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -40,6 +42,8 @@ type RequesterScopedHarnessMcpTools = {
 type ScheduledStaticHarnessMcpTools = {
   /** Final executable static MCP tools for this scheduled turn. */
   tools: AnyAgentTool[];
+  /** Exact MCP surface observed after this attempt's explicit tool cap. */
+  mcpToolMaterialization: McpToolMaterializationFact;
   /** Bounded model/operator warning when configured servers or final policy were incomplete. */
   diagnosticNotice?: string;
   dispose: () => Promise<void>;
@@ -129,6 +133,13 @@ function applyHarnessToolPolicy(
   const allowed = applyEmbeddedAttemptToolsAllow(tools, params.toolsAllow, {
     toolMeta: (tool) => getPluginToolMeta(tool),
   });
+  return applyHarnessConversationPolicy(allowed, params);
+}
+
+function applyHarnessConversationPolicy(
+  tools: AnyAgentTool[],
+  params: MaterializeRequesterScopedMcpToolsForHarnessRunParams,
+): AnyAgentTool[] {
   const profile =
     params.conversationCapabilityProfile ??
     (params.policyContext
@@ -138,10 +149,10 @@ function applyHarnessToolPolicy(
         })
       : undefined);
   if (!profile) {
-    return allowed;
+    return tools;
   }
   return applyFinalEffectiveToolPolicy({
-    bundledTools: allowed,
+    bundledTools: tools,
     config: params.policyContext?.config ?? params.cfg,
     conversationCapabilityProfile: profile,
     warn: params.warn ?? (() => undefined),
@@ -174,6 +185,8 @@ export async function materializeStaticMcpToolsForScheduledHarnessRunCore(
     MaterializeRequesterScopedMcpToolsForHarnessRunParams,
     "requesterSenderId" | "agentAccountId" | "messageChannel"
   > & {
+    provider: string;
+    model: string;
     toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
     /** Exact established Codex yolo predicate; no other profile bypasses approval metadata. */
     autoApproveCodexAppServerApprovals?: boolean;
@@ -210,6 +223,7 @@ export async function materializeStaticMcpToolsForScheduledHarnessRunCore(
     await retireSnapshotRuntime?.();
     throw error;
   }
+  let mcpToolMaterialization: McpToolMaterializationFact | undefined;
   try {
     const policyWarnings: string[] = [];
     const policyParams = {
@@ -219,8 +233,19 @@ export async function materializeStaticMcpToolsForScheduledHarnessRunCore(
         params.warn?.(message);
       },
     };
+    const explicitlyAllowedTools = applyEmbeddedAttemptToolsAllow(
+      liveRuntime.tools,
+      params.toolsAllow,
+      { toolMeta: (tool) => getPluginToolMeta(tool) },
+    );
+    mcpToolMaterialization = {
+      provider: params.provider,
+      model: params.model,
+      materializedToolCount: liveRuntime.tools.length,
+      toolsAllowMatchedToolCount: explicitlyAllowedTools.length,
+    };
     const allowed = filterScheduledCodexApproval(
-      applyHarnessToolPolicy(liveRuntime.tools, policyParams),
+      applyHarnessConversationPolicy(explicitlyAllowedTools, policyParams),
       params.autoApproveCodexAppServerApprovals === true,
       (message) => policyWarnings.push(message),
     );
@@ -228,7 +253,14 @@ export async function materializeStaticMcpToolsForScheduledHarnessRunCore(
     // same complete catalog and final policy before any model tool can mint one.
     liveRuntime.restrictAppTools?.(
       filterScheduledCodexApproval(
-        applyHarnessToolPolicy(liveRuntime.appTools ?? liveRuntime.tools, policyParams),
+        applyHarnessConversationPolicy(
+          applyEmbeddedAttemptToolsAllow(
+            liveRuntime.appTools ?? liveRuntime.tools,
+            params.toolsAllow,
+            { toolMeta: (tool) => getPluginToolMeta(tool) },
+          ),
+          policyParams,
+        ),
         params.autoApproveCodexAppServerApprovals === true,
         (message) => policyWarnings.push(message),
       ),
@@ -242,6 +274,7 @@ export async function materializeStaticMcpToolsForScheduledHarnessRunCore(
     let disposed = false;
     return {
       tools: allowed,
+      mcpToolMaterialization,
       ...(diagnosticNotice ? { diagnosticNotice } : {}),
       dispose: async () => {
         if (disposed) {
@@ -252,8 +285,12 @@ export async function materializeStaticMcpToolsForScheduledHarnessRunCore(
       },
     };
   } catch (error) {
-    await liveRuntime.dispose();
-    throw error;
+    try {
+      await liveRuntime.dispose();
+    } catch {
+      // Preserve the post-materialization setup error; cleanup is best-effort.
+    }
+    throw withMcpToolMaterialization(error, mcpToolMaterialization);
   }
 }
 

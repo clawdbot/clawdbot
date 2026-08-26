@@ -1,7 +1,10 @@
 // Tool allowlist tests cover tool availability for isolated cron runs.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../agents/test-helpers/fast-coding-tools.js";
+import { FailoverError, withMcpToolMaterialization } from "../../agents/failover-error.js";
+import { throwFallbackFailureSummary } from "../../agents/model-fallback-attempt.js";
 import {
+  runFallbackModelAttempt,
   runInitialModelFallbackAttempt,
   type TestModelFallbackRunnerParams,
 } from "../../agents/test-helpers/model-fallback-runner.test-support.js";
@@ -400,6 +403,98 @@ describe("runCronIsolatedAgentTurn toolsAllow passthrough", () => {
         MISSING_WEB_SEARCH_PROVIDER_DIAGNOSTIC_MESSAGE,
         "cron isolated agent run aborted",
       ]);
+    },
+  );
+
+  it(
+    "uses the terminal fallback candidate when agent metadata reports a CLI alias",
+    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
+    async () => {
+      runEmbeddedAgentMock.mockImplementation(async (request) => ({
+        payloads: [{ text: "fallback ok" }],
+        meta: {
+          agentMeta: {
+            provider: request.model === "gpt-5" ? "openai-cli" : request.provider,
+            model: request.model,
+          },
+        },
+        mcpToolMaterialization: {
+          provider: request.provider,
+          model: request.model,
+          materializedToolCount: 1,
+          toolsAllowMatchedToolCount: request.model === "gpt-5" ? 0 : 1,
+        },
+      }));
+      runWithModelFallbackMock.mockImplementation(async (params: TestModelFallbackRunnerParams) => {
+        await runInitialModelFallbackAttempt(params);
+        const result = await runFallbackModelAttempt(params, "openai", "gpt-5", "unknown");
+        return { result, provider: "openai", model: "gpt-5", attempts: [] };
+      });
+
+      const result = await runCronIsolatedAgentTurn(makeParamsWithToolsAllow(["notes__missing"]));
+
+      expect(result.status).toBe("ok");
+      expect(result.provider).toBe("openai");
+      expect(result.model).toBe("gpt-5");
+      expect(result.diagnostics?.summary).toContain("suppressed every configured MCP tool");
+    },
+  );
+
+  it(
+    "persists one exact-selector MCP warning when all fallback candidates fail",
+    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
+    async () => {
+      const terminalError = withMcpToolMaterialization(
+        new FailoverError("post-materialization setup failed", {
+          reason: "auth",
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+        }),
+        {
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          materializedToolCount: 2,
+          toolsAllowMatchedToolCount: 0,
+        },
+      );
+      runWithModelFallbackMock.mockImplementation(async () =>
+        throwFallbackFailureSummary({
+          attempts: [
+            {
+              reason: "overloaded",
+              provider: "openai",
+              model: "gpt-5.4",
+              error: "primary candidate failed",
+            },
+            {
+              reason: "auth",
+              provider: "anthropic",
+              model: "claude-sonnet-4-6",
+              error: "terminal candidate failed",
+            },
+          ],
+          candidates: [
+            { provider: "openai", model: "gpt-5.4" },
+            { provider: "anthropic", model: "claude-sonnet-4-6" },
+          ],
+          lastError: terminalError,
+          label: "models",
+          formatAttempt: (attempt) => `${attempt.provider}/${attempt.model}: ${attempt.error}`,
+        }),
+      );
+
+      const result = await runCronIsolatedAgentTurn(makeParamsWithToolsAllow(["notes__missing"]));
+
+      expect(result).toMatchObject({
+        status: "error",
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+      });
+      expect(
+        result.diagnostics?.entries.filter((entry) =>
+          entry.message.includes("suppressed every configured MCP tool"),
+        ),
+      ).toHaveLength(1);
     },
   );
 });
