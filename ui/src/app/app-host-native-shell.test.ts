@@ -3,6 +3,7 @@
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "../components/sidebar-update-card.ts";
+import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import "./app-host.ts";
 import { resetAppHostTestGlobals, type ShellKeyboardState } from "./app-host.test-support.ts";
 import type { ApplicationContext } from "./context.ts";
@@ -146,6 +147,42 @@ describe("OpenClaw native shell", () => {
       expect(navigate).not.toHaveBeenCalled();
     } finally {
       rawField.remove();
+    }
+  });
+
+  it("lets a shadow-root confirmation own Escape without leaving Settings", async () => {
+    const restoreDialogPolyfill = installDialogPolyfill();
+    const navigate = vi.fn();
+    const shell = document.createElement(
+      "openclaw-app-shell",
+    ) as unknown as ShellSettingsEscapeState;
+    shell.runtime = {
+      context: {
+        navigate,
+        overlays: { snapshot: { devicePairSetupOpen: false } },
+      } as unknown as ApplicationContext,
+    };
+    shell.lastWorkspaceLocation = { routeId: "usage", pathname: "/usage", search: "" };
+    shell.navDrawerOpen = false;
+    shell.routeState = { routeId: "appearance" };
+    const container = document.body.appendChild(document.createElement("div"));
+    const modal = container.appendChild(document.createElement("openclaw-modal-dialog"));
+    const cancel = modal.appendChild(document.createElement("button"));
+
+    try {
+      const { dialog } = await getRenderedModalDialog(container);
+      expect(dialog.open).toBe(true);
+      expect(document.querySelector("dialog[open]")).toBeNull();
+      cancel.addEventListener("keydown", (event) => shell.handleDocumentKeydown(event));
+      const event = new KeyboardEvent("keydown", { key: "Escape", cancelable: true });
+
+      cancel.dispatchEvent(event);
+
+      expect(event.defaultPrevented).toBe(false);
+      expect(navigate).not.toHaveBeenCalled();
+    } finally {
+      container.remove();
+      restoreDialogPolyfill();
     }
   });
 

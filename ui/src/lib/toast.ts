@@ -26,9 +26,7 @@ const DEFAULT_TOAST_DURATION_MS = 6_000;
 const TOAST_EXIT_FALLBACK_MS = 450;
 
 function activeModalToastLayer() {
-  return [...(document.openClawModalToastLayers ?? [])].findLast(
-    (candidate) => candidate.isConnected,
-  );
+  return [...(document.openClawModalLayers ?? [])].findLast((candidate) => candidate.isConnected);
 }
 
 // Outcomes reported during startup (a restored post-update result, for example)

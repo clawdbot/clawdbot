@@ -46,7 +46,6 @@ import { ChatPaneSessionPanelToggleController } from "./chat-pane-session-panel-
 import {
   CHAT_AUTOTYPE_EXEMPT_SELECTOR,
   CHAT_COMPOSER_TEXTAREA_SELECTOR,
-  CHAT_MODAL_SELECTOR,
   CHAT_OPEN_DETAILS_SELECTOR,
   CHAT_SPACE_ACTIVATION_SELECTOR,
   keyboardEventPathMatches,
@@ -351,7 +350,8 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
       event.key.length === 1 &&
       !keyboardEventPathMatches(event, CHAT_AUTOTYPE_EXEMPT_SELECTOR) &&
       !(event.key === " " && keyboardEventPathMatches(event, CHAT_SPACE_ACTIVATION_SELECTOR)) &&
-      !document.querySelector(CHAT_MODAL_SELECTOR)
+      !document.openClawModalLayers?.size &&
+      !document.querySelector("[aria-modal='true']")
     ) {
       const composer = this.querySelector<HTMLTextAreaElement>(CHAT_COMPOSER_TEXTAREA_SELECTOR);
       if (composer && !composer.disabled && !composer.readOnly) {
