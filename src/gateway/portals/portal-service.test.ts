@@ -1,10 +1,15 @@
 import { request, type Server } from "node:http";
+import type { Duplex } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getFreePort } from "../../test-utils/ports.js";
 import * as httpListen from "../server/http-listen.js";
 import { createGatewayPortalService, type GatewayPortalService } from "./portal-service.js";
 
 const services = new Set<GatewayPortalService>();
+
+async function unavailableWorkerConnection(): Promise<Duplex> {
+  throw new Error("Worker connection unavailable");
+}
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -138,6 +143,164 @@ describe("gateway portal service", () => {
     expect(second.url).toBe(`${second.publicUrl}?${second.tokenQuery}`);
     expect(httpServers).toHaveLength(1);
     expect(service.list()).toEqual([second]);
+  });
+
+  it("keeps local and worker portals on the same application port distinct", async () => {
+    const { service } = makeService(["127.0.0.1"]);
+    const local = await service.open({ targetPort: 3000 });
+    const worker = await service.open({
+      targetPort: 3000,
+      target: {
+        kind: "worker",
+        environmentId: "cloud/a",
+        ownerEpoch: 7,
+        remotePort: 3000,
+        connect: unavailableWorkerConnection,
+      },
+      origin: "Cloud worker A",
+    });
+    const otherWorker = await service.open({
+      targetPort: 3000,
+      target: {
+        kind: "worker",
+        environmentId: "cloud-a",
+        ownerEpoch: 7,
+        remotePort: 3000,
+        connect: unavailableWorkerConnection,
+      },
+    });
+    const staleWorker = await service.open({
+      targetPort: 3000,
+      target: {
+        kind: "worker",
+        environmentId: "cloud/a",
+        ownerEpoch: 6,
+        remotePort: 3000,
+        connect: unavailableWorkerConnection,
+      },
+    });
+
+    expect(local.id).toBe("p3000");
+    expect(new Set([local.id, worker.id, otherWorker.id, staleWorker.id]).size).toBe(4);
+    expect(worker).toMatchObject({ port: 3000, origin: "Cloud worker A" });
+    expect(service.list()).toHaveLength(4);
+    expect(service.listWorkerPortals("cloud/a", 7)).toEqual([worker]);
+    expect(service.listWorkerPortals("cloud/a", 6)).toEqual([staleWorker]);
+    expect(service.listWorkerPortals("cloud-a", 7)).toEqual([otherWorker]);
+    expect(service.listWorkerPortals("cloud/a", 8)).toEqual([]);
+  });
+
+  it("closes worker forwards only for the selected environment owner epoch", async () => {
+    const { service } = makeService(["127.0.0.1"]);
+    const closeStaleForward = vi.fn();
+    const closeCurrentForward = vi.fn();
+    const stale = await service.open({
+      targetPort: 3000,
+      target: {
+        kind: "worker",
+        environmentId: "cloud-a",
+        ownerEpoch: 6,
+        remotePort: 3000,
+        connect: unavailableWorkerConnection,
+      },
+      onClose: closeStaleForward,
+    });
+    const current = await service.open({
+      targetPort: 3000,
+      target: {
+        kind: "worker",
+        environmentId: "cloud-a",
+        ownerEpoch: 7,
+        remotePort: 3000,
+        connect: unavailableWorkerConnection,
+      },
+      onClose: closeCurrentForward,
+    });
+
+    await service.closeWorkerPortals("cloud-a", 6);
+
+    expect(closeStaleForward).toHaveBeenCalledOnce();
+    expect(closeCurrentForward).not.toHaveBeenCalled();
+    expect(service.list().map((portal) => portal.id)).toEqual([current.id]);
+    expect(stale.id).not.toBe(current.id);
+
+    await service.close(current.id);
+    expect(closeCurrentForward).toHaveBeenCalledOnce();
+  });
+
+  it("keeps worker portal ids bounded for the longest supported environment id", async () => {
+    const { service } = makeService(["127.0.0.1"]);
+    const environmentId = "w".repeat(256);
+    const portal = await service.open({
+      targetPort: 3000,
+      target: {
+        kind: "worker",
+        environmentId,
+        ownerEpoch: 7,
+        remotePort: 3000,
+        connect: unavailableWorkerConnection,
+      },
+    });
+
+    expect(portal.id.length).toBeLessThanOrEqual(256);
+    expect(service.listWorkerPortals(environmentId, 7)).toEqual([portal]);
+    await service.close(portal.id);
+    expect(service.list()).toEqual([]);
+  });
+
+  it("revalidates worker close authority immediately before queued removal", async () => {
+    const { service } = makeService(["127.0.0.1"]);
+    const portal = await service.open({ targetPort: 3000 });
+    let authorityCurrent = true;
+    const assertCurrent = () => {
+      if (!authorityCurrent) {
+        throw new Error("Worker portal authority changed");
+      }
+    };
+    const closing = service.close(portal.id, assertCurrent);
+    authorityCurrent = false;
+
+    await expect(closing).rejects.toThrow("Worker portal authority changed");
+    expect(service.list()).toEqual([portal]);
+  });
+
+  it("fences a worker portal whose listener is still opening during owner teardown", async () => {
+    const actualListen = httpListen.listenGatewayHttpServer;
+    let notifyBindStarted: (() => void) | undefined;
+    let releaseBind: (() => void) | undefined;
+    const bindStarted = new Promise<void>((resolve) => {
+      notifyBindStarted = resolve;
+    });
+    const bindReleased = new Promise<void>((resolve) => {
+      releaseBind = resolve;
+    });
+    vi.spyOn(httpListen, "listenGatewayHttpServer").mockImplementation(async (params) => {
+      notifyBindStarted?.();
+      await bindReleased;
+      await actualListen(params);
+    });
+    const { service } = makeService(["127.0.0.1"]);
+    const closeForward = vi.fn();
+    const opening = service.open({
+      targetPort: 3000,
+      target: {
+        kind: "worker",
+        environmentId: "cloud-a",
+        ownerEpoch: 7,
+        remotePort: 3000,
+        connect: unavailableWorkerConnection,
+      },
+      onClose: closeForward,
+    });
+    await bindStarted;
+
+    const closing = service.closeWorkerPortals("cloud-a", 7);
+    releaseBind?.();
+    await opening;
+    await closing;
+
+    expect(service.list()).toEqual([]);
+    expect(closeForward).toHaveBeenCalledOnce();
   });
 
   it("closes idempotently and closes every portal on shutdown", async () => {

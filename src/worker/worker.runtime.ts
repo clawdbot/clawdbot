@@ -1,6 +1,10 @@
 import { chmod, mkdtemp, realpath, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import {
+  WORKER_PORTAL_PROTOCOL_FEATURE,
+  type WorkerHelloOk,
+} from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import type { WorkerBrowserRuntime } from "./browser-runtime.js";
@@ -127,8 +131,9 @@ export async function runWorkerDescriptor(
   });
 
   try {
+    let hello: WorkerHelloOk;
     try {
-      await connection.start();
+      hello = await connection.start();
     } catch (error) {
       const fenced = fencedResult(connection.state);
       if (fenced) {
@@ -171,7 +176,10 @@ export async function runWorkerDescriptor(
           ? {}
           : { systemPrompt: descriptor.assignment.systemPrompt }),
         inferenceOptions: descriptor.assignment.inferenceOptions,
-        allowedToolNames: descriptor.assignment.toolAuthority.allowedToolNames,
+        allowedToolNames: descriptor.assignment.toolAuthority.allowedToolNames.filter(
+          (name) =>
+            name !== "portal" || hello.protocolFeatures.includes(WORKER_PORTAL_PROTOCOL_FEATURE),
+        ),
         ...(descriptor.assignment.browser ? { browser: descriptor.assignment.browser } : {}),
         ...(options.browserRuntime ? { browserRuntime: options.browserRuntime } : {}),
         inference: { stream },
