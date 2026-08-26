@@ -5,10 +5,7 @@ import { hasNodeErrorCode, isPathInside } from "../infra/path-guards.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { resolveDefaultPluginExtensionsDir } from "./install-paths.js";
 import { isManifestPluginAvailableForControlPlane } from "./manifest-contract-eligibility.js";
-import {
-  isActivatedManifestOwner,
-  passesManifestOwnerBasePolicy,
-} from "./manifest-owner-policy.js";
+import { isActivatedManifestOwner } from "./manifest-owner-policy.js";
 import type { PluginManifestBackupResource } from "./manifest-types.js";
 import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 
@@ -76,15 +73,35 @@ export function resolveActivatedPluginBackupInventory(params: {
       addPluginRoot(candidate.rootDir);
     }
     const invalidDeclaration = normalizedConfig.enabled
-      ? snapshot.diagnostics.find(
-          (diagnostic) =>
-            diagnostic.code === "backup-resource-declaration-invalid" &&
-            (!diagnostic.pluginId ||
-              passesManifestOwnerBasePolicy({
-                plugin: { id: diagnostic.pluginId },
-                normalizedConfig,
-              })),
-        )
+      ? snapshot.diagnostics.find((diagnostic) => {
+          if (diagnostic.code !== "backup-resource-declaration-invalid") {
+            return false;
+          }
+          if (!diagnostic.pluginId) {
+            return true;
+          }
+          const indexedOwner = snapshot.index.plugins.find(
+            (owner) => owner.pluginId === diagnostic.pluginId,
+          );
+          const discoveredOwner = snapshot.discovery?.candidates.find(
+            (owner) => (owner.diagnosticIdHint ?? owner.idHint) === diagnostic.pluginId,
+          );
+          const owner = indexedOwner ?? discoveredOwner;
+          if (!owner) {
+            return true;
+          }
+          const plugin = {
+            id: diagnostic.pluginId,
+            origin: owner.origin,
+            enabledByDefault: indexedOwner?.enabledByDefault,
+            enabledByDefaultOnPlatforms: indexedOwner?.enabledByDefaultOnPlatforms?.slice(),
+          };
+          return (
+            isActivatedManifestOwner({ plugin, normalizedConfig, rootConfig: params.config }) &&
+            (!indexedOwner ||
+              isManifestPluginAvailableForControlPlane({ snapshot, plugin, config: params.config }))
+          );
+        })
       : undefined;
     if (invalidDeclaration) {
       throw new Error(invalidDeclaration.message);

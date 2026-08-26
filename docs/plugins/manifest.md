@@ -238,10 +238,12 @@ or absolute and must not contain backslashes, NULs, empty path segments, `.`,
 `..`, Windows drive or UNC prefixes, URI-like values, or any path that escapes
 its selected anchor. Invalid entries are rejected rather than normalized.
 
-The planner deduplicates resources deterministically. Explicitly included
-config, credentials, workspaces, configured agent roots, and plugin resources
-override regenerable exclusions; an excluded ancestor remains traversable when
-it contains a protected descendant. Omit only data the plugin can recreate.
+The planner deduplicates resources deterministically. A narrower `regenerable`
+declaration wins over a broad configured state or agent root. Among plugin
+resource declarations, only an explicit nested `include` protects a descendant
+and keeps its excluded ancestors traversable. Explicit config, credentials,
+workspace, and nested agent paths also remain protected. Omit only data the
+plugin can recreate.
 `openclaw backup create --only-config` does not inspect plugin backup metadata.
 
 ## MCP server reference

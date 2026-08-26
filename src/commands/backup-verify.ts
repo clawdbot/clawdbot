@@ -276,12 +276,22 @@ function listSqliteSnapshotEntries(
 ): SqliteSnapshotEntry[] {
   const archiveRoot = normalizeArchiveRoot(manifest.archiveRoot);
   const roots = [
-    ...manifest.assets
-      .filter((asset) => asset.kind === "state")
-      .map((asset) => ({
-        kind: "state" as const,
-        archiveRoot: normalizeArchivePath(asset.archivePath, "Backup manifest state asset path"),
-      })),
+    ...(manifest.paths?.stateDir
+      ? [
+          {
+            kind: "state" as const,
+            archiveRoot: buildBackupArchivePath(archiveRoot, manifest.paths.stateDir),
+          },
+        ]
+      : manifest.assets
+          .filter((asset) => asset.kind === "state")
+          .map((asset) => ({
+            kind: "state" as const,
+            archiveRoot: normalizeArchivePath(
+              asset.archivePath,
+              "Backup manifest state asset path",
+            ),
+          }))),
     ...(manifest.paths?.agentRoots ?? []).map(({ agentId, sourcePath }) => ({
       kind: "agent" as const,
       archiveRoot: buildBackupArchivePath(archiveRoot, sourcePath),

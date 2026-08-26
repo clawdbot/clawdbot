@@ -10,7 +10,8 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runCommandWithRuntime } from "../cli/cli-utils.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { buildBackupArchivePath, buildBackupArchiveRoot } from "./backup-shared.js";
-import { backupVerifyCommand, testApi } from "./backup-verify.js";
+import type { BackupManifest } from "./backup-verify-manifest.js";
+import { backupVerifyCommand, testApi, verifyBackupArchive } from "./backup-verify.js";
 
 const TEST_ARCHIVE_ROOT = "2026-03-09T00-00-00.000Z-openclaw-backup";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -25,7 +26,7 @@ function createBackupManifest(
   assetArchivePath: string,
   archiveRoot = TEST_ARCHIVE_ROOT,
   stateDir = "/tmp/.openclaw",
-) {
+): BackupManifest {
   return {
     schemaVersion: 1,
     createdAt: "2026-03-09T00:00:00.000Z",
@@ -487,6 +488,7 @@ describe("backupVerifyCommand", () => {
       {
         tempPrefix: "openclaw-backup-legacy-agent-sqlite-",
         manifestAssetArchivePath: stateAssetArchivePath,
+        manifest: { ...createBackupManifest(stateAssetArchivePath), paths: undefined },
         payloads: [
           {
             fileName: "openclaw-agent.sqlite",
@@ -967,6 +969,63 @@ describe("backupVerifyCommand", () => {
       },
     );
   });
+
+  it.each([
+    {
+      name: "wrong database role",
+      schema: `
+        CREATE TABLE schema_meta (meta_key TEXT NOT NULL PRIMARY KEY, role TEXT NOT NULL);
+        INSERT INTO schema_meta (meta_key, role) VALUES ('primary', 'agent');
+      `,
+      error: /has role agent; expected global/iu,
+    },
+    {
+      name: "foreign-key corruption",
+      schema: `
+        PRAGMA foreign_keys = OFF;
+        CREATE TABLE schema_meta (meta_key TEXT NOT NULL PRIMARY KEY, role TEXT NOT NULL);
+        INSERT INTO schema_meta (meta_key, role) VALUES ('primary', 'global');
+        CREATE TABLE parents (id INTEGER PRIMARY KEY);
+        CREATE TABLE children (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parents(id));
+        INSERT INTO children (id, parent_id) VALUES (1, 99);
+      `,
+      error: /foreign_key_check failed/iu,
+    },
+  ])(
+    "rejects $name in the global database covered by an enclosing agent root",
+    async ({ schema, error }) => {
+      const agentDir = "/tmp/enclosing-agent";
+      const stateDir = `${agentDir}/.openclaw`;
+      const agentArchivePath = buildBackupArchivePath(TEST_ARCHIVE_ROOT, agentDir);
+      const manifest = {
+        ...createBackupManifest(agentArchivePath, TEST_ARCHIVE_ROOT, stateDir),
+        paths: {
+          stateDir,
+          agentRoots: [{ agentId: "main", sourcePath: agentDir }],
+        },
+        assets: [{ kind: "agent", sourcePath: agentDir, archivePath: agentArchivePath }],
+      };
+      const sqlitePayload = await createSqlitePayload((database) => database.exec(schema));
+
+      await withBrokenArchiveFixture(
+        {
+          tempPrefix: "openclaw-backup-enclosed-state-sqlite-",
+          manifestAssetArchivePath: agentArchivePath,
+          manifest,
+          payloads: [
+            {
+              fileName: "openclaw.sqlite",
+              contents: sqlitePayload,
+              archivePath: `${buildBackupArchivePath(TEST_ARCHIVE_ROOT, stateDir)}/state/openclaw.sqlite`,
+            },
+          ],
+        },
+        async (archivePath) => {
+          await expect(verifyBackupArchive(archivePath)).rejects.toThrow(error);
+        },
+      );
+    },
+  );
 
   it("validates a canonical agent database whose agent id is node_modules", async () => {
     const stateAssetArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw`;

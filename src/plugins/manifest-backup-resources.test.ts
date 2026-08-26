@@ -9,14 +9,22 @@ import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.
 
 const roots: string[] = [];
 
-function createPluginFixture(params: { id?: string; backupResources: unknown; root?: string }) {
+function createPluginFixture(params: {
+  id?: string;
+  backupResources: unknown;
+  root?: string;
+  workspace?: boolean;
+}) {
   const root =
     params.root ?? fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "backup-owner-")));
   if (!params.root) {
     roots.push(root);
   }
   const id = params.id ?? "backup-owner";
-  const pluginRoot = path.join(root, id);
+  const workspaceDir = path.join(root, "workspace");
+  const pluginRoot = params.workspace
+    ? path.join(workspaceDir, ".openclaw", "extensions", id)
+    : path.join(root, id);
   const stateDir = path.join(root, "state");
   fs.mkdirSync(pluginRoot, { recursive: true });
   fs.mkdirSync(stateDir, { recursive: true });
@@ -36,6 +44,7 @@ function createPluginFixture(params: { id?: string; backupResources: unknown; ro
     id,
     pluginRoot,
     stateDir,
+    workspaceDir,
     env: {
       HOME: root,
       OPENCLAW_HOME: root,
@@ -177,6 +186,35 @@ describe("plugin manifest backup resources", () => {
       }),
     ).toThrow("invalid plugin manifest backupResources");
   });
+
+  it.each([
+    { label: "ignores", activated: false },
+    { label: "fails closed on", activated: true },
+  ])(
+    "$label invalid declarations from a workspace owner when activated=$activated",
+    ({ activated }) => {
+      const fixture = createPluginFixture({
+        workspace: true,
+        backupResources: [{ disposition: "include", scope: "state", relativePath: "../outside" }],
+      });
+      const config: OpenClawConfig = activated
+        ? { plugins: { entries: { [fixture.id]: { enabled: true } } } }
+        : {};
+      const resolveInventory = () =>
+        resolveActivatedPluginBackupInventory({
+          config,
+          env: fixture.env,
+          stateDir: fixture.stateDir,
+          workspaceDirs: [fixture.workspaceDir],
+        });
+
+      if (activated) {
+        expect(resolveInventory).toThrow("invalid plugin manifest backupResources");
+      } else {
+        expect(resolveInventory()).toEqual({ pluginRoots: [fixture.pluginRoot], resources: [] });
+      }
+    },
+  );
 
   it("does not apply declarations when the plugin system is disabled", () => {
     const fixture = createPluginFixture({

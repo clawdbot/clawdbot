@@ -148,7 +148,14 @@ export function parseBackupManifest(raw: string): BackupManifest {
     platform: typeof parsed.platform === "string" ? parsed.platform : "unknown",
     nodeVersion: typeof parsed.nodeVersion === "string" ? parsed.nodeVersion : "unknown",
     paths: isRecord(parsed.paths)
-      ? { agentRoots: parseBackupManifestAgentRoots(parsed.paths.agentRoots) }
+      ? {
+          ...(parsed.paths.stateDir === undefined
+            ? {}
+            : {
+                stateDir: parseBackupManifestSourcePath(parsed.paths.stateDir, "state directory"),
+              }),
+          agentRoots: parseBackupManifestAgentRoots(parsed.paths.agentRoots),
+        }
       : undefined,
     assets,
   };
