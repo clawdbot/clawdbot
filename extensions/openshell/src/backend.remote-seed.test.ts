@@ -21,6 +21,7 @@ import { resolveOpenShellPluginConfig } from "./config.js";
 const sdkMocks = vi.hoisted(() => ({
   runSshSandboxCommand: vi.fn(),
   disposeSshSandboxSession: vi.fn(),
+  prepareSshSandboxExec: vi.fn(),
 }));
 
 const cliMocks = vi.hoisted(() => ({
@@ -34,6 +35,7 @@ vi.mock("openclaw/plugin-sdk/sandbox", async (importOriginal) => {
     ...actual,
     runSshSandboxCommand: sdkMocks.runSshSandboxCommand,
     disposeSshSandboxSession: sdkMocks.disposeSshSandboxSession,
+    prepareSshSandboxExec: sdkMocks.prepareSshSandboxExec,
   };
 });
 
@@ -89,6 +91,10 @@ async function createAdoptedRemoteBackend(params: { probeStdout: string }) {
   // `sandbox get` succeeds: the sandbox was created by a previous gateway
   // process that died before the first exec could run the one-time seed.
   cliMocks.runOpenShellCli.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
+  sdkMocks.prepareSshSandboxExec.mockResolvedValue({
+    argv: ["ssh", "openshell-test"],
+    cleanup: vi.fn(),
+  });
   sdkMocks.runSshSandboxCommand.mockImplementation(async ({ remoteCommand }) => ({
     stdout: String(remoteCommand).includes("ls -A")
       ? Buffer.from(params.probeStdout)

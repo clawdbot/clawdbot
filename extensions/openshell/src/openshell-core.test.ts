@@ -735,6 +735,11 @@ describe("openshell backend manager", () => {
     async (status) => {
       const sentinel = "synthetic-openshell-env-value";
       cliMocks.runOpenShellCli.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
+      sandboxMocks.runSshSandboxCommand.mockResolvedValueOnce({
+        stdout: Buffer.from("1\n"),
+        stderr: Buffer.alloc(0),
+        code: 0,
+      });
       const backend = await createOpenShellBackendFixture({
         workspaceDir: "/tmp/openclaw-synthetic-workspace",
         mode: "remote",
@@ -758,6 +763,7 @@ describe("openshell backend manager", () => {
       expect(execSpec.argv.join(" ")).not.toContain("SetEnv");
       expect(execSpec.stdinMode).toBe("pipe-open");
 
+      sandboxMocks.disposeSshSandboxSession.mockClear();
       await backend.finalizeExec?.({
         status,
         exitCode: status === "completed" ? 0 : 1,
@@ -780,6 +786,11 @@ describe("openshell backend manager", () => {
 
   it("disposes the OpenShell SSH session when secure exec staging fails", async () => {
     cliMocks.runOpenShellCli.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
+    sandboxMocks.runSshSandboxCommand.mockResolvedValueOnce({
+      stdout: Buffer.from("1\n"),
+      stderr: Buffer.alloc(0),
+      code: 0,
+    });
     sandboxMocks.prepareSshSandboxExec.mockRejectedValueOnce(
       new Error("synthetic staging failure"),
     );
@@ -796,7 +807,7 @@ describe("openshell backend manager", () => {
       }),
     ).rejects.toThrow("synthetic staging failure");
 
-    expect(sandboxMocks.disposeSshSandboxSession).toHaveBeenCalledOnce();
+    expect(sandboxMocks.disposeSshSandboxSession).toHaveBeenCalledTimes(2);
   });
 
   it("preserves a local sandbox skills shadow when mirror sync crosses filesystems", async () => {
