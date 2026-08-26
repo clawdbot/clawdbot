@@ -9,6 +9,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hashCliReseedPrompt, parseCliReseedPrompt } from "../agents/cli-runner/reseed-envelope.js";
+import { isOpenClawCliImageCachePath } from "../agents/embedded-agent-runner/run/images.media-refs.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import { redactTranscriptMessage } from "../agents/transcript-redact.js";
 import {
@@ -311,6 +312,64 @@ export function resolveClaudeCliPromptTextCandidates(
   );
 }
 
+// The CLI runner cannot pass structured image blocks to the Claude CLI, so it
+// appends "@<cache path>" mention lines to the prompt it hands the CLI (see
+// appendImagePathsToPrompt in agents/cli-runner/helpers.ts). Claude Code records
+// that mutated prompt as its user message, so without stripping, the imported
+// row fails text dedupe against the local transcript row — which carries the
+// original text plus the media facts that render the image preview — and the
+// raw path surfaces in chat history as a duplicate user row.
+function isCliImageMentionLine(line: string): boolean {
+  const trimmed = line.trim();
+  return trimmed.startsWith("@") && isOpenClawCliImageCachePath(trimmed.slice(1));
+}
+
+function stripTrailingCliImageMentions(text: string): string {
+  const lines = text.split("\n");
+  let end = lines.length;
+  while (end > 0 && isCliImageMentionLine(lines[end - 1] ?? "")) {
+    end -= 1;
+  }
+  if (end === lines.length) {
+    return text;
+  }
+  return lines.slice(0, end).join("\n").trimEnd();
+}
+
+// Returns null when stripping leaves no visible content (image-only prompt);
+// the local transcript row already represents that turn with media facts.
+function stripCliImageMentionsFromUserContent(
+  content: string | unknown[],
+): string | unknown[] | null {
+  if (typeof content === "string") {
+    return stripTrailingCliImageMentions(content) || null;
+  }
+  let changed = false;
+  const next: unknown[] = [];
+  for (const block of content) {
+    if (
+      block &&
+      typeof block === "object" &&
+      (block as { type?: unknown }).type === "text" &&
+      typeof (block as { text?: unknown }).text === "string"
+    ) {
+      const stripped = stripTrailingCliImageMentions((block as { text: string }).text);
+      if (stripped !== (block as { text: string }).text) {
+        changed = true;
+        if (stripped) {
+          next.push({ ...(block as Record<string, unknown>), text: stripped });
+        }
+        continue;
+      }
+    }
+    next.push(block);
+  }
+  if (!changed) {
+    return content;
+  }
+  return next.length > 0 ? next : null;
+}
+
 export function parseClaudeCliHistoryEntry(
   entry: ClaudeCliProjectEntry,
   cliSessionId: string,
@@ -408,13 +467,17 @@ export function parseClaudeCliHistoryEntry(
         }
       }
     }
+    const strippedContent = stripCliImageMentionsFromUserContent(content);
+    if (strippedContent === null) {
+      return null;
+    }
     // Record provenance here, where the native flags are known, so downstream
     // display never has to infer operator authorship from message text.
     const harnessInjected = isClaudeCliVisibleHarnessContext(entry);
     return attachOpenClawTranscriptMeta(
       {
         role: "user",
-        content,
+        content: strippedContent,
         ...(harnessInjected
           ? { provenance: { kind: "internal_system", sourceTool: "cli_harness_context" } }
           : {}),

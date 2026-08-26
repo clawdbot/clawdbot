@@ -487,6 +487,127 @@ describe("cli session history", () => {
     });
   });
 
+  it("strips CLI-injected image mention suffixes from imported user rows", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+      const workspaceMention = "@/Users/demo/workspace/.openclaw-cli-images/cafe01.png";
+      const tmpMention = "@/tmp/openclaw/openclaw-cli-images/cafe02.jpg";
+      await fs.writeFile(
+        filePath,
+        [
+          {
+            type: "user",
+            uuid: "image-user",
+            timestamp: "2026-03-26T16:29:54.800Z",
+            message: {
+              role: "user",
+              content: `look at this\n\n${workspaceMention}\n${tmpMention}`,
+            },
+          },
+          {
+            type: "user",
+            uuid: "image-only-user",
+            timestamp: "2026-03-26T16:29:55.800Z",
+            message: { role: "user", content: workspaceMention },
+          },
+          {
+            type: "user",
+            uuid: "plain-mention-user",
+            timestamp: "2026-03-26T16:29:56.800Z",
+            message: { role: "user", content: "check\n@/Users/demo/photos/pic.png" },
+          },
+        ]
+          .map((line) => JSON.stringify(line))
+          .join("\n"),
+        "utf-8",
+      );
+
+      const messages = readClaudeCliSessionMessages({ cliSessionId: sessionId, homeDir });
+
+      expect(messages).toHaveLength(2);
+      expectFields(messages[0], { role: "user", content: "look at this" });
+      expectFields(messages[1], { role: "user", content: "check\n@/Users/demo/photos/pic.png" });
+    });
+  });
+
+  it("strips image mentions inside text blocks while preserving sibling blocks", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+      const mention = "@/Users/demo/workspace/.openclaw-cli-images/cafe03.png";
+      await fs.writeFile(
+        filePath,
+        [
+          {
+            type: "user",
+            uuid: "block-user",
+            timestamp: "2026-03-26T16:29:54.800Z",
+            message: {
+              role: "user",
+              content: [
+                { type: "text", text: `caption\n\n${mention}` },
+                { type: "text", text: mention },
+                { type: "image", source: { type: "base64", media_type: "image/png", data: "aa" } },
+              ],
+            },
+          },
+          {
+            type: "user",
+            uuid: "mention-only-block-user",
+            timestamp: "2026-03-26T16:29:55.800Z",
+            message: {
+              role: "user",
+              content: [{ type: "text", text: mention }],
+            },
+          },
+        ]
+          .map((line) => JSON.stringify(line))
+          .join("\n"),
+        "utf-8",
+      );
+
+      const messages = readClaudeCliSessionMessages({ cliSessionId: sessionId, homeDir });
+
+      expect(messages).toHaveLength(1);
+      const blocks = readRecord(messages[0]).content as Array<Record<string, unknown>>;
+      expect(blocks).toHaveLength(2);
+      expectFields(blocks[0], { type: "text", text: "caption" });
+      expectFields(blocks[1], { type: "image" });
+    });
+  });
+
+  it("dedupes imported user rows whose text differs only by image mentions", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+      await fs.writeFile(
+        filePath,
+        JSON.stringify({
+          type: "user",
+          uuid: "image-user",
+          timestamp: "2026-03-26T16:29:54.800Z",
+          message: {
+            role: "user",
+            content: "look at this\n\n@/Users/demo/workspace/.openclaw-cli-images/cafe04.png",
+          },
+        }),
+        "utf-8",
+      );
+      const localMessages = [
+        {
+          role: "user",
+          content: "look at this",
+          timestamp: Date.parse("2026-03-26T16:29:54.800Z"),
+        },
+      ];
+
+      const merged = augmentBoundClaudeHistory({
+        homeDir,
+        sessionId,
+        provider: "claude-cli",
+        localMessages,
+      });
+
+      expect(merged).toHaveLength(1);
+      expectFields(merged[0], { role: "user", content: "look at this" });
+    });
+  });
+
   it("recovers the current user text from legacy reseed envelopes", async () => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
       const reseedPrompt = buildLegacyReseedPrompt();
