@@ -90,6 +90,8 @@ const repositoryScriptEntries = [
   // Invoked by scripts/lib/live-docker-stage.sh during container validation.
   "scripts/live-docker-normalize-config.ts!",
   "scripts/mcp-code-mode-gateway-e2e.ts!",
+  // Maintainer-triggered proof for the real Telegram message-tool route.
+  "scripts/proof-real-channel-dedupe.ts!",
   // Mantis invokes the trusted proof collector through its workflow shell step.
   "scripts/mantis/telegram-visible-proof.mjs!",
   "scripts/openclaw-release-clawhub-plan.ts!",
