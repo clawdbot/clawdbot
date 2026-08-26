@@ -70,7 +70,6 @@ export async function dispatchStagedPostCompactionDelegates(
     };
     traceparent?: string;
     model?: string;
-    originRunId?: string;
     /**
      * Optional TaskFlow claim handle. Carried through so a caller (startup
      * recovery) can finalize ONLY the rows whose spawn was accepted, terminalize
@@ -406,7 +405,6 @@ export async function dispatchStagedPostCompactionDelegates(
         },
         {
           ...spawnCtx,
-          ...(delegate.originRunId ? { requesterTurnRunId: delegate.originRunId } : {}),
           continuationDelegateAdmission: activeDispatch.authority,
         },
       );

@@ -543,7 +543,6 @@ export function createContinueDelegateTool(opts: {
           task,
           mode: "post-compaction",
           firstArmedAt: acceptedAt,
-          ...(opts.runId ? { originRunId: opts.runId } : {}),
           ...attachmentFields,
           ...targetingFields,
           ...artifactReturnFields,
