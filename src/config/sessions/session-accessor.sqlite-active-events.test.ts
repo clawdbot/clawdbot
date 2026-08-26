@@ -12,7 +12,7 @@ import { appendTranscriptEvent, persistSessionTranscriptTurn } from "./session-a
 import {
   readRecentSessionTranscriptMessageEvents,
   readSessionTranscriptActivePathEntryRelation,
-  readSessionTranscriptActiveStats,
+  readSessionTranscriptContextStats,
   readSessionTranscriptBoundedMessageTailPage,
   readSessionTranscriptMessageAnchorPage,
   readSessionTranscriptMessageEventById,
@@ -145,7 +145,7 @@ describe("SQLite active transcript event projection", () => {
          ORDER BY active.active_position`,
       )
       .all(scope.sessionId) as Array<{ event_json: string }>;
-    expect(readSessionTranscriptActiveStats(scope)).toEqual({
+    expect(readSessionTranscriptContextStats(scope)).toEqual({
       eventCount: activeRows.length,
       sizeBytes: activeRows.reduce(
         (total, row) => total + Buffer.byteLength(row.event_json, "utf8") + 1,
@@ -200,6 +200,87 @@ describe("SQLite active transcript event projection", () => {
         )
         .get(scope.sessionId),
     ).toEqual({ active_message_count: 1, needs_rebuild: 0 });
+  });
+
+  it("measures only replayable bytes after compaction without pruning ancestry", async () => {
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "discarded",
+          parentId: null,
+          message: { role: "user", content: "x".repeat(4_096) },
+        },
+        {
+          eventId: "kept",
+          parentId: "discarded",
+          message: { role: "user", content: "kept" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+    await appendTranscriptEvent(scope, {
+      type: "compaction",
+      id: "compaction",
+      parentId: "kept",
+      summary: "summary",
+      firstKeptEntryId: "kept",
+      tokensBefore: 2_000,
+    });
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "post-compaction",
+          parentId: "compaction",
+          message: { role: "assistant", content: "done" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+    await waitForSessionTranscriptIndexReconcile({ agentId: scope.agentId, env: scope.env });
+
+    const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
+    const contextRows = database.db
+      .prepare(
+        `SELECT event.event_json
+         FROM session_transcript_active_events AS active
+         JOIN transcript_events AS event
+           ON event.session_id = active.session_id AND event.seq = active.event_seq
+         WHERE active.session_id = ? AND active.active_position >= 1
+         ORDER BY active.active_position`,
+      )
+      .all(scope.sessionId) as Array<{ event_json: string }>;
+
+    expect(
+      database.db
+        .prepare(
+          "SELECT COUNT(*) AS count FROM session_transcript_active_events WHERE session_id = ?",
+        )
+        .get(scope.sessionId),
+    ).toEqual({ count: 4 });
+    expect(readSessionTranscriptContextStats(scope)).toEqual({
+      eventCount: 3,
+      sizeBytes: contextRows.reduce(
+        (total, row) => total + Buffer.byteLength(row.event_json, "utf8") + 1,
+        0,
+      ),
+    });
+    expect(readSessionTranscriptActivePathEntryRelation(scope, "discarded")).toBe("ancestor");
+
+    database.db
+      .prepare(
+        "UPDATE transcript_events SET event_json = json_set(event_json, '$.firstKeptEntryId', 'missing') WHERE session_id = ? AND seq = 3",
+      )
+      .run(scope.sessionId);
+    const danglingFirstKeptStats = readSessionTranscriptContextStats(scope);
+    expect(danglingFirstKeptStats.eventCount).toBe(4);
+    expect(danglingFirstKeptStats.sizeBytes).toBeGreaterThan(4_096);
+
+    database.db
+      .prepare("UPDATE transcript_events SET event_json = '{' WHERE session_id = ? AND seq = 3")
+      .run(scope.sessionId);
+    const malformedStats = readSessionTranscriptContextStats(scope);
+    expect(malformedStats.eventCount).toBe(4);
+    expect(malformedStats.sizeBytes).toBeGreaterThan(4_096);
   });
 
   it("skips oversized tail rows before materializing a bounded message page", async () => {

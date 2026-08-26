@@ -42,7 +42,7 @@ import {
 } from "../../config/sessions.js";
 import {
   readRecentSessionTranscriptActiveEvents,
-  readSessionTranscriptActiveStats,
+  readSessionTranscriptContextStats,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
@@ -487,7 +487,7 @@ function readSqliteSessionLogSnapshot(
   const snapshot: SessionLogSnapshot = {};
   try {
     if (options.includeByteSize) {
-      snapshot.byteSize = readSessionTranscriptActiveStats(scope).sizeBytes;
+      snapshot.byteSize = readSessionTranscriptContextStats(scope).sizeBytes;
     }
     if (options.includeUsage || options.includeTurnTaint) {
       const events = readRecentSessionTranscriptActiveEvents(scope, SQLITE_USAGE_TAIL_MAX_EVENTS);

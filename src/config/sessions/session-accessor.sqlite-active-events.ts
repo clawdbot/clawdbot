@@ -148,13 +148,69 @@ export function readRecentSessionTranscriptActiveEvents(
   });
 }
 
-/** Reads active-path event count and JSONL byte size without materializing payloads. */
-export function readSessionTranscriptActiveStats(scope: SessionTranscriptReadScope): {
+/** Reads the JSONL footprint that the latest compaction or reset can replay. */
+export function readSessionTranscriptContextStats(scope: SessionTranscriptReadScope): {
   eventCount: number;
   sizeBytes: number;
 } {
   return withCurrentProjectionSnapshot(scope, (projection) => {
     const db = getActiveTranscriptKysely(projection.database);
+    const boundary = executeSqliteQueryTakeFirstSync(
+      projection.database.db,
+      db
+        .selectFrom("session_transcript_active_events as active")
+        .innerJoin("transcript_event_identities as identity", (join) =>
+          join
+            .onRef("identity.session_id", "=", "active.session_id")
+            .onRef("identity.seq", "=", "active.event_seq"),
+        )
+        .innerJoin("transcript_events as event", (join) =>
+          join
+            .onRef("event.session_id", "=", "active.session_id")
+            .onRef("event.seq", "=", "active.event_seq"),
+        )
+        .select(["active.active_position", "event.event_json"])
+        .where("active.session_id", "=", projection.resolved.sessionId)
+        .where("identity.event_type", "in", ["compaction", "reset"])
+        .orderBy("active.active_position", "desc")
+        .limit(1),
+    );
+    let firstContextPosition = 0;
+    if (boundary) {
+      firstContextPosition = boundary.active_position;
+      try {
+        const firstKeptEntryId = (
+          JSON.parse(boundary.event_json) as {
+            firstKeptEntryId?: unknown;
+          }
+        ).firstKeptEntryId;
+        if (typeof firstKeptEntryId === "string" && firstKeptEntryId.length > 0) {
+          const firstKept = executeSqliteQueryTakeFirstSync(
+            projection.database.db,
+            db
+              .selectFrom("transcript_event_identities as identity")
+              .innerJoin("session_transcript_active_events as active", (join) =>
+                join
+                  .onRef("active.session_id", "=", "identity.session_id")
+                  .onRef("active.event_seq", "=", "identity.seq"),
+              )
+              .select("active.active_position")
+              .where("identity.session_id", "=", projection.resolved.sessionId)
+              .where("identity.event_id", "=", firstKeptEntryId)
+              .limit(1),
+          );
+          if (!firstKept || firstKept.active_position >= boundary.active_position) {
+            // A dangling or invalid retention anchor cannot safely exclude older bytes.
+            firstContextPosition = 0;
+          } else {
+            firstContextPosition = firstKept.active_position;
+          }
+        }
+      } catch {
+        // Malformed boundaries must not hide older bytes from the safety fuse.
+        firstContextPosition = 0;
+      }
+    }
     const row = executeSqliteQueryTakeFirstSync(
       projection.database.db,
       db
@@ -170,7 +226,8 @@ export function readSessionTranscriptActiveStats(scope: SessionTranscriptReadSco
           sql<number>`COALESCE(SUM(LENGTH(CAST(event.event_json AS BLOB))), 0)
             + COUNT(*)`.as("size_bytes"),
         ])
-        .where("active.session_id", "=", projection.resolved.sessionId),
+        .where("active.session_id", "=", projection.resolved.sessionId)
+        .where("active.active_position", ">=", firstContextPosition),
     );
     return {
       eventCount: row?.event_count ?? 0,

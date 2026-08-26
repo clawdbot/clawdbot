@@ -242,7 +242,7 @@ export { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-trans
 export {
   isSessionTranscriptProjectionUnavailableError,
   readRecentSessionTranscriptActiveEvents,
-  readSessionTranscriptActiveStats,
+  readSessionTranscriptContextStats,
   readSessionTranscriptBoundedMessageTailPage,
   readRecentSessionTranscriptMessageEvents,
   readSessionTranscriptActivePathEntryRelation,

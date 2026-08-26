@@ -3270,6 +3270,98 @@ describe("runMemoryFlushIfNeeded", () => {
     });
   });
 
+  it.each([
+    {
+      label: "Codex snapshot fallback",
+      storeFile: "sqlite-codex-compacted-byte-guard.json",
+      totalTokensFresh: true,
+      agentRuntimeOverride: "codex" as const,
+    },
+    {
+      label: "embedded transcript estimate",
+      storeFile: "sqlite-embedded-compacted-byte-guard.json",
+      totalTokensFresh: false,
+      agentRuntimeOverride: undefined,
+    },
+  ])(
+    "does not retrigger the byte guard from history superseded by compaction ($label)",
+    async ({ storeFile, totalTokensFresh, agentRuntimeOverride }) => {
+      const storePath = path.join(rootDir, storeFile);
+      const sessionKey = "agent:main:main";
+      const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
+      await upsertSessionEntryCore(scope, { sessionId: "session", updatedAt: 10 });
+      await replaceTranscriptEvents(scope, [
+        {
+          type: "message",
+          id: "discarded",
+          parentId: null,
+          message: { role: "user", content: "x".repeat(4_096) },
+        },
+        {
+          type: "message",
+          id: "kept",
+          parentId: "discarded",
+          message: { role: "user", content: "kept" },
+        },
+        {
+          type: "compaction",
+          id: "compaction",
+          parentId: "kept",
+          summary: "summary",
+          firstKeptEntryId: "kept",
+          tokensBefore: 2_000,
+        },
+        {
+          type: "message",
+          id: "post-compaction",
+          parentId: "compaction",
+          message: { role: "assistant", content: "done" },
+        },
+      ]);
+      expect(readTranscriptStatsSync(scope).sizeBytes).toBeGreaterThan(1_024);
+
+      const sessionEntry: SessionEntry = {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        totalTokens: 10,
+        totalTokensFresh,
+        totalTokensVersion: 1,
+        compactionCount: 1,
+        ...(agentRuntimeOverride ? { agentRuntimeOverride, agentHarnessId: "openclaw" } : {}),
+      };
+      const replyOperation = createReplyOperation();
+
+      const entry = await runPreflightCompactionIfNeeded({
+        cfg: {
+          agents: {
+            defaults: {
+              compaction: { maxActiveTranscriptBytes: "1kb" },
+            },
+          },
+        },
+        followupRun: createTestFollowupRun({
+          provider: "openai",
+          model: "gpt-5.5",
+          sessionId: "session",
+          sessionKey,
+        }),
+        defaultModel: "gpt-5.5",
+        agentCfgContextTokens: 1_000_000,
+        sessionEntry,
+        sessionStore: { [sessionKey]: sessionEntry },
+        sessionKey,
+        storePath,
+        isHeartbeat: false,
+        replyOperation,
+      });
+
+      expect(entry).toBe(sessionEntry);
+      expect(replyOperation.setPhase).not.toHaveBeenCalled();
+      expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+      expect(incrementCompactionCountMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("leaves an under-limit SQLite Codex session to native token compaction", async () => {
     const storePath = path.join(rootDir, "sqlite-codex-under-byte-guard.json");
     const sessionKey = "agent:main:main";
