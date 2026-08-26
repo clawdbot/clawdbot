@@ -383,30 +383,18 @@ describe("qa confidence report", () => {
     },
   );
 
-  it("accepts a positive count-only suite without scenario rows", async () => {
-    const report = await buildStrictSuiteReport({
-      counts: { total: 1, passed: 1, failed: 0, skipped: 0 },
-    });
-
-    expect(report.pass).toBe(true);
-    expect(report.globalPass).toBe(true);
-    expect(report.lanes[0]).toMatchObject({ status: "pass" });
-  });
-
-  it.each([
-    [{ total: 1, passed: 1, failed: 0, skipped: 0 }, "count/scenario mismatch"],
-    [{ total: 3, passed: 2, failed: 0 }, "no executed scenarios"],
-  ] as const)(
-    "rejects positive counts with explicitly empty scenario rows",
-    async (counts, expectedDetail) => {
-      const report = await buildStrictSuiteReport({ counts, scenarios: [] });
-
-      expect(report.pass).toBe(false);
-      expect(report.globalPass).toBe(false);
-      expect(report.lanes[0]).toMatchObject({ status: "unknown" });
+  it("distinguishes omitted scenario rows from explicitly empty evidence", async () => {
+    for (const [counts, pass, expectedDetail] of [
+      [{ total: 1, passed: 1, failed: 0, skipped: 0 }, true, "counts.failed=0"],
+      [{ total: 1, passed: 1, failed: 0, skipped: 0 }, false, "count/scenario mismatch"],
+      [{ total: 3, passed: 2, failed: 0 }, false, "no executed scenarios"],
+    ] as const) {
+      const report = await buildStrictSuiteReport({ counts, ...(pass ? {} : { scenarios: [] }) });
+      expect(report).toMatchObject({ pass, globalPass: pass });
+      expect(report.lanes[0]).toMatchObject({ status: pass ? "pass" : "unknown" });
       expect(report.lanes[0]?.details).toContain(expectedDetail);
-    },
-  );
+    }
+  });
 
   it("infers skipped suite rows from totals and scenario status", async () => {
     for (const [artifact, expectedDetail] of [
