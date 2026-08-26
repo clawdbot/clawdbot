@@ -89,6 +89,49 @@ describe("createInternalAgentTurnFacade", () => {
     });
   });
 
+  it("uses one timeout across acceptance and final response", async () => {
+    vi.useFakeTimers();
+    startTurn.mockImplementation(
+      async ({ io }) =>
+        await new Promise<void>((resolve) => {
+          setTimeout(() => {
+            io.emitAcceptance([true, { runId: "run-deadline", status: "accepted" }, undefined]);
+            setTimeout(() => {
+              io.emitFinal([true, { runId: "run-deadline", status: "ok" }, undefined]);
+              resolve();
+            }, 600);
+          }, 600);
+        }),
+    );
+
+    try {
+      let settled = false;
+      const outcome = createFacade()
+        .dispatchRaw(
+          { message: "test", idempotencyKey: "run-deadline" },
+          { expectFinal: true, timeoutMs: 1_000 },
+        )
+        .then(
+          () => ({ status: "resolved" as const }),
+          (error: unknown) => ({ error, status: "rejected" as const }),
+        )
+        .finally(() => {
+          settled = true;
+        });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(settled).toBe(true);
+      await expect(outcome).resolves.toMatchObject({
+        status: "rejected",
+        error: { message: "gateway request timeout for agent" },
+      });
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
   it("preserves post-acceptance Error identity", async () => {
     let rejectTurn!: (error: Error) => void;
     startTurn.mockImplementation(
@@ -159,12 +202,65 @@ describe("createInternalAgentTurnFacade", () => {
       ok: true,
       payload: { runId: "run-replay", status: "ok", result: terminalResult },
     });
-    expect(waitForTurn).toHaveBeenCalledWith({ runId: "run-replay", timeoutMs: 1_000 });
+    const waitTimeoutMs = waitForTurn.mock.calls[0]?.[0].timeoutMs;
+    expect(waitTimeoutMs).toBeGreaterThan(0);
+    expect(waitTimeoutMs).toBeLessThanOrEqual(1_000);
     expect(startTurn).toHaveBeenCalledTimes(2);
     expect(startTurn.mock.calls.map(([call]) => call.preflight.request.idempotencyKey)).toEqual([
       "same-request",
       "same-request",
     ]);
+  });
+
+  it("keeps terminal dedupe replay within the original timeout", async () => {
+    vi.useFakeTimers();
+    startTurn
+      .mockImplementationOnce(async ({ io }) => {
+        io.emitAcceptance([true, { runId: "run-replay", status: "in_flight" }, undefined]);
+      })
+      .mockImplementationOnce(
+        async ({ io }) =>
+          await new Promise<void>((resolve) => {
+            setTimeout(() => {
+              io.emitAcceptance([true, { runId: "run-replay", status: "ok" }, undefined]);
+              resolve();
+            }, 500);
+          }),
+      );
+    waitForTurn.mockImplementation(
+      async () =>
+        await new Promise((resolve) => {
+          setTimeout(() => resolve({ runId: "run-replay", status: "ok" }), 600);
+        }),
+    );
+
+    try {
+      let settled = false;
+      const outcome = createFacade()
+        .dispatchRaw(
+          { message: "test", idempotencyKey: "same-request" },
+          { expectFinal: true, timeoutMs: 1_000 },
+        )
+        .then(
+          () => ({ status: "resolved" as const }),
+          (error: unknown) => ({ error, status: "rejected" as const }),
+        )
+        .finally(() => {
+          settled = true;
+        });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(settled).toBe(true);
+      await expect(outcome).resolves.toMatchObject({
+        status: "rejected",
+        error: { message: "gateway request timeout for agent" },
+      });
+      expect(startTurn).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
   });
 
   it("keeps a cached replay in flight when the wait reaches a nonterminal timeout", async () => {

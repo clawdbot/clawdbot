@@ -432,9 +432,11 @@ export async function sendSubagentAnnounceDirectly(params: {
       throw err;
     }
 
-    const directAnnounceStillPending = isGatewayAgentRunPending(directAnnounceResponse);
-    if (directAnnounceStillPending) {
-      if (!params.requireVisibleReply) {
+    if (isGatewayAgentRunPending(directAnnounceResponse)) {
+      const directAnnounceStatus = directAnnounceResponse.status;
+      // Fresh acceptance transfers ordinary completion ownership. Replays and
+      // started runs stay pending until terminal evidence can retire a durable wake.
+      if (!params.requireVisibleReply && directAnnounceStatus === "accepted") {
         return {
           delivered: true,
           path: "direct",
