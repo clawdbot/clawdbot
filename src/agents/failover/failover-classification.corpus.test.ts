@@ -196,10 +196,22 @@ describe("cross-layer drift (documents current behavior, see refactor-02)", () =
     expect(classifyReplyRequest({ message })).toMatchObject({ code: "provider_model_unavailable" });
   });
 
-  it("keeps billing/plan-entitlement precedence over the bare model-unavailable wording", () => {
-    // Billing/plan text must still win even though it also contains "model" +
-    // "unavailable"-adjacent wording; precedence is enforced by check ordering
-    // in classifyFailoverClassificationFromMessage, not by regex exclusivity.
+  it("keeps billing/plan-entitlement precedence over the literal bare model-unavailable phrase", () => {
+    // This phrase contains the exact literal substring the bare-unavailable
+    // fix matches ("model" ... "is unavailable"), so it is the phrase that
+    // actually exercises the new detector's collision risk against billing —
+    // unlike the older "not available ... current plan" sample below, which
+    // never reaches the new regex at all. The "code":1311 marker is required
+    // for this exact prose to classify as billing at all (bare prose without
+    // a billing marker doesn't match isBillingErrorMessage on its own).
+    // Billing/plan wording must still win despite also matching the new regex.
+    const message = '{"code":1311,"message":"The model is unavailable in your current plan"}';
+    const classification = classifyFailoverSignal({ message });
+
+    expect(classification).toEqual({ kind: "reason", reason: "billing" });
+  });
+
+  it("keeps billing/plan-entitlement precedence over 'not available' wording", () => {
     const message =
       '{"code":1311,"message":"The model you requested is not available in your current plan"}';
     const classification = classifyFailoverSignal({ message });

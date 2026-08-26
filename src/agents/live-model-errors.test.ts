@@ -83,20 +83,12 @@ describe("live model error helpers", () => {
       false,
     );
     expect(isModelNotFoundErrorMessage("request ended without sending any chunks")).toBe(false);
-  });
-
-  it("detects bare model-unavailable wording (no 'not')", () => {
-    // OpenCode Zen's actual body for a withdrawn/deactivated route is the bare
-    // "Model is unavailable." (no "not"), which none of the "not found"/"not
-    // available" patterns above match.
-    expect(
-      isModelNotFoundErrorMessage(
-        "400 Error from provider (Console): Upstream request failed: Model is unavailable.",
-      ),
-    ).toBe(true);
-    expect(isModelNotFoundErrorMessage("Model is unavailable.")).toBe(true);
-    // Must not fire on unrelated "unavailable" wording that doesn't name the model.
-    expect(isModelNotFoundErrorMessage("503 service unavailable")).toBe(false);
-    expect(isModelNotFoundErrorMessage("The model service is temporarily unavailable")).toBe(false);
+    // Bare "Model is unavailable." (no "not") is intentionally NOT handled by
+    // this early detector: classify.ts consults it before billing/plan
+    // classification, and a bare "is unavailable" match here would shadow
+    // billing text like "The model is unavailable in your current plan" (see
+    // GENERIC_MODEL_NOT_FOUND_RE in failover/message-patterns.ts, which runs
+    // after billing and owns this case instead).
+    expect(isModelNotFoundErrorMessage("Model is unavailable.")).toBe(false);
   });
 });

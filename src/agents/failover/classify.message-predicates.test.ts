@@ -11,11 +11,35 @@ import {
   isTimeoutErrorMessage,
   matchesFormatErrorPattern,
 } from "./classify.js";
+import { GENERIC_MODEL_NOT_FOUND_RE } from "./message-patterns.js";
 import { renderRateLimitOrOverloadedCopy } from "./user-copy.js";
 
 describe("matchesFormatErrorPattern", () => {
   it("retains the direct format compatibility predicate", () => {
     expect(matchesFormatErrorPattern("invalid request format")).toBe(true);
+  });
+});
+
+describe("GENERIC_MODEL_NOT_FOUND_RE (#19 bare-unavailable RCA)", () => {
+  it("matches the exact production body: bare 'Model is unavailable.' (no 'not')", () => {
+    expect(
+      GENERIC_MODEL_NOT_FOUND_RE.test(
+        "400 Error from provider (Console): Upstream request failed: Model is unavailable.",
+      ),
+    ).toBe(true);
+    expect(GENERIC_MODEL_NOT_FOUND_RE.test("Model is unavailable.")).toBe(true);
+  });
+
+  it("still matches the original 'not found'/'not available' wording", () => {
+    expect(GENERIC_MODEL_NOT_FOUND_RE.test("model not found")).toBe(true);
+    expect(GENERIC_MODEL_NOT_FOUND_RE.test("model not available")).toBe(true);
+  });
+
+  it("does not fire on unrelated 'unavailable' wording that doesn't name the model", () => {
+    expect(GENERIC_MODEL_NOT_FOUND_RE.test("503 service unavailable")).toBe(false);
+    expect(GENERIC_MODEL_NOT_FOUND_RE.test("The model service is temporarily unavailable")).toBe(
+      false,
+    );
   });
 });
 
