@@ -270,6 +270,45 @@ describe("createFeishuCommentReplyDispatcher", () => {
       "- Approve: `/approve req_1`\n\n> Interactive buttons are unavailable in Feishu document comments. You can type the command shown above manually.",
     ],
     [
+      "select option with an actionable command",
+      {
+        presentation: {
+          blocks: [
+            {
+              type: "select" as const,
+              placeholder: "Choose deployment",
+              options: [
+                {
+                  label: "Deploy",
+                  action: { type: "command" as const, command: "/deploy staging" },
+                },
+              ],
+            },
+          ],
+        },
+      },
+      "Choose deployment:\n- Deploy: `/deploy staging`\n\n> Interactive buttons are unavailable in Feishu document comments. You can type the command shown above manually.",
+    ],
+    [
+      "select callback without actionable guidance",
+      {
+        presentation: {
+          blocks: [
+            {
+              type: "select" as const,
+              options: [
+                {
+                  label: "Choose",
+                  action: { type: "callback" as const, value: "private_choice" },
+                },
+              ],
+            },
+          ],
+        },
+      },
+      "Options:\n- Choose",
+    ],
+    [
       "disabled command without actionable guidance",
       {
         presentation: {

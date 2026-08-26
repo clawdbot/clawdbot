@@ -35,13 +35,14 @@ export function buildFeishuCommentPresentationFallback(params: {
   // Only warn when the rendered fallback exposes a command the user can copy.
   const fallbackHasCommand =
     params.fallbackHasCommand === true ||
-    params.presentation?.blocks.some(
-      (block) =>
-        block.type === "buttons" &&
-        block.buttons.some(
-          ({ action, disabled, url, webApp, web_app }) =>
-            !disabled && action?.type === "command" && !url && !webApp?.url && !web_app?.url,
-        ),
+    params.presentation?.blocks.some((block) =>
+      block.type === "select"
+        ? block.options.some(({ action }) => action?.type === "command")
+        : block.type === "buttons" &&
+          block.buttons.some(
+            ({ action, disabled, url, webApp, web_app }) =>
+              !disabled && action?.type === "command" && !url && !webApp?.url && !web_app?.url,
+          ),
     ) === true;
   return {
     fallbackText,
