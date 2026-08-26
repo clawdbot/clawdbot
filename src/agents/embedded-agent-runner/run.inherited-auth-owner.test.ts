@@ -66,6 +66,11 @@ describe("embedded setup inference inherited auth owner", () => {
         value.endsWith(path.join("agents", "main", "agent")),
       );
       expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
+      // A silent fall-back to the built-in host harness would still pass the
+      // auth-owner assertions; fail loudly on the route instead.
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledWith(
+        expect.objectContaining({ agentHarnessId: "codex" }),
+      );
     },
   );
 });
