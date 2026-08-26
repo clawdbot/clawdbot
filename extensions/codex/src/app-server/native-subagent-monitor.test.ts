@@ -15,6 +15,12 @@ import {
   retainCodexAppServerLiveThread,
 } from "./client-runtime.js";
 import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
+import {
+  buildEmptyToolTelemetry,
+  CodexAppServerEventProjector,
+  createParams,
+  registerCodexEventProjectorTestLifecycle,
+} from "./event-projector.test-harness.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import type {
   CodexAppServerRequestResult,
@@ -391,6 +397,224 @@ function taskRecord(params: {
 }
 
 describe("CodexNativeSubagentMonitor", () => {
+  describe("native completion delivery ownership", () => {
+    registerCodexEventProjectorTestLifecycle();
+
+    function deliveredNativeCompletion(): CodexServerNotification {
+      return {
+        method: "rawResponseItem/completed",
+        params: {
+          threadId: "parent-thread",
+          turnId: "parent-turn",
+          item: {
+            type: "agent_message",
+            author: "/root/worker",
+            recipient: "/root",
+            content: [
+              {
+                type: "input_text",
+                text: "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/worker\nPayload:\nThe build passed.",
+              },
+            ],
+          },
+        },
+      };
+    }
+
+    const completedChild = () =>
+      childTurnCompletedNotification({
+        status: "completed",
+        items: [
+          {
+            type: "agentMessage",
+            id: "child-final",
+            phase: "final_answer",
+            text: "The build passed.",
+          },
+        ],
+      });
+
+    it.each([
+      { order: "native-first", final: "The build passed. The change is ready." },
+      { order: "terminal-first", final: "The build passed. The change is ready." },
+      { order: "native-first", final: "NO_REPLY" },
+    ])(
+      "preserves $final when native delivery and child completion arrive $order",
+      async ({ order, final }) => {
+        const client = createClient();
+        const runtime = createRuntime();
+        const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
+        const owner = registerParent(monitor);
+        owner.bindTurn("parent-turn");
+        await notifyChildStarted(client, "parent-thread", "child-thread", "/root/worker");
+        const projector = new CodexAppServerEventProjector(
+          await createParams(),
+          "parent-thread",
+          "parent-turn",
+        );
+        let lastAnswer = "";
+        const answer = async (text: string, id: string) => {
+          lastAnswer = text;
+          await projector.handleNotification({
+            method: "item/completed",
+            params: {
+              threadId: "parent-thread",
+              turnId: "parent-turn",
+              item: { type: "agentMessage", id, phase: "final_answer", text },
+            },
+          });
+        };
+        runtime.deliverAgentHarnessTaskCompletion.mockImplementation(async () => {
+          await answer("NO_REPLY", "duplicate-answer");
+          return { delivered: true, path: "steered" };
+        });
+        try {
+          if (order === "terminal-first") {
+            await client.notify(completedChild());
+          }
+          await client.notify(deliveredNativeCompletion());
+          await answer(final, "parent-answer");
+          if (order === "native-first") {
+            await client.notify(completedChild());
+          }
+          await projector.handleNotification({
+            method: "turn/completed",
+            params: {
+              threadId: "parent-thread",
+              turn: {
+                id: "parent-turn",
+                status: "completed",
+                items: [{ type: "agentMessage", id: "last-answer", text: lastAnswer }],
+                error: null,
+              },
+            },
+          });
+          owner.unregister();
+          expect(projector.buildResult(buildEmptyToolTelemetry()).assistantTexts).toEqual([final]);
+          expect(runtime.deliverAgentHarnessTaskCompletion).not.toHaveBeenCalled();
+          expect(runtime.setDetachedTaskDeliveryStatusByRunId).toHaveBeenLastCalledWith({
+            runId: "codex-thread:child-thread",
+            deliveryStatus: "delivered",
+          });
+        } finally {
+          owner.unregister();
+          client.close();
+        }
+      },
+    );
+
+    it("waits for the parent to release its reply before announcing an undelivered completion", async () => {
+      const client = createClient();
+      const runtime = createRuntime();
+      const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
+      const owner = registerParent(monitor);
+      owner.bindTurn("parent-turn");
+      await notifyChildStarted(client);
+      await client.notify(completedChild());
+      try {
+        expect(runtime.deliverAgentHarnessTaskCompletion).not.toHaveBeenCalled();
+        owner.unregister();
+        expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledOnce();
+        expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledWith(
+          expect.objectContaining({ result: "The build passed." }),
+        );
+      } finally {
+        owner.unregister();
+        client.close();
+      }
+    });
+
+    it("defers completion when turn/started races ahead of the turn/start response", async () => {
+      const client = createClient();
+      const runtime = createRuntime();
+      const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
+      const owner = registerParent(monitor);
+      try {
+        await client.notify({
+          method: "turn/started",
+          params: {
+            threadId: "parent-thread",
+            turn: { id: "parent-turn", status: "inProgress", items: [] },
+          },
+        });
+        await notifyChildStarted(client, "parent-thread", "child-thread", "/root/worker");
+        await client.notify(completedChild());
+        expect(runtime.deliverAgentHarnessTaskCompletion).not.toHaveBeenCalled();
+        await client.notify(deliveredNativeCompletion());
+        owner.bindTurn("parent-turn");
+        owner.unregister();
+        expect(runtime.deliverAgentHarnessTaskCompletion).not.toHaveBeenCalled();
+        expect(runtime.setDetachedTaskDeliveryStatusByRunId).toHaveBeenLastCalledWith({
+          runId: "codex-thread:child-thread",
+          deliveryStatus: "delivered",
+        });
+      } finally {
+        owner.unregister();
+        client.close();
+      }
+    });
+
+    it.each([
+      "other-turn",
+      "other-parent",
+      "other-child",
+      "ordinary-message",
+      "user-text",
+    ] as const)("does not acknowledge a completion from %s", async (source) => {
+      const client = createClient();
+      const runtime = createRuntime();
+      const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
+      const owner = registerParent(monitor);
+      owner.bindTurn("parent-turn");
+      await notifyChildStarted(client, "parent-thread", "child-thread", "/root/worker");
+      const receipt = deliveredNativeCompletion();
+      const params = receipt.params as JsonObject;
+      const item = params.item as JsonObject;
+      if (source === "other-turn") {
+        params.turnId = "older-turn";
+      } else if (source === "other-parent") {
+        params.threadId = "another-parent";
+      } else if (source === "other-child") {
+        item.author = "/root/another-child";
+        item.content = [
+          {
+            type: "input_text",
+            text: "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/another-child\nPayload:\nThe build passed.",
+          },
+        ];
+      } else if (source === "ordinary-message") {
+        item.content = [{ type: "input_text", text: "Still working on the build." }];
+      } else {
+        item.type = "message";
+        item.role = "user";
+      }
+      try {
+        await client.notify(completedChild());
+        await client.notify(receipt);
+        expect(runtime.deliverAgentHarnessTaskCompletion).not.toHaveBeenCalled();
+        owner.unregister();
+        expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledOnce();
+      } finally {
+        owner.unregister();
+        client.close();
+      }
+    });
+
+    it("delivers a deferred completion if the parent client closes", async () => {
+      const client = createClient();
+      const runtime = createRuntime();
+      const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
+      const owner = registerParent(monitor);
+      owner.bindTurn("parent-turn");
+      await notifyChildStarted(client);
+      await client.notify(completedChild());
+      expect(runtime.deliverAgentHarnessTaskCompletion).not.toHaveBeenCalled();
+      client.close();
+      expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledOnce();
+      owner.unregister();
+    });
+  });
+
   it("pins a parent subscription until its final independently running child settles", async () => {
     const client = createClient();
     const runtime = createRuntime();
@@ -634,6 +858,8 @@ describe("CodexNativeSubagentMonitor", () => {
         terminalSummary: "child v2 result",
       }),
     );
+    expect(runtime.deliverAgentHarnessTaskCompletion).not.toHaveBeenCalled();
+    owner.unregister();
     expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledWith(
       expect.objectContaining({
         childSessionId: "child-v2",
