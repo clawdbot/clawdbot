@@ -14,6 +14,7 @@ import { TUI_PTY_RENDERING_FIXTURE_SCRIPT } from "./tui-pty-rendering-test-suppo
 import { TUI_PTY_RESET_FIXTURE } from "./tui-pty-reset-fixture-test-support.js";
 import { TUI_PTY_STARTUP_SESSION_FIXTURE } from "./tui-pty-startup-session-fixture-test-support.js";
 import { TUI_PTY_SESSION_SUBSCRIPTION_FIXTURE_SCRIPT } from "./tui-pty-subscription-fixture-test-support.js";
+import { TUI_PTY_TASK_FIXTURE } from "./tui-pty-task-fixture-test-support.js";
 import { startPty, type PtyRun } from "./tui-pty-test-support.js";
 
 export * from "./tui-pty-harness-assertion-test-support.js";
@@ -145,16 +146,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
         ? pluginApproval(initialPluginApprovalSessionKey)
         : null;
       let pendingPluginApprovalRun: { runId: string; sessionKey: string } | null = null;
-      let pendingTaskSuggestion: {
-        id: string;
-        title: string;
-        prompt: string;
-        tldr: string;
-        cwd: string;
-        sessionKey: string;
-        agentId: string;
-        createdAt: number;
-      } | null = null;
+      ${TUI_PTY_TASK_FIXTURE.variables}
 
       function record(method: string, payload?: unknown) {
         if (!actionLogPath) {
@@ -644,30 +636,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
           return { ok: true };
         }
 
-        async listTaskSuggestions() {
-          record("listTaskSuggestions", { pending: Boolean(pendingTaskSuggestion) });
-          return pendingTaskSuggestion ? [pendingTaskSuggestion] : [];
-        }
-
-        async acceptTaskSuggestion(taskId: string) {
-          record("acceptTaskSuggestion", { taskId });
-          pendingTaskSuggestion = null;
-          this.onEvent?.({
-            event: "task.suggestion",
-            payload: { action: "resolved", taskId, resolution: "accepted" },
-          });
-          return { taskId, key: "agent:main:task-pty" };
-        }
-
-        async dismissTaskSuggestion(taskId: string) {
-          record("dismissTaskSuggestion", { taskId });
-          pendingTaskSuggestion = null;
-          this.onEvent?.({
-            event: "task.suggestion",
-            payload: { action: "resolved", taskId, resolution: "dismissed" },
-          });
-          return { taskId, dismissed: true };
-        }
+        ${TUI_PTY_TASK_FIXTURE.methods}
       }
 
       async function main() {

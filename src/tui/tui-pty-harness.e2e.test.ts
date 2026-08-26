@@ -1,3 +1,6 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 // Exercises the fake-backend TUI PTY harness and visible terminal output.
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { sleep } from "../utils/sleep.js";
@@ -673,6 +676,51 @@ describe.sequential("TUI PTY harness", () => {
       await fixture.run.waitForOutput("session agent:main:task-pty");
     },
     TEST_TIMEOUT_MS,
+  );
+
+  it.each(["accept", "dismiss"])(
+    "does not reopen a task during pending %s after returning to its session",
+    async (action) => {
+      const tempDir = await mkdtemp(path.join(tmpdir(), "openclaw-tui-task-action-"));
+      const releasePath = path.join(tempDir, "release");
+      const pendingFixture = await startTuiFixture({
+        env: { OPENCLAW_TUI_PTY_TASK_RELEASE_PATH: releasePath },
+      });
+      try {
+        await pendingFixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
+        await pendingFixture.run.write("/session pending-source\r");
+        await pendingFixture.run.waitForOutput("session agent:main:pending-source");
+        await pendingFixture.run.write("task suggestion proof\r");
+        await pendingFixture.run.waitForOutput("Suggested follow-up: Remove stale adapter");
+        if (action === "accept") {
+          await pendingFixture.run.write("\x1b[A\r", { delay: false });
+          await pendingFixture.run.waitForOutput("Press Enter again to start this task.");
+        }
+        await pendingFixture.run.write("\r", { delay: false });
+        await pendingFixture.waitForLogEntry((entry) => entry.method === `${action}TaskSuggestion`);
+
+        await pendingFixture.run.write("/session pending-other\r");
+        await pendingFixture.run.waitForOutput("session agent:main:pending-other");
+        await pendingFixture.run.write("/session pending-source\r");
+        const rows = await waitForSynchronizedFrameRows(
+          pendingFixture.run,
+          (frame) => frame.some((row) => row.includes("session agent:main:pending-source")),
+          TEST_TIMEOUT_MS,
+        );
+        expect(rows.join("\n")).not.toContain("Suggested follow-up:");
+
+        await writeFile(releasePath, "release");
+        await pendingFixture.run.waitForOutput(
+          action === "accept" ? "session agent:main:task-pty" : "follow-up task dismissed",
+        );
+        const calls = await readFixtureLog(pendingFixture.logPath);
+        expect(countFixtureCalls(calls, `${action}TaskSuggestion`)).toBe(1);
+      } finally {
+        await pendingFixture.cleanup();
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    },
+    STARTUP_TEST_TIMEOUT_MS,
   );
 
   it(
