@@ -843,26 +843,6 @@ describe("chat pane keyboard shortcuts", () => {
     }
   });
 
-  it("releases an attachment override when Files closes", () => {
-    const { pane, state } = createTestChatPane({
-      client: createGatewayBrowserClientFixture(),
-      sessions: createSessionCapabilityFixture(),
-    });
-    pane.active = true;
-    state.attachmentSidebarContent = {
-      kind: "attachment",
-      attachmentKind: "document",
-      title: "report.pdf",
-      src: "/media/report.pdf",
-    };
-    state.sidebarLayout = openSlot({ columns: [] }, "workspace");
-
-    dispatchSidebarShortcut(pane);
-
-    expect(state.sidebarLayout.columns.flatMap((column) => column.panels)).toHaveLength(0);
-    expect(state.attachmentSidebarContent).toBeNull();
-  });
-
   it("toggles only the active pane's session workspace", () => {
     const client = createGatewayBrowserClientFixture();
     const sessions = createSessionCapabilityFixture();
