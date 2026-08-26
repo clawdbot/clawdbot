@@ -58,7 +58,6 @@ export class SessionManager extends SessionManagerBranching {
     boundedContext?: {
       boundaryCount: number;
       limits: SessionManagerBoundedContextLimits;
-      truncated: boolean;
     },
   ) {
     super(cwd, persistenceTarget, loadedEntries, boundedContext);
@@ -117,7 +116,6 @@ export class SessionManager extends SessionManagerBranching {
     return new SessionManager(cwd ?? header?.cwd ?? process.cwd(), target, entries, {
       boundaryCount: context.boundaryCount,
       limits,
-      truncated: context.truncated,
     });
   }
 

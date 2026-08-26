@@ -45,7 +45,7 @@ export class SessionManagerCore {
   protected persistenceTarget: SessionManagerPersistenceTarget | undefined;
   protected persistenceHeaderPending = false;
   protected boundedContextLimits: SessionManagerBoundedContextLimits | undefined;
-  protected boundedContextTruncated = false;
+  protected boundedContextIncomplete = false;
   protected persistedBoundaryCount: number | undefined;
 
   constructor(
@@ -55,13 +55,12 @@ export class SessionManagerCore {
     boundedContext?: {
       boundaryCount: number;
       limits: SessionManagerBoundedContextLimits;
-      truncated: boolean;
     },
   ) {
     this.cwd = cwd;
     this.persistenceTarget = persistenceTarget;
     this.boundedContextLimits = boundedContext?.limits;
-    this.boundedContextTruncated = boundedContext?.truncated ?? false;
+    this.boundedContextIncomplete = boundedContext !== undefined;
     this.persistedBoundaryCount = boundedContext?.boundaryCount;
     if (persistenceTarget || loadedEntries) {
       this.setLoadedSessionTarget(persistenceTarget, loadedEntries ?? []);
@@ -75,7 +74,7 @@ export class SessionManagerCore {
       ? readSessionTranscriptBoundedActiveContextCore(target, this.boundedContextLimits)
       : undefined;
     const entries = (bounded?.events ?? loadTranscriptEventsSync(target)) as FileEntry[];
-    this.boundedContextTruncated = bounded?.truncated ?? false;
+    this.boundedContextIncomplete = bounded !== undefined;
     this.persistedBoundaryCount = bounded?.boundaryCount;
     const header = entries.find(
       (entry) => typeof entry === "object" && entry !== null && entry.type === "session",
@@ -86,9 +85,9 @@ export class SessionManagerCore {
     }
   }
 
-  /** Whole-transcript rewrites and historical branch operations must never discard unloaded rows. */
+  /** Active-only loads can omit sibling rows even when they fit the context limits. */
   protected ensureCompletePersistedHistory(): void {
-    if (!this.persistenceTarget || !this.boundedContextTruncated) {
+    if (!this.persistenceTarget || !this.boundedContextIncomplete) {
       return;
     }
     const limits = this.boundedContextLimits;
