@@ -1308,6 +1308,40 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
+  it("keeps the composer task-state panel full width when hovered", async () => {
+    const page = await openBrowserPage(1024, 480);
+    try {
+      const progressCss = [
+        readStyleSheet("ui/src/styles/chat/progress-card.css"),
+        readStyleSheet("ui/src/styles/chat/composer-progress.css"),
+      ].join("\n");
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}\n${progressCss}</style></head><body>
+          <div class="agent-chat__progress-float" style="width: 800px">
+            <details class="session-progress-card session-progress-card--composer" open>
+              <summary class="session-progress-card__summary">
+                <span class="session-progress-card__summary-indicator"></span>
+                <span class="session-progress-card__summary-expanded">Task progress</span>
+                <span class="session-progress-card__summary-chevron">${iconSvg()}</span>
+              </summary>
+              <div class="session-progress-card__body">Current task state</div>
+            </details>
+          </div>
+        </body></html>`,
+      );
+
+      const card = page.locator(".session-progress-card--composer");
+      const resting = await getBoundingBox(page, ".session-progress-card--composer");
+      await card.hover();
+      const hovered = await getBoundingBox(page, ".session-progress-card--composer");
+
+      expect(resting.width).toBeCloseTo(800, 0);
+      expect(hovered.width).toBeCloseTo(resting.width, 0);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
   it.each([
     { label: "narrow desktop", width: 430, height: 720, hasTouch: false },
     { label: "desktop", width: 1366, height: 900, hasTouch: false },

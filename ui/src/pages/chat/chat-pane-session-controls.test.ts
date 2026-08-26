@@ -116,6 +116,25 @@ describe("chat pane composer controls", () => {
     expect(onModelSetup).toHaveBeenCalledOnce();
   });
 
+  it("renders a distinct active icon for every permission mode", () => {
+    const icons = new Set<string>();
+    for (const mode of [undefined, "read-only", "guarded", "workspace", "full"] as const) {
+      const container = document.createElement("div");
+      render(
+        renderChatPermissionPicker({
+          canSelectFull: true,
+          mode,
+          onSelect: () => undefined,
+        }),
+        container,
+      );
+      const icon = container.querySelector(".chat-controls__permission-icon svg");
+      expect(icon).not.toBeNull();
+      icons.add(icon?.outerHTML ?? "");
+    }
+    expect(icons.size).toBe(5);
+  });
+
   it("patches a keyboard-selected mode, clears to default, and locks full access", async () => {
     const container = document.createElement("div");
     const patch = vi.fn(async () => ({}));
