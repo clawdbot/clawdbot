@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { wrapToolWithBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
 import { BEFORE_TOOL_CALL_HOOK_CONTEXT } from "../agents/before-tool-call-metadata.js";
 import type { CodeModeHeadlessResult } from "../agents/code-mode.js";
-import type { AnyAgentTool } from "../agents/tools/common.js";
+import { jsonResult, type AnyAgentTool } from "../agents/tools/common.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createCronScriptRuntime } from "./trigger-script.js";
 
@@ -519,6 +519,69 @@ describe("cron script runtime elapsed-time budgets", () => {
         expect(Number.isSafeInteger(delegatedBudgetMs)).toBe(true);
         expect(delegatedBudgetMs).toBeGreaterThan(budgetMs / 2);
         expect(delegatedBudgetMs).toBeLessThanOrEqual(budgetMs);
+      } finally {
+        wallClock.mockRestore();
+      }
+    },
+  );
+
+  it.each(
+    executionModes.flatMap((executionMode) =>
+      [-1, 1].map((clockDirection) => Object.assign({ clockDirection }, executionMode)),
+    ),
+  )(
+    "survives a $clockDirection wall-clock jump after the real $budgetMs ms $mode handoff",
+    async ({ mode, timeoutSeconds, budgetMs, clockDirection }) => {
+      const config = {} as OpenClawConfig;
+      const initialWallClockMs = Date.now();
+      let wallClockJumpMs = 0;
+      const wallClock = vi
+        .spyOn(Date, "now")
+        .mockImplementation(() => initialWallClockMs + wallClockJumpMs);
+      try {
+        const shiftClock = {
+          name: "shift_clock",
+          label: "Shift clock",
+          description: "Adjust the test wall clock",
+          parameters: { type: "object", properties: {} },
+          execute: vi.fn(async () => {
+            wallClockJumpMs = clockDirection * budgetMs * 2;
+            return jsonResult({ shifted: true });
+          }),
+        } satisfies AnyAgentTool;
+        const observeClock = {
+          ...shiftClock,
+          name: "observe_clock",
+          execute: vi.fn(async () => jsonResult({ observed: true })),
+        } satisfies AnyAgentTool;
+        const preparedRuntime = createPreparedRuntime(config);
+        const runtime = createCronScriptRuntime({
+          config,
+          prepareRuntime: async () => ({ ...preparedRuntime, tools: [shiftClock, observeClock] }),
+        });
+        const sharedScript =
+          "await Promise.all([shift_clock({}), observe_clock({})]); await observe_clock({});";
+        const result =
+          mode === "trigger"
+            ? await runtime.evaluateTrigger({
+                jobId: `real-headless-trigger-${clockDirection}`,
+                script: `${sharedScript} return { fire: true };`,
+                state: null,
+              })
+            : await runtime.executePayload({
+                jobId: `real-headless-payload-${clockDirection}`,
+                script: `${sharedScript} return { notify: "clock stable" };`,
+                state: null,
+                ...(timeoutSeconds === undefined ? {} : { timeoutSeconds }),
+              });
+
+        expect(result).toMatchObject(
+          mode === "trigger"
+            ? { kind: "evaluated", fire: true }
+            : { kind: "completed", notify: "clock stable" },
+        );
+        expect(shiftClock.execute).toHaveBeenCalledOnce();
+        expect(observeClock.execute).toHaveBeenCalledTimes(2);
       } finally {
         wallClock.mockRestore();
       }
