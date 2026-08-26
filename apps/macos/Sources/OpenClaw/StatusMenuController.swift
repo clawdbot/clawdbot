@@ -345,52 +345,25 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
 
     private func scheduleDebugMenuOpen() {
         #if DEBUG
+        // launchctl setenv races `open`; arguments are reliable for captures.
+        let arguments = CommandLine.arguments
         let environment = ProcessInfo.processInfo.environment
-        if environment["OPENCLAW_DEBUG_OPEN_MENU"] == "1" {
+        func flag(_ env: String, _ arg: String) -> Bool {
+            environment[env] == "1" || arguments.contains(arg)
+        }
+        // Screenshot/demo helper: seed synthetic menu content so UI proof
+        // captures show populated rows without a configured gateway.
+        if flag("OPENCLAW_DEBUG_MENU_FIXTURES", "--debug-menu-fixtures") {
+            CronJobsStore.shared.seedDebugFixtureJobs()
+        }
+        if flag("OPENCLAW_DEBUG_OPEN_MENU", "--debug-open-menu") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                 guard let self, let button = self.statusItem?.button else { return }
                 self.statusItem?.menu = self.menu
                 button.performClick(nil)
             }
-            // Optionally arrow-key into a submenu (by entry id) for captures.
-            if let submenuID = environment["OPENCLAW_DEBUG_OPEN_SUBMENU"] {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
-                    guard let self,
-                          let index = self.menu.items.firstIndex(where: {
-                              $0.representedObject as? String == submenuID
-                          }) else { return }
-                    let selectableSteps = self.menu.items.prefix(index + 1)
-                        .filter { !$0.isSeparatorItem }.count
-                    var keyEvents: [(UInt16, Bool)] = []
-                    for _ in 0..<selectableSteps {
-                        keyEvents.append((125, true))
-                        keyEvents.append((125, false))
-                    }
-                    keyEvents.append((124, true))
-                    keyEvents.append((124, false))
-                    for (code, down) in keyEvents {
-                        guard let event = NSEvent.keyEvent(
-                            with: down ? .keyDown : .keyUp,
-                            location: .zero,
-                            modifierFlags: [],
-                            timestamp: ProcessInfo.processInfo.systemUptime,
-                            windowNumber: 0,
-                            context: nil,
-                            characters: "",
-                            charactersIgnoringModifiers: "",
-                            isARepeat: false,
-                            keyCode: code) else { continue }
-                        NSApp.postEvent(event, atStart: false)
-                    }
-                }
-            }
         }
-        // Screenshot/demo helper: seed synthetic menu content so UI proof
-        // captures show populated rows without a configured gateway.
-        if environment["OPENCLAW_DEBUG_MENU_FIXTURES"] == "1" {
-            CronJobsStore.shared.seedDebugFixtureJobs()
-        }
-        if environment["OPENCLAW_DEBUG_PROBE_RIGHTCLICK"] == "1" {
+        if flag("OPENCLAW_DEBUG_PROBE_RIGHTCLICK", "--debug-probe-rightclick") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                 guard let self, let button = self.statusItem?.button,
                       let window = button.window else { return }
