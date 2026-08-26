@@ -56,6 +56,28 @@ describe("buildGatewaySessionRow", () => {
     expect(row.effectiveReasoningLevel).toBe("on");
   });
 
+  it("omits an unknown model reasoning default without a catalog", () => {
+    const row = buildGatewaySessionRow({
+      cfg: {
+        agents: {
+          defaults: { model: { primary: "anthropic/claude-opus-4-8" } },
+        },
+      } as OpenClawConfig,
+      storePath: "/tmp/openclaw-sessions.json",
+      store: {},
+      key: "agent:main:main",
+      entry: {
+        sessionId: "session-main",
+        updatedAt: 1,
+      },
+      now: 1,
+      lightweightListRow: true,
+    });
+
+    expect(row.reasoningLevel).toBeUndefined();
+    expect(row).not.toHaveProperty("effectiveReasoningLevel");
+  });
+
   it("keeps per-model thinking defaults from enabling model reasoning defaults", () => {
     const row = buildGatewaySessionRow({
       cfg: {

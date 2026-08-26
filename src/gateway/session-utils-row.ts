@@ -518,7 +518,7 @@ export function buildGatewaySessionRow(params: {
     verboseLevel: entry?.verboseLevel,
     traceLevel: entry?.traceLevel,
     reasoningLevel: entry?.reasoningLevel,
-    effectiveReasoningLevel,
+    ...(effectiveReasoningLevel !== undefined ? { effectiveReasoningLevel } : {}),
     elevatedLevel: entry?.elevatedLevel,
     sendPolicy: entry?.sendPolicy,
     inputTokens: entry?.inputTokens,

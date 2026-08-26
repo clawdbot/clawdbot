@@ -22,7 +22,7 @@ type GatewaySessionReasoningProjectionParams = {
 
 export function resolveGatewaySessionReasoningLevel(
   params: GatewaySessionReasoningProjectionParams,
-): string {
+): string | undefined {
   const storedReasoningLevel = normalizeOptionalString(params.entry?.reasoningLevel);
   const agentConfig = resolveAgentConfig(params.cfg, params.agentId);
   const configuredReasoningDefault = normalizeReasoningLevel(
@@ -38,13 +38,19 @@ export function resolveGatewaySessionReasoningLevel(
       : undefined) ??
     configuredReasoningDefault ??
     "off";
-  return shouldUseModelReasoningDefault({
+  const usesModelReasoningDefault = shouldUseModelReasoningDefault({
     reasoningExplicitlySet:
       storedReasoningLevel !== undefined || configuredReasoningDefault !== undefined,
     resolvedReasoningLevel: projectedReasoningLevel,
     thinkingActive: params.effectiveThinkingLevel !== "off",
     thinkingExplicitlySet,
-  })
+  });
+  // A catalog-less event cannot determine whether the selected model supports
+  // reasoning. Omit the derived value so it cannot overwrite a richer client row.
+  if (usesModelReasoningDefault && params.modelCatalog === undefined) {
+    return undefined;
+  }
+  return usesModelReasoningDefault
     ? resolveReasoningDefault({
         provider: params.provider,
         model: params.model,
