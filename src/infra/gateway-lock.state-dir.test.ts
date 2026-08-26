@@ -104,4 +104,37 @@ describe("gateway lock state directory", () => {
       });
     });
   });
+
+  it("canonicalizes a missing state leaf through a symlinked parent", async () => {
+    await withTempDir("openclaw-gateway-lock-symlink-", async (root) => {
+      const canonicalRoot = await fs.realpath(root);
+      const realParent = path.join(canonicalRoot, "real");
+      const linkedParent = path.join(canonicalRoot, "linked");
+      await fs.mkdir(realParent, { recursive: true });
+      await fs.symlink(realParent, linkedParent, process.platform === "win32" ? "junction" : "dir");
+
+      const linkedStateDir = path.join(linkedParent, "missing-state");
+      const stateDir = path.join(realParent, "missing-state");
+      const lockDir = resolveGatewayLockDir(stateDir);
+      const lock = expectGatewayLock(
+        await acquireGatewayLock({
+          allowInTests: true,
+          env: {
+            ...process.env,
+            OPENCLAW_CONFIG_PATH: path.join(linkedStateDir, "openclaw.json"),
+            OPENCLAW_STATE_DIR: linkedStateDir,
+          },
+          timeoutMs: 30,
+        }),
+      );
+
+      try {
+        expect(lock.stateDir).toBe(stateDir);
+        expect(lock.stateLockPath).toBe(path.join(lockDir, "gateway.state.lock"));
+        expect(path.dirname(lock.lockPath)).toBe(lockDir);
+      } finally {
+        await lock.release();
+      }
+    });
+  });
 });
