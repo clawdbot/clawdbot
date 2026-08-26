@@ -420,6 +420,100 @@ describe("deliverReplies", () => {
     expect(setMessageReaction).toHaveBeenCalledWith("123", 456, [{ type: "emoji", emoji: "🔥" }]);
   });
 
+  it.each([
+    {
+      name: "a nested reaction target with default reply threading disabled",
+      nestedReplyToId: "456",
+      replyToMode: "off" as const,
+    },
+    {
+      name: "a numeric nested reaction target",
+      nestedReplyToId: 456,
+      replyToMode: "off" as const,
+    },
+    {
+      name: "a nested reaction target instead of a different outer reply",
+      nestedReplyToId: "456",
+      outerReplyToId: "789",
+      replyToMode: "all" as const,
+    },
+    {
+      name: "a nested reaction target without enabling native text replies",
+      nestedReplyToId: "456",
+      outerReplyToId: "789",
+      replyToMode: "off" as const,
+      text: "Done",
+    },
+    {
+      name: "a nested reaction target while preserving a different native text reply",
+      nestedReplyToId: "456",
+      outerReplyToId: "789",
+      replyToMode: "all" as const,
+      text: "Done",
+    },
+  ])("honors $name", async ({ nestedReplyToId, outerReplyToId, replyToMode, text }) => {
+    const runtime = createRuntime(false);
+    const setMessageReaction = vi.fn().mockResolvedValue(true);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 901, chat: { id: "123" } });
+    const bot = createBot({ sendMessage, setMessageReaction });
+
+    const result = await deliverWith({
+      replies: [
+        {
+          ...(text ? { text } : {}),
+          ...(outerReplyToId ? { replyToId: outerReplyToId } : {}),
+          channelData: { telegram: { reaction: { emoji: "🔥", replyToId: nestedReplyToId } } },
+        },
+      ],
+      replyToMode,
+      runtime,
+      bot,
+    });
+
+    expect(result).toEqual({ delivered: true });
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(setMessageReaction).toHaveBeenCalledWith("123", 456, [{ type: "emoji", emoji: "🔥" }]);
+    if (text) {
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+      if (replyToMode === "off") {
+        expect(mockCallArg(sendMessage, 0, 2)).not.toHaveProperty("reply_to_message_id");
+      } else {
+        expect(mockCallArg(sendMessage, 0, 2)).toMatchObject({ reply_to_message_id: 789 });
+      }
+    } else {
+      expect(sendMessage).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each(["0", "-1", "12.5", "9007199254740992", "invalid"])(
+    "rejects invalid explicit nested reaction target %s without using the outer reply",
+    async (nestedReplyToId) => {
+      const runtime = createRuntime(false);
+      const setMessageReaction = vi.fn().mockResolvedValue(true);
+      const sendMessage = vi.fn().mockResolvedValue({ message_id: 901, chat: { id: "123" } });
+
+      const result = await deliverWith({
+        replies: [
+          {
+            text: "Done",
+            replyToId: "789",
+            channelData: { telegram: { reaction: { emoji: "🔥", replyToId: nestedReplyToId } } },
+          },
+        ],
+        replyToMode: "all",
+        runtime,
+        bot: createBot({ sendMessage, setMessageReaction }),
+      });
+
+      expect(result).toEqual({ delivered: false });
+      expect(runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining("requires a reply target"),
+      );
+      expect(setMessageReaction).not.toHaveBeenCalled();
+      expect(sendMessage).not.toHaveBeenCalled();
+    },
+  );
+
   it("does not mark rejected reaction-only replies as delivered", async () => {
     const runtime = createRuntime(false);
     const setMessageReaction = vi.fn().mockRejectedValue(new Error("REACTION_INVALID"));
