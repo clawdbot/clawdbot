@@ -32,6 +32,15 @@ const SURFACE_TOKENS = ["--bg", "--bg-elevated", "--bg-muted", "--card", "--pane
 const AA_NORMAL_TEXT_MIN = 4.5;
 
 /*
+ * Beacon is the accessibility theme: it advertises WCAG AAA rather than AA, and
+ * that promise is the reason to pick it. Holding it to the shared 4.5:1 floor
+ * would let a palette edit quietly demote it to an ordinary dark theme, so its
+ * own floor is asserted separately.
+ */
+const AAA_NORMAL_TEXT_MIN = 7;
+const AAA_THEMES = new Set(["beacon", "beacon-light"]);
+
+/*
  * Separation guardrail for the markdown code chip.
  *
  * Text contrast was never the failure mode here: the chip surface itself
@@ -126,6 +135,12 @@ function resolveThemes(blocks: Map<string, TokenMap>): Map<string, TokenMap> {
     ["dash-light", layer(light, blocks.get(':root[data-theme="dash-light"]'))],
     ["absolutely", layer(blocks.get(':root[data-theme="absolutely"]'))],
     ["absolutely-light", layer(light, blocks.get(':root[data-theme="absolutely-light"]'))],
+    ["tide", layer(blocks.get(':root[data-theme="tide"]'))],
+    ["tide-light", layer(light, blocks.get(':root[data-theme="tide-light"]'))],
+    ["beacon", layer(blocks.get(':root[data-theme="beacon"]'))],
+    ["beacon-light", layer(light, blocks.get(':root[data-theme="beacon-light"]'))],
+    ["phosphor", layer(blocks.get(':root[data-theme="phosphor"]'))],
+    ["phosphor-light", layer(light, blocks.get(':root[data-theme="phosphor-light"]'))],
   ]);
 }
 
@@ -344,7 +359,7 @@ describe("Control UI theme contrast", () => {
   const baseCss = fs.readFileSync(path.join(stylesDir, "base.css"), "utf8");
   const themes = resolveThemes(parseThemeBlocks(baseCss));
 
-  it("keeps every text token at WCAG AA on every theme surface", () => {
+  it("keeps every text token at WCAG AA on every theme surface, AAA on themes that promise it", () => {
     const failures: string[] = [];
     for (const [themeName, tokens] of themes) {
       for (const textToken of TEXT_TOKENS) {
@@ -358,9 +373,10 @@ describe("Control UI theme contrast", () => {
             continue;
           }
           const ratio = contrastRatio(parseHex(foreground), parseHex(background));
-          if (ratio < AA_NORMAL_TEXT_MIN) {
+          const floor = AAA_THEMES.has(themeName) ? AAA_NORMAL_TEXT_MIN : AA_NORMAL_TEXT_MIN;
+          if (ratio < floor) {
             failures.push(
-              `${themeName}: ${textToken} ${foreground} on ${surfaceToken} ${background} = ${ratio.toFixed(2)}:1 (< ${AA_NORMAL_TEXT_MIN}:1)`,
+              `${themeName}: ${textToken} ${foreground} on ${surfaceToken} ${background} = ${ratio.toFixed(2)}:1 (< ${floor}:1)`,
             );
           }
         }
@@ -420,9 +436,10 @@ describe("Control UI theme contrast", () => {
           const host = resolveOpaqueColor(`var(${surfaceToken})`, tokens);
           const background = composite(resolvedTint, host);
           const ratio = contrastRatio(foreground, background);
-          if (ratio < AA_NORMAL_TEXT_MIN) {
+          const floor = AAA_THEMES.has(themeName) ? AAA_NORMAL_TEXT_MIN : AA_NORMAL_TEXT_MIN;
+          if (ratio < floor) {
             failures.push(
-              `${themeName}: ${foregroundToken} on ${tint} over ${surfaceToken} = ${ratio.toFixed(2)}:1 (< ${AA_NORMAL_TEXT_MIN}:1)`,
+              `${themeName}: ${foregroundToken} on ${tint} over ${surfaceToken} = ${ratio.toFixed(2)}:1 (< ${floor}:1)`,
             );
           }
         }
