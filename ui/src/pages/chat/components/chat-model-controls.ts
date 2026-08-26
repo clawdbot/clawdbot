@@ -170,7 +170,7 @@ function resolveCatalogTriggerStatus(
   if (state.status === "error") {
     return optionCount === 0 ? t("chat.modelControls.modelsUnavailable") : undefined;
   }
-  if (!state.hasSnapshot && ["idle", "loading", "refreshing"].includes(state.status)) {
+  if (!state.hasSnapshot && ["idle", "loading"].includes(state.status)) {
     return t("chat.modelControls.loadingModels");
   }
   if (state.hasSnapshot && optionCount === 0) {
@@ -354,8 +354,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     status: props.modelsLoading ? ("loading" as const) : ("ready" as const),
   };
   const catalogLoadingWithoutSnapshot =
-    !managedCatalog.hasSnapshot &&
-    ["idle", "loading", "refreshing"].includes(managedCatalog.status);
+    !managedCatalog.hasSnapshot && ["idle", "loading"].includes(managedCatalog.status);
   const catalogTriggerStatus = resolveCatalogTriggerStatus(managedCatalog, modelOptions.length);
   const busy =
     props.loading || props.sending || Boolean(props.activeRunId) || props.stream !== null;

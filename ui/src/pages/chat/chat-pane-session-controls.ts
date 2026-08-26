@@ -73,9 +73,7 @@ export function resolveChatModelCatalogState(
       : state.chatModelCatalogError
         ? "error"
         : state.chatModelsLoading
-          ? hasSnapshot
-            ? "refreshing"
-            : "loading"
+          ? "loading"
           : "ready",
   };
 }

@@ -633,8 +633,12 @@ describe("new-session model runtime", () => {
     });
 
     let container = renderControl(control, context);
-    expect(container.querySelector('[data-chat-model-catalog-state="refreshing"]')).not.toBeNull();
+    expect(container.querySelector("[data-chat-model-catalog-state]")).toBeNull();
     expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(2);
+    expect(
+      container.querySelector<HTMLButtonElement>('[data-chat-model-option="openai/gpt-5.6-sol"]')
+        ?.disabled,
+    ).toBe(false);
 
     container
       .querySelector<HTMLButtonElement>('[data-chat-model-option="openai/gpt-5.6-sol"]')

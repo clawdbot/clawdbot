@@ -284,11 +284,11 @@ export class NewSessionModelControl {
     };
     const cached = peekChatMetadata(client, agentId);
     if (Array.isArray(cached?.models)) {
-      this.publishMetadataCatalog(cached.models, "refreshing");
+      this.publishMetadataCatalog(cached.models, "ready");
     } else {
       this.updateMetadataState({
         ...this.metadataState,
-        status: this.metadataState.hasSnapshot ? "refreshing" : "loading",
+        status: this.metadataState.hasSnapshot ? "ready" : "loading",
       });
     }
 
@@ -463,10 +463,7 @@ export class NewSessionModelControl {
     const cached = peekChatMetadata(client, normalizedAgentId);
     if (activeRequestMatches) {
       if (cached) {
-        this.publishMetadataCatalog(
-          Array.isArray(cached.models) ? cached.models : [],
-          "refreshing",
-        );
+        this.publishMetadataCatalog(Array.isArray(cached.models) ? cached.models : [], "ready");
       } else {
         this.notify();
       }

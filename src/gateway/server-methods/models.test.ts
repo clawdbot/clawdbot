@@ -357,6 +357,7 @@ function requestModelsList(params: {
       loadGatewayModelCatalogSnapshot,
       logGateway: {
         debug: vi.fn(),
+        warn: vi.fn(),
       },
     } as never,
   });

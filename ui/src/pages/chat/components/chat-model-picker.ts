@@ -23,7 +23,7 @@ import { handleChatComposerDetailsToggle, syncChatPickerOverlay } from "./chat-p
 
 export type ChatModelCatalogState = {
   hasSnapshot: boolean;
-  status: "idle" | "loading" | "refreshing" | "ready" | "error" | "offline";
+  status: "idle" | "loading" | "ready" | "error" | "offline";
 };
 
 type ChatModelPickerParams = {
@@ -250,15 +250,13 @@ function renderCatalogState(
   const label =
     state.status === "offline"
       ? t("common.offline")
-      : state.status === "refreshing"
-        ? t("chat.modelControls.refreshingModels")
-        : state.status === "error"
-          ? errorLabel
-          : state.status === "ready"
-            ? hasOptions
-              ? `${t("modelSetup.failure.auth")}. ${t("modelSetup.failureGuidance.auth")}`
-              : t("chat.modelControls.noModelsAvailable")
-            : t("chat.modelControls.loadingModels");
+      : state.status === "error"
+        ? errorLabel
+        : state.status === "ready"
+          ? hasOptions
+            ? `${t("modelSetup.failure.auth")}. ${t("modelSetup.failureGuidance.auth")}`
+            : t("chat.modelControls.noModelsAvailable")
+          : t("chat.modelControls.loadingModels");
   return html`
     <div
       class="chat-controls__model-catalog-state ${hasOptions
