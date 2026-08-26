@@ -11,6 +11,10 @@ import {
 } from "./feishu-ingress.js";
 import { isMentionForwardRequest } from "./mention.js";
 import { createSequentialQueue } from "./sequential-queue.js";
+import {
+  isFeishuSourceMessageRecalled,
+  retainFeishuSourceMessageIngress,
+} from "./source-message-recall.js";
 import type { FeishuChatType } from "./types.js";
 
 type FeishuMessageReceiveHandlerContext = {
@@ -31,6 +35,7 @@ type FeishuMessageReceiveHandlerContext = {
     accountId?: string;
     processingClaim?: FeishuMessageProcessingClaim;
     messageDedupeKey?: string;
+    sourceMessageIds?: readonly string[];
     turnAdoptionLifecycle?: FeishuIngressLifecycle;
   }) => Promise<void>;
   resolveDebounceText: (params: {
@@ -117,6 +122,7 @@ type FeishuMessageDebounceEntry = {
   event: FeishuMessageEvent;
   processingClaim?: FeishuMessageProcessingClaim;
   turnAdoptionLifecycle?: FeishuIngressLifecycle;
+  sourceMessageRetention?: { dispose: () => void };
   abandoned?: boolean;
 };
 
@@ -205,33 +211,67 @@ export function createFeishuMessageReceiveHandler({
     messageDedupeKey?: string,
     processingClaim?: FeishuMessageProcessingClaim,
     turnAdoptionLifecycle?: FeishuIngressLifecycle,
+    sourceMessageIds: readonly string[] = [event.message.message_id],
+    onTaskSettled?: () => void,
   ) => {
-    const sequentialKey = resolveSequentialKey({
-      accountId,
-      event,
-      botOpenId: getBotOpenId(accountId),
-      botName: getBotName(accountId),
-    });
-    const task = async () => {
-      if (turnAdoptionLifecycle?.abortSignal.aborted) {
-        await turnAdoptionLifecycle.onAbandoned();
+    let taskSettled = false;
+    const settleTask = () => {
+      if (taskSettled) {
         return;
       }
-      await handleMessage({
-        cfg,
+      taskSettled = true;
+      onTaskSettled?.();
+    };
+    try {
+      const sequentialKey = resolveSequentialKey({
+        accountId,
         event,
         botOpenId: getBotOpenId(accountId),
         botName: getBotName(accountId),
-        runtime,
-        channelRuntime,
-        chatHistories,
-        accountId,
-        processingClaim,
-        messageDedupeKey,
-        turnAdoptionLifecycle,
       });
-    };
-    await enqueue(sequentialKey, task);
+      const task = async () => {
+        try {
+          const recalledMessageId = sourceMessageIds.find((messageId) =>
+            isFeishuSourceMessageRecalled({ channelRuntime, accountId, messageId }),
+          );
+          if (recalledMessageId) {
+            log(`feishu[${accountId}]: skipping recalled message ${recalledMessageId}`);
+            // The outer debounce flush settles durable claims. Keeping settlement
+            // there avoids adopting and committing a recalled queued turn.
+            if (!turnAdoptionLifecycle) {
+              processingClaim?.release({ error: new Error("feishu-source-message-recalled") });
+            }
+            return;
+          }
+          if (turnAdoptionLifecycle?.abortSignal.aborted) {
+            await turnAdoptionLifecycle.onAbandoned();
+            return;
+          }
+          await handleMessage({
+            cfg,
+            event,
+            botOpenId: getBotOpenId(accountId),
+            botName: getBotName(accountId),
+            runtime,
+            channelRuntime,
+            chatHistories,
+            accountId,
+            processingClaim,
+            messageDedupeKey,
+            sourceMessageIds,
+            turnAdoptionLifecycle,
+          });
+        } finally {
+          // Queue timeouts unblock later turns while this task keeps running.
+          // Retain recall state until the actual task, not the queue gate, ends.
+          settleTask();
+        }
+      };
+      await enqueue(sequentialKey, task);
+    } catch (err) {
+      settleTask();
+      throw err;
+    }
   };
 
   const resolveSenderDebounceId = (event: FeishuMessageEvent): string | undefined => {
@@ -272,6 +312,47 @@ export function createFeishuMessageReceiveHandler({
     }
   };
 
+  const partitionRecalledDebounceEntries = (entries: FeishuMessageDebounceEntry[]) => {
+    const activeEntries: FeishuMessageDebounceEntry[] = [];
+    const recalledEntries: FeishuMessageDebounceEntry[] = [];
+    for (const entry of entries) {
+      if (
+        !isFeishuSourceMessageRecalled({
+          channelRuntime,
+          accountId,
+          messageId: entry.event.message.message_id,
+        })
+      ) {
+        activeEntries.push(entry);
+        continue;
+      }
+      recalledEntries.push(entry);
+    }
+    return {
+      activeEntries,
+      settleRecalledEntries: async () => {
+        for (const entry of recalledEntries) {
+          log(
+            `feishu[${accountId}]: dropping recalled debounced message ${entry.event.message.message_id}`,
+          );
+          // Keep transport adoption and logical replay-guard release symmetric
+          // with the later sequential-queue recall check above.
+          if (!entry.turnAdoptionLifecycle) {
+            entry.processingClaim?.release({ error: new Error("feishu-source-message-recalled") });
+            continue;
+          }
+          const { settle } = buildFeishuFlushIngressLifecycle([
+            {
+              lifecycle: entry.turnAdoptionLifecycle,
+              replayClaim: entry.processingClaim,
+            },
+          ]);
+          await settle();
+        }
+      },
+    };
+  };
+
   const inboundDebouncer =
     channelRuntime.debounce.createInboundDebouncer<FeishuMessageDebounceEntry>({
       debounceMs: inboundDebounceMs,
@@ -292,8 +373,12 @@ export function createFeishuMessageReceiveHandler({
         const text = resolveDebounceText(event);
         return Boolean(text) && !channelRuntime.commands.isControlCommandMessage(text, cfg);
       },
+      // The shared debouncer routes buffered, immediate, and capacity-fallback
+      // entries through onFlush, so this callback owns every retention lease.
       onFlush: (entries, createFlush) => {
-        const activeEntries = entries.filter((entry) => !entry.abandoned);
+        const { activeEntries, settleRecalledEntries } = partitionRecalledDebounceEntries(
+          entries.filter((entry) => !entry.abandoned),
+        );
         const last = activeEntries.at(-1);
         const { lifecycle, settle } = buildFeishuFlushIngressLifecycle(
           activeEntries.map((entry) => ({
@@ -308,20 +393,34 @@ export function createFeishuMessageReceiveHandler({
         return createFlush({
           lifecycle,
           dispatch: async (admissionLifecycle) => {
-            if (!last) {
-              return;
-            }
-            if (admissionLifecycle.abortSignal.aborted) {
-              await admissionLifecycle.onAbandoned();
-              return;
-            }
+            const handedOffRetentions = new Set<FeishuMessageDebounceEntry>();
+            const handOffRetentions = (taskEntries: readonly FeishuMessageDebounceEntry[]) => {
+              for (const entry of taskEntries) {
+                handedOffRetentions.add(entry);
+              }
+              return () => {
+                for (const entry of taskEntries) {
+                  entry.sourceMessageRetention?.dispose();
+                }
+              };
+            };
             try {
+              await settleRecalledEntries();
+              if (!last) {
+                return;
+              }
+              if (admissionLifecycle.abortSignal.aborted) {
+                await admissionLifecycle.onAbandoned();
+                return;
+              }
               if (activeEntries.length === 1) {
                 await dispatchFeishuMessage(
                   last.event,
                   resolveFeishuMessageDedupeKey(last.event),
                   last.processingClaim,
                   admissionLifecycle,
+                  [last.event.message.message_id],
+                  handOffRetentions([last]),
                 );
                 await settle();
                 return;
@@ -373,17 +472,26 @@ export function createFeishuMessageReceiveHandler({
                 dispatchDedupeKey,
                 dispatchEntry.processingClaim,
                 admissionLifecycle,
+                freshEntries.map((entry) => entry.event.message.message_id),
+                handOffRetentions(freshEntries),
               );
               await settle();
             } catch (err) {
               await admissionLifecycle.onAbandoned();
               throw err;
+            } finally {
+              for (const entry of entries) {
+                if (!handedOffRetentions.has(entry)) {
+                  entry.sourceMessageRetention?.dispose();
+                }
+              }
             }
           },
         });
       },
       onError: (err, entries) => {
         for (const entry of entries) {
+          entry.sourceMessageRetention?.dispose();
           entry.processingClaim?.release({ error: err });
           try {
             void Promise.resolve(entry.turnAdoptionLifecycle?.onAbandoned()).catch(
@@ -440,13 +548,30 @@ export function createFeishuMessageReceiveHandler({
       await completeSuppressedIngress();
       return undefined;
     }
-    const messageDedupeKey = resolveFeishuMessageDedupeKey(event);
-    const claim = await claimUnprocessedFeishuMessage({
-      messageId: messageDedupeKey,
-      namespace: accountId,
-      log,
+    if (isFeishuSourceMessageRecalled({ channelRuntime, accountId, messageId })) {
+      log(`feishu[${accountId}]: dropping recalled message ${messageId ?? "unknown"}`);
+      await completeSuppressedIngress();
+      return undefined;
+    }
+    const sourceMessageRetention = retainFeishuSourceMessageIngress({
+      channelRuntime,
+      accountId,
+      messageId,
     });
+    const messageDedupeKey = resolveFeishuMessageDedupeKey(event);
+    let claim: Awaited<ReturnType<typeof claimUnprocessedFeishuMessage>>;
+    try {
+      claim = await claimUnprocessedFeishuMessage({
+        messageId: messageDedupeKey,
+        namespace: accountId,
+        log,
+      });
+    } catch (err) {
+      sourceMessageRetention?.dispose();
+      throw err;
+    }
     if (claim.kind === "duplicate" || claim.kind === "inflight") {
+      sourceMessageRetention?.dispose();
       log(`feishu[${accountId}]: dropping ${claim.kind} event for message ${messageId}`);
       await completeSuppressedIngress();
       return undefined;
@@ -455,12 +580,14 @@ export function createFeishuMessageReceiveHandler({
       event,
       ...(claim.kind === "claimed" ? { processingClaim: claim.handle } : {}),
       ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),
+      ...(sourceMessageRetention ? { sourceMessageRetention } : {}),
     };
     if (claim.kind === "claimed" && turnAdoptionLifecycle) {
       // The durable drain can abandon before the debounce timer flushes. Tie
       // the logical claim and queued entry to that earlier lifecycle.
       turnAdoptionLifecycle.registerAbandonHandler?.(() => {
         debounceEntry.abandoned = true;
+        sourceMessageRetention?.dispose();
         claim.handle.release({ error: new Error("feishu-ingress-abandoned-before-flush") });
       });
     }
@@ -472,6 +599,7 @@ export function createFeishuMessageReceiveHandler({
         await processMessage();
         return { kind: "deferred" };
       } catch (err) {
+        sourceMessageRetention?.dispose();
         if (claim.kind === "claimed") {
           claim.handle.release({ error: err });
         }
@@ -480,6 +608,7 @@ export function createFeishuMessageReceiveHandler({
     }
     if (fireAndForget) {
       void processMessage().catch((err: unknown) => {
+        sourceMessageRetention?.dispose();
         if (claim.kind === "claimed") {
           claim.handle.release({ error: err });
         }
@@ -490,6 +619,7 @@ export function createFeishuMessageReceiveHandler({
     try {
       await processMessage();
     } catch (err) {
+      sourceMessageRetention?.dispose();
       if (claim.kind === "claimed") {
         claim.handle.release({ error: err });
       }

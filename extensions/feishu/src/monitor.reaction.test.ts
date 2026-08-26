@@ -4,7 +4,10 @@ import {
   resolveInboundDebounceMs,
 } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { hasControlCommand, isControlCommandMessage } from "openclaw/plugin-sdk/command-detection";
-import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  createNonExitingRuntimeEnv,
+  createPluginRuntimeMock,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import { parseFeishuMessageEvent, type FeishuMessageEvent } from "./bot.js";
@@ -15,6 +18,7 @@ import {
   type FeishuReactionCreatedEvent,
 } from "./monitor.account.js";
 import { setFeishuRuntime } from "./runtime.js";
+import { bindFeishuSourceMessageRun } from "./source-message-recall.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
 const handleFeishuMessageMock = vi.hoisted(() => vi.fn(async (_params: { event?: unknown }) => {}));
@@ -273,6 +277,7 @@ function createFeishuMonitorRuntime(params?: {
 }): PluginRuntime {
   return {
     channel: {
+      runtimeContexts: createPluginRuntimeMock().channel.runtimeContexts,
       commands: {
         isControlCommandMessage: params?.isControlCommandMessage ?? isControlCommandMessage,
       },
@@ -585,6 +590,35 @@ describe("monitorSingleAccount lifecycle", () => {
       | { stop: ReturnType<typeof vi.fn> }
       | undefined;
     expect(manager?.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts active source-message runs when Feishu reports a recalled message", async () => {
+    handlers = {};
+    const register = vi.fn((registered: Record<string, (data: unknown) => Promise<void>>) => {
+      handlers = registered;
+    });
+    createEventDispatcherMock.mockReturnValue({ register });
+    const pluginRuntime = createFeishuMonitorRuntime();
+    setFeishuRuntime(pluginRuntime);
+    const binding = bindFeishuSourceMessageRun({
+      channelRuntime: pluginRuntime.channel,
+      accountId: "default",
+      messageId: "om_recalled_event",
+    });
+
+    await monitorSingleAccount({
+      cfg: buildDebounceConfig(),
+      account: buildDebounceAccount(),
+      runtime: createNonExitingRuntimeEnv(),
+      botOpenIdSource: {
+        kind: "prefetched",
+        botOpenId: "ou_bot",
+      },
+    });
+
+    await handlers["im.message.recalled_v1"]?.({ message_id: "om_recalled_event" });
+
+    expect(binding?.abortSignal.aborted).toBe(true);
   });
 });
 

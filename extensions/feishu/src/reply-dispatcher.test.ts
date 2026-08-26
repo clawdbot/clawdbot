@@ -492,6 +492,30 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   });
 
+  it("notifies callers when the typing target message is missing", async () => {
+    const onTypingTargetMissing = vi.fn();
+    const result = createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: {} as never,
+      chatId: "oc_chat",
+      sendTarget: "oc_chat",
+      replyToMessageId: "om_parent",
+      messageCreateTimeMs: Date.now() - 30_000,
+      onTypingTargetMissing,
+    });
+
+    const options = toTypingDispatcherOptions(result);
+    await options.onReplyStart?.();
+
+    const typingParams = firstMockArg(addTypingIndicatorMock, "typing indicator params") as {
+      onMessageNotFound?: (messageId: string) => void | Promise<void>;
+    };
+    expect(typingParams.onMessageNotFound).toBe(onTypingTargetMissing);
+    await typingParams.onMessageNotFound?.("om_parent");
+    expect(onTypingTargetMissing).toHaveBeenCalledWith("om_parent");
+  });
+
   it("targets typing at the inbound message while replies stay on the thread root", async () => {
     useNonStreamingAutoAccount();
     const { options } = createDispatcherHarness({
@@ -1610,6 +1634,39 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(result.getVisibleReplyState().visibleReplySent).toBe(true);
     await expect(result.ensureNoVisibleReplyFallback("accepted-no-id")).resolves.toBe(false);
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves an accepted media receipt when source recall races the provider response", async () => {
+    useNonStreamingAutoAccount();
+    const controller = new AbortController();
+    const acceptedError = createChannelPartialDeliveryError(
+      new Error("Feishu image send failed: no message_id returned"),
+      { messageIds: [], visibleReplySent: true },
+    );
+    sendMediaFeishuMock.mockImplementationOnce(async () => {
+      controller.abort(new Error("source message recalled"));
+      throw acceptedError;
+    });
+    const { result, options } = createDispatcherHarness({ abortSignal: controller.signal });
+
+    const error = await options
+      .deliver(
+        {
+          text: "caption that must not be duplicated",
+          mediaUrl: "https://example.com/reply.mp3",
+          audioAsVoice: true,
+        },
+        { kind: "final" },
+      )
+      .catch((caught: unknown) => caught);
+
+    expect(isChannelPartialDeliveryError(error)).toBe(true);
+    expect(sendMediaFeishuMock).toHaveBeenCalledOnce();
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(result.getVisibleReplyState().visibleReplySent).toBe(true);
+    await expect(result.ensureNoVisibleReplyFallback("recalled-accepted-no-id")).resolves.toBe(
+      false,
+    );
   });
 
   it.each([
@@ -3329,6 +3386,78 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       visibleReplySent: true,
       skippedFinalReason: null,
     });
+  });
+
+  it("suppresses reply and streaming side effects after source-message abort", async () => {
+    const controller = new AbortController();
+    const { result, options } = createDispatcherHarness({ abortSignal: controller.signal });
+
+    expect(result.replyOptions.abortSignal).toBe(controller.signal);
+    controller.abort(new Error("source message recalled"));
+    await options.onReplyStart?.();
+    result.replyOptions.onPartialReply?.({ text: "partial" });
+    result.replyOptions.onReasoningStream?.({ text: "thinking" });
+    await options.deliver({ text: "late final" }, { kind: "final" });
+
+    await expect(result.ensureNoVisibleReplyFallback("zero-final-count")).resolves.toBe(false);
+    expect(streamingInstances).toHaveLength(0);
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendMediaFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("does not fall back to a static reply when recalled during streaming start", async () => {
+    const controller = new AbortController();
+    let releaseStart!: () => void;
+    const startGate = new Promise<void>((resolve) => {
+      releaseStart = resolve;
+    });
+    const originalPush = streamingInstances.push.bind(streamingInstances);
+    streamingInstances.push = (...instances: StreamingSessionStub[]) => {
+      const first = instances[0];
+      if (first && streamingInstances.length === 0) {
+        first.start = vi.fn(async () => {
+          await startGate;
+          first.active = true;
+        });
+      }
+      return originalPush(...instances);
+    };
+
+    try {
+      const { options } = createDispatcherHarness({ abortSignal: controller.signal });
+      const delivery = options.deliver({ text: "```md\nlate reply\n```" }, { kind: "final" });
+      await vi.waitFor(() => expect(requireStreamingInstance(0).start).toHaveBeenCalledTimes(1));
+
+      controller.abort(new Error("source message recalled"));
+      releaseStart();
+      await delivery;
+
+      expect(requireStreamingInstance(0).discard).toHaveBeenCalledTimes(1);
+      expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+      expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    } finally {
+      streamingInstances.push = originalPush;
+    }
+  });
+
+  it("stops a chunked reply when the source is recalled between chunks", async () => {
+    const runtime = getFeishuRuntimeMock();
+    runtime.channel.text.resolveTextChunkLimit.mockReturnValue(10);
+    runtime.channel.text.chunkMarkdownTextWithMode.mockReturnValue(["first", "second"]);
+    const controller = new AbortController();
+    sendMessageFeishuMock.mockImplementationOnce(async () => {
+      controller.abort(new Error("source message recalled"));
+    });
+    const { options } = createDispatcherHarness({
+      abortSignal: controller.signal,
+      runtime: createRuntimeLogger(),
+    });
+
+    await options.deliver({ text: "firstsecond" }, { kind: "final" });
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expectMockArgFields(sendMessageFeishuMock, "first message send params", { text: "first" });
   });
 
   it("sends no-visible-reply fallback after an empty card streaming close", async () => {

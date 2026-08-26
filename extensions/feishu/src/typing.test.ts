@@ -1,10 +1,30 @@
 // Feishu tests cover typing plugin behavior.
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   FeishuBackoffError,
   getBackoffCodeFromResponse,
   isFeishuBackoffError,
 } from "./typing-backoff.js";
+
+const {
+  createFeishuClientMock,
+  getFeishuRuntimeMock,
+  messageReactionCreateMock,
+  resolveFeishuRuntimeAccountMock,
+} = vi.hoisted(() => ({
+  createFeishuClientMock: vi.fn(),
+  getFeishuRuntimeMock: vi.fn(),
+  messageReactionCreateMock: vi.fn(),
+  resolveFeishuRuntimeAccountMock: vi.fn(),
+}));
+
+vi.mock("./accounts.js", () => ({
+  resolveFeishuRuntimeAccount: resolveFeishuRuntimeAccountMock,
+}));
+vi.mock("./client.js", () => ({ createFeishuClient: createFeishuClientMock }));
+vi.mock("./runtime.js", () => ({ getFeishuRuntime: getFeishuRuntimeMock }));
+
+import { addTypingIndicator } from "./typing.js";
 
 describe("isFeishuBackoffError", () => {
   it("returns true for HTTP 429 (AxiosError shape)", () => {
@@ -101,6 +121,48 @@ describe("getBackoffCodeFromResponse", () => {
   it("returns undefined for response without code field", () => {
     const response = { data: { reaction_id: "r1" } };
     expect(getBackoffCodeFromResponse(response)).toBeUndefined();
+  });
+});
+
+describe("addTypingIndicator message-not-found handling", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resolveFeishuRuntimeAccountMock.mockReturnValue({ configured: true });
+    createFeishuClientMock.mockReturnValue({
+      im: { messageReaction: { create: messageReactionCreateMock } },
+    });
+    getFeishuRuntimeMock.mockReturnValue({
+      logging: { shouldLogVerbose: () => false },
+    });
+  });
+
+  it.each([
+    ["fulfilled response", false, { code: 231003 }, true],
+    ["Axios error", true, { response: { status: 400, data: { code: 231003 } } }, true],
+    ["SDK cause", true, { cause: { code: 231003 } }, true],
+    [
+      "logger tuple",
+      true,
+      [{ message: "Request failed with status code 400" }, { code: 231003 }],
+      true,
+    ],
+    ["unrelated response", false, { code: 99991401 }, false],
+  ])("handles %s", async (_name, rejects, result, expectedNotification) => {
+    if (rejects) {
+      messageReactionCreateMock.mockRejectedValueOnce(result);
+    } else {
+      messageReactionCreateMock.mockResolvedValueOnce(result);
+    }
+    const onMessageNotFound = vi.fn();
+
+    const state = await addTypingIndicator({
+      cfg: {} as never,
+      messageId: "om_target",
+      onMessageNotFound,
+    });
+
+    expect(state).toEqual({ messageId: "om_target", reactionId: null });
+    expect(onMessageNotFound).toHaveBeenCalledTimes(expectedNotification ? 1 : 0);
   });
 });
 

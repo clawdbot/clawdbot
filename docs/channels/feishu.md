@@ -221,11 +221,12 @@ Feishu/Lark does not support native slash-command menus, so send these as plain 
 
 1. Ensure the bot is published and approved in Feishu Open Platform / Lark Developer
 2. Ensure event subscription includes `im.message.receive_v1`
-3. For meeting invite auto-join, also subscribe to `vc.bot.meeting_invited_v1`
-4. Ensure **persistent connection** (WebSocket) is selected
-5. Ensure all required permission scopes are granted
-6. Ensure the gateway is running: `openclaw gateway status`
-7. Check logs: `openclaw logs --follow`
+3. Subscribe to `im.message.recalled_v1` so recalled source messages cancel in-flight agent runs
+4. For meeting invite auto-join, also subscribe to `vc.bot.meeting_invited_v1`
+5. Ensure **persistent connection** (WebSocket) is selected
+6. Ensure all required permission scopes are granted
+7. Ensure the gateway is running: `openclaw gateway status`
+8. Check logs: `openclaw logs --follow`
 
 Subscribing to `vc.bot.meeting_invited_v1` only delivers the event. Automatic joins are
 default-off. To enable them globally:
@@ -264,6 +265,12 @@ provides `vc +meeting-join`.
 <Warning>
 The official `lark-cli` VC agent skill currently marks meeting-bot actions as a limited beta. If the tool returns `ErrNotInGray` or error code `20017`, the app or tenant has not been enabled for that beta; use the early-access guidance in the linked skill before troubleshooting ordinary scope grants.
 </Warning>
+
+### Recalled messages still trigger replies
+
+1. Ensure event subscription includes `im.message.recalled_v1`, not only `im.message.receive_v1`
+2. Re-run setup: `openclaw channels login --channel feishu`
+3. Check logs: `openclaw logs --follow`
 
 ### QR setup does not react in the Feishu mobile app
 

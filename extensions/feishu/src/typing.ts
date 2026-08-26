@@ -1,4 +1,5 @@
 // Feishu plugin module implements typing behavior.
+import { collectErrorGraphCandidates } from "openclaw/plugin-sdk/error-runtime";
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
@@ -13,6 +14,22 @@ import {
 // See: https://open.feishu.cn/document/server-docs/im-v1/message-reaction/emojis-introduce
 // Full list: https://github.com/go-lark/lark/blob/main/emoji.go
 const TYPING_EMOJI = "Typing"; // Typing indicator emoji
+const FEISHU_MESSAGE_NOT_FOUND_CODE = 231003;
+
+/** Detect Feishu's recalled/deleted message code across SDK and Axios error shapes. */
+function isFeishuMessageNotFoundError(error: unknown): boolean {
+  return collectErrorGraphCandidates(error, (current) => [
+    current.cause,
+    current.response,
+    current.data,
+    ...(Array.isArray(current) ? current : []),
+  ]).some((candidate) => {
+    if (!candidate || typeof candidate !== "object") {
+      return false;
+    }
+    return (candidate as { code?: unknown }).code === FEISHU_MESSAGE_NOT_FOUND_CODE;
+  });
+}
 
 export type TypingIndicatorState = {
   messageId: string;
@@ -37,14 +54,22 @@ export async function addTypingIndicator(params: {
   messageId: string;
   accountId?: string;
   runtime?: RuntimeEnv;
+  onMessageNotFound?: (messageId: string) => void | Promise<void>;
 }): Promise<TypingIndicatorState> {
-  const { cfg, messageId, accountId, runtime } = params;
+  const { cfg, messageId, accountId, runtime, onMessageNotFound } = params;
   const account = resolveFeishuRuntimeAccount({ cfg, accountId });
   if (!account.configured) {
     return { messageId, reactionId: null };
   }
 
   const client = createFeishuClient(account);
+  const handleMessageNotFound = async (): Promise<TypingIndicatorState> => {
+    await onMessageNotFound?.(messageId);
+    if (getFeishuRuntime().logging.shouldLogVerbose()) {
+      runtime?.log?.(`[feishu] typing target message not found: ${messageId}`);
+    }
+    return { messageId, reactionId: null };
+  };
 
   try {
     const response = await client.im.messageReaction.create({
@@ -65,6 +90,9 @@ export async function addTypingIndicator(params: {
       }
       throw new FeishuBackoffError(backoffCode);
     }
+    if (isFeishuMessageNotFoundError(response)) {
+      return await handleMessageNotFound();
+    }
 
     const typedResponse: FeishuMessageReactionCreateResponse = response;
     const reactionId = typedResponse.data?.reaction_id ?? null;
@@ -75,6 +103,9 @@ export async function addTypingIndicator(params: {
         runtime?.log?.("[feishu] typing indicator hit rate-limit/quota, stopping keepalive");
       }
       throw err;
+    }
+    if (isFeishuMessageNotFoundError(err)) {
+      return await handleMessageNotFound();
     }
     // Silently fail for other non-critical errors (e.g. message deleted, permission issues)
     if (getFeishuRuntime().logging.shouldLogVerbose()) {

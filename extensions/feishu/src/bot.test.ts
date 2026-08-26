@@ -6,7 +6,7 @@ import type {
   getSessionBindingService,
   resolveConfiguredBindingRoute,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { createPluginRuntimeMock, createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveGroupSessionKey } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -22,6 +22,7 @@ import {
 import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
 import { createFeishuMessageReceiveHandler } from "./monitor.message-handler.js";
 import { setFeishuRuntime } from "./runtime.js";
+import { recallFeishuSourceMessage } from "./source-message-recall.js";
 import { setFeishuSyntheticDirectPreDispatchTarget } from "./synthetic-event-target.js";
 
 const failedFinalReceipt = {
@@ -183,6 +184,7 @@ function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): Plu
       current: vi.fn(() => currentRuntimeConfig),
     },
     channel: {
+      runtimeContexts: createPluginRuntimeMock().channel.runtimeContexts,
       routing: {
         resolveAgentRoute: resolveAgentRouteMock,
       },
@@ -336,10 +338,10 @@ const {
   mockDispatchInboundMessage,
   mockResolveFeishuBotName,
 } = vi.hoisted(() => ({
-  mockCreateFeishuReplyDispatcher: vi.fn(() => ({
+  mockCreateFeishuReplyDispatcher: vi.fn((params?: { abortSignal?: AbortSignal }) => ({
     dispatcherOptions: {},
     delivery: { deliver: vi.fn(async () => undefined) },
-    replyOptions: {},
+    replyOptions: { abortSignal: params?.abortSignal } as { abortSignal?: AbortSignal },
     ensureNoVisibleReplyFallback: vi.fn(),
   })),
   mockSendMessageFeishu: vi.fn().mockResolvedValue({ messageId: "pairing-msg", chatId: "oc-dm" }),
@@ -511,6 +513,7 @@ async function dispatchMessage(params: {
   channelRuntime?: PluginRuntime["channel"];
   botOpenId?: string;
   directPreDispatchTarget?: string;
+  sourceMessageIds?: readonly string[];
 }) {
   const runtime = createRuntimeEnv();
   const feishuConfig = params.cfg.channels?.feishu;
@@ -537,6 +540,7 @@ async function dispatchMessage(params: {
     botOpenId: params.botOpenId,
     runtime,
     channelRuntime: params.channelRuntime,
+    sourceMessageIds: params.sourceMessageIds,
   });
   return runtime;
 }
@@ -571,14 +575,106 @@ describe("handleFeishuMessage ACP routing", () => {
     mockSendMessageFeishu
       .mockReset()
       .mockResolvedValue({ messageId: "reply-msg", chatId: "oc_dm" });
-    mockCreateFeishuReplyDispatcher.mockReset().mockReturnValue({
-      dispatcherOptions: {},
-      delivery: { deliver: vi.fn(async () => undefined) },
-      replyOptions: {},
-      ensureNoVisibleReplyFallback: vi.fn(),
-    });
+    mockCreateFeishuReplyDispatcher
+      .mockReset()
+      .mockImplementation((params?: { abortSignal?: AbortSignal }) => ({
+        dispatcherOptions: {},
+        delivery: { deliver: vi.fn(async () => undefined) },
+        replyOptions: { abortSignal: params?.abortSignal } as { abortSignal?: AbortSignal },
+        ensureNoVisibleReplyFallback: vi.fn(),
+      }));
 
     setFeishuRuntime(createFeishuBotRuntime());
+  });
+
+  it("skips agent dispatch when the source message was already recalled", async () => {
+    const pluginRuntime = createFeishuBotRuntime();
+    setFeishuRuntime(pluginRuntime);
+    recallFeishuSourceMessage({
+      channelRuntime: pluginRuntime.channel,
+      accountId: "default",
+      messageId: "msg-recalled-before-dispatch",
+    });
+
+    await dispatchMessage({
+      cfg: { channels: { feishu: { enabled: true, dmPolicy: "open" } } },
+      event: {
+        sender: { sender_id: { open_id: "ou_sender_1" } },
+        message: {
+          message_id: "msg-recalled-before-dispatch",
+          chat_id: "oc_dm",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "hello" }),
+        },
+      },
+    });
+
+    expect(mockResolveAgentRoute).not.toHaveBeenCalled();
+    expect(mockDispatchInboundMessage).not.toHaveBeenCalled();
+  });
+
+  it("aborts an in-flight agent dispatch when the source message is recalled", async () => {
+    const pluginRuntime = createFeishuBotRuntime();
+    setFeishuRuntime(pluginRuntime);
+    let observedAbortSignal: AbortSignal | undefined;
+    mockDispatchInboundMessage.mockImplementationOnce(async (params) => {
+      observedAbortSignal = params.replyOptions?.abortSignal;
+      recallFeishuSourceMessage({
+        channelRuntime: pluginRuntime.channel,
+        accountId: "default",
+        messageId: "msg-recalled-during-run",
+      });
+      return { queuedFinal: false, counts: { final: 0 } };
+    });
+
+    await dispatchMessage({
+      cfg: { channels: { feishu: { enabled: true, dmPolicy: "open" } } },
+      event: {
+        sender: { sender_id: { open_id: "ou_sender_1" } },
+        message: {
+          message_id: "msg-recalled-during-run",
+          chat_id: "oc_dm",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "hello" }),
+        },
+      },
+    });
+
+    expect(observedAbortSignal?.aborted).toBe(true);
+  });
+
+  it("aborts a merged in-flight dispatch when any source message is recalled", async () => {
+    const pluginRuntime = createFeishuBotRuntime();
+    setFeishuRuntime(pluginRuntime);
+    let observedAbortSignal: AbortSignal | undefined;
+    mockDispatchInboundMessage.mockImplementationOnce(async (params) => {
+      observedAbortSignal = params.replyOptions?.abortSignal;
+      recallFeishuSourceMessage({
+        channelRuntime: pluginRuntime.channel,
+        accountId: "default",
+        messageId: "msg-merged-first",
+      });
+      return { queuedFinal: false, counts: { final: 0 } };
+    });
+
+    await dispatchMessage({
+      cfg: { channels: { feishu: { enabled: true, dmPolicy: "open" } } },
+      sourceMessageIds: ["msg-merged-first", "msg-merged-last"],
+      event: {
+        sender: { sender_id: { open_id: "ou_sender_1" } },
+        message: {
+          message_id: "msg-merged-last",
+          chat_id: "oc_dm",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "hello\nworld" }),
+        },
+      },
+    });
+
+    expect(observedAbortSignal?.aborted).toBe(true);
   });
 
   it("ensures configured ACP routes for Feishu DMs", async () => {

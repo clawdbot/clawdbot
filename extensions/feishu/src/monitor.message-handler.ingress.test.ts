@@ -9,13 +9,17 @@ import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  createNonExitingRuntimeEnv,
+  createPluginRuntimeMock,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import * as dedup from "./dedup.js";
 import type { FeishuMessageEvent } from "./event-types.js";
 import { createFeishuDurableIngress, type FeishuIngressLifecycle } from "./feishu-ingress.js";
 import { createFeishuMessageReceiveHandler } from "./monitor.message-handler.js";
+import { recallFeishuSourceMessage } from "./source-message-recall.js";
 
 type MessageReceiveHandlerContext = Parameters<typeof createFeishuMessageReceiveHandler>[0];
 type HandleMessageParams = Parameters<MessageReceiveHandlerContext["handleMessage"]>[0];
@@ -95,6 +99,7 @@ function createHarness(params: {
   const entries: DebounceEntry[] = [];
   const runtimeError = vi.fn();
   const channelRuntime = {
+    runtimeContexts: createPluginRuntimeMock().channel.runtimeContexts,
     commands: { isControlCommandMessage: () => false },
     debounce: {
       resolveInboundDebounceMs: () => 25,
@@ -160,6 +165,7 @@ function createHarness(params: {
       onError(err, entries);
     },
     runtimeError,
+    channelRuntime,
   };
 }
 
@@ -168,6 +174,154 @@ afterEach(() => {
 });
 
 describe("Feishu durable ingress debounce lifecycle", () => {
+  it("completes durable ingress without claiming a source recalled before receive", async () => {
+    const transport = createLifecycle();
+    const harness = createHarness({
+      lifecycles: new Map([["evt-recalled-before", transport.lifecycle]]),
+      claims: [],
+      adoptTurn: false,
+    });
+    recallFeishuSourceMessage({
+      channelRuntime: harness.channelRuntime,
+      accountId: "default",
+      messageId: "om-recalled-before",
+    });
+
+    await expect(
+      harness.handler(createTextEvent("evt-recalled-before", "om-recalled-before", "withdrawn")),
+    ).resolves.toBeUndefined();
+
+    expect(harness.claim).not.toHaveBeenCalled();
+    expect(harness.entries).toHaveLength(0);
+    expect(transport.calls.finalizing).toHaveBeenCalledTimes(1);
+    expect(transport.calls.adopted).toHaveBeenCalledTimes(1);
+  });
+
+  it("settles durable ingress and releases its claim when recalled during debounce", async () => {
+    const transport = createLifecycle();
+    const logicalClaim = createClaim("recalled-during-debounce");
+    const harness = createHarness({
+      lifecycles: new Map([["evt-recalled-debounce", transport.lifecycle]]),
+      claims: [logicalClaim],
+      adoptTurn: false,
+    });
+
+    await expect(
+      harness.handler(
+        createTextEvent("evt-recalled-debounce", "om-recalled-debounce", "withdrawn"),
+      ),
+    ).resolves.toEqual({ kind: "deferred" });
+    recallFeishuSourceMessage({
+      channelRuntime: harness.channelRuntime,
+      accountId: "default",
+      messageId: "om-recalled-debounce",
+    });
+    await harness.flush();
+
+    expect(harness.handleMessage).not.toHaveBeenCalled();
+    expect(logicalClaim.commit).not.toHaveBeenCalled();
+    expect(logicalClaim.release).toHaveBeenCalledTimes(1);
+    expect(transport.calls.finalizing).toHaveBeenCalledTimes(1);
+    expect(transport.calls.adopted).toHaveBeenCalledTimes(1);
+  });
+
+  it("settles a recalled turn while it waits in the per-chat dispatch queue", async () => {
+    let now = 1_720_000_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const first = createLifecycle();
+    const recalled = createLifecycle();
+    const firstClaim = createClaim("queue-first");
+    const recalledClaim = createClaim("queue-recalled");
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const harness = createHarness({
+      lifecycles: new Map([
+        ["evt-queue-first", first.lifecycle],
+        ["evt-queue-recalled", recalled.lifecycle],
+      ]),
+      claims: [firstClaim, recalledClaim],
+      adoptTurn: true,
+    });
+    harness.handleMessage.mockImplementationOnce(async (turn) => {
+      await firstGate;
+      turn.turnAdoptionLifecycle?.onAdoptionFinalizing();
+      await turn.turnAdoptionLifecycle?.onAdopted();
+    });
+
+    await harness.handler(createTextEvent("evt-queue-first", "om-queue-first", "first"));
+    const firstFlush = harness.flush();
+    await vi.waitFor(() => expect(harness.handleMessage).toHaveBeenCalledTimes(1));
+    await harness.handler(createTextEvent("evt-queue-recalled", "om-queue-recalled", "withdrawn"));
+    const recalledFlush = harness.flush();
+    recallFeishuSourceMessage({
+      channelRuntime: harness.channelRuntime,
+      accountId: "default",
+      messageId: "om-queue-recalled",
+    });
+    now += 31 * 60 * 1000;
+    releaseFirst();
+    await Promise.all([firstFlush, recalledFlush]);
+
+    expect(harness.handleMessage).toHaveBeenCalledTimes(1);
+    expect(recalledClaim.commit).not.toHaveBeenCalled();
+    expect(recalledClaim.release).toHaveBeenCalledTimes(1);
+    expect(recalled.calls.finalizing).toHaveBeenCalledTimes(1);
+    expect(recalled.calls.adopted).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops a merged queued turn when any constituent source is recalled", async () => {
+    const first = createLifecycle();
+    const mergedFirst = createLifecycle();
+    const mergedLast = createLifecycle();
+    const firstClaim = createClaim("merged-queue-first");
+    const mergedFirstClaim = createClaim("merged-queue-a");
+    const mergedLastClaim = createClaim("merged-queue-b");
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const harness = createHarness({
+      lifecycles: new Map([
+        ["evt-merged-queue-first", first.lifecycle],
+        ["evt-merged-queue-a", mergedFirst.lifecycle],
+        ["evt-merged-queue-b", mergedLast.lifecycle],
+      ]),
+      claims: [firstClaim, mergedFirstClaim, mergedLastClaim],
+      adoptTurn: true,
+    });
+    harness.handleMessage.mockImplementationOnce(async (turn) => {
+      await firstGate;
+      turn.turnAdoptionLifecycle?.onAdoptionFinalizing();
+      await turn.turnAdoptionLifecycle?.onAdopted();
+    });
+
+    await harness.handler(
+      createTextEvent("evt-merged-queue-first", "om-merged-queue-first", "first"),
+    );
+    const firstFlush = harness.flush();
+    await vi.waitFor(() => expect(harness.handleMessage).toHaveBeenCalledTimes(1));
+    await harness.handler(createTextEvent("evt-merged-queue-a", "om-merged-a", "alpha"));
+    await harness.handler(createTextEvent("evt-merged-queue-b", "om-merged-b", "beta"));
+    const mergedFlush = harness.flush();
+    recallFeishuSourceMessage({
+      channelRuntime: harness.channelRuntime,
+      accountId: "default",
+      messageId: "om-merged-a",
+    });
+    releaseFirst();
+    await Promise.all([firstFlush, mergedFlush]);
+
+    expect(harness.handleMessage).toHaveBeenCalledTimes(1);
+    expect(mergedFirstClaim.commit).not.toHaveBeenCalled();
+    expect(mergedLastClaim.commit).not.toHaveBeenCalled();
+    expect(mergedFirstClaim.release).toHaveBeenCalledTimes(1);
+    expect(mergedLastClaim.release).toHaveBeenCalledTimes(1);
+    expect(mergedFirst.calls.adopted).toHaveBeenCalledTimes(1);
+    expect(mergedLast.calls.adopted).toHaveBeenCalledTimes(1);
+  });
+
   it("accepts an empty group message body without losing bot mentions or ingress adoption", async () => {
     const transport = createLifecycle();
     const logicalClaim = createClaim("empty-group-mention");
