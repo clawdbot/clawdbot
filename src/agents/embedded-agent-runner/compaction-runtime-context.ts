@@ -352,6 +352,7 @@ export function buildEmbeddedCompactionRuntimeContext(
     agentDir: params.agentDir,
     config: params.config,
     toolOverrides: params.toolOverrides,
+    toolsAllow: params.toolsAllow,
     skillsSnapshot: params.skillsSnapshot,
     senderIsOwner: params.senderIsOwner,
     senderId: params.senderId ?? undefined,

@@ -17,3 +17,7 @@ Watch IMAP mailboxes and dispatch authenticated incoming email to isolated agent
 ## Surface
 
 plugin
+
+## Related docs
+
+- [imap](/automation/imap)

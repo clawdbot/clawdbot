@@ -610,12 +610,20 @@ describe("renderSessionsCard", () => {
     expect(document.activeElement).toBe(next);
     next?.dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
     expect(onSelectSession).toHaveBeenCalledOnce();
-    expect(onSelectSession).toHaveBeenCalledWith("agent:main:next", true);
+    expect(onSelectSession).toHaveBeenCalledWith(
+      "agent:main:next",
+      true,
+      sessions.map((s) => s.key),
+    );
 
     rows[0]?.querySelector<HTMLButtonElement>(".session-bar-actions button")?.click();
     expect(onSelectSession).toHaveBeenCalledOnce();
     rows[0]?.querySelector<HTMLElement>(".session-bar-value")?.click();
-    expect(onSelectSession).toHaveBeenCalledWith("agent:main:selected", false);
+    expect(onSelectSession).toHaveBeenCalledWith(
+      "agent:main:selected",
+      false,
+      sessions.map((s) => s.key),
+    );
   });
 
   it("sorts cost by the selected day values when day filters are active", () => {

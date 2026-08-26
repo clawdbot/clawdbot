@@ -204,7 +204,10 @@ describe("chat pane sidebar layout", () => {
         layout: { ...openSlot({ columns: [] }, "chat"), open },
         paneWidth: 1_400,
       });
-      expect(empty).toMatchObject({ columns: [], open: false });
+      expect(empty).toMatchObject({
+        columns: [{ panels: [], activePanelId: "", height: 360, width: 480 }],
+        open: false,
+      });
 
       const withDetail = resolveSidebarLayoutForBoard({
         board: board("hidden", "chat"),

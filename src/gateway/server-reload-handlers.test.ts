@@ -84,6 +84,7 @@ import {
 import { shouldRewarmProviderAuthState } from "./config-reload-recovery.js";
 import { applyHookMappings } from "./hooks-mapping.js";
 import { commitHooksConfigReload } from "./hooks.js";
+import { createLazyGatewayCronState } from "./server-cron-lazy.js";
 import type { GatewayCronState } from "./server-cron.js";
 import type { GatewayPluginReloadResult } from "./server-reload-handlers.js";
 import {
@@ -175,7 +176,6 @@ function createTestCronState(overrides: Partial<GatewayCronState> = {}): Gateway
     storePath: "/tmp/cron.json",
     cronEnabled: false,
     reconcileExitWatchers: vi.fn(async () => {}),
-    stopExitWatchers: vi.fn(),
     reconcileStreamWatchers: vi.fn(async () => {}),
     stopStreamWatchers: vi.fn(async () => {}),
     reconcileHeartbeatJobs: vi.fn(async () => {}),
@@ -287,7 +287,6 @@ const hoisted = vi.hoisted(() => ({
     storePath: "/tmp/rebuilt-cron.json",
     cronEnabled: true,
     reconcileExitWatchers: vi.fn(async () => {}),
-    stopExitWatchers: vi.fn(),
     reconcileStreamWatchers: vi.fn(async () => {}),
     stopStreamWatchers: vi.fn(async () => {}),
     reconcileHeartbeatJobs: vi.fn(async () => {}),
@@ -629,7 +628,6 @@ function createReloadHandlersForTest(
   },
 ) {
   const cron = { start: vi.fn(async () => {}), stop: vi.fn() };
-  const stopExitWatchers = vi.fn();
   const reconcileHeartbeatJobs = vi.fn(async () => {});
   const heartbeatRunner = {
     stop: vi.fn(),
@@ -641,7 +639,6 @@ function createReloadHandlersForTest(
     heartbeatRunner: heartbeatRunner as never,
     cronState: createTestCronState({
       cron: cron as never,
-      stopExitWatchers,
       reconcileHeartbeatJobs,
     }),
     channelHealthMonitor: null,
@@ -684,7 +681,6 @@ function createReloadHandlersForTest(
     logCron,
     reconcileHeartbeatJobs,
     setState,
-    stopExitWatchers,
   };
 }
 
@@ -1360,109 +1356,119 @@ describe("gateway hot reload model state", () => {
     }
   });
 
-  it("keeps a supervised on-exit child alive exactly once across same-store cron reload", async () => {
-    const fixtureDir = autoCleanupTempDirs.make("openclaw-cron-exit-reload-");
-    const childScriptPath = path.join(fixtureDir, "watcher.cjs");
-    const markerPath = path.join(fixtureDir, "watcher-runs.txt");
-    const releasePath = path.join(fixtureDir, "release-watcher");
-    const config = {
-      session: { mainKey: "main", store: path.join(fixtureDir, "sessions.json") },
-      cron: { enabled: true, store: path.join(fixtureDir, "jobs.json") },
-    } as OpenClawConfig;
-    await writeFile(
-      childScriptPath,
-      "const fs=require('node:fs');" +
-        "fs.appendFileSync(process.argv[2],'run\\n');" +
-        "const timer=setInterval(()=>{if(fs.existsSync(process.argv[3]))clearInterval(timer)},10)",
-      "utf8",
-    );
-    const childArgs = [childScriptPath, markerPath, releasePath];
-    const command =
-      process.platform === "win32"
-        ? buildWindowsCmdExeCommandLine(process.execPath, childArgs)
-        : [process.execPath, ...childArgs].map((argument) => JSON.stringify(argument)).join(" ");
-    const supervisor = getProcessSupervisor();
-    const spawn = vi.spyOn(supervisor, "spawn");
-    let state: ReturnType<ReloadHandlerParams["getState"]> | undefined;
-
-    vi.stubEnv("OPENCLAW_STATE_DIR", fixtureDir);
-    vi.stubEnv("OPENCLAW_SKIP_CRON", "0");
-    hoisted.runtimeConfig.value = config;
-    setRuntimeConfigSnapshot(config, config);
-
-    try {
-      const actualCron =
-        await vi.importActual<typeof import("./server-cron.js")>("./server-cron.js");
-      const initialCronState = actualCron.buildGatewayCronService({
-        cfg: config,
-        deps: {} as never,
-        broadcast: vi.fn(),
-      });
-      state = {
-        ...createDefaultGatewayReloadState(),
-        cronState: initialCronState,
-      };
-      await initialCronState.cron.start();
-      const job = await initialCronState.cron.add({
-        name: "preserve the real watched child",
-        enabled: true,
-        schedule: { kind: "on-exit", command },
-        sessionTarget: "main",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "systemEvent", text: "watched child finished" },
-      });
-      await initialCronState.reconcileExitWatchers();
-      await waitForFast(async () => expect(await readFile(markerPath, "utf8")).toBe("run\n"), {
-        timeout: 10_000,
-      });
-      expect(spawn).toHaveBeenCalledOnce();
-      const watchedRun = await spawn.mock.results[0]?.value;
-      if (!watchedRun) {
-        throw new Error("expected the supervised cron exit watcher to start");
-      }
-
-      hoisted.buildGatewayCronService.mockImplementationOnce(
-        (params) =>
-          actualCron.buildGatewayCronService(
-            params as Parameters<typeof actualCron.buildGatewayCronService>[0],
-          ) as unknown as ReturnType<typeof hoisted.buildGatewayCronService>,
+  it.each(["eager", "lazy"] as const)(
+    "keeps a supervised on-exit child alive exactly once across %s cron reload",
+    async (initialOwner) => {
+      const fixtureDir = autoCleanupTempDirs.make("openclaw-cron-exit-reload-");
+      const childScriptPath = path.join(fixtureDir, "watcher.cjs");
+      const markerPath = path.join(fixtureDir, "watcher-runs.txt");
+      const releasePath = path.join(fixtureDir, "release-watcher");
+      const config = {
+        session: { mainKey: "main", store: path.join(fixtureDir, "sessions.json") },
+        cron: { enabled: true, store: path.join(fixtureDir, "jobs.json") },
+      } as OpenClawConfig;
+      await writeFile(
+        childScriptPath,
+        "const fs=require('node:fs');" +
+          "fs.appendFileSync(process.argv[2],'run\\n');" +
+          "const timer=setInterval(()=>{if(fs.existsSync(process.argv[3]))clearInterval(timer)},10)",
+        "utf8",
       );
-      const handlers = createGatewayReloadHandlers({
-        getState: () => {
-          if (!state) {
-            throw new Error("expected gateway state");
-          }
-          return state;
-        },
-        setState: (nextState) => {
-          state = nextState;
-        },
-      });
+      const childArgs = [childScriptPath, markerPath, releasePath];
+      const command =
+        process.platform === "win32"
+          ? buildWindowsCmdExeCommandLine(process.execPath, childArgs)
+          : [process.execPath, ...childArgs].map((argument) => JSON.stringify(argument)).join(" ");
+      const supervisor = getProcessSupervisor();
+      const spawn = vi.spyOn(supervisor, "spawn");
+      const previousCronFactory = hoisted.buildGatewayCronService.getMockImplementation();
+      if (!previousCronFactory) {
+        throw new Error("expected the default cron test factory");
+      }
+      let state: ReturnType<ReloadHandlerParams["getState"]> | undefined;
 
-      await withGatewayRestartSignal(async () => {
-        await handlers.applyHotReload(createCronRestartPlan(), config);
-      });
+      vi.stubEnv("OPENCLAW_STATE_DIR", fixtureDir);
+      vi.stubEnv("OPENCLAW_SKIP_CRON", "0");
+      hoisted.runtimeConfig.value = config;
+      setRuntimeConfigSnapshot(config, config);
 
-      expect(supervisor.getRecord(watchedRun.runId)).toMatchObject({
-        pid: watchedRun.pid,
-        state: "running",
-      });
-      expect(await readFile(markerPath, "utf8")).toBe("run\n");
-      expect(spawn).toHaveBeenCalledOnce();
+      try {
+        const actualCron =
+          await vi.importActual<typeof import("./server-cron.js")>("./server-cron.js");
+        hoisted.buildGatewayCronService.mockImplementation(
+          (params) =>
+            actualCron.buildGatewayCronService(
+              params as Parameters<typeof actualCron.buildGatewayCronService>[0],
+            ) as unknown as ReturnType<typeof hoisted.buildGatewayCronService>,
+        );
+        const buildInitialCron =
+          initialOwner === "lazy" ? createLazyGatewayCronState : actualCron.buildGatewayCronService;
+        const initialCronState = buildInitialCron({
+          cfg: config,
+          deps: {} as never,
+          broadcast: vi.fn(),
+        });
+        state = {
+          ...createDefaultGatewayReloadState(),
+          cronState: initialCronState,
+        };
+        await initialCronState.cron.start();
+        const job = await initialCronState.cron.add({
+          name: "preserve the real watched child",
+          enabled: true,
+          schedule: { kind: "on-exit", command },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "watched child finished" },
+        });
+        await initialCronState.reconcileExitWatchers();
+        await waitForFast(async () => expect(await readFile(markerPath, "utf8")).toBe("run\n"), {
+          timeout: 10_000,
+        });
+        expect(spawn).toHaveBeenCalledOnce();
+        const watchedRun = await spawn.mock.results[0]?.value;
+        if (!watchedRun) {
+          throw new Error("expected the supervised cron exit watcher to start");
+        }
 
-      await writeFile(releasePath, "release");
-      await waitForFast(() => expect(state?.cronState.cron.getJob(job.id)?.enabled).toBe(false), {
-        timeout: 10_000,
-      });
-      expect(await readFile(markerPath, "utf8")).toBe("run\n");
-      expect(spawn).toHaveBeenCalledOnce();
-    } finally {
-      await writeFile(releasePath, "release").catch(() => {});
-      await state?.cronState.cron.stopAndDrain?.();
-      spawn.mockRestore();
-      vi.unstubAllEnvs();
-    }
-  });
+        const handlers = createGatewayReloadHandlers({
+          getState: () => {
+            if (!state) {
+              throw new Error("expected gateway state");
+            }
+            return state;
+          },
+          setState: (nextState) => {
+            state = nextState;
+          },
+        });
+
+        await withGatewayRestartSignal(async () => {
+          await handlers.applyHotReload(createCronRestartPlan(), config);
+        });
+
+        expect(supervisor.getRecord(watchedRun.runId)).toMatchObject({
+          pid: watchedRun.pid,
+          state: "running",
+        });
+        expect(await readFile(markerPath, "utf8")).toBe("run\n");
+        expect(spawn).toHaveBeenCalledOnce();
+
+        await writeFile(releasePath, "release");
+        await waitForFast(() => expect(state?.cronState.cron.getJob(job.id)?.enabled).toBe(false), {
+          timeout: 10_000,
+        });
+        expect(await readFile(markerPath, "utf8")).toBe("run\n");
+        expect(spawn).toHaveBeenCalledOnce();
+      } finally {
+        hoisted.buildGatewayCronService.mockImplementation(previousCronFactory);
+        await writeFile(releasePath, "release").catch(() => {});
+        await state?.cronState.cron.stopAndDrain?.();
+        spawn.mockRestore();
+        vi.unstubAllEnvs();
+      }
+    },
+  );
 
   it.each([
     "agents.defaults.compaction.model",
@@ -1516,7 +1522,6 @@ describe("gateway hot reload model state", () => {
       storePath: "/tmp/rebuilt-cron.json",
       cronEnabled: true,
       reconcileExitWatchers: newReconcileExitWatchers,
-      stopExitWatchers: vi.fn(),
       reconcileStreamWatchers: vi.fn(async () => {}),
       stopStreamWatchers: vi.fn(async () => {}),
       reconcileHeartbeatJobs: vi.fn(async () => {}),
@@ -1525,13 +1530,9 @@ describe("gateway hot reload model state", () => {
       order.push("build-new");
       return rebuiltCronState;
     });
-    const { applyHotReload, cron, cronReconciliation, setState, stopExitWatchers } =
-      createReloadHandlersForTest();
+    const { applyHotReload, cron, cronReconciliation, setState } = createReloadHandlersForTest();
     cron.stop.mockImplementation(() => {
       order.push("stop-old");
-    });
-    stopExitWatchers.mockImplementation(() => {
-      order.push("stop-old-watchers");
     });
     cronReconciliation.invalidate.mockImplementation(() => {
       order.push("invalidate-old");
@@ -1548,7 +1549,6 @@ describe("gateway hot reload model state", () => {
     });
 
     expect(cron.stop).toHaveBeenCalledTimes(1);
-    expect(stopExitWatchers).toHaveBeenCalledTimes(1);
     expect(newCron.start).toHaveBeenCalledTimes(1);
     await waitForFast(() => expect(newReconcileExitWatchers).toHaveBeenCalledTimes(1));
     await waitForFast(() => expect(order.at(-1)).toBe("hook"));
@@ -1556,7 +1556,6 @@ describe("gateway hot reload model state", () => {
       "build-new",
       "invalidate-old",
       "stop-old",
-      "stop-old-watchers",
       "start-new",
       "reconcile-watchers",
       "hook",
@@ -1592,7 +1591,6 @@ describe("gateway hot reload model state", () => {
       storePath: "/tmp/rebuilt-cron.json",
       cronEnabled: false,
       reconcileExitWatchers: vi.fn(async () => {}),
-      stopExitWatchers: vi.fn(),
       reconcileStreamWatchers: vi.fn(async () => {}),
       stopStreamWatchers: vi.fn(async () => {}),
       reconcileHeartbeatJobs: vi.fn(async () => {}),
@@ -1733,7 +1731,6 @@ describe("gateway hot reload model state", () => {
         storePath: "/tmp/rebuilt-cron.json",
         cronEnabled: true,
         reconcileExitWatchers: vi.fn(async () => {}),
-        stopExitWatchers: vi.fn(),
         reconcileStreamWatchers: vi.fn(async () => {}),
         stopStreamWatchers: vi.fn(async () => {}),
         reconcileHeartbeatJobs: vi.fn(async () => {}),
@@ -1769,7 +1766,6 @@ describe("gateway hot reload model state", () => {
       storePath: "/tmp/first-cron.json",
       cronEnabled: true,
       reconcileExitWatchers: vi.fn(async () => {}),
-      stopExitWatchers: vi.fn(),
       reconcileStreamWatchers: vi.fn(async () => {}),
       stopStreamWatchers: vi.fn(async () => {}),
       reconcileHeartbeatJobs: vi.fn(async () => {}),
@@ -1779,7 +1775,6 @@ describe("gateway hot reload model state", () => {
       storePath: "/tmp/second-cron.json",
       cronEnabled: true,
       reconcileExitWatchers: vi.fn(async () => {}),
-      stopExitWatchers: vi.fn(),
       reconcileStreamWatchers: vi.fn(async () => {}),
       stopStreamWatchers: vi.fn(async () => {}),
       reconcileHeartbeatJobs: vi.fn(async () => {}),
@@ -5329,7 +5324,6 @@ describe("gateway plugin hot reload handlers", () => {
       storePath: "/tmp/rebuilt-cron.json",
       cronEnabled: true,
       reconcileExitWatchers: vi.fn(async () => {}),
-      stopExitWatchers: vi.fn(),
       reconcileStreamWatchers: vi.fn(async () => {}),
       stopStreamWatchers: vi.fn(async () => {}),
       reconcileHeartbeatJobs: vi.fn(async () => {}),

@@ -175,5 +175,5 @@ export type ChatComposerState = SkillMenuState &
     dictation: ComposerDictationController | null;
     dictationDraftKey: string | null;
     dictationError: string | null;
-    dictationSelection: { start: number; end: number } | null;
+    dictationSelection: { start: number; end: number; value: string } | null;
   };

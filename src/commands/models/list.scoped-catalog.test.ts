@@ -137,6 +137,17 @@ describe("loadScopedListModelCatalogSnapshot", () => {
   });
 
   it("keeps static rows in the scoped snapshot", async () => {
+    const row = {
+      ...staticRow,
+      contextTokens: 200_000,
+      contextWindows: [{ id: "200k", label: "200K", contextWindow: 200_000 }],
+      contextWindowDefault: "200k",
+      thinkingLevelMap: { off: null, high: "high" },
+      mediaInput: { image: { maxBytes: 4096 } },
+      headers: { "x-provider": "private-transport" },
+    };
+    mocks.loadManifestCatalogRowsForList.mockReturnValueOnce([row]);
+    mocks.loadStaticManifestCatalogRowsForList.mockReturnValueOnce([row]);
     mocks.resolveManifestCatalogCoverageForList.mockReturnValueOnce({
       ownedProviderIds: new Set(["moonshot"]),
       completeProviderIds: new Set(["moonshot"]),
@@ -149,8 +160,20 @@ describe("loadScopedListModelCatalogSnapshot", () => {
     });
 
     expect(snapshot.entries).toEqual([
-      expect.objectContaining({ provider: "moonshot", id: "kimi-k2.6" }),
+      expect.objectContaining({
+        provider: "moonshot",
+        id: "kimi-k2.6",
+        contextWindow: 200_000,
+        contextTokens: 200_000,
+        contextWindows: [{ id: "200k", label: "200K", contextWindow: 200_000 }],
+        contextWindowDefault: "200k",
+        thinkingLevelMap: { off: null, high: "high" },
+        mediaInput: { image: { maxBytes: 4096 } },
+      }),
     ]);
+    expect(snapshot.entries[0]).not.toHaveProperty("headers");
+    expect(snapshot.entries[0]?.contextWindows?.[0]).not.toBe(row.contextWindows[0]);
+    expect(snapshot.entries[0]?.thinkingLevelMap).not.toBe(row.thinkingLevelMap);
     expect(snapshot.staticEntries).toEqual(snapshot.entries);
     expect(mocks.prepareScopedReadOnlyLiveModelCatalog).not.toHaveBeenCalled();
   });
@@ -163,6 +186,7 @@ describe("loadScopedListModelCatalogSnapshot", () => {
         name: "Account GPT-5.6",
         api: "openai-chatgpt-responses",
         baseUrl: "https://chatgpt.com/backend-api/codex",
+        contextWindow: 64_000,
       },
     ]);
     mocks.prepareScopedReadOnlyLiveModelCatalog.mockResolvedValueOnce({
@@ -190,7 +214,7 @@ describe("loadScopedListModelCatalogSnapshot", () => {
         id: "gpt-5.6",
         name: "Account GPT-5.6",
         api: "openai-chatgpt-responses",
-        contextWindow: 1_050_000,
+        contextWindow: 64_000,
       }),
       expect.objectContaining({
         provider: "openai",
@@ -208,6 +232,35 @@ describe("loadScopedListModelCatalogSnapshot", () => {
       ["openai"],
     );
   });
+
+  it.each([
+    { api: runtimeRow.api, baseUrl: "https://other.example/v1", matches: false },
+    { api: "openai-completions", baseUrl: runtimeRow.baseUrl, matches: false },
+    { api: runtimeRow.api, baseUrl: "https://api.openai.com/v1/", matches: true },
+  ])(
+    "enriches persisted capabilities only for a matching route: $api $baseUrl",
+    async ({ api, baseUrl, matches }) => {
+      const persisted = {
+        provider: "openai",
+        id: runtimeRow.id,
+        name: "Account model",
+        api,
+        baseUrl,
+      };
+      mocks.loadPersistedListCatalogEntries.mockReturnValueOnce([persisted]);
+      const snapshot = await loadScopedListModelCatalogSnapshot({
+        cfg: {},
+        agentDir: "/tmp/openclaw-agent",
+        providerIds: ["openai"],
+        runtimeProviderIds: [],
+        configuredKeys: [],
+      });
+
+      expect(snapshot.entries[0]?.contextWindow).toBe(matches ? 1_050_000 : undefined);
+      expect(snapshot.entries[0]?.reasoning).toBe(matches ? true : undefined);
+      expect(snapshot.entries[0]).toMatchObject(persisted);
+    },
+  );
 
   it("does not discover unowned providers whose explicit models are emitted by the configured row source", async () => {
     mocks.loadManifestCatalogRowsForList.mockReturnValueOnce([]);

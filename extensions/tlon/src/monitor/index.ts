@@ -980,8 +980,9 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
             continue;
           }
 
-          // Owner is always allowed
-          if (isOwner(ship)) {
+          const ownerInvite = isOwner(ship);
+          const allowed = ownerInvite || (await isDmAllowedWithIngress(ship, effectiveDmAllowlist));
+          if (ownerInvite || (effectiveAutoAcceptDmInvites && allowed)) {
             try {
               await api.poke({
                 app: "chat",
@@ -989,26 +990,18 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
                 json: { ship, ok: true },
               });
               processedDmInvites.add(ship);
-              runtime.log?.(`[tlon] Auto-accepted DM invite from owner ${ship}`);
+              runtime.log?.(
+                ownerInvite
+                  ? `[tlon] Auto-accepted DM invite from owner ${ship}`
+                  : `[tlon] Auto-accepted DM invite from ${ship}`,
+              );
             } catch (err) {
-              runtime.error?.(`[tlon] Failed to auto-accept DM from owner: ${String(err)}`);
-            }
-            continue;
-          }
-
-          const allowed = await isDmAllowedWithIngress(ship, effectiveDmAllowlist);
-          // Auto-accept if on allowlist and auto-accept is enabled
-          if (effectiveAutoAcceptDmInvites && allowed) {
-            try {
-              await api.poke({
-                app: "chat",
-                mark: "chat-dm-rsvp",
-                json: { ship, ok: true },
-              });
-              processedDmInvites.add(ship);
-              runtime.log?.(`[tlon] Auto-accepted DM invite from ${ship}`);
-            } catch (err) {
-              runtime.error?.(`[tlon] Failed to auto-accept DM from ${ship}: ${String(err)}`);
+              runtime.error?.(
+                ownerInvite
+                  ? `[tlon] Failed to auto-accept DM from owner: ${String(err)}`
+                  : `[tlon] Failed to auto-accept DM from ${ship}: ${String(err)}`,
+              );
+              throw err;
             }
             continue;
           }
@@ -1376,11 +1369,12 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       const processedGroupInvites = new Set<string>();
 
       // Helper to process pending invites
-      const processPendingInvites = async (foreigns: Foreigns) => {
+      const processPendingInvites = async (foreigns: Foreigns, propagateWriteFailures = false) => {
         if (!foreigns || typeof foreigns !== "object") {
           return;
         }
 
+        let firstWriteError: Error | undefined;
         for (const [groupFlag, foreign] of Object.entries(foreigns)) {
           if (processedGroupInvites.has(groupFlag)) {
             continue;
@@ -1395,8 +1389,12 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
           }
 
           const inviterShip = validInvite.from;
-          // Owner invites are always accepted
-          if (isOwner(inviterShip)) {
+          const ownerInvite = isOwner(inviterShip);
+          const shouldAccept =
+            ownerInvite ||
+            (effectiveAutoAcceptGroupInvites &&
+              isGroupInviteAllowed(inviterShip, effectiveGroupInviteAllowlist));
+          if (shouldAccept) {
             try {
               await api.poke({
                 app: "groups",
@@ -1407,89 +1405,69 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
                 },
               });
               processedGroupInvites.add(groupFlag);
-              runtime.log?.(`[tlon] Auto-accepted group invite from owner: ${groupFlag}`);
-            } catch (err) {
-              runtime.error?.(`[tlon] Failed to accept group invite from owner: ${String(err)}`);
-            }
-            continue;
-          }
-
-          // Skip if auto-accept is disabled
-          if (!effectiveAutoAcceptGroupInvites) {
-            // If owner is configured, queue approval
-            if (effectiveOwnerShip) {
-              const approval = createPendingApproval({
-                type: "group",
-                requestingShip: inviterShip,
-                groupFlag,
-              });
-              await queueApprovalRequest(approval);
-              processedGroupInvites.add(groupFlag);
-            }
-            continue;
-          }
-
-          // Check if inviter is on allowlist
-          const isAllowed = isGroupInviteAllowed(inviterShip, effectiveGroupInviteAllowlist);
-
-          if (!isAllowed) {
-            // If owner is configured, queue approval
-            if (effectiveOwnerShip) {
-              const approval = createPendingApproval({
-                type: "group",
-                requestingShip: inviterShip,
-                groupFlag,
-              });
-              await queueApprovalRequest(approval);
-              processedGroupInvites.add(groupFlag);
-            } else {
               runtime.log?.(
-                `[tlon] Rejected group invite from ${inviterShip} (not in groupInviteAllowlist): ${groupFlag}`,
+                ownerInvite
+                  ? `[tlon] Auto-accepted group invite from owner: ${groupFlag}`
+                  : `[tlon] Auto-accepted group invite: ${groupFlag} (from ${inviterShip})`,
               );
-              processedGroupInvites.add(groupFlag);
+            } catch (err) {
+              runtime.error?.(
+                ownerInvite
+                  ? `[tlon] Failed to accept group invite from owner: ${String(err)}`
+                  : `[tlon] Failed to auto-accept group ${groupFlag}: ${String(err)}`,
+              );
+              if (propagateWriteFailures && firstWriteError === undefined) {
+                firstWriteError = err instanceof Error ? err : new Error(formatErrorMessage(err));
+              }
             }
             continue;
           }
 
-          // Inviter is on allowlist - accept the invite
-          try {
-            await api.poke({
-              app: "groups",
-              mark: "group-join",
-              json: {
-                flag: groupFlag,
-                "join-all": true,
-              },
+          if (effectiveOwnerShip) {
+            const approval = createPendingApproval({
+              type: "group",
+              requestingShip: inviterShip,
+              groupFlag,
             });
+            await queueApprovalRequest(approval);
             processedGroupInvites.add(groupFlag);
-            runtime.log?.(
-              `[tlon] Auto-accepted group invite: ${groupFlag} (from ${validInvite.from})`,
-            );
-          } catch (err) {
-            runtime.error?.(`[tlon] Failed to auto-accept group ${groupFlag}: ${String(err)}`);
+            continue;
           }
+
+          if (effectiveAutoAcceptGroupInvites) {
+            runtime.log?.(
+              `[tlon] Rejected group invite from ${inviterShip} (not in groupInviteAllowlist): ${groupFlag}`,
+            );
+            processedGroupInvites.add(groupFlag);
+          }
+        }
+
+        if (firstWriteError !== undefined) {
+          throw firstWriteError;
         }
       };
 
       // Process existing pending invites from init data
       if (initForeigns) {
-        await processPendingInvites(initForeigns);
+        try {
+          await processPendingInvites(initForeigns);
+        } catch (error: unknown) {
+          runtime.error?.(`[tlon] Error handling initial foreigns: ${formatErrorMessage(error)}`);
+        }
       }
 
       try {
         await api.subscribe({
           app: "groups",
           path: "/v1/foreigns",
-          event: (data: unknown) => {
-            void (async () => {
-              try {
-                await processPendingInvites(data as Foreigns);
-              } catch (error: unknown) {
-                runtime.error?.(
-                  `[tlon] Error handling foreigns event: ${formatErrorMessage(error)}`,
-                );
-              }
-            })();
+          event: async (data: unknown) => {
+            try {
+              await processPendingInvites(data as Foreigns, true);
+            } catch (error: unknown) {
+              runtime.error?.(`[tlon] Error handling foreigns event: ${formatErrorMessage(error)}`);
+              // SSE advances its durable ack only after this callback resolves.
+              throw error;
+            }
           },
           err: (error) => {
             runtime.error?.(`[tlon] Foreigns subscription error: ${String(error)}`);

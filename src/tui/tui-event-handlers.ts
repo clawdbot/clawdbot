@@ -505,7 +505,17 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     const evt = payload as SessionMessageEvent;
     syncSessionKey();
-    if (!matchesSelectedTuiSession(state, evt, { requireAliasOwnership: true })) {
+    const currentUpdatedAt = state.sessionInfo.updatedAt;
+    const priorSession =
+      evt.sessionId && state.currentSessionId && evt.sessionId !== state.currentSessionId;
+    const isOlderSnapshot =
+      typeof evt.updatedAt === "number" && evt.updatedAt < (currentUpdatedAt ?? evt.updatedAt);
+    if (
+      !matchesSelectedTuiSession(state, evt, { requireAliasOwnership: true }) ||
+      (priorSession &&
+        (typeof evt.updatedAt !== "number" ||
+          (typeof currentUpdatedAt === "number" && evt.updatedAt <= currentUpdatedAt)))
+    ) {
       return;
     }
 
@@ -525,11 +535,6 @@ export function createEventHandlers(context: EventHandlerContext) {
       tui.requestRender();
     }
 
-    const currentUpdatedAt = state.sessionInfo.updatedAt;
-    const isOlderSnapshot =
-      typeof evt.updatedAt === "number" &&
-      typeof currentUpdatedAt === "number" &&
-      evt.updatedAt < currentUpdatedAt;
     if (!isOlderSnapshot) {
       if (typeof evt.sessionId === "string") {
         state.currentSessionId = evt.sessionId;
@@ -709,22 +714,18 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     const evt = payload as BtwEvent;
     syncSessionKey();
-    if (!matchesSelectedTuiSession(state, evt)) {
+    if (
+      evt.kind !== "btw" ||
+      !matchesSelectedTuiSession(state, evt) ||
+      (localMode && (!evt.runId || !isLocalBtwRunId?.(evt.runId)))
+    ) {
       return;
     }
-    if (evt.kind !== "btw") {
-      return;
-    }
-    const question = evt.question.trim();
-    const text = evt.text.trim();
+    const [question, text] = [evt.question.trim(), evt.text.trim()];
     if (!question || !text) {
       return;
     }
-    btw.showResult({
-      question,
-      text,
-      isError: evt.isError,
-    });
+    btw.showResult({ question, text, isError: evt.isError });
     tui.requestRender();
   };
 

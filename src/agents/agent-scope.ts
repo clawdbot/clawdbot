@@ -1,8 +1,5 @@
 /** Higher-level agent scope helpers for model selection, fallbacks, skills, and workspaces. */
-import fs from "node:fs";
-import path from "node:path";
 import {
-  lowercasePreservingWhitespace,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   resolvePrimaryStringValue,
@@ -24,7 +21,6 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
 import { resolveEffectiveAgentSkillFilter } from "../skills/discovery/agent-filter.js";
-import { resolveUserPath } from "../utils.js";
 import {
   AgentSelectionRequiredError,
   listAgentIds,
@@ -34,6 +30,7 @@ import {
   resolveDefaultAgentId,
   tryResolveLegacyCompatibilityAgentId,
 } from "./agent-scope-config.js";
+import { resolveCanonicalWorkspacePath } from "./workspace-state-identity.js";
 export { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 export {
   listAgentEntries,
@@ -59,11 +56,6 @@ export {
   type AgentSelectionContext,
   type ResolvedAgentConfig,
 } from "./agent-scope-config.js";
-
-/** Strip null bytes from paths to prevent ENOTDIR errors. */
-function stripNullBytes(s: string): string {
-  return s.split("\0").join("");
-}
 
 const AUTO_FALLBACK_PRIMARY_PROBE_INTERVAL_MS = 5 * 60 * 1000;
 const AUTO_FALLBACK_PRIMARY_PROBE_MAX_KEYS = 4096;
@@ -607,32 +599,16 @@ export function resolveEffectiveModelFallbacks(params: {
   return agentFallbacksOverride ?? defaultFallbacks;
 }
 
-function normalizePathForComparison(input: string): string {
-  const resolved = path.resolve(stripNullBytes(resolveUserPath(input)));
-  let normalized = resolved;
-  // Prefer realpath when available to normalize aliases/symlinks (for example /tmp -> /private/tmp)
-  // and canonical path case without forcing case-folding on case-sensitive macOS volumes.
-  try {
-    normalized = fs.realpathSync.native(resolved);
-  } catch {
-    // Keep lexical path for non-existent directories.
-  }
-  if (process.platform === "win32") {
-    return lowercasePreservingWhitespace(normalized);
-  }
-  return normalized;
-}
-
 export function resolveAgentIdByWorkspacePath(
   cfg: OpenClawConfig,
   workspacePath: string,
 ): string | undefined {
-  const normalizedWorkspacePath = normalizePathForComparison(workspacePath);
+  const normalizedWorkspacePath = resolveCanonicalWorkspacePath(workspacePath.replaceAll("\0", ""));
   let matchedAgentId: string | undefined;
   let matchedWorkspaceLength = -1;
 
   for (const id of listAgentIds(cfg)) {
-    const workspaceDir = normalizePathForComparison(resolveAgentWorkspaceDir(cfg, id));
+    const workspaceDir = resolveCanonicalWorkspacePath(resolveAgentWorkspaceDir(cfg, id));
     if (!isPathInside(workspaceDir, normalizedWorkspacePath)) {
       continue;
     }

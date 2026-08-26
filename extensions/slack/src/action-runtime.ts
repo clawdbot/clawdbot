@@ -52,9 +52,9 @@ const reactionsActions = new Set(["react", "reactions"]);
 const pinActions = new Set(["pinMessage", "unpinMessage", "listPins"]);
 const SLACK_REACTION_RESULT_LIMIT = 100;
 
-type SlackActionsRuntimeModule = typeof import("./actions.runtime.js");
+type SlackActionsRuntimeModule = typeof import("./actions.js");
 
-const loadSlackActionsRuntime = createLazyRuntimeModule(() => import("./actions.runtime.js"));
+const loadSlackActionsRuntime = createLazyRuntimeModule(() => import("./actions.js"));
 
 const loadSlackAccountsRuntime = createLazyRuntimeModule(() => import("./accounts.runtime.js"));
 const loadSlackChannelTypeRuntime = createLazyRuntimeModule(() => import("./channel-type.js"));
