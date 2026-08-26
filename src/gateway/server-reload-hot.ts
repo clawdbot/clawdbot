@@ -192,10 +192,10 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       const commit = async () => {
         if (plan.restartHeartbeat) {
           nextState.heartbeatRunner.updateConfig(nextConfig);
-          // Heartbeat cadence lives in system-owned cron monitor jobs;
-          // reconverge them against the new config in the background.
+        }
+        if (plan.restartHeartbeat || plan.reconcileSkillReviewJobs) {
           void nextState.cronState.reconcileHeartbeatJobs(nextConfig).catch((error: unknown) => {
-            params.logReload.warn(`heartbeat monitor reconvergence failed: ${String(error)}`);
+            params.logReload.warn(`cron monitor reconvergence failed: ${String(error)}`);
           });
         }
         // Config, plugin hooks, and prepared stores publish as one generation. Synchronously
@@ -462,9 +462,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
                 `stopping ${channel} account ${accountId} before plugin reload`,
               );
               await params.stopChannel(channel, accountId, { manual: false });
-              if (isPluginReloadAborted()) {
-                pluginReloadAborted = true;
-              }
+              pluginReloadAborted = isPluginReloadAborted();
             } catch (err) {
               accountStopFailures.push(`${channel}[${accountId}]`);
               params.logChannels.error(
@@ -486,9 +484,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             params.logChannels.info(`stopping ${channel} channel before plugin reload`);
             channelsStoppedBeforePluginReload.add(channel);
             await params.stopChannel(channel, undefined, { manual: false });
-            if (isPluginReloadAborted()) {
-              pluginReloadAborted = true;
-            }
+            pluginReloadAborted = isPluginReloadAborted();
           },
           onFailure: (channel, err) => {
             params.logChannels.error(

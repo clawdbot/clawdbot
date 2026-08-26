@@ -1563,6 +1563,34 @@ describe("gateway hot reload model state", () => {
     expect(setState).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    { from: "off" as const, to: "auto" as const },
+    { from: "auto" as const, to: "off" as const },
+  ])(
+    "reconciles skill review jobs when Workshop mode changes from $from to $to",
+    async ({ from, to }) => {
+      const { applyHotReload, heartbeatRunner, reconcileHeartbeatJobs, setState } =
+        createReloadHandlersForTest(undefined, undefined, undefined, vi.fn(), false);
+      const previousConfig = {
+        skills: { workshop: { autonomous: { mode: from } } },
+      } satisfies OpenClawConfig;
+      const nextConfig = {
+        skills: { workshop: { autonomous: { mode: to } } },
+      } satisfies OpenClawConfig;
+
+      await expect(
+        applyHotReload(buildGatewayReloadPlan(["skills.workshop.autonomous.mode"]), nextConfig, {
+          sourceConfig: previousConfig,
+          publish: async (commit) => await commit(),
+        }),
+      ).resolves.toBeUndefined();
+
+      await waitForFast(() => expect(reconcileHeartbeatJobs).toHaveBeenCalledWith(nextConfig));
+      expect(heartbeatRunner.updateConfig).not.toHaveBeenCalled();
+      expect(setState).toHaveBeenCalledOnce();
+    },
+  );
+
   it("rejects an ownerless heartbeat update failure before runtime commit", async () => {
     const publish = vi.fn(async (commit: () => Promise<void>) => await commit());
     const { applyHotReload, heartbeatRunner, setState } = createReloadHandlersForTest(
