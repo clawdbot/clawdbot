@@ -161,6 +161,9 @@ const PendingDelegateStateSchema = z
     persistedChainStateKind: z.enum(["advanced", "terminal"]).optional(),
     inheritedSilent: z.boolean().optional(),
     inheritedWake: z.boolean().optional(),
+    originRunId: z.string().min(1).optional(),
+    // Pre-cure rows may contain these overrides. Decode accepts but never projects
+    // them, so restart rebinds the spawn to authoritative TaskFlow ownerKey.
     spawnRequesterSessionKey: z.string().min(1).optional(),
     spawnRequesterChannel: z.string().min(1).optional(),
     spawnRequesterAccountId: z.string().min(1).optional(),
@@ -317,19 +320,7 @@ function encodeDelegateState(
       : {}),
     ...(delegate.inheritedSilent ? { inheritedSilent: true } : {}),
     ...(delegate.inheritedWake ? { inheritedWake: true } : {}),
-    ...(delegate.spawnRequesterSessionKey
-      ? { spawnRequesterSessionKey: delegate.spawnRequesterSessionKey }
-      : {}),
-    ...(delegate.spawnRequesterChannel
-      ? { spawnRequesterChannel: delegate.spawnRequesterChannel }
-      : {}),
-    ...(delegate.spawnRequesterAccountId
-      ? { spawnRequesterAccountId: delegate.spawnRequesterAccountId }
-      : {}),
-    ...(delegate.spawnRequesterTo ? { spawnRequesterTo: delegate.spawnRequesterTo } : {}),
-    ...(delegate.spawnRequesterThreadId !== undefined
-      ? { spawnRequesterThreadId: delegate.spawnRequesterThreadId }
-      : {}),
+    ...(delegate.originRunId ? { originRunId: delegate.originRunId } : {}),
   };
 }
 
@@ -425,17 +416,7 @@ export function decodeDelegateFlow(flow: TaskFlowRecord): PendingContinuationDel
       : {}),
     ...(state.inheritedSilent ? { inheritedSilent: true } : {}),
     ...(state.inheritedWake ? { inheritedWake: true } : {}),
-    ...(state.spawnRequesterSessionKey
-      ? { spawnRequesterSessionKey: state.spawnRequesterSessionKey }
-      : {}),
-    ...(state.spawnRequesterChannel ? { spawnRequesterChannel: state.spawnRequesterChannel } : {}),
-    ...(state.spawnRequesterAccountId
-      ? { spawnRequesterAccountId: state.spawnRequesterAccountId }
-      : {}),
-    ...(state.spawnRequesterTo ? { spawnRequesterTo: state.spawnRequesterTo } : {}),
-    ...(state.spawnRequesterThreadId !== undefined
-      ? { spawnRequesterThreadId: state.spawnRequesterThreadId }
-      : {}),
+    ...(state.originRunId ? { originRunId: state.originRunId } : {}),
     flowId: flow.flowId,
     expectedRevision: flow.revision,
   };
@@ -443,6 +424,16 @@ export function decodeDelegateFlow(flow: TaskFlowRecord): PendingContinuationDel
 
 export function readAcceptedDelegateChildSessionKey(flow: TaskFlowRecord): string | undefined {
   return decodeDelegateState(flow)?.childSessionKey;
+}
+
+export function findContinuationDelegateFlowByOriginRun(
+  ownerKey: string,
+  originRunId: string,
+): TaskFlowRecord | undefined {
+  return listTaskFlowsForOwnerKey(ownerKey).find(
+    (flow) =>
+      isContinuationDelegateFlow(flow) && decodeDelegateState(flow)?.originRunId === originRunId,
+  );
 }
 
 export function isPendingDelegateFlow(flow: TaskFlowRecord): boolean {

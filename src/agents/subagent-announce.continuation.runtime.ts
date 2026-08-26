@@ -1,4 +1,5 @@
 import { dispatchToolDelegates } from "../auto-reply/continuation/delegate-dispatch.js";
+import { findContinuationDelegateFlowByOriginRun } from "../auto-reply/continuation/delegate-flow-store.js";
 import {
   createContinuationOwnerSessionLoader,
   registerContinuationDelegateDispatchClaim,
@@ -23,7 +24,10 @@ import { hasLiveOrRecentlyDispatchedContinuationWork } from "../auto-reply/conti
 import { resolveAgentIdFromSessionKey, resolveSessionStorePathCore } from "../config/sessions.js";
 import { updateSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveContinuationTraceparent } from "../infra/continuation-tracer.js";
+import {
+  formatCurrentSpanContinuationTraceparent,
+  resolveContinuationTraceparent,
+} from "../infra/continuation-tracer.js";
 import { enqueueSystemEventRaw as enqueueSystemEvent } from "../infra/system-events.js";
 import { defaultRuntime } from "../runtime.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
@@ -42,6 +46,11 @@ import { getSubagentDepthFromSessionStore } from "./subagents/spawn/subagent-dep
 import { spawnSubagentDirect } from "./subagents/spawn/subagent-spawn.js";
 
 export { routeSubagentContinuationReturn } from "./subagent-announce.continuation-return.js";
+
+type OriginDelegateFlowStatus = NonNullable<
+  ReturnType<typeof findContinuationDelegateFlowByOriginRun>
+>["status"];
+type ChildContinuationDrainResult = Awaited<ReturnType<typeof dispatchToolDelegates>>;
 
 async function rejectCrossSessionTargeting(params: {
   crossSessionTargeting: "disabled" | "enabled";
@@ -73,6 +82,14 @@ async function rejectCrossSessionTargeting(params: {
   return true;
 }
 
+function reportDelegateAdmissionFailure(childSessionKey: string, eventSessionKey: string): void {
+  defaultRuntime.error?.(`[continuation:delegate-admission-failed] child=${childSessionKey}`);
+  enqueueSystemEvent(
+    "[continuation] Delegate was not scheduled because durable TaskFlow admission failed. Retry the delegation.",
+    { sessionKey: eventSessionKey, trusted: true },
+  );
+}
+
 async function drainChildContinuationQueue(params: {
   cfg: OpenClawConfig;
   childSessionKey: string;
@@ -82,9 +99,9 @@ async function drainChildContinuationQueue(params: {
   inheritedSilent?: boolean;
   inheritedWake?: boolean;
   chainStateOverride?: ContinuationChainState;
-}): Promise<void> {
+}): Promise<ChildContinuationDrainResult | undefined> {
   if (params.cfg.agents?.defaults?.continuation?.enabled !== true) {
-    return;
+    return undefined;
   }
   try {
     const childEntry = loadSessionEntryByKey(params.childSessionKey);
@@ -178,10 +195,12 @@ async function drainChildContinuationQueue(params: {
     ) {
       clearQueuedDelegatesChainTokensFold(params.childSessionKey);
     }
+    return dispatchResult;
   } catch (error) {
     defaultRuntime.error?.(
       `Subagent continuation delegate drain failed for ${params.childSessionKey}: ${String(error)}`,
     );
+    return undefined;
   }
 }
 
@@ -271,6 +290,7 @@ export async function coordinateSubagentContinuation(params: {
   skipAnnounceDelivery: boolean;
   continuationEnabled: boolean;
   isContinuationChainDelegate: boolean;
+  originDelegateFlowStatus?: OriginDelegateFlowStatus;
 }> {
   const continuationEnabled = params.cfg.agents?.defaults?.continuation?.enabled === true;
   const accounting = await prepareSubagentContinuationAccounting({
@@ -318,7 +338,8 @@ export async function coordinateSubagentContinuation(params: {
   }
 
   let bracketReserved = false;
-  let delayedBracketDrainArmed = false;
+  let bracketDrainArmed = false;
+  let originDelegateFlowStatus: OriginDelegateFlowStatus | undefined;
   const continuationResult = stripContinuationSignal(findings);
   if (continuationResult.signal?.kind === "work") {
     findings = continuationResult.text || "(no output)";
@@ -335,12 +356,22 @@ export async function coordinateSubagentContinuation(params: {
   } else if (continuationResult.signal?.kind === "delegate") {
     findings = continuationResult.text || "(no output)";
     const signal = continuationResult.signal;
-    const internalTraceparent = resolveContinuationTraceparent(params.traceparent);
+    const internalTraceparent =
+      formatCurrentSpanContinuationTraceparent() ??
+      resolveContinuationTraceparent(params.traceparent);
     const parentWasSilent = params.silentAnnounce === true;
     const chainSilent = signal.silent || signal.silentWake || parentWasSilent;
     const chainWake = signal.silentWake || (parentWasSilent && params.wakeOnReturn === true);
-    if (signal.postCompaction) {
-      stagePostCompactionDelegate(params.targetRequesterSessionKey, {
+    const existingOriginFlow = findContinuationDelegateFlowByOriginRun(
+      params.childSessionKey,
+      params.childRunId,
+    );
+    if (existingOriginFlow) {
+      originDelegateFlowStatus = existingOriginFlow.status;
+      bracketReserved = existingOriginFlow.status === "succeeded";
+      bracketDrainArmed = true;
+    } else if (signal.postCompaction) {
+      const staged = stagePostCompactionDelegate(params.childSessionKey, {
         task: signal.task,
         createdAt: Date.now(),
         ...(signal.targetSessionKey ? { targetSessionKey: signal.targetSessionKey } : {}),
@@ -354,11 +385,18 @@ export async function coordinateSubagentContinuation(params: {
           ? { traceparent: internalTraceparent, traceparentProvenance: "internal" as const }
           : {}),
         ...(signal.model ? { model: signal.model } : {}),
+        originRunId: params.childRunId,
       });
-      enqueueSystemEvent(
-        `[continuation:delegate-staged-post-compaction] Bracket delegate staged for post-compaction release: ${signal.task}`,
-        { sessionKey: params.targetRequesterSessionKey, trusted: true },
-      );
+      if (!staged) {
+        reportDelegateAdmissionFailure(params.childSessionKey, params.targetRequesterSessionKey);
+        bracketDrainArmed = true;
+      } else {
+        originDelegateFlowStatus = staged.status;
+        enqueueSystemEvent(
+          `[continuation:delegate-staged-post-compaction] Bracket delegate staged for post-compaction release: ${signal.task}`,
+          { sessionKey: params.childSessionKey, trusted: true },
+        );
+      }
     } else {
       const config = resolveContinuationRuntimeConfig(params.cfg);
       const childChainHop = parseContinuationChainHop(params.task) ?? 0;
@@ -369,78 +407,37 @@ export async function coordinateSubagentContinuation(params: {
       const guardAllowed =
         childChainHop < config.maxChainLength &&
         (config.costCapTokens <= 0 || parentChainTokens <= config.costCapTokens);
-      const spawnBracket = async (): Promise<boolean> => {
-        if (
-          await rejectCrossSessionTargeting({
-            crossSessionTargeting: config.crossSessionTargeting,
-            dispatchingSessionKey: params.childSessionKey,
-            eventSessionKey: params.targetRequesterSessionKey,
-            source: "bracket",
-            targeting: {
-              ...(signal.targetSessionKey ? { targetSessionKey: signal.targetSessionKey } : {}),
-              ...(signal.targetSessionKeys?.length
-                ? { targetSessionKeys: signal.targetSessionKeys }
-                : {}),
-              ...(signal.fanoutMode ? { fanoutMode: signal.fanoutMode } : {}),
-            },
-            task: signal.task,
-          })
-        ) {
-          return false;
-        }
-        try {
-          const childDepth = getSubagentDepthFromSessionStore(params.childSessionKey);
-          const spawnResult = await spawnSubagentDirect(
-            {
-              task: `[continuation:chain-hop:${nextChainHop}] Delegated from sub-agent (depth ${childDepth}): ${signal.task}`,
-              ...(chainSilent ? { silentAnnounce: true } : {}),
-              ...(chainWake ? { silentAnnounce: true, wakeOnReturn: true } : {}),
-              ...(signal.targetSessionKey
-                ? { continuationTargetSessionKey: signal.targetSessionKey }
-                : {}),
-              ...(signal.targetSessionKeys?.length
-                ? { continuationTargetSessionKeys: signal.targetSessionKeys }
-                : {}),
-              ...(signal.fanoutMode ? { continuationFanoutMode: signal.fanoutMode } : {}),
-              drainsContinuationDelegateQueue: true,
-              continuationChainState: accounting.buildChildContinuationSpawnState(nextChainHop),
-              ...(signal.model ? { model: signal.model } : {}),
-            },
-            {
-              agentSessionKey: params.targetRequesterSessionKey,
-              agentChannel: params.targetRequesterOrigin?.channel ?? undefined,
-              agentAccountId: params.targetRequesterOrigin?.accountId ?? undefined,
-              agentTo: params.targetRequesterOrigin?.to ?? undefined,
-              agentThreadId: params.targetRequesterOrigin?.threadId ?? undefined,
-            },
-          );
-          if (spawnResult.status === "accepted") {
-            defaultRuntime.log(
-              `[subagent-chain-hop] Spawned chain delegate (${nextChainHop}/${config.maxChainLength}) from ${params.childSessionKey}: ${signal.task.slice(0, 80)}`,
-            );
-            return true;
-          }
-          defaultRuntime.log(
-            `[subagent-chain-hop] Spawn rejected (${spawnResult.status}) from ${params.childSessionKey} reason=${spawnResult.error ?? "no reason given"}: ${signal.task.slice(0, 80)}`,
-          );
-          return false;
-        } catch (error) {
-          defaultRuntime.log(
-            `[subagent-chain-hop] Spawn failed from ${params.childSessionKey}: ${String(error)}`,
-          );
-          return false;
-        }
-      };
       if (!guardAllowed) {
         defaultRuntime.log(
           childChainHop >= config.maxChainLength
             ? `[subagent-chain-hop] Chain length ${nextChainHop} > ${config.maxChainLength}, rejecting hop from ${params.childSessionKey}`
             : `[subagent-chain-hop] Cost cap exceeded (${parentChainTokens} > ${config.costCapTokens}), rejecting hop from ${params.childSessionKey}`,
         );
-      } else if ((signal.delayMs ?? 0) > 0 && accounting.childChainTokensToFold === 0) {
-        enqueuePendingDelegate(params.childSessionKey, {
+      } else if (
+        await rejectCrossSessionTargeting({
+          crossSessionTargeting: config.crossSessionTargeting,
+          dispatchingSessionKey: params.childSessionKey,
+          eventSessionKey: params.targetRequesterSessionKey,
+          source: "bracket",
+          targeting: {
+            ...(signal.targetSessionKey ? { targetSessionKey: signal.targetSessionKey } : {}),
+            ...(signal.targetSessionKeys?.length
+              ? { targetSessionKeys: signal.targetSessionKeys }
+              : {}),
+            ...(signal.fanoutMode ? { fanoutMode: signal.fanoutMode } : {}),
+          },
           task: signal.task,
-          delayMs: Math.max(config.minDelayMs, Math.min(config.maxDelayMs, signal.delayMs ?? 0)),
+        })
+      ) {
+        // Policy rejection already emitted its visible outcome; no flow is admitted.
+      } else {
+        const delayMs =
+          (signal.delayMs ?? 0) > 0
+            ? Math.max(config.minDelayMs, Math.min(config.maxDelayMs, signal.delayMs ?? 0))
+            : 0;
+        const admitted = enqueuePendingDelegate(params.childSessionKey, {
+          task: signal.task,
+          ...(delayMs > 0 ? { delayMs } : {}),
           ...(chainWake ? { mode: "silent-wake" } : chainSilent ? { mode: "silent" } : {}),
           ...(params.silentAnnounce ? { inheritedSilent: true } : {}),
           ...(params.silentAnnounce && params.wakeOnReturn ? { inheritedWake: true } : {}),
@@ -451,41 +448,39 @@ export async function coordinateSubagentContinuation(params: {
           ...(signal.fanoutMode ? { fanoutMode: signal.fanoutMode } : {}),
           ...(internalTraceparent ? { traceparent: internalTraceparent } : {}),
           ...(signal.model ? { model: signal.model } : {}),
-          spawnRequesterSessionKey: params.targetRequesterSessionKey,
-          ...(params.targetRequesterOrigin?.channel
-            ? { spawnRequesterChannel: params.targetRequesterOrigin.channel }
-            : {}),
-          ...(params.targetRequesterOrigin?.accountId
-            ? { spawnRequesterAccountId: params.targetRequesterOrigin.accountId }
-            : {}),
-          ...(params.targetRequesterOrigin?.to
-            ? { spawnRequesterTo: params.targetRequesterOrigin.to }
-            : {}),
-          ...(params.targetRequesterOrigin?.threadId !== undefined
-            ? { spawnRequesterThreadId: params.targetRequesterOrigin.threadId }
-            : {}),
+          originRunId: params.childRunId,
         });
-        if (toolDelegates.length === 0) {
-          const state = accounting.buildChildContinuationSpawnState(nextChainHop);
-          void drainChildContinuationQueue({
-            cfg: params.cfg,
-            childSessionKey: params.childSessionKey,
-            requesterOrigin: params.targetRequesterOrigin,
-            chainStateOverride: {
-              currentChainCount: state.count,
-              chainStartedAt: state.startedAt,
-              accumulatedChainTokens: state.tokens,
-              chainId: state.chainId,
-            },
-            inheritedSilent: params.silentAnnounce === true,
-            inheritedWake: params.wakeOnReturn === true,
-          });
-          delayedBracketDrainArmed = true;
+        if (!admitted) {
+          reportDelegateAdmissionFailure(params.childSessionKey, params.targetRequesterSessionKey);
+          bracketDrainArmed = true;
+        } else {
+          originDelegateFlowStatus = admitted.status;
+          const shouldDrainBracketNow =
+            delayMs === 0 || accounting.childChainTokensToFold > 0 || toolDelegates.length === 0;
+          if (shouldDrainBracketNow) {
+            const state = accounting.buildChildContinuationSpawnState(childChainHop);
+            const dispatchResult = await drainChildContinuationQueue({
+              cfg: params.cfg,
+              childSessionKey: params.childSessionKey,
+              requesterOrigin: params.targetRequesterOrigin,
+              ...(accounting.childChainTokensToFold > 0 ? { dispatchRegardlessOfDelay: true } : {}),
+              chainStateOverride: {
+                currentChainCount: state.count,
+                chainStartedAt: state.startedAt,
+                accumulatedChainTokens: state.tokens,
+                chainId: state.chainId,
+              },
+              inheritedSilent: params.silentAnnounce === true,
+              inheritedWake: params.wakeOnReturn === true,
+            });
+            bracketReserved = (dispatchResult?.dispatched ?? 0) > 0;
+            originDelegateFlowStatus = findContinuationDelegateFlowByOriginRun(
+              params.childSessionKey,
+              params.childRunId,
+            )?.status;
+            bracketDrainArmed = true;
+          }
         }
-      } else if (accounting.childChainTokensToFold > 0 && (signal.delayMs ?? 0) > 0) {
-        bracketReserved = await spawnBracket();
-      } else {
-        bracketReserved = await spawnBracket();
       }
     }
   }
@@ -641,7 +636,7 @@ export async function coordinateSubagentContinuation(params: {
         activeDispatch.release();
       }
     }
-    if (deferInitialDrain) {
+    if (deferInitialDrain && !bracketDrainArmed) {
       const state = accounting.buildChildContinuationSpawnState(toolHopBase);
       postBracketDrainArmed = true;
       void drainChildContinuationQueue({
@@ -659,7 +654,7 @@ export async function coordinateSubagentContinuation(params: {
       });
     }
   }
-  if (deferInitialDrain && !postBracketDrainArmed && !delayedBracketDrainArmed) {
+  if (deferInitialDrain && !postBracketDrainArmed && !bracketDrainArmed) {
     const state = accounting.buildChildContinuationSpawnState(
       (parseContinuationChainHop(params.task) ?? 0) + (bracketReserved ? 1 : 0),
     );
@@ -683,5 +678,6 @@ export async function coordinateSubagentContinuation(params: {
     skipAnnounceDelivery: params.skipAnnounceDelivery,
     continuationEnabled,
     isContinuationChainDelegate: isChain,
+    ...(originDelegateFlowStatus ? { originDelegateFlowStatus } : {}),
   };
 }

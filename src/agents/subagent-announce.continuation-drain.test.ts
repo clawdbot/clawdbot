@@ -90,9 +90,13 @@ const revalidatePendingDelegateForSpawnMock = vi.fn(
 );
 // capture durable delayed-bracket delegate enqueues (replaces the old
 // volatile setTimeout path).
-const enqueuePendingDelegateMock = vi.fn((_sessionKey: string, _delegate: unknown) => {});
+const enqueuePendingDelegateMock = vi.fn((_sessionKey: string, _delegate: unknown) => ({
+  status: "queued",
+}));
 const clearQueuedDelegatesChainTokensFoldMock = vi.fn((_sessionKey: string) => 0);
-const stagePostCompactionDelegateMock = vi.fn((_sessionKey: string, _delegate: unknown) => {});
+const stagePostCompactionDelegateMock = vi.fn((_sessionKey: string, _delegate: unknown) => ({
+  status: "queued",
+}));
 const spawnSubagentDirectMock = vi.fn(
   async (_params: Record<string, unknown>, _ctx: unknown): Promise<SpawnSubagentResult> => ({
     status: "accepted",
@@ -375,9 +379,9 @@ describe("subagent-announce continuation drain (F7)", () => {
     markPendingDelegateFailedMock.mockReset();
     markPendingDelegateSpawnAcceptedMock.mockReset().mockReturnValue(true);
     revalidatePendingDelegateForSpawnMock.mockReset().mockReturnValue({ allowed: true });
-    enqueuePendingDelegateMock.mockReset();
+    enqueuePendingDelegateMock.mockReset().mockReturnValue({ status: "queued" });
     clearQueuedDelegatesChainTokensFoldMock.mockReset().mockReturnValue(0);
-    stagePostCompactionDelegateMock.mockReset();
+    stagePostCompactionDelegateMock.mockReset().mockReturnValue({ status: "queued" });
     spawnSubagentDirectMock.mockReset().mockResolvedValue({
       status: "accepted",
       childSessionKey: "agent:main:subagent:grandchild",
@@ -707,17 +711,17 @@ describe("subagent-announce continuation drain (F7)", () => {
       };
     };
     expect(call?.chainState).toMatchObject({
-      currentChainCount: 2,
+      currentChainCount: 1,
       accumulatedChainTokens: 7_000,
       chainId: "chain-post-bracket",
     });
     expect(call?.loadFreshChainState?.()).toMatchObject({
-      currentChainCount: 2,
+      currentChainCount: 1,
       accumulatedChainTokens: 7_000,
       chainId: "chain-post-bracket",
     });
     expect(childEntry).toMatchObject({
-      continuationChainCount: 2,
+      continuationChainCount: 1,
       continuationChainTokens: 7_000,
       continuationChainId: "chain-post-bracket",
     });
@@ -763,7 +767,7 @@ describe("subagent-announce continuation drain (F7)", () => {
       dispatchQueuedRegardlessOfDelay?: boolean;
     };
     expect(call.chainState).toMatchObject({
-      currentChainCount: 2,
+      currentChainCount: 1,
       accumulatedChainTokens: 7_000,
     });
     expect(call.dispatchQueuedRegardlessOfDelay).toBe(true);

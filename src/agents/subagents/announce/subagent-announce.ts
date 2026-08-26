@@ -530,6 +530,17 @@ export async function runSubagentAnnounceFlow(params: {
       invalidateSessionEntry,
     });
     findings = continuation.findings;
+    if (
+      continuation.originDelegateFlowStatus === "queued" ||
+      continuation.originDelegateFlowStatus === "running" ||
+      (continuation.originDelegateFlowStatus !== undefined &&
+        countPendingDescendantRuns(params.childSessionKey) > 0)
+    ) {
+      // The token-emitting child owns its delegate until the bound return settles.
+      // Retry preserves disposable-session cleanup without replaying the token flow.
+      shouldDeleteChildSession = false;
+      return "retryable";
+    }
     if (continuation.skipAnnounceDelivery && !managedArtifactReturn) {
       return "delivered";
     }

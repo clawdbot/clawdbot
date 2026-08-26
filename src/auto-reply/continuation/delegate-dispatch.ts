@@ -207,7 +207,7 @@ export async function dispatchToolDelegates(
   const { acceptedDelegates, pendingDelegates, acceptedChildSessionKeysByFlowId } =
     partitionKnownAcceptedDelegateChildren({
       delegates: toolDelegates,
-      parentSessionKey: (delegate) => delegate.spawnRequesterSessionKey ?? sessionKey,
+      parentSessionKey: () => sessionKey,
     });
   const { dispatchableDelegates, unavailablePolicyDelegates } = partitionManagedDelegatesForRuntime(
     {
@@ -310,10 +310,9 @@ export async function dispatchToolDelegates(
   }
 
   for (const delegate of delegatesWithinLimit) {
-    const spawnSessionKey = delegate.spawnRequesterSessionKey ?? sessionKey;
     const childSessionKey = delegate.flowId
       ? (acceptedChildSessionKeysByFlowId.get(delegate.flowId) ??
-        deriveContinuationDelegateChildSessionKeyFromParent(spawnSessionKey, delegate.flowId))
+        deriveContinuationDelegateChildSessionKeyFromParent(sessionKey, delegate.flowId))
       : undefined;
     const acceptedChildAlreadyKnown = Boolean(
       delegate.flowId && acceptedChildSessionKeysByFlowId.has(delegate.flowId),
@@ -460,11 +459,11 @@ export async function dispatchToolDelegates(
     const delegateDelivery: "immediate" | "timer" = delegateDelayMs > 0 ? "timer" : "immediate";
 
     const spawnCtx: SpawnSubagentContext = {
-      agentSessionKey: spawnSessionKey,
-      agentChannel: delegate.spawnRequesterChannel ?? ctx.agentChannel,
-      agentAccountId: delegate.spawnRequesterAccountId ?? ctx.agentAccountId,
-      agentTo: delegate.spawnRequesterTo ?? ctx.agentTo,
-      agentThreadId: delegate.spawnRequesterThreadId ?? ctx.agentThreadId,
+      agentSessionKey: sessionKey,
+      agentChannel: ctx.agentChannel,
+      agentAccountId: ctx.agentAccountId,
+      agentTo: ctx.agentTo,
+      agentThreadId: ctx.agentThreadId,
     };
 
     let dispatchSpan: ReturnType<typeof startContinuationDelegateSpan> | undefined;
@@ -477,18 +476,6 @@ export async function dispatchToolDelegates(
       ownerSessionKey: sessionKey,
     });
     try {
-      if (delegateDelivery === "timer") {
-        emitContinuationDelegateFireSpan({
-          chainId: dispatchChainId,
-          chainStepRemainingAtDispatch: maxChainLength - nextHop,
-          delegateMode,
-          delayMs: delegateDelayMs,
-          fireDeferredMs: Date.now() - (delegate.firstArmedAt ?? Date.now()),
-          reason: delegate.task,
-          traceparent: outboundTraceparent,
-          log: (message) => log.info(message),
-        });
-      }
       dispatchSpan = startContinuationDelegateSpan({
         chainId: dispatchChainId,
         chainStepRemaining: maxChainLength - nextHop,
@@ -500,6 +487,20 @@ export async function dispatchToolDelegates(
         log: (message) => log.info(message),
       });
       const spawnTraceparent = dispatchSpan.traceparent?.() ?? outboundTraceparent;
+      if (delegateDelivery === "timer") {
+        // The concrete dispatch span is the last trace owner before deferred work
+        // fires. Parent fire to it so a missing origin carrier cannot split traces.
+        emitContinuationDelegateFireSpan({
+          chainId: dispatchChainId,
+          chainStepRemainingAtDispatch: maxChainLength - nextHop,
+          delegateMode,
+          delayMs: delegateDelayMs,
+          fireDeferredMs: Date.now() - (delegate.firstArmedAt ?? Date.now()),
+          reason: delegate.task,
+          traceparent: spawnTraceparent,
+          log: (message) => log.info(message),
+        });
+      }
       if (childSessionKey && acceptedChildAlreadyKnown) {
         const acceptedDelegate = await persistTerminalChainState(
           delegate,

@@ -52,9 +52,28 @@ const callGatewayMock = vi.hoisted(() =>
     return {};
   }),
 );
+const inProcessDispatchMock = vi.hoisted(() =>
+  vi.fn(
+    async (
+      _method: string,
+      _params: Record<string, unknown>,
+      _options?: Record<string, unknown>,
+    ) => ({
+      runId: "return-run",
+      status: "accepted",
+    }),
+  ),
+);
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: (...args: [GatewayRequest]) => callGatewayMock(...args),
+}));
+vi.mock("../gateway/server-plugin-in-process-dispatch.js", () => ({
+  dispatchGatewayMethodInProcess: (
+    method: string,
+    params: Record<string, unknown>,
+    options?: Record<string, unknown>,
+  ) => inProcessDispatchMock(method, params, options),
 }));
 
 import {
@@ -62,27 +81,34 @@ import {
   pendingDelegateCount,
   resetDelegateStoreForTests,
 } from "../auto-reply/continuation/delegate-store.js";
-import { accountFollowupTurn } from "../auto-reply/reply/agent-runner-result-accounting.js";
-import type {
-  AdmittedFollowupTurn,
-  FollowupRunnerParams,
-} from "../auto-reply/reply/followup-turn-admission.js";
-import type { FollowupExecutionResult } from "../auto-reply/reply/followup-turn-execution.js";
 import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfig,
   setRuntimeConfigSnapshot,
 } from "../config/config.js";
-import type { SessionEntry } from "../config/sessions.js";
 import { resolveSessionStorePathCore } from "../config/sessions.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
+import {
+  resetContinuationTracer,
+  setContinuationTracer,
+  type SpanAttributes,
+} from "../infra/continuation-tracer.js";
+import { parseDiagnosticTraceparent } from "../infra/diagnostic-trace-context-pure.js";
+import {
+  resetDiagnosticTraceContextForTest,
+  runWithDiagnosticTraceContext,
+  type DiagnosticTraceContext,
+} from "../infra/diagnostic-trace-context.js";
 import { peekSystemEventEntries, resetSystemEventsForTest } from "../infra/system-events.js";
 import { defaultRuntime } from "../runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { listTaskFlowsForOwnerKey } from "../tasks/task-flow-runtime-internal.js";
+import {
+  listTaskFlowsForOwnerKey,
+  reloadTaskFlowRegistryFromStore,
+} from "../tasks/task-flow-runtime-internal.js";
 import { resetTaskFlowRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
 import { loadSessionEntryByKey } from "./subagents/announce/subagent-announce-delivery.js";
 import {
@@ -98,6 +124,14 @@ import { getSubagentDepthFromSessionStore } from "./subagents/spawn/subagent-dep
 import { spawnSubagentDirect } from "./subagents/spawn/subagent-spawn.js";
 
 const rootSessionKey = "agent:main:root";
+const originTraceId = "11111111111111111111111111111111";
+const originSpanId = "2222222222222222";
+const originTraceContext: DiagnosticTraceContext = {
+  traceId: originTraceId,
+  spanId: originSpanId,
+  parentSpanId: "3333333333333333",
+  traceFlags: "01",
+};
 let stateDir: string;
 
 function makeConfig(): OpenClawConfig {
@@ -115,118 +149,13 @@ function makeConfig(): OpenClawConfig {
           enabled: true,
           maxChainLength: 10,
           costCapTokens: 500_000,
-          minDelayMs: 0,
-          maxDelayMs: 0,
+          minDelayMs: 25,
+          maxDelayMs: 25,
           maxDelegatesPerTurn: 5,
           crossSessionTargeting: "disabled" as const,
         },
       },
     },
-  };
-}
-
-function createRawTokenTurn(params: {
-  cfg: OpenClawConfig;
-  sessionEntry: SessionEntry;
-  storePath: string;
-}): {
-  turn: AdmittedFollowupTurn;
-  defaults: FollowupRunnerParams;
-  execution: FollowupExecutionResult;
-} {
-  let currentEntry: SessionEntry | undefined = params.sessionEntry;
-  const sessionStore: Record<string, SessionEntry> = {
-    [rootSessionKey]: params.sessionEntry,
-  };
-  const turn: AdmittedFollowupTurn = {
-    runId: "raw-token-origin-run",
-    queued: {
-      prompt: "emit one raw-final delegate",
-      enqueuedAt: Date.now(),
-      originatingChannel: "discord",
-      originatingAccountId: "acct-root",
-      originatingTo: "chan-root",
-      run: {
-        agentId: "main",
-        agentDir: process.cwd(),
-        sessionId: params.sessionEntry.sessionId,
-        sessionKey: rootSessionKey,
-        sessionFile: rootSessionKey,
-        workspaceDir: process.cwd(),
-        config: params.cfg,
-        provider: "anthropic",
-        model: "sonnet-4.6",
-        messageProvider: "discord",
-        timeoutMs: 1_000,
-        blockReplyBreak: "message_end",
-      },
-    },
-    operation: {} as AdmittedFollowupTurn["operation"],
-    config: params.cfg,
-    sessionStore,
-    session: {
-      kind: "session",
-      key: rootSessionKey,
-      storePath: params.storePath,
-      current: () => currentEntry,
-      publish: (entry) => {
-        currentEntry = entry;
-        if (entry) {
-          sessionStore[rootSessionKey] = entry;
-        }
-      },
-      adopt: (entry) => {
-        currentEntry = entry;
-        sessionStore[rootSessionKey] = entry;
-      },
-    },
-    sendPolicy: "allow",
-    preflightCompactionApplied: false,
-    noOpRearmWakeClass: undefined,
-  };
-  return {
-    turn,
-    defaults: {
-      typing: {} as FollowupRunnerParams["typing"],
-      typingMode: "never",
-      defaultModel: "anthropic/sonnet-4.6",
-    },
-    execution: {
-      commentaryPayloadsEnabled: false,
-      execution: {
-        runId: "raw-token-origin-run",
-        outcome: {
-          kind: "settled",
-          status: "ok",
-          result: {
-            payloads: [{ text: "Origin turn complete." }],
-            meta: {
-              durationMs: 1,
-              agentMeta: {
-                provider: "anthropic",
-                model: "sonnet-4.6",
-                sessionId: params.sessionEntry.sessionId,
-                usage: { input: 3, output: 4, cacheRead: 0, cacheWrite: 0 },
-              },
-            },
-          },
-          continueWorkRequests: [],
-          rawContinuationText:
-            "Origin turn complete.\n[[CONTINUE_DELEGATE: reply exactly RAW-TOKEN-CHILD-DONE | silent-wake]]",
-          resolved: { provider: "anthropic", model: "sonnet-4.6" },
-          fallback: { exhausted: false, attempts: [] },
-          autoCompactionCount: 0,
-          didLogHeartbeatStrip: false,
-        },
-      },
-      runStartedAt: Date.now() - 10,
-      sessionCtx: {},
-      pendingToolTasks: new Set(),
-      progress: {
-        drain: vi.fn(async () => {}),
-        visibleToolErrorObserved: () => false,
-      },
-    } as FollowupExecutionResult,
   };
 }
 
@@ -254,6 +183,47 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2_000) {
   throw new Error("timed out waiting for condition");
 }
 
+type RecordedContinuationSpan = {
+  name: string;
+  traceId: string;
+  spanId: string;
+  inputTraceparent?: string;
+  attributes?: SpanAttributes;
+};
+
+function installRecordingContinuationTracer(): RecordedContinuationSpan[] {
+  const spans: RecordedContinuationSpan[] = [];
+  let sequence = 0;
+  setContinuationTracer({
+    startSpan(name, options) {
+      sequence += 1;
+      const parent = parseDiagnosticTraceparent(options?.traceparent);
+      const traceId = parent?.traceId ?? sequence.toString(16).padStart(32, "0");
+      const spanId = sequence.toString(16).padStart(16, "0");
+      const recorded: RecordedContinuationSpan = {
+        name,
+        traceId,
+        spanId,
+        ...(options?.traceparent ? { inputTraceparent: options.traceparent } : {}),
+        ...(options?.attributes ? { attributes: { ...options.attributes } } : {}),
+      };
+      spans.push(recorded);
+      return {
+        setAttributes(attributes) {
+          recorded.attributes = { ...recorded.attributes, ...attributes };
+        },
+        setStatus() {},
+        recordException() {},
+        traceparent() {
+          return `00-${traceId}-${spanId}-01`;
+        },
+        end() {},
+      };
+    },
+  });
+  return spans;
+}
+
 describe("continuation chain production composition proof (tree hop-1 + hop-2)", () => {
   let logSpy: ReturnType<typeof vi.spyOn>;
   let errorSpy: ReturnType<typeof vi.spyOn>;
@@ -263,6 +233,7 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
     gatewayState.waitResults.clear();
     gatewayState.chatHistoryBySessionKey.clear();
     callGatewayMock.mockClear();
+    inProcessDispatchMock.mockClear();
 
     stateDir = mkdtempSync(join(tmpdir(), "openclaw-proof-state-live-tree-chain-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
@@ -272,6 +243,8 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
     resetTaskFlowRegistryForTests({ persist: false });
     resetDelegateStoreForTests();
     resetSystemEventsForTest();
+    resetContinuationTracer();
+    resetDiagnosticTraceContextForTest();
     setRuntimeConfigSnapshot(makeConfig());
     expect(getRuntimeConfig().agents?.defaults?.continuation?.enabled).toBe(true);
 
@@ -290,6 +263,8 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
     resetTaskFlowRegistryForTests({ persist: false });
     resetSubagentRegistryForTests();
     resetAgentEventsForTest();
+    resetContinuationTracer();
+    resetDiagnosticTraceContextForTest();
     vi.unstubAllEnvs();
     // Both session access and shared state cache SQLite handles. Close them
     // before deleting this test's state directory so no handle/cache crosses
@@ -485,74 +460,199 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
     // duplicate either the stale intermediate or root delivery.
   });
 
-  it("binds a raw-final token delegate through durable task completion to its origin", async () => {
-    const cfg = makeConfig();
-    const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
-    const sessionEntry: SessionEntry = {
-      sessionId: "sess-root",
-      updatedAt: Date.now(),
-    };
-    const { turn, defaults, execution } = createRawTokenTurn({
-      cfg,
-      sessionEntry,
-      storePath,
+  it("keeps a raw-final token delegate owned by its registered disposable origin", async () => {
+    const spans = installRecordingContinuationTracer();
+    const delegateSentinel = "RAW-TOKEN-DELEGATE-DONE";
+    const delegateTask = `reply exactly ${delegateSentinel}`;
+    const originSpawn = await spawnSubagentDirect(
+      {
+        task: "emit one raw-final delegate token",
+        label: "raw-token-origin",
+        cleanup: "delete",
+      },
+      {
+        agentSessionKey: rootSessionKey,
+        agentChannel: "discord",
+        agentTo: "chan-root",
+        agentAccountId: "acct-root",
+      },
+    );
+    if (originSpawn.status !== "accepted" || !originSpawn.childSessionKey || !originSpawn.runId) {
+      throw new Error(`origin spawn failed: ${JSON.stringify(originSpawn)}`);
+    }
+    const originChildSessionKey = originSpawn.childSessionKey;
+    const originChildRunId = originSpawn.runId;
+    gatewayState.waitResults.set(originChildRunId, {
+      status: "ok",
+      startedAt: 10,
+      endedAt: 20,
     });
+    const originFinalText = `Origin complete.\n[[CONTINUE_DELEGATE: ${delegateTask} +1s]]`;
+    gatewayState.chatHistoryBySessionKey.set(originChildSessionKey, [
+      {
+        role: "assistant",
+        content: originFinalText,
+      },
+    ]);
 
-    await accountFollowupTurn({ turn, defaults, execution });
+    const emitOriginCompletion = () =>
+      runWithDiagnosticTraceContext(originTraceContext, () => {
+        emitAgentEvent({
+          runId: originChildRunId,
+          stream: "lifecycle",
+          sessionKey: originChildSessionKey,
+          data: {
+            phase: "end",
+            startedAt: 10,
+            endedAt: 20,
+            terminalReply: { disposition: "visible", text: originFinalText },
+          },
+        });
+      });
+    emitOriginCompletion();
 
-    const flows = listTaskFlowsForOwnerKey(rootSessionKey);
-    expect(flows).toHaveLength(1);
+    const listDelegateRuns = () =>
+      [
+        ...listSubagentRunsForRequester(rootSessionKey),
+        ...listSubagentRunsForRequester(originChildSessionKey),
+      ]
+        .filter((entry) => entry.task.includes(delegateSentinel))
+        .filter(
+          (entry, index, entries) =>
+            entries.findIndex((candidate) => candidate.runId === entry.runId) === index,
+        );
+    await waitFor(() => {
+      const flow = listTaskFlowsForOwnerKey(originChildSessionKey)[0];
+      return (
+        flow?.status === "succeeded" &&
+        listDelegateRuns().length === 1 &&
+        spans.some((span) => span.name === "continuation.delegate.dispatch") &&
+        spans.some((span) => span.name === "continuation.delegate.fire")
+      );
+    }, 4_000);
+
+    const flows = listTaskFlowsForOwnerKey(originChildSessionKey);
     const flow = flows[0];
+    const [delegateRun] = listDelegateRuns();
+    if (!flow || !delegateRun) {
+      throw new Error("expected one accepted raw-token delegate flow and run");
+    }
     expect(flow).toMatchObject({
-      ownerKey: rootSessionKey,
+      ownerKey: originChildSessionKey,
       status: "succeeded",
       currentStep: "Accepted by continuation subagent",
     });
-    const childRun = listSubagentRunsForRequester(rootSessionKey).find((entry) =>
-      entry.task.includes("RAW-TOKEN-CHILD-DONE"),
-    );
-    expect(childRun).toBeDefined();
-    expect(childRun?.childSessionKey).toBeTruthy();
-    expect(childRun?.runId).toBeTruthy();
-    expect(flow?.stateJson).toMatchObject({
-      childSessionKey: childRun?.childSessionKey,
+    expect(flow.stateJson).toMatchObject({
+      childSessionKey: delegateRun.childSessionKey,
     });
-
-    const childSessionKey = childRun?.childSessionKey as string;
-    const childRunId = childRun?.runId as string;
-    gatewayState.waitResults.set(childRunId, { status: "ok", startedAt: 50, endedAt: 60 });
-    gatewayState.chatHistoryBySessionKey.set(childSessionKey, [
-      {
-        role: "assistant",
-        content: "RAW-TOKEN-CHILD-DONE",
-      },
+    expect.soft(flow.stateJson).toMatchObject({ originRunId: originChildRunId });
+    expect.soft(delegateRun.requesterSessionKey).toBe(originChildSessionKey);
+    expect.soft(delegateRun.controllerSessionKey).toBe(originChildSessionKey);
+    expect.soft(listTaskFlowsForOwnerKey(rootSessionKey)).toHaveLength(0);
+    reloadTaskFlowRegistryFromStore();
+    expect.soft(listTaskFlowsForOwnerKey(originChildSessionKey)).toEqual([
+      expect.objectContaining({
+        flowId: flow.flowId,
+        ownerKey: originChildSessionKey,
+        stateJson: expect.objectContaining({
+          childSessionKey: delegateRun.childSessionKey,
+          originRunId: originChildRunId,
+        }),
+      }),
     ]);
-    const countOriginReturns = () =>
-      peekSystemEventEntries(rootSessionKey).filter((entry) =>
-        entry.text.includes("RAW-TOKEN-CHILD-DONE"),
-      ).length;
-    const before = countOriginReturns();
-    const completeChild = () =>
-      emitAgentEvent({
-        runId: childRunId,
-        stream: "lifecycle",
-        sessionKey: childSessionKey,
-        data: { phase: "end", startedAt: 50, endedAt: 60 },
-      });
 
-    completeChild();
-    await waitFor(() => countOriginReturns() === before + 1, 4_000);
-    completeChild();
+    const dispatchSpan = spans.find((span) => span.name === "continuation.delegate.dispatch");
+    const fireSpan = spans.find((span) => span.name === "continuation.delegate.fire");
+    expect(dispatchSpan).toBeDefined();
+    expect(fireSpan).toBeDefined();
+    expect.soft(dispatchSpan?.traceId).toBe(originTraceId);
+    expect.soft(fireSpan?.traceId).toBe(originTraceId);
+    expect.soft(dispatchSpan?.traceId).toBe(fireSpan?.traceId);
+
+    emitOriginCompletion();
     await new Promise<void>((resolveTurn) => {
       setTimeout(resolveTurn, 50);
     });
+    expect(listTaskFlowsForOwnerKey(originChildSessionKey)).toHaveLength(1);
+    expect(listDelegateRuns()).toHaveLength(1);
+    releaseSubagentRun(originChildRunId);
+    expect(getSubagentRunByChildSessionKey(originChildSessionKey)).toBeNull();
 
-    expect(countOriginReturns()).toBe(before + 1);
-    expect(listTaskFlowsForOwnerKey(rootSessionKey)).toEqual([
-      expect.objectContaining({
-        flowId: flow?.flowId,
-        status: "succeeded",
-      }),
+    const delegateChildSessionKey = delegateRun.childSessionKey;
+    const delegateChildRunId = delegateRun.runId;
+    gatewayState.waitResults.set(delegateChildRunId, {
+      status: "ok",
+      startedAt: 30,
+      endedAt: 40,
+    });
+    gatewayState.chatHistoryBySessionKey.set(delegateChildSessionKey, [
+      {
+        role: "assistant",
+        content: delegateSentinel,
+      },
     ]);
+    const countReturns = (sessionKey: string) => {
+      const gatewayReturns = callGatewayMock.mock.calls.filter(
+        ([request]) =>
+          request.method === "agent" &&
+          request.params?.sessionKey === sessionKey &&
+          typeof request.params.message === "string" &&
+          request.params.message.includes(delegateSentinel),
+      ).length;
+      const inProcessReturns = inProcessDispatchMock.mock.calls.filter(
+        ([method, params]) =>
+          method === "agent" &&
+          params.sessionKey === sessionKey &&
+          typeof params.message === "string" &&
+          params.message.includes(delegateSentinel),
+      ).length;
+      return gatewayReturns + inProcessReturns;
+    };
+    const originReturnsBefore = countReturns(originChildSessionKey);
+    const rootReturnsBefore = countReturns(rootSessionKey);
+    const emitDelegateCompletion = () =>
+      emitAgentEvent({
+        runId: delegateChildRunId,
+        stream: "lifecycle",
+        sessionKey: delegateChildSessionKey,
+        data: {
+          phase: "end",
+          startedAt: 30,
+          endedAt: 40,
+          terminalReply: { disposition: "visible", text: delegateSentinel },
+        },
+      });
+
+    emitDelegateCompletion();
+    try {
+      await waitFor(
+        () =>
+          countReturns(originChildSessionKey) + countReturns(rootSessionKey) ===
+          originReturnsBefore + rootReturnsBefore + 1,
+        4_000,
+      );
+    } catch {
+      throw new Error(
+        JSON.stringify({
+          originRun: getSubagentRunByChildSessionKey(originChildSessionKey),
+          delegateRun: getSubagentRunByChildSessionKey(delegateChildSessionKey),
+          originEvents: peekSystemEventEntries(originChildSessionKey).map((entry) => entry.text),
+          rootEvents: peekSystemEventEntries(rootSessionKey).map((entry) => entry.text),
+          gatewayCalls: callGatewayMock.mock.calls,
+          inProcessDispatches: inProcessDispatchMock.mock.calls,
+          logs: logSpy.mock.calls.map(([message]: [unknown]) => String(message)),
+          errors: errorSpy.mock.calls.map(([message]: [unknown]) => String(message)),
+        }),
+      );
+    }
+    expect.soft(countReturns(originChildSessionKey)).toBe(originReturnsBefore + 1);
+    expect.soft(countReturns(rootSessionKey)).toBe(rootReturnsBefore);
+
+    emitDelegateCompletion();
+    await new Promise<void>((resolveTurn) => {
+      setTimeout(resolveTurn, 50);
+    });
+    expect(countReturns(originChildSessionKey)).toBe(originReturnsBefore + 1);
+    expect(countReturns(rootSessionKey)).toBe(rootReturnsBefore);
   });
 });

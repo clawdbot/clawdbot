@@ -7,12 +7,14 @@ import type { FollowupExecutionResult } from "./followup-turn-execution.js";
 const state = vi.hoisted(() => ({
   dispatchPostCompactionDelegates: vi.fn(),
   emitContinuationCompactionReleasedSpan: vi.fn(),
+  formatCurrentSpanContinuationTraceparent: vi.fn<() => string | undefined>(),
   incrementRunCompactionCount: vi.fn(),
   recordNoOpRearmOutcome: vi.fn(),
   persistRunSessionUsage: vi.fn(async (_params: unknown) => undefined),
   refreshQueuedFollowupSession: vi.fn(),
   scheduleContinuation: vi.fn(),
   resolveContextTokensForModel: vi.fn<() => number | undefined>(() => 200_000),
+  resolveContinuationTraceparent: vi.fn<(value: string | undefined) => string | undefined>(),
 }));
 
 vi.mock("../../agents/context.js", () => ({
@@ -88,8 +90,9 @@ vi.mock("./post-compaction-delegate-dispatch.js", () => ({
 vi.mock("../../infra/continuation-tracer.js", () => ({
   emitContinuationCompactionReleasedSpan: (...args: unknown[]) =>
     state.emitContinuationCompactionReleasedSpan(...args),
-  formatActiveContinuationTraceparent: vi.fn(),
-  resolveContinuationTraceparent: vi.fn(),
+  formatCurrentSpanContinuationTraceparent: () => state.formatCurrentSpanContinuationTraceparent(),
+  resolveContinuationTraceparent: (value: string | undefined) =>
+    state.resolveContinuationTraceparent(value),
 }));
 
 vi.mock("../../sessions/input-provenance.js", () => ({
@@ -231,6 +234,8 @@ beforeEach(() => {
   state.incrementRunCompactionCount.mockResolvedValue(7);
   state.scheduleContinuation.mockResolvedValue(undefined);
   state.resolveContextTokensForModel.mockReturnValue(200_000);
+  state.formatCurrentSpanContinuationTraceparent.mockReturnValue(undefined);
+  state.resolveContinuationTraceparent.mockReturnValue(undefined);
 });
 
 describe("accountFollowupTurn", () => {
@@ -306,6 +311,11 @@ describe("accountFollowupTurn", () => {
 
   it("prefers a delegate token retained only in raw terminal text over typed continue_work", async () => {
     const turn = createTurn();
+    const currentTraceparent = "00-11111111111111111111111111111111-2222222222222222-01";
+    const inheritedTraceparent = "00-11111111111111111111111111111111-3333333333333333-01";
+    turn.queued.run.traceparent = inheritedTraceparent;
+    state.formatCurrentSpanContinuationTraceparent.mockReturnValue(currentTraceparent);
+    state.resolveContinuationTraceparent.mockReturnValue(inheritedTraceparent);
     const defaults = {
       typing: {} as FollowupRunnerParams["typing"],
       typingMode: "never",
@@ -331,6 +341,7 @@ describe("accountFollowupTurn", () => {
         continuationExtractionFromBracket: true,
         effectiveContinueWorkRequests: [{ reason: "finish queued work", delaySeconds: 30 }],
         continuationWorkReason: undefined,
+        internalBracketTraceparent: currentTraceparent,
       }),
     );
   });

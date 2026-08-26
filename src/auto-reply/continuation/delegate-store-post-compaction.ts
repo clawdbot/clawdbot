@@ -23,6 +23,7 @@ export function stagePostCompactionTaskFlowDelegate(
     task: delegate.task,
     mode: "post-compaction",
     firstArmedAt: delegate.firstArmedAt ?? delegate.stagedAt,
+    ...(delegate.originRunId ? { originRunId: delegate.originRunId } : {}),
     ...(delegate.attachments !== undefined ? { attachments: delegate.attachments } : {}),
     ...(delegate.attachAs !== undefined ? { attachAs: delegate.attachAs } : {}),
     ...(delegate.targetSessionKey ? { targetSessionKey: delegate.targetSessionKey } : {}),
@@ -256,12 +257,13 @@ export function listRecoverableStagedPostCompactionDelegates(options?: {
 /** Stage the session-persistence value used by reply and delivery callers. */
 export function stagePostCompactionDelegate(
   sessionKey: string,
-  delegate: SessionPostCompactionDelegate,
-): void {
+  delegate: SessionPostCompactionDelegate & { originRunId?: string },
+) {
   const stagedAt = delegate.createdAt ?? Date.now();
-  stagePostCompactionTaskFlowDelegate(sessionKey, {
+  return stagePostCompactionTaskFlowDelegate(sessionKey, {
     task: delegate.task,
     stagedAt,
+    ...(delegate.originRunId ? { originRunId: delegate.originRunId } : {}),
     firstArmedAt: delegate.firstArmedAt ?? stagedAt,
     ...(delegate.attachments !== undefined ? { attachments: delegate.attachments } : {}),
     ...(delegate.attachAs !== undefined ? { attachAs: delegate.attachAs } : {}),

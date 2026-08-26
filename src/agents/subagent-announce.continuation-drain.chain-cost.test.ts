@@ -84,9 +84,13 @@ const consumePendingDelegatesMock = vi.fn((_sessionKey: string): ConsumedToolDel
 const markPendingDelegateFailedMock = vi.fn();
 // capture durable delayed-bracket delegate enqueues (replaces the old
 // volatile setTimeout path).
-const enqueuePendingDelegateMock = vi.fn((_sessionKey: string, _delegate: unknown) => {});
+const enqueuePendingDelegateMock = vi.fn((_sessionKey: string, _delegate: unknown) => ({
+  status: "queued",
+}));
 const clearQueuedDelegatesChainTokensFoldMock = vi.fn((_sessionKey: string) => 0);
-const stagePostCompactionDelegateMock = vi.fn((_sessionKey: string, _delegate: unknown) => {});
+const stagePostCompactionDelegateMock = vi.fn((_sessionKey: string, _delegate: unknown) => ({
+  status: "queued",
+}));
 const spawnSubagentDirectMock = vi.fn(
   async (_params: Record<string, unknown>, _ctx: unknown): Promise<SpawnSubagentResult> => ({
     status: "accepted",
@@ -368,9 +372,9 @@ describe("subagent-announce continuation drain (F7)", () => {
       .mockResolvedValue({ delivered: true, path: "direct" });
     consumePendingDelegatesMock.mockReset().mockReturnValue([]);
     markPendingDelegateFailedMock.mockReset();
-    enqueuePendingDelegateMock.mockReset();
+    enqueuePendingDelegateMock.mockReset().mockReturnValue({ status: "queued" });
     clearQueuedDelegatesChainTokensFoldMock.mockReset().mockReturnValue(0);
-    stagePostCompactionDelegateMock.mockReset();
+    stagePostCompactionDelegateMock.mockReset().mockReturnValue({ status: "queued" });
     spawnSubagentDirectMock.mockReset().mockResolvedValue({
       status: "accepted",
       childSessionKey: "agent:main:subagent:grandchild",
@@ -903,14 +907,14 @@ describe("subagent-announce continuation drain (F7)", () => {
         task: string;
         delayMs?: number;
         traceparent?: string;
-        spawnRequesterSessionKey?: string;
+        originRunId?: string;
       },
     ];
     expect(enqueueSessionKey).toBe("agent:main:subagent:bracket");
     expect(enqueued.task).toBe("keep working");
     expect(enqueued.delayMs).toBe(30_000);
     expect(enqueued.traceparent).toBeUndefined();
-    expect(enqueued.spawnRequesterSessionKey).toBe("agent:main:main");
+    expect(enqueued.originRunId).toBe("run-bracket");
 
     // It must NOT be spawned immediately via a volatile in-process path.
     expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
@@ -922,7 +926,7 @@ describe("subagent-announce continuation drain (F7)", () => {
       chainState?: { currentChainCount?: number; accumulatedChainTokens?: number };
     };
     expect(dispatchCall.chainState).toMatchObject({
-      currentChainCount: 2,
+      currentChainCount: 1,
       accumulatedChainTokens: 1_000,
     });
   });
@@ -964,7 +968,7 @@ describe("subagent-announce continuation drain (F7)", () => {
       task: "keep working",
       delayMs: 30_000,
       traceparent: validTraceparent,
-      spawnRequesterSessionKey: "agent:main:main",
+      originRunId: "run-bracket-trace",
     });
     const enqueued = enqueuePendingDelegateMock.mock.calls[0]?.[1] as
       | { traceparent?: string }

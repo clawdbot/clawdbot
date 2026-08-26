@@ -713,15 +713,29 @@ describe("tool delegate dispatch contract", () => {
     );
   });
 
-  it("uses stored requester context when a child-owned delayed bracket delegate fires", async () => {
+  it("rebinds a stored requester override to the child owner when a delayed row fires", async () => {
     const sessionKey = "agent:main:subagent:delayed-bracket-owner";
-    enqueuePendingDelegate(sessionKey, {
-      task: "delayed bracket with requester context",
-      spawnRequesterSessionKey: "agent:main:main",
-      spawnRequesterChannel: "discord",
-      spawnRequesterAccountId: "acct",
-      spawnRequesterTo: "channel",
-      spawnRequesterThreadId: "thread",
+    const now = Date.now();
+    mockFlows.set("legacy-requester-flow", {
+      flowId: "legacy-requester-flow",
+      syncMode: "managed",
+      ownerKey: sessionKey,
+      controllerId: "core/continuation-delegate",
+      status: "queued",
+      stateJson: {
+        kind: "continuation_delegate",
+        task: "delayed bracket with requester context",
+        spawnRequesterSessionKey: "agent:main:main",
+        spawnRequesterChannel: "discord",
+        spawnRequesterAccountId: "acct",
+        spawnRequesterTo: "channel",
+        spawnRequesterThreadId: "thread",
+      },
+      goal: "legacy delayed delegate",
+      currentStep: "Queued for continuation dispatch",
+      revision: 0,
+      createdAt: now,
+      updatedAt: now,
     });
 
     const result = await dispatchToolDelegates({
@@ -736,13 +750,13 @@ describe("tool delegate dispatch contract", () => {
       expect.objectContaining({
         task: expect.stringContaining("delayed bracket with requester context"),
       }),
-      {
-        agentSessionKey: "agent:main:main",
-        agentChannel: "discord",
-        agentAccountId: "acct",
-        agentTo: "channel",
-        agentThreadId: "thread",
-      },
+      expect.objectContaining({
+        agentSessionKey: sessionKey,
+        agentChannel: undefined,
+        agentAccountId: undefined,
+        agentTo: undefined,
+        agentThreadId: undefined,
+      }),
     );
   });
 
@@ -922,13 +936,13 @@ describe("tool delegate dispatch contract", () => {
       expect.objectContaining({
         task: "[continuation:chain-hop:3] Delegated task (turn 3/10): inspect logs",
       }),
-      {
+      expect.objectContaining({
         agentSessionKey: sessionKey,
         agentChannel: "discord",
         agentAccountId: undefined,
         agentTo: "channel",
         agentThreadId: undefined,
-      },
+      }),
     );
   });
 
