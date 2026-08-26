@@ -10,10 +10,6 @@ import {
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import type { ContextEngineLogicalTurnLease } from "../../agents/harness/context-engine-logical-turn.js";
-import {
-  AGENT_RUN_RESTART_ABORT_STOP_REASON,
-  resolveAgentRunErrorLifecycleFields,
-} from "../../agents/run-termination.js";
 import { withLocalSessionPlacementTurnAdmission } from "../../agents/session-placement-admission.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -42,7 +38,7 @@ import { shouldBridgeCliPreambleEvents } from "./get-reply.types.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import type { FollowupRun } from "./queue.js";
-import { isReplyOperationRestartAbort } from "./reply-operation-abort.js";
+import { resolveReplyOperationTerminationFields } from "./reply-operation-abort.js";
 import { resolveFollowupRunToolAuthorityFingerprint } from "./reply-tool-authority.js";
 
 type CliPresentation = Pick<
@@ -117,15 +113,8 @@ export async function runCliFallbackCandidate(params: {
     sessionKey: turn.sessionKey,
     startedAt: cliLifecycleStartedAt,
     getLifecycleGeneration: () => params.lifecycleGeneration,
-    resolveTerminationFields: (error) => ({
-      ...resolveAgentRunErrorLifecycleFields(error, params.runAbortSignal),
-      ...(isReplyOperationRestartAbort(turn.replyOperation)
-        ? {
-            aborted: true as const,
-            stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON,
-          }
-        : {}),
-    }),
+    resolveTerminationFields: (error) =>
+      resolveReplyOperationTerminationFields(error, params.runAbortSignal, turn.replyOperation),
   });
   params.onLifecycleBackstop(lifecycleBackstop);
   const authProfile = resolveRunAuthProfile(params.candidateRun, params.cliExecutionProvider, {

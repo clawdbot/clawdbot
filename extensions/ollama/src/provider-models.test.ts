@@ -194,6 +194,81 @@ describe("ollama provider models", () => {
     ).toBe(true);
   });
 
+  it.each([
+    {
+      description: "retains authoritative list metadata when model inspection fails",
+      showResponse: () => jsonResponse({ error: "inspection unavailable" }, 503),
+      contextWindow: 32_768,
+      supportsTools: true,
+    },
+    {
+      description: "retains list metadata omitted from a successful model inspection",
+      showResponse: () => jsonResponse({}),
+      contextWindow: 32_768,
+      supportsTools: true,
+    },
+    {
+      description: "prefers explicit model-inspection metadata over the model list",
+      showResponse: () =>
+        jsonResponse({
+          model_info: { "gemma.context_length": 65_536 },
+          capabilities: ["completion"],
+        }),
+      contextWindow: 65_536,
+      supportsTools: false,
+    },
+  ])("$description", async ({ showResponse, contextWindow, supportsTools }) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) =>
+        requestUrl(input).endsWith("/api/tags")
+          ? jsonResponse({
+              models: [
+                {
+                  name: "gemma4:e2b",
+                  details: { context_length: 32_768 },
+                  capabilities: ["completion", "tools"],
+                },
+              ],
+            })
+          : showResponse(),
+      ),
+    );
+
+    const provider = await buildOllamaProvider("http://127.0.0.1:11434");
+
+    expect(provider.models).toEqual([
+      expect.objectContaining({
+        id: "gemma4:e2b",
+        contextWindow,
+        compat: expect.objectContaining({ supportsTools }),
+      }),
+    ]);
+  });
+
+  it("keeps an explicit empty model-inspection capability list authoritative", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) =>
+        requestUrl(input).endsWith("/api/tags")
+          ? jsonResponse({
+              models: [
+                {
+                  name: "gemma4:e2b",
+                  details: { context_length: 32_768 },
+                  capabilities: ["completion", "tools"],
+                },
+              ],
+            })
+          : jsonResponse({ capabilities: [] }),
+      ),
+    );
+
+    await expect(buildOllamaProvider("http://127.0.0.1:11434")).resolves.toMatchObject({
+      models: [],
+    });
+  });
+
   it("forwards remote auth to model listing and show probes", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer cloud-key");
@@ -787,13 +862,29 @@ describe("ollama provider models", () => {
     }
   });
 
-  it("keeps tools off after a live /api/show failure", async () => {
+  it.each([
+    {
+      description: "keeps tools off after a live inspection failure without list metadata",
+      listed: { name: "deepseek-r1:14b", digest: "sha256:show-failure" },
+      expected: { contextWindow: OLLAMA_DEFAULT_CONTEXT_WINDOW, supportsTools: false },
+    },
+    {
+      description: "preserves authoritative list metadata after a live inspection failure",
+      listed: {
+        name: "gemma4:e2b",
+        digest: "sha256:list-metadata",
+        details: { context_length: 32_768 },
+        capabilities: ["completion", "tools"],
+      },
+      expected: { contextWindow: 32_768, supportsTools: true },
+    },
+  ])("$description", async ({ listed, expected }) => {
     const server = createServer((request, response) => {
       response.setHeader("Content-Type", "application/json");
       if (request.url === "/api/tags") {
         response.end(
           JSON.stringify({
-            models: [{ name: "deepseek-r1:14b", digest: "sha256:show-failure" }],
+            models: [listed],
           }),
         );
         return;
@@ -819,9 +910,10 @@ describe("ollama provider models", () => {
       const provider = await buildOllamaProvider(`http://127.0.0.1:${address.port}`);
       const model = expectDefined(provider.models?.[0], "show-failed Ollama model");
 
-      expect(model.id).toBe("deepseek-r1:14b");
-      expect(model.compat?.supportsTools).toBe(false);
-      expect(model.reasoning).toBe(true);
+      expect(model.id).toBe(listed.name);
+      expect(model.contextWindow).toBe(expected.contextWindow);
+      expect(model.compat?.supportsTools).toBe(expected.supportsTools);
+      expect(model.reasoning).toBe(listed.name.startsWith("deepseek-r1"));
     } finally {
       if (server.listening) {
         await new Promise<void>((resolve, reject) => {

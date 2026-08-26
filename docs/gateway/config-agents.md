@@ -1291,7 +1291,7 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
   - `suggest`: allow `suggest`, where viewers can submit suggestions for the session owner or an `operator.admin` connection to send, queue, edit, or dismiss without granting direct access to send or manage the session.
   - `drafts`: allow `draft`, which hides the session from non-admin, non-owner session lists and event broadcasts.
 
-Session visibility and membership are maintained as canonical sharing state. Structured `session.sharing` and `session.suggestion` change events refresh connected clients without adding administrative narration to conversation transcripts. These controls coordinate operators sharing one agent; they are not a security boundary between tenants. Use separate Gateways or agents when work requires isolation.
+Session visibility and membership are maintained as canonical sharing state. Structured `session.sharing` events carry an attributed actor; principal-less changes use the additive `session.sharing.evidence` event. Every sharing change also emits the existing `sessions.changed` row refresh, so clients that do not recognize the evidence event still refresh canonical state. These events and `session.suggestion` do not add administrative narration to conversation transcripts. These controls coordinate operators sharing one agent; they are not a security boundary between tenants. Use separate Gateways or agents when work requires isolation.
 
 </Accordion>
 

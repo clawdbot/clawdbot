@@ -5,6 +5,7 @@ import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-ru
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import type { SessionIngestionFileState } from "./dreaming-ingestion-state.js";
 import { removeBackfillDiaryEntries, writeBackfillDiaryEntries } from "./dreaming-narrative.js";
+import { listMemorySessionTombstones } from "./memory-entry-origins.js";
 import { previewGroundedRemMarkdown } from "./rem-evidence.js";
 import type {
   SessionBackfillDay,
@@ -30,6 +31,7 @@ import {
   mergeTrackedMessageHashes,
   readSessionIngestionState,
   scanSessionIngestionSource,
+  sessionExclusionReason,
   sessionIngestionSourceFromCorpus,
   trimTrackedSessionScopes,
   writeSessionIngestionState,
@@ -92,13 +94,17 @@ async function listSessionBackfillSources(params: {
   const corpus = await listSessionTranscriptCorpusEntriesForAgent(params.agentId, {
     includeRetainedSqlite: true,
   });
+  const forgottenSessionIds = new Set(
+    listMemorySessionTombstones({ agentId: params.agentId }).map((entry) => entry.sessionId),
+  );
   const sources = corpus
     .map(sessionIngestionSourceFromCorpus)
     .filter(
       (entry): entry is SessionIngestionSource =>
         entry !== null &&
         !entry.buildOptions.generatedByDreamingNarrative &&
-        !entry.buildOptions.generatedByCronRun,
+        !entry.buildOptions.generatedByCronRun &&
+        !sessionExclusionReason(entry, undefined, forgottenSessionIds),
     );
   const canonicalPaths = new Set(sources.map((entry) => path.resolve(entry.absolutePath)));
   for (const archiveFile of params.archiveFiles) {

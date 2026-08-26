@@ -373,6 +373,7 @@ export async function runPluginsInspectCommand(
   lines.push(...formatInspectSection("Commands", inspect.commands));
   lines.push(...formatInspectSection("CLI commands", inspect.cliCommands));
   lines.push(...formatInspectSection("Services", inspect.services));
+  lines.push(...formatInspectSection("Gateway discovery", inspect.gatewayDiscoveryServices));
   lines.push(...formatInspectSection("Gateway methods", inspect.gatewayMethods ?? []));
   lines.push(
     ...formatInspectSection(

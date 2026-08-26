@@ -407,6 +407,9 @@ suite.define(() => {
       await waitForControlUiGatewayReady(page);
 
       const panel = page.locator(".sidebar-region__right-runtime .side-panel");
+      await expect.poll(() => panel.count()).toBe(0);
+
+      await page.locator(".chat-side-panel-toggle").click();
       await panel.locator(".side-panel-empty--selector").waitFor();
       expect(await panel.locator("wa-tab").count()).toBe(0);
 

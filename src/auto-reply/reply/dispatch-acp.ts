@@ -591,6 +591,7 @@ export async function tryDispatchAcpReplyCore(params: {
     shouldSendToolSummariesNow: params.shouldSendToolSummariesNow,
     shouldSendFullToolDetails: params.shouldSendFullToolDetails,
     deliver: delivery.deliver,
+    getConversationContext: () => params.ctx.agentText,
     onProgress: markAcpProgress,
     provider: params.ctx.Surface ?? params.ctx.Provider,
     accountId: effectiveDispatchAccountId,

@@ -1,11 +1,13 @@
 // File Transfer plugin module implements dir list behavior.
 import path from "node:path";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
-import { root } from "openclaw/plugin-sdk/security-runtime";
 import { mimeFromExtension } from "../shared/mime.js";
+import { readPathBinding, type PathBinding } from "../shared/path-binding.js";
+import { listCanonicalDirectory } from "./dir-list-worker.js";
 import {
   classifyFsSafeReadError,
   readAbsolutePath,
+  rejectCanonicalPathChange,
   resolveCanonicalReadPath,
   statRequiredDirectory,
 } from "./path-errors.js";
@@ -18,6 +20,9 @@ type DirListParams = {
   pageToken?: unknown;
   maxEntries?: unknown;
   followSymlinks?: unknown;
+  preflightOnly?: unknown;
+  expectedCanonicalPath?: unknown;
+  expectedBinding?: unknown;
 };
 
 type DirListEntry = {
@@ -35,6 +40,8 @@ type DirListOk = {
   entries: DirListEntry[];
   nextPageToken?: string;
   truncated: boolean;
+  preflight?: true;
+  binding: PathBinding;
 };
 
 type DirListErrCode =
@@ -43,6 +50,7 @@ type DirListErrCode =
   | "PERMISSION_DENIED"
   | "IS_FILE"
   | "SYMLINK_REDIRECT"
+  | "CANONICAL_PATH_CHANGED"
   | "READ_ERROR";
 
 type DirListErr = {
@@ -104,29 +112,77 @@ export async function handleDirList(params: DirListParams): Promise<DirListResul
     return canonical;
   }
 
+  const canonicalPathChange = rejectCanonicalPathChange(params.expectedCanonicalPath, canonical);
+  if (canonicalPathChange) {
+    return canonicalPathChange;
+  }
   const directory = await statRequiredDirectory(canonical, classifyFsError);
   if (!directory.ok) {
     return directory;
   }
-
-  let listedEntries: { name: string; isDirectory: boolean; size: number; mtimeMs: number }[];
-  try {
-    const dirRoot = await root(canonical);
-    listedEntries = await dirRoot.list(".", { withFileTypes: true });
-  } catch (err) {
-    const code = classifyFsError(err);
+  const expectedBinding = readPathBinding(params.expectedBinding);
+  if (params.expectedBinding !== undefined && expectedBinding?.kind !== "existing") {
     return {
       ok: false,
-      code,
-      message: `list failed: ${String(err)}`,
+      code: "CANONICAL_PATH_CHANGED",
+      message: "filesystem identity differs from the authorized target",
       canonicalPath: canonical,
     };
   }
+  if (
+    expectedBinding?.kind === "existing" &&
+    (expectedBinding.device !== directory.identity.device ||
+      expectedBinding.inode !== directory.identity.inode)
+  ) {
+    return {
+      ok: false,
+      code: "CANONICAL_PATH_CHANGED",
+      message: "filesystem identity differs from the authorized target",
+      canonicalPath: canonical,
+    };
+  }
+  const boundIdentity = expectedBinding?.kind === "existing" ? expectedBinding : directory.identity;
+  if (params.preflightOnly === true) {
+    return {
+      ok: true,
+      path: canonical,
+      entries: [],
+      truncated: false,
+      preflight: true,
+      binding: { kind: "existing", ...directory.identity },
+    };
+  }
 
-  listedEntries.sort((a, b) => a.name.localeCompare(b.name));
-
-  const total = listedEntries.length;
-  const page = listedEntries.slice(offset, offset + maxEntries);
+  const listing = await listCanonicalDirectory({
+    directoryPath: canonical,
+    expectedCanonicalPath: canonical,
+    expectedDevice: boundIdentity.device,
+    expectedInode: boundIdentity.inode,
+    maxEntries,
+    offset,
+  });
+  if (!listing.ok) {
+    if (listing.code === "CANONICAL_PATH_CHANGED") {
+      return {
+        ok: false,
+        code: "CANONICAL_PATH_CHANGED",
+        message: "canonical path differs from the authorized target",
+        canonicalPath: canonical,
+      };
+    }
+    const currentDirectory = await statRequiredDirectory(canonical, classifyFsError);
+    if (!currentDirectory.ok) {
+      return currentDirectory;
+    }
+    return {
+      ok: false,
+      code: "READ_ERROR",
+      message: "list failed",
+      canonicalPath: canonical,
+    };
+  }
+  const total = listing.total;
+  const page = listing.entries;
   const truncated = offset + maxEntries < total;
   const nextPageToken = truncated ? String(offset + maxEntries) : undefined;
 
@@ -151,5 +207,6 @@ export async function handleDirList(params: DirListParams): Promise<DirListResul
     entries,
     nextPageToken,
     truncated,
+    binding: { kind: "existing", ...directory.identity },
   };
 }

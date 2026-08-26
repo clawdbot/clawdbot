@@ -1779,7 +1779,7 @@ src/agents/custom-api-registry.ts	2
 src/agents/delegation-capability.ts	1
 src/agents/embedded-agent-helpers/bootstrap.ts	2
 src/agents/embedded-agent-helpers/images.ts	8
-src/agents/embedded-agent-helpers/openai.ts	21
+src/agents/embedded-agent-helpers/openai.ts	20
 src/agents/embedded-agent-helpers/turns.ts	23
 src/agents/embedded-agent-live-edit-diff.ts	3
 src/agents/embedded-agent-messaging-extraction.ts	1
@@ -2087,7 +2087,7 @@ src/agents/tools-effective-inventory.ts	4
 src/agents/tools/agent-step.ts	6
 src/agents/tools/agents-wait-tool.ts	1
 src/agents/tools/ask-user-tool-normalization.ts	3
-src/agents/tools/ask-user-tool.ts	11
+src/agents/tools/ask-user-tool.ts	8
 src/agents/tools/automations-tool-name.ts	1
 src/agents/tools/chat-history-text.ts	3
 src/agents/tools/common.ts	2

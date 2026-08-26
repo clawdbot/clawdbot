@@ -2890,6 +2890,10 @@ button.chat-reply-preview--message:disabled {
 }
 
 .chat-prs {
+  /* The transcript intentionally underlaps the composer stack; keep its
+     positioned virtual rows from painting over this interactive surface. */
+  position: relative;
+  z-index: 1;
   display: grid;
   gap: 6px;
   /* Mirror .agent-chat__composer-shell sizing: the rows belong to the input

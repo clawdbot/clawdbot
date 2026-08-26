@@ -22,6 +22,7 @@ import {
   toWorkerConnectionError,
   WorkerAdmissionDeadlineExceededError,
   WorkerConnectionStoppedError,
+  WorkerFencedError,
 } from "./worker-connection-contract.js";
 import { WorkerConnectionEndpointError } from "./worker-connection-endpoint.js";
 import { WorkerConnectionFrameDispatcher } from "./worker-connection-frames.js";
@@ -154,9 +155,12 @@ describe("worker connection endpoint failures", () => {
       admissionDeadlineMs: 60_000,
       reconnectBackoff: { initialMs: 30_000, maxMs: 30_000, factor: 1, jitter: 0 },
     });
+    const terminalErrors: Error[] = [];
+    connection.onTerminalError((error) => terminalErrors.push(error));
 
     await expect(connection.start()).rejects.toBeInstanceOf(WorkerConnectionEndpointError);
-    expect(connection.state).toMatchObject({ kind: "failed" });
+    expect(terminalErrors).toHaveLength(1);
+    expect(connection.state).toEqual({ kind: "failed", error: terminalErrors[0] });
     expect(createSocket).not.toHaveBeenCalled();
   });
 
@@ -404,6 +408,8 @@ describe("WorkerConnection state listener isolation", () => {
   it("settles stop and reaches later listeners when an earlier listener throws", async () => {
     const connection = createIdleConnection();
     const listeners = installThrowingThenHealthyListeners(connection);
+    const terminalErrors: Error[] = [];
+    connection.onTerminalError((error) => terminalErrors.push(error));
     const exit = connection.waitForExit();
 
     await expect(connection.stop()).resolves.toBeUndefined();
@@ -413,11 +419,14 @@ describe("WorkerConnection state listener isolation", () => {
     expect(connection.state).toEqual({ kind: "stopped" });
     expect(listeners.throwingCalls()).toBe(1);
     expect(listeners.observed).toEqual(["stopped"]);
+    expect(terminalErrors).toEqual([new WorkerConnectionStoppedError()]);
   });
 
   it("settles fencing and reaches later listeners when an earlier listener throws", async () => {
     const connection = createIdleConnection();
     const listeners = installThrowingThenHealthyListeners(connection);
+    const terminalErrors: Error[] = [];
+    connection.onTerminalError((error) => terminalErrors.push(error));
 
     expect(() => connection.fence("owner-epoch-mismatch")).not.toThrow();
     await expect(connection.waitForExit()).resolves.toEqual({
@@ -428,6 +437,25 @@ describe("WorkerConnection state listener isolation", () => {
     expect(connection.state).toEqual({ kind: "fenced", reason: "owner-epoch-mismatch" });
     expect(listeners.throwingCalls()).toBe(1);
     expect(listeners.observed).toEqual(["fenced"]);
+    expect(terminalErrors).toEqual([new WorkerFencedError("owner-epoch-mismatch")]);
+  });
+
+  it("keeps terminal errors bound to their emitted state during nested transitions", () => {
+    const connection = createIdleConnection();
+    const terminalErrors: Error[] = [];
+    connection.onStateChange((state) => {
+      if (state.kind === "fenced") {
+        void connection.stop();
+      }
+    });
+    connection.onTerminalError((error) => terminalErrors.push(error));
+
+    connection.fence("owner-epoch-mismatch");
+
+    expect(terminalErrors).toEqual([
+      new WorkerConnectionStoppedError(),
+      new WorkerFencedError("owner-epoch-mismatch"),
+    ]);
   });
 });
 

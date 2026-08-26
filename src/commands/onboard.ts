@@ -204,7 +204,7 @@ function validatePreflightOptions(opts: OnboardOptions, runtime: RuntimeEnv): bo
     return rejectOption(
       opts,
       runtime,
-      `Missing --remote-url for remote mode. Example: ${formatCliCommand("openclaw onboard --non-interactive --mode remote --remote-url ws://127.0.0.1:3000")}.`,
+      `Missing --remote-url for remote mode. Example: ${formatCliCommand("openclaw onboard --non-interactive --accept-risk --mode remote --remote-url ws://127.0.0.1:3000")}.`,
     );
   }
   if (opts.nonInteractive && opts.mode === "remote" && opts.remoteUrl?.trim()) {

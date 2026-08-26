@@ -48,12 +48,11 @@ import { listRunningSessions } from "../agents/bash-process-registry.js";
 import { saveExecApprovals, type ExecApprovalsFile } from "../infra/exec-approvals.js";
 import { buildWorkerConnectParams, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "./transcript-message.js";
-import { WorkerAdmissionDeadlineExceededError } from "./worker-connection-contract.js";
 import {
-  createWorkerConnection,
+  WorkerAdmissionDeadlineExceededError,
   WorkerConnectionStoppedError,
-  type WorkerConnectionState,
-} from "./worker-connection.js";
+} from "./worker-connection-contract.js";
+import { createWorkerConnection, type WorkerConnectionState } from "./worker-connection.js";
 import {
   WorkerInferenceProxyClient,
   WorkerLiveEventClient,

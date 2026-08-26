@@ -66,14 +66,18 @@ function responseFromSseFrames(frames: unknown[]): Response {
   } as Response;
 }
 
-function responseFromReaderText(text: string, releaseLock: () => void): Response {
+function responseFromReaderText(
+  text: string,
+  releaseLock: () => void,
+  cancel: () => Promise<void> = async () => undefined,
+): Response {
   const chunks: Array<ReadableStreamReadResult<Uint8Array>> = [
     { done: false, value: new TextEncoder().encode(text) },
     { done: true, value: undefined },
   ];
   const reader = {
     read: async () => chunks.shift() ?? { done: true, value: undefined },
-    cancel: async () => undefined,
+    cancel,
     releaseLock,
   } as ReadableStreamDefaultReader<Uint8Array>;
 
@@ -524,17 +528,14 @@ describe("streamProxy", () => {
     expect(cancel).not.toHaveBeenCalled();
     secondReadResolve?.({
       done: false,
-      value: encoder.encode(
-        `${JSON.stringify({
-          type: "done",
-          reason: "stop",
-          usage,
-        })}\n\n`,
-      ),
+      value: encoder.encode(`${JSON.stringify({ type: "start" })}\n\n`),
     });
     await vi.advanceTimersByTimeAsync(119_000);
     expect(cancel).not.toHaveBeenCalled();
-    thirdReadResolve?.({ done: true, value: undefined });
+    thirdReadResolve?.({
+      done: false,
+      value: encoder.encode(`data: ${JSON.stringify({ type: "done", reason: "stop", usage })}\n\n`),
+    });
 
     await expect(stream.result()).resolves.toMatchObject({
       stopReason: "stop",
@@ -589,17 +590,14 @@ describe("streamProxy", () => {
     expect(cancel).not.toHaveBeenCalled();
     secondReadResolve?.({
       done: false,
-      value: encoder.encode(
-        `${JSON.stringify({
-          type: "done",
-          reason: "stop",
-          usage,
-        })}\n\n`,
-      ),
+      value: encoder.encode(`${JSON.stringify({ type: "start" })}\n\n`),
     });
     await vi.advanceTimersByTimeAsync(4);
     expect(cancel).not.toHaveBeenCalled();
-    thirdReadResolve?.({ done: true, value: undefined });
+    thirdReadResolve?.({
+      done: false,
+      value: encoder.encode(`data: ${JSON.stringify({ type: "done", reason: "stop", usage })}\n\n`),
+    });
 
     await expect(stream.result()).resolves.toMatchObject({
       stopReason: "stop",
@@ -687,14 +685,8 @@ describe("streamProxy", () => {
     expect(cancel).toHaveBeenCalledWith(expect.any(Error));
   });
 
-  it("releases the proxy response reader after a terminal stream", async () => {
-    let resolveReleased: (() => void) | undefined;
-    const released = new Promise<void>((resolve) => {
-      resolveReleased = resolve;
-    });
-    const releaseLock = vi.fn(() => {
-      resolveReleased?.();
-    });
+  it("releases the response reader when terminal stream cancellation never settles", async () => {
+    const releaseLock = vi.fn();
     vi.stubGlobal(
       "fetch",
       vi.fn(async () =>
@@ -705,6 +697,7 @@ describe("streamProxy", () => {
             usage,
           })}\n\n`,
           releaseLock,
+          () => new Promise<void>(() => {}),
         ),
       ),
     );
@@ -713,9 +706,30 @@ describe("streamProxy", () => {
       authToken: "token",
       proxyUrl: "https://proxy.example",
     }).result();
-    await released;
 
     expect(releaseLock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not cancel a naturally drained response ending with a terminal frame", async () => {
+    const cancel = vi.fn(async () => undefined);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        responseFromReaderText(
+          `data: ${JSON.stringify({ type: "done", reason: "stop", usage })}`,
+          () => undefined,
+          cancel,
+        ),
+      ),
+    );
+
+    await expect(
+      streamProxy(model, context, {
+        authToken: "token",
+        proxyUrl: "https://proxy.example",
+      }).result(),
+    ).resolves.toMatchObject({ stopReason: "stop" });
+    expect(cancel).not.toHaveBeenCalled();
   });
 
   it("returns an error result when EOF arrives without a terminal event", async () => {
@@ -827,6 +841,75 @@ describe("streamProxy loopback /api/stream", () => {
     }
     return { port: address.port, request };
   }
+
+  it.each([
+    {
+      name: "terminal success",
+      terminal: { type: "done", reason: "stop", usage },
+      expected: { stopReason: "stop" },
+    },
+    {
+      name: "terminal error",
+      terminal: { type: "error", reason: "error", errorMessage: "upstream failed", usage },
+      expected: { stopReason: "error", errorMessage: "upstream failed" },
+    },
+    {
+      name: "malformed event",
+      terminal: "{invalid json",
+      expected: { stopReason: "error" },
+    },
+  ])(
+    "closes a hanging native SSE body after $name without applying later frames",
+    async (entry) => {
+      let notifyClosed: (() => void) | undefined;
+      const closed = new Promise<void>((resolve) => {
+        notifyClosed = resolve;
+      });
+      server = http.createServer((_req, res) => {
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        res.once("close", () => notifyClosed?.());
+        const frames = [
+          { type: "text_start", contentIndex: 0 },
+          { type: "text_delta", contentIndex: 0, delta: "visible" },
+          entry.terminal,
+          { type: "text_delta", contentIndex: 0, delta: " late mutation" },
+        ];
+        res.write(
+          frames
+            .map(
+              (frame) => `data: ${typeof frame === "string" ? frame : JSON.stringify(frame)}\n\n`,
+            )
+            .join(""),
+        );
+      });
+      server.listen(0, "127.0.0.1");
+      await once(server, "listening");
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected loopback server address");
+      }
+
+      const result = await resultWithinMs(
+        streamProxy(model, context, {
+          authToken: "token",
+          proxyUrl: `http://127.0.0.1:${address.port}`,
+          timeoutMs: 3_000,
+        }),
+        1_000,
+      );
+      expect(result).toMatchObject({
+        ...entry.expected,
+        content: [{ type: "text", text: "visible" }],
+      });
+      const socketClosed = await Promise.race([
+        closed.then(() => true),
+        new Promise<boolean>((resolve) => {
+          setTimeout(() => resolve(false), 300);
+        }),
+      ]);
+      expect(socketClosed).toBe(true);
+    },
+  );
 
   it("falls back to the HTTP status for malformed UTF-8 proxy errors", async () => {
     const prefix = Buffer.from('{"error":"corrupted ');

@@ -41,6 +41,7 @@ import {
   reserveAskUserPromptDelivery,
 } from "./tools/ask-user-tool.js";
 import { resetPendingAskUserQuestionsForTest } from "./tools/ask-user-tool.test-support.js";
+import { createSecretsTool } from "./tools/secrets-tool.js";
 
 type ToolExecutionStartEvent = Omit<Extract<AgentEvent, { type: "tool_execution_start" }>, "type">;
 type ToolExecutionEndEvent = Omit<Extract<AgentEvent, { type: "tool_execution_end" }>, "type">;
@@ -436,6 +437,53 @@ describe("handleToolExecutionStart read path checks", () => {
       },
     });
     await activation.finish();
+  });
+
+  it("delivers credential requests as absolute Control UI links without answer affordances", async () => {
+    const { ctx } = createTestContext();
+    const onToolResult = vi.fn();
+    ctx.params.onToolResult = onToolResult;
+    ctx.params.config = {
+      gateway: {
+        publicOrigin: "https://console.example.test",
+        controlUi: { basePath: "/control" },
+      },
+    };
+    const args = { action: "request", name: "TEST_API_KEY", kind: "secret" };
+    let questionId = "";
+    let resolveAnswer: ((value: { status: "cancelled" }) => void) | undefined;
+    const tool = createSecretsTool({
+      agentId: "agent-test-id",
+      sessionKey: "agent:unit-session",
+      runId: "run-test",
+      gatewayCall: async (method, _options, params) => {
+        if (method === "question.request") {
+          questionId = String(requireRecord(params, "question request").id);
+          return { id: questionId };
+        }
+        if (method === "question.get") {
+          return { question: { questions: [] } };
+        }
+        if (method === "question.waitAnswer") {
+          return await new Promise((resolve) => {
+            resolveAnswer = resolve;
+          });
+        }
+        throw new Error(`unexpected method ${method}`);
+      },
+    });
+
+    await startTool(ctx, { toolName: "secrets", toolCallId: "secret-call-1", args });
+    const pending = tool.execute("secret-call-1", args);
+    await vi.waitFor(() => expect(onToolResult).toHaveBeenCalledOnce());
+
+    expect(onToolResult).toHaveBeenCalledWith({
+      text: `🔑 Agent requests credential TEST_API_KEY (secret). Reply is disabled for secrets — open to provide it: https://console.example.test/control/ask/${questionId}`,
+    });
+    expect(onToolResult.mock.calls[0]?.[0]).not.toHaveProperty("channelData");
+    expect(onToolResult.mock.calls[0]?.[0]).not.toHaveProperty("presentation");
+    resolveAnswer?.({ status: "cancelled" });
+    await pending;
   });
 
   it.each([

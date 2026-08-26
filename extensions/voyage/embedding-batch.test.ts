@@ -1,7 +1,9 @@
 // Voyage batch tests cover the real HTTP boundary and bounded response reads.
+import { once } from "node:events";
+import { createServer } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runVoyageEmbeddingBatches } from "./embedding-batch.js";
-import type { VoyageEmbeddingClient } from "./embedding-provider.js";
+import { createVoyageEmbeddingProvider, type VoyageEmbeddingClient } from "./embedding-provider.js";
 
 type VoyageBatchOptions = Parameters<typeof runVoyageEmbeddingBatches>[0];
 type BatchStage = "upload" | "create" | "status" | "output" | "error";
@@ -133,6 +135,121 @@ afterEach(() => {
 });
 
 describe("voyage batch bounded reads", () => {
+  it("preserves configured query parameters on real direct embedding requests", async () => {
+    const received: Array<{ url: string; authorization: string | undefined }> = [];
+    const server = createServer((request, response) => {
+      received.push({ url: request.url ?? "", authorization: request.headers.authorization });
+      if (request.url !== "/tenant/v1/embeddings?api-version=2024-10-21&tenant=beta") {
+        response.writeHead(404).end("wrong embedding endpoint");
+        return;
+      }
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ data: [{ embedding: [7, 11] }] }));
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected loopback TCP address");
+    }
+
+    try {
+      const { provider } = await createVoyageEmbeddingProvider({
+        config: {},
+        provider: "voyage",
+        model: "voyage-3",
+        fallback: "none",
+        remote: {
+          baseUrl: `http://127.0.0.1:${address.port}/tenant/v1/?api-version=2024-10-21&tenant=beta#local`,
+          apiKey: "voyage-loopback-key",
+        },
+      });
+
+      await expect(provider.embedQuery("hello")).resolves.toEqual([7, 11]);
+      expect(received).toEqual([
+        {
+          url: "/tenant/v1/embeddings?api-version=2024-10-21&tenant=beta",
+          authorization: "Bearer voyage-loopback-key",
+        },
+      ]);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
+  it("preserves configured query parameters through real batch upload, create, status, and error output", async () => {
+    const received: Array<{ url: string; authorization: string | undefined }> = [];
+    const server = createServer((request, response) => {
+      const url = request.url ?? "";
+      received.push({ url, authorization: request.headers.authorization });
+      const parsed = new URL(url, "http://localhost");
+      if (parsed.search !== "?api-version=2024-10-21&tenant=beta") {
+        response.writeHead(404).end("missing embedding tenant query");
+        return;
+      }
+      response.writeHead(200, { "content-type": "application/json" });
+      if (parsed.pathname === "/tenant/v1/files") {
+        response.end(JSON.stringify({ id: "input-0" }));
+      } else if (parsed.pathname === "/tenant/v1/batches") {
+        response.end(JSON.stringify({ id: "batch-0", status: "in_progress" }));
+      } else if (parsed.pathname === "/tenant/v1/batches/batch-0") {
+        response.end(
+          JSON.stringify({
+            id: "batch-0",
+            status: "completed",
+            output_file_id: "output-0",
+            error_file_id: "error-0",
+          }),
+        );
+      } else if (parsed.pathname === "/tenant/v1/files/error-0/content") {
+        response.end(
+          JSON.stringify({
+            custom_id: "req-0",
+            response: { status_code: 500, message: "provider rejected request" },
+            error: null,
+          }),
+        );
+      } else {
+        response.end(JSON.stringify({ error: "unexpected embedding path" }));
+      }
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected loopback TCP address");
+    }
+
+    try {
+      await expect(
+        runBatch({
+          client: {
+            baseUrl: `http://127.0.0.1:${address.port}/tenant/v1/?api-version=2024-10-21&tenant=beta#local`,
+            headers: { Authorization: "Bearer voyage-loopback-key" },
+            model: "voyage-3",
+            ssrfPolicy: { allowedHostnames: ["127.0.0.1"] },
+          },
+        }),
+      ).rejects.toThrow("voyage batch batch-0 completed: provider rejected request");
+
+      expect(received.map(({ url }) => url)).toEqual([
+        "/tenant/v1/files?api-version=2024-10-21&tenant=beta",
+        "/tenant/v1/batches?api-version=2024-10-21&tenant=beta",
+        "/tenant/v1/batches/batch-0?api-version=2024-10-21&tenant=beta",
+        "/tenant/v1/files/error-0/content?api-version=2024-10-21&tenant=beta",
+      ]);
+      expect(
+        received.every(({ authorization }) => authorization === "Bearer voyage-loopback-key"),
+      ).toBe(true);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
   it("clamps polling to the remaining batch timeout", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);

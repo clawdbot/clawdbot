@@ -180,16 +180,16 @@ export function resolveNewSessionSubmitBlock(
     return { gate: "device-runtime", reason: deviceRuntimeUnsupportedReason };
   }
   const placementTarget = host.placementTargetForSubmission();
-  if (placementTarget && (!client.recoveryScope || !client.recoveryScopeReady)) {
+  if (
+    placementTarget &&
+    (!client.recoveryScope || !client.recoveryScopeReady || gateway.cloudProfilesPending)
+  ) {
     return { gate: "placement-recovery", reason: t("newSession.placementNotReady") };
   }
   const cloudProfileId = placementTarget?.kind === "profile" ? placementTarget.profileId : "";
   if (
     cloudProfileId &&
-    (!client.recoveryScope ||
-      !client.recoveryScopeReady ||
-      !gateway.cloudProfilesReady ||
-      gateway.cloudProfilesPending ||
+    (!gateway.cloudProfilesReady ||
       !place.worktree ||
       !gateway.cloudProfiles.some((profile) => profile.id === cloudProfileId) ||
       Boolean(host.cloudRuntimeUnsupportedReason()))

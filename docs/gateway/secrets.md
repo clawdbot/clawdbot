@@ -303,6 +303,8 @@ Reference an entry from `openclaw.json` with the `store` source:
 
 Control UI set/delete operations automatically refresh the active secrets runtime when the changed name is referenced by a `store` SecretRef in the active source config. Names that are not referenced skip that work. Direct CLI writes remain an offline/local path; after changing a config-referenced value with the CLI, run `openclaw secrets reload` so the active in-memory snapshot picks it up.
 
+The agent can also ask you to add an entry with the [`secrets` tool](/tools/secrets): it names the entry and the reason, you type the value into a masked prompt, and the Gateway writes it directly into the store. The value never enters the chat, the transcript, or the model's context, and the same automatic runtime refresh applies.
+
 <Warning>
 Store values are not encrypted at rest. They are stored unencrypted in the shared state SQLite database (`state/openclaw.sqlite`), protected by the same `0600` file and `0700` directory permissions as other credentials in that database. Operators who need stronger storage isolation should use an external exec provider such as the [1Password plugin](/plugins/onepassword) or [Vault SecretRefs](/plugins/vault).
 </Warning>

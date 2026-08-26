@@ -14,6 +14,7 @@ import {
   clearMemoryCoreWorkspaceNamespace,
   SESSION_BACKFILL_REWIND_NAMESPACE,
 } from "./dreaming-state.js";
+import { recordMemorySessionTombstones } from "./memory-entry-origins.js";
 import {
   markSessionBackfillRewindBaseline,
   resetSessionBackfillIngestionState,
@@ -129,6 +130,39 @@ describe("runSessionBackfill", () => {
         apply: true,
       }),
     ).rejects.toThrow("Memory session-backfill --rem cannot be combined with --apply.");
+  });
+
+  it("never resurrects forgotten canonical sessions through session backfill apply", async () => {
+    const workspaceDir = await createIsolatedWorkspace("forgotten-");
+    await seedCanonicalTranscript("forgotten", [
+      {
+        role: "user",
+        content: "Forgotten owner claim must never return.",
+        timestamp: "2026-01-02T12:00:00.000Z",
+        owner: true,
+      },
+    ]);
+    await seedCanonicalTranscript("retained", [
+      {
+        role: "user",
+        content: "Retained owner claim remains eligible.",
+        timestamp: "2026-01-02T12:01:00.000Z",
+        owner: true,
+      },
+    ]);
+    recordMemorySessionTombstones({ agentId: "main", sessionIds: ["forgotten"] });
+
+    const result = await runSessionBackfill({
+      agentId: "main",
+      workspaceDir,
+      apply: true,
+      timezone: "UTC",
+    });
+
+    expect(result.candidateCount).toBe(1);
+    expect(result.days[0]?.topCandidates).toEqual(["User: Retained owner claim remains eligible."]);
+    const ingestion = await dreamingTestState.readSessionIngestionState(workspaceDir);
+    expect(ingestion.files).not.toHaveProperty("main:sessions/main/forgotten");
   });
 
   it("buckets messages in the configured timezone and processes days oldest first", async () => {

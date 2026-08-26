@@ -474,20 +474,49 @@ describe("printCronList", () => {
   );
 
   it.each([
-    { label: "disabled", enabled: false, runStatus: "ok" as const, expectedStatus: "disabled" },
-    { label: "running", enabled: true, runStatus: "ok" as const, expectedStatus: "running" },
-    { label: "failed", enabled: true, runStatus: "error" as const, expectedStatus: "error" },
+    {
+      label: "disabled",
+      enabled: false,
+      running: false,
+      runStatus: "ok" as const,
+      expectedStatus: "disabled",
+    },
+    {
+      label: "running",
+      enabled: true,
+      running: true,
+      runStatus: "ok" as const,
+      expectedStatus: "running",
+    },
+    {
+      label: "paused but force-running",
+      enabled: false,
+      running: true,
+      runStatus: "ok" as const,
+      expectedStatus: "running",
+    },
+    {
+      label: "failed",
+      enabled: true,
+      running: false,
+      runStatus: "error" as const,
+      expectedStatus: "error",
+    },
   ])(
     "does not let prior non-delivery override a $label automation",
-    ({ enabled, runStatus, expectedStatus }) => {
+    ({ enabled, running, runStatus, expectedStatus }) => {
       const job = createBaseJob({
         enabled,
         state: {
           lastRunStatus: runStatus,
           lastDeliveryStatus: "not-delivered",
-          ...(expectedStatus === "running" ? { runningAtMs: Date.now() } : {}),
+          ...(running ? { runningAtMs: Date.now() } : {}),
         },
       });
+
+      const list = createRuntimeLogCapture();
+      printCronList([job], list.runtime);
+      expectLogsToInclude(list.logs, expectedStatus);
 
       const show = createRuntimeLogCapture();
       printCronShow(job, show.runtime);
@@ -495,6 +524,9 @@ describe("printCronList", () => {
       expectLogsToInclude(show.logs, `status: ${expectedStatus}`);
       expect(show.logs.join("\n")).not.toContain("ok (not delivered)");
       expect(enrichCronJsonWithStatus(job)).toMatchObject({ status: expectedStatus });
+      expect(enrichCronJsonWithStatus({ jobs: [job] })).toMatchObject({
+        jobs: [{ status: expectedStatus }],
+      });
     },
   );
 

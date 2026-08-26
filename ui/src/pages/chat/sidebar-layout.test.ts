@@ -71,9 +71,16 @@ describe("sidebar layout", () => {
     expect(chat?.slot).toBe("chat");
   });
 
-  it("keeps the panel open as a type selector after its final tab closes", () => {
+  it("collapses the panel after its final tab closes", () => {
     const closed = closeSlot(openSlot({ columns: [] }, "detail"), "detail");
-    expect(closed).toEqual({ columns: [], open: true });
+    expect(closed).toEqual({ columns: [], open: false });
+  });
+
+  it("does not reopen a minimized panel when another tab remains", () => {
+    const minimized = { ...openAll(), open: false };
+    const closed = closeSlot(minimized, "detail");
+    expect(closed.open).toBe(false);
+    expect(closed.columns[0]?.panels.map((panel) => panel.slot)).toEqual(["discussion", "chat"]);
   });
 
   it("minimizes and expands without discarding tabs", () => {

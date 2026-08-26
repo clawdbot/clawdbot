@@ -815,8 +815,10 @@ suite.define(() => {
               .getByRole("button", { name: `Close ${label}`, exact: true })
               .click();
           }
-          await sidePanel(page).locator(".side-panel-empty--selector").waitFor();
-          await sidePanel(page).getByRole("button", { name: "Close", exact: true }).click();
+          await expect.poll(() => sidePanel(page).count()).toBe(0);
+          await page.reload();
+          await page.locator(".chat-group").first().waitFor();
+          await expect.poll(() => sidePanel(page).count()).toBe(0);
           await page.locator(".chat-side-panel-toggle").click();
           await sidePanel(page).locator(".side-panel-empty--selector").waitFor();
           expect(await sidePanel(page).locator("wa-tab").count()).toBe(0);
