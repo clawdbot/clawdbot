@@ -845,37 +845,47 @@ describe("browser control server", () => {
     expect(String(waitCall.path)).toContain("safe-wait.pdf");
   });
 
-  it("cancels wait/download when its HTTP caller disconnects", async () => {
-    const base = await startServerAndBase();
-    let operationSignal: AbortSignal | undefined;
-    requirePwMock("waitForDownloadViaPlaywright").mockImplementationOnce(async (value) => {
-      const options = value as { signal?: AbortSignal };
-      operationSignal = options.signal;
-      await new Promise<void>((_resolve, reject) => {
-        options.signal?.addEventListener(
-          "abort",
-          () => {
-            const reason = options.signal?.reason;
-            reject(reason instanceof Error ? reason : new Error("request aborted"));
-          },
-          { once: true },
-        );
+  it.each([
+    {
+      route: "/wait/download",
+      mockName: "waitForDownloadViaPlaywright",
+      body: { path: "cancelled-wait.pdf" },
+    },
+    { route: "/response/body", mockName: "responseBodyViaPlaywright", body: { url: "**/api" } },
+  ] as const)(
+    "cancels $route when its HTTP caller disconnects",
+    async ({ route, mockName, body }) => {
+      const base = await startServerAndBase();
+      let operationSignal: AbortSignal | undefined;
+      requirePwMock(mockName).mockImplementationOnce(async (value) => {
+        const options = value as { signal?: AbortSignal };
+        operationSignal = options.signal;
+        await new Promise<void>((_resolve, reject) => {
+          options.signal?.addEventListener(
+            "abort",
+            () => {
+              const reason = options.signal?.reason;
+              reject(reason instanceof Error ? reason : new Error("request aborted"));
+            },
+            { once: true },
+          );
+        });
+        throw new Error("unreachable");
       });
-      throw new Error("unreachable");
-    });
-    const controller = new AbortController();
-    const response = realFetch(`${base}/wait/download`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path: "cancelled-wait.pdf" }),
-      signal: controller.signal,
-    });
+      const controller = new AbortController();
+      const response = realFetch(`${base}${route}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
 
-    await vi.waitFor(() => expect(operationSignal).toBeInstanceOf(AbortSignal));
-    controller.abort(new Error("caller disconnected"));
-    await expect(response).rejects.toThrow();
-    await vi.waitFor(() => expect(operationSignal?.aborted).toBe(true));
-  });
+      await vi.waitFor(() => expect(operationSignal).toBeInstanceOf(AbortSignal));
+      controller.abort(new Error("caller disconnected"));
+      await expect(response).rejects.toThrow();
+      await vi.waitFor(() => expect(operationSignal?.aborted).toBe(true));
+    },
+  );
 
   it("download accepts in-root relative output path", async () => {
     const base = await startServerAndBase();

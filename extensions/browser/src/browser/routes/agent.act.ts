@@ -805,6 +805,7 @@ export function registerBrowserAgentActRoutes(
         const result = await pw.responseBodyViaPlaywright({
           cdpUrl,
           targetId: tab.targetId,
+          signal,
           url,
           timeoutMs: timeoutMs ?? undefined,
           maxChars: maxChars ?? undefined,
