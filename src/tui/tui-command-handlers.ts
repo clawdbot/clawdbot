@@ -2,7 +2,6 @@
 import { randomUUID } from "node:crypto";
 import type { Component, OverlayHandle, SelectItem, TUI } from "@earendil-works/pi-tui";
 import type { Result } from "@openclaw/normalization-core/result";
-import { normalizeLowercaseStringOrEmpty as normalizedChatSendAckStatus } from "@openclaw/normalization-core/string-coerce";
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { modelKey } from "../agents/model-ref-shared.js";
 import { shouldForwardModelCommandToServer } from "../auto-reply/commands-registry.shared.js";
@@ -19,6 +18,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { normalizeTerminalChatSendAckStatus } from "../shared/chat-send-ack-status.js";
 import {
   formatTuiLevelCommandUsage,
   helpText,
@@ -106,15 +106,6 @@ function isBtwCommand(text: string): boolean {
 function isSlashStopCommand(text: string): boolean {
   const trimmed = text.trim();
   return trimmed.startsWith("/") && isChatStopCommandText(trimmed);
-}
-
-function isTerminalChatSendAckFailure(status: unknown): boolean {
-  const normalized = normalizedChatSendAckStatus(status);
-  return normalized === "timeout" || normalized === "error";
-}
-
-function isTerminalChatSendAckSuccess(status: unknown): boolean {
-  return normalizedChatSendAckStatus(status) === "ok";
 }
 
 const TERMINAL_CHAT_SEND_FAILURE_MESSAGE = "Chat failed before the run started; try again.";
@@ -934,9 +925,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         runId,
       });
       const acceptedRunId = sendResult.runId || runId;
-      const terminalAckFailure = isTerminalChatSendAckFailure(sendResult.status);
-      const terminalAckSuccess = isTerminalChatSendAckSuccess(sendResult.status);
-      const terminalAck = terminalAckFailure || terminalAckSuccess;
+      const terminalAckStatus = normalizeTerminalChatSendAckStatus(sendResult.status);
+      const terminalAckFailure = terminalAckStatus === "timeout" || terminalAckStatus === "error";
+      const terminalAck = terminalAckStatus !== undefined;
       if (!isCurrentSendViewport()) {
         if (isBtw) {
           forgetLocalBtwRunId?.(runId);
