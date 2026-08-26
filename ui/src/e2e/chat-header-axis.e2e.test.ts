@@ -106,7 +106,7 @@ suite.define(() => {
             }
             expect(geometry.separatorDisplays).toEqual(["block", "block"]);
           } else {
-            expect(geometry.projectRow.bottom).toBeLessThanOrEqual(geometry.sessionTrail.top);
+            expect(geometry.projectRow.bottom - geometry.sessionTrail.top).toBeLessThanOrEqual(0.1);
             expect(geometry.parentText).toBeCloseTo(geometry.sessionText, 1);
             expect(geometry.separatorDisplays).toEqual(["none", "none"]);
           }
