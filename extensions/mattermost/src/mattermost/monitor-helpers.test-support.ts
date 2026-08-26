@@ -11,7 +11,15 @@ describe("matchesMattermostBotMention", () => {
     "@echobot hello",
     "hey @echobot check this",
     "(@echobot)",
+    "hello.@echobot",
+    "hello-@echobot",
+    "hello:@echobot",
+    "@echobot.",
+    "@echobot...",
+    "@echobot-",
     "thanks @echobot: run it",
+    "thanks @echobot:",
+    "team:@echobot hello",
     "@EchoBot hello",
     "@echobot",
   ])("matches a real bot mention: %j", (text) => {
@@ -24,6 +32,9 @@ describe("matchesMattermostBotMention", () => {
     "@echobot.dia hello",
     "@echobot-ops please review",
     "@echobot_2 ping",
+    "@echobot:remote hello",
+    "@echobot:remote.example hello",
+    "@echobot::remote hello",
     "mail me at bob@echobot later",
   ])("does not match a longer username or embedded handle: %j", (text) => {
     expect(matchesMattermostBotMention(text, "echobot")).toBe(false);
@@ -117,9 +128,22 @@ describe("normalizeMention", () => {
     "@echobot.dia hello",
     "@echobot-ops please review",
     "@echobotdia hello",
+    "@echobot:remote hello",
+    "@echobot:remote.example hello",
     "mail me at bob@echobot later",
   ])("leaves other users' handles intact: %j", (input) => {
     expect(normalizeMention(input, "echobot")).toBe(input);
+  });
+
+  it.each([
+    { input: "hello.@echobot", expected: "hello." },
+    { input: "hello-@echobot", expected: "hello-" },
+    { input: "hello:@echobot", expected: "hello:" },
+    { input: "@echobot.", expected: "." },
+    { input: "@echobot-", expected: "-" },
+    { input: "@echobot: hello", expected: ": hello" },
+  ])("preserves punctuation around a real mention: $input", ({ input, expected }) => {
+    expect(normalizeMention(input, "echobot")).toBe(expected);
   });
 
   it("preserves table padding on lines without the mention", () => {

@@ -1303,71 +1303,72 @@ describe("mattermost inbound user posts", () => {
     expect(ctx?.Provider).toBe("mattermost");
   });
 
-  it("does not wake on a mention of a longer username containing the bot name", async () => {
-    const socket = new FakeWebSocket();
-    const abortController = new AbortController();
-    mockState.abortController = abortController;
-    const verboseDebug = vi.fn();
-    const config: OpenClawConfig = {
-      channels: {
-        mattermost: {
-          enabled: true,
-          baseUrl: "https://mattermost.example.com",
-          botToken: "bot-token",
-          // No chatmode: "onmessage" would force requireMention off (accounts.ts).
-          dmPolicy: "open",
-          groupPolicy: "open",
-          requireMention: true,
+  it.each([
+    { message: "@openclawdia hello", expectedBody: null },
+    { message: "@openclaw:remote.example hello", expectedBody: null },
+    { message: "hello.@openclaw", expectedBody: "hello." },
+    { message: "hello-@openclaw", expectedBody: "hello-" },
+    { message: "hello:@openclaw", expectedBody: "hello:" },
+    { message: "@openclaw.", expectedBody: "." },
+    { message: "@openclaw-", expectedBody: "-" },
+    { message: "@openclaw: hello", expectedBody: ": hello" },
+  ])(
+    "dispatches only genuine mention-required posts: $message",
+    async ({ message, expectedBody }) => {
+      const socket = new FakeWebSocket();
+      const abortController = new AbortController();
+      mockState.abortController = abortController;
+      const verboseDebug = vi.fn();
+      const config: OpenClawConfig = {
+        channels: {
+          mattermost: {
+            enabled: true,
+            baseUrl: "https://mattermost.example.com",
+            botToken: "bot-token",
+            // No chatmode: "onmessage" would force requireMention off (accounts.ts).
+            dmPolicy: "open",
+            groupPolicy: "open",
+            requireMention: true,
+          },
         },
-      },
-    };
-    mockState.runtimeCore = createRuntimeCore(config, undefined, { verboseDebug });
+      };
+      mockState.runtimeCore = createRuntimeCore(config, undefined, { verboseDebug });
 
-    const monitor = monitorMattermostProvider({
-      config,
-      runtime: testRuntime(),
-      abortSignal: abortController.signal,
-      webSocketFactory: () => socket,
-    });
+      const monitor = monitorMattermostProvider({
+        config,
+        runtime: testRuntime(),
+        abortSignal: abortController.signal,
+        webSocketFactory: () => socket,
+      });
 
-    await vi.waitFor(() => {
-      expect(socket.openListenerCount).toBeGreaterThan(0);
-    });
-    socket.emitOpen();
+      await vi.waitFor(() => {
+        expect(socket.openListenerCount).toBeGreaterThan(0);
+      });
+      socket.emitOpen();
 
-    // "openclawdia" is a different, legal Mattermost username; the bot must stay quiet.
-    await socket.emitMessage({
-      event: "posted",
-      data: {
-        channel_id: "chan-1",
-        channel_name: "town-square",
-        channel_display_name: "Town Square",
-        sender_name: "alice",
-        post: JSON.stringify({
-          id: "post-other-user-mention",
-          channel_id: "chan-1",
-          user_id: "user-1",
-          message: "@openclawdia hello",
-          create_at: 1_714_000_000_002,
-        }),
-      },
-      broadcast: {
-        channel_id: "chan-1",
-        user_id: "user-1",
-      },
-    });
+      await emitMattermostChannelPost(socket, {
+        id: "post-mention-boundary",
+        message,
+      });
 
-    await vi.waitFor(() => {
-      expect(verboseDebug).toHaveBeenCalledWith(
-        expect.stringContaining("drop group message (missing mention"),
-      );
-    });
-    abortController.abort();
-    socket.emitClose(1000);
-    await monitor;
-
-    expect(mockState.dispatchInboundMessage).not.toHaveBeenCalled();
-  });
+      if (expectedBody === null) {
+        await vi.waitFor(() => {
+          expect(verboseDebug).toHaveBeenCalledWith(
+            expect.stringContaining("drop group message (missing mention"),
+          );
+        });
+        expect(mockState.dispatchInboundMessage).not.toHaveBeenCalled();
+      } else {
+        expect(mockState.dispatchInboundMessage).toHaveBeenCalledTimes(1);
+        expect(mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].ctx.BodyForAgent).toBe(
+          expectedBody,
+        );
+      }
+      abortController.abort();
+      socket.emitClose(1000);
+      await monitor;
+    },
+  );
 
   it("merges Mattermost progress preview updates and clears after message-tool delivery", async () => {
     const socket = new FakeWebSocket();
