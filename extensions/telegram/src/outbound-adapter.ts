@@ -10,10 +10,7 @@ import {
   createAttachedChannelResultAdapter,
   type ChannelOutboundAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
-import {
-  resolveTextChunkLimit,
-  chunkMarkdownTextWithMode,
-} from "openclaw/plugin-sdk/reply-chunking";
+import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
 import {
   resolveSendableOutboundReplyParts,
   sendPayloadMediaSequenceOrFallback,
@@ -36,11 +33,12 @@ import {
   resolveTelegramPromptContextSource,
 } from "./prompt-context-projection.js";
 import { registerTelegramQuestionDelivery } from "./question-finalization.js";
-import { TELEGRAM_RICH_TEXT_LIMIT } from "./rich-message.js";
 import { loadTelegramSendModule, type TelegramSendModule } from "./send-runtime.js";
 import { normalizeTelegramOutboundTarget, parseTelegramTarget } from "./targets.js";
+import { resolveTelegramTextChunkLimit, TELEGRAM_TEXT_CHUNK_LIMIT } from "./text-chunk-limit.js";
 
-export const TELEGRAM_TEXT_CHUNK_LIMIT = 4000;
+export { TELEGRAM_TEXT_CHUNK_LIMIT } from "./text-chunk-limit.js";
+
 const TELEGRAM_POLL_OPTION_LIMIT = 12;
 
 type TelegramSendFn = typeof import("./send.js").sendMessageTelegram;
@@ -576,18 +574,8 @@ export function createTelegramOutboundAdapter(
         gatewayClientScopes,
       });
     },
-    resolveEffectiveTextChunkLimit: ({ cfg, accountId }) => {
-      const richMessages =
-        mergeTelegramAccountConfig(cfg, accountId ?? resolveDefaultTelegramAccountId(cfg))
-          .richMessages === true;
-      const platformLimit = richMessages ? TELEGRAM_RICH_TEXT_LIMIT : TELEGRAM_TEXT_CHUNK_LIMIT;
-      return Math.min(
-        resolveTextChunkLimit(cfg, "telegram", accountId ?? undefined, {
-          fallbackLimit: platformLimit,
-        }),
-        platformLimit,
-      );
-    },
+    resolveEffectiveTextChunkLimit: ({ cfg, accountId }) =>
+      resolveTelegramTextChunkLimit({ cfg, accountId }),
     pollMaxOptions: TELEGRAM_POLL_OPTION_LIMIT,
     supportsPollDurationSeconds: true,
     supportsAnonymousPolls: true,
