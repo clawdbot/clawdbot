@@ -64,7 +64,7 @@ function modeIcon(mode: SessionPermissionMode | null): unknown {
     case "full":
       return icons.shieldAlert;
     default:
-      return icons.shieldCheck;
+      return icons.shield;
   }
 }
 
