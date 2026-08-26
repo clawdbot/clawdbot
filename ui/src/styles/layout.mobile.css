@@ -331,8 +331,12 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
     display: none;
   }
 
-  .content--chat {
+  /* Match desktop: the composer owns its own bottom breathing room, so the
+     page shell adds none. The `main` qualifier outranks the generic mobile
+     `.content` padding rules later in this file that would re-add 12-16px. */
+  main.content--chat {
     gap: 2px;
+    padding-bottom: 0;
   }
 
   /* Show the mobile gear toggle (lives in topbar now) */

@@ -458,4 +458,7 @@ export function getCurrentPluginMetadataSnapshot(
 // Light bridges (plugin-metadata-snapshot.runtime.ts) serve reads through this
 // instance whenever the metadata system is loaded; the require fallback only
 // covers cold processes.
-registerPluginMetadataSnapshotReaders({ getCurrentPluginMetadataSnapshot });
+registerPluginMetadataSnapshotReaders({
+  adoptCurrentPluginMetadataSnapshotIfAbsent,
+  getCurrentPluginMetadataSnapshot,
+});

@@ -91,6 +91,7 @@ export function createApplicationGateway(
     ...(options.bootstrapProfile ? { bootstrapProfile: options.bootstrapProfile } : {}),
     password: initialPassword,
   };
+  let connectionRevision = 0;
   let snapshot: ApplicationGatewaySnapshot = {
     client: null,
     phase: "stopped",
@@ -293,6 +294,7 @@ export function createApplicationGateway(
       nextConnection.bootstrapToken !== connection.bootstrapToken ||
       nextConnection.bootstrapProfile !== connection.bootstrapProfile;
     if (credentialsChanged) {
+      connectionRevision += 1;
       void clearStoredChatSnapshots();
     }
     const hasRequestedSessionKey = requestedSessionKey !== undefined;
@@ -541,6 +543,9 @@ export function createApplicationGateway(
     },
     get connection() {
       return connection;
+    },
+    get connectionRevision() {
+      return connectionRevision;
     },
     get eventLog() {
       return eventLog;

@@ -46,6 +46,7 @@ import {
   updateSessionCatalogData as updateSessionCatalogDataForHost,
 } from "./session-data-controller-catalog.ts";
 import {
+  publishSidebarSessionError,
   publishSidebarSessionList,
   refreshSidebarSessionList,
   subscribeSidebarAgentSessionCaches,
@@ -95,6 +96,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   private activeSessionLineageRetryTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private reconnectListRevision: number | null = null;
   private gatewaySource: ApplicationContext<RouteId>["gateway"] | null = null;
+  private gatewayConnectionRevision = 0;
   private gatewayClient: GatewayBrowserClient | null = null;
   private gatewayConnected = false;
   // Bind mutation completions to one epoch so stale failures cannot cross reconnects.
@@ -422,19 +424,18 @@ export class SessionDataController implements ReactiveController, SessionCatalog
       return;
     }
     const gateway = this.context?.gateway;
-    const sameClientDisconnected =
+    const sameGatewayDisconnected =
       gateway !== undefined &&
       gateway === this.gatewaySource &&
       gateway.snapshot.client !== null &&
-      gateway.snapshot.client === this.gatewayClient &&
       gateway.snapshot.phase !== "connected";
-    if (sameClientDisconnected && this.reconnectListRevision === null) {
+    if (sameGatewayDisconnected && this.reconnectListRevision === null) {
       this.reconnectListRevision = sessions.canonicalListRevision + 1;
     }
     const waitingForReconnectList =
       this.reconnectListRevision !== null &&
       sessions.canonicalListRevision < this.reconnectListRevision;
-    if (!sameClientDisconnected && !waitingForReconnectList) {
+    if (!sameGatewayDisconnected && !waitingForReconnectList) {
       // Keep the result and agent scope paired until the first canonical list
       // after reconnect; chat startup may publish a partial reconciliation first.
       this.reconnectListRevision = null;
@@ -465,9 +466,12 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   private synchronizeGateway(gateway: ApplicationContext<RouteId>["gateway"]): void {
     const client = gateway.snapshot.client;
     const connected = gateway.snapshot.phase === "connected";
+    const sessionSourceChanged =
+      gateway !== this.gatewaySource ||
+      gateway.connectionRevision !== this.gatewayConnectionRevision;
     const clientChanged = client !== this.gatewayClient;
     const connectedStarted = connected && !this.gatewayConnected;
-    const sourceOrClientChanged = gateway !== this.gatewaySource || client !== this.gatewayClient;
+    const sourceOrClientChanged = sessionSourceChanged || clientChanged;
     const connectionChanged = connected !== this.gatewayConnected;
     // Presence and auth snapshots must not retire this client's in-flight
     // native or catalog pages unless its connection phase actually changes.
@@ -476,6 +480,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     }
     this.invalidateSessionMutations();
     this.gatewaySource = gateway;
+    this.gatewayConnectionRevision = gateway.connectionRevision;
     this.gatewayClient = client;
     this.gatewayConnected = connected;
     this.presenceInstanceId = client?.instanceId;
@@ -493,7 +498,10 @@ export class SessionDataController implements ReactiveController, SessionCatalog
       }
       return;
     }
-    this.clearSessionCache();
+    // Session rows belong to the logical Gateway, not one replaceable socket client.
+    if (sessionSourceChanged) {
+      this.clearSessionCache();
+    }
     this.resetSessionCatalogConnection();
     if (connected && this.sessionsSource && this.host.sidebarSessionStatusFilter() !== "active") {
       void this.refreshSidebarSessions();
@@ -584,7 +592,6 @@ export class SessionDataController implements ReactiveController, SessionCatalog
       }
       this.childSessionRowsByParent = { ...this.childSessionRowsByParent, [parentKey]: rows };
       this.loadedChildSessionKeys = new Set([...this.loadedChildSessionKeys, parentKey]);
-      this.notify();
     } catch (error) {
       if (generation !== this.childSessionGeneration || sessions !== this.context?.sessions) {
         return;
@@ -680,7 +687,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   }
 
   dismissSessionMutationError(): void {
-    this.sessionMutationError = null;
+    publishSidebarSessionError(this, null, "action");
     this.notify();
   }
 
@@ -725,7 +732,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
 
   private invalidateSessionMutations(): void {
     this.sessionMutationEpoch += 1;
-    this.sessionMutationError = null;
+    publishSidebarSessionError(this, null, "action");
     // Dismiss any confirm dialog still open under the retired epoch before a
     // new one can be issued; otherwise it stays modal until manually closed.
     this.sessionMutationAbortController.abort();
@@ -743,7 +750,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     if (gateway.snapshot.phase !== "connected" || !client) {
       return null;
     }
-    this.sessionMutationError = null;
+    publishSidebarSessionError(this, null, "action");
     this.notify();
     return {
       epoch: this.sessionMutationEpoch,
@@ -772,7 +779,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
 
   publishSessionMutationError(scope: SidebarSessionMutationScope, error: unknown): void {
     if (this.isSessionMutationScopeCurrent(scope)) {
-      this.sessionMutationError = formatUiError(error);
+      publishSidebarSessionError(this, formatUiError(error), "action");
       this.notify();
     }
   }

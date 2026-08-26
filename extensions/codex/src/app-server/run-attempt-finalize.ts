@@ -1,4 +1,5 @@
 import {
+  buildEmbeddedForegroundPromptContext,
   embeddedAgentLog,
   formatErrorMessage,
   runAgentHarnessLlmOutputHook,
@@ -67,6 +68,7 @@ export async function finalizeCodexAttempt(
     sessionAgentId,
     contextSessionKey,
     effectiveCwd,
+    agentDir,
     attemptStartedAt,
     startupAuthProfileId,
   } = connection;
@@ -393,20 +395,11 @@ export async function finalizeCodexAttempt(
         attemptTools.toolBridge.availableSpecs,
       ).some((tool) => tool.name === "skill_workshop"),
       compacted: (result.compactionCount ?? 0) > 0,
-      messageChannel: params.messageChannel,
-      messageProvider: params.messageProvider,
-      chatType: params.chatType,
-      agentAccountId: params.agentAccountId,
-      groupId: params.groupId,
-      groupChannel: params.groupChannel,
-      groupSpace: params.groupSpace,
-      memberRoleIds: params.memberRoleIds,
-      spawnedBy: params.spawnedBy,
       senderId: params.senderId ?? undefined,
-      senderName: params.senderName,
-      senderUsername: params.senderUsername,
-      senderE164: params.senderE164,
-      senderIsOwner: params.senderIsOwner,
+      foregroundPromptContext: buildEmbeddedForegroundPromptContext(
+        { ...params, agentId: sessionAgentId },
+        agentDir,
+      ),
     },
     hookRunner,
   });

@@ -428,7 +428,6 @@ suite.define(() => {
 
       const queuedRow = page.locator(".chat-queue__item", { hasText: queuedText });
       await queuedRow.waitFor({ timeout: 10_000 });
-      await queuedRow.getByText("Waiting for current run").waitFor({ timeout: 10_000 });
       await expectRequestCountStable(gateway, "chat.send", 1);
     } finally {
       await suite.closeBrowserContext(context);
@@ -465,7 +464,7 @@ suite.define(() => {
       await composer.fill(followUp);
       await page.getByRole("button", { name: "Queue message" }).click();
       const queuedRow = page.locator(".chat-queue__item", { hasText: followUp });
-      await queuedRow.getByText("Waiting for current run").waitFor({ timeout: 10_000 });
+      await queuedRow.waitFor({ timeout: 10_000 });
       await expectRequestCountStable(gateway, "chat.send", 1);
 
       await gateway.setHistoryMessages([

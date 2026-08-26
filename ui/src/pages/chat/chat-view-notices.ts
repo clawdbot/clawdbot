@@ -23,6 +23,12 @@ type ChatViewNoticesProps = ChatPlacementStartupNoticeProps & {
   workspaceConflict?: WorkspaceResultConflict | null;
 };
 
+type ChatComposerNoticesProps = ChatPlacementStartupNoticeProps & {
+  runError?: { summary: string } | null;
+  onDismissWorkspaceConflict?: () => void;
+  workspaceConflict?: WorkspaceResultConflict | null;
+};
+
 function renderDiskSpaceNotice(diskSpace: SessionPlacementDiskSpace | undefined) {
   if (!diskSpace || diskSpace.status === "ok") {
     return nothing;
@@ -34,68 +40,89 @@ function renderDiskSpaceNotice(diskSpace: SessionPlacementDiskSpace | undefined)
   const critical = diskSpace.status === "critical";
   return html`
     <div
-      class="callout ${critical ? "danger" : "warn"} chat-cloud-disk-space-notice"
+      class="chat-composer-neighbor-card chat-composer-neighbor-card--${critical
+        ? "danger"
+        : "warn"} chat-cloud-disk-space-notice"
       role=${critical ? "alert" : "status"}
     >
-      <div class="chat-cloud-disk-space-notice__title">
-        <span aria-hidden="true">${icons.alertTriangle}</span>
+      <span class="chat-composer-neighbor-card__icon" aria-hidden="true"
+        >${icons.alertTriangle}</span
+      >
+      <div class="chat-composer-neighbor-card__copy">
         <strong
           >${t(critical ? "chat.diskSpace.criticalTitle" : "chat.diskSpace.warningTitle")}</strong
         >
+        <span>
+          ${t(critical ? "chat.diskSpace.criticalBody" : "chat.diskSpace.warningBody", {
+            percent: String(usedPercent),
+            free: formatBytes(diskSpace.availableBytes),
+          })}
+        </span>
       </div>
-      <p>
-        ${t(critical ? "chat.diskSpace.criticalBody" : "chat.diskSpace.warningBody", {
-          percent: String(usedPercent),
-          free: formatBytes(diskSpace.availableBytes),
-        })}
-      </p>
     </div>
   `;
 }
 
-export function renderChatViewNotices(props: ChatViewNoticesProps) {
+function renderErrorNotice(error: string, onDismiss?: () => void) {
   return html`
-    ${renderDiskSpaceNotice(props.diskSpace)}
-    ${props.error
-      ? html`
-          <div class="chat-error" role="alert">
-            <span class="chat-error__dot" aria-hidden="true"></span>
-            <span class="chat-error__content">${props.error}</span>
-            ${props.onDismissError
-              ? html`
-                  <openclaw-tooltip .content=${t("chat.actions.dismissError")}>
-                    <button
-                      class="chat-error__dismiss"
-                      type="button"
-                      @click=${props.onDismissError}
-                      aria-label=${t("chat.actions.dismissError")}
-                    >
-                      ${icons.x}
-                    </button>
-                  </openclaw-tooltip>
-                `
-              : nothing}
-          </div>
-        `
-      : nothing}
+    <div
+      class="chat-composer-neighbor-card chat-composer-neighbor-card--danger chat-error"
+      role="alert"
+    >
+      <span class="chat-composer-neighbor-card__icon" aria-hidden="true"
+        >${icons.alertTriangle}</span
+      >
+      <span class="chat-composer-neighbor-card__copy chat-error__content"
+        ><strong>${error}</strong></span
+      >
+      ${onDismiss
+        ? html`
+            <openclaw-tooltip .content=${t("chat.actions.dismissError")}>
+              <button
+                class="chat-error__dismiss"
+                type="button"
+                @click=${onDismiss}
+                aria-label=${t("chat.actions.dismissError")}
+              >
+                ${icons.x}
+              </button>
+            </openclaw-tooltip>
+          `
+        : nothing}
+    </div>
+  `;
+}
+
+export function renderChatTopbarNotices(props: ChatViewNoticesProps) {
+  return html`
+    <div class="chat-topbar-notices">
+      ${renderDiskSpaceNotice(props.diskSpace)}
+      ${props.error ? renderErrorNotice(props.error, props.onDismissError) : nothing}
+      ${props.focusMode && props.onToggleFocusMode
+        ? html`
+            <openclaw-tooltip .content=${t("chat.actions.exitFocusMode")}>
+              <button
+                class="chat-focus-exit"
+                type="button"
+                @click=${props.onToggleFocusMode}
+                aria-label=${t("chat.actions.exitFocusMode")}
+              >
+                ${icons.x}
+              </button>
+            </openclaw-tooltip>
+          `
+        : nothing}
+    </div>
+  `;
+}
+
+export function renderChatComposerNotices(props: ChatComposerNoticesProps) {
+  return html`
+    ${props.runError ? renderErrorNotice(props.runError.summary) : nothing}
     ${renderWorkspaceConflictNotice({
       conflict: props.workspaceConflict ?? undefined,
       onDismiss: props.onDismissWorkspaceConflict,
     })}
-    ${props.focusMode && props.onToggleFocusMode
-      ? html`
-          <openclaw-tooltip .content=${t("chat.actions.exitFocusMode")}>
-            <button
-              class="chat-focus-exit"
-              type="button"
-              @click=${props.onToggleFocusMode}
-              aria-label=${t("chat.actions.exitFocusMode")}
-            >
-              ${icons.x}
-            </button>
-          </openclaw-tooltip>
-        `
-      : nothing}
     ${renderPlacementStartupStatus(props.placementStartup, props.onRetrySessionPlacementStartup)}
   `;
 }

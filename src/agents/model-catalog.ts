@@ -57,6 +57,7 @@ type DiscoveredModel = {
   contextWindow?: number;
   contextTokens?: number;
   reasoning?: boolean;
+  thinkingLevelMap?: ModelCatalogEntry["thinkingLevelMap"];
   input?: ModelInputType[];
   params?: ModelCatalogEntry["params"];
   compat?: ModelCatalogEntry["compat"];
@@ -183,6 +184,7 @@ function clearRouteBoundCatalogMetadata(entry: ModelCatalogEntry): ModelCatalogE
     contextWindowDefault: _contextWindowDefault,
     contextTokens: _contextTokens,
     reasoning: _reasoning,
+    thinkingLevelMap: _thinkingLevelMap,
     input: _input,
     params: _params,
     compat: _compat,
@@ -196,7 +198,7 @@ function overlayCatalogMetadata(
   base: ModelCatalogEntry,
   overlay: ModelCatalogEntry,
   options?: {
-    catalogCompatRoute?: ModelCatalogEntry;
+    catalogRoute?: ModelCatalogEntry;
     preserveBaseCompat?: boolean;
     preserveBaseName?: boolean;
   },
@@ -207,6 +209,7 @@ function overlayCatalogMetadata(
   const routeChanged = catalogRouteChanges(base, overlay);
   const routeBase = routeChanged ? clearRouteBoundCatalogMetadata(base) : base;
   const params = mergeCatalogParams(routeBase.params, overlay.params);
+  const thinkingLevelMap = overlay.thinkingLevelMap ?? options?.catalogRoute?.thinkingLevelMap;
   // Options + default are one normalized unit (default ∈ options): an overlay
   // that replaces the options list must also own the default, or a base default
   // absent from the new list would leak through the field-by-field merge.
@@ -243,6 +246,7 @@ function overlayCatalogMetadata(
     ...(overlay.contextWindow !== undefined ? { contextWindow: overlay.contextWindow } : {}),
     ...(overlay.contextTokens !== undefined ? { contextTokens: overlay.contextTokens } : {}),
     ...(overlay.reasoning !== undefined ? { reasoning: overlay.reasoning } : {}),
+    ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
     ...(overlay.input !== undefined ? { input: overlay.input } : {}),
     ...(params ? { params } : {}),
     ...(overlay.mediaInput !== undefined ? { mediaInput: overlay.mediaInput } : {}),
@@ -253,8 +257,8 @@ function overlayCatalogMetadata(
     ...(overlay.replacedBy !== undefined ? { replacedBy: overlay.replacedBy } : {}),
     compat: options?.preserveBaseCompat
       ? resolveCatalogOwnedModelCompat({
-          catalogRoute: options.catalogCompatRoute ?? base,
-          catalogCompat: (options.catalogCompatRoute ?? base).compat,
+          catalogRoute: options.catalogRoute ?? base,
+          catalogCompat: (options.catalogRoute ?? base).compat,
           configuredRoute: {
             api: overlay.api ?? base.api,
             baseUrl: overlay.baseUrl ?? base.baseUrl,
@@ -279,7 +283,7 @@ function mergeCatalogEntries(
   models: ModelCatalogEntry[],
   entries: ModelCatalogEntry[],
   options?: {
-    catalogCompatRoutes?: readonly ModelCatalogEntry[];
+    catalogRoutes?: readonly ModelCatalogEntry[];
     preserveBaseCompat?: boolean;
     preserveBaseName?: boolean;
   },
@@ -297,16 +301,16 @@ function mergeCatalogEntries(
     }
     const existing = models.at(existingIndex);
     if (existing) {
-      // The logical row may currently represent a sibling physical route. Compat
-      // must come from the catalog variant selected by config, not that sibling.
-      const catalogCompatRoute = options?.preserveBaseCompat
-        ? options.catalogCompatRoutes?.find(
+      // Logical rows can represent a sibling route; capabilities must come
+      // from the exact catalog variant selected by config, not that sibling.
+      const catalogRoute = options?.preserveBaseCompat
+        ? options.catalogRoutes?.find(
             (candidate) => catalogRouteVariantKey(candidate) === catalogRouteVariantKey(entry),
           )
         : undefined;
       models[existingIndex] = overlayCatalogMetadata(existing, entry, {
         ...options,
-        catalogCompatRoute,
+        catalogRoute,
       });
     }
   }
@@ -454,6 +458,9 @@ export function loadManifestModelCatalog(params: {
     if (typeof row.reasoning === "boolean") {
       entry.reasoning = row.reasoning;
     }
+    if (row.thinkingLevelMap) {
+      entry.thinkingLevelMap = { ...row.thinkingLevelMap };
+    }
     if (row.input?.length) {
       entry.input = [...row.input];
     }
@@ -561,6 +568,7 @@ export async function buildPreparedModelCatalogSnapshot(
         contextWindow,
         ...(contextTokens !== undefined ? { contextTokens } : {}),
         reasoning,
+        ...(entry.thinkingLevelMap ? { thinkingLevelMap: entry.thinkingLevelMap } : {}),
         input,
         ...(modelParams ? { params: modelParams } : {}),
         compat,
@@ -606,7 +614,7 @@ export async function buildPreparedModelCatalogSnapshot(
     if (configuredModels.length > 0) {
       const entriesForAugment = [...models];
       mergeCatalogEntries(entriesForAugment, configuredModels, {
-        catalogCompatRoutes: routeVariants.entries,
+        catalogRoutes: routeVariants.entries,
         preserveBaseCompat: true,
         preserveBaseName: true,
       });
@@ -692,7 +700,7 @@ export async function buildPreparedModelCatalogSnapshot(
     if (configuredModels.length > 0) {
       mergeCatalogRouteVariants(routeVariants, configuredModels, { preserveBaseCompat: true });
       mergeCatalogEntries(models, configuredModels, {
-        catalogCompatRoutes: routeVariants.entries,
+        catalogRoutes: routeVariants.entries,
         preserveBaseCompat: true,
         preserveBaseName: true,
       });

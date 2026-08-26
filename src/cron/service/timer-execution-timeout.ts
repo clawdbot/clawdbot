@@ -68,6 +68,7 @@ export type CronJobRunResult = CronRunOutcome &
     completionStatus?: CronCompletionStatus;
     deliveryState?: CronResolvedDeliveryState;
     deliveryError?: string;
+    delivery?: CronDeliveryTrace;
     delivered?: boolean;
     deliveryAttempted?: boolean;
     startedAt: number;
@@ -135,9 +136,13 @@ export type ExecuteJobCoreOptions = {
   streamSourceIdentity?: string;
 };
 
-/** Script payloads run headlessly even when their notifications target main. */
+/** Payloads that execute outside the main session own cancellable task-run state. */
 export function runsDetachedFromMainSession(job: CronJob): boolean {
-  return job.sessionTarget !== "main" || job.payload.kind === "script";
+  return (
+    job.sessionTarget !== "main" ||
+    job.payload.kind === "script" ||
+    job.payload.kind === "skillCollectionReview"
+  );
 }
 
 export function resolveMainSessionCronDeliveryContext(

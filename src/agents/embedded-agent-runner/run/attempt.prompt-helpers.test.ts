@@ -43,7 +43,6 @@ import {
   mergeOrphanedTrailingUserPrompt,
   resolveAttemptMediaTaskSystemPromptAddition,
   resolvePromptBuildHookResult,
-  shouldInjectHeartbeatPrompt,
 } from "./attempt-prompt-helpers.js";
 import { resolvePromptSubmissionSkipReason } from "./attempt-prompt-submit.js";
 
@@ -64,20 +63,6 @@ function hasLoneSurrogate(value: string): boolean {
   }
   return false;
 }
-
-describe("shouldInjectHeartbeatPrompt", () => {
-  it("injects global heartbeat guidance for heartbeat runs", () => {
-    const heartbeatParams = {
-      config: {},
-      agentId: "main",
-      defaultAgentId: "main",
-      isDefaultAgent: true,
-      trigger: "heartbeat" as const,
-    };
-
-    expect(shouldInjectHeartbeatPrompt(heartbeatParams)).toBe(true);
-  });
-});
 
 describe("mergeOrphanedTrailingUserPrompt", () => {
   it("keeps structured media and JSON summaries on UTF-16 boundaries", () => {

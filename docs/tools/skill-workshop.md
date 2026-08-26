@@ -57,9 +57,11 @@ Only a `pending` proposal can be revised, applied, rejected, or quarantined.
 
 ## Collection review
 
-In `auto` mode, the Gateway starts one isolated collection-review session per
-agent workspace each week. The session can only read skills and submit
-one atomic collection reconciliation listing only changes. It keeps distinct useful skills,
+In `auto` mode, the Gateway runs one system-owned cron job per writable
+workspace each week. The job appears in `openclaw cron list` and runs every
+7 days. Cron owns the cadence; the job is enabled only when
+`skills.workshop.autonomous.mode` is `auto`. The review can only read skills
+and submit one atomic collection reconciliation listing only changes. It keeps distinct useful skills,
 rewrites weak ones, consolidates overlap, and drops junk or stale fragments.
 Choosing `auto` intentionally authorizes those rewrites and drops without a
 second approval **for Workshop-owned paths only**; `propose` and `off` do not
@@ -71,6 +73,10 @@ skills may receive `write` or `drop`. A new
 skill created during collection review is recorded as an automatically applied
 `create` proposal, which makes that directory Workshop-owned. Disabled and
 agent-filtered skills stay untouched.
+
+Recorded usage counts and last-used recency are supporting evidence, not an
+age-based lifecycle: heavy use favors preserving a skill's procedure, while no
+recorded use alone never justifies removing it.
 
 Skills that predate ownership tracking, including skills that earlier reconcile
 runs created directly, have no applied `create` proposal. Skill Workshop
@@ -89,8 +95,7 @@ To undo the last completed cleanup, ask the agent to restore the skill
 collection. It uses `skill_workshop` action `restore_collection` under the same
 workspace lock. Restore refuses if any affected skill changed after cleanup.
 
-The weekly attempt is persisted per workspace before the model starts. Gateway
-restarts do not repeat a failed or successful attempt within 7 days. Review is admitted only for collections of at most
+Each attempt is persisted per workspace before the model starts. Review is admitted only for collections of at most
 200 skills and 240,000 total `SKILL.md` bytes. Larger collections stay unchanged.
 The reconciled result must stay inside the same byte limit.
 
@@ -420,9 +425,12 @@ Proposal descriptions are always capped at 160 bytes, independent of
 | `skills.curator.unpin`             | `operator.admin` |
 | `skills.curator.restore`           | `operator.admin` |
 
-`skills.curator.status` also reports the latest collection and experience review
-outcome per workspace. The other curator methods manage lifecycle state written
-by older releases. Weekly review does not use age, pin, or overlap state.
+`skills.curator.status` reports live skill usage recorded from trusted
+`skill.used` events, plus the latest collection and experience review outcomes
+per workspace. Age-based skill lifecycle curation is retired.
+`skills.curator.pin`, `skills.curator.unpin`, and `skills.curator.restore` remain
+registered for existing clients, but always return an error explaining that the
+weekly collection review now manages the skill collection.
 
 `requestRevision` is Gateway-only (no CLI or agent-tool equivalent): it
 forwards free-text revision instructions to the owning agent's chat session
@@ -450,8 +458,9 @@ proposals.
 
 Default state directory: `~/.openclaw`.
 
-- `state/openclaw.sqlite`: canonical proposal records, the active generation
-  reference, lifecycle status, origin attribution, and apply rollback metadata.
+- `state/openclaw.sqlite`: canonical proposal records and provenance, the active
+  generation reference, proposal status, recorded skill usage, collection and
+  experience review outcomes, and apply rollback metadata.
 - Each generation contains one `PROPOSAL.md` and all of that revision's support
   files. Revision publication never overwrites the active generation in place.
 - Generation files are flushed before publication. After the complete bundle is

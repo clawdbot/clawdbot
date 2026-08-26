@@ -269,6 +269,7 @@ export async function buildDiscordMessageProcessContext(params: {
       const starter = await resolveDiscordThreadStarter({
         channel: threadChannel,
         client,
+        accountId,
         parentId: threadParentId,
         parentType: threadParentType,
         resolveTimestampMs,

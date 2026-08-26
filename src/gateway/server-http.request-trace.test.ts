@@ -106,6 +106,47 @@ describe("gateway HTTP request trace scope", () => {
 });
 
 describe("gateway HTTP request error cleanup", () => {
+  it.each([
+    { label: "completed", destroy: false },
+    { label: "destroyed", destroy: true },
+  ])("does not invoke later routes after an earlier response is $label", async ({ destroy }) => {
+    const handleWatchNodeRequest = vi.fn(async () => true);
+    const server = createGatewayHttpServer({
+      clients: new Set(),
+      controlUiEnabled: false,
+      controlUiBasePath: "",
+      openAiChatCompletionsEnabled: false,
+      openResponsesEnabled: false,
+      handleHooksRequest: async (_req, res) => {
+        if (destroy) {
+          res.destroy();
+        } else {
+          res.end("already finished");
+        }
+        return false;
+      },
+      handleWatchNodeRequest,
+      resolvedAuth,
+      getRuntimeConfig: () => ({}),
+    });
+    const port = await listen(server);
+
+    try {
+      const request = fetch(`http://127.0.0.1:${port}/api/nodes/watch/example`);
+      if (destroy) {
+        await expect(request).rejects.toMatchObject({ name: "TypeError" });
+      } else {
+        const response = await request;
+        expect(response.status).toBe(200);
+        expect(await response.text()).toBe("already finished");
+      }
+      expect(handleWatchNodeRequest).not.toHaveBeenCalled();
+    } finally {
+      server.closeAllConnections();
+      await closeServer(server);
+    }
+  });
+
   it("preserves a response the route already completed before throwing", async () => {
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
     const server = createGatewayHttpServer({

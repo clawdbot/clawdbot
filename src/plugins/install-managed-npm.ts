@@ -602,6 +602,7 @@ export async function installPluginFromManagedNpmRoot(
       dependencyScanRootDir: npmRoot,
       logger,
       expectedPluginId: installedExpectedPluginId,
+      requirePluginManifest: params.trustedSourceLinkedOfficialInstall,
       trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
       mode: policyMode,
       installPolicyRequest: params.installPolicyRequest,

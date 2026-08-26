@@ -341,6 +341,35 @@ describe("gateway-cli coverage", () => {
     expect(runtimeErrors).toHaveLength(0);
   });
 
+  it.each(["abc", "7d", "1.5", "", "  "])(
+    "rejects malformed usage-cost --days %j",
+    async (days) => {
+      callGateway.mockClear();
+
+      await expectGatewayExit(["gateway", "usage-cost", "--days", days, "--json"]);
+
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
+        ok: false,
+        error: { type: "cli_error", message: expect.stringContaining("Invalid --days") },
+      });
+      expect(runtimeErrors).toHaveLength(0);
+    },
+  );
+
+  it("rejects a malformed health --timeout before calling Gateway", async () => {
+    callGateway.mockClear();
+
+    await expectGatewayExit(["gateway", "health", "--timeout", "abc", "--json"]);
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
+      ok: false,
+      error: { type: "cli_error", message: expect.stringContaining("Invalid --timeout") },
+    });
+    expect(runtimeErrors).toHaveLength(0);
+  });
+
   it("writes JSON for gateway health transport failures in JSON mode", async () => {
     const error = new Error("gateway closed (1006)");
     const payload = {

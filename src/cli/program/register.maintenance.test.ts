@@ -397,6 +397,28 @@ describe("registerMaintenanceCommands doctor action", () => {
   });
 
   it.each(
+    [
+      { name: "severity threshold", selector: ["--severity-min", "error"] },
+      { name: "all checks", selector: ["--all"] },
+      { name: "skipped check", selector: ["--skip", "core/example"] },
+      { name: "selected check", selector: ["--only", "core/example"] },
+    ].flatMap(({ name, selector }) => [
+      { name: `${name} after JSON`, args: ["--json", ...selector] },
+      { name: `${name} before JSON`, args: [...selector, "--json"] },
+    ]),
+  )("rejects lint-only $name without explicit lint mode", async ({ args }) => {
+    const message = "doctor lint options require --lint. Use `openclaw doctor --lint ...`.";
+
+    await runMaintenanceCli(["doctor", ...args]);
+
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runDoctorLintCli).not.toHaveBeenCalled();
+    expect(runtime.writeJson).toHaveBeenCalledWith(jsonFailure(message));
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).toHaveBeenCalledWith(2);
+  });
+
+  it.each(
     DOCTOR_MUTATION_OPTIONS.flatMap((mutationOption) => [
       { mode: "explicit lint", args: ["--lint", mutationOption], mutationOption },
       {

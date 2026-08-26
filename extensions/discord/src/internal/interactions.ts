@@ -19,7 +19,7 @@ import {
   deleteWebhookMessage,
   editWebhookMessage,
   getWebhookMessage,
-} from "./api.js";
+} from "./api.interactions.js";
 import { OptionsHandler } from "./interaction-options.js";
 import {
   InteractionResponseController,

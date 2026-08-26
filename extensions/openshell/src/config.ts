@@ -68,6 +68,18 @@ function normalizeProviders(value: string[] | undefined): string[] {
 const nonEmptyTrimmedString = (message: string) =>
   z.string({ error: message }).trim().min(1, { error: message });
 
+const openShellManagedRemotePath = (fieldName: string) =>
+  nonEmptyTrimmedString(`${fieldName} must be a non-empty string`)
+    .regex(/^\/(?:sandbox|agent)(?:\/|$)/, {
+      error: (issue) =>
+        String(issue.input).startsWith("/")
+          ? `OpenShell ${fieldName} must stay under /sandbox or /agent`
+          : `OpenShell ${fieldName} must be absolute`,
+    })
+    .refine((value) => isManagedOpenShellRemotePath(path.posix.normalize(value)), {
+      error: `OpenShell ${fieldName} must stay under /sandbox or /agent`,
+    });
+
 const openShellWorkspaceName = z
   .string({ error: "workspace must be a valid OpenShell workspace name" })
   .trim()
@@ -98,12 +110,8 @@ const OpenShellPluginConfigSchema = z.strictObject({
     .optional(),
   gpu: z.boolean({ error: "gpu must be a boolean" }).optional(),
   autoProviders: z.boolean({ error: "autoProviders must be a boolean" }).optional(),
-  remoteWorkspaceDir: nonEmptyTrimmedString(
-    "remoteWorkspaceDir must be a non-empty string",
-  ).optional(),
-  remoteAgentWorkspaceDir: nonEmptyTrimmedString(
-    "remoteAgentWorkspaceDir must be a non-empty string",
-  ).optional(),
+  remoteWorkspaceDir: openShellManagedRemotePath("remoteWorkspaceDir").optional(),
+  remoteAgentWorkspaceDir: openShellManagedRemotePath("remoteAgentWorkspaceDir").optional(),
   timeoutSeconds: z
     .number({
       error: `timeoutSeconds must be a number between 1 and ${MAX_TIMER_TIMEOUT_SECONDS}`,

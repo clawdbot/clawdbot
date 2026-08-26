@@ -365,6 +365,7 @@ export function createGatewayBroadcaster(params: {
         } catch {
           /* ignore */
         }
+        c.socket.terminate();
         continue;
       }
       // Build the frame before consuming the seq: a serialization failure

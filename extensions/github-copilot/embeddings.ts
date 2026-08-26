@@ -312,21 +312,21 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
           return { apiKey: explicitValue, baseUrl: customBaseUrl };
         })()
       : undefined;
-    const value = explicitValue
-      ? explicitValue
-      : (
-          await resolveFirstGithubToken({
-            agentDir: options.agentDir,
-            config: options.config,
-            env: process.env,
-          })
-        ).githubToken;
+    const profileAuth = explicitValue
+      ? undefined
+      : await resolveFirstGithubToken({
+          agentDir: options.agentDir,
+          config: options.config,
+          env: process.env,
+        });
+    const value = explicitValue ?? profileAuth?.githubToken;
     if (!value) {
       throw new Error("No GitHub token available for Copilot embedding provider");
     }
 
     const githubDomain = resolveGithubCopilotDomain({
       env: process.env,
+      explicit: profileAuth?.githubDomain,
       config: options.config,
     });
     // A custom endpoint owns its own explicit credential. Never resolve a

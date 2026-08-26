@@ -11,13 +11,13 @@ import {
 } from "./github-publication-availability.js";
 import { createGitHubPublicationCoordinatorMethods } from "./github-publication-coordinator-methods.js";
 import {
-  captureGitHubPublicationWorkspaceSnapshot,
   executeGitHubPublication,
   matchesGitHubPublicationIdentityRow,
 } from "./github-publication-executor.js";
-import { resolveGitHubPublicationFailure } from "./github-publication-failure.js";
+import { captureGitHubPublicationWorkspaceSnapshot } from "./github-publication-git-transport.js";
 import {
   claimGitHubPublicationExecution as claimExecution,
+  deferGitHubPublicationRequests as deferRequests,
   digestGitHubPublicationRequest as digestRequest,
   ensureGitHubPublicationStore as ensureSchema,
   githubPublicationDatabase as publicationDb,
@@ -464,6 +464,14 @@ export function createGitHubPublicationCoordinator(params: {
       bindWorkspaceSnapshot,
       updatePublishingFacts,
       complete,
+      defer: (row) => {
+        deferRequests([row.request_id]);
+        const deferred = readById(row.request_id);
+        if (!deferred) {
+          throw new Error("GitHub publication request disappeared.");
+        }
+        return deferred;
+      },
     });
     activePublicationExecutions.set(executionKey, operation);
     const release = () => {
@@ -545,10 +553,7 @@ export function createGitHubPublicationCoordinator(params: {
     }
   };
 
-  const failClaimPreparation = (
-    claim: WorkerSessionTurnClaim,
-    error: unknown,
-  ): SessionGitHubPublicationResult[] => {
+  const deferClaimPreparation = (claim: WorkerSessionTurnClaim): void => {
     ensureSchema();
     const db = openOpenClawStateDatabase().db;
     const rows = executeSqliteQuerySync(
@@ -559,39 +564,22 @@ export function createGitHubPublicationCoordinator(params: {
         .where("session_id", "=", claim.sessionId)
         .where("claim_id", "=", claim.claimId)
         .where("run_id", "=", claim.runId)
+        .where("status", "in", ["requested", "publishing"])
         .orderBy("created_at_ms"),
     ).rows;
-    const failure = resolveGitHubPublicationFailure(error);
-    return rows.map((row) => {
-      if (row.status === "published" || row.status === "failed") {
-        return publicationResult(row);
-      }
-      const claimed = claimExecution(row.request_id, instanceId);
-      return publicationResult(
-        complete(claimed, {
-          requestId: row.request_id,
-          status: "failed",
-          code: failure.code,
-          message: "GitHub publication failed.",
-          nextAction: failure.nextAction,
-        }),
-      );
-    });
+    deferRequests(rows.map((row) => row.request_id));
   };
 
   return {
     requestForClaim,
     prepareClaimWorkspace,
-    failClaimPreparation,
+    deferClaimPreparation,
     ...createGitHubPublicationCoordinatorMethods({
       placements: params.placements,
-      instanceId,
       readById,
       requestForClaim,
       sameWorktree,
       processRow,
-      failClaimPreparation,
-      complete,
     }),
   };
 }

@@ -1826,7 +1826,7 @@ describe("install-sh smoke runner", () => {
 });
 
 describe("bun global install smoke", () => {
-  it("packs the current tree and verifies image-provider discovery through Bun", () => {
+  it("packs the current tree and verifies the installed package runtime through Bun", () => {
     const script = readFileSync(BUN_GLOBAL_SMOKE_PATH, "utf8");
     const assertions = readFileSync(BUN_GLOBAL_ASSERTIONS_PATH, "utf8");
     const packageHelper = readFileSync(DOCKER_E2E_PACKAGE_HELPER_PATH, "utf8");
@@ -1841,11 +1841,15 @@ describe("bun global install smoke", () => {
     expect(script).toContain("--skip-build");
     expect(script).toContain("--output-name openclaw-current.tgz");
     expect(script).not.toContain("npm pack --ignore-scripts --json --pack-destination");
-    expect(script).toContain('"$bun_path" install -g "$PACKAGE_TGZ" --no-progress');
+    expect(script).toContain('"$bun_path" install -g --trust "$PACKAGE_TGZ" --no-progress');
     expect(script).toContain('"$openclaw_bin" --help');
     expect(script).toContain("OPENCLAW_BUN_GLOBAL_SMOKE_PROOF_PATH");
     expect(script).toContain("infer image providers --json");
     expect(script).toContain("assert-image-providers");
+    expect(script).toContain("assert-openclaw-trusted");
+    expect(script).toContain("agent --local");
+    expect(script).toContain("gateway health");
+    expect(script).toContain("openclaw_e2e_wait_gateway_ready");
     expect(assertions).toContain("image providers output is missing bundled provider");
     expect(script).toContain("OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE");
     expect(script).toContain('source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"');
@@ -1944,6 +1948,77 @@ describe("bun global install smoke", () => {
     );
   });
 
+  it("requires Bun 1.4 or newer", () => {
+    const supported = spawnSync(
+      process.execPath,
+      [BUN_GLOBAL_ASSERTIONS_PATH, "assert-bun-version", "1.4.0"],
+      { encoding: "utf8" },
+    );
+    expect(supported.status, supported.stderr).toBe(0);
+
+    const unsupported = spawnSync(
+      process.execPath,
+      [BUN_GLOBAL_ASSERTIONS_PATH, "assert-bun-version", "1.3.14"],
+      { encoding: "utf8" },
+    );
+    expect(unsupported.status).not.toBe(0);
+    expect(unsupported.stderr).toContain("Bun 1.4 or newer is required; found 1.3.14");
+  });
+
+  it("requires Bun to trust and execute OpenClaw lifecycle scripts", () => {
+    const tempDir = tempDirs.make("openclaw-bun-trusted-lifecycle-");
+    const packageRoot = join(tempDir, "node_modules", "openclaw");
+    const globalManifestPath = join(tempDir, "package.json");
+    const untrustedOutputPath = join(tempDir, "untrusted.txt");
+    mkdirSync(join(packageRoot, "dist"), { recursive: true });
+    writeFileSync(globalManifestPath, JSON.stringify({ trustedDependencies: ["openclaw"] }));
+    writeFileSync(untrustedOutputPath, "./node_modules/koffi [install]\n");
+
+    const trusted = spawnSync(
+      process.execPath,
+      [
+        BUN_GLOBAL_ASSERTIONS_PATH,
+        "assert-openclaw-trusted",
+        packageRoot,
+        globalManifestPath,
+        untrustedOutputPath,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(trusted.status, trusted.stderr).toBe(0);
+
+    writeFileSync(untrustedOutputPath, "./node_modules/openclaw [preinstall, postinstall]\n");
+    const blocked = spawnSync(
+      process.execPath,
+      [
+        BUN_GLOBAL_ASSERTIONS_PATH,
+        "assert-openclaw-trusted",
+        packageRoot,
+        globalManifestPath,
+        untrustedOutputPath,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(blocked.status).not.toBe(0);
+    expect(blocked.stderr).toContain("OpenClaw lifecycle scripts remain blocked by Bun");
+
+    writeFileSync(untrustedOutputPath, "");
+    writeFileSync(join(packageRoot, "dist", "openclaw-install-guard"), "pending\n");
+    const skipped = spawnSync(
+      process.execPath,
+      [
+        BUN_GLOBAL_ASSERTIONS_PATH,
+        "assert-openclaw-trusted",
+        packageRoot,
+        globalManifestPath,
+        untrustedOutputPath,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(skipped.status).not.toBe(0);
+    expect(skipped.stderr).toContain("OpenClaw preinstall lifecycle did not remove");
+  });
+
   it.runIf(process.platform !== "win32")(
     "uses bundled AI bytes when a prebuilt tarball is provided",
     () => {
@@ -1979,25 +2054,77 @@ describe("bun global install smoke", () => {
         `#!/usr/bin/env bash
 set -euo pipefail
 if [ "\${1:-}" = "--version" ]; then
-  echo "1.3.14"
+  echo "1.4.0"
   exit 0
 fi
+if [ "\${1:-}" = "pm" ] && [ "\${2:-}" = "-g" ] && [ "\${3:-}" = "untrusted" ]; then
+  echo './node_modules/koffi [install]'
+  exit 0
+fi
+if [ "\${1:-}" = "run" ] && [ "\${2:-}" = "--bun" ]; then
+  echo "OpenClaw 2026.6.17"
+  exit 0
+fi
+if [[ "\${1:-}" == */openclaw.mjs ]]; then
+  shift
+  if [ "\${1:-}" = "--version" ]; then
+    echo "OpenClaw 2026.6.17"
+  elif [ "\${1:-}" = "--help" ]; then
+    echo "Usage: openclaw"
+  elif [ "\${1:-}" = "infer" ]; then
+    printf '[{"id":"google"},{"id":"openai"},{"id":"xai"}]\n'
+  elif [ "\${1:-}" = "status" ] || { [ "\${1:-}" = "plugins" ] && [ "\${2:-}" = "list" ]; }; then
+    echo '{}'
+  elif [ "\${1:-}" = "agent" ]; then
+    printf '{"path":"/v1/responses"}\n' >>"$MOCK_REQUEST_LOG"
+    printf '{"payloads":[{"text":"%s"}]}\n' "$SUCCESS_MARKER"
+  elif [ "\${1:-}" = "gateway" ] && [ "\${2:-}" = "health" ]; then
+    echo '{"ok":true}'
+  elif [ "\${1:-}" = "gateway" ]; then
+    port=""
+    while [ "$#" -gt 0 ]; do
+      if [ "$1" = "--port" ]; then
+        port="$2"
+        break
+      fi
+      shift
+    done
+    exec node -e 'const http=require("node:http"); const port=Number(process.argv[1]); http.createServer((req,res)=>{res.writeHead(200,{"content-type":"text/plain"});res.end("ok")}).listen(port,"127.0.0.1",()=>console.log("[gateway] ready at http://127.0.0.1:"+port))' "$port"
+  else
+    echo "unsupported fake OpenClaw command: $*" >&2
+    exit 1
+  fi
+  exit 0
+fi
+test "\${1:-}" = "install"
+case " $* " in
+  *' --trust '*) ;;
+  *) echo 'missing --trust' >&2; exit 1 ;;
+esac
 override="$(node -e 'const p=require(process.argv[1]);process.stdout.write(p.overrides["@openclaw/ai"])' "$BUN_INSTALL/install/global/package.json")"
 case "\${override#file:}" in
   *.tgz) ;;
   *) exit 1 ;;
 esac
 test -f "\${override#file:}"
-mkdir -p "$BUN_INSTALL/bin"
-cat >"$BUN_INSTALL/bin/openclaw" <<'OPENCLAW'
-#!/usr/bin/env bash
-if [ "\${1:-}" = "--version" ]; then
-  echo "OpenClaw 2026.6.17"
-else
-  printf '[{"id":"google"},{"id":"openai"},{"id":"xai"}]\n'
-fi
+package_root="$BUN_INSTALL/install/global/node_modules/openclaw"
+mkdir -p "$BUN_INSTALL/bin" "$package_root/dist"
+cat >"$package_root/openclaw.mjs" <<'OPENCLAW'
+#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "--version") {
+  console.log("OpenClaw 2026.6.17");
+} else if (args[0] === "--help") {
+  console.log("Usage: openclaw");
+} else if (args[0] === "infer") {
+  console.log(JSON.stringify([{ id: "google" }, { id: "openai" }, { id: "xai" }]));
+} else {
+  process.exit(1);
+}
 OPENCLAW
-chmod +x "$BUN_INSTALL/bin/openclaw"
+chmod +x "$package_root/openclaw.mjs"
+ln -s "$package_root/openclaw.mjs" "$BUN_INSTALL/bin/openclaw"
+node -e 'const fs=require("node:fs");const p=process.argv[1];const value=JSON.parse(fs.readFileSync(p,"utf8"));value.trustedDependencies=["openclaw"];fs.writeFileSync(p,JSON.stringify(value))' "$BUN_INSTALL/install/global/package.json"
 `,
       );
       chmodSync(bunPath, 0o755);
@@ -2015,6 +2142,9 @@ chmod +x "$BUN_INSTALL/bin/openclaw"
 
       expect(result.status, result.stderr).toBe(0);
       expect(result.stdout).toContain("bun-global-install-smoke: image providers OK (3 providers)");
+      expect(result.stdout).toContain(
+        "bun-global-install-smoke: Bun 1.4.0 package, CLI, local agent, and Gateway runtime OK",
+      );
     },
   );
 
