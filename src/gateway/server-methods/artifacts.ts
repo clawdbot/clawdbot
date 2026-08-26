@@ -516,7 +516,7 @@ export const artifactsHandlers: GatewayRequestHandlers = {
         respond(true, {
           artifact: {
             id: managed.artifactId,
-            type: managed.type,
+            type: normalizeArtifactType(managed.type),
             title: managed.title,
             ...(managed.mimeType ? { mimeType: managed.mimeType } : {}),
             ...(managed.sizeBytes !== undefined ? { sizeBytes: managed.sizeBytes } : {}),

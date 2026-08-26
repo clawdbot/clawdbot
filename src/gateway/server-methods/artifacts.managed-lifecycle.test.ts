@@ -63,6 +63,35 @@ describe("managed artifact lifecycle", () => {
     });
   });
 
+  it("normalizes managed documents to the public file artifact type", async () => {
+    const attachmentId = "22222222-2222-4222-8222-222222222222";
+    const artifactId = `artifact_managed_media_${attachmentId}`;
+    hoisted.resolveManagedArtifactDownload.mockResolvedValue({
+      artifactId,
+      sessionKey: "agent:main:main",
+      type: "document",
+      title: "report.csv",
+      mimeType: "text/csv",
+      sizeBytes: 10,
+      url: `/api/chat/media/outgoing/agent%3Amain%3Amain/${attachmentId}/full?mediaTicket=ticket`,
+      expiresAt: "2026-08-26T05:00:00.000Z",
+    });
+    const calls: Array<{ ok: boolean; payload?: unknown }> = [];
+
+    await artifactsHandlers["artifacts.download"]?.({
+      req: { type: "req", id: "download", method: "artifacts.download", params: {} },
+      params: { sessionKey: "agent:main:main", artifactId },
+      client: null,
+      isWebchatConnect: () => false,
+      respond: (ok, payload) => calls.push({ ok, payload }),
+      context: { getRuntimeConfig: () => ({}) } as never,
+    });
+
+    const result = calls[0]?.payload as { artifact?: Record<string, unknown> };
+    expect(calls[0]?.ok).toBe(true);
+    expectFields(result.artifact, { id: artifactId, type: "file", mimeType: "text/csv" });
+  });
+
   it("does not retarget a stale managed artifact id through a different block URL", async () => {
     const artifactId = "artifact_managed_image_11111111-1111-4111-8111-111111111111";
     const calls: Array<{ ok: boolean; error?: unknown }> = [];

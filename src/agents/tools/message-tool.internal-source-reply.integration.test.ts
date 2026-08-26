@@ -21,9 +21,7 @@ import { extractMessagingToolSourceReplyPayload } from "../embedded-agent-messag
 import { buildEmbeddedRunPayloads } from "../embedded-agent-runner/run/payloads.js";
 import { createMessageTool } from "./message-tool-execution.js";
 
-function createCurrentSourceMessageTool(
-  params: { workspaceDir?: string; sandboxRoot?: string } = {},
-) {
+function createCurrentSourceMessageTool(params: { workspaceDir?: string } = {}) {
   return createMessageTool({
     config: { agents: { entries: { main: { default: true } } } },
     currentChannelProvider: "webchat",
@@ -31,7 +29,6 @@ function createCurrentSourceMessageTool(
     agentSessionKey: "agent:main:webchat:dm:dashboard",
     runId: "webchat-run",
     workspaceDir: params.workspaceDir,
-    sandboxRoot: params.sandboxRoot,
     getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
     resolveCommandSecretRefsViaGateway: async ({ config }) => ({
       resolvedConfig: config,
@@ -129,52 +126,6 @@ describe("WebChat message tool internal source reply", () => {
     );
   });
 
-  it("preserves structured attachment metadata after rewriting a sandbox path", async () => {
-    await withOpenClawTestState(
-      { layout: "state-only", prefix: "message-tool-source-sandbox-attachment-" },
-      async (state) => {
-        await fs.mkdir(state.workspaceDir, { recursive: true });
-        const sourcePath = path.join(state.workspaceDir, "source.csv");
-        const sourceContents = "id,label\n1,alpha\n2,beta\n";
-        await fs.writeFile(sourcePath, sourceContents, "utf8");
-        const tool = createCurrentSourceMessageTool({
-          workspaceDir: state.workspaceDir,
-          sandboxRoot: state.workspaceDir,
-        });
-
-        const toolResult = await tool.execute("message-sandbox-attachment-call", {
-          action: "send",
-          message: "Sandbox attachment.",
-          attachments: [
-            {
-              type: "file",
-              media: "/workspace/source.csv",
-              name: "declared-report.csv",
-              contentType: "text/csv",
-            },
-          ],
-        });
-
-        expect(toolResult.details).toMatchObject({
-          sourceReply: {
-            text: "Sandbox attachment.",
-            attachments: [
-              {
-                name: "declared-report.csv",
-                mimeType: "text/csv",
-              },
-            ],
-          },
-        });
-        const sourceReply = extractMessagingToolSourceReplyPayload(toolResult);
-        expect(sourceReply?.mediaUrls).toHaveLength(1);
-        const mediaPath = sourceReply?.mediaUrls?.[0];
-        expect(mediaPath).toBeTruthy();
-        await expect(fs.readFile(mediaPath as string, "utf8")).resolves.toBe(sourceContents);
-      },
-    );
-  });
-
   it("rejects disallowed local media before acknowledging the current-source send", async () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "message-tool-source-path-" },
@@ -196,7 +147,7 @@ describe("WebChat message tool internal source reply", () => {
     );
   });
 
-  it("publishes managed images and documents with the current run owner", async () => {
+  it("publishes managed images and sandbox documents with the current run owner", async () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-internal-source-reply-" },
       async (state) => {
@@ -234,6 +185,8 @@ describe("WebChat message tool internal source reply", () => {
           sessionId,
           agentId: "main",
           runId: "restart-proof-run",
+          workspaceDir,
+          sandboxRoot: workspaceDir,
           getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
           resolveCommandSecretRefsViaGateway: async () => ({
             resolvedConfig: config,
@@ -246,7 +199,15 @@ describe("WebChat message tool internal source reply", () => {
         const sendParams = {
           action: "send" as const,
           message: "Durable attachment reply",
-          mediaUrls: [...imagePaths, documentPath],
+          mediaUrls: imagePaths,
+          attachments: [
+            {
+              type: "file" as const,
+              media: "/workspace/report.csv",
+              name: "declared-report.csv",
+              contentType: "text/csv",
+            },
+          ],
         };
         const updates: SessionTranscriptUpdate[] = [];
         const publishedDownloads: Array<Promise<unknown>> = [];
@@ -329,7 +290,7 @@ describe("WebChat message tool internal source reply", () => {
         expect(document).toMatchObject({
           type: "document",
           artifactId: expect.stringMatching(/^artifact_managed_media_/u),
-          fileName: "report.csv",
+          fileName: "declared-report.csv",
           mimeType: "text/csv",
         });
         expect(JSON.stringify(assistant)).not.toContain(workspaceDir);
@@ -354,7 +315,7 @@ describe("WebChat message tool internal source reply", () => {
         await expect(Promise.all(publishedDownloads)).resolves.toEqual([
           expect.objectContaining({ type: "image" }),
           expect.objectContaining({ type: "image" }),
-          expect.objectContaining({ type: "document", title: "report.csv" }),
+          expect.objectContaining({ type: "document", title: "declared-report.csv" }),
         ]);
         for (const block of content.filter(
           (entry) => entry.type === "image" || entry.type === "document",

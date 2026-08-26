@@ -98,4 +98,77 @@ describe("Control UI managed media under a UI base path", () => {
       await browser.close();
     }
   });
+
+  it("downloads a managed document ticket beneath the configured UI base path", async () => {
+    const executablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
+    const browser = await chromium.launch({ executablePath });
+    const context = await browser.newContext({
+      serviceWorkers: "block",
+      viewport: { width: 1280, height: 800 },
+    });
+    const page = await context.newPage();
+    const attachmentId = "00000000-0000-4000-8000-000000000002";
+    const artifactId = `artifact_managed_media_${attachmentId}`;
+    const sourcePath = `/api/chat/media/outgoing/agent%3Amain%3Amain/${attachmentId}/full`;
+    const ticketedPath = `${sourcePath}?mediaTicket=ticket-document`;
+
+    const gateway = await installMockGateway(page, {
+      basePath: "/rosita",
+      historyMessages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "attachment",
+              attachment: {
+                artifactId,
+                kind: "document",
+                label: "managed-report.csv",
+                mimeType: "text/csv",
+                url: sourcePath,
+              },
+            },
+          ],
+          timestamp: 1,
+        },
+      ],
+      methodResponses: {
+        "artifacts.download": {
+          artifact: {
+            id: artifactId,
+            type: "file",
+            title: "managed-report.csv",
+            mimeType: "text/csv",
+            download: { mode: "url" },
+          },
+          url: ticketedPath,
+          expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}rosita/chat`);
+      await gateway.waitForRequest("artifacts.download");
+      const card = page.locator(".chat-assistant-attachment-card--compact");
+      await card.waitFor({
+        state: "visible",
+        timeout: 10_000,
+      });
+      const downloadLink = card.locator(".chat-assistant-attachment-card__download");
+      expect(await downloadLink.getAttribute("href")).toBe(`/rosita${ticketedPath}`);
+
+      const [download] = await Promise.all([
+        page.waitForEvent("download"),
+        downloadLink.evaluate((link) => (link as HTMLAnchorElement).click()),
+      ]);
+      expect(download.suggestedFilename()).toBe("managed-report.csv");
+      const requestUrl = new URL(download.url());
+      expect(requestUrl.pathname).toBe(`/rosita${sourcePath}`);
+      expect(requestUrl.searchParams.get("mediaTicket")).toBe("ticket-document");
+    } finally {
+      await context.close();
+      await browser.close();
+    }
+  });
 });
