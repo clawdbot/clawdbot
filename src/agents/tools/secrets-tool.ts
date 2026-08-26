@@ -20,8 +20,7 @@ import {
 import { callGatewayTool } from "./gateway.js";
 import { jsonResult, textResult } from "./tool-results.js";
 
-const SECRET_STORE_KINDS = ["secret", "env"] as const;
-type SecretStoreKind = (typeof SECRET_STORE_KINDS)[number];
+type SecretStoreKind = "secret";
 const SecretsToolSchema = Type.Object(
   {
     action: stringEnum(["request", "list", "delete"], {
@@ -36,9 +35,8 @@ const SecretsToolSchema = Type.Object(
       }),
     ),
     kind: Type.Optional(
-      stringEnum(SECRET_STORE_KINDS, {
-        description:
-          "`secret` for a credential (write-only, never returned) or `env` for a plain environment value. Required for request.",
+      stringEnum(["secret"], {
+        description: "Only `secret` may be requested; requested values are never readable back.",
       }),
     ),
     allowedHosts: Type.Optional(
@@ -88,15 +86,17 @@ export function normalizeSecretsRequestParams(value: unknown): NormalizedSecrets
   }
   const params = value;
   const name = readSecretStoreName(params);
-  const kind = readToolStringParam(params, "kind", { required: true });
-  if (kind !== "secret" && kind !== "env") {
-    throw new ToolInputError('kind must be "secret" or "env"');
+  // Requests are secret-only on purpose: `list` renders env values, so an
+  // agent-requested env entry would be readable straight back through this
+  // tool, breaking the promise the masked prompt makes to the human.
+  const kind = readToolStringParam(params, "kind", { required: false }) ?? "secret";
+  if (kind !== "secret") {
+    throw new ToolInputError(
+      'kind must be "secret"; environment values are set in Settings or the CLI, not requested from the model',
+    );
   }
   const allowedHosts = params.allowedHosts;
   if (allowedHosts !== undefined) {
-    if (kind !== "secret") {
-      throw new ToolInputError("allowedHosts is only supported for secret entries");
-    }
     if (
       !Array.isArray(allowedHosts) ||
       allowedHosts.length > 128 ||
@@ -123,18 +123,19 @@ export function normalizeSecretsRequestParams(value: unknown): NormalizedSecrets
   const timeoutSeconds = Math.min(3_600, Math.max(30, timeout ?? DEFAULT_ASK_USER_TIMEOUT_SECONDS));
   const binding: NonNullable<QuestionRequestQuestion["secretStore"]> = {
     name,
-    kind,
+    kind: "secret",
     ...(allowedHosts !== undefined ? { allowedHosts } : {}),
     ...(reason ? { reason } : {}),
   };
-  const question = `Provide ${kind === "secret" ? "the secret" : "the environment value"} for ${name}.${reason ? ` ${reason}` : ""}`;
+  const question = `Provide the secret for ${name}.${reason ? ` ${reason}` : ""}`;
   return {
     ...binding,
+    kind: "secret",
     timeoutSeconds,
     questions: [
       {
         questionId: "secret_value",
-        header: kind === "secret" ? "API key" : "Environment",
+        header: "API key",
         question,
         options: [],
         isSecret: true,
@@ -165,7 +166,6 @@ function storedSecretResult(params: NormalizedSecretsRequestParams, replacedExis
   const guidance = [
     `Stored ${params.name} without exposing its value.`,
     `Reference {source:"store", id:"${params.name}"} in config SecretRefs.`,
-    "Environment entries appear in gateway-host exec environments on the NEXT agent run.",
     "Secret values are substituted at egress only when secrets.egressProxy.enabled is true and the destination matches their allowed hosts.",
   ];
   return textResult(`${guidance.join(" ")}\n\n${JSON.stringify(details, null, 2)}`, details);

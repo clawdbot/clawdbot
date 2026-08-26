@@ -24,14 +24,17 @@ apply to it the same way. Creating a credential request also requires an
 
 ## Actions
 
-- `request` — ask the human for a value and store it under a name such as
-  `STRIPE_API_KEY`. The agent picks the kind (`secret` or `env`), may propose
-  `allowedHosts` for secret entries, and may include a short `reason` shown on
-  the prompt. The tool blocks until you answer, skip, or the request times out
-  (15 minutes by default).
+- `request` — ask the human for a credential and store it under a name such as
+  `STRIPE_API_KEY`. Requests are protected-secret only: an `env` value is
+  readable through `list`, so requesting one would break the promise the masked
+  prompt makes. The agent may propose `allowedHosts` and a short `reason` shown
+  on the prompt, and the tool blocks until you answer, skip, or it times out
+  (15 minutes by default). The request is bound to the requesting agent run; if
+  that run ends before you answer, the write is refused.
 - `list` — entry metadata: name, kind, allowed hosts, and last update. Secret
-  values are structurally absent from the listing; env entries show their
-  value, since those are injected into exec environments anyway.
+  values are structurally absent from the listing. Operator-set `env` entries
+  show their value, since those are injected into exec environments anyway and
+  are agent-readable by design.
 - `delete` — soft-delete an entry by name. Deleted entries are purged after 30
   days.
 

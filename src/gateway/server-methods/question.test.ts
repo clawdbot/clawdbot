@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { isSecretValueRegisteredForRedaction } from "../../logging/secret-redaction-registry.js";
 import * as secretsRuntimeState from "../../secrets/runtime-state.js";
 import { listSecretStoreEntries, writeSecretStoreEntry } from "../../secrets/store/secret-store.js";
@@ -22,6 +23,12 @@ type SecretStoreReload = Parameters<typeof createSecretStoreWriteService>[0]["re
 let reloadSecrets: ReturnType<typeof vi.fn<SecretStoreReload>>;
 
 beforeEach(() => {
+  // Store-bound resolution revalidates the requesting run at the write, so the
+  // fixtures must present the live run the questions are bound to.
+  registerAgentRunContext(requestParams.runId, {
+    sessionKey: requestParams.sessionKey,
+    agentId: requestParams.agentId,
+  });
   vi.useFakeTimers();
   vi.setSystemTime(1_000);
   manager = new QuestionManager();
@@ -31,6 +38,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  clearAgentRunContext(requestParams.runId);
   manager.reset();
   vi.restoreAllMocks();
   vi.useRealTimers();
@@ -518,6 +526,43 @@ describe("question gateway methods", () => {
       expect(manager.list()).toEqual([]);
     },
   );
+
+  it("refuses to write a credential once its requesting run is gone", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const requested = await call("question.request", secretRequestParams, {
+        client: adminRequestClient,
+      });
+      const id = (requested[1] as { id: string }).id;
+      // The requester dies between the prompt and the human's submission.
+      clearAgentRunContext(requestParams.runId);
+
+      const resolved = await call("question.resolve", {
+        id,
+        answers: { answers: { secret_value: ["test-secret-value-stale-runner-123"] } },
+      });
+
+      expect(resolved).toMatchObject([
+        false,
+        undefined,
+        { code: "INVALID_REQUEST", details: { reason: "QUESTION_REQUESTER_INACTIVE" } },
+      ]);
+      expect(listSecretStoreEntries({ scope: { kind: "team" } })).toEqual([]);
+      expect(manager.get(id)?.status).toBe("pending");
+    });
+  });
+
+  it("refuses to mint a store-bound question that names no requesting run", async () => {
+    const { runId: _runId, ...withoutRun } = secretRequestParams;
+
+    expect(
+      await call("question.request", withoutRun, { client: adminRequestClient }),
+    ).toMatchObject([
+      false,
+      undefined,
+      { code: "INVALID_REQUEST", message: expect.stringContaining("runId") },
+    ]);
+    expect(manager.list()).toEqual([]);
+  });
 
   it("annotates a store-bound question with replacement metadata without exposing the old value", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {

@@ -15,6 +15,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ENV_SECRET_REF_ID_RE } from "../../config/types.secrets.js";
+import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
   handleQuestionChannelRequested,
   handleQuestionChannelResolved,
@@ -202,6 +203,17 @@ export function createQuestionHandlers(
       // Store-bound questions end in a secret-store write on resolve. Without
       // this gate any operator.questions client could mint and self-answer one,
       // bypassing the operator.admin requirement on secrets.store.set.
+      if (request.questions.some((question) => question.secretStore) && !request.runId) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "secret store questions must carry the requesting runId",
+          ),
+        );
+        return;
+      }
       if (request.questions.some((question) => question.secretStore) && !isGatewayAdmin(client)) {
         respond(
           false,
@@ -415,6 +427,22 @@ export function createQuestionHandlers(
             false,
             undefined,
             errorShape(ErrorCodes.INVALID_REQUEST, "Allowed hosts apply only to secret entries."),
+          );
+          return;
+        }
+        // Closure-bound authority: a store write is delegated by one live agent
+        // run, so revalidate that exact run immediately before the sink. The
+        // recorded runId is provenance; a terminated or replaced requester must
+        // not reach secret-store I/O. No await may separate this from the write.
+        if (!question.runId || !getAgentRunContext(question.runId)) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              "the agent run that requested this credential is no longer active",
+              { details: { reason: "QUESTION_REQUESTER_INACTIVE" } },
+            ),
           );
           return;
         }

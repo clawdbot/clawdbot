@@ -68,7 +68,7 @@ describe("secrets request normalization", () => {
     expect(
       normalizeSecretsRequestParams({
         name: "SERVICE_SETTING",
-        kind: "env",
+        kind: "secret",
         timeoutSeconds: 9_999,
       }).timeoutSeconds,
     ).toBe(3_600);
@@ -85,9 +85,9 @@ describe("secrets request normalization", () => {
     ["lowercase names", { name: "bad_name", kind: "secret" }, "uppercase"],
     ["unknown entry kinds", { name: "VALID_NAME", kind: "password" }, "kind must be"],
     [
-      "host restrictions on environment entries",
-      { name: "VALID_NAME", kind: "env", allowedHosts: ["example.test"] },
-      "only supported for secret",
+      "environment-value requests the model could read back",
+      { name: "VALID_NAME", kind: "env" },
+      'kind must be "secret"',
     ],
     [
       "duplicate allowed hosts",
@@ -159,7 +159,7 @@ describe("secrets tool", () => {
     });
     expect(JSON.stringify(result)).not.toContain("test-secret-value-123");
     expect(result.content[0]).toMatchObject({
-      text: expect.stringContaining("NEXT agent run"),
+      text: expect.stringContaining('{source:"store", id:"SERVICE_API_KEY"}'),
     });
     expect(gateway.mock).toHaveBeenCalledWith(
       "question.request",
@@ -204,12 +204,12 @@ describe("secrets tool", () => {
     const result = await createSecretsTool({ gatewayCall: gateway.call }).execute("call-metadata", {
       action: "request",
       name: "SERVICE_SETTING",
-      kind: "env",
+      kind: "secret",
     });
 
     expect(result.details).toMatchObject({
       status: "stored",
-      kind: "env",
+      kind: "secret",
       replacedExisting: false,
     });
     expect(gateway.mock.mock.calls.some(([method]) => method === "question.resolve")).toBe(false);
