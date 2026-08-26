@@ -31,6 +31,10 @@ type AllocationContext = LeaseContext & {
 // Match the existing paired-device dormancy ceiling before reclaiming idle images.
 const WARM_IMAGE_RETENTION_MS = 14 * 24 * 60 * 60 * 1_000;
 const WARM_IMAGE_COMMAND_TIMEOUT_MS = 60_000;
+// Scrub and create ride a full `crabbox run`/snapshot round trip (SSH, workspace
+// owner, coordinator posts); 60s starves them under coordinator latency and the
+// capture silently degrades to cold-only. Live-measured on AWS 2026-08-26.
+const WARM_IMAGE_CAPTURE_TIMEOUT_MS = 180_000;
 const CHECKPOINT_ID_PATTERN = /^chk_[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u;
 
 // Enrollment roots its identity, device token, bundles, and node-host workspaces
@@ -292,22 +296,27 @@ export function createCrabboxWarmImageManager(dependencies: {
           context,
           "scrub",
           dependencies.runArgs(context),
-          WARM_IMAGE_COMMAND_TIMEOUT_MS,
+          WARM_IMAGE_CAPTURE_TIMEOUT_MS,
           SCRUB_WORKER_STATE,
         );
         const created = parseCreatedCheckpoint(
-          await checkpointCommand(context, "create", [
-            "checkpoint",
+          await checkpointCommand(
+            context,
             "create",
-            "--provider",
-            context.provider,
-            "--id",
-            context.id,
-            "--mode",
-            "native",
-            "--wait=false",
-            "--json",
-          ]),
+            [
+              "checkpoint",
+              "create",
+              "--provider",
+              context.provider,
+              "--id",
+              context.id,
+              "--mode",
+              "native",
+              "--wait=false",
+              "--json",
+            ],
+            WARM_IMAGE_CAPTURE_TIMEOUT_MS,
+          ),
           context.id,
         );
         openStore().register(key, { ...reservation, ...created });

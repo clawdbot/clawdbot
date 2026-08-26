@@ -228,8 +228,10 @@ describe("Crabbox profile warm images", () => {
     expect(scrub?.options.input).toContain("kill -TERM");
     expect(scrub?.options.input).toContain("kill -KILL");
     expect(scrub?.options.input).toContain('rm -rf "$worker_root"');
-    expect(scrub?.options.timeoutMs).toBe(60_000);
-    expect(calls[1]?.options.timeoutMs).toBe(60_000);
+    // Capture phases ride a full crabbox run/snapshot round trip; 60s starves
+    // them under coordinator latency (live-measured on AWS 2026-08-26).
+    expect(scrub?.options.timeoutMs).toBe(180_000);
+    expect(calls[1]?.options.timeoutMs).toBe(180_000);
     const home = tempDirs.make("openclaw-crabbox-warm-scrub-");
     const workspace = path.join(
       home,
