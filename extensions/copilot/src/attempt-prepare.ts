@@ -2,7 +2,9 @@ import fsp from "node:fs/promises";
 import type { SandboxContext } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   buildAgentHookContextChannelFields,
+  buildEmbeddedForegroundPromptContext,
   isHostScopedAgentToolActive,
+  resolveAgentDir,
   resolveSandboxContext as defaultResolveSandboxContext,
   resolveSessionAgentIds,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -89,6 +91,10 @@ export function prepareCopilotAttemptContext(
     modelProviderId: modelRef.provider,
     modelId: modelRef.id,
     trigger: input.trigger,
+    foregroundPromptContext: buildEmbeddedForegroundPromptContext(
+      { ...input, agentId: sessionAgentId },
+      input.agentDir ?? resolveAgentDir(input.config ?? {}, sessionAgentId),
+    ),
     ...(input.config ? { config: input.config } : {}),
     ...hookContextWindowFields,
     ...buildAgentHookContextChannelFields(input),

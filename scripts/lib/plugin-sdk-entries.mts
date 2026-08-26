@@ -159,7 +159,7 @@ export function buildPluginSdkPackageExports() {
 }
 
 /**
- * List public plugin SDK dist artifacts expected in package output.
+ * List all packaged plugin SDK dist artifacts, including production-private runtime JS.
  * @internal Shared repository-script contract.
  */
 export function listPluginSdkDistArtifacts() {

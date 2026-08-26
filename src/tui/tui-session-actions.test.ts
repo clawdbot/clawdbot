@@ -200,7 +200,19 @@ describe("tui session actions", () => {
       activeChatRunId: "research-run",
       pendingSubmit: acceptedSubmit("research-pending", "private draft"),
       historyLoaded: true,
-      sessionInfo: { displayName: "Research secret", updatedAt: 100, verboseLevel: "full" },
+      sessionInfo: {
+        displayName: "Research secret",
+        updatedAt: 100,
+        modelProvider: "anthropic",
+        model: "private-research-model",
+        thinkingLevel: "high",
+        thinkingLevels: [{ id: "high", label: "high" }],
+        agentRuntime: { id: "private-runtime", source: "agent" },
+        responseUsage: "full",
+        effectiveResponseUsage: "full",
+        contextTokens: 999_999,
+        verboseLevel: "full",
+      },
     });
     sendPendingUser(state, "research-pending", "private draft");
     const chatLog = new ChatLog();
@@ -208,6 +220,7 @@ describe("tui session actions", () => {
     const history = createDeferred<{
       messages: unknown[];
       sessionInfo: { sessionId: string };
+      defaults: { modelProvider: string; model: string; contextTokens: number };
     }>();
     const loadHistory = vi.fn(() => history.promise);
     const invalidateRunOwnership = vi.fn();
@@ -229,7 +242,7 @@ describe("tui session actions", () => {
     expect(state.currentAgentId).toBe("ops");
     expect(state.currentSessionKey).toBe("global");
     expect(state.currentSessionId).toBeNull();
-    expect(state.sessionInfo.displayName).toBeUndefined();
+    expect(state.sessionInfo).toEqual({});
     expect(state.activeChatRunId).toBeNull();
     expect(state.pendingSubmit).toBeNull();
     expect(state.historyLoaded).toBe(false);
@@ -239,9 +252,21 @@ describe("tui session actions", () => {
     expect(clearLocalRunIds).toHaveBeenCalledOnce();
     expect(loadHistory).toHaveBeenCalledWith({ sessionKey: "global", agentId: "ops", limit: 200 });
 
-    history.resolve({ messages: [], sessionInfo: { sessionId: "ops-session" } });
+    history.resolve({
+      messages: [],
+      sessionInfo: { sessionId: "ops-session" },
+      defaults: { modelProvider: "openai", model: "gpt-5.4", contextTokens: 128_000 },
+    });
     await switching;
     expect(state.currentSessionId).toBe("ops-session");
+    expect(state.sessionInfo).toMatchObject({
+      modelProvider: "openai",
+      model: "gpt-5.4",
+      contextTokens: 128_000,
+    });
+    expect(state.sessionInfo.thinkingLevel).toBeUndefined();
+    expect(state.sessionInfo.agentRuntime).toBeUndefined();
+    expect(state.sessionInfo.responseUsage).toBeUndefined();
   });
 
   it("returns success after applying a normalized fresh agent roster", async () => {
@@ -397,9 +422,9 @@ describe("tui session actions", () => {
         activeChatRunId: null,
         pendingSubmit: null,
         historyLoaded: false,
-        sessionInfo: { updatedAt: null },
+        sessionInfo: {},
       });
-      expect(state.sessionInfo.thinkingLevel).toBe("high");
+      expect(state.sessionInfo.thinkingLevel).toBeUndefined();
       expect(state.sessionInfo.verboseLevel).toBeUndefined();
       expect(state.sessionProjection?.entries).toEqual([]);
       expect(invalidateRunOwnership).toHaveBeenCalledOnce();
@@ -1685,13 +1710,15 @@ describe("tui session actions", () => {
 
     await setSession("agent:main:target");
 
-    expect(state.sessionInfo).toMatchObject({
-      displayName: undefined,
-      fastMode: undefined,
-      verboseLevel: undefined,
-      traceLevel: undefined,
-      reasoningLevel: undefined,
-    });
+    for (const key of [
+      "displayName",
+      "fastMode",
+      "verboseLevel",
+      "traceLevel",
+      "reasoningLevel",
+    ] as const) {
+      expect(state.sessionInfo[key]).toBeUndefined();
+    }
   });
 
   it("merges a same-session mode patch without clearing untouched modes", () => {
@@ -2196,6 +2223,40 @@ describe("tui session actions", () => {
     expect(state.sessionInfo.model).toBe("model-after-reset");
     expect(addUser).not.toHaveBeenCalled();
     expect(clearAll).toHaveBeenCalledOnce();
+  });
+
+  it("discards in-flight history when an external event replaces the same session", async () => {
+    const history = createDeferred<unknown>();
+    const { chatLog, addUser, clearAll } = createHistoryChatLog();
+    const state = createBaseState({
+      currentSessionId: "session-before-reset",
+      sessionGeneration: 4,
+      sessionInfo: { model: "model-before-reset" },
+    });
+    const { loadHistory } = createTestSessionActions({
+      client: makeTuiBackend({ loadHistory: vi.fn(() => history.promise) }),
+      chatLog,
+      state,
+    });
+
+    const staleHistory = loadHistory();
+    state.sessionGeneration = 5;
+    state.currentSessionId = "session-after-reset";
+    state.sessionInfo = { model: "model-after-reset" };
+    history.resolve({
+      sessionInfo: {
+        key: "agent:main:main",
+        sessionId: "session-before-reset",
+        model: "private-old-model",
+      },
+      messages: [{ role: "user", content: "PRIVATE OLD HISTORY" }],
+    });
+
+    await expect(staleHistory).resolves.toEqual({ loaded: false });
+    expect(state.currentSessionId).toBe("session-after-reset");
+    expect(state.sessionInfo.model).toBe("model-after-reset");
+    expect(addUser).not.toHaveBeenCalled();
+    expect(clearAll).not.toHaveBeenCalled();
   });
 
   it("does not clear the selected session for another session's reset result", () => {

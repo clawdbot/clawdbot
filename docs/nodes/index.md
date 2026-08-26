@@ -169,7 +169,7 @@ openclaw node start
 openclaw node restart
 ```
 
-`node install` also accepts `--context-path`, `--tls`, `--tls-fingerprint`, `--node-id` (legacy client instance ID only), `--share-installed-apps` / `--no-share-installed-apps`, `--runtime <node>` (default: node), and `--force` to reinstall. `node status`, `node stop`, and `node uninstall` are also available.
+`node install` also accepts `--context-path`, `--tls`, `--tls-fingerprint`, `--node-id` (legacy client instance ID only), `--share-installed-apps` / `--no-share-installed-apps`, `--runtime <node|bun>` (default: `node`), and `--force` to reinstall. Bun requires version 1.4+ with WAL-reset-safe `node:sqlite` and is an explicit opt-in; Node remains recommended. `node status`, `node stop`, and `node uninstall` are also available.
 
 ### Pair + name
 
@@ -733,7 +733,13 @@ Node-related settings live under `gateway.nodes` and `tools.exec`:
     nodes: {
       // Auto-approve first-time node pairing from trusted networks (CIDR list).
       // Disabled when unset. Only applies to first-time role:node requests
-      // with no requested scopes; does not auto-approve upgrades.
+      // with no requested scopes; does not auto-approve upgrades. This
+      // approves the device only: the node's command/capability surface still
+      // needs `openclaw nodes approve <requestId>` (see `openclaw nodes
+      // pending`), because device pairing alone must not grant commands.
+      // Silent same-host pairing behaves the same way. SSH-verified pairing
+      // and node-profile setup codes approve the initial surface, since both
+      // record explicit machine-ownership or admin consent.
       pairing: {
         autoApproveCidrs: ["192.168.1.0/24"],
         // SSH-verified auto-approval (default: enabled). Approves first-time

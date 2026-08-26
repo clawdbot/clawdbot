@@ -1655,6 +1655,27 @@ describe("gateway sessions patch", () => {
     expect(cleared.sessionRoot).toBe("/workspace/project");
   });
 
+  test("stores and clears a session permission mode without a recorded root", async () => {
+    const store = mainStoreEntry({});
+    const stored = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, permissionMode: "workspace" },
+      }),
+    );
+    expect(stored.permissionMode).toBe("workspace");
+    expect(stored.sessionRoot).toBeUndefined();
+
+    const cleared = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, permissionMode: null },
+      }),
+    );
+    expect(cleared.permissionMode).toBeUndefined();
+    expect(cleared.sessionRoot).toBeUndefined();
+  });
+
   test("clears a node cwd when changing or clearing the node binding", async () => {
     const store = mainStoreEntry({
       execHost: "node",

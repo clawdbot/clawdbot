@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-store.js";
+import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-identity.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";

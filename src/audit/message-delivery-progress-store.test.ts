@@ -10,6 +10,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { STATE_SCHEMA_10_TO_9_DOWNGRADE_SQL } from "../state/openclaw-state-schema-v10-retirement.test-support.js";
+import { STATE_SCHEMA_11_TO_10_TABLES_SQL } from "../state/openclaw-state-schema-v11-retirement.test-support.js";
 import { recordAuditEvent } from "./audit-event-store.js";
 import type { OutboundMessageProgressInput } from "./audit-event-types.js";
 import {
@@ -138,10 +139,12 @@ describe("outbound message progress companion", () => {
     );
   });
 
-  it("stays absent through startup, reads, and terminal-only writes at schema v10", () => {
+  it("stays absent through startup, reads, and terminal-only writes at the current schema", () => {
     const database = databaseOptions();
     const opened = openOpenClawStateDatabase(database);
-    expect(OPENCLAW_STATE_SCHEMA_VERSION).toBe(10);
+    expect(opened.db.prepare("PRAGMA user_version").get()).toEqual({
+      user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+    });
     expect(tableExists(opened.db, "outbound_message_progress")).toBe(false);
     expect(tableExists(opened.db, "outbound_message_execution_bindings")).toBe(false);
 
@@ -272,12 +275,12 @@ describe("outbound message progress companion", () => {
     ).toBe(true);
     // This pinned reader predates the Workshop's first-use column and requires present lazy tables
     // to retain its exact shape; project that unrelated table to the reader's historical contract.
+    // It is a v9-era build, so both later retirements must be undone before the
+    // version markers rewind: v11's curator tables, then the documented 10->9 recipe.
     openOpenClawStateDatabase(database).db.exec(
       "ALTER TABLE skill_workshop_proposals DROP COLUMN claim_released_time;",
     );
-    // The pinned reader is a v9-era build, so it refuses v10 databases by the
-    // version contract. Project the file back to the exact v9 shape with the
-    // documented 10→9 downgrade so the C04 same-version reader proof survives.
+    openOpenClawStateDatabase(database).db.exec(STATE_SCHEMA_11_TO_10_TABLES_SQL);
     openOpenClawStateDatabase(database).db.exec(STATE_SCHEMA_10_TO_9_DOWNGRADE_SQL);
     closeOpenClawStateDatabaseForTest();
 
@@ -355,9 +358,11 @@ describe("outbound message progress companion", () => {
       });
     }
 
-    expect(openOpenClawStateDatabase(database).db.prepare("PRAGMA quick_check").get()).toEqual({
-      quick_check: "ok",
+    const reopened = openOpenClawStateDatabase(database).db;
+    expect(reopened.prepare("PRAGMA user_version").get()).toEqual({
+      user_version: OPENCLAW_STATE_SCHEMA_VERSION,
     });
+    expect(reopened.prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
     expect(
       pageOutboundMessageAuditEventsForRun({
         runId: "run-progress",

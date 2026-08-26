@@ -89,5 +89,49 @@ describe("browser tool schema", () => {
       requireSchemaProperty(requestProperties, "kind", "browser request kind schema").enum,
     ).toContain("batch");
     expect(requestProperties.actions).toBeDefined();
+
+    for (const name of ["kind", "actions", "stopOnError", "doubleClick", "ref"] as const) {
+      const flattened = requireSchemaProperty(properties, name, `browser ${name} schema`);
+      const nested = requireSchemaProperty(
+        requestProperties,
+        name,
+        `browser request ${name} schema`,
+      );
+
+      expect(flattened.description, name).toBeTruthy();
+      expect(nested.description, name).toBe(flattened.description);
+    }
+
+    expect(properties.actions?.description).toContain("batch");
+    expect(properties.stopOnError?.description).toContain("default");
+    expect(properties.doubleClick?.description).toContain("clickCoords");
+    expect(properties.ref?.description).toContain("snapshot");
+    expect(properties.profile?.description).toContain("default");
+    expect(properties.labels?.description).toContain("snapshot");
+    expect(properties.request?.description).toContain("act");
+  });
+
+  it("preserves batch fields without advertising them on unsupported profiles", () => {
+    const schema = createBrowserToolSchema(
+      resolveBrowserToolCapabilities({
+        profileCapabilities: {
+          supportsBatchActions: false,
+          supportsDownloads: false,
+          supportsPdf: false,
+        },
+      }),
+    );
+    const properties = schema.properties as BrowserSchemaRecord;
+    const requestProperties = requireSchemaProperty(properties, "request", "browser request schema")
+      .properties as BrowserSchemaRecord;
+
+    for (const scopedProperties of [properties, requestProperties]) {
+      expect(scopedProperties.kind?.enum).not.toContain("batch");
+      expect(scopedProperties.kind?.description).not.toContain("batch");
+      expect(scopedProperties.actions).toBeDefined();
+      expect(scopedProperties.stopOnError).toBeDefined();
+      expect(scopedProperties.actions?.description).toBeUndefined();
+      expect(scopedProperties.stopOnError?.description).toBeUndefined();
+    }
   });
 });

@@ -318,9 +318,6 @@ export type DiscordAccountConfig = Omit<
     slashCommand?: DiscordSlashCommandConfig;
     /** Thread binding lifecycle settings. */
     threadBindings?: DiscordThreadBindingsConfig;
-    /** Show subagent count reactions and typing on the source message. Default: false. */
-    /** @deprecated Doctor-only legacy input. */
-    subagentProgress?: boolean;
     /** Privileged Gateway Intents (must also be enabled in Discord Developer Portal). */
     intents?: DiscordIntentsConfig;
     /** Voice channel conversation settings. */

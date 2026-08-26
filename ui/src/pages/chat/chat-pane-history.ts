@@ -488,16 +488,20 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
   }
 
   protected async forkFromMessage(entryId: string): Promise<void> {
-    const state = this.state;
-    if (!state) {
+    const scope = this.captureConnectionScope();
+    if (!scope) {
       return;
     }
+    const state = scope.state;
     const sourceKey = state.sessionKey;
     const agentParams = scopedAgentParamsForSession(state, sourceKey);
     try {
       const result = await state.sessions.forkAtMessage(sourceKey, entryId, agentParams);
       const editorText = result.editorText ?? "";
-      if (this.state !== state || !visibleSessionMatches(state, sourceKey, agentParams.agentId)) {
+      if (
+        !this.isConnectionScopeCurrent(scope) ||
+        !visibleSessionMatches(state, sourceKey, agentParams.agentId)
+      ) {
         return;
       }
       if (this.onPaneSessionChange?.(this.paneId, result.sessionKey) === false) {
@@ -512,6 +516,12 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
         draft: editorText,
       });
     } catch (error) {
+      if (
+        !this.isConnectionScopeCurrent(scope) ||
+        !visibleSessionMatches(state, sourceKey, agentParams.agentId)
+      ) {
+        return;
+      }
       state.lastError = formatUiError(error);
       state.chatError = state.lastError;
       state.requestUpdate?.();

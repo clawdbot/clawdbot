@@ -45,20 +45,38 @@ const mockLoadChannelSecretContractApi = vi.hoisted(() =>
       telegram: ["botToken"],
     };
     return {
-      secretTargetRegistryEntries: (fields[channelId] ?? []).map((field) => {
-        const pathPattern = `channels.${channelId}.${field}`;
-        return {
-          id: pathPattern,
-          targetType: pathPattern,
-          configFile: "openclaw.json" as const,
-          pathPattern,
-          secretShape: "secret_input" as const,
-          expectedResolvedValue: "string" as const,
-          includeInPlan: true,
-          includeInConfigure: true,
-          includeInAudit: true,
-        };
-      }),
+      secretTargetRegistryEntries: [
+        ...(fields[channelId] ?? []).map((field) => {
+          const pathPattern = `channels.${channelId}.${field}`;
+          return {
+            id: pathPattern,
+            targetType: pathPattern,
+            configFile: "openclaw.json" as const,
+            pathPattern,
+            secretShape: "secret_input" as const,
+            expectedResolvedValue: "string" as const,
+            includeInPlan: true,
+            includeInConfigure: true,
+            includeInAudit: true,
+          };
+        }),
+        ...(channelId === "discord"
+          ? [
+              {
+                id: "channels.discord.accounts[].token",
+                targetType: "channels.discord.accounts[].token",
+                configFile: "openclaw.json" as const,
+                pathPattern: "channels.discord.accounts[].token",
+                refPathPattern: "channels.discord.accounts[].tokenRef",
+                secretShape: "sibling_ref" as const,
+                expectedResolvedValue: "string" as const,
+                includeInPlan: true,
+                includeInConfigure: true,
+                includeInAudit: true,
+              },
+            ]
+          : []),
+      ],
     };
   }),
 );
@@ -1906,6 +1924,114 @@ describe("config cli", () => {
         provider: "default",
         id: "DISCORD_BOT_TOKEN",
       });
+    });
+
+    it.each(["ref builder", "JSON value", "batch ref", "batch value"] as const)(
+      "writes array-indexed sibling SecretRefs to their registered ref path in %s mode",
+      async (mode) => {
+        const resolved = {
+          channels: { discord: { accounts: [{ token: "existing-token" }] } },
+        } as unknown as OpenClawConfig;
+        const ref = { source: "env", provider: "default", id: "DISCORD_ACCOUNT_TOKEN" };
+        const configPath = "channels.discord.accounts[0].token";
+        setSnapshot(resolved, resolved);
+
+        const args =
+          mode === "ref builder"
+            ? [
+                configPath,
+                "--ref-provider",
+                ref.provider,
+                "--ref-source",
+                ref.source,
+                "--ref-id",
+                ref.id,
+              ]
+            : mode === "JSON value"
+              ? [configPath, JSON.stringify(ref), "--strict-json"]
+              : [
+                  "--batch-json",
+                  JSON.stringify([
+                    mode === "batch ref"
+                      ? { path: configPath, ref }
+                      : { path: configPath, value: ref },
+                  ]),
+                ];
+        await runConfigSet(...args);
+
+        expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+        const written = firstWrittenConfig() as {
+          channels?: { discord?: { accounts?: Array<{ token?: unknown; tokenRef?: unknown }> } };
+        };
+        expect(written.channels?.discord?.accounts?.[0]).toEqual({
+          token: "existing-token",
+          tokenRef: ref,
+        });
+        expect(requireWriteOptions().explicitSetPaths).toEqual([
+          ["channels", "discord", "accounts", "0", "tokenRef"],
+        ]);
+      },
+    );
+
+    it("keeps a quoted numeric record key distinct from an array-indexed secret target", async () => {
+      const resolved = {
+        channels: { discord: { accounts: { "0": { token: "existing-token" } } } },
+      } as unknown as OpenClawConfig;
+      const ref = { source: "env", provider: "default", id: "DISCORD_ACCOUNT_TOKEN" };
+      setSnapshot(resolved, resolved);
+
+      await runConfigSet(
+        'channels.discord.accounts["0"].token',
+        "--ref-provider",
+        ref.provider,
+        "--ref-source",
+        ref.source,
+        "--ref-id",
+        ref.id,
+      );
+
+      const written = firstWrittenConfig() as {
+        channels?: { discord?: { accounts?: Record<string, { token?: unknown }> } };
+      };
+      expect(written.channels?.discord?.accounts?.["0"]).toEqual({ token: ref });
+      expect(requireWriteOptions().explicitSetPaths).toEqual([
+        ["channels", "discord", "accounts", "0", "token"],
+      ]);
+    });
+
+    it.each([
+      [
+        'agents.defaults.models["fixture/model.v1"].params["literal.dot"]',
+        "LITERAL",
+        { "literal.dot": "LITERAL" },
+      ],
+      [
+        'agents.defaults.models["fixture/model.v1"].params.literal.dot',
+        "NESTED",
+        { literal: { dot: "NESTED" } },
+      ],
+      [
+        'agents.defaults.models["fixture/model.v1"].params.record["0"]',
+        "RECORD-ZERO",
+        { record: { "0": "RECORD-ZERO" } },
+      ],
+      [
+        'agents.defaults.models["fixture/model.v1"].params.list[0]',
+        "ARRAY-ZERO",
+        { list: ["ARRAY-ZERO"] },
+      ],
+    ])("preserves generic config path identity for %s", async (configPath, value, expected) => {
+      const resolved = {
+        agents: { defaults: { models: { "fixture/model.v1": { params: {} } } } },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      await runConfigSet(configPath, JSON.stringify(value), "--strict-json");
+
+      expect(firstWrittenConfig().agents?.defaults?.models?.["fixture/model.v1"]?.params).toEqual(
+        expected,
+      );
+      expectLogIncludes(`Updated ${configPath}`);
     });
 
     it("keeps numeric config set path segments as object keys for schema-backed Discord guild records", async () => {
@@ -3772,6 +3898,11 @@ describe("config cli", () => {
         error: "Invalid path (empty segment): gateway.[port]",
       },
       {
+        name: "rejects registry array patterns as concrete config paths",
+        args: ["config", "get", "plugins.entries.example.config.accounts[].token"],
+        error: 'Invalid path (empty "[]"): plugins.entries.example.config.accounts[].token',
+      },
+      {
         name: "rejects a trailing escape for config get before reading another key",
         args: ["config", "get", "gateway.port\\"],
         error: "Invalid path (trailing escape): gateway.port\\",
@@ -3855,6 +3986,14 @@ describe("config cli", () => {
       ["agents.list[0].id", ["agents", "list", "0", "id"]],
       ["agents.list[0][1]", ["agents", "list", "0", "1"]],
       ["[0]", ["0"]],
+      [
+        'plugins.entries.example.config.accounts["0"].token',
+        ["plugins", "entries", "example", "config", "accounts", "0", "token"],
+      ],
+      [
+        'plugins.entries["foo.config.bar"].config.token',
+        ["plugins", "entries", "foo.config.bar", "config", "token"],
+      ],
       ["  gateway.port  ", ["gateway", "port"]],
       ["channels.discord.guilds.prod\\.guild", ["channels", "discord", "guilds", "prod.guild"]],
       [
@@ -4494,7 +4633,7 @@ describe("config cli", () => {
         "--strict-json",
       ]);
 
-      expectLogIncludes("Updated agents.list.1.model.primary");
+      expectLogIncludes("Updated agents.list[1].model.primary");
       expectLogIncludes("Change will apply without restarting the gateway.");
       expectLogExcludes("Restart the gateway to apply.");
     });
@@ -4544,7 +4683,7 @@ describe("config cli", () => {
         "--strict-json",
       ]);
 
-      expectLogIncludes("Updated agents.list.0.model.primary");
+      expectLogIncludes("Updated agents.list[0].model.primary");
       expectLogIncludes("Restart the gateway to apply.");
       expectLogExcludes("Change will apply without restarting the gateway.");
     });
@@ -4568,7 +4707,7 @@ describe("config cli", () => {
         "--strict-json",
       ]);
 
-      expectLogIncludes("Updated agents.list.0.model.primary");
+      expectLogIncludes("Updated agents.list[0].model.primary");
       expectLogIncludes("Change will apply without restarting the gateway.");
       expectLogExcludes("Restart the gateway to apply.");
     });
@@ -4674,23 +4813,30 @@ describe("config cli", () => {
       expectLogExcludes("Change will apply without restarting the gateway.");
     });
 
-    it("keeps plugin entry config writes restart-backed when reload metadata is absent", async () => {
-      const resolved: OpenClawConfig = {
-        plugins: {
-          entries: {
-            canvas: { enabled: true },
+    it.each([
+      ["canvas", "plugins.entries.canvas.enabled"],
+      ["canvas.internal", 'plugins.entries["canvas.internal"].enabled'],
+      ["canvas", "plugins.entries.canvas.config.accounts[0].enabled"],
+    ])(
+      "keeps plugin entry %s writes unambiguous and restart-backed",
+      async (pluginId, configPath) => {
+        const resolved = {
+          plugins: {
+            entries: {
+              [pluginId]: { enabled: true, config: { accounts: [{ enabled: true }] } },
+            },
           },
-        },
-      } as unknown as OpenClawConfig;
-      setSnapshot(resolved, resolved);
+        } as unknown as OpenClawConfig;
+        setSnapshot(resolved, resolved);
 
-      await runConfigSet("plugins.entries.canvas.enabled", "false");
+        await runConfigSet(configPath, "false");
 
-      expectLogIncludes("Updated plugins.entries.canvas.enabled");
-      expectLogIncludes("Restart the gateway to apply.");
-      expectLogExcludes("Change will apply without restarting the gateway.");
-      expectLogExcludes("No gateway restart needed.");
-    });
+        expectLogIncludes(`Updated ${configPath}`);
+        expectLogIncludes("Restart the gateway to apply.");
+        expectLogExcludes("Change will apply without restarting the gateway.");
+        expectLogExcludes("No gateway restart needed.");
+      },
+    );
 
     it("keeps the restart hint for mixed hot and restart batch updates", async () => {
       const resolved: OpenClawConfig = {

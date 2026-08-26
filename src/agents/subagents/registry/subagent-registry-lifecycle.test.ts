@@ -13,6 +13,7 @@ import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
   runWithGatewayIndependentRootWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../../../process/gateway-work-admission.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../../../tasks/detached-task-runtime-contract.js";
@@ -934,6 +935,49 @@ describe("subagent registry lifecycle hardening", () => {
     releaseAnnounce?.("delivered");
     await waitForLifecycleState(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
     expect(entry.cleanupCompletedAt).toBeTypeOf("number");
+  });
+
+  it("settles an admitted subagent and its delivery behind a closed drain fence", async () => {
+    const entry = createRunEntry({ expectsCompletionMessage: true });
+    let releaseAnnounce = (_outcome: AnnounceFlowOutcome) => {};
+    const runSubagentAnnounceFlow = vi.fn(
+      () =>
+        new Promise<AnnounceFlowOutcome>((resolve) => {
+          releaseAnnounce = resolve;
+        }),
+    );
+    const controller = createLifecycleController({ entry, runSubagentAnnounceFlow });
+    let finishRun = () => {};
+    const admittedRun = runWithGatewayIndependentRootWorkAdmission(async () => {
+      await new Promise<void>((resolve) => {
+        finishRun = resolve;
+      });
+      await completeRun(controller, entry, {
+        triggerCleanup: true,
+        terminalReply: { disposition: "visible", text: "final completion reply" },
+      });
+    });
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension?.drain()).toBe(true);
+
+    try {
+      expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
+      finishRun();
+      await waitForLifecycleState(() => expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce());
+      await admittedRun;
+      expect(entry.execution.status).toBe("terminal");
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+      expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
+
+      releaseAnnounce("delivered");
+      await waitForLifecycleState(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      expect(entry.cleanupCompletedAt).toBeTypeOf("number");
+    } finally {
+      releaseAnnounce("delivered");
+      finishRun();
+      suspension?.release();
+      await admittedRun;
+    }
   });
 
   it("keeps direct delete cleanup root-admitted until the gateway call settles", async () => {

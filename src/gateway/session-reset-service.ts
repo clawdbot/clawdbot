@@ -97,7 +97,7 @@ import {
   forgetActiveSessionForShutdown,
   noteActiveSessionForShutdown,
 } from "./active-sessions-shutdown-tracker.js";
-import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
+import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "./operator-role-policy.js";
 import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
 import { findDirectChildSessionsForParent } from "./session-child-sessions.js";
 import {
@@ -1545,9 +1545,15 @@ export async function performGatewaySessionReset(params: {
                 createdActor: currentEntry.createdActor,
                 createdAt: currentEntry.createdAt,
                 projectId: currentEntry.projectId,
+                ...(currentEntry.sandbox === "required" ? { sandbox: "required" as const } : {}),
               }
             : params.creation
-              ? buildSessionCreationStamp(params.creation)
+              ? {
+                  ...buildSessionCreationStamp(params.creation),
+                  ...(resolveCreatorSandbox(cfg, params.creation) === "required"
+                    ? { sandbox: "required" as const }
+                    : {}),
+                }
               : {};
           const nextEntry: InternalSessionEntry = {
             sessionId: nextSessionId,

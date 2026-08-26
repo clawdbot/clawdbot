@@ -498,6 +498,56 @@ describe("telegramMessageActions", () => {
     });
   });
 
+  it("advertises Telegram reaction syntax and emoji discovery in message tool schema", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: "tok",
+          actions: { reactions: true },
+        },
+      },
+    } as OpenClawConfig;
+
+    const discovery = telegramMessageActions.describeMessageTool?.({ cfg });
+    const contributions = Array.isArray(discovery?.schema)
+      ? discovery.schema
+      : discovery?.schema
+        ? [discovery.schema]
+        : [];
+    const reactionSchema = contributions.find((entry) => "emoji" in entry.properties);
+    const emojiDescription = (
+      reactionSchema?.properties.emoji as { description?: string } | undefined
+    )?.description;
+
+    expect(discovery?.actions).toEqual(expect.arrayContaining(["react", "emoji-list"]));
+    expect(reactionSchema?.actions).toEqual([]);
+    expect(reactionSchema?.properties.emoji).toMatchObject({
+      type: "string",
+      description: expect.stringContaining("custom_emoji_id"),
+    });
+    expect(emojiDescription).toContain('action:"emoji-list"');
+    expect(emojiDescription).toContain("arbitrary Unicode may be rejected");
+
+    const disabledDiscovery = telegramMessageActions.describeMessageTool?.({
+      cfg: {
+        channels: {
+          telegram: {
+            botToken: "tok",
+            actions: { reactions: false },
+          },
+        },
+      } as OpenClawConfig,
+    });
+    const disabledContributions = Array.isArray(disabledDiscovery?.schema)
+      ? disabledDiscovery.schema
+      : disabledDiscovery?.schema
+        ? [disabledDiscovery.schema]
+        : [];
+    expect(disabledDiscovery?.actions).not.toContain("react");
+    expect(disabledDiscovery?.actions).not.toContain("emoji-list");
+    expect(disabledContributions.find((entry) => "emoji" in entry.properties)).toBeUndefined();
+  });
+
   it("matches runtime account-key normalization during SecretRef-tolerant discovery", () => {
     const cfg = {
       channels: {

@@ -1637,6 +1637,7 @@ describe("scripts/changed-lanes", () => {
         "scripts/generate-prompt-snapshots.ts",
         "test/helpers/agents/happy-path-prompt-snapshots.ts",
         "test/fixtures/agents/prompt-snapshots/runtime-happy-path/telegram-direct-codex-message-tool.md",
+        "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/discord-group-codex-message-tool.md.diff",
       ],
       changedPath: "test/helpers/agents/happy-path-prompt-snapshots.ts",
       expected: {

@@ -115,6 +115,106 @@ suite.define(() => {
     );
   });
 
+  it("keeps configured models visible when their catalog fails, then recovers on refresh", async () => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 1_000, width: 1_440 },
+      },
+      async ({ page }) => {
+        const config = {
+          agents: { defaults: { model: "openai/gpt-5.5" } },
+          models: { providers: { openai: { apiKey: "[redacted]" } } },
+        };
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            ...providerUsageResponses({ updatedAt: now, providers: [] }),
+            "config.get": {
+              config,
+              sourceConfig: config,
+              hash: "model-providers-catalog-failure",
+              issues: [],
+              raw: JSON.stringify(config),
+              valid: true,
+            },
+            "models.list": {
+              __mockError: {
+                code: "UNAVAILABLE",
+                message: "Model catalog temporarily unavailable",
+              },
+            },
+            "models.authStatus": {
+              ts: now,
+              providers: [
+                {
+                  provider: "openai",
+                  displayName: "OpenAI",
+                  status: "static",
+                  profiles: [],
+                  apiKey: { source: "config" },
+                },
+              ],
+            },
+          },
+        });
+
+        await page.goto(`${suite.server.baseUrl}settings/model-providers`);
+        const card = page.locator('[data-provider-id="openai"]');
+        await card.waitFor();
+        await expect
+          .poll(async () => (await gateway.getRequests("models.list")).length)
+          .toBeGreaterThan(0);
+
+        if (recordVisuals) {
+          await mkdir(artifactDir, { recursive: true });
+          const phase =
+            (await page.locator(".provider-usage-error").count()) === 0 ? "before" : "after";
+          await page.screenshot({
+            animations: "disabled",
+            fullPage: true,
+            path: path.join(artifactDir, `model-catalog-request-failure-${phase}.png`),
+          });
+        }
+
+        await expect
+          .poll(() => page.locator(".provider-usage-error").textContent(), { timeout: 5_000 })
+          .toContain("Model catalog temporarily unavailable");
+        expect(await page.locator('[data-model-readiness="model-required"]').count()).toBe(0);
+        const primary = page.locator(".model-providers__defaults wa-select").first();
+        await expect
+          .poll(() =>
+            primary.evaluate((element) =>
+              String((element as HTMLElement & { value?: string }).value),
+            ),
+          )
+          .toBe("openai/gpt-5.5");
+
+        await gateway.setMethodResponse("models.list", {
+          models: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true }],
+        });
+        await page.getByRole("button", { name: "Refresh", exact: true }).click();
+
+        await expect.poll(() => page.locator(".provider-usage-error").count()).toBe(0);
+        await expect.poll(() => card.textContent()).toContain("API key set in config");
+        await expect
+          .poll(() =>
+            primary.evaluate((element) =>
+              String((element as HTMLElement & { value?: string }).value),
+            ),
+          )
+          .toBe("openai/gpt-5.5");
+        if (recordVisuals) {
+          await page.screenshot({
+            animations: "disabled",
+            fullPage: true,
+            path: path.join(artifactDir, "model-catalog-request-recovered.png"),
+          });
+        }
+      },
+    );
+  });
+
   it("clears unsaved provider credentials when switching agents without saving them", async () => {
     await suite.withPage(
       {

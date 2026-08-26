@@ -25,12 +25,23 @@ import { focusComposerFromChrome, paneDomId } from "./chat-composer-dom.ts";
 import { renderChatGoal } from "./chat-composer-goal.ts";
 import { renderChatComposerPlusMenu } from "./chat-composer-plus-menu.ts";
 import { renderChatQueue } from "./chat-composer-queue.ts";
-import { renderSkillMenu, type SkillMenuHost } from "./chat-composer-skill-menu.ts";
-import { renderSlashMenu, type SlashMenuHost } from "./chat-composer-slash-menu.ts";
+import {
+  normalizeSkillTokenSelection,
+  resetSkillMenuState,
+  renderSkillDraftOverlay,
+  renderSkillMenu,
+  type SkillMenuHost,
+} from "./chat-composer-skill-menu.ts";
+import {
+  renderSlashMenu,
+  resetSlashMenuState,
+  type SlashMenuHost,
+} from "./chat-composer-slash-menu.ts";
 import { commitComposerDraft } from "./chat-composer-state.ts";
 import { renderCompactionIndicator, renderFallbackIndicator } from "./chat-composer-status.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 import {
+  ensureChatComposerPickerDismissal,
   handleChatComposerDropdownShow,
   markPointerOpenedChatComposerDropdown,
   restorePointerOpenedChatComposerTrigger,
@@ -120,6 +131,9 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     slashMenuListboxId,
     slashMenuAnnouncementId,
   } = context;
+  if (slashMenuVisible || skillMenuVisible) {
+    ensureChatComposerPickerDismissal();
+  }
   const disabledBanner = props.disabledBanner
     ? html`
         <div
@@ -236,6 +250,8 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
           state.dictationSelection?.end ?? visibleDraft.length,
         ).value
       : visibleDraft;
+  const draftDirection = detectTextDirection(dictationPreviewDraft);
+  const skillDraftOverlay = renderSkillDraftOverlay(dictationPreviewDraft, draftDirection);
   const progressCard = props.progressCard
     ? html`<div class="agent-chat__progress-float">
         ${renderSessionProgressCard(props.progressCard, "composer", props.onDismissProgressCard)}
@@ -246,8 +262,8 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
         ${renderChatGoal(state, activeSession.goal, {
           canAct: props.connected && canCompose,
           onGoalCommand: props.onGoalCommand,
-          onGoalEdit: (goal) => {
-            commitComposerDraft(props, `/goal edit ${goal.objective}`);
+          onGoalEdit: (updatedGoal) => {
+            commitComposerDraft(props, `/goal edit ${updatedGoal.objective}`);
             requestUpdate();
             queueMicrotask(() => state.composerTextarea?.focus({ preventScroll: true }));
           },
@@ -290,6 +306,12 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                 : ""}${dictation?.active ? " agent-chat__input--dictating" : ""}"
               @wa-show=${handleChatComposerDropdownShow}
               @wa-after-show=${restorePointerOpenedChatComposerTrigger}
+              @openclaw-composer-dismiss-invocations=${() => {
+                state.slashMenuOpen = false;
+                resetSlashMenuState(state);
+                resetSkillMenuState(state);
+                requestUpdate();
+              }}
               @click=${(event: MouseEvent) => focusComposerFromChrome(event, canCompose)}
               @pointerdown=${(event: PointerEvent) => {
                 markPointerOpenedChatComposerDropdown(event);
@@ -401,8 +423,11 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                 <div class="agent-chat__composer-combobox">
                   <textarea
                     ${ref(state.textareaRef ?? undefined)}
+                    class=${skillDraftOverlay === nothing
+                      ? ""
+                      : "agent-chat__composer-textarea--rich"}
                     .value=${dictationPreviewDraft}
-                    dir=${detectTextDirection(dictationPreviewDraft)}
+                    dir=${draftDirection}
                     ?disabled=${!canCompose}
                     ?readonly=${dictation?.locksComposer === true}
                     aria-autocomplete="list"
@@ -423,6 +448,12 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                     @beforeinput=${handleBeforeInput}
                     @input=${handleInput}
                     @select=${handleSelect}
+                    @pointerup=${(event: PointerEvent) => {
+                      if (event.currentTarget instanceof HTMLTextAreaElement) {
+                        normalizeSkillTokenSelection(event.currentTarget);
+                      }
+                      handleSelect(event);
+                    }}
                     @compositionstart=${(event: CompositionEvent) => {
                       state.composerComposing = true;
                       state.composingDraft = {
@@ -441,6 +472,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                     placeholder=${dictation?.active ? "" : placeholder}
                     rows="1"
                   ></textarea>
+                  ${skillDraftOverlay}
                   <span
                     id=${slashMenuAnnouncementId}
                     class="sr-only"

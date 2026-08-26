@@ -37,10 +37,12 @@ type TaskRegistryRestoreState =
   | { status: "failed"; error: Error };
 let taskRegistryRestoreState: TaskRegistryRestoreState = { status: "uninitialized" };
 export const taskFlowSyncRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
-export type TaskRegistryDeliveryRuntime = Pick<
-  typeof import("./task-registry-delivery-runtime.js"),
-  "sendMessage"
->;
+export type TaskRegistryDeliveryRuntime = {
+  sendMessage: (typeof import("./task-registry-delivery-runtime.js"))["sendMessage"];
+  // Optional so existing test overrides that stub only sendMessage stay valid;
+  // delivery treats a missing resolver as "no Control UI link".
+  resolveTaskControlUiSessionUrl?: (typeof import("./task-registry-delivery-runtime.js"))["resolveTaskControlUiSessionUrl"];
+};
 export const TASK_REGISTRY_DELIVERY_RUNTIME_OVERRIDE_KEY = Symbol.for(
   "openclaw.taskRegistry.deliveryRuntimeOverride",
 );

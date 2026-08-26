@@ -122,7 +122,6 @@ describe("DraftPlaceState cloud machine selection", () => {
       {
         id: "aws",
         providerId: "crabbox",
-        executionMode: "worker-turn",
         executionModes,
         machines: [
           { id: "standard", label: "Standard", default: true },

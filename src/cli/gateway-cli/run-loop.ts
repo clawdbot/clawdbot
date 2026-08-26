@@ -474,7 +474,11 @@ export async function runGatewayLoop(params: {
     }
     return reacquireAndResumeInProcessRestart();
   };
-  const SUPERVISOR_STOP_TIMEOUT_MS = 30_000;
+  // The managed unit grants this same budget to a graceful SIGTERM.  A plain
+  // supervisor restart does not carry a gateway restart intent, but it can
+  // still interrupt an embedded model/tool turn; leave enough time for that
+  // turn to settle before systemd resorts to SIGKILL.
+  const SUPERVISOR_STOP_TIMEOUT_MS = 330_000;
   const SHUTDOWN_TIMEOUT_MS = SUPERVISOR_STOP_TIMEOUT_MS - 5_000;
   const clearPendingStartupForceExitTimer = () => {
     clearTimeout(pendingStartupForceExitTimer ?? undefined);

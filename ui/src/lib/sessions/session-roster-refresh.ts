@@ -93,13 +93,69 @@ function isPrimarySessionListQuery(options: SessionListScope): boolean {
   );
 }
 
+function preserveCurrentSessionRow(
+  result: SessionsListResult,
+  state: SessionState,
+  snapshot: SessionGateway["snapshot"],
+  backgroundHydrate: boolean,
+): SessionsListResult {
+  const currentKey = snapshot.sessionKey?.trim();
+  if (!currentKey) {
+    return result;
+  }
+  const currentAgentId = normalizeAgentId(
+    parseAgentSessionKey(currentKey)?.agentId ?? resolveUiSelectedGlobalAgentId(snapshot),
+  );
+  const exactPreviousCurrentRow = state.result?.sessions.find((row) =>
+    areUiSessionKeysEquivalent(row.key, currentKey),
+  );
+  const previousCurrentRow =
+    exactPreviousCurrentRow ??
+    (state.agentId === currentAgentId
+      ? state.result?.sessions.find((row) =>
+          uiSessionRowMatchesSelectedChat(snapshot, row.key, currentKey),
+        )
+      : undefined);
+  const nextContainsCurrentRow = exactPreviousCurrentRow
+    ? result.sessions.some((row) => areUiSessionKeysEquivalent(row.key, currentKey))
+    : result.sessions.some((row) => uiSessionRowMatchesSelectedChat(snapshot, row.key, currentKey));
+  if (
+    previousCurrentRow &&
+    (backgroundHydrate || previousCurrentRow.archived === true) &&
+    !nextContainsCurrentRow
+  ) {
+    const sessions = [...result.sessions, previousCurrentRow];
+    return { ...result, count: sessions.length, sessions };
+  }
+  return result;
+}
+
+function retainSessionPaginationWindow(
+  options: SessionListOptions,
+  offset: number | undefined,
+  result: SessionsListResult | null,
+  nextResult: SessionsListResult,
+  snapshot: SessionGateway["snapshot"],
+): SessionListOptions {
+  const ownerFirstPage =
+    Boolean(snapshot.selfUser?.id.trim()) && isPrimarySessionListQuery(options);
+  const retainedListLimit =
+    ownerFirstPage && result && typeof offset === "number"
+      ? offset + result.sessions.length
+      : nextResult.sessions.length;
+  // Retain the shared pagination window, excluding owner rows merged ahead of it.
+  return {
+    ...options,
+    limit: Math.max(options.limit ?? DEFAULT_SESSION_LIST_QUERY.limit, retainedListLimit),
+  };
+}
+
 export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
   let inFlight: Promise<void> | null = null;
   let queuedExplicitRefresh: SessionRefreshOptions | null = null;
   let eventRefreshQueued = false;
   let lastListOptions: SessionListOptions = {};
-  let hasForegroundListOptions = false;
-  let hasSeededListOptions = false;
+  let listOptionsSource: "none" | "seeded" | "foreground" = "none";
   const observesPageLifecycle =
     typeof document !== "undefined" && typeof globalThis.addEventListener === "function";
   let pageActive = !observesPageLifecycle || document.visibilityState !== "hidden";
@@ -253,10 +309,10 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     delete durableListOptions.offset;
     if (!backgroundHydrate && !provisional) {
       lastListOptions = durableListOptions;
-      hasForegroundListOptions = true;
-    } else if (!provisional && !hasForegroundListOptions && !hasSeededListOptions) {
+      listOptionsSource = "foreground";
+    } else if (!provisional && listOptionsSource === "none") {
       lastListOptions = durableListOptions;
-      hasSeededListOptions = true;
+      listOptionsSource = "seeded";
     }
     // A provisional owner window may only paint an empty sidebar faster; once a
     // roster is on screen it stays silent so foreign-owned rows never blink out.
@@ -286,53 +342,21 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
           ? appendSessionResults(currentState.result, merged)
           : reconcileRosterPresentationMetadata(merged, currentState.result);
       if (append && nextResult && !backgroundHydrate) {
-        const ownerFirstPage =
-          Boolean(host.snapshot().selfUser?.id.trim()) &&
-          isPrimarySessionListQuery(durableListOptions);
-        const retainedListLimit =
-          ownerFirstPage && result && typeof requestOptions.offset === "number"
-            ? requestOptions.offset + result.sessions.length
-            : nextResult.sessions.length;
-        // Retain the shared pagination window, excluding owner rows merged ahead of it.
-        lastListOptions = {
-          ...durableListOptions,
-          limit: Math.max(
-            durableListOptions.limit ?? DEFAULT_SESSION_LIST_QUERY.limit,
-            retainedListLimit,
-          ),
-        };
+        lastListOptions = retainSessionPaginationWindow(
+          durableListOptions,
+          requestOptions.offset,
+          result,
+          nextResult,
+          host.snapshot(),
+        );
       }
       if (nextResult) {
-        const snapshot = host.snapshot();
-        const currentKey = snapshot.sessionKey?.trim();
-        if (currentKey) {
-          const currentAgentId = normalizeAgentId(
-            parseAgentSessionKey(currentKey)?.agentId ?? resolveUiSelectedGlobalAgentId(snapshot),
-          );
-          const exactPreviousCurrentRow = currentState.result?.sessions.find((row) =>
-            areUiSessionKeysEquivalent(row.key, currentKey),
-          );
-          const previousCurrentRow =
-            exactPreviousCurrentRow ??
-            (currentState.agentId === currentAgentId
-              ? currentState.result?.sessions.find((row) =>
-                  uiSessionRowMatchesSelectedChat(snapshot, row.key, currentKey),
-                )
-              : undefined);
-          const nextContainsCurrentRow = exactPreviousCurrentRow
-            ? nextResult.sessions.some((row) => areUiSessionKeysEquivalent(row.key, currentKey))
-            : nextResult.sessions.some((row) =>
-                uiSessionRowMatchesSelectedChat(snapshot, row.key, currentKey),
-              );
-          if (
-            previousCurrentRow &&
-            (backgroundHydrate || previousCurrentRow.archived === true) &&
-            !nextContainsCurrentRow
-          ) {
-            const sessions = [...nextResult.sessions, previousCurrentRow];
-            nextResult = { ...nextResult, count: sessions.length, sessions };
-          }
-        }
+        nextResult = preserveCurrentSessionRow(
+          nextResult,
+          currentState,
+          host.snapshot(),
+          backgroundHydrate,
+        );
       }
       nextResult = host.decorate(nextResult);
       if (!provisional) {
