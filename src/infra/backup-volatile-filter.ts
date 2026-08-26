@@ -120,6 +120,13 @@ export function isVolatileBackupPath(absolutePath: string, plan: VolatileFilterP
         return true;
       }
 
+      // Rebuildable, manifest-verified bundles bridge already-open Control UI
+      // documents across updates; restoring them would only copy stale package bytes.
+      const controlUiAssetCacheRoot = path.posix.join(stateDirPosix, "cache", "control-ui-assets");
+      if (isUnder(filePosix, controlUiAssetCacheRoot)) {
+        return true;
+      }
+
       const sessionsRoot = path.posix.join(stateDirPosix, "sessions");
       if (isUnder(filePosix, sessionsRoot) && hasExtension(filePosix, [".jsonl", ".log"])) {
         return true;

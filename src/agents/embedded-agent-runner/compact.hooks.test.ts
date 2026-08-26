@@ -1,6 +1,6 @@
 // Hook integration coverage for direct and queued embedded compaction.
 
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -1206,6 +1206,24 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       expect(toolOptions.exec).toEqual(expect.objectContaining({ mode: execMode }));
     },
   );
+
+  it("defaults rootless compaction permissions to the canonical agent workspace", async () => {
+    const workspaceDir = tempDirs.make("openclaw-rootless-compaction-permission-");
+    const canonicalWorkspace = await realpath(workspaceDir);
+
+    await compactEmbeddedAgentSessionDirect(
+      wrappedCompactionArgs({
+        workspaceDir,
+        permissionMode: "workspace",
+        sessionEntry: { sessionId: "session-1", permissionMode: "workspace" },
+      }),
+    );
+
+    const toolOptions = expectRecordFields(mockCallArg(createOpenClawCodingToolsMock), {
+      sessionPermissionPolicy: { mode: "workspace", root: canonicalWorkspace },
+    });
+    expect(toolOptions.exec).toEqual(expect.objectContaining({ mode: "auto" }));
+  });
 
   it("keeps manifest-profiled plugin tools executable during compaction", async () => {
     const toolName = "profiled_plugin_tool";

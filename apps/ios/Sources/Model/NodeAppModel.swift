@@ -407,11 +407,6 @@ final class NodeAppModel {
     private var gatewaySessionScope: String?
     var gatewayAccentColorHex: String?
     private var focusedChatSessionKey: String?
-    // Two-part unread guard mirroring Android: the opened key survives read
-    // confirmations so later unread episodes on the same open chat re-acknowledge;
-    // the acknowledged key is the per-episode pending flag.
-    @ObservationIgnored private var openedChatSessionKey: String?
-    @ObservationIgnored private var readAcknowledgedChatSessionKey: String?
     var selectedAgentId: String?
     var gatewayDefaultAgentId: String?
     var gatewayAgents: [AgentSummary] = []
@@ -3367,16 +3362,8 @@ extension NodeAppModel {
         self.mainSessionKey
     }
 
-    func openChat(sessionKey: String?, unread: Bool = false) {
+    func openChat(sessionKey: String?) {
         self.focusChatSession(sessionKey)
-        let activeKey = self.chatSessionKey
-        self.openedChatSessionKey = activeKey
-        if self.readAcknowledgedChatSessionKey != activeKey {
-            self.readAcknowledgedChatSessionKey = nil
-        }
-        if unread {
-            self.acknowledgeChatSessionReadIfNeeded(activeKey)
-        }
         self.openChatRequestID &+= 1
     }
 
@@ -3400,47 +3387,6 @@ extension NodeAppModel {
         else { return false }
         self.consumedDashboardNavigationRequestID = requestID
         return true
-    }
-
-    /// One acknowledgement per unread episode: the pending flag clears when a fresh
-    /// snapshot confirms the read (unread != true), so a run finishing while the
-    /// session stays open re-acknowledges without patch loops (the gateway stamps
-    /// lastReadAt server-side, which makes the exchange convergent).
-    func reconcileChatSessionReadState(_ entries: [OpenClawChatSessionEntry]) {
-        guard let openedKey = self.openedChatSessionKey,
-              let entry = entries.first(where: { $0.key == openedKey })
-        else { return }
-        if entry.unread != true {
-            if self.readAcknowledgedChatSessionKey == openedKey {
-                self.readAcknowledgedChatSessionKey = nil
-            }
-            return
-        }
-        // Only the currently open chat auto-acknowledges fresh unread episodes.
-        guard openedKey == self.chatSessionKey else { return }
-        self.acknowledgeChatSessionReadIfNeeded(openedKey)
-    }
-
-    private func acknowledgeChatSessionReadIfNeeded(_ sessionKey: String) {
-        guard self.readAcknowledgedChatSessionKey != sessionKey else { return }
-        self.readAcknowledgedChatSessionKey = sessionKey
-        let transport = self.makeChatTransport()
-        Task { @MainActor in
-            do {
-                try await transport.patchSession(
-                    key: sessionKey,
-                    expectedSessionID: nil,
-                    label: nil,
-                    category: nil,
-                    pinned: nil,
-                    archived: nil,
-                    unread: false)
-            } catch {
-                if self.readAcknowledgedChatSessionKey == sessionKey {
-                    self.readAcknowledgedChatSessionKey = nil
-                }
-            }
-        }
     }
 
     func focusChatSession(_ sessionKey: String?) {

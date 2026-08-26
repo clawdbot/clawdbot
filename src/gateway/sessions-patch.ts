@@ -81,7 +81,6 @@ import {
   isAgentSessionModelPatchOrigin,
   snapshotAgentModelFallback,
 } from "./session-model-patch-origin.js";
-import { applySessionPermissionMode } from "./session-permission-policy.js";
 import { applySessionContextWindowPatch } from "./sessions-patch-context-window.js";
 import { applySessionsPatchSubagentPolicy } from "./sessions-patch-subagent-policy.js";
 
@@ -395,7 +394,9 @@ export async function projectSessionsPatchEntry(params: {
 
   if ("unread" in patch) {
     if (patch.unread === true) {
-      next.markedUnreadAt = now;
+      // This timestamp is also the conditional-ack revision. Repeated writes in
+      // one clock tick must still represent distinct manual unread intent.
+      next.markedUnreadAt = Math.max(now, (params.existingEntry?.markedUnreadAt ?? 0) + 1);
     } else {
       next.lastReadAt = now;
       delete next.markedUnreadAt;
@@ -571,9 +572,10 @@ export async function projectSessionsPatchEntry(params: {
     }
   }
   if ("permissionMode" in patch) {
-    const permissionRootError = applySessionPermissionMode(next, patch.permissionMode);
-    if (permissionRootError) {
-      return invalid(permissionRootError);
+    if (patch.permissionMode === null) {
+      delete next.permissionMode;
+    } else if (patch.permissionMode !== undefined) {
+      next.permissionMode = patch.permissionMode;
     }
   }
   if ("model" in patch) {

@@ -22,6 +22,7 @@ import {
   writeRuntimeJson,
   writeRuntimeStdout,
 } from "../runtime.js";
+import { parseConcreteConfigPathTokens } from "../shared/dot-path.js";
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
 import {
@@ -229,7 +230,8 @@ export async function runConfigUnset(opts: {
     if (cliOptions.json && !cliOptions.dryRun) {
       throw new Error("--json can only be used with --dry-run.");
     }
-    const parsedPath = parseConfigSetPath(opts.path);
+    const pathTokens = parseConcreteConfigPathTokens(opts.path);
+    const parsedPath = pathTokens.map(String);
     assertConfigPathIsNotAutoManaged(parsedPath);
     const mutationStart = cliOptions.dryRun
       ? { snapshot: await loadValidConfig(runtime), writeOptions: {} }
@@ -276,7 +278,7 @@ export async function runConfigUnset(opts: {
       runtime.exit(1);
       return;
     }
-    const operation = buildUnsetOperation(parsedPath);
+    const operation = buildUnsetOperation(parsedPath, pathTokens);
     if (cliOptions.dryRun) {
       await runConfigOperations({
         runtime,

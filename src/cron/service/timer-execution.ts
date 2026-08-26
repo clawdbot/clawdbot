@@ -167,6 +167,19 @@ export async function executeJobCore(
       payload: appendCronPayloadText(effectiveJob.payload, options.streamBatch),
     };
   }
+  if (effectiveJob.payload.kind === "skillCollectionReview") {
+    const result = state.deps.runSkillCollectionReview
+      ? await state.deps.runSkillCollectionReview({
+          agentId: resolveCronJobEffectiveAgentId(
+            effectiveJob,
+            state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId,
+          ),
+          ...(abortSignal ? { abortSignal } : {}),
+        })
+      : { status: "skipped" as const, summary: "skill collection review runner unavailable" };
+    return triggerEval ? { ...result, triggerEval } : result;
+  }
+
   const heartbeatTask = isHeartbeatTaskCronJob(effectiveJob) ? effectiveJob : undefined;
   if (effectiveJob.payload.kind === "heartbeat" || heartbeatTask) {
     // Monitors and migrated tasks share the wake bus, keeping coalescing,
@@ -525,16 +538,16 @@ async function executeScriptCronJob(
       });
     }
     if (result.wake) {
-      const eventText = notify ?? `script job ${job.name} completed`;
       if (job.sessionTarget !== "main" || !notify) {
-        enqueueCronSystemEvent(state, eventText, {
+        enqueueCronSystemEvent(state, notify ?? `script job ${job.name} completed`, {
           ...eventOptions,
           contextKey: `cron:${job.id}:script-wake`,
         });
       }
       requestCronHeartbeat(state, {
+        source: result.wake === "now" ? "notifications-event" : "cron",
         intent: result.wake === "now" ? "immediate" : "event",
-        reason: `cron:${job.id}:script`,
+        reason: result.wake === "now" ? "wake" : `cron:${job.id}:script`,
         agentId,
       });
     }

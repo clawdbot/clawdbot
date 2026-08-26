@@ -1647,6 +1647,10 @@ openclaw-workboard-card-dashboard {
 }
 
 @media (max-width: 900px) {
+  .content--workboard {
+    overflow-y: auto;
+  }
+
   .workboard-draft {
     width: 100%;
     height: 100dvh;
@@ -1694,10 +1698,10 @@ openclaw-workboard-card-dashboard {
     grid-template-columns: 1fr;
   }
 
+  .workboard,
   .workboard-board--page {
     flex-direction: column;
-    overflow-x: hidden;
-    overflow-y: auto;
+    overflow: visible;
     scroll-snap-type: none;
   }
 

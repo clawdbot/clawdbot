@@ -831,6 +831,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "hooks.mappings[].sessionMode": "Hook Mapping Session Mode",
   "hooks.mappings[].messageTemplate": "Hook Mapping Message Template",
   "hooks.mappings[].textTemplate": "Hook Mapping Text Template",
+  "hooks.mappings[].forEach": "Hook Mapping Fan-Out Key",
   "hooks.mappings[].deliver": "Hook Mapping Deliver Reply",
   "hooks.mappings[].allowUnsafeExternalContent": "Hook Mapping Allow Unsafe External Content",
   "hooks.mappings[].channel": "Hook Mapping Delivery Channel",

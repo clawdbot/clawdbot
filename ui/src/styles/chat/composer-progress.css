@@ -1,6 +1,7 @@
 .session-progress-card--composer {
   position: relative;
   display: block;
+  box-sizing: border-box;
   interpolate-size: allow-keywords;
   width: 100%;
   max-width: none;
@@ -11,11 +12,7 @@
   border-radius: calc(20px * var(--openclaw-corner-radius-scale))
     calc(20px * var(--openclaw-corner-radius-scale)) 0 0;
   corner-shape: superellipse(1.5);
-  background: color-mix(
-    in srgb,
-    var(--composer-attached-surface, var(--chat-composer-surface)) 90%,
-    transparent
-  );
+  background: var(--composer-attached-surface, var(--chat-composer-surface));
   -webkit-backdrop-filter: blur(8px);
   backdrop-filter: blur(8px);
 }
@@ -50,15 +47,59 @@
   margin-bottom: calc(0px - var(--chat-composer-shell-gap) - var(--chat-progress-underlap));
 }
 
+.agent-chat__goal-float {
+  --chat-goal-underlap: 18px;
+
+  position: relative;
+  z-index: 0;
+  width: 100%;
+  margin: 0 0 calc(0px - var(--chat-composer-shell-gap) - var(--chat-goal-underlap));
+}
+
+.agent-chat__goal-float .agent-chat__goal {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 0 0 var(--chat-goal-underlap);
+  border: 1px solid var(--chat-composer-hairline);
+  border-bottom: 0;
+  border-radius: calc(20px * var(--openclaw-corner-radius-scale))
+    calc(20px * var(--openclaw-corner-radius-scale)) 0 0;
+  corner-shape: superellipse(1.5);
+  background: var(--composer-attached-surface, var(--chat-composer-surface, var(--card)));
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+
+.agent-chat__goal-float .agent-chat__goal-row {
+  min-height: 42px;
+  padding: 8px var(--chat-stack-trailing-inset) 8px var(--chat-stack-leading-inset);
+}
+
+.agent-chat__goal-float + :is(.agent-chat__composer-errors, .agent-chat__input),
+.agent-chat__progress-float
+  + :is(.agent-chat__goal-float, .agent-chat__composer-errors, .agent-chat__input) {
+  position: relative;
+  z-index: 1;
+}
+
+.agent-chat__progress-float + .agent-chat__goal-float .agent-chat__goal {
+  border-top: 1px solid var(--chat-queue-divider);
+  border-radius: 0;
+}
+
 .session-progress-card__summary {
   display: grid;
-  grid-template-columns: 14px minmax(0, 1fr) auto;
+  grid-template-columns: 14px minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 12px;
   width: 100%;
   min-width: 0;
   min-height: 42px;
-  padding: 8px 18px;
+  /* The chevron is 18px while queue/goal actions occupy 24px. The 3px
+     compensation keeps all trailing centers on one vertical stack column. */
+  padding: 8px calc(var(--chat-stack-trailing-inset) + 3px) 8px var(--chat-stack-leading-inset);
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -86,18 +127,27 @@
 
 .session-progress-card__summary-collapsed {
   display: inline-grid;
-  grid-template-columns: minmax(0, auto) auto;
+  grid-template-columns: minmax(0, 1fr);
   justify-content: start;
   gap: 8px;
 }
 
 .session-progress-card__summary-expanded {
   display: none;
+  grid-column: 2 / 4;
   justify-content: space-between;
   gap: 16px;
 }
 
 .session-progress-card--composer[open] .session-progress-card__summary-collapsed {
+  display: none;
+}
+
+.session-progress-card--composer[open] .session-progress-card__summary-indicator {
+  display: none;
+}
+
+.session-progress-card--composer[open] .session-progress-card__summary-count--collapsed {
   display: none;
 }
 
@@ -145,7 +195,6 @@
   place-items: center;
   flex: 0 0 14px;
   color: var(--muted);
-  transform: translateX(-5px);
 }
 
 .session-progress-card__summary-indicator > svg {
@@ -188,12 +237,14 @@
 
 .session-progress-card--composer .session-progress-card__body {
   position: static;
+  display: flex;
+  flex-direction: column;
   width: 100%;
   min-width: 0;
-  max-height: min(360px, 48dvh);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: 0 18px 14px;
+  min-height: 0;
+  max-height: min(300px, 48dvh);
+  overflow: hidden;
+  padding: 0 18px 14px 13px;
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -220,6 +271,15 @@
   font-size: 13px;
 }
 
+.session-progress-card--composer .session-progress-card__steps {
+  min-height: 0;
+  max-height: min(calc(8.4em + 35px), 36dvh);
+  padding-inline-end: 4px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
 .session-progress-card--composer .session-progress-card__markdown progress {
   display: none;
 }
@@ -229,8 +289,7 @@
      the composer's rounded corners), so the highlight lives on the container to
      fill the whole shape; a summary-only fill leaves slivers of the resting
      background at those corners. */
-  .session-progress-card--composer:not([open]):hover,
-  .session-progress-card--composer[open] .session-progress-card__summary:hover {
+  .session-progress-card--composer:not([open]):hover {
     background: color-mix(
       in srgb,
       var(--text-strong) 5%,
@@ -239,13 +298,24 @@
   }
 }
 
-:root[data-theme-mode="light"] .session-progress-card__summary,
-:root[data-theme-mode="light"] .session-progress-card--composer .session-progress-card__body {
+:root[data-theme-mode="light"] .session-progress-card--composer {
   border-color: transparent;
   box-shadow:
     0 0 0 1px rgb(0 0 0 / 6%),
     0 1px 2px -1px rgb(0 0 0 / 6%),
     0 4px 14px rgb(0 0 0 / 7%);
+}
+
+.agent-chat__goal-float .agent-chat__goal--blocked {
+  border-color: color-mix(in srgb, var(--warn) 30%, var(--border));
+  background:
+    radial-gradient(
+      circle at 92% 0%,
+      color-mix(in srgb, var(--warn) 13%, transparent),
+      transparent 42%
+    ),
+    color-mix(in srgb, var(--warn) 8%, var(--composer-attached-surface));
+  box-shadow: 7px -7px 20px -18px color-mix(in srgb, var(--warn) 45%, transparent);
 }
 
 @media (prefers-reduced-motion: reduce) {

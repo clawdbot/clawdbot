@@ -101,38 +101,6 @@ html.openclaw-native-macos .new-session-page__incognito-rail {
   text-align: left;
 }
 
-.new-session-page__selection-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  min-height: 24px;
-  padding: 2px 8px;
-  border: 0;
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-  color: var(--accent);
-  font: inherit;
-  font-size: 11px;
-  cursor: var(--cursor-action);
-}
-
-.new-session-page__selection-status:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent) 20%, transparent);
-}
-
-.new-session-page__selection-status:disabled {
-  cursor: default;
-  opacity: 0.5;
-}
-
-.new-session-page__selection-status svg {
-  width: 12px;
-  height: 12px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.7px;
-}
-
 .new-session-page__incognito-notice {
   display: flex;
   align-items: center;
@@ -814,22 +782,23 @@ wa-popover.new-session-page__project-popover::part(body) {
   border-radius: var(--radius-full) 0 0 var(--radius-full);
 }
 
-wa-dropdown.new-session-page__start-menu {
-  display: inline-flex;
-}
-
 .new-session-page__start-menu-trigger {
-  width: 22px;
-  min-width: 22px;
-  height: 36px;
-  padding: 0 4px 0 2px;
+  width: 34px;
+  min-width: 34px;
+  padding: 0;
   border-left: 1px solid color-mix(in srgb, var(--primary-foreground) 28%, transparent);
   border-radius: 0 var(--radius-full) var(--radius-full) 0;
 }
 
 .new-session-page__start-menu-trigger svg {
-  width: 13px;
-  height: 13px;
+  width: 15px;
+  height: 15px;
+}
+
+.new-session-page__start-submit--blocked {
+  cursor: var(--cursor-action);
+  filter: saturate(0.45);
+  opacity: 0.48;
 }
 
 /* Keep a long first prompt visible before scrolling. The shared auto-height
@@ -869,13 +838,6 @@ wa-dropdown.new-session-page__start-menu {
 
 .new-session-page__composer[data-attachment-drop-active] > * {
   opacity: 0.5;
-}
-
-/* Reason shown after Enter/Start is pressed while a submit gate blocks it. */
-.new-session-page__blocked-submit {
-  padding: 4px var(--chat-box-inset) 0;
-  font-size: 12px;
-  color: var(--muted);
 }
 
 @media (prefers-reduced-motion: reduce) {

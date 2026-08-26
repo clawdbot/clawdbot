@@ -265,7 +265,7 @@ describe("existing-session interaction navigation guard", () => {
   });
 
   it.each(GUARDED_TARGET_REFRESH_ACTIONS)(
-    "resolves current target after guarded $kind interaction",
+    "does not adopt an unrelated target after guarded $kind interaction",
     async (body) => {
       routeState.profileCtx.listTabs
         .mockResolvedValueOnce([routeState.tab])
@@ -276,7 +276,7 @@ describe("existing-session interaction navigation guard", () => {
       expect(response.statusCode).toBe(200);
       expect(response.body).toMatchObject({
         ok: true,
-        targetId: "new-target",
+        targetId: routeState.tab.targetId,
         url: routeState.tab.url,
       });
     },

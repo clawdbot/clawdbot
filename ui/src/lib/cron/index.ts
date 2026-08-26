@@ -2,6 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveCronTriggerMinIntervalMs } from "../../../../src/config/cron-limits.js";
+import { isSystemOwnedCronPayloadKind } from "../../../../src/cron/types.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   CronJob,
@@ -63,9 +64,15 @@ export type CronFormState = {
   triggerOnce: boolean;
   sessionTarget: "main" | "isolated" | "current" | `session:${string}`;
   wakeMode: "next-heartbeat" | "now";
-  // "heartbeat" is system-owned and always payloadLocked; the form only
+  // System-owned payloads are always payloadLocked; the form only
   // displays it, never submits it.
-  payloadKind: "systemEvent" | "agentTurn" | "command" | "script" | "heartbeat";
+  payloadKind:
+    | "systemEvent"
+    | "agentTurn"
+    | "command"
+    | "script"
+    | "heartbeat"
+    | "skillCollectionReview";
   payloadLocked: boolean;
   payloadText: string;
   payloadModel: string;
@@ -105,7 +112,7 @@ function isCronPayload(value: unknown): value is CronPayload {
   if (value.kind === "script") {
     return typeof value.script === "string";
   }
-  if (value.kind === "heartbeat") {
+  if (isSystemOwnedCronPayloadKind(value.kind)) {
     return true;
   }
   return false;
@@ -922,7 +929,11 @@ function parseStaggerSchedule(
 }
 
 function isReadOnlyCronPayload(payload: CronPayload | null): boolean {
-  return payload?.kind === "command" || payload?.kind === "script" || payload?.kind === "heartbeat";
+  return (
+    payload?.kind === "command" ||
+    payload?.kind === "script" ||
+    isSystemOwnedCronPayloadKind(payload?.kind)
+  );
 }
 
 function jobToForm(job: CronJob, prev: CronFormState): CronFormState {

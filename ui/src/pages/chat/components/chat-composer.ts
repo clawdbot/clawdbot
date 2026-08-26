@@ -7,6 +7,7 @@ import type { SlashCommandDef } from "../../../lib/chat/commands.ts";
 import { resolveThinkingCommandArgOptionsForSession } from "../../../lib/chat/thinking.ts";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
 import { ComposerDictationController, insertComposerDictation } from "../composer-dictation.ts";
+import { normalizeChatComposerDraft } from "../composer-draft.ts";
 import { ComposerMicrophonePicker } from "../composer-microphone-picker.ts";
 import { isLargePastedTextAttachment } from "./chat-attachments.ts";
 import { renderContextNotice } from "./chat-composer-context.ts";
@@ -319,6 +320,10 @@ export function renderChatComposer(props: ChatComposerProps) {
     requestUpdate();
   };
   const handleBeforeInput = (event: InputEvent) => {
+    const target = event.target;
+    if (!(target instanceof HTMLTextAreaElement)) {
+      return;
+    }
     if (!state.composerComposing && !event.isComposing) {
       markComposerInputIntent(state, composerDraftKey(props));
     }
@@ -370,7 +375,12 @@ export function renderChatComposer(props: ChatComposerProps) {
     if (state.composingDraft?.key === draftKey) {
       state.composingDraft = null;
     }
-    commitComposerDraft(props, target.value);
+    const normalizedDraft = normalizeChatComposerDraft(target.value);
+    if (target.value !== normalizedDraft) {
+      target.value = normalizedDraft;
+      adjustTextareaHeight(target);
+    }
+    commitComposerDraft(props, normalizedDraft);
     props.onTypingChange?.(false);
   };
   const handleSend = (submissionAction?: Event) => {
@@ -385,6 +395,16 @@ export function renderChatComposer(props: ChatComposerProps) {
     props.onSend(undefined, submissionAction);
     syncComposerDraftAfterSend(state.composerTextarea);
   };
+  state.microphonePicker ??= new ComposerMicrophonePicker(requestUpdate);
+  const devicePicker = state.microphonePicker;
+  devicePicker.syncCatalog(props.gatewayClient ?? null, props.connected);
+  const startRealtimeTalk = () => {
+    if (devicePicker.realtimeStatus !== "ready") {
+      devicePicker.handleOpen();
+      return;
+    }
+    props.onToggleRealtimeTalk?.();
+  };
   const handleVoicePrimaryAction = () => {
     if (props.realtimeTalkActive) {
       props.onToggleRealtimeTalk?.();
@@ -395,10 +415,8 @@ export function renderChatComposer(props: ChatComposerProps) {
       handleSend();
       return;
     }
-    props.onToggleRealtimeTalk?.();
+    startRealtimeTalk();
   };
-  state.microphonePicker ??= new ComposerMicrophonePicker(requestUpdate);
-  const devicePicker = state.microphonePicker;
   const selectedMicrophoneId = loadSettings().realtimeTalkInputDeviceId?.trim() ?? "";
   const microphonePicker = props.onToggleRealtimeTalk
     ? renderMicrophonePicker({
@@ -409,6 +427,8 @@ export function renderChatComposer(props: ChatComposerProps) {
         voiceActive: Boolean(props.realtimeTalkActive),
         issue: devicePicker.issue,
         holdToDictate: props.composerHoldToRecord !== false,
+        realtimeStatus: devicePicker.realtimeStatus,
+        dictationStatus: devicePicker.dictationStatus,
         onOpen: devicePicker.handleOpen,
         onClose: devicePicker.handleClose,
         onSelect: (deviceId: string) => {
@@ -423,12 +443,15 @@ export function renderChatComposer(props: ChatComposerProps) {
           }
           requestUpdate();
         },
+        onOpenTalkSettings: props.onOpenTalkSettings,
+        onOpenDictationSettings: props.onOpenDictationSettings,
       })
     : nothing;
   const dictationOptions = {
     client: props.gatewayClient ?? null,
     connected: props.connected,
     enabled: props.composerHoldToRecord !== false,
+    dictationAvailable: devicePicker.dictationStatus === "ready",
     realtimeTalkActive: props.realtimeTalkActive === true,
     onCommit: (transcript: string) => {
       const target = state.composerTextarea;
@@ -460,14 +483,25 @@ export function renderChatComposer(props: ChatComposerProps) {
         textarea.selectionEnd = insertion.caret;
       });
     },
-    onError: (message: string) => props.onDictationError?.(message),
+    onError: (
+      message: string,
+      failure: { kind: "interrupted" | "start"; preservesText: boolean },
+    ) => {
+      const recovery =
+        failure.kind === "interrupted" && failure.preservesText
+          ? t("chat.composer.dictationInterruptedRecovery")
+          : t("chat.composer.dictationStartRecovery");
+      state.dictationError = `${message} ${recovery}`;
+      requestUpdate();
+    },
     onStateChange: requestUpdate,
+    onDictationUnavailable: devicePicker.handleOpen,
     // With an initial empty composer, this button retains the existing
     // send-after-typing behavior until the host rerenders the primary actions.
     // Once a draft is rendered, the separate voice control starts Talk directly.
     onTap:
       visibleDraft.trim() || props.attachments?.length
-        ? () => props.onToggleRealtimeTalk?.()
+        ? startRealtimeTalk
         : handleVoicePrimaryAction,
   };
   state.dictation ??= new ComposerDictationController(dictationOptions);
@@ -477,6 +511,10 @@ export function renderChatComposer(props: ChatComposerProps) {
       ? state.dictation
       : undefined;
   const handleDictationPointerDown = (event: PointerEvent) => {
+    if (state.dictationError) {
+      state.dictationError = null;
+      requestUpdate();
+    }
     const target = state.composerTextarea;
     state.dictationSelection = {
       start: target?.selectionStart ?? visibleDraft.length,
@@ -549,6 +587,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     composerControls,
     composerLeadControl,
     runStatusAnnouncement,
+    composerRunStatus,
     requestUpdate,
     sendShortcut,
     questionPanelProps,
