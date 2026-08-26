@@ -527,6 +527,20 @@ describe("setupWizardCommand", () => {
       expectedError: "Invalid --flow",
     },
     {
+      label: "remote mode without a URL",
+      options: { mode: "remote" as const },
+      expectedError: formatCliCommand(
+        "openclaw onboard --non-interactive --accept-risk --mode remote --remote-url ws://127.0.0.1:3000",
+      ),
+    },
+    {
+      label: "remote mode without a URL in JSON output",
+      options: { mode: "remote" as const, json: true },
+      expectedError: formatCliCommand(
+        "openclaw onboard --non-interactive --accept-risk --mode remote --remote-url ws://127.0.0.1:3000",
+      ),
+    },
+    {
       label: "malformed remote URL",
       options: { mode: "remote" as const, remoteUrl: "garbage" },
       expectedError: "URL must start with ws:// or wss://",
@@ -569,6 +583,9 @@ describe("setupWizardCommand", () => {
       await setupWizardCommand({ nonInteractive: true, acceptRisk: true, ...options }, runtime);
 
       expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(expectedError));
+      if ("json" in options && options.json) {
+        expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining(expectedError));
+      }
       expect(runtime.exit).toHaveBeenCalledWith(1);
       expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
       expect(mocks.handleReset).not.toHaveBeenCalled();
