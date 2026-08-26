@@ -50,9 +50,6 @@ struct MenuContent: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(self.connectionLabel)
                     self.statusLine(label: self.healthStatus.label, color: self.healthStatus.color)
-                    if let macNodeStatus = self.macNodeStatus {
-                        self.statusLine(label: macNodeStatus.label, color: macNodeStatus.color)
-                    }
                     if self.pairingPrompter.pendingCount > 0 {
                         self.pairingStatusLine(
                             label: "Pairing approval pending (\(self.pairingPrompter.pendingCount))")
@@ -66,6 +63,15 @@ struct MenuContent: View {
                 }
             }
             .disabled(self.state.connectionMode == .unconfigured)
+            // The native-menu extra style flattens multi-view Toggle labels to
+            // their first Text, so status sublines inside the label above never
+            // render. Node-channel state must be a top-level menu view to stay
+            // operator-visible (same pattern as the exec-approval error lines).
+            if let macNodeStatus = self.macNodeStatus {
+                Text(macNodeStatus.label)
+                    .font(.caption)
+                    .foregroundStyle(macNodeStatus.color)
+            }
 
             Divider()
             Toggle(isOn: self.heartbeatsBinding) {
