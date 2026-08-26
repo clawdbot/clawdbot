@@ -480,6 +480,16 @@ openclaw-chat-question-panel {
     box-shadow: none;
   }
 
+  :root[data-theme-mode="light"]
+    .agent-chat__composer-shell--question-composer
+    .agent-chat__input--dictating,
+  :root[data-theme-mode="light"]
+    .agent-chat__composer-shell--question-composer
+    .agent-chat__input--dictating:focus-within {
+    border-color: transparent;
+    box-shadow: none;
+  }
+
   .agent-chat__composer-shell--question-composer .chat-question-panel--collapsed {
     border-radius: var(--question-composer-radius) var(--question-composer-radius) 0 0;
     box-shadow: inset 0 -1px 0 var(--chat-composer-hairline);

@@ -346,6 +346,12 @@ suite.define(() => {
       await expect
         .poll(() => composer.evaluate((element) => getComputedStyle(element).boxShadow))
         .toBe("none");
+      await composer.evaluate((element) => {
+        element.classList.add("agent-chat__input--dictating");
+      });
+      await expect
+        .poll(() => composer.evaluate((element) => getComputedStyle(element).boxShadow))
+        .toBe("none");
     },
   );
 
