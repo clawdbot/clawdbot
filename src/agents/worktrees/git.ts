@@ -21,9 +21,14 @@ type WorktreeListEntry = {
   lockedReason?: string;
 };
 
-function gitEnvironment(env?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  // Gateway-run Git must never execute repository hooks or filesystem monitors;
-  // the admin-gated setup script is the sole intentional repository-code path.
+/**
+ * Gateway-run Git must never execute repository hooks or filesystem monitors;
+ * the admin-gated setup script is the sole intentional repository-code path.
+ * Exported so other Gateway-owned callers that must bypass the `runGit`/
+ * `requireGit*` wrappers (e.g. a buffered, non-throwing invocation with a
+ * custom timeout) still pin the same invariant instead of reimplementing it.
+ */
+export function gitEnvironment(env?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return {
     ...(env ?? process.env),
     GIT_CONFIG_COUNT: "2",
