@@ -149,13 +149,13 @@ extension NodeServiceManager {
     private static func errorMessage(from result: CommandResult, treatNotLoadedAsError: Bool) -> String? {
         if !result.success {
             return result.parsed.flatMap {
-                self.mergeHints(message: $0.error ?? $0.message, hints: $0.hints)
+                JSONObjectExtractionSupport.mergeHints(message: $0.error ?? $0.message, hints: $0.hints)
             } ?? result.message ?? "Node service command failed"
         }
         guard let parsed = result.parsed else { return nil }
         if treatNotLoadedAsError, parsed.result == "not-loaded" {
             let base = parsed.message ?? "Node service not loaded."
-            return self.mergeHints(message: base, hints: parsed.hints)
+            return JSONObjectExtractionSupport.mergeHints(message: base, hints: parsed.hints)
         }
         return nil
     }
@@ -182,17 +182,6 @@ extension NodeServiceManager {
             message: message,
             error: error,
             hints: hints)
-    }
-
-    private static func mergeHints(message: String?, hints: [String]) -> String? {
-        let trimmed = message?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let nonEmpty = trimmed?.isEmpty == false ? trimmed : nil
-        guard !hints.isEmpty else { return nonEmpty }
-        let hintText = hints.prefix(2).joined(separator: " · ")
-        if let nonEmpty {
-            return "\(nonEmpty) (\(hintText))"
-        }
-        return hintText
     }
 
     private static func launchdProgramArguments(
