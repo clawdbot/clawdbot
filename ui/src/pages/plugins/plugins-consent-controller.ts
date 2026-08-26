@@ -48,32 +48,25 @@ type PluginsConsentControllerHost = {
   requestUpdate: () => void;
 };
 
-function committedMutationMessage(success: string, refreshError: string | null): PluginRowMessage {
+function committedMutationMessage(
+  action: "installed" | "enabled" | "disabled",
+  result: PluginMutationResult,
+  refreshError: string | null,
+): PluginRowMessage {
+  const key = result.restartRequired
+    ? `pluginsPage.${action}Restart`
+    : `pluginsPage.${action}Success`;
+  const warnings = "warnings" in result ? (result.warnings ?? []) : [];
   return {
     kind: "success",
     text: [
-      success,
+      t(key, { name: result.plugin.name }),
+      ...warnings.map((warning) => formatUiExternalText(warning)),
       refreshError ? t("pluginsPage.configRefreshFailed", { error: refreshError }) : null,
     ]
       .filter(Boolean)
       .join("\n"),
   };
-}
-
-function mutationSuccessMessage(
-  action: "installed" | "enabled" | "disabled",
-  result: PluginMutationResult,
-): string {
-  const key = result.restartRequired
-    ? `pluginsPage.${action}Restart`
-    : `pluginsPage.${action}Success`;
-  const warnings = "warnings" in result ? (result.warnings ?? []) : [];
-  return [
-    t(key, { name: result.plugin.name }),
-    ...warnings.map((warning) => formatUiExternalText(warning)),
-  ]
-    .filter(Boolean)
-    .join("\n");
 }
 
 export class PluginsConsentController {
@@ -160,7 +153,7 @@ export class PluginsConsentController {
         ? this.host.getSearchResults()?.find((entry) => entry.package.name === request.packageName)
             ?.package
         : undefined;
-    this.open({ kind: "install", request, installIdentity }, pluginId, {
+    const fallback = {
       name:
         catalogPlugin?.name ??
         searchPackage?.displayName ??
@@ -174,44 +167,42 @@ export class PluginsConsentController {
       ...(searchPackage?.verificationTier
         ? { verificationTier: searchPackage.verificationTier }
         : {}),
-    });
+    };
+    this.open({ kind: "install", request, installIdentity }, pluginId, undefined, fallback);
   }
 
   private open(
     intent: PluginConsentIntent,
     pluginId: string | null,
-    fallback: PluginConsentState["fallback"],
     details?: CapabilityConsentErrorDetails,
+    fallback?: PluginConsentState["fallback"],
   ): void {
     if (!this.host.canMutate()) {
       return;
+    }
+    let resolvedFallback = fallback;
+    if (!resolvedFallback && pluginId) {
+      const plugin = this.host.getResult()?.plugins.find((entry) => entry.id === pluginId);
+      resolvedFallback = {
+        name: plugin?.name ?? pluginId,
+        ...(plugin?.version ? { version: plugin.version } : {}),
+        ...(plugin?.origin === "official" ? { official: true } : {}),
+      };
     }
     this.host.closeDetails();
     this.inspection = null;
     this.inspectionError = null;
     this.inspectionLoading = Boolean(pluginId);
-    this.consent = { intent, pluginId, fallback, ...(details ? { details } : {}) };
+    this.consent = {
+      intent,
+      pluginId,
+      fallback: resolvedFallback ?? null,
+      ...(details ? { details } : {}),
+    };
     this.host.requestUpdate();
     if (pluginId) {
       void this.inspect();
     }
-  }
-
-  private openServerConsent(
-    intent: PluginConsentIntent,
-    details: CapabilityConsentErrorDetails,
-  ): void {
-    const plugin = this.host.getResult()?.plugins.find((entry) => entry.id === details.pluginId);
-    this.open(
-      intent,
-      details.pluginId,
-      {
-        name: plugin?.name ?? details.pluginId,
-        ...(plugin?.version ? { version: plugin.version } : {}),
-        ...(plugin?.origin === "official" ? { official: true } : {}),
-      },
-      details,
-    );
   }
 
   close(): void {
@@ -292,14 +283,18 @@ export class PluginsConsentController {
         }
         this.host.setMessage(
           installedPluginKey,
-          committedMutationMessage(mutationSuccessMessage("installed", result), refreshError),
+          committedMutationMessage("installed", result, refreshError),
         );
         await this.host.refreshCatalogAfterMutation(client);
       },
       (error) => {
         const consentDetails = readPluginCapabilityConsentError(error);
         if (consentDetails) {
-          this.openServerConsent({ kind: "install", request, installIdentity }, consentDetails);
+          this.open(
+            { kind: "install", request, installIdentity },
+            consentDetails.pluginId,
+            consentDetails,
+          );
           return;
         }
         const policyWarning = readPluginInstallPolicyWarning(error);
@@ -338,11 +333,7 @@ export class PluginsConsentController {
     const plugin = this.host.getResult()?.plugins.find((entry) => entry.id === pluginId);
     // Bundled code ships with the release; external code needs an explicit consent moment.
     if (enabled && plugin && plugin.origin !== "bundled") {
-      this.open({ kind: "enable", pluginId, rowKey: key }, pluginId, {
-        name: plugin.name,
-        ...(plugin.version ? { version: plugin.version } : {}),
-        ...(plugin.origin === "official" ? { official: true } : {}),
-      });
+      this.open({ kind: "enable", pluginId, rowKey: key }, pluginId);
       return;
     }
     await this.setEnabled(pluginId, enabled, key);
@@ -361,10 +352,7 @@ export class PluginsConsentController {
         this.host.applyMutationResult(result);
         this.host.setMessage(
           key,
-          committedMutationMessage(
-            mutationSuccessMessage(enabled ? "enabled" : "disabled", result),
-            refreshError,
-          ),
+          committedMutationMessage(enabled ? "enabled" : "disabled", result, refreshError),
         );
         await this.host.refreshCatalogAfterMutation(client);
         if (isCurrent() && !result.restartRequired) {
@@ -375,7 +363,7 @@ export class PluginsConsentController {
       (error) => {
         const details = readPluginCapabilityConsentError(error);
         if (enabled && details) {
-          this.openServerConsent({ kind: "enable", pluginId, rowKey: key }, details);
+          this.open({ kind: "enable", pluginId, rowKey: key }, details.pluginId, details);
           return;
         }
         this.host.setMessage(key, { kind: "error", text: formatUiError(error) });

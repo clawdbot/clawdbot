@@ -912,6 +912,7 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
 
   function discoverBundleInRoot(params: {
     rootDir: string;
+    hasPackageExtensions: boolean;
     origin: PluginOrigin;
     workspaceDir?: string;
     installOwner?: string;
@@ -919,7 +920,7 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
     manifest?: PackageManifest | null;
   }): "added" | "invalid" | "none" {
     return withPluginScanExistenceCache(() => {
-      const bundleFormat = detectBundleManifestFormat(params.rootDir);
+      const bundleFormat = detectBundleManifestFormat(params.rootDir, params.hasPackageExtensions);
       if (!bundleFormat) {
         return "none";
       }
@@ -1109,6 +1110,7 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
     if (
       discoverBundleInRoot({
         rootDir: dir,
+        hasPackageExtensions: extensions.length > 0,
         origin: params.origin,
         workspaceDir: params.workspaceDir,
         ...(params.installOwner ? { installOwner: params.installOwner } : {}),

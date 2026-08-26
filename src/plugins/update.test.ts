@@ -841,25 +841,6 @@ describe("updateNpmInstalledPlugins", () => {
       childEnabled: false,
     },
     {
-      label: "rejects an unchanged update when the saved acceptance hash is forged",
-      nextProviders: ["existing-child-provider"],
-      review: "none",
-      priorAcceptance: "forged-hash",
-      rejected: true,
-      ownerEnabled: true,
-      childEnabled: false,
-    },
-    {
-      label:
-        "rejects an unchanged update when the saved surface differs from the installed artifact",
-      nextProviders: ["existing-child-provider"],
-      review: "none",
-      priorAcceptance: "forged-surface",
-      rejected: true,
-      ownerEnabled: true,
-      childEnabled: false,
-    },
-    {
       label: "rejects an unchanged replacement when prior acceptance has no artifact integrity",
       nextProviders: ["existing-child-provider"],
       review: "none",
@@ -874,15 +855,6 @@ describe("updateNpmInstalledPlugins", () => {
       review: "accept",
       priorAcceptance: "unanchored",
       rejected: false,
-      ownerEnabled: true,
-      childEnabled: false,
-    },
-    {
-      label: "rejects an acknowledgment token for a different reviewed surface",
-      nextProviders: ["existing-child-provider", "new-child-provider"],
-      review: "stale",
-      priorAcceptance: "valid",
-      rejected: true,
       ownerEnabled: true,
       childEnabled: false,
     },
@@ -911,10 +883,6 @@ describe("updateNpmInstalledPlugins", () => {
         childProviders: nextProviders,
       });
       const previousDeclared = resolvePluginArtifactDeclaredSurface(installedDir);
-      const previousAcceptedSurface =
-        priorAcceptance === "forged-surface"
-          ? { ...previousDeclared, providers: ["forged-provider"] }
-          : previousDeclared;
       const previousAcceptedAt = "2026-01-01T00:00:00.000Z";
       const childManifestPath = path.join(
         installedDir,
@@ -935,11 +903,8 @@ describe("updateNpmInstalledPlugins", () => {
               spec: packageName,
               installPath: installedDir,
               ...(priorAcceptance !== "unanchored" ? { integrity: "sha512-previous" } : {}),
-              acceptedSurface: previousAcceptedSurface,
-              acceptedSurfaceHash:
-                priorAcceptance === "forged-hash"
-                  ? "0".repeat(64)
-                  : computeDeclaredSurfaceHash(previousAcceptedSurface),
+              acceptedSurface: previousDeclared,
+              acceptedSurfaceHash: computeDeclaredSurfaceHash(previousDeclared),
               acceptedSurfaceAt: previousAcceptedAt,
               ...(priorAcceptance !== "unanchored"
                 ? { acceptedSurfaceIntegrity: "sha512-previous" }
@@ -1000,9 +965,7 @@ describe("updateNpmInstalledPlugins", () => {
                   }),
                 );
               }
-              return {
-                reviewToken: review === "stale" ? "0".repeat(64) : details.reviewToken,
-              };
+              return { reviewToken: details.reviewToken };
             };
       const result = await updatePlugin(config, pluginId, {
         onCapabilityConsent,

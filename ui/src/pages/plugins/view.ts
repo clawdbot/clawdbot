@@ -32,10 +32,13 @@ import {
   type PluginsInspectResult,
 } from "../../lib/plugins/index.ts";
 import {
+  pluginOriginLabel,
+  pluginVerificationLabel,
   renderArtTile,
   renderPluginConsentDialog,
   renderPluginDeclaredCapabilities,
   renderPluginGrants,
+  renderPluginMetaRow,
   type PluginConsentState,
 } from "./consent-dialog.ts";
 import type { PluginInstallPolicyWarningDetails } from "./install-policy-warning.ts";
@@ -351,23 +354,6 @@ function stateStatus(plugin: PluginCatalogItem) {
  * healthy states, so only the error status earns a pill next to the actions. */
 function rowStateStatus(plugin: PluginCatalogItem) {
   return plugin.state === "error" ? stateStatus(plugin) : nothing;
-}
-
-function originLabel(origin: string): string {
-  switch (origin) {
-    case "bundled":
-      return t("pluginsPage.included");
-    case "global":
-      return t("pluginsPage.global");
-    case "workspace":
-      return t("pluginsPage.workspace");
-    case "config":
-      return t("pluginsPage.config");
-    case "official":
-      return t("pluginsPage.official");
-    default:
-      return origin;
-  }
 }
 
 function requestInstall(
@@ -802,7 +788,7 @@ function renderPluginRow(
           ${plugin.description || t("pluginsPage.optionalCapability")}
         </span>
         ${renderMetaLine([
-          plugin.origin ? originLabel(plugin.origin) : nothing,
+          plugin.origin ? pluginOriginLabel(plugin.origin) : nothing,
           includePackageName && plugin.packageName
             ? html`<span class="plugins-meta__mono">${plugin.packageName}</span>`
             : nothing,
@@ -1026,10 +1012,6 @@ function findInstalledSearchPlugin(
   );
 }
 
-function verificationLabel(tier: string): string {
-  return tier === "source-linked" ? t("pluginsPage.verifiedSource") : tier;
-}
-
 function renderClawHubResult(item: PluginSearchResult, props: PluginsViewProps): TemplateResult {
   const pkg = item.package;
   const installed = findInstalledSearchPlugin(item, props.result?.plugins ?? []);
@@ -1066,7 +1048,7 @@ function renderClawHubResult(item: PluginSearchResult, props: PluginsViewProps):
         <span class="settings-row__desc">${pkg.summary || pkg.name}</span>
         ${renderMetaLine([
           pkg.isOfficial ? t("pluginsPage.official") : nothing,
-          pkg.verificationTier ? verificationLabel(pkg.verificationTier) : nothing,
+          pkg.verificationTier ? pluginVerificationLabel(pkg.verificationTier) : nothing,
           typeof pkg.downloads === "number"
             ? html`<span class="plugins-downloads">
                 <span aria-hidden="true">${icons.download}</span>
@@ -1189,15 +1171,6 @@ function renderConnectorSection(
 
 /* ---------------------------------- detail overlay ---------------------------------- */
 
-function detailMetaRow(label: string, value: string | TemplateResult) {
-  return html`
-    <div class="plugins-detail__meta-row">
-      <span class="plugins-detail__meta-label">${label}</span>
-      <span class="plugins-detail__meta-value">${value}</span>
-    </div>
-  `;
-}
-
 function renderDetailOverlay(props: PluginsViewProps) {
   const plugin = props.detailPluginId
     ? props.result?.plugins.find((entry) => entry.id === props.detailPluginId)
@@ -1296,18 +1269,21 @@ function renderDetailOverlay(props: PluginsViewProps) {
           ${renderRowMessage(key, props.messages[key], busy, props, installIdentity)}
           <div class="plugins-detail__meta">
             ${plugin.origin
-              ? detailMetaRow(t("pluginsPage.detailOrigin"), originLabel(plugin.origin))
+              ? renderPluginMetaRow(t("pluginsPage.detailOrigin"), pluginOriginLabel(plugin.origin))
               : nothing}
             ${plugin.category
-              ? detailMetaRow(t("pluginsPage.detailCategory"), pluginCategoryLabel(plugin.category))
+              ? renderPluginMetaRow(
+                  t("pluginsPage.detailCategory"),
+                  pluginCategoryLabel(plugin.category),
+                )
               : nothing}
             ${plugin.packageName
-              ? detailMetaRow(
+              ? renderPluginMetaRow(
                   t("pluginsPage.detailPackage"),
                   html`<code>${plugin.packageName}</code>`,
                 )
               : nothing}
-            ${detailMetaRow(t("pluginsPage.detailPluginId"), html`<code>${plugin.id}</code>`)}
+            ${renderPluginMetaRow(t("pluginsPage.detailPluginId"), html`<code>${plugin.id}</code>`)}
           </div>
           ${plugin.installed
             ? html`<section class="plugins-detail__capabilities">

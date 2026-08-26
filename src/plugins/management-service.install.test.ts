@@ -1,14 +1,13 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { computeDeclaredSurfaceHash } from "./capability-consent.js";
 import { buildPluginCapabilitySummary } from "./capability-summary.js";
 import {
   configSnapshot,
   hostedFeedDiffsEntry,
   metadataSnapshot,
-  reviewManagedPluginTestArtifact,
 } from "./management-service.test-helpers.js";
-import { cleanupTrackedTempDirs } from "./test-helpers/fs-fixtures.js";
+import { invokePluginArtifactInstallMock } from "./test-helpers/install-fixtures.js";
 
 const mocks = vi.hoisted(() => ({
   applyUninstall: vi.fn(),
@@ -61,7 +60,10 @@ vi.mock("./plugin-metadata-snapshot.js", () => ({
 }));
 
 vi.mock("./clawhub.js", () => ({
-  installPluginFromClawHub: (...args: unknown[]) => mocks.clawhubInstall(...args),
+  installPluginFromClawHub: (params: Parameters<typeof invokePluginArtifactInstallMock>[1]) =>
+    invokePluginArtifactInstallMock(mocks.clawhubInstall, params, {
+      manifest: { providers: [], channels: [], channelConfigs: {}, providerAuthChoices: [] },
+    }),
 }));
 
 vi.mock("./install.js", () => ({
@@ -97,7 +99,6 @@ function mockHostedOfficialCatalog(entries: unknown[]) {
   });
 }
 
-const trackedArtifactDirs: string[] = [];
 const emptyArtifactAcknowledgment = {
   reviewToken: computeDeclaredSurfaceHash(
     buildPluginCapabilitySummary({ manifest: {}, origin: "global" }).declared,
@@ -105,27 +106,22 @@ const emptyArtifactAcknowledgment = {
 };
 
 function mockClawHubInstall(pluginId: string, packageName: string, targetDir?: string) {
-  mocks.clawhubInstall.mockImplementation(async (params) => {
-    await reviewManagedPluginTestArtifact(params, pluginId, trackedArtifactDirs);
-    return {
-      ok: true,
-      pluginId,
-      targetDir: targetDir ?? `/tmp/extensions/${pluginId}`,
-      extensions: ["index.js"],
-      packageName,
-      clawhub: {
-        source: "clawhub",
-        clawhubUrl: "https://clawhub.ai",
-        clawhubPackage: packageName,
-        clawhubFamily: "code-plugin",
-      },
-    };
+  mocks.clawhubInstall.mockResolvedValue({
+    ok: true,
+    pluginId,
+    targetDir: targetDir ?? `/tmp/extensions/${pluginId}`,
+    extensions: ["index.js"],
+    packageName,
+    clawhub: {
+      source: "clawhub",
+      clawhubUrl: "https://clawhub.ai",
+      clawhubPackage: packageName,
+      clawhubFamily: "code-plugin",
+    },
   });
 }
 
 describe("managed plugin installation", () => {
-  afterEach(() => cleanupTrackedTempDirs(trackedArtifactDirs));
-
   beforeEach(() => {
     clearManagedPluginOfficialCatalogCache();
     for (const mock of Object.values(mocks)) {
@@ -311,11 +307,6 @@ describe("managed plugin installation", () => {
           reason: "Review installed dependencies",
         }),
       ).resolves.toEqual({ status: "approved" });
-      await reviewManagedPluginTestArtifact(
-        params as Parameters<typeof reviewManagedPluginTestArtifact>[0],
-        "diffs",
-        trackedArtifactDirs,
-      );
       return {
         ok: true,
         pluginId: "diffs",

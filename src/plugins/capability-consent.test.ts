@@ -226,6 +226,12 @@ describe("plugin capability consent", () => {
       current: false,
     },
     {
+      label: "a forged acceptance hash",
+      record: { acceptedSurfaceHash: "0".repeat(64) },
+      declared: { tools: ["read"] },
+      current: false,
+    },
+    {
       label: "a changed accepted snapshot",
       record: { acceptedSurface: createDeclaredSurface({ tools: ["write"] }) },
       declared: { tools: ["read"] },

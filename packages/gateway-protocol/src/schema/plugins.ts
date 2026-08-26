@@ -1,7 +1,8 @@
 // Gateway Protocol schema module defines protocol validation shapes.
-import type { Static } from "typebox";
+import type { Static, TSchema } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
+import type { PluginDeclaredSurfaceGroup } from "./plugin-declared-surface-groups.js";
 import { NonEmptyString } from "./primitives.js";
 
 /**
@@ -181,7 +182,7 @@ export const PluginDeclaredSurfaceSchema = closedObject({
   skills: Type.Array(NonEmptyString),
   /** Dot paths from configContracts.dangerousFlags. */
   dangerousConfigFlags: Type.Array(NonEmptyString),
-});
+} satisfies Record<PluginDeclaredSurfaceGroup, TSchema>);
 
 /** Operator-granted capability flags with effective values. */
 export const PluginOperatorGrantsSchema = closedObject({

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { PLUGIN_DECLARED_SURFACE_GROUPS } from "../../packages/gateway-protocol/src/schema/plugin-declared-surface-groups.js";
 import type {
   PluginInspectSource,
   PluginInstallTrust,
@@ -44,19 +45,6 @@ import {
   type PluginMetadataSnapshot,
 } from "./plugin-metadata-snapshot.js";
 
-const DECLARED_SURFACE_GROUPS = [
-  "channels",
-  "providers",
-  "tools",
-  "contracts",
-  "hooks",
-  "mcpServers",
-  "cliCommands",
-  "cliBackends",
-  "skills",
-  "dangerousConfigFlags",
-] as const satisfies readonly (keyof PluginAcceptedDeclaredSurface)[];
-
 export function mergePluginDeclaredSurfaces(
   surfaces: Iterable<PluginAcceptedDeclaredSurface>,
 ): PluginAcceptedDeclaredSurface {
@@ -73,11 +61,11 @@ export function mergePluginDeclaredSurfaces(
     dangerousConfigFlags: [],
   };
   for (const surface of surfaces) {
-    for (const group of DECLARED_SURFACE_GROUPS) {
+    for (const group of PLUGIN_DECLARED_SURFACE_GROUPS) {
       merged[group].push(...surface[group]);
     }
   }
-  for (const group of DECLARED_SURFACE_GROUPS) {
+  for (const group of PLUGIN_DECLARED_SURFACE_GROUPS) {
     merged[group] = [...new Set(merged[group])].toSorted();
   }
   return merged;
@@ -150,15 +138,10 @@ function resolvePluginArtifactManifests(rootDir: string, env: NodeJS.ProcessEnv 
     throw new Error(`Plugin artifact has no valid plugin manifest: ${artifactRoot}`);
   }
   return Array.from(manifestRoots, (manifestRoot) => {
-    const hasNativeManifest = fs.existsSync(path.join(manifestRoot, PLUGIN_MANIFEST_FILENAME));
-    const bundleFormat = detectBundleManifestFormat(manifestRoot);
-    // Runtime discovery prioritizes package extensions over bundles, then bundles over native fallback.
-    const loaded =
-      hasPackageExtensions && hasNativeManifest
-        ? loadPluginManifest(manifestRoot)
-        : bundleFormat
-          ? loadBundleManifest({ rootDir: manifestRoot, bundleFormat })
-          : loadPluginManifest(manifestRoot);
+    const bundleFormat = detectBundleManifestFormat(manifestRoot, hasPackageExtensions);
+    const loaded = bundleFormat
+      ? loadBundleManifest({ rootDir: manifestRoot, bundleFormat })
+      : loadPluginManifest(manifestRoot);
     if (!loaded.ok) {
       throw new Error(loaded.error);
     }
@@ -180,7 +163,7 @@ export function resolvePluginArtifactDeclaredSurface(
 
 export function computeDeclaredSurfaceHash(declared: PluginAcceptedDeclaredSurface): string {
   const canonical = Object.fromEntries(
-    DECLARED_SURFACE_GROUPS.map((group) => [group, declared[group].toSorted()]),
+    PLUGIN_DECLARED_SURFACE_GROUPS.map((group) => [group, declared[group].toSorted()]),
   );
   return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
 }
@@ -190,7 +173,7 @@ export function diffDeclaredSurfaceWidening(
   next: PluginAcceptedDeclaredSurface,
 ): { widened: Partial<PluginAcceptedDeclaredSurface>; hasWidening: boolean } {
   const widened: Partial<PluginAcceptedDeclaredSurface> = {};
-  for (const group of DECLARED_SURFACE_GROUPS) {
+  for (const group of PLUGIN_DECLARED_SURFACE_GROUPS) {
     const previousValues = new Set(previous[group]);
     const added = next[group].filter((value) => !previousValues.has(value)).toSorted();
     if (added.length > 0) {

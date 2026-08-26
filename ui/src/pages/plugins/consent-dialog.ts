@@ -1,5 +1,9 @@
 import { html, nothing, type TemplateResult } from "lit";
 import type { CapabilityConsentErrorDetails } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
+import {
+  PLUGIN_DECLARED_SURFACE_GROUPS,
+  type PluginDeclaredSurfaceGroup,
+} from "../../../../packages/gateway-protocol/src/schema/plugin-declared-surface-groups.js";
 import { icons } from "../../components/icons.ts";
 import "../../components/modal-dialog.ts";
 import { renderSettingsStatus } from "../../components/settings-ui.ts";
@@ -85,7 +89,11 @@ export function renderArtTile(
   </span>`;
 }
 
-function capabilityRow(label: string, value: TemplateResult | string, warning = false) {
+export function renderPluginMetaRow(
+  label: string,
+  value: TemplateResult | string,
+  warning = false,
+) {
   return html`
     <div class="plugins-detail__meta-row ${warning ? "plugins-consent__row--warning" : ""}">
       <span class="plugins-detail__meta-label">${label}</span>
@@ -98,27 +106,36 @@ function renderCapabilityItems(items: readonly string[]) {
   return html`<span class="plugins-consent__items">${items.join(", ")}</span>`;
 }
 
-function capabilityGroups(): ReadonlyArray<readonly [keyof PluginDeclaredSurface, string]> {
-  return [
-    ["channels", t("pluginsPage.categoryChannels")],
-    ["providers", t("pluginsPage.categoryProviders")],
-    ["tools", t("pluginsPage.categoryTools")],
-    ["contracts", t("pluginConsent.contracts")],
-    ["hooks", t("pluginConsent.hooks")],
-    ["mcpServers", t("pluginConsent.mcpServers")],
-    ["cliCommands", t("pluginConsent.cliCommands")],
-    ["cliBackends", t("pluginConsent.cliBackends")],
-    ["skills", t("pluginConsent.skills")],
-    ["dangerousConfigFlags", t("pluginConsent.dangerousFlags")],
-  ];
+const CAPABILITY_GROUP_LABELS = {
+  channels: "pluginsPage.categoryChannels",
+  providers: "pluginsPage.categoryProviders",
+  tools: "pluginsPage.categoryTools",
+  contracts: "pluginConsent.contracts",
+  hooks: "pluginConsent.hooks",
+  mcpServers: "pluginConsent.mcpServers",
+  cliCommands: "pluginConsent.cliCommands",
+  cliBackends: "pluginConsent.cliBackends",
+  skills: "pluginConsent.skills",
+  dangerousConfigFlags: "pluginConsent.dangerousFlags",
+} as const satisfies Record<PluginDeclaredSurfaceGroup, string>;
+
+function renderCapabilityRows(surface: Partial<PluginDeclaredSurface>, widened = false) {
+  return PLUGIN_DECLARED_SURFACE_GROUPS.flatMap((group) => {
+    const items = surface[group];
+    return items?.length && (widened || group !== "dangerousConfigFlags")
+      ? [
+          renderPluginMetaRow(
+            t(CAPABILITY_GROUP_LABELS[group]),
+            renderCapabilityItems(items),
+            widened,
+          ),
+        ]
+      : [];
+  });
 }
 
 export function renderPluginDeclaredCapabilities(declared: PluginDeclaredSurface): TemplateResult {
-  const rows = capabilityGroups().flatMap(([key, label]) =>
-    key !== "dangerousConfigFlags" && declared[key].length > 0
-      ? [capabilityRow(label, renderCapabilityItems(declared[key]))]
-      : [],
-  );
+  const rows = renderCapabilityRows(declared);
   return html`
     <section class="plugins-consent__section">
       <h3>${t("pluginConsent.declaredTitle")}</h3>
@@ -127,10 +144,10 @@ export function renderPluginDeclaredCapabilities(declared: PluginDeclaredSurface
         ? html`<div class="plugins-consent__rows">${rows}</div>`
         : html`<p class="plugins-consent__hint">${t("pluginConsent.declaredEmpty")}</p>`}
       ${declared.hooks.length === 0
-        ? capabilityRow(t("pluginConsent.hooks"), t("pluginConsent.runtimeHooks"))
+        ? renderPluginMetaRow(t("pluginConsent.hooks"), t("pluginConsent.runtimeHooks"))
         : nothing}
       ${declared.dangerousConfigFlags.length > 0
-        ? capabilityRow(
+        ? renderPluginMetaRow(
             t("pluginConsent.dangerousFlags"),
             renderCapabilityItems(declared.dangerousConfigFlags),
             true,
@@ -144,10 +161,7 @@ function renderWidenedCapabilities(details: CapabilityConsentErrorDetails) {
   if (!details.widened) {
     return nothing;
   }
-  const rows = capabilityGroups().flatMap(([key, label]) => {
-    const added = details.widened?.[key];
-    return added?.length ? [capabilityRow(label, renderCapabilityItems(added), true)] : [];
-  });
+  const rows = renderCapabilityRows(details.widened, true);
   if (rows.length === 0) {
     return nothing;
   }
@@ -166,51 +180,38 @@ function renderWidenedCapabilities(details: CapabilityConsentErrorDetails) {
 }
 
 function grantValue(grant: PluginHookGrant, on: string, off: string) {
-  return `${grant.effective ? on : off} ${t(
+  return `${t(grant.effective ? on : off)} ${t(
     grant.configured === undefined ? "pluginConsent.grantDefault" : "pluginConsent.grantConfigured",
   )}`;
+}
+
+function modelOverrideValue(key: string, allowed: boolean | undefined): string | undefined {
+  return allowed === undefined
+    ? undefined
+    : t(key, { value: t(allowed ? "pluginConsent.allowed" : "pluginConsent.blocked") });
 }
 
 function modelOverrideSummary(
   overrides: NonNullable<PluginOperatorGrants["llm"] | PluginOperatorGrants["subagent"]>,
 ): string {
-  const values: string[] = [];
-  if (overrides.allowModelOverride !== undefined) {
-    values.push(
-      t("pluginConsent.modelOverride", {
-        value: t(overrides.allowModelOverride ? "pluginConsent.allowed" : "pluginConsent.blocked"),
-      }),
-    );
-  }
-  if (overrides.allowedModels?.length) {
-    values.push(t("pluginConsent.allowedModels", { models: overrides.allowedModels.join(", ") }));
-  }
-  if ("allowedCompletionModels" in overrides && overrides.allowedCompletionModels?.length) {
-    values.push(
-      t("pluginConsent.allowedCompletionModels", {
-        models: overrides.allowedCompletionModels.join(", "),
-      }),
-    );
-  }
-  if ("allowAuthProfileOverride" in overrides && overrides.allowAuthProfileOverride !== undefined) {
-    values.push(
-      t("pluginConsent.authProfileOverride", {
-        value: t(
-          overrides.allowAuthProfileOverride ? "pluginConsent.allowed" : "pluginConsent.blocked",
-        ),
-      }),
-    );
-  }
-  if ("allowAgentIdOverride" in overrides && overrides.allowAgentIdOverride !== undefined) {
-    values.push(
-      t("pluginConsent.agentIdOverride", {
-        value: t(
-          overrides.allowAgentIdOverride ? "pluginConsent.allowed" : "pluginConsent.blocked",
-        ),
-      }),
-    );
-  }
-  return values.join(" · ") || t("pluginConsent.noOverrides");
+  const values = [
+    modelOverrideValue("pluginConsent.modelOverride", overrides.allowModelOverride),
+    overrides.allowedModels?.length
+      ? t("pluginConsent.allowedModels", { models: overrides.allowedModels.join(", ") })
+      : undefined,
+    "allowedCompletionModels" in overrides && overrides.allowedCompletionModels?.length
+      ? t("pluginConsent.allowedCompletionModels", {
+          models: overrides.allowedCompletionModels.join(", "),
+        })
+      : undefined,
+    "allowAuthProfileOverride" in overrides
+      ? modelOverrideValue("pluginConsent.authProfileOverride", overrides.allowAuthProfileOverride)
+      : undefined,
+    "allowAgentIdOverride" in overrides
+      ? modelOverrideValue("pluginConsent.agentIdOverride", overrides.allowAgentIdOverride)
+      : undefined,
+  ];
+  return values.filter(Boolean).join(" · ") || t("pluginConsent.noOverrides");
 }
 
 export function renderPluginGrants(grants: PluginOperatorGrants, origin?: string): TemplateResult {
@@ -220,18 +221,18 @@ export function renderPluginGrants(grants: PluginOperatorGrants, origin?: string
       <h3>${t("pluginConsent.grantsTitle")}</h3>
       <p class="plugins-consent__description">${t("pluginConsent.grantsDescription")}</p>
       <div class="plugins-consent__rows">
-        ${capabilityRow(
+        ${renderPluginMetaRow(
           t("pluginConsent.promptInjection"),
           grantValue(
             grants.hooks.allowPromptInjection,
-            t("pluginConsent.allowed"),
-            t("pluginConsent.blocked"),
+            "pluginConsent.allowed",
+            "pluginConsent.blocked",
           ),
         )}
-        ${capabilityRow(
+        ${renderPluginMetaRow(
           t("pluginConsent.conversationAccess"),
           html`
-            ${grantValue(conversation, t("pluginConsent.on"), t("pluginConsent.off"))}
+            ${grantValue(conversation, "pluginConsent.on", "pluginConsent.off")}
             ${!conversation.effective &&
             conversation.configured === undefined &&
             origin !== "bundled"
@@ -242,10 +243,10 @@ export function renderPluginGrants(grants: PluginOperatorGrants, origin?: string
           `,
         )}
         ${grants.llm
-          ? capabilityRow(t("pluginConsent.modelOverrides"), modelOverrideSummary(grants.llm))
+          ? renderPluginMetaRow(t("pluginConsent.modelOverrides"), modelOverrideSummary(grants.llm))
           : nothing}
         ${grants.subagent
-          ? capabilityRow(
+          ? renderPluginMetaRow(
               t("pluginConsent.subagentModelOverrides"),
               modelOverrideSummary(grants.subagent),
             )
@@ -255,47 +256,40 @@ export function renderPluginGrants(grants: PluginOperatorGrants, origin?: string
   `;
 }
 
-function sourceKindLabel(kind: PluginInspectSource["kind"]): string {
-  switch (kind) {
-    case "bundled":
-      return t("pluginsPage.included");
-    case "official-catalog":
-      return t("pluginsPage.official");
-    case "clawhub":
-      return t("pluginConsent.sourceClawHub");
-    case "npm":
-      return t("pluginConsent.sourceNpm");
-    case "git":
-      return t("pluginConsent.sourceGit");
-    case "path":
-      return t("pluginConsent.sourcePath");
-    case "archive":
-      return t("pluginConsent.sourceArchive");
-    case "marketplace":
-      return t("pluginConsent.sourceMarketplace");
-    default:
-      return kind satisfies never;
-  }
-}
+const SOURCE_KIND_LABELS = {
+  bundled: "pluginsPage.included",
+  "official-catalog": "pluginsPage.official",
+  clawhub: "pluginConsent.sourceClawHub",
+  npm: "pluginConsent.sourceNpm",
+  git: "pluginConsent.sourceGit",
+  path: "pluginConsent.sourcePath",
+  archive: "pluginConsent.sourceArchive",
+  marketplace: "pluginConsent.sourceMarketplace",
+} as const satisfies Record<PluginInspectSource["kind"], string>;
 
-function originLabel(origin: string | undefined, official?: boolean): string | null {
+const PLUGIN_ORIGIN_LABELS: Readonly<Record<string, string>> = {
+  bundled: "pluginsPage.included",
+  global: "pluginsPage.global",
+  workspace: "pluginsPage.workspace",
+  config: "pluginsPage.config",
+  official: "pluginsPage.official",
+};
+
+export function pluginOriginLabel(origin: string, official?: boolean): string;
+export function pluginOriginLabel(origin: string | undefined, official?: boolean): string | null;
+export function pluginOriginLabel(origin: string | undefined, official?: boolean): string | null {
   if (official) {
     return t("pluginsPage.official");
   }
-  switch (origin) {
-    case "bundled":
-      return t("pluginsPage.included");
-    case "global":
-      return t("pluginsPage.global");
-    case "workspace":
-      return t("pluginsPage.workspace");
-    case "config":
-      return t("pluginsPage.config");
-    case "official":
-      return t("pluginsPage.official");
-    default:
-      return origin ?? (official === false ? t("pluginConsent.community") : null);
-  }
+  const label =
+    origin && Object.hasOwn(PLUGIN_ORIGIN_LABELS, origin)
+      ? PLUGIN_ORIGIN_LABELS[origin]
+      : undefined;
+  return label ? t(label) : (origin ?? (official === false ? t("pluginConsent.community") : null));
+}
+
+export function pluginVerificationLabel(tier: string): string {
+  return tier === "source-linked" ? t("pluginsPage.verifiedSource") : tier;
 }
 
 function renderProvenance(source: PluginInspectSource | undefined) {
@@ -311,7 +305,7 @@ function renderProvenance(source: PluginInspectSource | undefined) {
   return html`
     <div class="plugins-consent__provenance">
       <span
-        >${[sourceKindLabel(source.kind), source.spec ?? source.packageName]
+        >${[t(SOURCE_KIND_LABELS[source.kind]), source.spec ?? source.packageName]
           .filter(Boolean)
           .join(" · ")}</span
       >
@@ -372,11 +366,10 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): Temp
   const slug = consent.pluginId ?? packageName ?? fallback?.name ?? "plugin";
   const name = plugin?.name ?? fallback?.name ?? slug;
   const version = plugin?.version ?? fallback?.version;
-  const origin = originLabel(plugin?.origin, fallback?.official);
-  const verification =
-    fallback?.verificationTier === "source-linked"
-      ? t("pluginsPage.verifiedSource")
-      : fallback?.verificationTier;
+  const origin = pluginOriginLabel(plugin?.origin, fallback?.official);
+  const verification = fallback?.verificationTier
+    ? pluginVerificationLabel(fallback.verificationTier)
+    : undefined;
   const meta = [origin, packageName, verification].filter(Boolean).join(" · ");
   const action =
     consent.intent.kind === "install"

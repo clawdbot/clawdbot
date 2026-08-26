@@ -113,6 +113,12 @@ requires acceptance for its current surface. Updates require fresh consent
 only when the new artifact declares additional capabilities; unchanged or
 narrower surfaces refresh an existing acceptance automatically.
 
+Carrying an earlier acceptance forward requires the install record to pin
+artifact integrity, which registry and ClawHub installs provide. Sources
+without recorded integrity — notably local paths — cannot prove the new bytes
+are the artifact you approved before, so they ask for consent on every install
+rather than inheriting it.
+
 Interactive CLI commands prompt when consent is required. For noninteractive
 installs, updates, or enablement, review the plugin first and pass
 `--accept-capabilities` explicitly:

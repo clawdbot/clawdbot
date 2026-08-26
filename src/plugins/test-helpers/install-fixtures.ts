@@ -18,7 +18,11 @@ type PluginArtifactInstallMockParams = {
 
 export async function invokePluginArtifactInstallMock<
   TResult extends { ok: boolean; pluginId?: string; version?: string },
->(mock: unknown, params: PluginArtifactInstallMockParams): Promise<TResult> {
+>(
+  mock: unknown,
+  params: PluginArtifactInstallMockParams,
+  fixture?: { manifest?: Record<string, unknown> },
+): Promise<TResult> {
   const result = await (mock as (params: PluginArtifactInstallMockParams) => Promise<TResult>)(
     params,
   );
@@ -39,6 +43,7 @@ export async function invokePluginArtifactInstallMock<
       rootDir: stagedArtifactDir,
       pluginId,
       ...(result.version ? { packageVersion: result.version } : {}),
+      ...(fixture?.manifest ? { manifest: fixture.manifest } : {}),
     });
     await reviewArtifact({
       pluginId,

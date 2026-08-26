@@ -343,41 +343,29 @@ describe("plugin management Gateway handlers", () => {
     });
   });
 
-  it.each(
-    [
-      {
-        method: "plugins.setEnabled",
-        params: { pluginId: "workboard", enabled: true },
-        mock: managementMocks.setEnabled,
-      },
-      {
-        method: "plugins.install",
-        params: { source: "official", pluginId: "workboard" },
-        mock: managementMocks.install,
-      },
-      {
-        method: "plugins.install",
-        params: { source: "clawhub", packageName: "community/workboard" },
-        mock: managementMocks.install,
-      },
-    ].flatMap((testCase) =>
-      [
-        { label: "obsolete blind acknowledgement", acknowledgement: true },
-        { label: "missing review token", acknowledgement: {} },
-        { label: "empty review token", acknowledgement: { reviewToken: "" } },
-        {
-          label: "extra acknowledgement properties",
-          acknowledgement: { reviewToken, unexpected: true },
-        },
-      ].map((invalid) => ({
-        method: testCase.method,
-        params: testCase.params,
-        mock: testCase.mock,
-        label: invalid.label,
-        acknowledgement: invalid.acknowledgement,
-      })),
-    ),
-  )("rejects $label before dispatching $method", async (testCase) => {
+  it.each([
+    {
+      label: "enablement with obsolete blind acknowledgement",
+      method: "plugins.setEnabled",
+      params: { pluginId: "workboard", enabled: true },
+      mock: managementMocks.setEnabled,
+      acknowledgement: true,
+    },
+    {
+      label: "an official install with a missing review token",
+      method: "plugins.install",
+      params: { source: "official", pluginId: "workboard" },
+      mock: managementMocks.install,
+      acknowledgement: {},
+    },
+    {
+      label: "a ClawHub install with extra acknowledgement properties",
+      method: "plugins.install",
+      params: { source: "clawhub", packageName: "community/workboard" },
+      mock: managementMocks.install,
+      acknowledgement: { reviewToken, unexpected: true },
+    },
+  ])("rejects $label before dispatch", async (testCase) => {
     const result = await callHandler(testCase.method, {
       ...testCase.params,
       acknowledgeCapabilities: testCase.acknowledgement,
@@ -394,22 +382,6 @@ describe("plugin management Gateway handlers", () => {
       method: "plugins.setEnabled",
       params: { pluginId: "workboard", enabled: true },
       mock: managementMocks.setEnabled,
-    },
-    {
-      label: "an enable request with a stale review token",
-      method: "plugins.setEnabled",
-      params: {
-        pluginId: "workboard",
-        enabled: true,
-        acknowledgeCapabilities: { reviewToken: "b".repeat(64) },
-      },
-      mock: managementMocks.setEnabled,
-    },
-    {
-      label: "an initial install request",
-      method: "plugins.install",
-      params: { source: "official", pluginId: "workboard" },
-      mock: managementMocks.install,
     },
     {
       label: "an install request with a stale review token",

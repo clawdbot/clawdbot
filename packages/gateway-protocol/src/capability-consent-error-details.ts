@@ -1,8 +1,8 @@
 import type { Static } from "typebox";
 import { asProtocolRecord, isNonEmptyProtocolString } from "./protocol-value-normalization.js";
+import { PLUGIN_DECLARED_SURFACE_GROUPS } from "./schema/plugin-declared-surface-groups.js";
 import type {
   CapabilityConsentErrorDetailsSchema,
-  PluginDeclaredSurfaceSchema,
   PluginDeclaredSurfaceWideningSchema,
 } from "./schema/plugins.js";
 
@@ -10,21 +10,7 @@ export const PLUGIN_CAPABILITY_CONSENT_REQUIRED = "PLUGIN_CAPABILITY_CONSENT_REQ
 
 export type CapabilityConsentErrorDetails = Static<typeof CapabilityConsentErrorDetailsSchema>;
 
-type PluginDeclaredSurface = Static<typeof PluginDeclaredSurfaceSchema>;
 type PluginDeclaredSurfaceWidening = Static<typeof PluginDeclaredSurfaceWideningSchema>;
-
-const DECLARED_SURFACE_GROUPS = [
-  "channels",
-  "providers",
-  "tools",
-  "contracts",
-  "hooks",
-  "mcpServers",
-  "cliCommands",
-  "cliBackends",
-  "skills",
-  "dangerousConfigFlags",
-] as const satisfies readonly (keyof PluginDeclaredSurface)[];
 
 function hasOnlyKeys(record: Record<string, unknown>, allowed: readonly string[]): boolean {
   return Object.keys(record).every((key) => allowed.includes(key));
@@ -32,11 +18,11 @@ function hasOnlyKeys(record: Record<string, unknown>, allowed: readonly string[]
 
 function readDeclaredSurfaceWidening(value: unknown): PluginDeclaredSurfaceWidening | undefined {
   const record = asProtocolRecord(value);
-  if (!record || !hasOnlyKeys(record, DECLARED_SURFACE_GROUPS)) {
+  if (!record || !hasOnlyKeys(record, PLUGIN_DECLARED_SURFACE_GROUPS)) {
     return undefined;
   }
   const widened: PluginDeclaredSurfaceWidening = {};
-  for (const group of DECLARED_SURFACE_GROUPS) {
+  for (const group of PLUGIN_DECLARED_SURFACE_GROUPS) {
     const items = record[group];
     if (items === undefined) {
       continue;
