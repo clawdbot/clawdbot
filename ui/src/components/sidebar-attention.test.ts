@@ -237,6 +237,36 @@ describe("sidebar attention refresh ownership", () => {
     vi.unstubAllGlobals();
   });
 
+  it("keeps the plain attention panel inside its top-layer menu surface", async () => {
+    const provider = createApplicationContextProvider({
+      gateway: {
+        snapshot: { phase: "connected", client: null, hello: null },
+        connection: { gatewayUrl: "" },
+        subscribe: () => () => undefined,
+        subscribeEvents: () => () => undefined,
+      },
+      overlays: {
+        snapshot: { approvalQueue: [] },
+        subscribe: () => () => undefined,
+      },
+      scopeUpgrade: hiddenScopeUpgradeCapability,
+    } as unknown as ApplicationContext);
+    const element = document.createElement("openclaw-sidebar-attention") as SidebarAttentionElement;
+    provider.append(element);
+    document.body.append(provider);
+
+    await waitForFast(() =>
+      expect(element.querySelector<HTMLButtonElement>(".sidebar-issues-button")).not.toBeNull(),
+    );
+    element.querySelector<HTMLButtonElement>(".sidebar-issues-button")!.click();
+
+    await waitForFast(() => {
+      const panel = element.querySelector(".sidebar-issues-panel");
+      expect(panel).not.toBeNull();
+      expect(panel?.closest("openclaw-menu-surface")).not.toBeNull();
+    });
+  });
+
   it("keeps the latest refresh when an older load on the same client finishes last", async () => {
     const firstCron = deferred<unknown>();
     const firstAuth = deferred<unknown>();
