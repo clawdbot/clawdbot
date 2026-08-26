@@ -124,6 +124,22 @@ export function bindReplyDispatcherConversationContext(
   conversationContextsByDispatcher.set(dispatcher, conversationContext);
 }
 
+/** Keep private sanitization context and its owner attached when a dispatcher is wrapped. */
+export function inheritReplyDispatcherNormalization(
+  source: ReplyDispatcher,
+  dispatcher: ReplyDispatcher,
+): ReplyDispatcher {
+  const conversationContext = conversationContextsByDispatcher.get(source);
+  if (conversationContext !== undefined) {
+    conversationContextsByDispatcher.set(dispatcher, conversationContext);
+  }
+  const preparer = replyDispatcherPreparers.get(source);
+  if (preparer) {
+    replyDispatcherPreparers.set(dispatcher, preparer);
+  }
+  return dispatcher;
+}
+
 export function normalizeReplyPayloadForDispatcher(
   dispatcher: ReplyDispatcher,
   payload: ReplyPayload,

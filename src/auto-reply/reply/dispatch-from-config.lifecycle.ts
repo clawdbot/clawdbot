@@ -530,13 +530,9 @@ export function createDispatchReplyOperationCoordinator(params: {
     // Hook-queued payloads must settle through the turn ledger too, or a
     // hook-delivered visible reply could trigger the no-visible-reply fallback.
     dispatchHookDispatcher: createAbortAwareDispatcher({
-      dispatcher: {
-        ...params.dispatcher,
-        sendToolResult: (payload) => turnLedger.sendQueued("tool", payload).queued,
-        sendBlockReply: (payload) => turnLedger.sendQueued("block", payload).queued,
-        sendFinalReply: (payload) => turnLedger.sendQueued("final", payload).queued,
-      },
+      dispatcher: params.dispatcher,
       isAborted: isPreDispatchOperationAborted,
+      send: (kind, payload) => turnLedger.sendQueued(kind, payload).queued,
     }),
     turnLedger,
     ensureDispatchReplyOperation,

@@ -1,6 +1,7 @@
 import { isAbortError } from "../../infra/abort-signal.js";
 import type { ReplyPayload } from "../reply-payload.js";
-import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
+import { inheritReplyDispatcherNormalization } from "./reply-dispatcher.js";
+import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
 
 export class DispatchReplyOperationAbortedError extends Error {
   constructor() {
@@ -64,16 +65,17 @@ export function runWithDispatchAbortSignal<T>(
 export function createAbortAwareDispatcher(params: {
   dispatcher: ReplyDispatcher;
   isAborted: () => boolean;
+  send?: (kind: ReplyDispatchKind, payload: ReplyPayload) => boolean;
 }): ReplyDispatcher {
   const sendIfActive =
-    (send: (payload: ReplyPayload) => boolean) =>
+    (kind: ReplyDispatchKind, send: (payload: ReplyPayload) => boolean) =>
     (payload: ReplyPayload): boolean =>
-      params.isAborted() ? false : send(payload);
+      params.isAborted() ? false : (params.send?.(kind, payload) ?? send(payload));
   const getCancelledCounts = params.dispatcher.getCancelledCounts;
   const dispatcher: ReplyDispatcher = {
-    sendToolResult: sendIfActive(params.dispatcher.sendToolResult),
-    sendBlockReply: sendIfActive(params.dispatcher.sendBlockReply),
-    sendFinalReply: sendIfActive(params.dispatcher.sendFinalReply),
+    sendToolResult: sendIfActive("tool", params.dispatcher.sendToolResult),
+    sendBlockReply: sendIfActive("block", params.dispatcher.sendBlockReply),
+    sendFinalReply: sendIfActive("final", params.dispatcher.sendFinalReply),
     ...(params.dispatcher.supportsSettledReceipt ? { supportsSettledReceipt: true } : {}),
     waitForIdle: () => params.dispatcher.waitForIdle(),
     getQueuedCounts: () => params.dispatcher.getQueuedCounts(),
@@ -85,5 +87,5 @@ export function createAbortAwareDispatcher(params: {
       }
     },
   };
-  return dispatcher;
+  return inheritReplyDispatcherNormalization(params.dispatcher, dispatcher);
 }
