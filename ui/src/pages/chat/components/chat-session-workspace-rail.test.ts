@@ -47,7 +47,9 @@ describe("session workspace path actions", () => {
       list: {
         sessionKey: "agent:main:workspace",
         root: "/synthetic/project",
-        files: [{ kind: "modified" as const, name: "edited.ts", path: "src/edited.ts" }],
+        files: [
+          { kind: "modified" as const, name: "edited.ts", path: "src/edited.ts", missing: false },
+        ],
         browser: {
           path: "",
           entries: [{ kind: "file" as const, name: "browser.ts", path: "src/browser.ts" }],
