@@ -399,8 +399,7 @@
     corner-shape: superellipse(1.5);
   }
 
-  .code-block-wrapper.code-block-wrapper,
-  .chat-assistant-attachment-card.chat-assistant-attachment-card {
+  .code-block-wrapper.code-block-wrapper {
     border-radius: calc(14px * var(--openclaw-corner-radius-scale));
     corner-shape: superellipse(1.5);
   }
@@ -410,13 +409,6 @@
      superellipse flattens a fully rounded end. */
   .option-card.option-card,
   .agent-chat__input.agent-chat__input {
-    border-radius: calc(20px * var(--openclaw-corner-radius-scale));
-    corner-shape: superellipse(1.5);
-  }
-
-  .chat-image-frame.chat-image-frame,
-  .chat-message-image-button.chat-message-image-button,
-  .chat-message-image.chat-message-image {
     border-radius: calc(20px * var(--openclaw-corner-radius-scale));
     corner-shape: superellipse(1.5);
   }

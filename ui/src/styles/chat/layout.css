@@ -1412,6 +1412,20 @@ openclaw-chat-page {
   transition: transform 150ms ease-out;
 }
 
+@supports (corner-shape: superellipse(1.5)) {
+  .chat-assistant-attachment-card.chat-assistant-attachment-card {
+    border-radius: calc(14px * var(--openclaw-corner-radius-scale));
+    corner-shape: superellipse(1.5);
+  }
+
+  .chat-image-frame.chat-image-frame,
+  .chat-message-image-button.chat-message-image-button,
+  .chat-message-image.chat-message-image {
+    border-radius: calc(20px * var(--openclaw-corner-radius-scale));
+    corner-shape: superellipse(1.5);
+  }
+}
+
 .chat-image-frame:hover .chat-message-image,
 .chat-assistant-attachments > .chat-message-image-button:hover .chat-message-image {
   transform: scale(1.02);
