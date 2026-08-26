@@ -5,6 +5,9 @@ import OpenClawKit
 import OpenClawProtocol
 
 struct ChatSessionRosterSnapshot: Sendable {
+    private static let maximumPageCount = 50
+    private static let maximumSessionCount = 10000
+
     let sessions: [OpenClawChatSessionEntry]
     let isCached: Bool
     let totalCount: Int?
@@ -30,9 +33,16 @@ struct ChatSessionRosterSnapshot: Sendable {
         var rowIndices: [String: Int] = [:]
         var totalCount: Int?
         var offset = 0
+        var pageCount = 0
 
         while true {
             try Task.checkCancellation()
+            // Match sessions.list's bounded scan so a changing Gateway snapshot
+            // cannot keep a sidebar refresh alive forever.
+            guard pageCount < Self.maximumPageCount, sessions.count < Self.maximumSessionCount else {
+                return Self(sessions: sessions, isCached: false, totalCount: totalCount, isComplete: false)
+            }
+            pageCount += 1
             let response: OpenClawChatSessionsListResponse
             do {
                 response = try await fetchPage(offset)
@@ -51,6 +61,9 @@ struct ChatSessionRosterSnapshot: Sendable {
                 if let index = rowIndices[session.key] {
                     sessions[index] = session
                 } else {
+                    guard sessions.count < Self.maximumSessionCount else {
+                        return Self(sessions: sessions, isCached: false, totalCount: totalCount, isComplete: false)
+                    }
                     rowIndices[session.key] = sessions.count
                     sessions.append(session)
                 }

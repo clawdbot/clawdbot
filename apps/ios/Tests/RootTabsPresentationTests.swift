@@ -112,6 +112,31 @@ struct RootTabsPresentationTests {
         #expect(snapshot.isComplete)
     }
 
+    @Test func `session roster bounds an endlessly advancing gateway snapshot without dropping rows`() async throws {
+        var requestCount = 0
+
+        let snapshot = try await ChatSessionRosterSnapshot.collect { offset in
+            requestCount += 1
+            guard requestCount <= 51 else { throw URLError(.networkConnectionLost) }
+            let sessions = (offset..<(offset + 200)).map { Self.sessionEntry(key: "session-\($0)") }
+            return OpenClawChatSessionsListResponse(
+                ts: nil,
+                path: nil,
+                count: sessions.count,
+                totalCount: offset + 400,
+                offset: offset,
+                nextOffset: offset + sessions.count,
+                hasMore: true,
+                defaults: nil,
+                sessions: sessions)
+        }
+
+        #expect(requestCount == 50)
+        #expect(snapshot.sessions.count == 10000)
+        #expect(snapshot.sessions.last?.key == "session-9999")
+        #expect(!snapshot.isComplete)
+    }
+
     @Test func `session roster preserves successful pages when a later request fails`() async throws {
         let firstPage = (0..<200).map { Self.sessionEntry(key: "session-\($0)") }
 
