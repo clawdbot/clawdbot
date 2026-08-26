@@ -145,7 +145,21 @@ describe("channel scenario route isolation", () => {
   )(
     "rejects a same-ID $leak route collision in $scenario.scenarioId",
     async ({ scenario, leak }) => {
-      await expect(runRoutingScenario(scenario, leak)).rejects.toThrow(scenario.expectedFailure);
+      const result = runRoutingScenario(scenario, leak);
+      const firstRoute = scenario.routes[0];
+      const conversationId = firstRoute.target.split(":")[1];
+      const expectedKind = firstRoute.target.startsWith("dm:") ? "direct" : "group";
+      const leakedKind =
+        leak === "conversation-kind"
+          ? expectedKind === "direct"
+            ? "group"
+            : "direct"
+          : expectedKind;
+      const leakedAccount = leak === "account" ? "foreign-account" : "qa-channel";
+
+      await expect(result).rejects.toThrow(scenario.expectedFailure);
+      await expect(result).rejects.toThrow(`qa-channel:${expectedKind}:${conversationId}:`);
+      await expect(result).rejects.toThrow(`${leakedAccount}:${leakedKind}:${conversationId}:`);
     },
   );
 
