@@ -53,7 +53,7 @@ suite.define(() => {
 
       const rowEditor = page.locator(".chat-queue__item").nth(1).locator(".chat-queue__edit-input");
       await rowEditor.waitFor({ timeout: 10_000 });
-      await rowEditor.press("Control+A");
+      await rowEditor.press("ControlOrMeta+A");
       expect(await rowEditor.inputValue()).toBe(QUEUED[1]);
       expect(await composer.inputValue()).toBe("a separate composer draft");
       // The row stays where it is, marked as the one being edited.
@@ -211,7 +211,7 @@ suite.define(() => {
       // `hasText` stops matching once the row text becomes a textarea value.
       const inlineEditor = page.locator(".chat-queue__edit-input");
       await inlineEditor.waitFor({ timeout: 10_000 });
-      await inlineEditor.press("Control+A");
+      await inlineEditor.press("ControlOrMeta+A");
       await page.keyboard.insertText("edited before send");
       await inlineEditor.press("Control+Enter");
       await page.locator(".chat-queue__item", { hasText: "edited before send" }).waitFor();
