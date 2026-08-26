@@ -82,11 +82,14 @@ export const splitTrailingDirective = (text: string): { text: string; tail: stri
 };
 
 const parseChunk = (raw: string, options?: { silentToken?: string }): ParsedChunk => {
-  const replyParsed = parseInlineDirectives(raw ?? "", {
+  let text = raw ?? "";
+  const replyParsed = parseInlineDirectives(text, {
     stripAudioTag: true,
     stripReplyTags: true,
   });
-  let text = stripInlineDirectiveTagsForDelivery(replyParsed.text).text;
+  if (replyParsed.hasReplyTag || replyParsed.hasAudioTag) {
+    text = replyParsed.text;
+  }
 
   const silentToken = options?.silentToken ?? SILENT_REPLY_TOKEN;
   const isSilent =
@@ -116,12 +119,14 @@ export function createStreamingDirectiveAccumulator() {
   let pendingSeparator = "";
   let pendingReply: PendingReplyState = { sawCurrent: false, hasTag: false };
   let activeReply: PendingReplyState = { sawCurrent: false, hasTag: false };
+  let hasReturnedText = false;
 
   const reset = () => {
     pendingTail = "";
     pendingSeparator = "";
     pendingReply = { sawCurrent: false, hasTag: false };
     activeReply = { sawCurrent: false, hasTag: false };
+    hasReturnedText = false;
   };
 
   const consume = (raw: string, options: ConsumeOptions = {}): ReplyDirectiveParseResult | null => {
@@ -152,6 +157,11 @@ export function createStreamingDirectiveAccumulator() {
     const parsed = parseChunk(combined, { silentToken: options.silentToken });
     if (hadPendingTail && heldSeparator && parsed.text.startsWith("[")) {
       parsed.text = `${heldSeparator}${parsed.text}`;
+    }
+    // Only a message-leading malformed marker is delivery control. Once text has
+    // streamed, a later marker is literal content whose Markdown opener may be gone.
+    if (options.final && !hasReturnedText) {
+      parsed.text = stripInlineDirectiveTagsForDelivery(parsed.text).text;
     }
     const hasTag = activeReply.hasTag || pendingReply.hasTag || parsed.replyToTag;
     const sawCurrent =
@@ -185,6 +195,7 @@ export function createStreamingDirectiveAccumulator() {
       hasTag,
     };
     pendingReply = { sawCurrent: false, hasTag: false };
+    hasReturnedText ||= Boolean(combinedResult.text);
     return combinedResult;
   };
 

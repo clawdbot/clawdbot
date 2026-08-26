@@ -295,7 +295,7 @@ describe("normalizeReplyPayload", () => {
     expect(expectNormalizedReply(result).text).toBe("The user is saying hello");
   });
 
-  it.each([
+  it.each<[string, string[]]>([
     ["NO_REPLY\n\nThe user is saying hello", "The user is saying hello"],
     ["NO_REPLY\r\nThe user is saying hello", "The user is saying hello"],
     ["NO_REPLY NO_REPLY\nThe user is saying hello", "The user is saying hello"],
@@ -1444,6 +1444,18 @@ describe("createStreamingDirectiveAccumulator", () => {
     expect(result?.replyToCurrent).toBe(true);
   });
 
+  it("strips a malformed leading reply prefix split across chunks", () => {
+    const accumulator = createStreamingDirectiveAccumulator();
+    expect(accumulator.consume("[[reply_to_")).toBeNull();
+    expect(accumulator.consume("current] Visible reply")).toBeNull();
+
+    expect(accumulator.consume("", { final: true })).toMatchObject({
+      text: "Visible reply",
+      replyToCurrent: false,
+      replyToTag: false,
+    });
+  });
+
   it("preserves padding when a buffered trailing reply tag stays incomplete", () => {
     const accumulator = createStreamingDirectiveAccumulator();
 
@@ -1477,6 +1489,20 @@ describe("createStreamingDirectiveAccumulator", () => {
     const final = accumulator.consume("", { final: true });
 
     expect(`${first?.text ?? ""}${final?.text ?? ""}`).toBe(text);
+  });
+
+  it.each([
+    ["inline prose", ["Explain [[reply_to_", "current] literally."]],
+    ["inline code", ["Use `[[reply_to_", "current]` literally."]],
+    ["fenced code", ["```text\n[[reply_to_", "current]\n```"]],
+    ["indented code", ["    [[reply_to_", "current]"]],
+    ["ambiguous explicit prefix", ["[[reply_to:message-7", " Visible reply"]],
+  ])("preserves split malformed %s", (_name, chunks) => {
+    const accumulator = createStreamingDirectiveAccumulator();
+    const streamed = chunks.map((chunk) => accumulator.consume(chunk)?.text ?? "").join("");
+    const final = accumulator.consume("", { final: true });
+
+    expect(`${streamed}${final?.text ?? ""}`).toBe(chunks.join(""));
   });
 
   it.each([
