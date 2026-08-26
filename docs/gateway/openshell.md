@@ -138,8 +138,10 @@ Tradeoff: upload + download cost on every exec turn.
 
 `mode: "remote"` makes the **OpenShell workspace canonical**:
 
-- On first sandbox creation, OpenClaw seeds the remote workspace from local
-  once.
+- On first use after sandbox creation, OpenClaw seeds the remote workspace
+  from local once. If the Gateway restarts before that first use, the next use
+  detects the still-empty remote workspace and seeds it; a workspace that
+  already holds content is never re-seeded.
 - After that, `exec`, `read`, `write`, `edit`, and `apply_patch` operate
   directly on the remote workspace. OpenClaw does **not** sync remote changes
   back to local.
@@ -509,8 +511,8 @@ openclaw logs --follow
 3. Core writes the SSH config to a temp file and opens an SSH session through
    the same remote filesystem bridge as the generic SSH backend.
 4. In `mirror` mode: sync local to remote before exec, run, sync back after.
-5. In `remote` mode: seed once on create, then operate directly on the remote
-   workspace.
+5. In `remote` mode: seed once on first use, then operate directly on the
+   remote workspace.
 
 ## Related
 

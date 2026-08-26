@@ -473,6 +473,7 @@ const invokeToolsRpc = async (
     hasAvatar: boolean;
     updatedAt: number;
   },
+  internal?: { operatorRoleActor?: { kind: "system" } | { kind: "operator"; profileId: string } },
 ) => {
   const respond = vi.fn();
   await expectDefined(
@@ -484,6 +485,7 @@ const invokeToolsRpc = async (
     context: { getRuntimeConfig: () => cfg } as never,
     client: {
       ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
+      ...(internal ? { internal } : {}),
       connect: {
         role: "operator",
         scopes,
@@ -569,6 +571,50 @@ describe("POST /tools/invoke", () => {
         },
       });
       expect(hookMocks.runBeforeToolCallHook).not.toHaveBeenCalled();
+    });
+  });
+
+  it("preserves host-minted system authority for a shared-secret caller under roles", async () => {
+    await withOpenClawTestState({ label: "tools-invoke-system-authority" }, async () => {
+      const owner = ensureProfileForEmail("sysauth-owner@example.test");
+      const sessionKey = "agent:main:sysauth-primary";
+      const entry = {
+        sessionId: "sysauth-primary-session",
+        updatedAt: 1,
+        visibility: "shared" as const,
+        createdActor: { type: "human" as const, id: owner.id },
+      };
+      await upsertSessionEntryCore({ agentId: "main", sessionKey }, entry);
+      sessionEntries.set(sessionKey, entry);
+      cfg = {
+        agents: { list: [{ id: "main", default: true, tools: { allow: ["agents_list"] } }] },
+        gateway: {
+          roles: {
+            default: "guest",
+            definitions: {
+              guest: {
+                sessions: { others: "view" },
+                agents: ["guest-agent"],
+                scopes: ["operator.write"],
+              },
+            },
+          },
+        },
+      };
+
+      // Shared-secret operator owners have no durable profile; connect mints system
+      // authority on the connection. Dispatch must carry that fact forward instead of
+      // re-deriving ownership from scopes, or the caller is denied its own agent.
+      const call = await invokeToolsRpc(
+        { name: "agents_list", args: {}, sessionKey },
+        ["operator.write"],
+        undefined,
+        undefined,
+        undefined,
+        { operatorRoleActor: { kind: "system" } },
+      );
+
+      expect(call?.[1]).toMatchObject({ ok: true, toolName: "agents_list" });
     });
   });
 

@@ -82,6 +82,9 @@ export class NodeInvokeStreamController {
     if (Buffer.byteLength(payloadJSON, "utf8") > MAX_INVOKE_INPUT_BYTES) {
       throw new Error("node invoke input exceeds 16 KiB");
     }
+    if (this.settleIfExpired(invokeId, pending)) {
+      throw new Error("node invoke is not pending");
+    }
     if (!this.options.isConnectionActive(pending)) {
       throw new Error("node invoke connection or pairing generation is unavailable");
     }
@@ -96,8 +99,7 @@ export class NodeInvokeStreamController {
       if (pending.connId !== connId) {
         continue;
       }
-      if (pending.deadlineAtMs !== undefined && Date.now() >= pending.deadlineAtMs) {
-        this.settleTimeout(id, pending);
+      if (this.settleIfExpired(id, pending)) {
         continue;
       }
       if (!this.takePending(id, pending)) {
@@ -117,8 +119,7 @@ export class NodeInvokeStreamController {
     ) {
       return false;
     }
-    if (pending.deadlineAtMs !== undefined && Date.now() >= pending.deadlineAtMs) {
-      this.settleTimeout(params.id, pending);
+    if (this.settleIfExpired(params.id, pending)) {
       return false;
     }
     if (!this.takePending(params.id, pending)) {
@@ -157,11 +158,7 @@ export class NodeInvokeStreamController {
     }
     if (params.signal) {
       const onAbort = () => {
-        if (
-          params.pending.deadlineAtMs !== undefined &&
-          Date.now() >= params.pending.deadlineAtMs
-        ) {
-          this.settleTimeout(params.requestId, params.pending);
+        if (this.settleIfExpired(params.requestId, params.pending)) {
           return;
         }
         if (!this.takePending(params.requestId, params.pending)) {
@@ -198,8 +195,7 @@ export class NodeInvokeStreamController {
     ) {
       return false;
     }
-    if (pending.deadlineAtMs !== undefined && Date.now() >= pending.deadlineAtMs) {
-      this.settleTimeout(params.invokeId, pending);
+    if (this.settleIfExpired(params.invokeId, pending)) {
       return false;
     }
     if (params.seq > pending.nextProgressSeq) {
@@ -223,8 +219,7 @@ export class NodeInvokeStreamController {
       if (chunk === undefined) {
         break;
       }
-      if (pending.deadlineAtMs !== undefined && Date.now() >= pending.deadlineAtMs) {
-        this.settleTimeout(params.invokeId, pending);
+      if (this.settleIfExpired(params.invokeId, pending)) {
         break;
       }
       pending.progressChunks.delete(pending.nextProgressSeq);
@@ -244,8 +239,7 @@ export class NodeInvokeStreamController {
         pending.progressChunks.clear();
         break;
       }
-      if (pending.deadlineAtMs !== undefined && Date.now() >= pending.deadlineAtMs) {
-        this.settleTimeout(params.invokeId, pending);
+      if (this.settleIfExpired(params.invokeId, pending)) {
         break;
       }
       this.resetIdleTimer(params.invokeId, pending);
@@ -289,6 +283,14 @@ export class NodeInvokeStreamController {
 
   private sendInvokeCancel(requestId: string, pending: PendingInvoke): void {
     this.options.sendCancel(requestId, pending);
+  }
+
+  private settleIfExpired(requestId: string, pending: PendingInvoke): boolean {
+    if (pending.deadlineAtMs === undefined || Date.now() < pending.deadlineAtMs) {
+      return false;
+    }
+    this.settleTimeout(requestId, pending);
+    return true;
   }
 
   private settleTimeout(requestId: string, pending: PendingInvoke): void {

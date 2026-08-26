@@ -734,6 +734,13 @@ describe("runDaemonInstall", () => {
     expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
   });
 
+  it("forwards Bun as the explicit managed-service runtime", async () => {
+    await runDaemonInstall({ json: true, runtime: "bun" });
+
+    expect(readFirstInstallPlanArg().runtime).toBe("bun");
+    expect(actionState.failed).toStrictEqual([]);
+  });
+
   it("continues Linux install when service probe hits a non-fatal systemd bus failure", async () => {
     service.isLoaded.mockRejectedValueOnce(
       new Error("systemctl is-enabled unavailable: Failed to connect to bus"),

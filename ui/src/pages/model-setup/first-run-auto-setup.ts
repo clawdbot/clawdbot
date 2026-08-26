@@ -7,6 +7,11 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import type { ModelSetupDetectionConnection } from "./detect-cache.ts";
+import {
+  clearFirstRunActivationReceipt,
+  persistFirstRunActivationReceipt,
+  readFirstRunActivationReceipt,
+} from "./first-run-activation-receipt.ts";
 import type {
   ModelSetupActivationTaskResult,
   ModelSetupTaskResult,
@@ -37,6 +42,7 @@ type PendingRestart = {
   routeData: ModelSetupRouteData;
   connection: ModelSetupDetectionConnection;
   modelRef: string;
+  restored: boolean;
 };
 
 type FirstRunAutoSetupHost = {
@@ -74,6 +80,9 @@ export class FirstRunAutoSetup {
     this.reset();
     this.readyConnection = null;
     this.pendingRestart = null;
+    if (this.host.routeData()?.firstRun === false) {
+      clearFirstRunActivationReceipt();
+    }
   }
 
   connectionChanged(connection: ModelSetupDetectionConnection): void {
@@ -91,13 +100,18 @@ export class FirstRunAutoSetup {
   retryDetection(): void {
     if (this.host.routeData()?.firstRun && !this.host.actionsDisabled()) {
       this.pendingRestart = null;
+      clearFirstRunActivationReceipt();
       this.host.setRefreshWarning(null);
       this.reset();
     }
   }
 
   dispose(): void {
-    this.routeChanged();
+    // Process/window disposal is exactly the lifecycle the durable receipt
+    // protects; only an explicit route exit, retry, or terminal outcome clears it.
+    this.reset();
+    this.readyConnection = null;
+    this.pendingRestart = null;
   }
 
   visiblePageState(verified: boolean): ModelSetupPageState {
@@ -129,6 +143,17 @@ export class FirstRunAutoSetup {
       !this.host.canUseSetup(snapshot.client)
     ) {
       return;
+    }
+    if (!this.pendingRestart) {
+      const receipt = readFirstRunActivationReceipt(context);
+      if (receipt) {
+        this.pendingRestart = {
+          routeData,
+          connection: readyConnection,
+          modelRef: receipt.modelRef,
+          restored: true,
+        };
+      }
     }
     const configured = pageState.result.setupComplete && pageState.result.configuredModel;
     if (this.pendingRestart && !configured) {
@@ -225,7 +250,9 @@ export class FirstRunAutoSetup {
         routeData: owner.routeData,
         connection: owner.connection,
         modelRef: candidate.modelRef,
+        restored: false,
       };
+      persistFirstRunActivationReceipt(context, candidate);
       const outcome = await this.host.activate(candidate, targetId);
       if (!this.owns(owner) || !outcome || "error" in outcome) {
         return;
@@ -234,10 +261,15 @@ export class FirstRunAutoSetup {
         // A rejected transport may still commit; only a definitive Gateway
         // failure permits dispatching another provider activation.
         this.pendingRestart = null;
+        clearFirstRunActivationReceipt();
         continue;
       }
       if (outcome.value.result.gatewayRestartRequired && outcome.value.result.modelRef) {
         this.pendingRestart.modelRef = outcome.value.result.modelRef;
+        persistFirstRunActivationReceipt(context, {
+          kind: candidate.kind,
+          modelRef: outcome.value.result.modelRef,
+        });
         // Keep the completed attempt closed until a replacement hello owns
         // detection and exact-model verification; the old socket is unsafe.
         this.host.setActivationState({
@@ -249,6 +281,7 @@ export class FirstRunAutoSetup {
         return;
       }
       this.pendingRestart = null;
+      clearFirstRunActivationReceipt();
       if (this.host.activationSuccessful() && !outcome.value.refreshError) {
         context.navigate("custodian", { search: "?onboarding=1" });
       }
@@ -258,6 +291,7 @@ export class FirstRunAutoSetup {
 
   private failPendingActivation(pending: PendingRestart): void {
     this.pendingRestart = null;
+    clearFirstRunActivationReceipt();
     this.host.setRefreshWarning(null);
     this.host.setVerifyState({
       phase: "failed",
@@ -276,13 +310,14 @@ export class FirstRunAutoSetup {
       pending.routeData !== owner.routeData ||
       pending.connection.client !== owner.connection.client ||
       pending.connection.agentId !== owner.connection.agentId ||
-      pending.connection.hello === owner.connection.hello ||
+      (pending.connection.hello === owner.connection.hello && !pending.restored) ||
       pending.modelRef !== modelRef
     ) {
       this.failPendingActivation(pending);
       return;
     }
     this.pendingRestart = null;
+    clearFirstRunActivationReceipt();
     this.host.setRefreshWarning(null);
     this.host.context().navigate("custodian", { search: "?onboarding=1" });
   }

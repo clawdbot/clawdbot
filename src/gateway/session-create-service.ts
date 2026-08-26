@@ -76,7 +76,7 @@ import {
 import { recordSessionCreated } from "../sessions/session-state-events.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
-import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
+import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "./operator-role-policy.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
 import { buildForkedGatewaySessionEntry } from "./session-create-fork-entry.js";
@@ -352,7 +352,7 @@ export async function createGatewaySession(params: {
   /** Trusted host actor; only system-owned callers may omit operator identity. */
   operatorRoleActor?: GatewayOperatorRoleActor;
   /** Trusted in-process creation provenance; never populated from public Gateway params. */
-  creation?: { via: SessionCreatedVia; actor?: SessionCreatedActor };
+  creation?: { via: SessionCreatedVia; actor?: SessionCreatedActor; sandbox?: "required" };
   /** Exact harness namespace authorized by the scoped plugin runtime. */
   authorizedAgentHarnessId?: string;
   /** Exact plugin namespace authorized by the scoped plugin runtime. */
@@ -1062,6 +1062,7 @@ export async function createGatewaySession(params: {
             ),
           storeKey: target.canonicalKey,
           agentId: target.agentId,
+          preparedSessionRoot: sessionRoot,
           // Patch appliers read key presence as caller intent (present = change,
           // null = clear), so omitted create fields must stay absent: a present
           // undefined model trips the selection lock and drops modelFallback,
@@ -1075,6 +1076,7 @@ export async function createGatewaySession(params: {
             ...(requestedContextWindow ? { contextWindow: requestedContextWindow } : {}),
             ...(requestedThinkingLevel ? { thinkingLevel: requestedThinkingLevel } : {}),
             ...(requestedToolOverrides ? { toolOverrides: params.toolOverrides } : {}),
+            ...(params.permissionMode ? { permissionMode: params.permissionMode } : {}),
           },
           loadGatewayModelCatalog: params.loadGatewayModelCatalog,
           authorizedAgentHarnessId: params.authorizedAgentHarnessId,
@@ -1138,7 +1140,12 @@ export async function createGatewaySession(params: {
           // Stamp provenance only for genuinely new rows: adopting an existing key
           // must not restamp write-once node facts (this direct store write bypasses
           // the merge-level write-once guard), and legacy rows stay "unknown".
-          ...(params.creation && createdNewEntry ? buildSessionCreationStamp(params.creation) : {}),
+          ...(params.creation && createdNewEntry
+            ? buildSessionCreationStamp({
+                ...params.creation,
+                sandbox: resolveCreatorSandbox(params.cfg, params.creation),
+              })
+            : {}),
           ...(params.visibility && createdNewEntry ? { visibility: params.visibility } : {}),
           ...(projectId && createdNewEntry ? { projectId } : {}),
           ...(catalogResolvedModel && catalogAgentRuntime
@@ -1155,8 +1162,6 @@ export async function createGatewaySession(params: {
           // Session worktrees adopt cwd only during admin-gated creation; public patching stays
           // restricted to spawned subagent and ACP lineage.
           ...(spawnedCwd ? { spawnedCwd } : {}),
-          ...(sessionRoot ? { sessionRoot } : {}),
-          ...(params.permissionMode ? { permissionMode: params.permissionMode } : {}),
           ...(preparedLifecycle?.worktree ? { worktree: preparedLifecycle.worktree } : {}),
           ...(execNode ? { execHost: "node", execNode, ...(execCwd ? { execCwd } : {}) } : {}),
           ...(createdNewEntry && params.armSessionDiffBaselineCapture && !execNode

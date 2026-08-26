@@ -428,6 +428,7 @@ vi.mock("./participant-context.js", async () => {
 
 vi.mock("../runtime.js", () => ({
   getDiscordRuntime: () => ({
+    agent: { runCommandFromIngress: agentCommandMock },
     mediaUnderstanding: {
       transcribeAudioFile: transcribeAudioFileMock,
     },

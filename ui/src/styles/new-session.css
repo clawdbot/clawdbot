@@ -1100,10 +1100,8 @@ wa-dropdown.new-session-page__start-menu {
     gap: 4px 2px;
   }
 
-  /* A new session has visibility chips instead of the chat settings cluster.
-     Keep those chips intrinsic and let the model picker use the remaining width;
-     spacing stays on the shared family token so the row keeps one rhythm as it
-     wraps. */
+  /* Visibility chips stay intrinsic and let the model control use the
+     remaining width until the shared narrow-composer treatment takes over. */
   .new-session-page__composer .agent-chat__composer-controls {
     display: flex;
     flex-wrap: wrap;
@@ -1119,5 +1117,14 @@ wa-dropdown.new-session-page__start-menu {
 
   .new-session-page__select {
     position: static;
+  }
+}
+
+@container chat-composer (max-width: 480px) {
+  .new-session-page__composer .agent-chat__input .chat-composer-model-control {
+    flex: 0 0 var(--chat-composer-control-size);
+    width: var(--chat-composer-control-size);
+    min-width: var(--chat-composer-control-size);
+    max-width: var(--chat-composer-control-size);
   }
 }

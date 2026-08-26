@@ -429,10 +429,11 @@ describe("Crabbox worker provider", () => {
       expect(setup).toContain('[launcher,"--version"]');
       expect(setup).toContain("codex-cli ${runtime.version}");
       expect(setup).not.toContain("$state_dir/extensions/codex");
-      expect(setup).toContain('OPENCLAW_STATE_DIR="$state_dir" openclaw plugins enable codex');
-      expect(setup).toContain(
-        'OPENCLAW_STATE_DIR="$state_dir" npx --yes --package "$package_spec" -- openclaw plugins enable codex',
-      );
+      expect(setup).toContain("set -- openclaw");
+      expect(setup).toContain('set -- npx --yes --package "$package_spec" -- openclaw');
+      expect(setup).toContain('OPENCLAW_STATE_DIR="$state_dir" "$@" plugins enable codex');
+      expect(setup.match(/plugins inspect codex --json/g)).toHaveLength(1);
+      expect(setup.match(/setsid -f sh -c/g)).toHaveLength(1);
       expect(setup.indexOf("plugins inspect codex --json")).toBeGreaterThan(
         setup.indexOf(setupCodeCleared),
       );

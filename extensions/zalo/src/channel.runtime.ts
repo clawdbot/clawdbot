@@ -6,7 +6,7 @@ import {
   PAIRING_APPROVED_MESSAGE,
   type ChannelPlugin,
   type OpenClawConfig,
-} from "./runtime-api.js";
+} from "./runtime-support.js";
 import { normalizeSecretInputString } from "./secret-input.js";
 import { sendMessageZalo } from "./send.js";
 import type { ResolvedZaloAccount } from "./types.js";

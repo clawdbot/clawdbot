@@ -198,7 +198,7 @@ async function executeCameraSnap({
       },
       idempotencyKey: crypto.randomUUID(),
     });
-    const payload = parseCameraSnapPayload(raw?.payload);
+    const payload = parseCameraSnapPayload(raw?.payload, { expectedHost: resolvedNode.remoteIp });
     const normalizedFormat = normalizeLowercaseStringOrEmpty(payload.format);
     if (normalizedFormat !== "jpg" && normalizedFormat !== "jpeg" && normalizedFormat !== "png") {
       throw new Error(`unsupported camera.snap format: ${payload.format}`);
@@ -281,7 +281,7 @@ async function executePhotosLatest({
 
   // Reject every malformed batch member before creating any capture artifact.
   const photos = payload.photos.map((photoRaw) => {
-    const photo = parseCameraSnapPayload(photoRaw);
+    const photo = parseCameraSnapPayload(photoRaw, { expectedHost: resolvedNode.remoteIp });
     const normalizedFormat = normalizeLowercaseStringOrEmpty(photo.format);
     if (normalizedFormat !== "jpg" && normalizedFormat !== "jpeg" && normalizedFormat !== "png") {
       throw new Error(`unsupported photos.latest format: ${photo.format}`);

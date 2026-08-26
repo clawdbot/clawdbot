@@ -14,6 +14,7 @@ import type {
 import {
   createRemoteShellSandboxFsBridge,
   disposeSshSandboxSession,
+  prepareSshSandboxExec,
   resolvePreferredOpenClawTmpDir,
   runSshSandboxCommand,
   sanitizeEnvVars,
@@ -45,6 +46,7 @@ type CreateOpenShellSandboxBackendFactoryParams = {
 
 type PendingExec = {
   sshSession: SshSandboxSession;
+  cleanup: () => Promise<void>;
 };
 
 const MATERIALIZED_SKILLS_REMOTE_PARTS = [".openclaw", "sandbox-skills"] as const;
@@ -63,6 +65,11 @@ function buildOpenShellDirectoryUploadArgs(params: {
   ];
 }
 
+// Prints "0" when every managed root is missing or empty, "1" otherwise. Any
+// content in a managed root means the remote workspace was already seeded (or
+// holds operator data) and re-seeding would destroy remote-canonical state.
+const REMOTE_MANAGED_ROOTS_EMPTY_SCRIPT =
+  'for root in "$@"; do if [ -d "$root" ] && [ -n "$(ls -A "$root")" ]; then printf "1\\n"; exit 0; fi; done; printf "0\\n"';
 const PINNED_REMOTE_PATH_MUTATION_SCRIPT = [
   "set -eu",
   'die() { echo "$1" >&2; exit 1; }',
@@ -369,25 +376,27 @@ class OpenShellSandboxBackendImpl {
     const remoteCommand = buildValidatedExecRemoteCommand({
       command: params.command,
       workdir: remoteWorkdir,
-      env: params.env,
+      env: {},
     });
     await (preparedWorkspace ?? this.prepareRemoteWorkspaceForExec());
     const sshSession = await createOpenShellSshSession({
       context: this.params.execContext,
     });
-    return {
-      argv: [
-        "ssh",
-        "-F",
-        sshSession.configPath,
-        ...(params.usePty
-          ? ["-tt", "-o", "RequestTTY=force", "-o", "SetEnv=TERM=xterm-256color"]
-          : ["-T", "-o", "RequestTTY=no"]),
-        sshSession.host,
+    try {
+      const prepared = await prepareSshSandboxExec({
+        session: sshSession,
         remoteCommand,
-      ],
-      token: { sshSession },
-    };
+        env: params.env,
+        tty: params.usePty,
+      });
+      return {
+        argv: prepared.argv,
+        token: { sshSession, cleanup: prepared.cleanup },
+      };
+    } catch (error) {
+      await disposeSshSandboxSession(sshSession);
+      throw error;
+    }
   }
 
   async validateWorkdir(workdir: string): Promise<string | null> {
@@ -469,14 +478,18 @@ class OpenShellSandboxBackendImpl {
     }
   }
 
-  async finalizeExec(token?: PendingExec): Promise<void> {
+  async finalizeExec(token: PendingExec | undefined): Promise<void> {
     try {
       if (this.params.execContext.config.mode === "mirror") {
         await this.syncWorkspaceFromRemote();
       }
     } finally {
       if (token?.sshSession) {
-        await disposeSshSandboxSession(token.sshSession);
+        try {
+          await token.cleanup();
+        } finally {
+          await disposeSshSandboxSession(token.sshSession);
+        }
       }
     }
   }
@@ -689,6 +702,17 @@ class OpenShellSandboxBackendImpl {
           throw this.buildLegacyRuntimeUnavailableError(`OpenShell reports phase "${phase}".`);
         }
       }
+      // The seed obligation must survive a gateway restart between `sandbox
+      // create` and the first exec: process memory is gone, so adopted remote
+      // sandboxes probe the managed roots instead. Only completely empty roots
+      // arm the seed — the wipe step is then a no-op, so recovery can never
+      // destroy operator content in a remote-canonical workspace.
+      if (
+        this.params.execContext.config.mode === "remote" &&
+        (await this.remoteManagedRootsEmpty())
+      ) {
+        this.remoteSeedPending = true;
+      }
       return;
     }
     if (this.params.legacyRuntimeAdopted) {
@@ -900,6 +924,16 @@ class OpenShellSandboxBackendImpl {
         }
       },
     );
+  }
+
+  private async remoteManagedRootsEmpty(): Promise<boolean> {
+    const result = await this.runRemoteShellScriptInternal({
+      script: REMOTE_MANAGED_ROOTS_EMPTY_SCRIPT,
+      args: [this.params.remoteWorkspaceDir, this.params.remoteAgentWorkspaceDir],
+    });
+    // Anything other than an exact "0" reads as non-empty so the seed never
+    // fires on ambiguous probe output.
+    return result.stdout.toString("utf8").trim() === "0";
   }
 
   private async maybeSeedRemoteWorkspace(): Promise<boolean> {

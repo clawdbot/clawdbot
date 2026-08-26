@@ -43,9 +43,9 @@ on:
       include_browser:
         description: Whether the tagged Docker release includes browser images
         value: ${{ jobs.create-manifest.outputs.browser_supported }}
-      vcr_source_refs:
-        description: Newline-delimited attestation-verified immutable GHCR source refs
-        value: ${{ jobs.verify-attestations.outputs.vcr_source_refs }}
+      vcr_source_digests:
+        description: Newline-delimited attestation-verified immutable GHCR source digests
+        value: ${{ jobs.verify-attestations.outputs.vcr_source_digests }}
     secrets:
       DOCKERHUB_USERNAME:
         required: true
@@ -900,7 +900,7 @@ jobs:
     if: ${{ always() && needs.create-manifest.result == 'success' }}
     runs-on: ubuntu-24.04
     outputs:
-      vcr_source_refs: ${{ steps.vcr_source_refs.outputs.value }}
+      vcr_source_digests: ${{ steps.vcr_source_digests.outputs.value }}
     permissions:
       contents: read
       packages: write
@@ -1052,11 +1052,11 @@ jobs:
             "${dockerhub_arm64_refs[@]}"
 
       # Resolve the moving release tags once, then verify the exact immutable
-      # indexes that the VCR publisher will consume. Passing those digest refs
-      # across the job boundary prevents a later tag rewrite from changing the
-      # bytes copied after attestation verification.
+      # indexes that the VCR publisher will consume. Pass only their digests
+      # across the secret-scanned job boundary so a later tag rewrite cannot
+      # change the bytes copied after attestation verification.
       - name: Resolve and verify immutable VCR source refs
-        id: vcr_source_refs
+        id: vcr_source_digests
         shell: bash
         env:
           GHCR_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
@@ -1073,7 +1073,7 @@ jobs:
             tags+=("${image_version}-browser")
           fi
 
-          source_refs=()
+          source_digests=()
           immutable_refs=()
           for index in "${!aliases[@]}"; do
             tagged_ref="${GHCR_IMAGE}:${tags[$index]}"
@@ -1088,7 +1088,7 @@ jobs:
                 <<< "${descriptor}"
             )"
             immutable_ref="${GHCR_IMAGE}@${digest}"
-            source_refs+=("${aliases[$index]}=${immutable_ref}")
+            source_digests+=("${aliases[$index]}=${digest}")
             immutable_refs+=("${immutable_ref}")
           done
 
@@ -1099,7 +1099,7 @@ jobs:
 
           {
             echo "value<<EOF"
-            printf '%s\n' "${source_refs[@]}"
+            printf '%s\n' "${source_digests[@]}"
             echo "EOF"
           } >> "${GITHUB_OUTPUT}"
 

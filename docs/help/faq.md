@@ -608,7 +608,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
     | Grok | No (xAI OAuth or key) | `XAI_API_KEY` |
     | Kimi | No | `KIMI_API_KEY` or `MOONSHOT_API_KEY` |
     | MiniMax Search | No | `MINIMAX_CODE_PLAN_KEY`, `MINIMAX_CODING_API_KEY`, or `MINIMAX_API_KEY` |
-    | Ollama Web Search | Yes (needs `ollama signin`) | - |
+    | Ollama Web Search | Local: yes (needs `ollama signin`); hosted: no | Hosted: `OLLAMA_API_KEY` |
     | Perplexity | No | `PERPLEXITY_API_KEY` or `OPENROUTER_API_KEY` |
     | SearXNG | Yes (self-hosted) | `SEARXNG_BASE_URL` |
     | Tavily | No | `TAVILY_API_KEY` |

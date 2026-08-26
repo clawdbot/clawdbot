@@ -2487,6 +2487,93 @@ describe("tui command handlers", () => {
   });
 
   it.each([
+    {
+      name: "provider-specific binary on",
+      local: false,
+      levels: [
+        { id: "off", label: "off" },
+        { id: "high", label: "on" },
+      ],
+      input: "on",
+      expected: "high",
+    },
+    {
+      name: "case-insensitive binary on in embedded mode",
+      local: true,
+      levels: [{ id: "high", label: "on" }],
+      input: "ON",
+      expected: "high",
+    },
+    {
+      name: "always-on high profile",
+      local: false,
+      levels: [{ id: "high", label: "always on" }],
+      input: "always on",
+      expected: "high",
+    },
+    {
+      name: "always-on off profile",
+      local: false,
+      levels: [{ id: "off", label: "always on" }],
+      input: "always on",
+      expected: "off",
+    },
+    {
+      name: "Moonshot binary on",
+      local: false,
+      levels: [{ id: "low", label: "on" }],
+      input: "on",
+      expected: "low",
+    },
+    {
+      name: "canonical id ahead of another option's label",
+      local: false,
+      levels: [
+        { id: "low", label: "high" },
+        { id: "high", label: "turbo" },
+      ],
+      input: "high",
+      expected: "high",
+    },
+  ])(
+    "resolves $name to its canonical thinking level",
+    async ({ local, levels, input, expected }) => {
+      const { handleCommand, patchSession, addSystem } = createHarness({
+        opts: { local },
+        sessionInfo: { thinkingLevels: levels },
+      });
+
+      await handleCommand(`/think ${input}`);
+
+      expect(patchSession).toHaveBeenCalledWith({
+        key: "agent:main:main",
+        thinkingLevel: expected,
+      });
+      expect(addSystem).toHaveBeenCalledWith(`thinking set to ${input}`);
+    },
+  );
+
+  it.each([undefined, []])(
+    "resolves thinking labels from the provider policy when session levels are %j",
+    async (thinkingLevels) => {
+      const { handleCommand, patchSession } = createHarness({
+        sessionInfo: {
+          modelProvider: "opencode-go",
+          model: "minimax-m3",
+          thinkingLevels,
+        },
+      });
+
+      await handleCommand("/think on");
+
+      expect(patchSession).toHaveBeenCalledWith({
+        key: "agent:main:main",
+        thinkingLevel: "high",
+      });
+    },
+  );
+
+  it.each([
     { command: "verbose", usage: "usage: /verbose <on|off|full>" },
     { command: "reasoning", usage: "usage: /reasoning <on|off|stream>" },
   ])("shows the complete canonical no-argument /$command usage", async ({ command, usage }) => {

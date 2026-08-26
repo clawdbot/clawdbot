@@ -1,7 +1,7 @@
 // Start-time service repair: rebuilds stale service definitions before starting Gateway.
 import path from "node:path";
 import { buildGatewayInstallPlan } from "../../commands/daemon-install-helpers.js";
-import { DEFAULT_GATEWAY_DAEMON_RUNTIME } from "../../commands/daemon-runtime.js";
+import { resolveGatewayDaemonRuntime } from "../../commands/daemon-runtime.js";
 import { resolveGatewayInstallToken } from "../../commands/gateway-install-token.js";
 import { readConfigFileSnapshotForWrite } from "../../config/io.js";
 import {
@@ -10,6 +10,7 @@ import {
   resolveStateDir,
 } from "../../config/paths.js";
 import { OPENCLAW_WRAPPER_ENV_KEY, resolveOpenClawWrapperPath } from "../../daemon/program-args.js";
+import { resolveBunRuntimeInfo } from "../../daemon/runtime-paths.js";
 import {
   hasGatewayServiceEnvironmentDifference,
   hasGatewayServiceLauncherOverride,
@@ -175,6 +176,13 @@ export async function repairLoadedGatewayServiceForStart(
     existingServiceEnv: existingEnvironment,
   });
   const wrapperPath = await resolveOpenClawWrapperPath(installEnv[OPENCLAW_WRAPPER_ENV_KEY]);
+  const installedRuntime = resolveGatewayDaemonRuntime(managedCommand?.programArguments);
+  const installedRuntimePath =
+    installedRuntime === "bun" ? managedCommand?.programArguments[0] : undefined;
+  const runtime =
+    installedRuntimePath && (await resolveBunRuntimeInfo(installedRuntimePath)).supported
+      ? "bun"
+      : "node";
 
   const tokenResolution = await resolveGatewayInstallToken({
     config: cfg,
@@ -203,7 +211,8 @@ export async function repairLoadedGatewayServiceForStart(
     await buildGatewayInstallPlan({
       env: installEnv,
       port,
-      runtime: DEFAULT_GATEWAY_DAEMON_RUNTIME,
+      runtime,
+      runtimePath: runtime === "bun" ? installedRuntimePath : undefined,
       wrapperPath,
       existingEnvironment,
       existingEnvironmentValueSources,

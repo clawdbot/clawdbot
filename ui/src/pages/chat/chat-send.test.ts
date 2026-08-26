@@ -500,7 +500,7 @@ describe("refreshChat", () => {
     await waitForFast(() => expect(host.chatModelCatalog).toEqual([model]));
   });
 
-  it("renders cached models while startup metadata refreshes", async () => {
+  it("keeps cached models interactive while startup metadata revalidates silently", async () => {
     const startup = createDeferred<unknown>();
     const host = makeChatHost({
       chatModelSwitchPromises: {},
@@ -527,7 +527,7 @@ describe("refreshChat", () => {
     });
 
     expect(host.chatModelCatalog).toEqual([cachedModel]);
-    expect(asChatPageHost(host).chatModelsLoading).toBe(true);
+    expect(asChatPageHost(host).chatModelsLoading).toBe(false);
     const container = document.createElement("div");
     const controls = renderChatPaneComposerControls({
       state: asChatPageHost(host),
@@ -541,8 +541,8 @@ describe("refreshChat", () => {
       onModelSetup: vi.fn(),
     });
     render(controls.composerControls, container);
-    expect(container.querySelector('[data-chat-model-catalog-state="refreshing"]')).not.toBeNull();
-    expect(container.textContent).toContain("Refreshing models…");
+    expect(container.querySelector("[data-chat-model-catalog-state]")).toBeNull();
+    expect(container.textContent).toContain("Cached Model");
     expect(container.textContent).not.toContain("Loading models…");
 
     startup.resolve({
@@ -3428,6 +3428,28 @@ describe("handleSendChat", () => {
     expect(refreshCurrentSessionTools).toHaveBeenCalledTimes(1);
   });
 
+  it.each(["/model default", "/model DEFAULT"])(
+    "forwards semantic model reset commands through chat.send: %s",
+    async (command) => {
+      const host = makeChatHost({
+        requestHandlers: {
+          "chat.send": { status: "started" },
+          "sessions.patch": createResolvedModelPatch("default", "openai"),
+        },
+        sessionKey: "main",
+        chatMessage: command,
+      });
+
+      await handleSendChat(host);
+
+      expect(host.request).toHaveBeenCalledWith(
+        "chat.send",
+        expect.objectContaining({ message: command, sessionKey: "main" }),
+      );
+      expect(host.request).not.toHaveBeenCalledWith("sessions.patch", expect.anything());
+    },
+  );
+
   it("queues local slash commands while the gateway client is unavailable", async () => {
     const host = makeChatHost({
       client: null,
@@ -5187,9 +5209,13 @@ describe("handleSendChat", () => {
     const host = makeChatHost({ chatQueue: [item] });
     expect(admitQueuedMessageForSession(host, host.sessionKey, item)).toBe(true);
 
-    expect(removeDeliveredQueuedChatSendForRun(host, item.sendRunId)).toMatchObject({
-      id: item.id,
-    });
+    expect(
+      removeDeliveredQueuedChatSendForRun(
+        host,
+        item.sendRunId,
+        resolveStoredChatOutboxScope(host, item.sessionKey),
+      ),
+    ).toMatchObject({ id: item.id });
 
     expect(host.chatQueue).toStrictEqual([]);
     expect(listStoredChatOutboxes(host)).toStrictEqual([]);
@@ -5209,12 +5235,126 @@ describe("handleSendChat", () => {
     const replacement = makeChatHost({ chatQueue: [], sessionKey: "agent:main:replacement" });
     expect(admitQueuedMessageForSession(sender, item.sessionKey, item)).toBe(true);
 
-    expect(removeDeliveredQueuedChatSendForRun(replacement, item.sendRunId)).toMatchObject({
-      id: item.id,
-    });
+    expect(
+      removeDeliveredQueuedChatSendForRun(
+        replacement,
+        item.sendRunId,
+        resolveStoredChatOutboxScope(replacement, item.sessionKey),
+      ),
+    ).toMatchObject({ id: item.id });
 
     expect(replacement.chatQueue).toStrictEqual([]);
     expect(listStoredChatOutboxes(replacement)).toStrictEqual([]);
+  });
+
+  it("keeps a selected queued send when a foreign terminal reuses its run id", () => {
+    const selected = {
+      id: "selected-terminal-collision",
+      text: "keep this selected-session prompt",
+      createdAt: 1,
+      sendAttempts: 1,
+      sendRunId: "shared-terminal-run",
+      sendState: "sending" as const,
+      sessionKey: "agent:main:selected",
+    };
+    const foreign = {
+      ...selected,
+      id: "foreign-terminal-collision",
+      text: "retire this foreign-session prompt",
+      sessionKey: "agent:main:foreign",
+    };
+    const host = makeChatHost({
+      chatQueue: [selected],
+      chatRunId: selected.sendRunId,
+      sessionKey: selected.sessionKey,
+    });
+    Object.assign(host, {
+      chatMessagesBySession: new Map(),
+      connectionEpoch: 1,
+      pendingSessionMessageReloadSessionKey: null,
+      requestUpdate: vi.fn(),
+    });
+    expect(admitQueuedMessageForSession(host, selected.sessionKey, selected)).toBe(true);
+    expect(admitQueuedMessageForSession(host, foreign.sessionKey, foreign)).toBe(true);
+
+    handlePageGatewayEvent(asChatPageHost(host), {
+      event: "chat",
+      payload: {
+        state: "final",
+        runId: foreign.sendRunId,
+        sessionKey: foreign.sessionKey,
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "foreign reply" }],
+        },
+      },
+    } as Parameters<typeof handlePageGatewayEvent>[1]);
+
+    expect(host.chatMessages).toStrictEqual([]);
+    expect(host.chatQueue).toEqual([expect.objectContaining({ id: selected.id })]);
+    expect(listStoredChatOutboxes(host)).toEqual([
+      expect.objectContaining({
+        sessionKey: selected.sessionKey,
+        queue: [expect.objectContaining({ id: selected.id })],
+      }),
+    ]);
+  });
+
+  it("routes an unscoped global terminal to the default agent outbox", () => {
+    const runId = "shared-global-terminal-run";
+    const selected = {
+      id: "selected-global-terminal",
+      text: "keep the selected agent prompt",
+      createdAt: 1,
+      sendAttempts: 1,
+      sendRunId: runId,
+      sendState: "sending" as const,
+      sessionKey: "global",
+      agentId: "work",
+    };
+    const defaultAgent = {
+      ...selected,
+      id: "default-global-terminal",
+      text: "retire the default agent prompt",
+      agentId: "main",
+    };
+    const host = makeChatHost({
+      assistantAgentId: selected.agentId,
+      chatMessagesBySession: new Map(),
+      chatQueue: [selected],
+      chatRunId: runId,
+      sessionKey: "global",
+    });
+    Object.assign(host, {
+      connectionEpoch: 1,
+      pendingSessionMessageReloadSessionKey: null,
+      requestUpdate: vi.fn(),
+    });
+    expect(admitQueuedMessageForSession(host, selected.sessionKey, selected)).toBe(true);
+    expect(admitQueuedMessageForSession(host, defaultAgent.sessionKey, defaultAgent)).toBe(true);
+
+    handlePageGatewayEvent(asChatPageHost(host), {
+      event: "chat",
+      payload: {
+        state: "final",
+        runId,
+        sessionKey: "global",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "default agent reply" }],
+        },
+      },
+    } as Parameters<typeof handlePageGatewayEvent>[1]);
+
+    expect(host.chatMessages).toStrictEqual([]);
+    expect(host.chatQueue).toEqual([expect.objectContaining({ id: selected.id })]);
+    expect(listStoredChatOutboxes(host)).toEqual([
+      expect.objectContaining({
+        agentId: selected.agentId,
+        queue: [expect.objectContaining({ id: selected.id })],
+        sessionKey: selected.sessionKey,
+      }),
+    ]);
   });
 
   it("preserves terminal user-turn ordering when an inactive split pane handles the event first", () => {
@@ -6117,7 +6257,13 @@ describe("handleSendChat", () => {
       await send;
       expect(latePeer.chatQueue[0]?.sendState).toBe("sending");
 
-      expect(removeDeliveredQueuedChatSendForRun(host, runId)).toMatchObject({ id: item.id });
+      expect(
+        removeDeliveredQueuedChatSendForRun(
+          host,
+          runId,
+          resolveStoredChatOutboxScope(host, item.sessionKey),
+        ),
+      ).toMatchObject({ id: item.id });
       expect(latePeer.chatQueue).toStrictEqual([]);
     } finally {
       stopLatePeer();

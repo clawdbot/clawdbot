@@ -355,4 +355,75 @@ suite.define(() => {
 
     await context.close();
   });
+
+  it("keeps same-run events from another session out of the selected transcript", async () => {
+    const context = await suite.browser.newContext({ viewport: { height: 900, width: 1200 } });
+    const page = await context.newPage();
+    const runId = "run-shared-across-session-events";
+    const selectedText = "Selected session stream stays in its own row.";
+    const wrongSessionText = "Wrong session content must never enter this transcript. ".repeat(12);
+    const gateway = await installMockGateway(page, {
+      historyMessages: [
+        transcriptMessage("user", "Earlier prompt", "run-earlier:user", "user-earlier", 1),
+        transcriptMessage("assistant", "Earlier answer", "run-earlier", "assistant-earlier", 2),
+      ],
+      inFlightRun: { runId, text: selectedText },
+      sessionInfo: {
+        activeRunIds: [runId],
+        hasActiveRun: true,
+        key: "main",
+      },
+    });
+
+    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.getByText(selectedText, { exact: true }).waitFor();
+    const inactiveSessionKey = "agent:main:inactive-session";
+    await gateway.emitGatewayEvent("chat", {
+      deltaText: wrongSessionText,
+      message: { role: "assistant", content: [{ type: "text", text: wrongSessionText }] },
+      runId,
+      sessionKey: inactiveSessionKey,
+      state: "delta",
+    });
+    await gateway.emitGatewayEvent("chat", {
+      message: { role: "assistant", content: [{ type: "text", text: wrongSessionText }] },
+      runId,
+      sessionKey: inactiveSessionKey,
+      state: "final",
+    });
+
+    await expect.poll(() => page.getByText(wrongSessionText, { exact: true }).count()).toBe(0);
+    await expect.poll(() => page.getByText(selectedText, { exact: true }).count()).toBe(1);
+    const overlappingRows = await page.locator(".chat-virtual-row").evaluateAll((rows) => {
+      const bounds = rows
+        .map((row) => {
+          const rect = row.getBoundingClientRect();
+          return {
+            bottom: rect.bottom,
+            key: row.getAttribute("data-virtual-row-key"),
+            top: rect.top,
+          };
+        })
+        .filter((rect) => rect.bottom > rect.top)
+        .toSorted((left, right) => left.top - right.top);
+      return bounds.slice(1).flatMap((current, index) => {
+        const previous = bounds[index];
+        return previous && current.top < previous.bottom - 0.5
+          ? [{ current: current.key, previous: previous.key }]
+          : [];
+      });
+    });
+    expect(overlappingRows).toEqual([]);
+
+    const artifactDir = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
+    if (artifactDir) {
+      await fs.mkdir(artifactDir, { recursive: true });
+      await page.screenshot({
+        path: path.join(artifactDir, "cross-session-run-isolation.png"),
+        fullPage: true,
+      });
+    }
+
+    await context.close();
+  });
 });

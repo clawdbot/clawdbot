@@ -18,6 +18,47 @@ export type ReleaseValidationCampaignArtifact =
       releaseUrl: string;
     };
 
+type CampaignIssue = {
+  number: number;
+  state: string;
+  title: string;
+  body?: string | null;
+  html_url: string;
+  labels?: Array<string | { name?: string | null }>;
+  pull_request?: object;
+};
+
+type RepositoryParams = { owner: string; repo: string };
+
+type CampaignIssueResponse = Promise<{ data: CampaignIssue }>;
+
+type CampaignIssuesApi = {
+  listForRepo(
+    params: RepositoryParams & { state: "open"; labels: string; per_page: number },
+  ): Promise<unknown>;
+  getLabel(params: RepositoryParams & { name: string }): Promise<unknown>;
+  createLabel(
+    params: RepositoryParams & { name: string; color: string; description: string },
+  ): Promise<unknown>;
+  createComment(
+    params: RepositoryParams & { issue_number: number; body: string },
+  ): Promise<unknown>;
+  create(
+    params: RepositoryParams & { title: string; body: string; labels: string[] },
+  ): CampaignIssueResponse;
+  update(
+    params: RepositoryParams & {
+      issue_number: number;
+      title?: string;
+      body?: string;
+      state?: "open" | "closed";
+      state_reason?: "completed";
+      labels?: string[];
+    },
+  ): CampaignIssueResponse;
+  get(params: RepositoryParams & { issue_number: number }): CampaignIssueResponse;
+};
+
 export function validateReleaseValidationCampaignArtifact(
   artifact: unknown,
   options?: {
@@ -27,8 +68,21 @@ export function validateReleaseValidationCampaignArtifact(
   },
 ): ReleaseValidationCampaignArtifact;
 
+/**
+ * Structural subset of the Actions-provided Octokit client this publisher uses.
+ * Declared locally so the script keeps a real contract without depending on
+ * Octokit's generated types from a plain-Node script surface.
+ */
+export type ReleaseValidationCampaignGitHubClient = {
+  paginate(
+    method: CampaignIssuesApi["listForRepo"],
+    params: Parameters<CampaignIssuesApi["listForRepo"]>[0],
+  ): Promise<CampaignIssue[]>;
+  rest: { issues: CampaignIssuesApi };
+};
+
 export function runReleaseValidationCampaignPublish(params: {
-  github: any;
+  github: ReleaseValidationCampaignGitHubClient;
   context: { repo: { owner: string; repo: string } };
   core: { info(message: string): void; setOutput?(name: string, value: string): void };
   artifact: unknown;

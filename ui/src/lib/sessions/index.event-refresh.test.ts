@@ -2,23 +2,15 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
-import { createSessionCapability } from "./index.ts";
+import {
+  createSessionCapabilityHarness,
+  sessionChangedEvent,
+  sessionsResult,
+} from "./session-capability.test-support.ts";
+import type { SessionCapability } from "./session-capability.ts";
 
 const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 200;
 const SESSION_EVENT_REFRESH_MAX_WAIT_MS = 1_000;
-
-function sessionsResult(
-  ts: number,
-  sessions: SessionsListResult["sessions"] = [],
-): SessionsListResult {
-  return {
-    ts,
-    path: "",
-    count: sessions.length,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions,
-  };
-}
 
 function deferred<T>() {
   let resolve: (value: T) => void = () => undefined;
@@ -26,37 +18,6 @@ function deferred<T>() {
     resolve = next;
   });
   return { promise, resolve };
-}
-
-function sessionChangedEvent(key: string): GatewayEventFrame {
-  return {
-    type: "event",
-    event: "sessions.changed",
-    payload: { sessionKey: key, reason: "create", key, kind: "direct", updatedAt: 1 },
-  };
-}
-
-function createHarness(request: GatewayBrowserClient["request"], ownerId?: string) {
-  const client = { request } as GatewayBrowserClient;
-  let eventListener: ((event: GatewayEventFrame) => void) | undefined;
-  const sessions = createSessionCapability({
-    snapshot: {
-      client,
-      phase: "connected",
-      sessionKey: "agent:main:main",
-      assistantAgentId: "main",
-      hello: null,
-      selfUser: ownerId ? { id: ownerId } : null,
-    },
-    subscribe: () => () => undefined,
-    subscribeEvents(listener) {
-      eventListener = listener;
-      return () => {
-        eventListener = undefined;
-      };
-    },
-  });
-  return { sessions, emitEvent: (event: GatewayEventFrame) => eventListener?.(event) };
 }
 
 function installPageLifecycle() {
@@ -98,9 +59,9 @@ describe("event-driven session list refresh", () => {
         updatedAt: 1,
         owner: { actor: { type: "human" as const, id: "profile-self" } },
       };
-      return sessionsResult(1, [visible]);
+      return sessionsResult([visible], 1);
     });
-    const { sessions, emitEvent } = createHarness(
+    const { sessions, emitEvent } = createSessionCapabilityHarness(
       request as unknown as GatewayBrowserClient["request"],
     );
 
@@ -159,7 +120,7 @@ describe("event-driven session list refresh", () => {
           throw new Error(`Unexpected request: ${method}`);
         }
         if (params?.boardFace !== "dashboard") {
-          return sessionsResult(1);
+          return sessionsResult([], 1);
         }
         const rows = params.agentId
           ? [{ ...dashboardRows[0]!, key: `agent:${params.agentId}:dashboard` }]
@@ -167,14 +128,14 @@ describe("event-driven session list refresh", () => {
         const offset = params.offset ?? 0;
         const page = rows.slice(offset, offset + (params.limit ?? 50));
         return {
-          ...sessionsResult(1, page),
+          ...sessionsResult(page, 1),
           totalCount: rows.length,
           hasMore: offset + page.length < rows.length,
           nextOffset: offset + page.length < rows.length ? offset + page.length : null,
         };
       },
     );
-    const { sessions, emitEvent } = createHarness(
+    const { sessions, emitEvent } = createSessionCapabilityHarness(
       request as unknown as GatewayBrowserClient["request"],
     );
     const allAgentsQuery = {
@@ -255,18 +216,21 @@ describe("event-driven session list refresh", () => {
         calls[lane] += 1;
         const done = lane !== "research" && calls[lane] > 1;
         const rowKey = lane === "research" ? "agent:research:other" : key;
-        return sessionsResult(calls[lane], [
-          {
-            key: rowKey,
-            kind: "direct",
-            updatedAt: calls[lane],
-            hasActiveRun: !done,
-            status: done ? "done" : "running",
-          },
-        ]);
+        return sessionsResult(
+          [
+            {
+              key: rowKey,
+              kind: "direct",
+              updatedAt: calls[lane],
+              hasActiveRun: !done,
+              status: done ? "done" : "running",
+            },
+          ],
+          calls[lane],
+        );
       },
     );
-    const { sessions, emitEvent } = createHarness(
+    const { sessions, emitEvent } = createSessionCapabilityHarness(
       request as unknown as GatewayBrowserClient["request"],
     );
     const mainQuery = {
@@ -341,9 +305,9 @@ describe("event-driven session list refresh", () => {
       if (method !== "sessions.list") {
         throw new Error(`Unexpected request: ${method}`);
       }
-      return sessionsResult(1, [mainRow]);
+      return sessionsResult([mainRow], 1);
     });
-    const { sessions, emitEvent } = createHarness(
+    const { sessions, emitEvent } = createSessionCapabilityHarness(
       request as unknown as GatewayBrowserClient["request"],
     );
 
@@ -398,9 +362,9 @@ describe("event-driven session list refresh", () => {
         throw new Error(`Unexpected request: ${method}`);
       }
       listCalls += 1;
-      return sessionsResult(listCalls, listCalls === 1 ? [mainRow] : [fallbackRow]);
+      return sessionsResult(listCalls === 1 ? [mainRow] : [fallbackRow], listCalls);
     });
-    const { sessions, emitEvent } = createHarness(
+    const { sessions, emitEvent } = createSessionCapabilityHarness(
       request as unknown as GatewayBrowserClient["request"],
     );
 
@@ -454,19 +418,17 @@ describe("event-driven session list refresh", () => {
     {
       filter: "ownerId",
       query: { ownerId: "profile-ada" },
-      applyFilter: (sessions: ReturnType<typeof createSessionCapability>) =>
-        sessions.setOwnerFilter("profile-ada"),
+      applyFilter: (sessions: SessionCapability) => sessions.setOwnerFilter("profile-ada"),
     },
     {
       filter: "involvingMe",
       query: { involvingMe: true },
-      applyFilter: (sessions: ReturnType<typeof createSessionCapability>) =>
-        sessions.setInvolvingMeFilter(true),
+      applyFilter: (sessions: SessionCapability) => sessions.setInvolvingMeFilter(true),
     },
     {
       filter: "search",
       query: { search: "Ada" },
-      applyFilter: (sessions: ReturnType<typeof createSessionCapability>) =>
+      applyFilter: (sessions: SessionCapability) =>
         sessions.refresh({ agentId: "main", search: "Ada", force: true }),
     },
   ])(
@@ -494,12 +456,12 @@ describe("event-driven session list refresh", () => {
           }
           const filtered = Boolean(params?.ownerId || params?.involvingMe || params?.search);
           return sessionsResult(
-            matchesFilteredRoster ? 1 : 2,
             filtered && !matchesFilteredRoster ? [] : [row],
+            matchesFilteredRoster ? 1 : 2,
           );
         },
       );
-      const { sessions, emitEvent } = createHarness(
+      const { sessions, emitEvent } = createSessionCapabilityHarness(
         request as unknown as GatewayBrowserClient["request"],
       );
 
@@ -556,13 +518,13 @@ describe("event-driven session list refresh", () => {
       const page = rows.slice(offset, offset + limit);
       const hasMore = offset + page.length < rows.length;
       return {
-        ...sessionsResult(offset + 1, page),
+        ...sessionsResult(page, offset + 1),
         totalCount: rows.length,
         nextOffset: hasMore ? offset + page.length : null,
         hasMore,
       };
     });
-    const { sessions, emitEvent } = createHarness(
+    const { sessions, emitEvent } = createSessionCapabilityHarness(
       request as unknown as GatewayBrowserClient["request"],
     );
 
@@ -590,9 +552,9 @@ describe("event-driven session list refresh", () => {
       if (method !== "sessions.list") {
         throw new Error(`Unexpected request: ${method}`);
       }
-      return sessionsResult(1);
+      return sessionsResult([], 1);
     });
-    const { sessions, emitEvent } = createHarness(
+    const { sessions, emitEvent } = createSessionCapabilityHarness(
       request as unknown as GatewayBrowserClient["request"],
     );
 
@@ -625,9 +587,9 @@ describe("event-driven session list refresh", () => {
       if (method !== "sessions.list") {
         throw new Error(`Unexpected request: ${method}`);
       }
-      return sessionsResult(1);
+      return sessionsResult([], 1);
     });
-    const { sessions, emitEvent } = createHarness(
+    const { sessions, emitEvent } = createSessionCapabilityHarness(
       request as unknown as GatewayBrowserClient["request"],
     );
 
@@ -654,9 +616,9 @@ describe("event-driven session list refresh", () => {
       if (method !== "sessions.list") {
         throw new Error(`Unexpected request: ${method}`);
       }
-      return sessionsResult(1);
+      return sessionsResult([], 1);
     });
-    const { sessions, emitEvent } = createHarness(
+    const { sessions, emitEvent } = createSessionCapabilityHarness(
       request as unknown as GatewayBrowserClient["request"],
     );
 
@@ -685,9 +647,9 @@ describe("event-driven session list refresh", () => {
       if (method !== "sessions.list") {
         throw new Error(`Unexpected request: ${method}`);
       }
-      return sessionsResult(1);
+      return sessionsResult([], 1);
     });
-    const { sessions, emitEvent } = createHarness(
+    const { sessions, emitEvent } = createSessionCapabilityHarness(
       request as unknown as GatewayBrowserClient["request"],
     );
 
@@ -728,9 +690,9 @@ describe("event-driven session list refresh", () => {
           secondListStarted.resolve();
           return await secondList.promise;
         }
-        return sessionsResult(listCalls);
+        return sessionsResult([], listCalls);
       });
-      const { sessions, emitEvent } = createHarness(
+      const { sessions, emitEvent } = createSessionCapabilityHarness(
         request as unknown as GatewayBrowserClient["request"],
       );
 
@@ -752,7 +714,7 @@ describe("event-driven session list refresh", () => {
           expect(request).toHaveBeenCalledTimes(1);
         }
 
-        firstList.resolve(sessionsResult(1));
+        firstList.resolve(sessionsResult([], 1));
         await secondListStarted.promise;
         if (!fireBeforeInitialCompletion) {
           await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
@@ -770,12 +732,12 @@ describe("event-driven session list refresh", () => {
         });
         expect(sessions.state.loading).toBe(false);
 
-        secondList.resolve(sessionsResult(2));
+        secondList.resolve(sessionsResult([], 2));
         await Promise.all([initialRefresh, explicitRefresh]);
         expect(request).toHaveBeenCalledTimes(2);
       } finally {
-        firstList.resolve(sessionsResult(1));
-        secondList.resolve(sessionsResult(2));
+        firstList.resolve(sessionsResult([], 1));
+        secondList.resolve(sessionsResult([], 2));
         sessions.dispose();
         vi.useRealTimers();
       }
@@ -816,9 +778,9 @@ describe("event-driven session list refresh", () => {
         secondListStarted.resolve();
         return await secondList.promise;
       }
-      return sessionsResult(listCalls);
+      return sessionsResult([], listCalls);
     });
-    const { sessions, emitEvent } = createHarness(
+    const { sessions, emitEvent } = createSessionCapabilityHarness(
       request as unknown as GatewayBrowserClient["request"],
     );
 
@@ -842,7 +804,7 @@ describe("event-driven session list refresh", () => {
       }
       await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
 
-      firstList.resolve(sessionsResult(1));
+      firstList.resolve(sessionsResult([], 1));
       await secondListStarted.promise;
       expect(request.mock.calls[1]?.[1]).toMatchObject({
         agentId: "main",
@@ -850,7 +812,7 @@ describe("event-driven session list refresh", () => {
         offset: 25,
       });
 
-      secondList.resolve(sessionsResult(2));
+      secondList.resolve(sessionsResult([], 2));
       await Promise.all([initialRefresh, appendRefresh]);
       expect(request).toHaveBeenCalledTimes(3);
       expect(request.mock.calls[2]?.[1]).toMatchObject({
@@ -859,8 +821,8 @@ describe("event-driven session list refresh", () => {
       });
       expect(request.mock.calls[2]?.[1]).not.toHaveProperty("offset");
     } finally {
-      firstList.resolve(sessionsResult(1));
-      secondList.resolve(sessionsResult(2));
+      firstList.resolve(sessionsResult([], 1));
+      secondList.resolve(sessionsResult([], 2));
       sessions.dispose();
       vi.useRealTimers();
     }
@@ -882,9 +844,9 @@ describe("event-driven session list refresh", () => {
       if (listCalls === 3) {
         thirdListStarted.resolve();
       }
-      return sessionsResult(listCalls);
+      return sessionsResult([], listCalls);
     });
-    const { sessions, emitEvent } = createHarness(
+    const { sessions, emitEvent } = createSessionCapabilityHarness(
       request as unknown as GatewayBrowserClient["request"],
     );
 
@@ -898,7 +860,7 @@ describe("event-driven session list refresh", () => {
       await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
       expect(request).toHaveBeenCalledTimes(2);
 
-      secondList.resolve(sessionsResult(2));
+      secondList.resolve(sessionsResult([], 2));
       await thirdListStarted.promise;
       expect(request).toHaveBeenCalledTimes(3);
     } finally {
@@ -917,12 +879,12 @@ describe("event-driven session list refresh", () => {
         throw new Error(`Unexpected request: ${method}`);
       }
       if (params?.archived !== "all") {
-        return sessionsResult(0);
+        return sessionsResult([], 0);
       }
       filteredCalls += 1;
-      return filteredCalls === 2 ? await activeRefresh.promise : sessionsResult(filteredCalls);
+      return filteredCalls === 2 ? await activeRefresh.promise : sessionsResult([], filteredCalls);
     });
-    const { sessions, emitEvent } = createHarness(
+    const { sessions, emitEvent } = createSessionCapabilityHarness(
       request as unknown as GatewayBrowserClient["request"],
     );
     const unsubscribe = sessions.subscribeList({ agentId: "main", archivedFilter: "all" }, vi.fn());
@@ -936,7 +898,7 @@ describe("event-driven session list refresh", () => {
       emitEvent(sessionChangedEvent("agent:main:queued"));
       await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
       page.setVisibility("hidden");
-      activeRefresh.resolve(sessionsResult(2));
+      activeRefresh.resolve(sessionsResult([], 2));
       await vi.advanceTimersByTimeAsync(0);
       expect(filteredCalls).toBe(2);
 
@@ -944,7 +906,7 @@ describe("event-driven session list refresh", () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(filteredCalls).toBe(3);
     } finally {
-      activeRefresh.resolve(sessionsResult(2));
+      activeRefresh.resolve(sessionsResult([], 2));
       unsubscribe();
       sessions.dispose();
       vi.useRealTimers();
@@ -959,9 +921,9 @@ describe("event-driven session list refresh", () => {
       if (method !== "sessions.list") {
         throw new Error(`Unexpected request: ${method}`);
       }
-      return sessionsResult(1, [{ key: "agent:main:pending", kind: "direct", updatedAt: 0 }]);
+      return sessionsResult([{ key: "agent:main:pending", kind: "direct", updatedAt: 0 }], 1);
     });
-    const { sessions, emitEvent } = createHarness(
+    const { sessions, emitEvent } = createSessionCapabilityHarness(
       request as unknown as GatewayBrowserClient["request"],
     );
     const unsubscribe = sessions.subscribeList({ agentId: "main", archivedFilter: "all" }, vi.fn());
