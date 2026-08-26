@@ -75,6 +75,7 @@ vi.mock("./bot-message-dispatch.agent.runtime.js", () => ({
   resolveAgentDir: vi.fn(() => "/tmp/agent"),
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
   resolveDefaultModelForAgent: vi.fn(() => ({ provider: "openai", model: "gpt-test" })),
+  resolveHumanDelayConfig: vi.fn(() => undefined),
 }));
 
 const { createTelegramBot } = await import("./bot.js");
