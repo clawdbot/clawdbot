@@ -425,7 +425,7 @@ function createQaNativeOutputForwarder() {
   };
 
   return {
-    write(stream: "stderr" | "stdout", chunk: Buffer) {
+    write: (stream: "stderr" | "stdout", chunk: Buffer) => {
       const output = outputs[stream];
       let text = output.decoder.write(chunk);
       while (text.length > 0) {
