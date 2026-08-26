@@ -92,6 +92,7 @@ type CoreCodingToolsOptions = {
   skillInstructionPaths?: readonly string[];
   modelContextWindowTokens?: number;
   imageSanitization?: ImageSanitizationLimits;
+  modelHasVision?: boolean;
   memoryWriteProvenance?: MemoryWriteProvenanceObserver;
   baseToolNames?: readonly string[];
   baseToolFactories?: {
@@ -144,11 +145,13 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
             bridge: sandboxFsBridge!,
             modelContextWindowTokens: options.modelContextWindowTokens,
             imageSanitization: options.imageSanitization,
+            modelHasVision: options.modelHasVision,
             createTool: options.baseToolFactories?.createReadTool,
           })
         : createOpenClawReadTool(
             (options.baseToolFactories?.createReadTool ?? createReadTool)(options.codingRoot, {
               maxBytes: resolveAdaptiveReadMaxBytes(options),
+              modelHasVision: options.modelHasVision,
             }),
             {
               modelContextWindowTokens: options.modelContextWindowTokens,

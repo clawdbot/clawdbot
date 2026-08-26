@@ -27,6 +27,7 @@ import {
   collectPresentOpenClawTools,
   shouldIncludeAskUserToolForOpenClawTools,
   shouldIncludeProgressCardToolForOpenClawTools,
+  shouldIncludeSecretsToolForOpenClawTools,
 } from "./openclaw-tools.registration.js";
 import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.js";
 import { createOpenClawSwarmToolGroups } from "./openclaw-tools.swarm.js";
@@ -68,6 +69,7 @@ import { createPdfTool } from "./tools/pdf-tool.js";
 import { createPortalTool } from "./tools/portal-tool.js";
 import { createProgressCardTool } from "./tools/progress-card-tool.js";
 import { createScreenTool } from "./tools/screen-tool.js";
+import { createSecretsTool } from "./tools/secrets-tool.js";
 import { createSessionStatusTool } from "./tools/session-status-tool.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
@@ -478,6 +480,19 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
           }),
         ]
       : []),
+    ...(shouldIncludeSecretsToolForOpenClawTools({
+      config: resolvedConfig,
+      agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+      pluginToolDenylist: options?.pluginToolDenylist,
+    })
+      ? [
+          createSecretsTool({
+            agentId: sessionAgentId,
+            sessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+            runId: options?.runId,
+          }),
+        ]
+      : []),
     createSessionsListTool({
       ...sessionLookupToolOptions,
       requesterAgentIdOverride: sessionAgentId,
@@ -544,6 +559,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
             requesterRunId: options?.runId,
             swarmCollector: options?.swarmCollector,
             workspaceDir: spawnWorkspaceDir,
+            sessionPermissionPolicy: options?.sessionPermissionPolicy,
             inheritedToolAllowlist: options?.inheritedToolAllowlist,
             inheritedToolDenylist: options?.inheritedToolDenylist,
           }),

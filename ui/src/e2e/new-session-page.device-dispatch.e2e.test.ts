@@ -101,6 +101,169 @@ suite.define(() => {
     }
   });
 
+  it.each(deviceTargets)(
+    "does not dispatch the $name device from stale capacity during a topology refresh",
+    async ({ value }) => {
+      const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+      const page = await context.newPage();
+      const environment = {
+        id: "node:paired-runner",
+        type: "node",
+        label: "Paired runner",
+        status: "available",
+        sessionHost: true,
+        workerSlots: { total: 2, available: 1 },
+      };
+      const gateway = await installMockGateway(page, {
+        operatorScopes: ["operator.read", "operator.write"],
+        workspace: WORKSPACE,
+        workspaceGit: true,
+        methodResponses: {
+          "environments.list": { environments: [environment], profiles: [] },
+          "sessions.create": { key: "agent:main:stale-device-capacity" },
+        },
+      });
+
+      try {
+        await page.goto(`${suite.server.baseUrl}new`);
+        await gateway.waitForRequest("environments.list");
+        const where = page.locator("#new-session-where-trigger");
+        await where.click();
+        await page.locator(`[data-value="${value}"]`).click();
+        await page.locator(".new-session-page__message").fill("require current worker capacity");
+        const start = page.getByRole("button", { name: "Start session" });
+        await expect.poll(() => start.isEnabled()).toBe(true);
+
+        await gateway.deferNext("environments.list");
+        const requestsBeforeRefresh = (await gateway.getRequests("environments.list")).length;
+        await gateway.emitGatewayEvent("node.runnerInventory.changed", {
+          nodeId: "paired-runner",
+        });
+        await gateway.waitForRequest("environments.list", { after: requestsBeforeRefresh });
+        await expect.poll(() => start.isDisabled()).toBe(true);
+        expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+        await expect
+          .poll(() =>
+            where.getAttribute(value === "auto-device" ? "data-auto-device" : "data-device-id"),
+          )
+          .toBe(value === "auto-device" ? "true" : "paired-runner");
+
+        await gateway.resolveDeferred("environments.list", {
+          environments: [{ ...environment, workerSlots: { total: 2, available: 0 } }],
+          profiles: [],
+        });
+        await expect.poll(() => start.isDisabled()).toBe(true);
+        await expect
+          .poll(() => start.locator("xpath=..").getAttribute("content"))
+          .toContain("No worker slots are available");
+        expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+      } finally {
+        await context.close();
+      }
+    },
+  );
+
+  it.each([
+    {
+      name: "paired device",
+      preference: { kind: "device", id: "paired-runner" },
+      attribute: "data-device-id",
+      value: "paired-runner",
+      target: { deviceId: "paired-runner" },
+    },
+    {
+      name: "automatic device",
+      preference: { kind: "auto-device" },
+      attribute: "data-auto-device",
+      value: "true",
+      target: { autoDevice: true },
+    },
+    {
+      name: "cloud worker",
+      preference: { kind: "cloud", id: "aws" },
+      attribute: "data-cloud-profile",
+      value: "aws",
+      target: { profileId: "aws" },
+    },
+  ])(
+    "does not start locally while a remembered $name destination is being restored",
+    async ({ preference, attribute, value, target }) => {
+      const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+      const page = await context.newPage();
+      const appUrl = new URL(suite.server.baseUrl);
+      const gatewayUrl = `${appUrl.protocol === "https:" ? "wss:" : "ws:"}//${appUrl.host}`;
+      const storageKey = `openclaw.new-session.preferences.v1:${gatewayOriginScope(gatewayUrl)}`;
+      const sessionKey = "agent:main:restored-remote-destination";
+      const catalog = {
+        environments: [
+          {
+            id: "node:paired-runner",
+            type: "node",
+            label: "Paired runner",
+            status: "available",
+            sessionHost: true,
+            workerSlots: { total: 2, available: 1 },
+          },
+        ],
+        profiles: [{ id: "aws", providerId: "crabbox" }],
+      };
+      await page.addInitScript(
+        ({ key, workspace, where }) => {
+          localStorage.setItem(
+            key,
+            JSON.stringify({
+              agents: { main: { workspace, folder: workspace, where, worktree: true } },
+            }),
+          );
+        },
+        { key: storageKey, workspace: WORKSPACE, where: preference },
+      );
+      const gateway = await installMockGateway(page, {
+        deferredMethods: ["environments.list"],
+        operatorScopes: ["operator.read", "operator.write", "operator.admin"],
+        workspace: WORKSPACE,
+        workspaceGit: true,
+        methodResponses: {
+          "worktrees.branches": {
+            branches: [{ kind: "local", name: "main" }],
+            defaultBranch: "main",
+            repositoryStatus: "git",
+          },
+          "sessions.create": { key: sessionKey },
+          "sessions.list": createdSessionListResult(sessionKey),
+          "sessions.dispatch": { placement: { state: "active", generation: 1 } },
+          "sessions.send": { runId: "run-restored-remote", status: "started" },
+        },
+      });
+
+      try {
+        await page.goto(`${suite.server.baseUrl}new`);
+        await gateway.waitForRequest("environments.list");
+        await expect
+          .poll(() => page.locator("#new-session-detail-trigger").getAttribute("data-worktree"))
+          .toBe("true");
+        await page.locator(".new-session-page__message").fill("keep my chosen remote destination");
+        const start = page.getByRole("button", { name: "Start session" });
+        await expect.poll(() => start.isDisabled()).toBe(true);
+        await expect
+          .poll(() => start.locator("xpath=..").getAttribute("content"))
+          .toContain("Restoring your last session setup");
+        expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+
+        await gateway.resolveDeferred("environments.list", catalog);
+        const where = page.locator("#new-session-where-trigger");
+        await expect.poll(() => where.getAttribute(attribute)).toBe(value);
+        await expect.poll(() => start.isEnabled()).toBe(true);
+        await start.click();
+        await expect(gateway.waitForRequest("sessions.dispatch")).resolves.toMatchObject({
+          params: { key: sessionKey, agentId: "main", ...target },
+        });
+      } finally {
+        await context.close();
+      }
+    },
+  );
+
   it.each([
     {
       name: "offline paired device",

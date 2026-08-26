@@ -925,7 +925,7 @@ describe("session startup catch-up", () => {
     expect(harness.indexedContents[0]).not.toContain("replacement store target");
   });
 
-  it("preserves generated-session classification during targeted custom-store indexing", async () => {
+  it("excludes generated cron transcripts from targeted custom-store indexing", async () => {
     const storePath = path.join(stateDir, "custom-sessions", "sessions.json");
     const session = await writeSqliteSession({
       storePath,
@@ -947,8 +947,8 @@ describe("session startup catch-up", () => {
       ],
     });
 
-    expect(harness.indexedPaths).toEqual([session.corpusPath]);
-    expect(harness.indexedContents).toEqual([""]);
+    expect(harness.indexedPaths).toEqual([]);
+    expect(harness.indexedContents).toEqual([]);
   });
 
   it("queues transcript update identity without requiring a session file", async () => {

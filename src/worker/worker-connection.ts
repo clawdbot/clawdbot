@@ -47,11 +47,7 @@ import {
 import { WorkerConnectionEndpointError } from "./worker-connection-endpoint.js";
 import { WorkerConnectionFrameDispatcher } from "./worker-connection-frames.js";
 
-export {
-  WorkerConnectionInterruptedError,
-  WorkerConnectionStoppedError,
-  WorkerFencedError,
-} from "./worker-connection-contract.js";
+export { WorkerConnectionInterruptedError } from "./worker-connection-contract.js";
 export type { WorkerConnectionState } from "./worker-connection-contract.js";
 
 const DEFAULT_RECONNECT_BACKOFF: BackoffPolicy = {
@@ -160,6 +156,14 @@ export class WorkerConnection {
   onStateChange(listener: (state: WorkerConnectionState) => void): () => void {
     this.stateListeners.add(listener);
     return () => this.stateListeners.delete(listener);
+  }
+
+  onTerminalError(listener: (error: Error) => void): () => void {
+    return this.onStateChange((state) => {
+      if (this.isTerminal(state)) {
+        listener(this.terminalError(state));
+      }
+    });
   }
 
   onInferenceEvent(listener: (frame: WorkerInferenceEventFrame) => void): () => void {
@@ -507,22 +511,18 @@ export class WorkerConnection {
     return error;
   }
 
-  private isTerminal(): boolean {
-    return (
-      this.stateValue.kind === "failed" ||
-      this.stateValue.kind === "fenced" ||
-      this.stateValue.kind === "stopped"
-    );
+  private isTerminal(state: WorkerConnectionState = this.stateValue): boolean {
+    return state.kind === "failed" || state.kind === "fenced" || state.kind === "stopped";
   }
 
-  private terminalError(): Error {
-    if (this.stateValue.kind === "failed") {
-      return this.stateValue.error;
+  private terminalError(state: WorkerConnectionState = this.stateValue): Error {
+    if (state.kind === "failed") {
+      return state.error;
     }
-    if (this.stateValue.kind === "fenced") {
-      return new WorkerFencedError(this.stateValue.reason);
+    if (state.kind === "fenced") {
+      return new WorkerFencedError(state.reason);
     }
-    if (this.stateValue.kind === "stopped") {
+    if (state.kind === "stopped") {
       return new WorkerConnectionStoppedError();
     }
     return new WorkerConnectionInterruptedError("worker connection terminated");

@@ -22,6 +22,47 @@ async function writeTranscript(name: string, records: unknown[]): Promise<string
 }
 
 describe("session transcript provenance", () => {
+  it.each(["assistant", "toolResult"])(
+    "discards earlier archive lines after an authoritative %s event identifies a dreaming run",
+    async (role) => {
+      const filePath = await writeTranscript("narrative.jsonl.deleted.2026-08-26T10-00-00.000Z", [
+        { type: "message", message: { role: "user", content: "Private fragment from dreaming." } },
+        {
+          type: "message",
+          message: {
+            role,
+            content: "Internal narrative output.",
+            __openclaw: { runId: "dreaming-narrative-main-light-real" },
+          },
+        },
+      ]);
+
+      const entry = await buildSessionEntry(filePath, { sessionKind: "unknown" });
+
+      expect(entry?.generatedByDreamingNarrative).toBe(true);
+      expect(entry?.content).toBe("");
+      expect(entry?.lineProvenance).toEqual([]);
+    },
+  );
+
+  it("does not treat run identity on user-authored transcript messages as authoritative", async () => {
+    const filePath = await writeTranscript("interactive.jsonl", [
+      {
+        type: "message",
+        message: {
+          role: "user",
+          content: "Keep this genuine user conversation.",
+          __openclaw: { runId: "dreaming-narrative-main-light-spoofed" },
+        },
+      },
+    ]);
+
+    const entry = await buildSessionEntry(filePath, { sessionKind: "interactive" });
+
+    expect(entry?.generatedByDreamingNarrative).toBeUndefined();
+    expect(entry?.content).toBe("User: Keep this genuine user conversation.");
+  });
+
   it("classifies owner input and its agent-derived response", async () => {
     const filePath = await writeTranscript("owner.jsonl", [
       {

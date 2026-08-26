@@ -1,5 +1,5 @@
 // Dashboard link tests cover dashboard command URL resolution and config snapshot handling.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { dashboardCommand } from "./dashboard.js";
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
@@ -91,6 +91,10 @@ function mockSnapshot(token: unknown = "abc") {
 }
 
 describe("dashboardCommand", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   beforeEach(() => {
     resetRuntime();
     readConfigFileSnapshotMock.mockClear();
@@ -224,6 +228,23 @@ describe("dashboardCommand", () => {
     expect(runtime.log).toHaveBeenCalledWith(
       "Browser launch failed. Open the one-time pairing URL copied to clipboard.",
     );
+  });
+
+  it("prints the SSH hint when browser and clipboard delivery fail after support detection", async () => {
+    vi.stubEnv("SSH_CONNECTION", "192.0.2.1 12345 192.0.2.2 22");
+    mockSnapshot("shhhh");
+    copyToClipboardMock.mockResolvedValue(false);
+    detectBrowserOpenSupportMock.mockResolvedValue({ ok: true });
+    openUrlMock.mockResolvedValue(false);
+    formatControlUiSshHintMock.mockReturnValue("ssh hint");
+
+    await dashboardCommand(runtime);
+
+    expect(formatControlUiSshHintMock).toHaveBeenCalledWith({
+      port: 18789,
+      basePath: undefined,
+    });
+    expect(runtime.log).toHaveBeenCalledWith("ssh hint");
   });
 
   it("never passes token to SSH hint (CVE regression — SSH path)", async () => {

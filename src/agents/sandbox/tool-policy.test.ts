@@ -252,19 +252,26 @@ describe("sandbox/tool-policy", () => {
       "sessions",
       "sessions.json",
     );
-    const entry = { sessionId: "guest-session", updatedAt: 1, sandbox: "required" as const };
+    const entry = {
+      sessionId: "guest-session",
+      updatedAt: 1,
+      sandbox: "required" as const,
+      createdActor: { type: "human" as const, id: "guest-principal" },
+    };
     await replaceSessionEntry({ sessionKey, storePath }, entry);
     const cfg: OpenClawConfig = {
       session: { store: storePath },
       agents: {
-        defaults: { sandbox: { mode: "off", scope: "session" } },
+        defaults: { sandbox: { mode: "off", scope: "session", workspaceAccess: "rw" } },
         list: [{ id: "main" }],
       },
     };
 
     expect(resolveSandboxRuntimeStatus({ cfg, sessionKey })).toMatchObject({
       sandboxRequired: true,
+      sandboxPrincipalId: "guest-principal",
       sandboxed: true,
+      workspaceAccess: "ro",
     });
     const blockedMessage = formatSandboxToolPolicyBlockedMessage({
       cfg,
@@ -273,6 +280,38 @@ describe("sandbox/tool-policy", () => {
     });
     expect(blockedMessage).toContain("create a new session under an authorized role");
     expect(blockedMessage).not.toContain("sandbox.mode=off");
+  });
+
+  it("does not apply guest isolation or cap writable access to unstamped sessions", async () => {
+    const sessionKey = "agent:main:maintainer";
+    const storePath = path.join(
+      sandboxStoreDirs.make("openclaw-unstamped-sandbox-"),
+      "agents",
+      "main",
+      "sessions",
+      "sessions.json",
+    );
+    await replaceSessionEntry(
+      { sessionKey, storePath },
+      {
+        sessionId: "maintainer-session",
+        updatedAt: 1,
+        createdActor: { type: "human", id: "maintainer-principal" },
+      },
+    );
+    const cfg: OpenClawConfig = {
+      session: { store: storePath },
+      agents: {
+        defaults: { sandbox: { mode: "all", scope: "agent", workspaceAccess: "rw" } },
+        list: [{ id: "main" }],
+      },
+    };
+
+    const runtime = resolveSandboxRuntimeStatus({ cfg, sessionKey });
+
+    expect(runtime).toMatchObject({ sandboxRequired: false, sandboxed: true });
+    expect(runtime.sandboxPrincipalId).toBeUndefined();
+    expect(runtime.workspaceAccess).toBeUndefined();
   });
 
   it("classifies a borrowed runtime key under its own sandbox agent", () => {

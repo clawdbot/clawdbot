@@ -20,6 +20,7 @@
   "channel-config-ui-hints",
   "channel-config-writes",
   "channel-contract-testing",
+  "channel-ingress-test-runtime",
   "channel-mention-gating",
   "channel-route",
   "channel-secret-owner-runtime",

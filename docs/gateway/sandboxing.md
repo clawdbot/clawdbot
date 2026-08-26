@@ -51,6 +51,13 @@ execution or Gateway/node host overrides cannot bypass it. The default
 - `session`: one container per session.
 - `shared`: one container shared by all sandboxed sessions (per-agent `docker`/`ssh`/`browser` overrides are ignored under this scope).
 
+Sessions whose creator role requires sandboxing use the creator's authenticated
+principal as their isolation boundary instead. Different guests on the same
+agent receive separate sandbox environments and workspaces, regardless of the
+configured scope. Sessions created by the same guest reuse that guest's
+environment and workspace, including when the configured scope is `session`.
+Sessions without a role-required sandbox keep the configured scope behavior.
+
 Non-shared runtime identity also includes the resolved agent workspace path. This prevents co-hosted workspaces that reuse the same agent or session keys from sharing Docker, browser, SSH, OpenShell, or plugin-provided sandbox state. `shared` scope intentionally remains workspace-independent.
 
 The first use after upgrading from an older release creates non-shared runtimes and sandbox workspaces under the workspace-qualified identity. Existing non-shared runtimes are not adopted; this is an intentional one-time reset. They can age out through configured prune settings or be removed with `openclaw sandbox recreate`; the next use provisions the current identity.
@@ -285,6 +292,13 @@ For the full prerequisites, configuration reference, workspace-mode comparison, 
 | `none` (default) | Tools see an isolated sandbox workspace under `~/.openclaw/sandboxes`.                    |
 | `ro`             | Mounts the agent workspace read-only at `/agent` (disables `write`/`edit`/`apply_patch`). |
 | `rw`             | Mounts the agent workspace read/write at `/workspace`.                                    |
+
+For a role-required sandbox, OpenClaw caps configured `rw` workspace access at
+`ro` and logs an `agent/sandbox` warning. The guest keeps a separate sandbox
+workspace, while the shared agent workspace is available only as a read-only
+mount. This prevents guests from sharing the writable agent workspace; `none`
+and `ro` remain unchanged. Sessions without a role-required sandbox retain their
+configured workspace access.
 
 With the OpenShell backend, `mirror` mode still uses the local workspace as the canonical source between exec turns, `remote` mode uses the remote OpenShell workspace as canonical after the initial seed, and `workspaceAccess: "ro"`/`"none"` still restrict write behavior the same way.
 

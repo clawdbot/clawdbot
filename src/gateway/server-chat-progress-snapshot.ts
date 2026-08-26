@@ -22,6 +22,14 @@ export function updateChatRunProgressSnapshot(
   const toolCallId = typeof data.toolCallId === "string" ? data.toolCallId.trim() : "";
   const review = asNullableRecord(data.review) ?? undefined;
   const reviewId = typeof review?.id === "string" ? review.id.trim() : "";
+  const isStartupStatus =
+    event.stream === "run_status" &&
+    [
+      "preparing_workspace",
+      "provisioning_environment",
+      "preparing_context",
+      "starting_model",
+    ].includes(phase);
   const preambleItemId =
     typeof data.itemId === "string" && data.itemId.trim()
       ? data.itemId.trim()
@@ -53,7 +61,14 @@ export function updateChatRunProgressSnapshot(
         candidate.data.phase === "strict_review_required" &&
         candidate.data.reviewId === data.reviewId,
     );
-  if (!isTool && !isPreamble && !isStandaloneGuardian && !isNotice && !resolvesStrictReview) {
+  if (
+    !isTool &&
+    !isPreamble &&
+    !isStartupStatus &&
+    !isStandaloneGuardian &&
+    !isNotice &&
+    !resolvesStrictReview
+  ) {
     return snapshot;
   }
 
@@ -74,6 +89,17 @@ export function updateChatRunProgressSnapshot(
     next.events = next.events.filter((candidate) => !predicate(candidate));
     next.byteLength = next.events.reduce((total, candidate) => total + jsonUtf8Bytes(candidate), 0);
   };
+
+  if (isStartupStatus) {
+    if (
+      next.events.some((candidate) => candidate.stream === "tool" || candidate.stream === "item")
+    ) {
+      return next;
+    }
+    removeWhere((candidate) => candidate.stream === "run_status");
+  } else if (isTool || isPreamble) {
+    removeWhere((candidate) => candidate.stream === "run_status");
+  }
 
   if (isTool) {
     removeWhere((candidate) => {

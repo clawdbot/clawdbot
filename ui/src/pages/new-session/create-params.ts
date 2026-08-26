@@ -37,6 +37,7 @@ export function buildDraftSessionCreateParams(draft: {
   visibility?: NewSessionVisibility;
   attachments?: SessionCreateParams["attachments"];
   projectId?: string;
+  projectGitUrl?: string;
   worktree: boolean;
   baseRef?: string;
   worktreeName?: string;
@@ -53,7 +54,11 @@ export function buildDraftSessionCreateParams(draft: {
   const contextWindow = normalizeOptionalString(draft.contextWindow);
   const thinkingLevel = normalizeOptionalString(draft.thinkingLevel);
   const projectId = normalizeOptionalString(draft.projectId);
-  const customFolder = !projectId && cwd && cwd !== workspace ? cwd : undefined;
+  const projectGitUrl =
+    !projectId && (draft.message.trim() || draft.attachments?.length)
+      ? normalizeOptionalString(draft.projectGitUrl)
+      : undefined;
+  const customFolder = !projectId && !projectGitUrl && cwd && cwd !== workspace ? cwd : undefined;
   return {
     ...(normalizeOptionalString(draft.key) ? { key: normalizeOptionalString(draft.key) } : {}),
     agentId: normalizeAgentId(draft.agentId),
@@ -69,6 +74,7 @@ export function buildDraftSessionCreateParams(draft: {
     ...(draft.toolOverrides ? { toolOverrides: draft.toolOverrides } : {}),
     ...(draft.permissionMode ? { permissionMode: draft.permissionMode } : {}),
     ...(projectId ? { projectId } : {}),
+    ...(projectGitUrl ? { projectGitUrl } : {}),
     ...(customFolder ? { cwd: customFolder } : {}),
     ...(draft.worktree
       ? {

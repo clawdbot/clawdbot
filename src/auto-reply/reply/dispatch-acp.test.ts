@@ -3624,6 +3624,73 @@ describe("tryDispatchAcpReplyCore", () => {
     });
   });
 
+  it.each(["direct", "routed"] as const)(
+    "never leaks a marked private inbound prompt across ACP live text deltas via %s delivery",
+    async (deliveryPath) => {
+      setReadyAcpResolution();
+      const marker = "[Current message - respond to this]";
+      const conversationContext = `${marker}\nPrivate secret. Keep hidden.`;
+      const directBlockTexts: string[] = [];
+      const dispatcher = createReplyDispatcher({
+        deliver: async (payload, info) => {
+          if (info.kind === "block" && payload.text) {
+            directBlockTexts.push(payload.text);
+          }
+        },
+      });
+      const ctx = buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        SessionKey: sessionKey,
+        Body: conversationContext,
+        BodyForAgent: conversationContext,
+      });
+      managerMocks.runTurn.mockImplementationOnce(
+        async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+          await onEvent({
+            type: "text_delta",
+            text: "Visible answer before. ",
+            tag: "agent_message_chunk",
+          });
+          await onEvent({
+            type: "text_delta",
+            text: `${marker}\nPrivate secret. `,
+            tag: "agent_message_chunk",
+          });
+          await onEvent({
+            type: "text_delta",
+            text: "Keep hidden. Visible answer after.",
+            tag: "agent_message_chunk",
+          });
+          await onEvent({ type: "done", status: "completed" });
+        },
+      );
+
+      await runDispatch({
+        bodyForAgent: conversationContext,
+        cfg: createAcpTestConfig({
+          acp: { enabled: true, stream: { deliveryMode: "live" } },
+        }),
+        ctx,
+        dispatcher,
+        shouldRouteToOriginating: deliveryPath === "routed",
+        originatingChannel: "discord",
+      });
+
+      const deliveredTexts =
+        deliveryPath === "direct"
+          ? directBlockTexts
+          : routeMocks.routeReply.mock.calls.map((_, index) => String(routePayload(index).text));
+      expect(deliveredTexts.join("")).toContain("Visible answer before.");
+      expect(deliveredTexts.join("")).toContain("Visible answer after.");
+      for (const text of deliveredTexts) {
+        expect(text).not.toContain(marker);
+        expect(text).not.toContain("Private secret.");
+        expect(text).not.toContain("Keep hidden.");
+      }
+    },
+  );
+
   it("falls back to final text when a later telegram ACP block delivery fails", async () => {
     setReadyAcpResolution();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });

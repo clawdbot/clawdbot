@@ -3,28 +3,10 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
 import { openTaskDetailId } from "./components/chat-detail-slot.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
-import {
-  SIDEBAR_NARROW_BREAKPOINT_PX,
-  closeSlot,
-  isSidebarSlotVisible,
-  openSlot,
-  type SidebarSlotId,
-} from "./sidebar-layout.ts";
+import { closeSlot, isSidebarSlotVisible, openSlot, type SidebarSlotId } from "./sidebar-layout.ts";
 
 type ChatPaneSidebarLayout = Parameters<typeof isSidebarSlotVisible>[0];
 type ChatPaneGatewaySnapshot = Parameters<typeof isDesktopPanelAvailable>[0];
-
-export type ChatProgressCardPlacement = "composer" | "rail";
-
-/** Picks the single live progress-card placement for one chat pane. */
-function chatProgressCardPlacement(params: {
-  companionRailVisible: boolean;
-}): ChatProgressCardPlacement {
-  if (params.companionRailVisible) {
-    return "rail";
-  }
-  return "composer";
-}
 
 export function releaseAttachmentWorkspaceOwner(state: ChatPageHost, slot: SidebarSlotId): void {
   // Attachment views temporarily own Files content. Release that owner
@@ -38,7 +20,6 @@ export function releaseAttachmentWorkspaceOwner(state: ChatPageHost, slot: Sideb
 export function createChatPaneRails(params: {
   state: ChatPageHost;
   sidebarLayout: ChatPaneSidebarLayout;
-  paneWidth: number;
   presentationId: string;
   presented: boolean;
   gatewaySnapshot: ChatPaneGatewaySnapshot;
@@ -91,16 +72,10 @@ export function createChatPaneRails(params: {
     narrowLayout: false,
     onToggleCollapsed: () => togglePanelSlot("tasks"),
   };
-  const progressCardPlacement = chatProgressCardPlacement({
-    companionRailVisible:
-      params.paneWidth >= SIDEBAR_NARROW_BREAKPOINT_PX &&
-      isSidebarSlotVisible(sidebarLayout, "companion"),
-  });
   return {
     backgroundTasks,
     closePanelSlot,
     openPanelSlot,
-    progressCardPlacement,
     sessionWorkspace,
   };
 }

@@ -566,6 +566,7 @@ describe("runMemoryFlushIfNeeded", () => {
         isControlUiVisible: false,
         projectSessionActive: false,
         projectSessionLifecycle: false,
+        projectSessionMessages: false,
         sessionId: "session",
         sessionKey,
       }),

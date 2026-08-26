@@ -156,6 +156,56 @@ describe("Ollama onboarding model selection", () => {
     expect(result.defaultModel).toBe("ollama/deepseek-r1:1b");
   });
 
+  it.each([
+    {
+      description: "model inspection fails",
+      showResponse: () => Response.json({ error: "inspection unavailable" }, { status: 503 }),
+    },
+    {
+      description: "model inspection omits metadata",
+      showResponse: () => Response.json({}),
+    },
+  ])(
+    "selects and configures list-advertised models when $description",
+    async ({ showResponse }) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: string | URL | Request) =>
+          requestUrl(input).endsWith("/api/tags")
+            ? Response.json({
+                models: [
+                  {
+                    name: "gemma4:e2b",
+                    size: 2_000_000_000,
+                    details: { context_length: 32_768 },
+                    capabilities: ["completion", "tools"],
+                  },
+                ],
+              })
+            : showResponse(),
+        ),
+      );
+      const prompter = {
+        select: vi.fn().mockResolvedValueOnce("local-only"),
+        text: vi.fn().mockResolvedValueOnce("http://127.0.0.1:11434"),
+        note: vi.fn(async () => undefined),
+        confirm: vi.fn().mockResolvedValue(false),
+      } as unknown as WizardPrompter;
+
+      const result = await promptAndConfigureOllama({ cfg: {}, prompter });
+
+      expect(result.defaultModel).toBe("ollama/gemma4:e2b");
+      expect(result.config.models?.providers?.ollama?.models).toContainEqual(
+        expect.objectContaining({
+          id: "gemma4:e2b",
+          contextWindow: 32_768,
+          compat: expect.objectContaining({ supportsTools: true }),
+        }),
+      );
+      expect(prompter.confirm).not.toHaveBeenCalled();
+    },
+  );
+
   it("aborts pending model discovery with the setup signal", async () => {
     const controller = new AbortController();
     vi.stubGlobal(

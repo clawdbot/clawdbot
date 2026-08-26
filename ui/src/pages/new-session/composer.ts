@@ -439,8 +439,10 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
     paneId: skillMenuHost.paneId,
     getDraft: skillMenuHost.getDraft,
     commitDraft: skillMenuHost.commitDraft,
+    getTextarea: skillMenuHost.getTextarea,
     resolveArgOptions: (command) => command.argOptions ?? [],
     runCommand: () => submitNewSession(options),
+    canRunInlineCommand: () => false,
     refreshCommands: options.refreshCommands,
     commandFilter: (command) => command.executeLocal !== true,
   };
@@ -457,6 +459,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
   const handleSelect = (event: Event) => {
     const target = event.currentTarget;
     if (target instanceof HTMLTextAreaElement) {
+      updateSlashMenu(target.value, slashMenuState, slashMenuHost, options.requestUpdate);
       updateSkillMenu(
         target.value,
         target.selectionStart,

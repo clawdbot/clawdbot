@@ -558,6 +558,23 @@ CREATE TABLE IF NOT EXISTS memory_index_chunk_provenance (
   FOREIGN KEY (chunk_id) REFERENCES memory_index_chunks(id) ON DELETE CASCADE
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS memory_entry_origins (
+  entry_key TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  session_key TEXT,
+  origin_class TEXT NOT NULL CHECK (origin_class IN ('owner', 'agent', 'untrusted', 'system')),
+  observed_at INTEGER NOT NULL,
+  PRIMARY KEY (entry_key, agent_id, session_id)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS memory_session_tombstones (
+  session_id TEXT NOT NULL PRIMARY KEY,
+  agent_id TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS memory_embedding_cache (
   provider TEXT NOT NULL,
   model TEXT NOT NULL,

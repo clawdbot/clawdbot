@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", () => ({
   fetchRemoteEmbeddingVectors: mocks.fetchRemoteEmbeddingVectors,
+  resolveEmbeddingEndpointUrl: (baseUrl: string, endpoint: string) => `${baseUrl}/${endpoint}`,
   resolveRemoteEmbeddingClient: mocks.resolveRemoteEmbeddingClient,
 }));
 

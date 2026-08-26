@@ -54,6 +54,30 @@ describe("resolveSandboxWorkspaceAuthority", () => {
     expect(result).toEqual({ sandboxed: true, workspaceAccess: "ro" });
   });
 
+  it("caps role-required access and rejects principal-shared worker authority", async () => {
+    const sessionKey = "agent:main:guest-worker";
+    const storePath = createSessionStorePath("openclaw-required-workspace-authority");
+    await replaceSessionEntry(
+      { sessionKey, storePath },
+      {
+        sessionId: "guest-worker",
+        updatedAt: Date.now(),
+        sandbox: "required",
+        createdActor: { type: "human", id: "guest-principal" },
+      },
+    );
+    const config = configWithSandbox({ mode: "off", scope: "session", workspaceAccess: "rw" });
+    config.session = { store: storePath };
+
+    expect(resolveSandboxWorkspaceAuthority({ config, agentId: "main", sessionKey })).toMatchObject(
+      {
+        sandboxed: true,
+        workspaceAccess: "ro",
+        confinementError: expect.stringContaining("not exclusive"),
+      },
+    );
+  });
+
   it("rejects Docker and shell escape configurations", () => {
     const externalBind = resolveSandboxWorkspaceAuthority({
       config: configWithSandbox({

@@ -247,42 +247,62 @@ describe("runBrowserHatchHandoff", () => {
     expect(displayed).not.toContain("#bootstrapToken=");
   });
 
-  it("attempts a forwarded-display SSH browser open and uses the GUI timeout on failure", async () => {
-    sharedMocks.detectBrowserOpenSupport.mockResolvedValueOnce({ ok: true, command: "xdg-open" });
-    const prompter = createWizardPrompter();
-    const openBrowser = vi.fn(async () => false);
-    const pollForClient = vi.fn(async () => ({
-      connected: false as const,
-      reason: "timeout" as const,
-    }));
-    const env = {
-      DISPLAY: "localhost:10.0",
-      SSH_CONNECTION: "192.0.2.1 12345 192.0.2.2 22",
-    };
+  it.each([
+    {
+      openerOutcome: "returns false",
+      openBrowser: vi.fn(async () => false),
+    },
+    {
+      openerOutcome: "rejects",
+      openBrowser: vi.fn(async () => {
+        throw new Error("browser command failed");
+      }),
+    },
+  ])(
+    "falls back to the SSH hint and manual timeout when the browser opener $openerOutcome",
+    async ({ openBrowser }) => {
+      sharedMocks.detectBrowserOpenSupport.mockResolvedValueOnce({
+        ok: true,
+        command: "xdg-open",
+      });
+      const prompter = createWizardPrompter();
+      const pollForClient = vi.fn(async () => ({
+        connected: false as const,
+        reason: "timeout" as const,
+      }));
+      const env = {
+        DISPLAY: "localhost:10.0",
+        SSH_CONNECTION: "192.0.2.1 12345 192.0.2.2 22",
+      };
 
-    const result = await runBrowserHatchHandoff(
-      { config: {}, prompter },
-      {
-        env,
-        platform: "linux",
-        openBrowser,
-        resolveTarget: async () => target,
-        probePresence: async () => ({ reachable: true, clientKeys: [] }),
-        pollForClient,
-      },
-    );
+      const result = await runBrowserHatchHandoff(
+        { config: {}, prompter },
+        {
+          env,
+          platform: "linux",
+          openBrowser,
+          resolveTarget: async () => target,
+          probePresence: async () => ({ reachable: true, clientKeys: [] }),
+          pollForClient,
+        },
+      );
 
-    expect(result).toEqual({ handedOff: false, reason: "timeout" });
-    expect(sharedMocks.detectBrowserOpenSupport).toHaveBeenCalledWith(
-      expect.objectContaining({ env, platform: "linux" }),
-    );
-    expect(openBrowser).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#bootstrapToken=one-time-bootstrap",
-    );
-    expect(pollForClient).toHaveBeenCalledWith(
-      expect.objectContaining({ target, timeoutMs: 60_000 }),
-    );
-  });
+      expect(result).toEqual({ handedOff: false, reason: "timeout" });
+      expect(sharedMocks.detectBrowserOpenSupport).toHaveBeenCalledWith(
+        expect.objectContaining({ env, platform: "linux" }),
+      );
+      expect(openBrowser).toHaveBeenCalledWith(
+        "http://127.0.0.1:18789/#bootstrapToken=one-time-bootstrap",
+      );
+      expect(prompter.note).toHaveBeenCalledWith(
+        expect.stringContaining(target.sshHint),
+        "Continue in your browser",
+      );
+      expect(pollForClient).toHaveBeenCalledWith(
+        expect.objectContaining({ target, timeoutMs: 300_000 }),
+      );
+    },
+  );
 
   it("prints the URL when browser launch fails", async () => {
     sharedMocks.detectBrowserOpenSupport.mockResolvedValueOnce({ ok: true, command: "open" });

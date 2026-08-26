@@ -3334,72 +3334,17 @@ openclaw-sidebar-attention {
   min-width: 0;
 }
 
-.sidebar-identity-card__name,
-.sidebar-identity-card__subtitle {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .sidebar-identity-card__name {
   display: flex;
   align-items: center;
   gap: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--text-strong);
   font-size: calc(13.5px * var(--control-ui-text-scale));
   font-weight: 600;
   line-height: 18px;
-}
-
-.sidebar-identity-card__subtitle {
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  line-height: 1.2;
-}
-
-.sidebar-identity-card__subtitle--gateway {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.sidebar-identity-card__gateway-health {
-  width: 6px;
-  height: 6px;
-  flex: none;
-  border-radius: 50%;
-  background: var(--muted);
-}
-
-.sidebar-identity-card__gateway-health[data-health="ok"] {
-  background: var(--ok);
-}
-
-.sidebar-identity-card__gateway-health[data-health="error"] {
-  background: var(--danger);
-}
-
-.sidebar-identity-card__gateway-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sidebar-identity-card__gateway-primary {
-  flex: none;
-}
-
-.sidebar-identity-card__status {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
 }
 
 openclaw-tooltip.sidebar-hover-tooltip {
@@ -3537,6 +3482,13 @@ openclaw-tooltip.sidebar-hover-tooltip {
   background: color-mix(in srgb, var(--danger) 18%, transparent);
 }
 
+.sidebar-footer-bar__status--restarting,
+.sidebar-footer-bar__status--restarting:hover {
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  color: var(--warn);
+  cursor: default;
+}
+
 .sidebar-footer-bar__status:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
@@ -3553,6 +3505,16 @@ openclaw-tooltip.sidebar-hover-tooltip {
   height: 6px;
   border-radius: var(--radius-full);
   background: var(--danger);
+}
+
+.sidebar-footer-bar__status--restarting .sidebar-footer-bar__status-dot {
+  background: var(--warn);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .sidebar-footer-bar__status--restarting .sidebar-footer-bar__status-dot {
+    animation: pulse-subtle 1.2s ease-in-out infinite;
+  }
 }
 
 .sidebar-session-group-running {

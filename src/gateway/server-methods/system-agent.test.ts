@@ -918,14 +918,12 @@ describe("openclaw.chat", () => {
     } finally {
       releaseApproval.resolve();
     }
-    await vi.waitFor(() => {
-      expect(resolveOperatorApproval).toHaveBeenCalledWith("allow-once", proposalHash);
-      expect(runGatewayRestart).toHaveBeenCalledOnce();
-      expect(systemAgentLane().activeCount).toBe(0);
-    });
+    expect(resolveOperatorApproval).toHaveBeenCalledWith("allow-once", proposalHash);
+    expect(runGatewayRestart).toHaveBeenCalledOnce();
     await expect(resolveOperatorApproval.mock.results[0]?.value).resolves.toMatchObject({
       text: expect.stringContaining("[openclaw] done: gateway.restart"),
     });
+    await vi.waitFor(() => expect(systemAgentLane().activeCount).toBe(0));
     expect(readLastSystemAgentAuditEntry()).toMatchObject({
       operation: "gateway.restart",
       summary: "Scheduled Gateway restart",

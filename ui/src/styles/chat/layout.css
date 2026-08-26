@@ -2890,6 +2890,10 @@ button.chat-reply-preview--message:disabled {
 }
 
 .chat-prs {
+  /* The transcript intentionally underlaps the composer stack; keep its
+     positioned virtual rows from painting over this interactive surface. */
+  position: relative;
+  z-index: 1;
   display: grid;
   gap: 6px;
   /* Mirror .agent-chat__composer-shell sizing: the rows belong to the input
@@ -7601,6 +7605,8 @@ button.chat-pr__diff {
 
   .agent-chat__composer-lead .chat-controls__permission-trigger {
     width: var(--chat-composer-control-size);
+    justify-content: center;
+    padding-inline: 0;
   }
 
   .agent-chat__composer-lead
@@ -7740,6 +7746,8 @@ button.chat-pr__diff {
 @media (max-width: 640px) {
   .agent-chat__composer-meta .chat-controls__permission-trigger {
     width: 44px;
+    justify-content: center;
+    padding-inline: 0;
   }
 
   .agent-chat__composer-meta

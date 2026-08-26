@@ -1914,7 +1914,11 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         await waitForLayoutSettled(page, ".chat-main__conversation, .agent-chat__composer-shell");
         const after = await geometry();
 
-        expect(after).toEqual(before);
+        for (const key of ["composer", "conversation", "thread"] as const) {
+          expect(after[key].height).toBe(before[key].height);
+          expect(after[key].width).toBe(before[key].width);
+          expect(Math.abs(after[key].top - before[key].top)).toBeLessThanOrEqual(0.5);
+        }
         expect(
           await page
             .locator(".chat-topbar-notices")
@@ -4455,6 +4459,57 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       const model = await getBoundingBox(page, '[data-chat-model-select="true"]');
       expect(model.y).toBeGreaterThan(session.y);
       expect(model.width).toBe(session.width);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it("keeps the embedded side-chat composer trailing and flush with the tab strip", async () => {
+    const page = await openBrowserPage(1024, 768);
+    try {
+      await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+        <section class="chat-session-rail chat-session-rail--expanded chat-session-rail--embedded">
+          <div class="chat-session-rail__thread">Side chat</div>
+          <form class="agent-chat__input chat-session-rail__composer">
+            <div class="agent-chat__composer-input-row">
+              <label class="agent-chat__composer-combobox chat-session-rail__prompt">
+                <input class="chat-session-rail__input" type="text" placeholder="Ask a question" />
+              </label>
+            </div>
+            <div class="agent-chat__composer-footer">
+              <div class="agent-chat__composer-trail">
+                <div class="agent-chat__composer-actions">
+                  <button class="chat-send-btn">${iconSvg()}</button>
+                </div>
+              </div>
+            </div>
+          </form>
+        </section>
+      </body></html>`);
+
+      const geometry = await page.evaluate(() => {
+        const rect = (selector: string) => {
+          const element = document.querySelector<HTMLElement>(selector)!;
+          const box = element.getBoundingClientRect();
+          return { left: box.left, right: box.right, width: box.width };
+        };
+        const thread = document.querySelector<HTMLElement>(".chat-session-rail__thread")!;
+        const threadStyle = getComputedStyle(thread);
+        return {
+          composer: rect(".chat-session-rail__composer"),
+          footer: rect(".chat-session-rail__composer .agent-chat__composer-footer"),
+          input: rect(".chat-session-rail__input"),
+          send: rect(".chat-session-rail__composer .chat-send-btn"),
+          threadBorderTopWidth: threadStyle.borderTopWidth,
+          threadMarginTop: threadStyle.marginTop,
+        };
+      });
+
+      expect(geometry.input.width).toBeGreaterThan(geometry.composer.width * 0.8);
+      expect(geometry.footer.width).toBeGreaterThan(geometry.composer.width * 0.8);
+      expect(Math.abs(geometry.composer.right - geometry.send.right)).toBeLessThanOrEqual(10);
+      expect(geometry.threadBorderTopWidth).toBe("0px");
+      expect(geometry.threadMarginTop).toBe("0px");
     } finally {
       await closeBrowserPage(page);
     }

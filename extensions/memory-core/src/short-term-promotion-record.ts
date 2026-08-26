@@ -8,6 +8,7 @@ import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-st
 import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
 import pLimit from "p-limit";
 import { deriveConceptTags } from "./concept-vocabulary.js";
+import { recordMemoryEntryOrigins, type MemoryEntryOrigin } from "./memory-entry-origins.js";
 import { readStore, withShortTermLock, writeStore } from "./short-term-promotion-store.js";
 import type { ShortTermRecallEntry, ShortTermRecallStore } from "./short-term-promotion-types.js";
 import {
@@ -151,7 +152,12 @@ async function updateShortTermRecallStore(
 export async function recordShortTermRecalls(params: {
   workspaceDir?: string;
   query: string;
-  results: Array<MemorySearchResult & { identitySnippet?: string }>;
+  results: Array<
+    MemorySearchResult & {
+      identitySnippet?: string;
+      sessionOrigin?: { agentId: string; sessionId: string; sessionKey?: string };
+    }
+  >;
   signalType?: "recall" | "daily";
   dedupeByQueryPerDay?: boolean;
   dayBucket?: string;
@@ -189,6 +195,7 @@ export async function recordShortTermRecalls(params: {
   }
   const signalType = params.signalType ?? "recall";
   const queryHash = hashQuery(query);
+  const origins: MemoryEntryOrigin[] = [];
   const todayBucket =
     normalizeIsoDay(params.dayBucket ?? "") ?? formatMemoryDreamingDay(nowMs, params.timezone);
   await updateShortTermRecallStore(
@@ -311,9 +318,25 @@ export async function recordShortTermRecalls(params: {
           ...(projectKey ? { projectKey } : {}),
           ...(existing?.promotedAt ? { promotedAt: existing.promotedAt } : {}),
         };
+        if (result.sessionOrigin) {
+          origins.push({
+            entryKey: key,
+            agentId: result.sessionOrigin.agentId,
+            sessionId: result.sessionOrigin.sessionId,
+            sessionKey: result.sessionOrigin.sessionKey ?? null,
+            originClass: provenance.originClass,
+            observedAt: provenance.observedAt,
+          });
+        }
       }
     },
     async () => {
+      for (const agentId of new Set(origins.map((origin) => origin.agentId))) {
+        recordMemoryEntryOrigins({
+          agentId,
+          origins: origins.filter((origin) => origin.agentId === agentId),
+        });
+      }
       await appendMemoryHostEvent(workspaceDir, {
         type: "memory.recall.recorded",
         timestamp: nowIso,

@@ -19,6 +19,7 @@ import { createBrowserRouteDispatcher } from "../src/browser/routes/dispatcher.j
 import { createBrowserRouteContext } from "../src/browser/server-context.js";
 import { getFreePort } from "../src/browser/test-port.js";
 import { getBrowserControlState, stopBrowserControlService } from "../src/control-service.js";
+import chromeExtensionManifest from "./manifest.json" with { type: "json" };
 import { relayTestKey } from "./relay-key.test-support.js";
 
 declare const chrome: {
@@ -387,6 +388,24 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
           refreshConfigFromDisk: false,
         });
         const dispatcher = createBrowserRouteDispatcher(routeContext);
+        const matchingDoctor = await dispatcher.dispatch({
+          method: "GET",
+          path: "/doctor",
+          query: { profile: "e2e" },
+        });
+        expect(matchingDoctor.status).toBe(200);
+        expect(matchingDoctor.body).toMatchObject({
+          checks: expect.arrayContaining([
+            expect.objectContaining({
+              id: "extension-version",
+              status: "pass",
+              summary: `running ${chromeExtensionManifest.version}; bundled ${chromeExtensionManifest.version} (match)`,
+            }),
+          ]),
+        });
+        process.stderr.write(
+          `[browser-extension-e2e] doctor version match ${chromeExtensionManifest.version}\n`,
+        );
         const tabsResponse = await dispatcher.dispatch({
           method: "GET",
           path: "/tabs",
@@ -632,8 +651,45 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
           .poll(() => relay.bridge.accessibleTabs().some((tab) => tab.tabId === tabId))
           .toBe(false);
 
+        const installedManifestPath = path.join(installed, "manifest.json");
+        const installedManifest = JSON.parse(await fs.readFile(installedManifestPath, "utf8")) as {
+          version: string;
+        };
+        const outdatedVersion = chromeExtensionManifest.version === "2.0.0" ? "1.0.0" : "2.0.0";
+        await fs.writeFile(
+          installedManifestPath,
+          `${JSON.stringify({ ...installedManifest, version: outdatedVersion }, null, 2)}\n`,
+        );
+        await context.close();
+        context = await launchChromium();
+        await loadUnpackedExtension(context, installed);
+        expect(await waitForExtensionId(context, installed)).toBe(extensionId);
+        const outdatedExtensionPage = await context.newPage();
+        await outdatedExtensionPage.goto(`chrome-extension://${extensionId}/options.html`);
+        await expect.poll(() => relay.bridge.identity?.extensionVersion).toBe(outdatedVersion);
+        const outdatedDoctor = await dispatcher.dispatch({
+          method: "GET",
+          path: "/doctor",
+          query: { profile: "e2e" },
+        });
+        expect(outdatedDoctor.status).toBe(200);
+        expect(outdatedDoctor.body).toMatchObject({
+          ok: true,
+          checks: expect.arrayContaining([
+            expect.objectContaining({
+              id: "extension-version",
+              status: "warn",
+              summary: `running ${outdatedVersion}; bundled ${chromeExtensionManifest.version} (mismatch)`,
+              fixHint: expect.stringMatching(/reload/i),
+            }),
+          ]),
+        });
+        process.stderr.write(
+          `[browser-extension-e2e] doctor version mismatch running=${outdatedVersion} bundled=${chromeExtensionManifest.version} status=WARN\n`,
+        );
+
         const extensionContext = routeContext.forProfile("e2e");
-        await extensionPage.evaluate(
+        await outdatedExtensionPage.evaluate(
           async () => await chrome.runtime.sendMessage({ type: "unpair" }),
         );
         await expect.poll(() => relay.bridge.extensionConnected).toBe(false);

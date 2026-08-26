@@ -282,6 +282,14 @@ export const APPROVAL_PAGE_ELEMENT = {
   loadModule: () => import("../pages/approval/approval-page-registration.ts"),
 } satisfies OptionalCustomElement;
 
+const QUESTION_PAGE_TAG = "openclaw-question-page";
+
+export const QUESTION_PAGE_ELEMENT = {
+  tagName: QUESTION_PAGE_TAG,
+  label: QUESTION_PAGE_TAG,
+  loadModule: () => import("../pages/question/question-page-registration.ts"),
+} satisfies OptionalCustomElement;
+
 // The card is in the chat graph, but modal-only queue controls stay off the
 // startup path until an approval is actually pending.
 const EXEC_APPROVAL_TAG = "openclaw-exec-approval";
