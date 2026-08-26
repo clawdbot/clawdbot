@@ -106,7 +106,8 @@ describe("cron script immediate wake", () => {
               contextKey: options?.contextKey,
               deliveryContext: options?.deliveryContext,
             }),
-          requestHeartbeat: (wake) => requestHeartbeatWake({ ...wake, sessionKey, coalesceMs: 0 }),
+          requestHeartbeat: (wakeRequest) =>
+            requestHeartbeatWake({ ...wakeRequest, sessionKey, coalesceMs: 0 }),
           runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
           runScriptJob: vi.fn(async () => ({
             status: "ok" as const,
