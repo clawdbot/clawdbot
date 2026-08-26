@@ -38,6 +38,17 @@ const AA_NORMAL_TEXT_MIN = 4.5;
  * own floor is asserted separately.
  */
 const AAA_NORMAL_TEXT_MIN = 7;
+
+/*
+ * The chat confirmation button defaults to --danger under --media-foreground,
+ * which is a theme-invariant white, and every dark palette opts out of that
+ * pairing through a selector list in chat/grouped.css. A theme with a light
+ * --danger that is missing from the list therefore renders white on pale:
+ * Beacon shipped that way at 1.80:1 until review caught it. Membership is read
+ * back out of the stylesheet rather than restated here, so the list and the
+ * palettes cannot drift apart again.
+ */
+const CONFIRM_BUTTON_RULE = ".chat-confirm-popover__yes";
 const AAA_THEMES = new Set(["beacon", "beacon-light"]);
 
 /*
@@ -311,6 +322,41 @@ function readCodeChipTokens(chatTextCss: string): { surface: string; border: str
   return { surface, border };
 }
 
+type ConfirmButtonPaint = { background: string; color: string };
+
+function readConfirmButtonPaint(groupedCss: string): {
+  base: ConfirmButtonPaint;
+  overrides: Map<string, ConfirmButtonPaint>;
+} {
+  const pattern = /([^{}]*\.chat-confirm-popover__yes(?![\w-])[^{}]*)\{([^}]*)\}/gu;
+  let base: ConfirmButtonPaint | undefined;
+  const overrides = new Map<string, ConfirmButtonPaint>();
+  for (const match of groupedCss.matchAll(pattern)) {
+    const selector = (match[1] ?? "").trim();
+    const body = match[2] ?? "";
+    if (selector.includes(":hover")) {
+      continue;
+    }
+    const background = body.match(/background:\s*var\((--[\w-]+)\)/u)?.[1];
+    const color = body.match(/color:\s*var\((--[\w-]+)\)/u)?.[1];
+    if (!background || !color) {
+      continue;
+    }
+    const themes = [...selector.matchAll(/\[data-theme="([^"]+)"\]/gu)].map((m) => m[1] ?? "");
+    if (themes.length === 0) {
+      base = { background, color };
+      continue;
+    }
+    for (const theme of themes) {
+      overrides.set(theme, { background, color });
+    }
+  }
+  if (!base) {
+    throw new Error(`could not read the base "${CONFIRM_BUTTON_RULE}" paint`);
+  }
+  return { base, overrides };
+}
+
 function readRuleBody(css: string, selector: string): string {
   const body = css.split(`${selector} {`)[1]?.split("}")[0];
   if (body === undefined) {
@@ -411,6 +457,28 @@ describe("Control UI theme contrast", () => {
             `${themeName}: chip border ${chip.border} ${border} on ${hostToken} ${host} = ${borderStep.toFixed(2)}:1 (< ${CHIP_BORDER_MIN_STEP}:1)`,
           );
         }
+      }
+    }
+    expect(failures).toEqual([]);
+  });
+
+  it("keeps the chat confirmation button legible on every theme", () => {
+    const groupedCss = fs.readFileSync(path.join(stylesDir, "chat", "grouped.css"), "utf8");
+    const { base, overrides } = readConfirmButtonPaint(groupedCss);
+    const failures: string[] = [];
+    for (const [themeName, tokens] of themes) {
+      const paint = overrides.get(themeName) ?? base;
+      const background = tokens.get(paint.background);
+      const color = tokens.get(paint.color);
+      if (!background?.startsWith("#") || !color?.startsWith("#")) {
+        continue;
+      }
+      const ratio = contrastRatio(parseHex(color), parseHex(background));
+      const floor = AAA_THEMES.has(themeName) ? AAA_NORMAL_TEXT_MIN : AA_NORMAL_TEXT_MIN;
+      if (ratio < floor) {
+        failures.push(
+          `${themeName}: ${paint.color} ${color} on ${paint.background} ${background} = ${ratio.toFixed(2)}:1 (< ${floor}:1)`,
+        );
       }
     }
     expect(failures).toEqual([]);
