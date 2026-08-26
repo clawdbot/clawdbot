@@ -1,8 +1,8 @@
 // Telegram tests cover sequential key plugin behavior.
 import type { Chat, Message } from "grammy/types";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { buildTelegramApprovalCallbackData } from "./approval-callback-data.js";
-import { resetTelegramForumFlagCacheForTest, resolveTelegramForumFlag } from "./bot/helpers.js";
+import { resolveTelegramForumFlag } from "./bot/helpers.js";
 import { buildTelegramQuestionCallbackData } from "./question-callback-data.js";
 import { getTelegramSequentialConstraints, getTelegramSequentialKey } from "./sequential-key.js";
 
@@ -416,10 +416,6 @@ describe("getTelegramSequentialKey", () => {
   });
 
   describe("forum flag cache fallback", () => {
-    afterEach(() => {
-      resetTelegramForumFlagCacheForTest();
-    });
-
     it("uses cached forum flag to assign topic:1 lane when payload lacks is_forum and is_topic_message", async () => {
       // Prime the cache the way bot-message-context does: resolveTelegramForumFlag
       // calls cacheTelegramForumFlag internally when the hint is available.

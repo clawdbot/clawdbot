@@ -192,16 +192,26 @@ function canReconcileTelegramLegacyLane(params: {
     (chatType === "group" || chatType === "supergroup") && typeof chatId === "number" && chatId < 0;
   const hasValidThreadId =
     typeof threadId === "number" && Number.isSafeInteger(threadId) && threadId > 0;
-  // Allow group chats with no message_thread_id to bypass the hasValidThreadId
-  // guard: General forum topic (topic:1) messages never carry message_thread_id,
-  // so blocking them here would permanently prevent reconciliation of events
-  // that were stored in the base lane before the forum flag was known.
-  const isForumGroupWithNoThread = isGroupChat && !typedApproval && !hasValidThreadId;
+  const chatTypeHint =
+    chatType === "channel" ||
+    chatType === "group" ||
+    chatType === "private" ||
+    chatType === "supergroup"
+      ? chatType
+      : undefined;
+  const forumFlag =
+    resolveTelegramMessageForumFlagHint({
+      chatType: chatTypeHint,
+      isForum: typeof message.chat?.is_forum === "boolean" ? message.chat.is_forum : undefined,
+      isTopicMessage:
+        typeof message.is_topic_message === "boolean" ? message.is_topic_message : undefined,
+    }) ?? (typeof chatId === "number" ? getCachedTelegramForumFlag(chatId) : undefined);
+  const isForumGroup = isGroupChat && forumFlag === true;
   if (
     typeof chatId !== "number" ||
     !Number.isSafeInteger(chatId) ||
-    (typedApproval ? !isPrivateChat && !isGroupChat : !isPrivateChat) ||
-    (!typedApproval && !hasValidThreadId && !isForumGroupWithNoThread) ||
+    (typedApproval ? !isPrivateChat && !isGroupChat : !isPrivateChat && !isForumGroup) ||
+    (!typedApproval && !hasValidThreadId && !isForumGroup) ||
     (typedApproval && threadId !== undefined && !hasValidThreadId)
   ) {
     return false;
@@ -209,17 +219,7 @@ function canReconcileTelegramLegacyLane(params: {
   const baseLaneKey = `telegram:${chatId}`;
   const legacyThreadId = isGroupChat
     ? resolveTelegramForumThreadId({
-        isForum:
-          resolveTelegramMessageForumFlagHint({
-            chatType,
-            isForum:
-              typeof message.chat?.is_forum === "boolean" ? message.chat.is_forum : undefined,
-            isTopicMessage:
-              typeof message.is_topic_message === "boolean" ? message.is_topic_message : undefined,
-          }) ??
-          // Fall back to cache: General topic payloads lack is_forum and
-          // is_topic_message, but getChat or a later message may have populated it.
-          getCachedTelegramForumFlag(chatId),
+        isForum: forumFlag,
         messageThreadId: hasValidThreadId ? threadId : undefined,
       })
     : hasValidThreadId
@@ -228,7 +228,7 @@ function canReconcileTelegramLegacyLane(params: {
   const topicLaneKey = legacyThreadId ? `${baseLaneKey}:topic:${legacyThreadId}` : undefined;
   const canonicalLaneKey = typedApproval
     ? `${baseLaneKey}:approval`
-    : params.botInfo?.has_topics_enabled === true
+    : isForumGroup || params.botInfo?.has_topics_enabled === true
       ? topicLaneKey
       : baseLaneKey;
   const previousLaneKey = canonicalLaneKey === baseLaneKey ? topicLaneKey : baseLaneKey;
