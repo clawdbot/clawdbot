@@ -365,10 +365,14 @@ async function runProductionContinuationTurn(params: {
   if (!claimed) {
     throw new Error("expected the durable continuation row to be claimable");
   }
-  await executePendingContinuationWork(claimed, {
-    ...CONTINUATION_RETRY_POLICY,
-    reasonCategory: classifyContinuationWorkReason(claimed.reason),
-  });
+  await executePendingContinuationWork(
+    claimed,
+    {
+      ...CONTINUATION_RETRY_POLICY,
+      reasonCategory: classifyContinuationWorkReason(claimed.reason),
+    },
+    new AbortController().signal,
+  );
 
   return {
     runSpanContext: runSpan.spanContext(),
