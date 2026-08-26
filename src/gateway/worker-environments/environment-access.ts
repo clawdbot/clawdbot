@@ -405,7 +405,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
   };
 
   const stopTunnelOwners = async (stops: Array<Promise<void> | undefined>): Promise<void> => {
-    const results = await Promise.allSettled(stops);
+    const results = await Promise.allSettled(stops.filter((stop) => stop !== undefined));
     const failure = results.find((result) => result.status === "rejected");
     if (failure) {
       throw failure.reason;

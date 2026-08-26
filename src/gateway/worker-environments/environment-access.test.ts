@@ -17,7 +17,7 @@ describe("worker environment service", () => {
 
   it("drains all tunnel owners before reporting an independent shutdown failure", async () => {
     const shutdownError = new Error("SSH tunnel shutdown failed");
-    const nodeShutdown = createDeferred<void>();
+    const nodeShutdown = createDeferred();
     const tunnelManager = {
       stopAll: vi.fn().mockRejectedValueOnce(shutdownError).mockResolvedValue(undefined),
     } as unknown as WorkerTunnelManager;

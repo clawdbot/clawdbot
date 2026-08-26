@@ -62,11 +62,6 @@ const RETRYABLE_TRANSPORT_CODES = new Set([
   "UNAVAILABLE",
 ]);
 
-type TerminalNodeWorkerSupervisorReceipt = Extract<
-  NodeWorkerSupervisorReceipt,
-  { state: "completed" | "failed" | "interrupted" | "cancelled" }
->;
-
 type NodeWorkerLaunch = (request: {
   deviceId: string;
   input: {
@@ -81,7 +76,7 @@ type NodeWorkerLaunch = (request: {
   timeoutMs: number;
   signal?: AbortSignal;
   onDispatchReady?: () => void;
-}) => Promise<TerminalNodeWorkerSupervisorReceipt>;
+}) => Promise<Exclude<NodeWorkerSupervisorReceipt, { state: "pending" | "running" }>>;
 
 type NodeWorkerWorkspaceBinding = {
   localPath: string;
