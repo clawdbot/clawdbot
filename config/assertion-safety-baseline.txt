@@ -690,7 +690,6 @@ extensions/matrix/src/matrix/monitor/context-summary.ts	2
 extensions/matrix/src/matrix/monitor/events.ts	3
 extensions/matrix/src/matrix/monitor/handler-context.ts	1
 extensions/matrix/src/matrix/monitor/handler-helpers.ts	3
-extensions/matrix/src/matrix/monitor/handler-ingress-content.ts	2
 extensions/matrix/src/matrix/monitor/handler-ingress-prefix.ts	3
 extensions/matrix/src/matrix/monitor/handler-state.ts	1
 extensions/matrix/src/matrix/monitor/handler.ts	2
