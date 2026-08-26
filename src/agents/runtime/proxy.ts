@@ -341,20 +341,20 @@ export function streamProxy(
       let terminalEventSeen = false;
       const toolArgumentPreviewSchedules = new Map<number, ToolArgumentPreviewSchedule>();
 
-      const processSseLine = (line: string) => {
+      const processSseLine = (line: string): boolean => {
         // The SSE spec makes the space after "data:" optional; accept both
         // `data:{...}` and `data: {...}`, mirroring provider-transport-fetch.
         if (!line.startsWith("data:")) {
-          return;
+          return false;
         }
         const data = line.slice("data:".length).trim();
         if (!data) {
-          return;
+          return false;
         }
         const proxyEvent = JSON.parse(data) as ProxyAssistantMessageEvent;
         const event = processProxyEvent(proxyEvent, partial, toolArgumentPreviewSchedules);
         if (!event) {
-          return;
+          return false;
         }
         stream.push(event);
         return event.type === "done" || event.type === "error";
@@ -377,7 +377,7 @@ export function streamProxy(
         assertProxySsePendingBufferWithinLimit(buffer);
 
         for (const line of lines) {
-          terminalEventSeen = processSseLine(line) === true;
+          terminalEventSeen = processSseLine(line);
           if (terminalEventSeen) {
             break;
           }
@@ -390,7 +390,7 @@ export function streamProxy(
       if (readerReachedEof) {
         buffer += decoder.decode();
         if (buffer.trim()) {
-          terminalEventSeen = processSseLine(buffer) === true;
+          terminalEventSeen = processSseLine(buffer);
         }
       }
       if (!terminalEventSeen) {
