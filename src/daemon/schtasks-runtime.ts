@@ -209,12 +209,39 @@ export async function launchFallbackTaskScript(
     child.unref();
     return;
   }
-  // Opening the batch file checks Windows ACLs that fs.access does not enforce.
+  // Preserve native missing-script errors before testing the actual cmd.exe access contract.
   await (await fs.open(scriptPath, "r")).close();
+  const scriptEnv = { ...process.env, OPENCLAW_STARTUP_SCRIPT_PROBE: scriptPath };
+  // libuv uses backup semantics, so privileged Node opens can bypass the DACL that cmd enforces.
+  const scriptProbe = spawnSync(
+    getWindowsPowerShellExePath(),
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-EncodedCommand",
+      Buffer.from(
+        "$ErrorActionPreference='Stop'; [System.IO.File]::OpenRead($env:OPENCLAW_STARTUP_SCRIPT_PROBE).Dispose()",
+        "utf16le",
+      ).toString("base64"),
+    ],
+    {
+      env: scriptEnv,
+      stdio: "ignore",
+      windowsHide: true,
+    },
+  );
+  if (scriptProbe.error) {
+    throw scriptProbe.error;
+  }
+  if (scriptProbe.status !== 0) {
+    throw Object.assign(new Error("Windows login item script is not readable"), { code: "EACCES" });
+  }
   const { child } = await spawnWithFallback({
-    argv: [getWindowsCmdExePath(), "/d", "/c", scriptPath],
+    // Percent substitution is nonrecursive; quoting keeps path metacharacters inert.
+    argv: [getWindowsCmdExePath(), "/d", "/v:off", "/c", '"%OPENCLAW_STARTUP_SCRIPT_PROBE%"'],
     options: {
       detached: true,
+      env: scriptEnv,
       stdio: "ignore",
       windowsHide: true,
     },

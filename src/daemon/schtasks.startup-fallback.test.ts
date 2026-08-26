@@ -427,6 +427,29 @@ describe("Windows startup fallback", () => {
     });
   });
 
+  it("rejects denied cmd script access even when Node opens it with backup privileges", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      env.OPENCLAW_STATE_DIR = path.join(env.USERPROFILE, "state & %USERPROFILE%");
+      const scriptPath = resolveTaskScriptPath(env);
+      await fs.mkdir(path.dirname(scriptPath), { recursive: true });
+      await fs.writeFile(scriptPath, "@echo off\r\n", "utf8");
+      spawnSync.mockReturnValueOnce(makeSpawnSyncResult({ status: 1 }));
+
+      await expect(launchFallbackTaskScript(env, null)).rejects.toMatchObject({ code: "EACCES" });
+      expect(spawnSync).toHaveBeenCalledWith(
+        getWindowsPowerShellExePath(),
+        expect.arrayContaining(["-EncodedCommand"]),
+        expect.objectContaining({
+          env: expect.objectContaining({ OPENCLAW_STARTUP_SCRIPT_PROBE: scriptPath }),
+          stdio: "ignore",
+          windowsHide: true,
+        }),
+      );
+      expect(spawn).not.toHaveBeenCalled();
+      expect(childUnref).not.toHaveBeenCalled();
+    });
+  });
+
   it("detaches the direct executable only after it starts", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       await writeGatewayScript(env);
@@ -443,6 +466,7 @@ describe("Windows startup fallback", () => {
 
   it("detaches the cmd fallback only after it starts", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      env.OPENCLAW_STATE_DIR = path.join(env.USERPROFILE, "state & %USERPROFILE% !");
       const scriptPath = resolveTaskScriptPath(env);
       await fs.mkdir(path.dirname(scriptPath), { recursive: true });
       await fs.writeFile(scriptPath, "@echo off\r\nrem no parsed command\r\n", "utf8");
@@ -450,8 +474,13 @@ describe("Windows startup fallback", () => {
       await expect(launchFallbackTaskScript(env)).resolves.toBeUndefined();
       expect(spawn).toHaveBeenCalledWith(
         getWindowsCmdExePath(),
-        ["/d", "/c", scriptPath],
-        expect.objectContaining({ detached: true, stdio: "ignore", windowsHide: true }),
+        ["/d", "/v:off", "/c", '"%OPENCLAW_STARTUP_SCRIPT_PROBE%"'],
+        expect.objectContaining({
+          detached: true,
+          env: expect.objectContaining({ OPENCLAW_STARTUP_SCRIPT_PROBE: scriptPath }),
+          stdio: "ignore",
+          windowsHide: true,
+        }),
       );
       expect(childUnref).toHaveBeenCalledOnce();
     });

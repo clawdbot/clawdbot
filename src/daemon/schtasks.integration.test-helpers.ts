@@ -200,6 +200,7 @@ async function inspectNativeAclDenial(params: {
   batchMarkerPath: string;
   scriptPath: string;
 }): Promise<NativeStartupAclDiagnostics> {
+  const scriptEnv = { ...process.env, OPENCLAW_STARTUP_SCRIPT_PROBE: params.scriptPath };
   const nodeOpen: NativeStartupAclDiagnostics["nodeOpen"] = {
     opened: false,
     readData: false,
@@ -224,22 +225,21 @@ async function inspectNativeAclDenial(params: {
       "-NoProfile",
       "-NonInteractive",
       "-Command",
-      '$ErrorActionPreference="Stop"; $stream=[System.IO.File]::OpenRead($env:OPENCLAW_STARTUP_ACL_PROBE_PATH); try { [void]$stream.ReadByte() } finally { $stream.Dispose() }',
+      '$ErrorActionPreference="Stop"; $stream=[System.IO.File]::OpenRead($env:OPENCLAW_STARTUP_SCRIPT_PROBE); try { [void]$stream.ReadByte() } finally { $stream.Dispose() }',
     ],
-    { ...process.env, OPENCLAW_STARTUP_ACL_PROBE_PATH: params.scriptPath },
+    scriptEnv,
   );
-  const cmdType = inspectNativeAclCommand(getWindowsCmdExePath(), [
-    "/d",
-    "/c",
-    "type",
-    params.scriptPath,
-  ]);
+  const cmdType = inspectNativeAclCommand(
+    getWindowsCmdExePath(),
+    ["/d", "/v:off", "/c", 'type "%OPENCLAW_STARTUP_SCRIPT_PROBE%"'],
+    scriptEnv,
+  );
   await fs.rm(params.batchMarkerPath, { force: true });
-  const cmdBatchResult = inspectNativeAclCommand(getWindowsCmdExePath(), [
-    "/d",
-    "/c",
-    params.scriptPath,
-  ]);
+  const cmdBatchResult = inspectNativeAclCommand(
+    getWindowsCmdExePath(),
+    ["/d", "/v:off", "/c", '"%OPENCLAW_STARTUP_SCRIPT_PROBE%"'],
+    scriptEnv,
+  );
   const markerWritten = await fs
     .access(params.batchMarkerPath)
     .then(() => true)
@@ -259,7 +259,7 @@ export async function proveNativeStartupFallbackLaunch(params: {
   rootDir: string;
 }): Promise<NativeStartupFallbackProof> {
   const proofRoot = path.join(params.rootDir, "startup-fallback-proof");
-  const stateDir = path.join(proofRoot, "state");
+  const stateDir = path.join(proofRoot, "state & %OPENCLAW_STARTUP_PROBE% !");
   const env = {
     ...params.env,
     APPDATA: path.join(proofRoot, "appdata"),
@@ -352,7 +352,7 @@ export async function proveNativeStartupFallbackLaunch(params: {
   let deniedReadError: string;
   let aclDiagnostics: NativeStartupAclDiagnostics;
   try {
-    // Node's Windows existence checks ignore ACLs; opening the file must still fail.
+    // Node's existence and privileged backup opens bypass the DACL; cmd must still reject it.
     await fs.access(scriptPath);
     aclDiagnostics = await inspectNativeAclDenial({ batchMarkerPath, scriptPath });
     console.info(`[windows-startup-acl] ${JSON.stringify(aclDiagnostics)}`);
