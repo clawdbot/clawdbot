@@ -545,7 +545,12 @@ function parseValidateConfigFromRawOrRespond(
   respond: RespondFn,
   buildSchemaForConfig: typeof buildRuntimeConfigSchemaForConfig,
   modelIdNormalizationPolicies?: Parameters<typeof normalizeSubmittedConfigModelRefs>[1],
-): { config: OpenClawConfig; writeConfig: OpenClawConfig; schema: ConfigSchemaResponse } | null {
+): {
+  config: OpenClawConfig;
+  writeConfig: OpenClawConfig;
+  schema: ConfigSchemaResponse;
+  restorationUiHints: ConfigUiHints | undefined;
+} | null {
   const rawValue = parseRawConfigOrRespond(params, requestName, respond);
   if (!rawValue) {
     return null;
@@ -558,11 +563,18 @@ function parseValidateConfigFromRawOrRespond(
   const schema = loadSchemaWithPlugins();
   // Sentinels are restored against this snapshot, so the hints must describe it. The cached schema
   // is keyed on plugin registry version alone and can still describe the previous channel owner.
-  const restored = restoreRedactedValues(
-    parsedRes.parsed,
-    snapshot.config,
+  //
+  // Unioned with the active runtime schema because `config.get` emits sentinels from that same
+  // union: an ownership-changing edit can drop a claimant from persisted discovery while
+  // `gateway.reload.mode="off"` leaves it serving, so a field only that owner marks sensitive is
+  // redacted on read. Restoring against the persisted side alone leaves such a sentinel
+  // unrecognised, and the restore walk then rejects it as reserved data -- which fails every
+  // round-trip save rather than leaking anything.
+  const restorationUiHints = unionRedactionUiHints(
+    schema.uiHints,
     buildSchemaForConfig(snapshot.config, snapshot.sourceConfig).uiHints,
   );
+  const restored = restoreRedactedValues(parsedRes.parsed, snapshot.config, restorationUiHints);
   if (!restored.ok) {
     respond(
       false,
@@ -591,6 +603,7 @@ function parseValidateConfigFromRawOrRespond(
     config: validatedSubmission.config,
     writeConfig: validatedSubmission.validationCandidate,
     schema,
+    restorationUiHints,
   };
 }
 
@@ -836,6 +849,15 @@ async function respondWithConfigRestartWrite(params: {
   basePluginMetadataSnapshot?: PluginMetadataSnapshot;
   /** Request-scoped memoized builder, shared with the caller's earlier pre-write hint builds. */
   buildSchemaForConfig: typeof buildRuntimeConfigSchemaForConfig;
+  /**
+   * The exact hint set that restored this request's sentinels.
+   *
+   * Whatever recognised a sentinel on the way in has to redact it on the way out. Restoration can
+   * consult the active runtime owner's hints, which neither the pre-write nor the committed build
+   * carries; without them the value a sentinel stood for is returned in plaintext, turning a
+   * no-op round trip into a read oracle for exactly the field config.get had hidden.
+   */
+  restorationUiHints: ConfigUiHints | undefined;
   changedPaths: string[];
   actor: ReturnType<typeof resolveControlPlaneActor>;
   context: GatewayRequestContext;
@@ -848,13 +870,16 @@ async function respondWithConfigRestartWrite(params: {
   // marks sensitive. Clearing the cache above is not enough: the caller already holds stale hints.
   // Union with the pre-write hints so a claimant this write removed still redacts its own fields.
   const uiHints = unionRedactionUiHints(
-    params.buildSchemaForConfig(params.previousConfig, params.previousSourceConfig).uiHints,
-    // The committed config is its own authored counterpart on this gateway path:
-    // replaceConfigFile hands back the object it serialized to disk (or the re-read authored
-    // source snapshot) here — its void-io echo and skip-refresh returns, which can echo a runtime
-    // shape, are unreachable from this io-less call — so no seeded entry config can masquerade as
-    // operator selection.
-    params.buildSchemaForConfig(params.writeResult.config, params.writeResult.config).uiHints,
+    params.restorationUiHints,
+    unionRedactionUiHints(
+      params.buildSchemaForConfig(params.previousConfig, params.previousSourceConfig).uiHints,
+      // The committed config is its own authored counterpart on this gateway path:
+      // replaceConfigFile hands back the object it serialized to disk (or the re-read authored
+      // source snapshot) here — its void-io echo and skip-refresh returns, which can echo a runtime
+      // shape, are unreachable from this io-less call — so no seeded entry config can masquerade as
+      // operator selection.
+      params.buildSchemaForConfig(params.writeResult.config, params.writeResult.config).uiHints,
+    ),
   );
   let restartPlanningChangedPaths = params.changedPaths;
   const persistedPlan = buildGatewayReloadPlan(params.changedPaths, {
@@ -1183,10 +1208,16 @@ export const configHandlers: GatewayRequestHandlers = {
           // registry version alone, and ownership can move through a config reload without
           // advancing that key, which would leave the departing claimant's only sensitive
           // hint out of the union and return its retained value here.
+          //
+          // The restoration hints join that union because they are what recognised the incoming
+          // sentinels; redacting with anything narrower hands back the value config.get hid.
           unionRedactionUiHints(
-            buildSchemaForConfig(snapshot.config, snapshot.sourceConfig).uiHints,
-            // Committed config is authored as persisted, so it is its own source half.
-            buildSchemaForConfig(writeResult.config, writeResult.config).uiHints,
+            parsed.restorationUiHints,
+            unionRedactionUiHints(
+              buildSchemaForConfig(snapshot.config, snapshot.sourceConfig).uiHints,
+              // Committed config is authored as persisted, so it is its own source half.
+              buildSchemaForConfig(writeResult.config, writeResult.config).uiHints,
+            ),
           ),
         ),
         ...preparedSecretDegradationPayload(preparedSecretsSnapshot),
@@ -1286,10 +1317,17 @@ export const configHandlers: GatewayRequestHandlers = {
       mergeObjectArraysById: true,
       replaceArrayPaths: replacePaths,
     });
-    const patchRedactionUiHints = buildSchemaForConfig(
-      snapshot.config,
-      snapshot.sourceConfig,
-    ).uiHints;
+    // The active-plus-persisted union `config.get` redacts with, used here unconditionally.
+    //
+    // It has to cover restoration: a sentinel only the still-active owner explains is otherwise
+    // unrecognised and rejected as reserved data. It equally has to cover every acknowledgement,
+    // including patches that submit no sentinel at all -- those responses echo the stored config,
+    // so redacting them with the persisted hints alone hands back the very field `config.get` hid.
+    // Gating this on a sentinel being present left exactly that hole open.
+    const patchRedactionUiHints = unionRedactionUiHints(
+      loadSchemaWithPlugins().uiHints,
+      buildSchemaForConfig(snapshot.config, snapshot.sourceConfig).uiHints,
+    );
     const restoredMerge = restoreRedactedValues(merged, snapshot.config, patchRedactionUiHints);
     if (!restoredMerge.ok) {
       respond(
@@ -1375,7 +1413,7 @@ export const configHandlers: GatewayRequestHandlers = {
       respondConfigPatchNoop({
         snapshot,
         config: snapshot.config,
-        uiHints: buildSchemaForConfig(snapshot.config, snapshot.sourceConfig).uiHints,
+        uiHints: patchRedactionUiHints,
         actor,
         context,
         respond,
@@ -1412,7 +1450,12 @@ export const configHandlers: GatewayRequestHandlers = {
         snapshot,
         config: validatedConfig,
         // writeConfig is the authored candidate this validated config was materialized from.
-        uiHints: buildSchemaForConfig(validatedConfig, writeConfig).uiHints,
+        // Unioned with the restore-side hints for the same reason as the pre-validation no-op:
+        // this response echoes a stored config and must not narrow what `config.get` redacted.
+        uiHints: unionRedactionUiHints(
+          patchRedactionUiHints,
+          buildSchemaForConfig(validatedConfig, writeConfig).uiHints,
+        ),
         actor,
         context,
         respond,
@@ -1457,6 +1500,7 @@ export const configHandlers: GatewayRequestHandlers = {
       persistedOwnershipPaths,
       basePluginMetadataSnapshot: writeOptions.basePluginMetadataSnapshot,
       buildSchemaForConfig,
+      restorationUiHints: patchRedactionUiHints,
       changedPaths,
       actor,
       context,
@@ -1535,6 +1579,7 @@ export const configHandlers: GatewayRequestHandlers = {
       persistedOwnershipPaths,
       basePluginMetadataSnapshot: writeOptions.basePluginMetadataSnapshot,
       buildSchemaForConfig,
+      restorationUiHints: parsed.restorationUiHints,
       changedPaths,
       actor,
       context,

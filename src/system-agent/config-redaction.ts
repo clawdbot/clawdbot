@@ -9,8 +9,9 @@ import { CHANNEL_IDS } from "../channels/ids.js";
 import { parseConfigSetPath, parseConfigSetValue } from "../cli/config-cli-path.js";
 import {
   MANIFEST_ONLY_CHANNEL_OWNERSHIP_POLICY,
-  collectChannelSchemaMetadataCore,
+  collectChannelSchemaMetadataWithOwnership,
   collectPluginSchemaMetadataCore,
+  normalizeChannelMetadataKey,
 } from "../config/channel-config-metadata.js";
 import { createConfiguredChannelOwnershipPolicy } from "../config/channel-ownership-policy.js";
 import { REDACTED_SENTINEL, redactConfigObject } from "../config/redact-snapshot.js";
@@ -138,7 +139,10 @@ function resolveMetadataConfigRedaction(
   const plugins = collectPluginSchemaMetadataCore(snapshot.manifestRegistry);
   // Redaction must follow the owner the operator's config activates. Without a config there is
   // nothing to consult, so manifest order stands.
-  const channels = collectChannelSchemaMetadataCore(
+  // The ownership-preserving collector, because admission needs `schemaPluginId` to tell which
+  // plugin's declared spelling may be admitted for a contested channel. `...Core` strips exactly
+  // that field, which silently left every plugin channel unadmitted.
+  const channels = collectChannelSchemaMetadataWithOwnership(
     snapshot.manifestRegistry,
     config
       ? createConfiguredChannelOwnershipPolicy({
@@ -156,7 +160,14 @@ function resolveMetadataConfigRedaction(
         })
       : MANIFEST_ONLY_CHANNEL_OWNERSHIP_POLICY,
   );
-  const schema = buildConfigSchemaCore({ plugins, channels });
+  const schema = buildConfigSchemaCore({
+    plugins,
+    // The public shape the schema builder expects: ownership is an admission-side concern.
+    channels: channels.map(
+      ({ schemaPluginId: _schemaPluginId, schemaPluginOrigin: _schemaPluginOrigin, ...entry }) =>
+        entry,
+    ),
+  });
   const uiHints = schema.uiHints;
   const metadata = {
     schema,
@@ -171,12 +182,7 @@ function resolveMetadataConfigRedaction(
         .filter((plugin) => plugin.configSchema !== undefined)
         .map((plugin) => normalizePluginPolicyId(plugin.id)),
     ),
-    channelIds: new Set([
-      ...CHANNEL_IDS,
-      ...channels
-        .filter((channel) => channel.configSchema !== undefined)
-        .map((channel) => channel.id),
-    ]),
+    channelIds: collectAdmissibleChannelKeys(snapshot.manifestRegistry, channels),
   };
   if (config && configCache) {
     configCache.set(config, { metadata, sourceConfig: resolvedSourceConfig });
@@ -235,6 +241,67 @@ function resolveConfigUiHint(
       acceptHint,
     })?.hint ?? undefined
   );
+}
+
+/**
+ * Channel container keys the system agent may treat as owned by a known schema.
+ *
+ * Keyed by the spelling the operator has to author, not by the canonical id the schema collector
+ * stores metadata under. `resolveChannelConfigRecord` reads `channels[<key>]` exactly as declared
+ * and `validation.ts` accepts only that spelling, so admitting the canonical variant of a
+ * case-preserving channel would bless a key both other planes reject. Anything else stays an
+ * unknown owner and is redacted, which is the safe direction.
+ */
+function collectAdmissibleChannelKeys(
+  registry: PluginMetadataSnapshot["manifestRegistry"],
+  channels: readonly { id: string; configSchema?: unknown; schemaPluginId?: string }[],
+): Set<string> {
+  // Keyed by the owner that actually supplies each canonical channel's schema. Admitting every
+  // declared spelling would let two plugins that spell one canonical id differently lend each
+  // other a schema: the loser's authored block would be redacted against the winner's hints, so
+  // fields only the loser marks sensitive would come back visible. A spelling whose declarer does
+  // not own the schema stays an unknown owner and is redacted whole, the safe direction.
+  const ownerByChannelId = new Map(
+    channels
+      .filter((channel) => channel.configSchema !== undefined)
+      .map((channel) => [channel.id, channel.schemaPluginId]),
+  );
+  const admissible = new Set<string>(CHANNEL_IDS);
+  for (const record of registry.plugins) {
+    for (const declared of record.channels ?? []) {
+      if (ownerByChannelId.get(normalizeChannelMetadataKey(declared)) === record.id) {
+        admissible.add(declared);
+      }
+    }
+  }
+  return admissible;
+}
+
+/**
+ * The path as the schema plane keys it.
+ *
+ * Admission matches the authored spelling, but every hint and schema lookup below is keyed by
+ * `normalizeChannelMetadataKey`: a plugin declaring `AcmeChat` stores its hints under
+ * `channels.acmechat.*`. Consulting those with the authored segment finds nothing at all, so a
+ * field the plugin explicitly marked sensitive would reach model-visible operation text in
+ * plaintext -- the unknown-owner fallback had been hiding that, and admitting the owner removes it.
+ */
+function canonicalizeChannelOwnerSegment(path: readonly string[]): string[] {
+  const channelId = path[1];
+  if (
+    path[0] !== "channels" ||
+    channelId === undefined ||
+    isKernelOwnedChannelConfigKey(channelId)
+  ) {
+    return [...path];
+  }
+  const canonical = normalizeChannelMetadataKey(channelId);
+  if (canonical === channelId) {
+    return [...path];
+  }
+  const next = [...path];
+  next[1] = canonical;
+  return next;
 }
 
 function isUnknownDynamicOwnerPath(
@@ -344,10 +411,12 @@ function hasSensitiveConfigValue(
   if (isUnknownDynamicOwnerPath(path, metadata)) {
     return true;
   }
+  // Admission is done; everything below reads the schema plane, which is keyed canonically.
+  const schemaPath = canonicalizeChannelOwnerSegment(path);
   const { uiHints } = metadata;
-  const canonicalPath = path.join(".");
+  const canonicalPath = schemaPath.join(".");
   const sensitiveHint = resolveConfigUiHint(
-    path,
+    schemaPath,
     uiHints,
     true,
     (candidate) => candidate.sensitive !== undefined,
@@ -355,7 +424,10 @@ function hasSensitiveConfigValue(
   if (sensitiveHint?.sensitive === true || isSensitiveConfigPath(canonicalPath)) {
     return true;
   }
-  const hint = resolveConfigUiHint(path, uiHints);
+  // Canonical for the same reason as the `sensitive` lookup above. Reading the authored path here
+  // left a cased channel's url-secret tag unfound, so a credential embedded in a URL stayed
+  // visible even though the plugin had tagged the field.
+  const hint = resolveConfigUiHint(schemaPath, uiHints);
   if (
     typeof value === "string" &&
     (hasSensitiveUrlHintTag(hint) || isSensitiveUrlConfigPath(canonicalPath)) &&
@@ -450,17 +522,19 @@ export function redactSystemAgentConfigPath(path: string): string {
   try {
     const parsedPath = parseConfigSetPath(path);
     const metadata = resolveSystemAgentConfigRedactionMetadata();
-    const hasSensitivePathData = parsedPath.some(
+    // Admission reads the authored spelling; schema and hint lookups read the canonical one.
+    const schemaPath = canonicalizeChannelOwnerSegment(parsedPath);
+    const hasSensitivePathData = schemaPath.some(
       (segment, index) =>
-        hasSensitiveContainerAssignment(parsedPath, index) ||
-        (!isDynamicOwnerIdSegment(parsedPath, index) &&
-          !isSchemaDynamicSegment(parsedPath, index, metadata) &&
+        hasSensitiveContainerAssignment(schemaPath, index) ||
+        (!isDynamicOwnerIdSegment(schemaPath, index) &&
+          !isSchemaDynamicSegment(schemaPath, index, metadata) &&
           (segment.includes("=") ||
-            (!SENSITIVE_CONFIG_CONTAINER_KEYS.has(parsedPath[index - 1] ?? "") &&
-              hasSensitiveSegmentPrefix(parsedPath, index, metadata)))) ||
+            (!SENSITIVE_CONFIG_CONTAINER_KEYS.has(schemaPath[index - 1] ?? "") &&
+              hasSensitiveSegmentPrefix(schemaPath, index, metadata)))) ||
         (index > 0 &&
-          !SENSITIVE_CONFIG_CONTAINER_KEYS.has(parsedPath[index - 1] ?? "") &&
-          isSensitiveConfigPathParts(parsedPath.slice(0, index), metadata)),
+          !SENSITIVE_CONFIG_CONTAINER_KEYS.has(schemaPath[index - 1] ?? "") &&
+          isSensitiveConfigPathParts(schemaPath.slice(0, index), metadata)),
     );
     return isUnknownDynamicOwnerPath(parsedPath, metadata) || hasSensitivePathData
       ? "<redacted path>"
@@ -480,21 +554,23 @@ export function isSystemAgentSensitiveConfigPathEmbedding(path: string): boolean
   }
   const metadata = resolveSystemAgentConfigRedactionMetadata();
   const unknownOwner = isUnknownDynamicOwnerPath(parsedPath, metadata);
-  return parsedPath.some((segment, index) => {
+  // Admission reads the authored spelling; schema and hint lookups read the canonical one.
+  const schemaPath = canonicalizeChannelOwnerSegment(parsedPath);
+  return schemaPath.some((segment, index) => {
     if (unknownOwner && segment.includes("=")) {
       return true;
     }
-    if (hasSensitiveContainerAssignment(parsedPath, index)) {
+    if (hasSensitiveContainerAssignment(schemaPath, index)) {
       return true;
     }
     if (
-      isDynamicOwnerIdSegment(parsedPath, index) ||
-      SENSITIVE_CONFIG_CONTAINER_KEYS.has(parsedPath[index - 1] ?? "") ||
-      isSchemaDynamicSegment(parsedPath, index, metadata)
+      isDynamicOwnerIdSegment(schemaPath, index) ||
+      SENSITIVE_CONFIG_CONTAINER_KEYS.has(schemaPath[index - 1] ?? "") ||
+      isSchemaDynamicSegment(schemaPath, index, metadata)
     ) {
       return false;
     }
-    return segment.includes("=") || hasSensitiveSegmentPrefix(parsedPath, index, metadata);
+    return segment.includes("=") || hasSensitiveSegmentPrefix(schemaPath, index, metadata);
   });
 }
 

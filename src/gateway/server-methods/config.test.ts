@@ -581,11 +581,16 @@ describe("config schema response cache", () => {
       expect.objectContaining({ ok: true }),
       undefined,
     );
-    expect(loadGatewayRuntimeConfigSchemaMock).toHaveBeenCalledTimes(1);
+    // config.patch reads the active runtime schema to redact its acknowledgement, so it builds
+    // here. A serving gateway always has a published runtime snapshot and answers that read from
+    // the cache; this test deliberately runs without one, so the read is a real build. What the
+    // case is actually about — a write invalidating the cache for the NEXT request — is the
+    // increment below.
+    expect(loadGatewayRuntimeConfigSchemaMock).toHaveBeenCalledTimes(2);
 
     await invokeConfigSchema();
 
-    expect(loadGatewayRuntimeConfigSchemaMock).toHaveBeenCalledTimes(2);
+    expect(loadGatewayRuntimeConfigSchemaMock).toHaveBeenCalledTimes(3);
   });
 
   it("rebuilds when the active plugin registry generation changes", async () => {
