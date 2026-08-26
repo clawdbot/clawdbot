@@ -64,7 +64,32 @@ function collectSafetyCommentLines(sourceFile: ts.SourceFile, source: string) {
   );
   const sameLine = new Set<number>();
   const standalone = new Set<number>();
+  // Raw scanning misreads the `}` ending a template substitution as a block
+  // close, so every comment after the file's first substitution went unseen;
+  // track substitution brace depth and rescan the way the parser does.
+  const templateBraceDepths: number[] = [];
   for (let token = scanner.scan(); token !== ts.SyntaxKind.EndOfFileToken; token = scanner.scan()) {
+    if (token === ts.SyntaxKind.TemplateHead) {
+      templateBraceDepths.push(0);
+      continue;
+    }
+    const braceDepth = templateBraceDepths.at(-1);
+    if (braceDepth !== undefined) {
+      if (token === ts.SyntaxKind.OpenBraceToken) {
+        templateBraceDepths[templateBraceDepths.length - 1] = braceDepth + 1;
+        continue;
+      }
+      if (token === ts.SyntaxKind.CloseBraceToken) {
+        if (braceDepth > 0) {
+          templateBraceDepths[templateBraceDepths.length - 1] = braceDepth - 1;
+          continue;
+        }
+        if (scanner.reScanTemplateToken(false) !== ts.SyntaxKind.TemplateMiddle) {
+          templateBraceDepths.pop();
+        }
+        continue;
+      }
+    }
     if (token !== ts.SyntaxKind.SingleLineCommentTrivia) {
       continue;
     }
