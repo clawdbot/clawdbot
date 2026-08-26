@@ -31,8 +31,6 @@ export type CommonChannelMessagingConfig<
   configWrites?: boolean;
   /** If false, do not start this account. Default: true. */
   enabled?: boolean;
-  /** Post a room-specific introduction when joining a group. Default: true. */
-  joinIntro?: boolean;
   /** Direct message access policy (default: pairing). */
   dmPolicy?: DmPolicy;
   /** Optional allowlist for inbound DM senders. */

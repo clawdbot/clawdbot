@@ -63,8 +63,9 @@ install. Channels marked "official plugin" install with one command
 
 - Discord, Slack, and Telegram post one room-specific introduction when the bot
   joins an allowed group. Introductions are enabled by default, never run in
-  direct messages, and can be disabled with `channels.<channel>.joinIntro: false`.
-  Set `channels.<channel>.accounts.<accountId>.joinIntro` to override one account.
+  direct messages, and can be disabled with `channels.<channel>.joinIntro: false`
+  for those three channels. Set `channels.<channel>.accounts.<accountId>.joinIntro`
+  to override one Discord, Slack, or Telegram account.
 - Telegram replies that contain markdown image syntax, such as `![alt](url)`,
   are converted into media replies on the final outbound path when possible.
 - Slack multi-person DMs route as group chats, so group policy, mention

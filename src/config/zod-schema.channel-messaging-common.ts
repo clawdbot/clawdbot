@@ -109,7 +109,6 @@ function createCommonChannelAccountShape<
     markdown: MarkdownConfigSchema,
     configWrites: z.boolean().optional(),
     enabled: z.boolean().optional(),
-    joinIntro: z.boolean().optional(),
     dmPolicy:
       options.useDefaults || options.dmPolicyDefault
         ? DmPolicySchema.optional().default("pairing")
