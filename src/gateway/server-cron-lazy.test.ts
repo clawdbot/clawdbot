@@ -87,6 +87,49 @@ describe("createLazyGatewayCronState", () => {
     expect(cron["readJob"]).toHaveBeenCalledWith("demo");
   });
 
+  it("does not load cron solely to prepare a watcher handoff", async () => {
+    const lazy = createLazyGatewayCronState(createParams());
+
+    await expect(lazy.prepareExitWatcherHandoff?.()).resolves.toBeUndefined();
+    expect(hoisted.buildGatewayCronService).not.toHaveBeenCalled();
+  });
+
+  it("preserves a watcher owner when hot reload overtakes lazy startup", async () => {
+    const finishStart = deferred();
+    const cron = createCronService();
+    cron.start = vi.fn(async () => await finishStart.promise);
+    const watchers = {
+      reconcile: vi.fn(),
+      cancel: vi.fn(),
+      cancelAll: vi.fn(async () => {}),
+      activeJobIds: vi.fn(() => ["watched-job"]),
+      updateHandlers: vi.fn(),
+    };
+    const stopOwner = vi.fn(async () => {});
+    hoisted.setState({
+      ...createCronState(cron),
+      prepareExitWatcherHandoff: vi.fn(async () => ({
+        current: () => watchers,
+        adopt: vi.fn(),
+        stopOwner,
+      })),
+    });
+    const lazy = createLazyGatewayCronState(createParams());
+
+    const start = lazy.cron.start();
+    await vi.waitFor(() => expect(cron["start"]).toHaveBeenCalledOnce());
+    const handoff = await lazy.prepareExitWatcherHandoff?.();
+    expect(handoff?.current()).toBe(watchers);
+
+    await handoff?.stopOwner();
+    finishStart.resolve();
+    await start;
+
+    expect(stopOwner).toHaveBeenCalledOnce();
+    expect(watchers.cancelAll).not.toHaveBeenCalled();
+    expect(cron["stop"]).not.toHaveBeenCalled();
+  });
+
   it("forwards run payload overrides to the loaded cron service", async () => {
     const cron = createCronService();
     hoisted.setState(createCronState(cron));

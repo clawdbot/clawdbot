@@ -105,26 +105,39 @@ export class GatewayClientTransport implements ConnectableOpenClawTransport {
           try {
             this.options.onHelloOk?.(_hello);
           } finally {
-            this.rejectPendingConnect = null;
-            resolve();
+            // A retired client's late hello must not settle its replacement's connection.
+            if (this.client === client && this.rejectPendingConnect === reject) {
+              this.rejectPendingConnect = null;
+              resolve();
+            }
           }
         },
         onConnectError: (error: Error) => {
           try {
             this.options.onConnectError?.(error);
           } finally {
-            if (this.client === client) {
+            // Established reconnects belong to the GatewayClient; only initial failure retires it.
+            if (this.client === client && this.rejectPendingConnect === reject) {
               this.client = null;
-            }
-            if (this.connectPromise) {
               this.connectPromise = null;
+              this.rejectPendingConnect = null;
+              void client.stopAndWait().catch(() => {});
+              reject(error);
             }
-            void client.stopAndWait().catch(() => {});
-            this.rejectPendingConnect = null;
-            reject(error);
           }
         },
-        onReconnectPaused: this.options.onReconnectPaused,
+        onReconnectPaused: (info: unknown) => {
+          try {
+            this.options.onReconnectPaused?.(info);
+          } finally {
+            // A terminal reconnect has no retry owner, so future connects need a fresh client.
+            if (this.client === client && this.rejectPendingConnect === null) {
+              this.client = null;
+              this.connectPromise = null;
+              void client.stopAndWait().catch(() => {});
+            }
+          }
+        },
         onClose: this.options.onClose,
         onGap: this.options.onGap,
       } as never);

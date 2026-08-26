@@ -27,6 +27,7 @@ import {
   type SidebarAttentionKind,
 } from "./sidebar-attention-entries.ts";
 import { buildSidebarAttentionEntries } from "./sidebar-attention-items.ts";
+import { resolveSidebarUpdateAttention } from "./sidebar-attention-update.ts";
 import "./sidebar-attention.ts";
 
 function deferred<T>() {
@@ -68,7 +69,6 @@ type SidebarAttentionElement = HTMLElement & {
   context: ApplicationContext;
   updateComplete: Promise<boolean>;
   cronJobs: CronJob[];
-  hasUpdateSurface(): boolean;
   startUpdate(): void;
   modelAuthStatus: ModelAuthStatusResult | null;
   loadedAtMs: number;
@@ -140,6 +140,17 @@ describe("automation attention", () => {
     );
 
     expect(overdue?.label).toBe("stalled-id");
+  });
+
+  it("shows automation owners only when the caller supplies an all-agent owner map", () => {
+    const item = buildSidebarAttentionEntries({
+      cronJobs: [cronJob("writer-job")],
+      cronOwnerByJobId: new Map([["writer-job", "Writer"]]),
+      modelAuthStatus: null,
+      now: 0,
+    })[0];
+
+    expect(item?.meta?.context).toBe("Writer");
   });
 
   it("orders failed before overdue and newest first within each group", () => {
@@ -226,6 +237,40 @@ describe("sidebar attention refresh ownership", () => {
     vi.unstubAllGlobals();
   });
 
+  it("keeps the plain attention panel inside its top-layer menu surface", async () => {
+    const provider = createApplicationContextProvider({
+      gateway: {
+        snapshot: { phase: "connected", client: null, hello: null },
+        connection: { gatewayUrl: "" },
+        subscribe: () => () => undefined,
+        subscribeEvents: () => () => undefined,
+      },
+      overlays: {
+        snapshot: { approvalQueue: [] },
+        subscribe: () => () => undefined,
+      },
+      agentSelection: {
+        state: { selectedId: null, scopeId: null },
+        subscribe: () => () => undefined,
+      },
+      scopeUpgrade: hiddenScopeUpgradeCapability,
+    } as unknown as ApplicationContext);
+    const element = document.createElement("openclaw-sidebar-attention") as SidebarAttentionElement;
+    provider.append(element);
+    document.body.append(provider);
+
+    await waitForFast(() =>
+      expect(element.querySelector<HTMLButtonElement>(".sidebar-issues-button")).not.toBeNull(),
+    );
+    element.querySelector<HTMLButtonElement>(".sidebar-issues-button")!.click();
+
+    await waitForFast(() => {
+      const panel = element.querySelector(".sidebar-issues-panel");
+      expect(panel).not.toBeNull();
+      expect(panel?.closest("openclaw-menu-surface")).not.toBeNull();
+    });
+  });
+
   it("keeps the latest refresh when an older load on the same client finishes last", async () => {
     const firstCron = deferred<unknown>();
     const firstAuth = deferred<unknown>();
@@ -267,7 +312,10 @@ describe("sidebar attention refresh ownership", () => {
       snapshot: { approvalQueue: [] },
       subscribe: () => () => undefined,
     } as unknown as ApplicationContext["overlays"];
-    const selectionState = { selectedId: "main" as string | null };
+    const selectionState = {
+      selectedId: "main" as string | null,
+      scopeId: "main" as string | null,
+    };
     const selectionListeners = new Set<() => void>();
     const agentSelection = {
       state: selectionState,
@@ -299,8 +347,12 @@ describe("sidebar attention refresh ownership", () => {
     expect(request.mock.calls.find(([method]) => method === "models.authStatus")?.[1]).toEqual({
       agentId: "main",
     });
+    expect(request.mock.calls.find(([method]) => method === "cron.list")?.[1]).toMatchObject({
+      agentId: "main",
+    });
 
     selectionState.selectedId = "writer";
+    selectionState.scopeId = "writer";
     for (const listener of selectionListeners) {
       listener();
     }
@@ -308,6 +360,9 @@ describe("sidebar attention refresh ownership", () => {
     expect(request.mock.calls.filter(([method]) => method === "models.authStatus")[1]?.[1]).toEqual(
       { agentId: "writer" },
     );
+    expect(request.mock.calls.filter(([method]) => method === "cron.list")[1]?.[1]).toMatchObject({
+      agentId: "writer",
+    });
 
     const currentAuth = { ts: 2, providers: [] } as ModelAuthStatusResult;
     now = 200_000;
@@ -333,6 +388,7 @@ describe("sidebar attention refresh ownership", () => {
     expect(localStorage.getItem(dismissalStoreKey(gateway.connection.gatewayUrl))).not.toBeNull();
 
     selectionState.selectedId = null;
+    selectionState.scopeId = null;
     for (const listener of selectionListeners) {
       listener();
     }
@@ -388,7 +444,10 @@ describe("sidebar attention refresh ownership", () => {
         return () => undefined;
       },
     } as unknown as ApplicationGateway;
-    const selectionState = { selectedId: "main" as string | null };
+    const selectionState = {
+      selectedId: "main" as string | null,
+      scopeId: "main" as string | null,
+    };
     const selectionListeners = new Set<() => void>();
     const provider = createApplicationContextProvider({
       gateway,
@@ -412,6 +471,7 @@ describe("sidebar attention refresh ownership", () => {
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
 
     selectionState.selectedId = "writer";
+    selectionState.scopeId = "writer";
     for (const listener of selectionListeners) {
       listener();
     }
@@ -466,7 +526,7 @@ describe("sidebar attention refresh ownership", () => {
       subscribe: () => () => undefined,
     } as unknown as ApplicationContext["overlays"];
     const agentSelection = {
-      state: { selectedId: "main" },
+      state: { selectedId: "main", scopeId: "main" },
       subscribe: () => () => undefined,
     } as unknown as ApplicationContext["agentSelection"];
     vi.stubGlobal("localStorage", createTestStorageMock());
@@ -549,14 +609,14 @@ describe("update attention", () => {
       overlays: { snapshot: overlaySnapshot },
     } as unknown as ApplicationContext;
 
-    expect(element.hasUpdateSurface()).toBe(false);
+    expect(resolveSidebarUpdateAttention(element.context).present).toBe(false);
 
     gatewaySnapshot.hello.auth.scopes = ["operator.read"];
-    expect(element.hasUpdateSurface()).toBe(true);
+    expect(resolveSidebarUpdateAttention(element.context).present).toBe(true);
 
     gatewaySnapshot.hello.auth.scopes = ["operator.admin"];
     overlaySnapshot.updateCampaignStatusHydrated = true;
-    expect(element.hasUpdateSurface()).toBe(true);
+    expect(resolveSidebarUpdateAttention(element.context).present).toBe(true);
   });
 
   it("keeps restart reconciliation visible after update metadata clears", () => {
@@ -574,7 +634,7 @@ describe("update attention", () => {
       },
     } as unknown as ApplicationContext;
 
-    expect(element.hasUpdateSurface()).toBe(true);
+    expect(resolveSidebarUpdateAttention(element.context).present).toBe(true);
   });
 
   it.each([
@@ -646,12 +706,14 @@ describe("reconcileSidebarAttentionDismissals", () => {
   const reconcile = (
     dismissals: Record<string, string[]>,
     active: Array<{ kind: SidebarAttentionKind; signature: string }>,
+    scope?: { cronInventoryComplete: boolean; modelAuthAgentId: string | null },
   ) => {
     vi.stubGlobal("localStorage", createTestStorageMock());
     localStorage.setItem(dismissalStoreKey(gatewayUrl), JSON.stringify(dismissals));
     return reconcileSidebarAttentionDismissals({
       active,
       gatewayUrl,
+      ...(scope ? { scope } : {}),
     });
   };
 
@@ -669,6 +731,22 @@ describe("reconcileSidebarAttentionDismissals", () => {
         chip("modelAuthExpired", "openai"),
       ]),
     ).toEqual({ modelAuthExpired: ["openai"] });
+  });
+
+  it("preserves dismissals outside a selected agent's partial inventory", () => {
+    expect(
+      reconcile(
+        {
+          cronFailed: ["main-job", "writer-job"],
+          modelAuthExpired: ["agent:main\nopenai", "agent:writer\nopenai"],
+        },
+        [chip("cronFailed", "main-job"), chip("modelAuthExpired", "agent:main\nopenai")],
+        { cronInventoryComplete: false, modelAuthAgentId: "main" },
+      ),
+    ).toEqual({
+      cronFailed: ["main-job", "writer-job"],
+      modelAuthExpired: ["agent:main\nopenai", "agent:writer\nopenai"],
+    });
   });
 });
 

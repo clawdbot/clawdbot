@@ -695,6 +695,20 @@ describe("hardenApprovedExecutionPaths", () => {
     );
   });
 
+  it("captures the execution host cwd when an approval request omits cwd", () => {
+    const hardened = hardenApprovedExecutionPaths({
+      approvedByAsk: true,
+      argv: [],
+      shellCommand: null,
+      cwd: undefined,
+    });
+    expect(hardened.ok).toBe(true);
+    if (!hardened.ok) {
+      throw new Error("unreachable");
+    }
+    expect(hardened.cwd).toBe(fs.realpathSync(process.cwd()));
+  });
+
   it("handles shell payloads that invoke absolute-path native binaries", () => {
     if (process.platform === "win32") {
       return;

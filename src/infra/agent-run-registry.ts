@@ -23,6 +23,8 @@ type AgentRunContext = {
   projectSessionActive?: boolean;
   /** Whether lifecycle events may update the shared session row. */
   projectSessionLifecycle?: boolean;
+  /** Sticky diagnostic provenance only; never authorization for recovery work. */
+  mainSessionRestartRecovery?: true;
   /** Active cadence state by job; admission permits one invocation per job. */
   cronRunsByJobId?: Map<string, { pacingEnabled: boolean; nextCheckMs?: number }>;
   /** Timestamp when this context was first registered (for TTL-based cleanup). */
@@ -190,6 +192,9 @@ export function registerAgentRunContext(
   }
   if (context.projectSessionLifecycle !== undefined) {
     existing.projectSessionLifecycle = context.projectSessionLifecycle;
+  }
+  if (context.mainSessionRestartRecovery === true) {
+    existing.mainSessionRestartRecovery = true;
   }
   if (context.cronRunsByJobId !== undefined) {
     existing.cronRunsByJobId ??= new Map();

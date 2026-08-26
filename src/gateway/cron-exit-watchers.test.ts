@@ -146,6 +146,92 @@ describe("createCronExitWatchers", () => {
     expect(order).toEqual(["persist", "fire"]);
   });
 
+  it("rebinds live watchers but drains callbacks already owned by the previous scheduler", async () => {
+    const { supervisor, runs } = makeFakeSupervisor();
+    let releasePersistence = () => {};
+    const persistenceGate = new Promise<void>((resolve) => {
+      releasePersistence = resolve;
+    });
+    const releaseCompletion = vi.fn();
+    const oldPersistCompletion = vi.fn(async () => {
+      await persistenceGate;
+      return releaseCompletion;
+    });
+    const oldFireOnExit = vi.fn(async () => {});
+    const newPersistCompletion = vi.fn(async () => {});
+    const newFireOnExit = vi.fn(async () => {});
+    const watchers = createCronExitWatchers({
+      getProcessSupervisor: () => supervisor as never,
+      persistCompletion: oldPersistCompletion,
+      fireOnExit: oldFireOnExit,
+      logger: noopLogger,
+    });
+
+    watchers.reconcile([onExitJob("old-owner"), onExitJob("new-owner")]);
+    await flush();
+    expectDefined(runs[0], "runs[0] test invariant").deferred.resolve({
+      exitCode: 0,
+      reason: "exit",
+    });
+    await vi.waitFor(() => expect(oldPersistCompletion).toHaveBeenCalledOnce());
+
+    const handoff = watchers.updateHandlers({
+      getProcessSupervisor: () => supervisor as never,
+      persistCompletion: newPersistCompletion,
+      fireOnExit: newFireOnExit,
+      logger: noopLogger,
+    });
+    const handoffSettled = vi.fn();
+    void handoff?.then(handoffSettled);
+
+    expectDefined(runs[1], "runs[1] test invariant").deferred.resolve({
+      exitCode: 0,
+      reason: "exit",
+    });
+    await vi.waitFor(() => expect(newFireOnExit).toHaveBeenCalledOnce());
+    expect(newPersistCompletion).toHaveBeenCalledOnce();
+    expect(oldFireOnExit).not.toHaveBeenCalled();
+    expect(handoffSettled).not.toHaveBeenCalled();
+
+    releasePersistence();
+    await handoff;
+    await vi.waitFor(() => expect(oldFireOnExit).toHaveBeenCalledOnce());
+    expect(releaseCompletion).toHaveBeenCalledOnce();
+    expect(supervisor.spawn).toHaveBeenCalledTimes(2);
+    expect(supervisor.cancelScope).not.toHaveBeenCalled();
+  });
+
+  it("routes post-handoff retries through the replacement scheduler owner", async () => {
+    const { supervisor, runs } = makeFakeSupervisor();
+    const oldUpdateWatcherState = vi.fn(async () => {});
+    const newUpdateWatcherState = vi.fn(async () => {});
+    const watchers = createCronExitWatchers({
+      getProcessSupervisor: () => supervisor as never,
+      persistCompletion: vi.fn(async () => {}),
+      fireOnExit: vi.fn(async () => {}),
+      updateWatcherState: oldUpdateWatcherState,
+      logger: noopLogger,
+      retryBackoffMs: [0],
+    });
+
+    watchers.reconcile([onExitJob("job-a")]);
+    await flush();
+    await watchers.updateHandlers({
+      getProcessSupervisor: () => supervisor as never,
+      persistCompletion: vi.fn(async () => {}),
+      fireOnExit: vi.fn(async () => {}),
+      updateWatcherState: newUpdateWatcherState,
+      logger: noopLogger,
+    });
+    expectDefined(runs[0], "runs[0] test invariant").deferred.reject(new Error("wait failed"));
+
+    await vi.waitFor(() => expect(newUpdateWatcherState).toHaveBeenCalledOnce());
+    expect(oldUpdateWatcherState).not.toHaveBeenCalled();
+    await delay(5);
+    await flush();
+    expect(supervisor.spawn).toHaveBeenCalledTimes(2);
+  });
+
   it("a fired job stays unarmed across a simulated restart (disabled in store → not re-run)", async () => {
     // persistCompletion disables the job; after a restart the reconcile sees a
     // disabled job and must NOT re-arm (which would re-run the command).

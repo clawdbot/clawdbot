@@ -136,7 +136,7 @@ describe("executeWithApiKeyRotation", () => {
     expect(execute).toHaveBeenCalledTimes(2);
   });
 
-  it("does not retry caller-aborted AbortError", async () => {
+  it("does not start an operation when retry policy is already cancelled", async () => {
     const controller = new AbortController();
     controller.abort(new Error("user cancelled"));
     const sleep = vi.fn(async () => undefined);
@@ -159,8 +159,26 @@ describe("executeWithApiKeyRotation", () => {
       }),
     ).rejects.toThrow("user cancelled");
 
-    expect(execute).toHaveBeenCalledTimes(1);
+    expect(execute).not.toHaveBeenCalled();
     expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it("preserves retry-policy cancellation raised during an operation", async () => {
+    const controller = new AbortController();
+    const execute = vi.fn(async () => {
+      controller.abort(new Error("retry policy cancelled provider read"));
+      throw Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
+    });
+
+    await expect(
+      executeWithApiKeyRotation({
+        provider: "openai",
+        apiKeys: ["key-1"],
+        transientRetry: { attempts: 2, signal: controller.signal },
+        execute,
+      }),
+    ).rejects.toThrow("retry policy cancelled provider read");
+    expect(execute).toHaveBeenCalledOnce();
   });
 
   it("retries timeout-like AbortError when the caller signal is not aborted", async () => {

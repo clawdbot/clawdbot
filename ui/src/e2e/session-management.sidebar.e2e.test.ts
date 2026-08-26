@@ -166,6 +166,9 @@ suite.define(() => {
       const parent = page.locator(`[data-session-key="${parentKey}"]`);
       await parent.waitFor({ state: "visible", timeout: 10_000 });
       await expect.poll(() => page.locator(".sidebar-recent-session--child").count()).toBe(0);
+      await expect
+        .poll(() => parent.locator(".session-run-spinner").getAttribute("aria-label"))
+        .toBe("Active run");
       await captureUiProof(page, "child-sessions-collapsed.png");
 
       await parent.getByRole("button", { name: "Show 4 child sessions for Plan release" }).click();

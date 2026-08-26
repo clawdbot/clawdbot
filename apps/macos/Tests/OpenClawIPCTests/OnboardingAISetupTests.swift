@@ -1497,6 +1497,7 @@ struct OnboardingAISetupTests {
         #expect(!model.connected)
         #expect(model.pendingActivationVerification)
         #expect(model.phase == .detecting)
+        #expect(OnboardingController.shared.busyReason == "OpenClaw is testing your AI connection.")
 
         await model.activate(kind: "codex-cli")
         #expect(model.pendingActivationVerification)
@@ -1507,6 +1508,7 @@ struct OnboardingAISetupTests {
         #expect(model.connected)
         #expect(!model.pendingActivationVerification)
         #expect(model.selectedKind == "existing-model")
+        #expect(OnboardingController.shared.busyReason == nil)
     }
 
     @Test func `implicit model label falls through verification to automatic setup`() async throws {
@@ -1663,10 +1665,13 @@ struct OnboardingAISetupTests {
         let model = harness.model(defaults: defaults)
 
         model.resumeConfiguredInference(modelRef: "openai/gpt-5.5")
+        #expect(OnboardingController.shared.busyReason == "OpenClaw is testing your AI connection.")
         let outcome = await model.verifyPendingConfiguredInference()
 
         #expect(!model.connected)
         #expect(model.pendingActivationVerification)
+        #expect(model.phase == .ready)
+        #expect(OnboardingController.shared.busyReason == nil)
         #expect(model.detectError?.detail == "expired login")
         #expect(outcome == .notConnected)
         #expect(isPending(defaults))
