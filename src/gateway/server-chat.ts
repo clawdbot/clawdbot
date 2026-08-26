@@ -1413,6 +1413,7 @@ export function createAgentEventHandler({
       !isAborted &&
       ((isToolEvent && !suppressHeartbeatToolEvents) ||
         isItemEvent ||
+        evt.stream === "run_status" ||
         evt.stream === "notice" ||
         typeof evt.data?.reviewId === "string" ||
         evt.data?.phase === "started" ||
