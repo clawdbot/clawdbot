@@ -68,6 +68,7 @@ import {
 import type { AuthProfileCredential, AuthProfileStore } from "../auth-profiles/types.js";
 import {
   buildBootstrapBudgetState,
+  buildBootstrapPromptWarningNotice,
   buildBootstrapTruncationReportMeta,
 } from "../bootstrap-budget.js";
 import {
@@ -1611,6 +1612,9 @@ export async function prepareCliRunContext(
             tools: promptTools,
             contextFiles,
             bootstrapMode,
+            bootstrapTruncationNotice: buildBootstrapPromptWarningNotice(
+              bootstrapPromptWarning.lines,
+            ),
             modelDisplay,
             agentId: sessionAgentId,
             sessionKey: params.sessionKey,
@@ -1824,7 +1828,6 @@ export async function prepareCliRunContext(
         systemPrompt,
         systemPromptReport,
         claudeSkillsPluginArgs: claudeSkillsPlugin.args,
-        bootstrapPromptWarningLines: bootstrapPromptWarning.lines,
         authEpoch,
         authBindingFingerprint,
         ...(skipLocalCredentialEpoch ? { authBindingSkipsLocalCredential: true } : {}),
@@ -1935,7 +1938,6 @@ export async function prepareCliRunContext(
       systemPrompt,
       systemPromptReport,
       claudeSkillsPluginArgs: claudeSkillsPlugin.args,
-      bootstrapPromptWarningLines: bootstrapPromptWarning.lines,
       ...(openClawHistoryPrompt ? { openClawHistoryPrompt } : {}),
       authEpoch,
       authBindingFingerprint,

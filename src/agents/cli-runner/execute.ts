@@ -9,7 +9,6 @@ import { compareValidSemver } from "../../infra/semver.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import type { CliBackendThinkingLevel } from "../../plugins/cli-backend.types.js";
 import { applySkillEnvOverridesFromSnapshot } from "../../skills/runtime/env-overrides.js";
-import { appendBootstrapPromptWarning } from "../bootstrap-budget.js";
 import {
   fingerprintCliRuntimeArtifact,
   resolveCliRuntimeOwnerFingerprint,
@@ -166,12 +165,7 @@ export async function executePreparedCliRun(
   let prompt =
     params.controlOperation !== undefined
       ? basePrompt
-      : applyPluginTextReplacements(
-          appendBootstrapPromptWarning(basePrompt, context.bootstrapPromptWarningLines, {
-            preserveExactPrompt: params.trigger === "heartbeat" ? params.prompt : undefined,
-          }),
-          context.backendResolved.textTransforms?.input,
-        );
+      : applyPluginTextReplacements(basePrompt, context.backendResolved.textTransforms?.input);
   if (
     nodePlacement &&
     ((params.images?.length ?? 0) > 0 ||

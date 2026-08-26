@@ -242,7 +242,6 @@ export function buildPreparedCliRunContext(
     normalizedModel: model,
     systemPrompt: overrides.systemPrompt ?? "You are a helpful assistant.",
     systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
-    bootstrapPromptWarningLines: [],
     authEpochVersion: 2,
     claudeSkillsPluginArgs: [],
     ...(overrides.mcpDeliveryCapture ? { mcpDeliveryCapture: true } : {}),
