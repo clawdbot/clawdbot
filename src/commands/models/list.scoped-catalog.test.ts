@@ -108,6 +108,9 @@ describe("loadScopedListModelCatalogSnapshot", () => {
       expect.objectContaining({ readOnly: true }),
       ["openai"],
     );
+    expect(mocks.prepareScopedReadOnlyLiveModelCatalog.mock.calls[0]?.[0]).not.toHaveProperty(
+      "inheritedAuthDir",
+    );
   });
 
   it("uses authenticated manifest fallback rows without loading provider runtime", async () => {
