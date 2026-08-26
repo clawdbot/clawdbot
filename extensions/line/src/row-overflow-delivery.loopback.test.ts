@@ -332,6 +332,25 @@ describe("Row-overflow table delivery through production outbound adapter over l
     }
   });
 
+  it("preserves ordinary prose, code, and table order on the actual LINE HTTP wire", async () => {
+    const markdown =
+      "Before\n\n```js\nfirst()\n```\n\nBetween\n\n| Name | Value |\n|---|---|\n| Item | one |\n\nAfter";
+
+    await lineOutboundAdapter.sendPayload!({
+      to: "line:user:UtestOrdered",
+      text: markdown,
+      payload: { text: markdown },
+      cfg: LINE_TEST_CFG,
+    });
+
+    expect(
+      collectAllWireMessages(requests).map((message) =>
+        message.type === "flex" ? message.altText : message.text,
+      ),
+    ).toEqual(["Before", "Code", "Between", "Table", "After"]);
+    expect(requests.every((request) => request.body.messages.length <= 5)).toBe(true);
+  });
+
   it("carries a valid Bearer token and recipient through the production outbound adapter", async () => {
     const rows = Array.from({ length: 15 }, (_, i) => `| Item${i + 1} | $${i + 1}.00 |`).join("\n");
     const markdown = `| Name | Price |\n|---|---|\n${rows}`;

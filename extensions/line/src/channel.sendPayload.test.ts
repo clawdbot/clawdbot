@@ -517,6 +517,38 @@ describe("line outbound sendPayload", () => {
     );
   });
 
+  it("keeps rendered-code quick replies on the final inline media message", async () => {
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+    const cfg = { channels: { line: {} } } as OpenClawConfig;
+
+    await lineOutboundAdapter.sendPayload!({
+      to: "line:user:U123",
+      text: "```js\nfirst()\n```",
+      payload: {
+        text: "```js\nfirst()\n```",
+        mediaUrl: "https://example.com/image.jpg",
+        channelData: { line: { quickReplies: ["Continue"] } },
+      },
+      accountId: "default",
+      cfg,
+    });
+
+    expect(mocks.pushMessagesLine).toHaveBeenCalledExactlyOnceWith(
+      "line:user:U123",
+      [
+        expect.objectContaining({ type: "flex", altText: "Code" }),
+        expect.objectContaining({
+          type: "image",
+          originalContentUrl: "https://example.com/image.jpg",
+          quickReply: { items: ["Continue"] },
+        }),
+      ],
+      { verbose: false, accountId: "default", cfg },
+    );
+    expect(mocks.pushFlexMessage).not.toHaveBeenCalled();
+  });
+
   it("sends template message without dropping text", async () => {
     const { runtime, mocks } = createRuntime();
     setLineRuntime(runtime);

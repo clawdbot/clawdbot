@@ -244,7 +244,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       await sendMediaMessages();
     }
 
-    if (orderedMessages) {
+    if (orderedMessages && !shouldSendQuickRepliesInline) {
       for (const [index, message] of orderedMessages.entries()) {
         const isLast = index === orderedMessages.length - 1;
         if (message.type === "flex") {

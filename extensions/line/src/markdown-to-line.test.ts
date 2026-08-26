@@ -207,6 +207,19 @@ describe("processLineMessage", () => {
     expect(result.flexMessages).toHaveLength(0);
   });
 
+  it("keeps ordinary code cards, table cards, and prose in authored order", () => {
+    const result = processLineMessage(
+      "Before\n\n```js\nfirst()\n```\n\nBetween\n\n| Name | Value |\n|---|---|\n| Item | one |\n\nAfter",
+    );
+
+    expect(result.flexMessages.map((message) => message.altText)).toEqual(["Code", "Table"]);
+    expect(
+      result.segments?.map((segment) =>
+        segment.type === "flex" ? segment.message.altText : segment.text,
+      ),
+    ).toEqual(["Before", "Code", "Between", "Table", "After"]);
+  });
+
   it("processes text with code blocks", () => {
     const text = `Check this code:
 
@@ -346,7 +359,7 @@ print("done")
       Buffer.byteLength(JSON.stringify(result.flexMessages[0]?.contents), "utf8"),
     ).toBeLessThanOrEqual(30_000);
     expect(result.text).toBe("");
-    expect(result.segments).toBeUndefined();
+    expect(result.segments).toEqual([{ type: "flex", message: result.flexMessages[0] }]);
   });
 
   it("downgrades a generic table with more than 10 rows to ordered bullet text", () => {
@@ -384,7 +397,7 @@ print("done")
     const result = processLineMessage(`| Name | Price |\n|---|---|\n${rows}`);
 
     expect(result.flexMessages).toHaveLength(1);
-    expect(result.segments).toBeUndefined();
+    expect(result.segments).toEqual([{ type: "flex", message: result.flexMessages[0] }]);
   });
 
   it("keeps a generic table with exactly 10 rows as a Flex bubble", () => {
@@ -394,7 +407,7 @@ print("done")
     const result = processLineMessage(`| Name | Value | Extra |\n|---|---|---|\n${rows}`);
 
     expect(result.flexMessages).toHaveLength(1);
-    expect(result.segments).toBeUndefined();
+    expect(result.segments).toEqual([{ type: "flex", message: result.flexMessages[0] }]);
   });
 
   it("downgrades a two-column table with inline markup and more than 10 rows using the renderer's layout decision", () => {

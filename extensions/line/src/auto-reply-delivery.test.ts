@@ -22,6 +22,36 @@ describe("deliverLineAutoReply", () => {
   it.each([
     { name: "without quick replies", quickReplies: [] as string[] },
     { name: "with final quick replies", quickReplies: ["Continue"] },
+  ])("keeps ordinary Markdown blocks in source order $name", async ({ quickReplies }) => {
+    const { deps, replyMessageLine, pushMessagesLine } = createDeps({
+      processLineMessage: processOrderedLineMessage,
+      chunkMarkdownText,
+    });
+    const markdown =
+      "Before\n\n```js\nfirst()\n```\n\nBetween\n\n| Name | Value |\n|---|---|\n| Item | one |\n\nAfter";
+
+    await deliverLineAutoReply({
+      ...baseDeliveryParams,
+      payload: { text: markdown },
+      lineData: quickReplies.length > 0 ? { quickReplies } : {},
+      deps,
+    });
+
+    expect(replyMessageLine).toHaveBeenCalledOnce();
+    expect(pushMessagesLine).not.toHaveBeenCalled();
+    const messages = expectDefined(replyMessageLine.mock.calls[0]?.[1], "LINE reply messages");
+    expect(
+      messages.map((message) => (message.type === "flex" ? message.altText : message.text)),
+    ).toEqual(["Before", "Code", "Between", "Table", "After"]);
+    if (quickReplies.length > 0) {
+      expect(messages.at(-1)).toMatchObject({ quickReply: { items: quickReplies } });
+      expect(messages.slice(0, -1).every((message) => !("quickReply" in message))).toBe(true);
+    }
+  });
+
+  it.each([
+    { name: "without quick replies", quickReplies: [] as string[] },
+    { name: "with final quick replies", quickReplies: ["Continue"] },
   ])("keeps oversized Markdown tables in source order $name", async ({ quickReplies }) => {
     const { deps, replyMessageLine, pushMessagesLine } = createDeps({
       processLineMessage: processOrderedLineMessage,
