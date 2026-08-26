@@ -51,6 +51,7 @@ The lists below are generated from the source target registry and checked agains
 - `plugins.entries.google-meet.config.realtime.providers.*.apiKey`
 - `plugins.entries.google.config.webSearch.apiKey`
 - `plugins.entries.google.config.webSearch.headers.*`
+- `plugins.entries.imap.config.accounts.*.password`
 - `plugins.entries.xai.config.webSearch.apiKey`
 - `plugins.entries.moonshot.config.webSearch.apiKey`
 - `plugins.entries.perplexity.config.webSearch.apiKey`
