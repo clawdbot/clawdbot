@@ -6001,11 +6001,7 @@ button.chat-pr__diff {
 }
 
 .chat-attachment-thumb--file:is(:hover, :focus-within) .chat-attachment-file {
-  background: color-mix(
-    in srgb,
-    var(--chat-composer-surface, var(--popover)) 86%,
-    var(--text)
-  );
+  background: color-mix(in srgb, var(--chat-composer-surface, var(--popover)) 86%, var(--text));
 }
 
 .chat-attachment-file--pasted-text {

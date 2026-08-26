@@ -195,19 +195,30 @@ function pastedTextPreview(attachment: ChatAttachment): string {
   );
 }
 
-function attachmentFileGlyph(attachment: ChatAttachment) {
-  if (attachment.mimeType.startsWith("video/")) {
-    return icons.play;
-  }
-  if (attachment.mimeType.startsWith("audio/")) {
-    return icons.music;
-  }
-  return icons.fileText;
-}
-
-function attachmentFileType(attachment: ChatAttachment): string {
-  return resolveAttachmentFileIcon(attachment.fileName ?? "attachment", attachment.mimeType)
-    .extensionLabel;
+function renderCompactAttachmentFile(attachment: ChatAttachment) {
+  const resolved = resolveAttachmentFileIcon(
+    attachment.fileName ?? "attachment",
+    attachment.mimeType,
+  );
+  const glyph =
+    resolved.family === "video"
+      ? icons.play
+      : resolved.family === "audio"
+        ? icons.music
+        : icons.fileText;
+  return html`
+    <openclaw-tooltip .content=${attachment.fileName ?? t("chat.attachments.attachedFile")}>
+      <div class="chat-attachment-file">
+        <span class="chat-attachment-file__icon" data-family=${resolved.family}>${glyph}</span>
+        <span class="chat-attachment-file__body">
+          <span class="chat-attachment-file__name"
+            >${attachment.fileName ?? t("chat.attachments.attachedFile")}</span
+          >
+          <span class="chat-attachment-file__type">${resolved.extensionLabel}</span>
+        </span>
+      </div>
+    </openclaw-tooltip>
+  `;
 }
 
 function appendPastedTextToDraft(draft: string, text: string): string {
@@ -718,25 +729,7 @@ export function renderAttachmentPreview(props: ChatAttachmentControlsProps) {
                           </span>
                         </div>
                       `
-                    : html`
-                        <openclaw-tooltip
-                          .content=${att.fileName ?? t("chat.attachments.attachedFile")}
-                        >
-                          <div class="chat-attachment-file">
-                            <span class="chat-attachment-file__icon"
-                              >${attachmentFileGlyph(att)}</span
-                            >
-                            <span class="chat-attachment-file__body">
-                              <span class="chat-attachment-file__name"
-                                >${att.fileName ?? t("chat.attachments.attachedFile")}</span
-                              >
-                              <span class="chat-attachment-file__type"
-                                >${attachmentFileType(att)}</span
-                              >
-                            </span>
-                          </div>
-                        </openclaw-tooltip>
-                      `}
+                    : renderCompactAttachmentFile(att)}
                 <openclaw-tooltip .content=${t("chat.composer.removeAttachment")}>
                   <button
                     class="chat-attachment-remove"
