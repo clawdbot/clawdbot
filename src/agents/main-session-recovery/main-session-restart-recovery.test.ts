@@ -52,6 +52,7 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import {
+  beginSessionWorkAdmission,
   interruptSessionWorkAdmissions,
   isSessionLifecycleMutationActive,
   isSessionWorkAdmissionActive,
@@ -538,6 +539,34 @@ describe("main-session-restart-recovery", () => {
       { runId: "key-only-run", lifecycleGeneration },
       { runId: "restart-run", lifecycleGeneration },
     ]);
+  });
+
+  it("marks an admitted channel turn when no chat run remains", async () => {
+    const storePath = path.join(tmpDir, "admitted-channel", "sessions.json");
+    const sessionKey = "agent:main:main";
+    const sessionId = "admitted-channel-session";
+    await writeStorePath(storePath, {
+      [sessionKey]: runningSessionEntry(sessionId),
+    });
+    const admission = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities: [sessionKey, sessionId],
+      assertAllowed: () => undefined,
+    });
+
+    try {
+      await expect(markRestartAbortedMainSessions({ stateDir: tmpDir })).resolves.toEqual({
+        marked: 1,
+        skipped: 0,
+      });
+      expect(readStore(storePath)[sessionKey]).toMatchObject({
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryForceSafeTools: true,
+      });
+    } finally {
+      admission.release();
+    }
   });
 
   it("does not scan stale stores for agents absent from the configured roster", async () => {
