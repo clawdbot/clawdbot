@@ -86,8 +86,8 @@ export function createWorkerPortalToolExecutor(params: WorkerPortalToolExecutorD
         throw new Error("Worker portal is not owned by the active environment");
       }
       await service.close(id, assertPortalAuthority);
-      assertPortalAuthority();
       params.portals.onChanged();
+      assertPortalAuthority();
       return {
         resultJson: serializeWorkerSessionToolResult(
           formatPortalResult({ action: "close", id, result: { closed: true } }),
@@ -103,52 +103,39 @@ export function createWorkerPortalToolExecutor(params: WorkerPortalToolExecutorD
       ownerEpoch: environment.ownerEpoch,
       remotePort,
     });
-    let createdPortalId: string | undefined;
     try {
       // Node discovery can yield; a replaced turn must never publish its former owner's portal.
       assertPortalAuthority();
       request.signal?.throwIfAborted();
-      const opened = await service.open({
-        targetPort: remotePort,
-        assertCurrent: assertPortalAuthority,
-        target: {
-          kind: "worker",
-          environmentId: environment.environmentId,
-          ownerEpoch: environment.ownerEpoch,
-          connect: connection.connect,
-          remotePort,
-        },
-        onClose: connection.close,
-        origin: environment.profileId,
-        ...(request.request.title !== undefined ? { title: request.request.title } : {}),
-        ...(request.request.description !== undefined
-          ? { description: request.request.description }
-          : {}),
-        ...(request.request.path !== undefined ? { path: request.request.path } : {}),
-      });
-      if (opened.created) {
-        createdPortalId = opened.portal.id;
-      } else {
-        // Reuse keeps the existing entry's connect/onClose; this turn's carrier handle is redundant.
-        await connection.close();
-      }
-      assertPortalAuthority();
-      params.portals.onChanged();
-      return {
-        resultJson: serializeWorkerSessionToolResult(
-          formatPortalResult({ action: "open", result: opened.portal }),
-        ),
-      };
     } catch (error) {
-      // Only tear down what this turn created: closing a reused portal here would let a
-      // revoked turn destroy the live portal a still-authorized predecessor established.
-      if (createdPortalId) {
-        await service.close(createdPortalId);
-        params.portals.onChanged();
-      } else {
-        await connection.close();
-      }
+      await connection.close();
       throw error;
     }
+    const opened = await service.open({
+      targetPort: remotePort,
+      assertCurrent: assertPortalAuthority,
+      target: {
+        kind: "worker",
+        environmentId: environment.environmentId,
+        ownerEpoch: environment.ownerEpoch,
+        connect: connection.connect,
+        remotePort,
+      },
+      onClose: connection.close,
+      origin: environment.profileId,
+      ...(request.request.title !== undefined ? { title: request.request.title } : {}),
+      ...(request.request.description !== undefined
+        ? { description: request.request.description }
+        : {}),
+      ...(request.request.path !== undefined ? { path: request.request.path } : {}),
+    });
+    // Publication transfers ownership to the environment; later turn revocation only denies its result.
+    params.portals.onChanged();
+    assertPortalAuthority();
+    return {
+      resultJson: serializeWorkerSessionToolResult(
+        formatPortalResult({ action: "open", result: opened }),
+      ),
+    };
   };
 }
