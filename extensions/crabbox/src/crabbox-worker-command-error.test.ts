@@ -33,10 +33,25 @@ describe("crabboxCommandError", () => {
     expect(error.message).toBe("Crabbox inspect failed with exit code 1: quota page");
   });
 
-  it("omits output detail when the command did not exit", () => {
+  it("keeps the captured tail when the command did not exit", () => {
     const error = crabboxCommandError(
       "inspect",
-      commandResult({ code: null, killed: true, termination: "timeout", stderr: "partial" }),
+      commandResult({
+        code: null,
+        killed: true,
+        termination: "timeout",
+        stderr: "provider never answered",
+      }),
+    );
+    expect(error.message).toBe(
+      "Crabbox inspect did not exit normally (timeout): provider never answered",
+    );
+  });
+
+  it("omits the detail when a non-exit termination produced no output", () => {
+    const error = crabboxCommandError(
+      "inspect",
+      commandResult({ code: null, killed: true, termination: "timeout" }),
     );
     expect(error.message).toBe("Crabbox inspect did not exit normally (timeout)");
   });

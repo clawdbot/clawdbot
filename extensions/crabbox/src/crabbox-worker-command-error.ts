@@ -21,7 +21,9 @@ function crabboxCommandDetail(result: SpawnResult): string {
 
 export function crabboxCommandError(action: string, result: SpawnResult): Error {
   if (result.termination !== "exit") {
-    return new Error(`Crabbox ${action} did not exit normally (${result.termination})`);
+    return new Error(
+      `Crabbox ${action} did not exit normally (${result.termination})${crabboxCommandDetail(result)}`,
+    );
   }
   const exitCode = result.code === null ? "unknown" : String(result.code);
   return new Error(
