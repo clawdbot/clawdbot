@@ -17,22 +17,30 @@ import type {
   RunCronAgentTurnResult,
 } from "../../cron/isolated-agent/run.types.js";
 import { resolveCronAgentSessionKey } from "../../cron/isolated-agent/session-key.js";
+import type { CronExecutionIdentityAdmission } from "../../cron/service/state.js";
 import type { CronJob } from "../../cron/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { requestHeartbeat } from "../../infra/heartbeat-wake.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
 import { validateExplicitMessageAccountSelection } from "../../infra/outbound/message-account-selection.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
 import { isUnscopedSessionKeySentinel, toAgentStoreSessionKey } from "../../routing/session-key.js";
-import type { HookAgentDispatchPayload, HooksConfigResolved } from "../hooks.js";
+import {
+  type HookAgentDispatchPayload,
+  type HooksConfigResolved,
+  normalizeHookDispatchSessionKey,
+} from "../hooks.js";
 import {
   fenceScheduledGatewayContextResolver,
   runWithScheduledGatewayContext,
 } from "../scheduled-run-gateway-context.js";
+import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
 import {
   createHooksRequestHandler,
@@ -224,13 +232,13 @@ function validateHookAgentDeliveryAccount(params: {
   };
 }
 
-/** Creates the HTTP handler used by gateway hook endpoints. */
-export function createGatewayHooksRequestHandler(params: {
+type PluginHookDispatch = PluginRuntime["hooks"]["dispatchHookAgentTurn"];
+type PluginHookDispatchParams = Parameters<PluginHookDispatch>[0];
+type PluginHookDispatchResult = Awaited<ReturnType<PluginHookDispatch>>;
+
+/** Creates one lifecycle-owned dispatcher shared by HTTP hooks and trusted plugins. */
+export function createGatewayHookDispatcher(params: {
   deps: CliDeps;
-  getHooksConfig: () => HooksConfigResolved | null;
-  getClientIpConfig: () => HookClientIpConfig;
-  bindHost: string;
-  port: number;
   logHooks: SubsystemLogger;
   agentStartAdmissionTimeoutMs?: number;
   /**
@@ -242,10 +250,6 @@ export function createGatewayHooksRequestHandler(params: {
 }) {
   const {
     deps,
-    getHooksConfig,
-    getClientIpConfig,
-    bindHost,
-    port,
     logHooks,
     resolveGatewayContext,
     agentStartAdmissionTimeoutMs = HOOK_AGENT_START_ADMISSION_TIMEOUT_MS,
@@ -290,6 +294,7 @@ export function createGatewayHooksRequestHandler(params: {
 
   const dispatchAgentHook = async (
     value: HookAgentDispatchPayload,
+    pluginId?: string,
   ): Promise<HookAgentDispatchResult> => {
     const sessionKey = value.sessionKey;
     // A hook name is a single-line label: it lands in logs, in cron job `name` fields,
@@ -494,13 +499,20 @@ export function createGatewayHooksRequestHandler(params: {
               // group that owns both lanes.
               lane: CommandLane.HookDispatch,
               executionIdentity: {
-                ingress: {
-                  kind: "webhook",
-                  boundary: "gateway.hooks.agent",
-                  state: "present",
-                  ...(acceptedValue.mappingId ? { rawSourceRef: acceptedValue.mappingId } : {}),
-                },
-              },
+                ingress: pluginId
+                  ? {
+                      kind: "webhook",
+                      boundary: "gateway.hooks.plugin",
+                      state: "present",
+                      rawSourceRef: `${pluginId}:${safeName}`,
+                    }
+                  : {
+                      kind: "webhook",
+                      boundary: "gateway.hooks.agent",
+                      state: "present",
+                      ...(acceptedValue.mappingId ? { rawSourceRef: acceptedValue.mappingId } : {}),
+                    },
+              } satisfies CronExecutionIdentityAdmission,
               abortSignal: startupAbortController.signal,
               onLaneWait: (info) => {
                 if (info?.waiting === false) {
@@ -607,6 +619,124 @@ export function createGatewayHooksRequestHandler(params: {
     return await admission;
   };
 
+  const pluginHookReplays = new Map<
+    string,
+    { createdAt: number; result: Promise<PluginHookDispatchResult> }
+  >();
+  const dispatchHookAgentTurn = async (
+    value: PluginHookDispatchParams,
+    pluginId: string,
+  ): Promise<PluginHookDispatchResult> => {
+    const agentId = normalizeOptionalString(value.agentId);
+    if (!agentId) {
+      return { ok: false, reason: "agentId is required" };
+    }
+    const sessionKey = normalizeHookDispatchSessionKey({
+      sessionKey: value.sessionKey,
+      targetAgentId: agentId,
+    });
+    if (
+      sessionKey !== value.sessionKey ||
+      !sessionKey.startsWith("hook:") ||
+      sessionKey.length <= 5 ||
+      /[\s\p{Cc}]/u.test(sessionKey)
+    ) {
+      return {
+        ok: false,
+        reason: "sessionKey must start with hook: and contain no whitespace or control characters",
+      };
+    }
+    if (value.externalContentSource !== "email") {
+      return { ok: false, reason: "externalContentSource must be email" };
+    }
+    const run = async (): Promise<PluginHookDispatchResult> => {
+      const result = await dispatchAgentHook(
+        {
+          name: value.name,
+          agentId,
+          effectiveAgentId: agentId,
+          sessionKey,
+          message: value.message,
+          deliver: value.deliver,
+          model: value.model,
+          thinking: value.thinking,
+          timeoutSeconds: value.timeoutSeconds,
+          idempotencyKey: value.idempotencyKey,
+          sessionMode: "isolated",
+          sourcePath: `plugin:${pluginId}`,
+          wakeMode: "now",
+          channel: "last",
+          delivery: value.deliver ? { mode: "announce", channel: "last" } : { mode: "none" },
+          externalContentSource: "email",
+        },
+        pluginId,
+      );
+      return result.ok ? result : { ok: false, reason: result.error };
+    };
+    const idempotencyKey = normalizeOptionalString(value.idempotencyKey);
+    if (!idempotencyKey) {
+      return await run();
+    }
+    const now = Date.now();
+    for (const [key, entry] of pluginHookReplays) {
+      if (entry.createdAt < now - DEDUPE_TTL_MS) {
+        pluginHookReplays.delete(key);
+      }
+    }
+    const replayKey = JSON.stringify({
+      pluginId,
+      idempotencyKey,
+      name: value.name,
+      agentId,
+      sessionKey,
+      message: value.message,
+      externalContentSource: value.externalContentSource,
+      deliver: value.deliver,
+      model: value.model,
+      thinking: value.thinking,
+      timeoutSeconds: value.timeoutSeconds,
+    });
+    const replay = pluginHookReplays.get(replayKey);
+    if (replay) {
+      return await replay.result;
+    }
+    const result = run().then(
+      (outcome) => {
+        if (!outcome.ok) {
+          pluginHookReplays.delete(replayKey);
+        }
+        return outcome;
+      },
+      (error: unknown) => {
+        pluginHookReplays.delete(replayKey);
+        throw error;
+      },
+    );
+    pluginHookReplays.set(replayKey, { createdAt: now, result });
+    pruneMapToMaxSize(pluginHookReplays, DEDUPE_MAX);
+    return await result;
+  };
+
+  return { dispatchWakeHook, dispatchAgentHook, dispatchHookAgentTurn };
+}
+
+export type GatewayHookDispatcher = ReturnType<typeof createGatewayHookDispatcher>;
+
+/** Creates the HTTP handler used by gateway hook endpoints. */
+export function createGatewayHooksRequestHandler(params: {
+  deps: CliDeps;
+  getHooksConfig: () => HooksConfigResolved | null;
+  getClientIpConfig: () => HookClientIpConfig;
+  bindHost: string;
+  port: number;
+  logHooks: SubsystemLogger;
+  agentStartAdmissionTimeoutMs?: number;
+  resolveGatewayContext?: () => GatewayRequestContext | undefined;
+  dispatcher?: GatewayHookDispatcher;
+}) {
+  const { getHooksConfig, bindHost, port, logHooks, getClientIpConfig } = params;
+  const { dispatchAgentHook, dispatchWakeHook } =
+    params.dispatcher ?? createGatewayHookDispatcher(params);
   return createHooksRequestHandler({
     getHooksConfig,
     bindHost,

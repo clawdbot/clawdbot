@@ -477,9 +477,7 @@ export function createGatewayNodesRuntime(
                 (node as { connected?: unknown } | null)?.connected === true,
             )
           : nodes;
-      return {
-        nodes: projectGatewayRuntimeNodes(filteredNodes, context) as GatewayRuntimeNodes,
-      };
+      return { nodes: projectGatewayRuntimeNodes(filteredNodes, context) as GatewayRuntimeNodes };
     },
     invoke: invokeNode,
     openDuplex: (params) =>
@@ -491,7 +489,7 @@ function createGatewayPluginRuntimeBindings(
   resolveGatewayContext: GatewayContextResolver | undefined,
   overridePolicies: PluginSubagentOverridePolicies,
 ): {
-  runtime: Pick<PluginRuntime, "gateway" | "nodes" | "subagent"> &
+  runtime: Pick<PluginRuntime, "gateway" | "hooks" | "nodes" | "subagent"> &
     Pick<CreatePluginRuntimeOptions, "dispatchReplyFromConfig">;
   retire: () => void;
 } {
@@ -525,6 +523,16 @@ function createGatewayPluginRuntimeBindings(
         isAvailable: async () => hasInProcessGatewayContext(resolveBoundGatewayContext),
         request: (method, params, options) =>
           dispatchTrustedPluginGatewayMethod(method, params, options, resolveBoundGatewayContext),
+      },
+      hooks: {
+        dispatchHookAgentTurn: async (params) => {
+          const pluginId = getPluginRuntimeGatewayRequestScope()?.pluginId;
+          const gatewayContext = resolveBoundGatewayContext();
+          if (!pluginId || !gatewayContext?.dispatchHookAgentTurn) {
+            throw new Error("Plugin hook runtime requires an active Gateway and plugin identity.");
+          }
+          return await gatewayContext.dispatchHookAgentTurn(pluginId, params);
+        },
       },
       nodes: createGatewayNodesRuntime(resolveBoundGatewayContext, lifetime.signal),
       subagent: createGatewaySubagentRuntime(resolveBoundGatewayContext, overridePolicies),
