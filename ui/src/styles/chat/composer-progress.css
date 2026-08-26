@@ -225,10 +225,6 @@
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .session-progress-card--composer:hover {
-    width: min(440px, 100%);
-  }
-
   .session-progress-card__summary:hover {
     background: color-mix(
       in srgb,

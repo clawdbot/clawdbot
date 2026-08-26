@@ -1062,6 +1062,7 @@ export async function createGatewaySession(params: {
             ),
           storeKey: target.canonicalKey,
           agentId: target.agentId,
+          preparedSessionRoot: sessionRoot,
           // Patch appliers read key presence as caller intent (present = change,
           // null = clear), so omitted create fields must stay absent: a present
           // undefined model trips the selection lock and drops modelFallback,
@@ -1075,6 +1076,7 @@ export async function createGatewaySession(params: {
             ...(requestedContextWindow ? { contextWindow: requestedContextWindow } : {}),
             ...(requestedThinkingLevel ? { thinkingLevel: requestedThinkingLevel } : {}),
             ...(requestedToolOverrides ? { toolOverrides: params.toolOverrides } : {}),
+            ...(params.permissionMode ? { permissionMode: params.permissionMode } : {}),
           },
           loadGatewayModelCatalog: params.loadGatewayModelCatalog,
           authorizedAgentHarnessId: params.authorizedAgentHarnessId,
@@ -1155,8 +1157,6 @@ export async function createGatewaySession(params: {
           // Session worktrees adopt cwd only during admin-gated creation; public patching stays
           // restricted to spawned subagent and ACP lineage.
           ...(spawnedCwd ? { spawnedCwd } : {}),
-          ...(sessionRoot ? { sessionRoot } : {}),
-          ...(params.permissionMode ? { permissionMode: params.permissionMode } : {}),
           ...(preparedLifecycle?.worktree ? { worktree: preparedLifecycle.worktree } : {}),
           ...(execNode ? { execHost: "node", execNode, ...(execCwd ? { execCwd } : {}) } : {}),
           ...(createdNewEntry && params.armSessionDiffBaselineCapture && !execNode

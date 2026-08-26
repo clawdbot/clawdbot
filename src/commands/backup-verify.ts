@@ -16,8 +16,10 @@ import { isTransientSqliteBackupPath } from "../infra/backup-volatile-filter.js"
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "../infra/disk-space.js";
 import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { SQLITE_SIDECAR_SUFFIXES } from "../infra/sqlite-files.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { assertOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-maintenance.js";
 import { resolveUserPath } from "../utils.js";
 import { BACKUP_MAX_DECOMPRESSION_RATIO, buildBackupArchivePath } from "./backup-shared.js";
 import {
@@ -30,7 +32,6 @@ import {
 const MAX_MANIFEST_BYTES = 1024 * 1024;
 const MAX_SQLITE_SNAPSHOT_EXTRACT_BYTES = 64 * 1024 * 1024 * 1024;
 const SQLITE_SNAPSHOT_FREE_SPACE_RESERVE_BYTES = 256 * 1024 * 1024;
-const SQLITE_SNAPSHOT_SIDECAR_SUFFIXES = ["-wal", "-shm", "-journal"] as const;
 
 type BackupVerifyOptions = {
   archive: string;
@@ -64,6 +65,7 @@ type NormalizedArchiveEntry = {
 
 type SqliteSnapshotEntry = NormalizedArchiveEntry & {
   stateAssetRoot: string;
+  agentId?: string;
 };
 
 type ExpectedSqliteRole = "agent" | "global";
@@ -240,7 +242,7 @@ function isSqliteSnapshotRelativePath(relativePath: string): boolean {
 
 function resolveSqliteSnapshotSidecarDatabasePath(relativePath: string): string | undefined {
   const portablePath = resolvePortableArchivePathKey(relativePath);
-  for (const suffix of SQLITE_SNAPSHOT_SIDECAR_SUFFIXES) {
+  for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
     if (portablePath.endsWith(suffix)) {
       const databasePath = relativePath.slice(0, -suffix.length);
       return isSqliteSnapshotRelativePath(databasePath) ? databasePath : undefined;
@@ -272,76 +274,94 @@ function listSqliteSnapshotEntries(
   manifest: BackupManifest,
   entries: NormalizedArchiveEntry[],
 ): SqliteSnapshotEntry[] {
-  const declaredStateAssetRoots = manifest.assets
-    .filter((asset) => asset.kind === "state")
-    .map((asset) => normalizeArchivePath(asset.archivePath, "Backup manifest state asset path"));
-  for (const root of declaredStateAssetRoots) {
-    const portableRoot = resolvePortableArchivePathKey(root);
-    for (const entry of entries) {
-      const isExactStateEntry = isArchivePathWithin(entry.normalized, root);
-      const isPortableStateEntry = isArchivePathWithin(
-        resolvePortableArchivePathKey(entry.normalized),
-        portableRoot,
-      );
-      if (isPortableStateEntry && !isExactStateEntry) {
-        throw new Error(`Backup contains a case-mangled state asset path: ${entry.normalized}`);
-      }
-    }
-  }
-
-  const hasSqliteCandidate = entries.some((entry) =>
-    declaredStateAssetRoots.some((root) => {
-      if (!isArchivePathWithin(entry.normalized, root)) {
-        return false;
-      }
-      const relativePath = path.posix.relative(root, entry.normalized);
-      return (
-        isSqliteSnapshotRelativePath(relativePath) ||
-        resolveSqliteSnapshotSidecarDatabasePath(relativePath) !== undefined
-      );
-    }),
-  );
-  if (!hasSqliteCandidate) {
-    return [];
-  }
-
-  const stateAssetRoot = resolveCanonicalStateAssetRoot(manifest);
-  if (!stateAssetRoot) {
-    return [];
-  }
+  const archiveRoot = normalizeArchiveRoot(manifest.archiveRoot);
+  const roots = [
+    ...(manifest.paths?.stateDir
+      ? [
+          {
+            kind: "state" as const,
+            archiveRoot: buildBackupArchivePath(archiveRoot, manifest.paths.stateDir),
+          },
+        ]
+      : manifest.assets
+          .filter((asset) => asset.kind === "state")
+          .map((asset) => ({
+            kind: "state" as const,
+            archiveRoot: normalizeArchivePath(
+              asset.archivePath,
+              "Backup manifest state asset path",
+            ),
+          }))),
+    ...(manifest.paths?.agentRoots ?? []).map(({ agentId, sourcePath }) => ({
+      kind: "agent" as const,
+      archiveRoot: buildBackupArchivePath(archiveRoot, sourcePath),
+      agentId,
+    })),
+  ]
+    .map((root) =>
+      Object.assign(root, {
+        portableArchiveRoot: resolvePortableArchivePathKey(root.archiveRoot),
+      }),
+    )
+    .toSorted((left, right) => right.archiveRoot.length - left.archiveRoot.length);
+  const sqliteEntries: SqliteSnapshotEntry[] = [];
 
   for (const entry of entries) {
-    if (!isArchivePathWithin(entry.normalized, stateAssetRoot)) {
+    const portableEntryPath = resolvePortableArchivePathKey(entry.normalized);
+    const portableRoot = roots.find((root) =>
+      isArchivePathWithin(portableEntryPath, root.portableArchiveRoot),
+    );
+    const sqliteRoot = roots.find((root) =>
+      isArchivePathWithin(entry.normalized, root.archiveRoot),
+    );
+    if (portableRoot && portableRoot !== sqliteRoot) {
+      throw new Error(
+        `Backup contains a case-mangled ${portableRoot.kind} asset path: ${entry.normalized}`,
+      );
+    }
+    if (!sqliteRoot) {
       continue;
     }
-    const relativePath = path.posix.relative(stateAssetRoot, entry.normalized);
+
+    const relativePath = path.posix.relative(sqliteRoot.archiveRoot, entry.normalized);
     assertCanonicalSqlitePathCasing(relativePath, entry.normalized);
+    if (
+      sqliteRoot.kind === "agent" &&
+      resolvePortableArchivePathKey(relativePath) === "openclaw-agent.sqlite" &&
+      relativePath !== "openclaw-agent.sqlite"
+    ) {
+      throw new Error(`Backup contains a case-mangled canonical SQLite path: ${entry.normalized}`);
+    }
     if (resolveSqliteSnapshotSidecarDatabasePath(relativePath)) {
       throw new Error(`Backup contains a SQLite snapshot sidecar: ${entry.normalized}`);
     }
-  }
-
-  return entries.flatMap((entry) => {
-    if (!isArchivePathWithin(entry.normalized, stateAssetRoot)) {
-      return [];
-    }
-    const relativePath = path.posix.relative(stateAssetRoot, entry.normalized);
     // Only state-owned database snapshots should be opened during verification.
     // Package content, excluded reindex artifacts, and noncanonical symlinks are
     // preserved or skipped by backup creation without becoming SQLite snapshots.
     if (!isSqliteSnapshotRelativePath(relativePath)) {
-      return [];
+      continue;
     }
-    const candidate = { ...entry, stateAssetRoot };
-    if (!resolveExpectedSqliteRole(candidate) && !isRegularArchiveFile(entry.type)) {
-      return [];
+    const candidate: SqliteSnapshotEntry = {
+      ...entry,
+      stateAssetRoot: sqliteRoot.archiveRoot,
+      ...(sqliteRoot.kind === "agent" ? { agentId: sqliteRoot.agentId } : {}),
+    };
+    if (resolveExpectedSqliteRole(candidate) || isRegularArchiveFile(entry.type)) {
+      sqliteEntries.push(candidate);
     }
-    return [candidate];
-  });
+  }
+
+  if (sqliteEntries.length > 0) {
+    resolveCanonicalStateAssetRoot(manifest);
+  }
+  return sqliteEntries;
 }
 
 function resolveExpectedSqliteRole(entry: SqliteSnapshotEntry): ExpectedSqliteRole | undefined {
   const relativePath = path.posix.relative(entry.stateAssetRoot, entry.normalized);
+  if (entry.agentId) {
+    return relativePath === "openclaw-agent.sqlite" ? "agent" : undefined;
+  }
   return resolveExpectedSqliteRoleFromRelativePath(relativePath);
 }
 
@@ -530,7 +550,14 @@ async function verifySqliteSnapshots(params: {
         database.exec("PRAGMA query_only = ON; PRAGMA trusted_schema = OFF;");
         await loadSqliteVecExtension({ db: database });
         assertSqliteIntegrity(database, entry.normalized);
-        assertExpectedSqliteRole(database, entry.normalized, expectedRole);
+        if (entry.agentId) {
+          assertOpenClawAgentDatabaseOwner(database, {
+            agentId: entry.agentId,
+            pathname: entry.normalized,
+          });
+        } else {
+          assertExpectedSqliteRole(database, entry.normalized, expectedRole);
+        }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         throw new Error(

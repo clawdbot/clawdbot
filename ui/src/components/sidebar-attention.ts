@@ -667,7 +667,6 @@ class SidebarAttention extends OpenClawLightDomElement {
               <span class="sidebar-footer-update__icon" aria-hidden="true"
                 >${updateState.busy ? icons.refresh : icons.download}</span
               >
-              <span class="sidebar-footer-update__label">${t("updates.sidebar.action")}</span>
             </button>
             ${updateDismissal
               ? html`<openclaw-tooltip

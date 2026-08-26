@@ -7,7 +7,8 @@ const getCurrentPluginMetadataSnapshotMock = vi.hoisted(() => vi.fn());
 const getActivePluginRegistryWorkspaceDirFromStateMock = vi.hoisted(() => vi.fn());
 const normalizeProviderModelIdWithRuntimeMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
   getCurrentPluginMetadataSnapshot: getCurrentPluginMetadataSnapshotMock,
 }));
 

@@ -733,7 +733,13 @@ Node-related settings live under `gateway.nodes` and `tools.exec`:
     nodes: {
       // Auto-approve first-time node pairing from trusted networks (CIDR list).
       // Disabled when unset. Only applies to first-time role:node requests
-      // with no requested scopes; does not auto-approve upgrades.
+      // with no requested scopes; does not auto-approve upgrades. This
+      // approves the device only: the node's command/capability surface still
+      // needs `openclaw nodes approve <requestId>` (see `openclaw nodes
+      // pending`), because device pairing alone must not grant commands.
+      // Silent same-host pairing behaves the same way. SSH-verified pairing
+      // and node-profile setup codes approve the initial surface, since both
+      // record explicit machine-ownership or admin consent.
       pairing: {
         autoApproveCidrs: ["192.168.1.0/24"],
         // SSH-verified auto-approval (default: enabled). Approves first-time
