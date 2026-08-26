@@ -576,7 +576,7 @@ export async function executeQueuedCronRun(params: {
       state,
       job: executionJob,
       startedAt: started.startedAt,
-      publicRunId: started.runReceipt.receiptId,
+      runReceipt: started.runReceipt,
     });
     const taskRunId = taskRun?.runId;
     const activeJobMarker = markCronJobActive(executionJob.id, {
