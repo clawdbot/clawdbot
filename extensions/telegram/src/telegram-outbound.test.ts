@@ -57,6 +57,17 @@ describe("telegramPlugin outbound", () => {
     ).toBe(1200);
   });
 
+  it("keeps rich-account legacy HTML at the Telegram text limit", () => {
+    expect(
+      telegramOutbound.resolveEffectiveTextChunkLimit?.({
+        cfg: { channels: { telegram: { richMessages: true } } },
+        accountId: "default",
+        fallbackLimit: 4000,
+        formatting: { parseMode: "HTML" },
+      }),
+    ).toBe(4000);
+  });
+
   it("uses the selected account's rich-message limit", () => {
     expect(
       telegramOutbound.resolveEffectiveTextChunkLimit?.({
@@ -147,6 +158,28 @@ describe("telegramPlugin outbound", () => {
       "first<b>second</b>",
       expect.objectContaining({ textMode: "html" }),
     );
+  });
+
+  it("keeps rich-account legacy HTML chunks within Telegram's text limit", async () => {
+    clearTelegramRuntime();
+    const text = "x".repeat(4_001);
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "tg-1", chatId: "12345" });
+
+    await sendTextMediaPayload({
+      channel: "telegram",
+      ctx: {
+        cfg: { channels: { telegram: { richMessages: true } } },
+        to: "12345",
+        text: "",
+        payload: { text },
+        formatting: { parseMode: "HTML" },
+        deps: { sendTelegram },
+      },
+      adapter: telegramOutbound,
+    });
+
+    expect(sendTelegram.mock.calls.map((call) => call[1])).toEqual(["x".repeat(4_000), "x"]);
+    expect(sendTelegram.mock.calls.every((call) => call[2]?.textMode === "html")).toBe(true);
   });
 
   it("keeps astral characters whole at positive configured chunk limits", () => {

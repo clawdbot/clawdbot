@@ -574,8 +574,8 @@ export function createTelegramOutboundAdapter(
         gatewayClientScopes,
       });
     },
-    resolveEffectiveTextChunkLimit: ({ cfg, accountId }) =>
-      resolveTelegramTextChunkLimit({ cfg, accountId }),
+    resolveEffectiveTextChunkLimit: ({ cfg, accountId, formatting }) =>
+      resolveTelegramTextChunkLimit({ cfg, accountId, formatting }),
     pollMaxOptions: TELEGRAM_POLL_OPTION_LIMIT,
     supportsPollDurationSeconds: true,
     supportsAnonymousPolls: true,
