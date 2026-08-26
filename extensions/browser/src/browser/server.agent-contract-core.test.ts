@@ -681,6 +681,35 @@ describe("browser control server", () => {
     }
   });
 
+  it("passes exact relay ownership into navigation before a renderer replacement", async () => {
+    const base = await startServerAndBase();
+    const runtime = expectDefined(await startBrowserControlServerFromConfig(), "browser runtime");
+    const previousRelays = runtime.extensionRelays;
+    runtime.extensionRelays = new Map([
+      ["openclaw", { bridge: { captureOperationTarget: () => () => "replacement-target" } }],
+    ]) as unknown as NonNullable<typeof runtime.extensionRelays>;
+    requirePwMock("navigateViaPlaywright").mockImplementationOnce(async (options) => {
+      const targetId = (
+        options as { resolveOperationTarget?: () => string | undefined }
+      ).resolveOperationTarget?.();
+      if (!targetId) {
+        throw new Error("captured relay target was not forwarded to navigation");
+      }
+      return { url: "https://example.com/recovered", targetId };
+    });
+
+    try {
+      const response = await postJson<{ ok: boolean; targetId?: string }>(`${base}/navigate`, {
+        url: "https://example.com/recovered",
+        targetId: "abcd1234",
+      });
+
+      expect(response).toMatchObject({ ok: true, targetId: "replacement-target" });
+    } finally {
+      runtime.extensionRelays = previousRelays;
+    }
+  });
+
   it.each(NAVIGATION_TIMEOUT_CASES)(
     "forwards timer-safe navigation timeout $requestedTimeoutMs to the Chrome MCP backend",
     async ({ requestedTimeoutMs, expectedTimeoutMs }) => {

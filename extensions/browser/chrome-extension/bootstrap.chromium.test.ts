@@ -205,7 +205,12 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
           nodePath: tsxPath,
           nativeHostPath,
         };
-        const gatewayServer = http.createServer((_req, res) => {
+        const gatewayServer = http.createServer((req, res) => {
+          if (req.url === "/browser-owner-proof") {
+            res.writeHead(200, { "content-type": "text/html" });
+            res.end("<title>OpenClaw selected tab</title>");
+            return;
+          }
           res.writeHead(426);
           res.end();
         });
@@ -466,6 +471,52 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
         }, screenshotDataUrl);
         expect(orangePixels).toBeGreaterThan(20);
         process.stderr.write(`[browser-extension-e2e] screenshot proof ${proofPath}\n`);
+
+        const distractingPage = await context.newPage();
+        const distractingUrl = `data:text/html,${encodeURIComponent("<title>Unrelated tab</title>")}`;
+        await distractingPage.goto(distractingUrl);
+        await expect
+          .poll(() => relay.bridge.accessibleTabs().some((tab) => tab.url === distractingUrl))
+          .toBe(true);
+        const liveTabsResponse = await dispatcher.dispatch({
+          method: "GET",
+          path: "/tabs",
+          query: { profile: "e2e" },
+        });
+        const liveTabs = (
+          liveTabsResponse.body as { tabs?: Array<{ targetId?: string; url?: string }> }
+        ).tabs;
+        const selectedTab = liveTabs?.find((tab) => tab.url === controlled.url());
+        const unrelatedTab = liveTabs?.find((tab) => tab.url === distractingUrl);
+        if (!selectedTab?.targetId || !unrelatedTab?.targetId) {
+          throw new Error(`Extension navigation proof tabs missing: ${JSON.stringify(liveTabs)}`);
+        }
+        expect(selectedTab.targetId).not.toBe(unrelatedTab.targetId);
+        const previousSsrfPolicy = browserState.resolved.ssrfPolicy;
+        browserState.resolved.ssrfPolicy = { allowPrivateNetwork: true };
+        try {
+          const navigationResponse = await dispatcher.dispatch({
+            method: "POST",
+            path: "/navigate",
+            query: { profile: "e2e" },
+            body: {
+              targetId: selectedTab.targetId,
+              url: `http://127.0.0.1:${gatewayPort}/browser-owner-proof`,
+            },
+          });
+          expect(navigationResponse.status, JSON.stringify(navigationResponse.body)).toBe(200);
+          expect(navigationResponse.body).toMatchObject({
+            ok: true,
+            targetId: selectedTab.targetId,
+            url: `http://127.0.0.1:${gatewayPort}/browser-owner-proof`,
+          });
+          expect(distractingPage.url()).toBe(distractingUrl);
+          process.stderr.write(
+            "[browser-extension-e2e] owner-bound navigation ignored unrelated tab\n",
+          );
+        } finally {
+          browserState.resolved.ssrfPolicy = previousSsrfPolicy;
+        }
 
         const registration = status.registrations.find(
           (entry) => relevantManifestPaths.includes(entry.manifestPath) && entry.state === "owned",

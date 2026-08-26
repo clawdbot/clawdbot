@@ -13,6 +13,7 @@ import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { ACT_MAX_VIEWPORT_DIMENSION, resolveBrowserNavigationTimeoutMs } from "./act-policy.js";
 import { type AriaSnapshotNode, formatAriaSnapshot, type RawAXNode } from "./cdp.js";
 import type { BrowserDownloadResult } from "./download-types.js";
+import { BrowserTabNotFoundError } from "./errors.js";
 import {
   assertBrowserNavigationAllowed,
   assertBrowserNavigationResultAllowed,
@@ -28,7 +29,7 @@ import {
   type RoleSnapshotOptions,
   type RoleRefMap,
 } from "./pw-role-snapshot.js";
-import { pageTargetInfo } from "./pw-session-connection.js";
+import { connectBrowser, pageTargetInfo } from "./pw-session-connection.js";
 import {
   assertPageNavigationCompletedSafely,
   closeBlockedNavigationTarget,
@@ -477,6 +478,7 @@ export async function snapshotRoleViaPlaywright(opts: {
 export async function navigateViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  resolveOperationTarget?: () => string | undefined;
   url: string;
   timeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
@@ -507,6 +509,7 @@ export async function navigateViaPlaywright(opts: {
     ...navigationPolicy,
   });
   const timeout = resolveBrowserNavigationTimeoutMs(opts.timeoutMs);
+  let currentTargetId = opts.targetId;
   let page = await getPageForTargetId(opts);
   let pageState = ensurePageState(page);
   const navigate = async () =>
@@ -517,7 +520,16 @@ export async function navigateViaPlaywright(opts: {
       timeoutMs: timeout,
       ssrfPolicy: opts.ssrfPolicy,
       browserProxyMode: opts.browserProxyMode,
-      targetId: opts.targetId,
+      targetId: currentTargetId,
+      ...(opts.resolveOperationTarget
+        ? {
+            assertPageCurrent: () => {
+              if (opts.resolveOperationTarget?.() !== currentTargetId) {
+                throw new BrowserTabNotFoundError({ input: currentTargetId });
+              }
+            },
+          }
+        : {}),
     });
   const navigateWithDownloadCapture = async (): Promise<{
     response: Awaited<ReturnType<typeof navigate>> | null;
@@ -556,7 +568,7 @@ export async function navigateViaPlaywright(opts: {
           await closeBlockedNavigationTarget({
             cdpUrl: opts.cdpUrl,
             page,
-            targetId: opts.targetId,
+            targetId: currentTargetId,
           });
         }
         throw downloadErr;
@@ -579,7 +591,21 @@ export async function navigateViaPlaywright(opts: {
       ssrfPolicy: opts.ssrfPolicy,
       reason: "retry navigate after detached frame",
     }).catch(() => {});
-    page = await getPageForTargetId(opts);
+    if (opts.resolveOperationTarget) {
+      // Auto-attach completes during reconnect; only then can the same tab owner prove its new ID.
+      await connectBrowser(opts.cdpUrl, opts.ssrfPolicy);
+      const replacementTargetId = opts.resolveOperationTarget();
+      if (!replacementTargetId) {
+        throw new BrowserTabNotFoundError({ input: currentTargetId });
+      }
+      page = await getPageForTargetId({ ...opts, targetId: replacementTargetId });
+      if (opts.resolveOperationTarget() !== replacementTargetId) {
+        throw new BrowserTabNotFoundError({ input: currentTargetId });
+      }
+      currentTargetId = replacementTargetId;
+    } else {
+      page = await getPageForTargetId(opts);
+    }
     pageState = ensurePageState(page);
     navigationResult = await navigateWithDownloadCapture();
   }
@@ -591,7 +617,7 @@ export async function navigateViaPlaywright(opts: {
         response: navigationResult.response,
         ssrfPolicy: opts.ssrfPolicy,
         browserProxyMode: opts.browserProxyMode,
-        targetId: opts.targetId,
+        targetId: currentTargetId,
       });
     }
   } catch (err) {
@@ -599,7 +625,7 @@ export async function navigateViaPlaywright(opts: {
       await closeBlockedNavigationTarget({
         cdpUrl: opts.cdpUrl,
         page,
-        targetId: opts.targetId,
+        targetId: currentTargetId,
       });
     }
     throw err;

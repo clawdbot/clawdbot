@@ -387,6 +387,7 @@ export function registerBrowserAgentSnapshotRoutes(
           targetId: tab.targetId,
           url,
           timeoutMs,
+          ...(resolveRelayTarget ? { resolveOperationTarget: resolveRelayTarget } : {}),
           ...browserNavigationPolicyForProfile(ctx, profileCtx),
         });
         const currentTargetId = resolveOperationTargetOutcome({
