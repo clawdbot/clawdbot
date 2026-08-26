@@ -296,7 +296,7 @@ describe("OpenAI ChatGPT Responses inference streaming", () => {
       {
         api: "openai-chatgpt-responses",
         elapsedMs: expect.any(Number),
-        errorName: "Error",
+        failureKind: "caller-abort",
         model: "gpt-5.6-luna",
         provider: "openai",
         stopReason: "aborted",
@@ -314,7 +314,11 @@ describe("OpenAI ChatGPT Responses inference streaming", () => {
         response: {
           id: "resp_failed",
           status: "failed",
-          error: { code: "invalid_prompt", message: "rejected" },
+          error: {
+            code: "invalid_prompt",
+            type: "hostile type: user prompt echoed here",
+            message: "rejected",
+          },
         },
       };
       const logWarn = vi.fn();
@@ -373,13 +377,19 @@ describe("OpenAI ChatGPT Responses inference streaming", () => {
       // log keeps timing and classification and never the message body.
       expect(logWarn).toHaveBeenCalledTimes(1);
       const logged = logWarn.mock.calls[0]?.[2];
-      expect(logged).toMatchObject({
+      expect(logged).toEqual({
+        api: "openai-chatgpt-responses",
+        elapsedMs: expect.any(Number),
+        failureKind: "provider-failure",
+        model: "gpt-5.6-luna",
+        provider: "openai",
         stopReason: "error",
-        errorName: "ResponsesStreamFailure",
         transport,
       });
-      expect(logged).not.toHaveProperty("errorMessage");
-      expect(JSON.stringify(logged)).not.toContain("rejected");
+      const serialized = JSON.stringify(logged);
+      for (const hostile of ["rejected", "invalid_prompt", "hostile type", "echoed"]) {
+        expect(serialized).not.toContain(hostile);
+      }
       if (transport === "websocket") {
         expect(fetchMock).not.toHaveBeenCalled();
       }

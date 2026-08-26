@@ -6,7 +6,6 @@ import {
   resolveTimerTimeoutMs,
   clampTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type {
   Tool as OpenAITool,
   ResponseCreateParamsStreaming,
@@ -242,6 +241,23 @@ function isRequestTimeoutError(
     error.name === "TimeoutError" ||
     error.message === "Request was aborted"
   );
+}
+
+type StreamFailureKind = "timeout" | "caller-abort" | "provider-failure" | "transport";
+
+/** Local-only failure category for transport diagnostics; never provider text. */
+function classifyStreamFailure(
+  error: unknown,
+  signal: AbortSignal | undefined,
+  requestTimedOut: boolean,
+): StreamFailureKind {
+  if (requestTimedOut) {
+    return "timeout";
+  }
+  if (signal?.aborted) {
+    return "caller-abort";
+  }
+  return error instanceof ResponsesStreamFailure ? "provider-failure" : "transport";
 }
 
 function formatRequestTimeoutError(timeoutMs: number, cause: unknown): Error {
@@ -623,9 +639,11 @@ export const streamOpenAICodexResponses: StreamFunction<
       });
       stream.end();
     } catch (error) {
-      const normalizedError =
+      const requestTimedOut =
         isRequestTimeoutError(error, options?.signal, requestTimeoutSignal, requestTimeoutMs) &&
-        requestTimeoutMs !== undefined
+        requestTimeoutMs !== undefined;
+      const normalizedError =
+        requestTimedOut && requestTimeoutMs !== undefined
           ? formatRequestTimeoutError(requestTimeoutMs, error)
           : error;
       for (const block of output.content) {
@@ -633,26 +651,18 @@ export const streamOpenAICodexResponses: StreamFunction<
         delete (block as { partialJson?: string }).partialJson;
       }
       const terminal = projectProviderError(normalizedError, options?.signal);
-      const diagnosticSource =
-        options?.signal?.aborted && options.signal.reason !== undefined
-          ? options.signal.reason
-          : normalizedError;
-      const diagnostic = projectProviderError(diagnosticSource, options?.signal);
-      // Log only timing, stop classification, and structured codes. The projected
-      // message is excluded: provider message/body text survives redaction and can
-      // carry prompt- or response-derived content.
+      // Log only locally-derived facts: timing and a fixed failure category. No
+      // projected provider field (message, body, code, type, name) is logged —
+      // all of them are provider-controlled text that can carry prompt- or
+      // response-derived content.
       getAiTransportHost().logWarn("openai-transport", "ChatGPT Responses stream terminated", {
         provider: model.provider,
         api: model.api,
         model: model.id,
         transport: options?.transport || "auto",
         elapsedMs: Math.max(0, Date.now() - startedAt),
-        stopReason: diagnostic.stopReason,
-        ...(diagnosticSource instanceof Error
-          ? { errorName: truncateUtf16Safe(diagnosticSource.name, 64) }
-          : {}),
-        ...(diagnostic.errorCode ? { errorCode: diagnostic.errorCode } : {}),
-        ...(diagnostic.errorType ? { errorType: diagnostic.errorType } : {}),
+        stopReason: terminal.stopReason,
+        failureKind: classifyStreamFailure(error, options?.signal, requestTimedOut),
       });
       Object.assign(output, terminal);
       stream.push({ type: "error", reason: terminal.stopReason, error: output });
