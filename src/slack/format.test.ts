@@ -56,4 +56,55 @@ describe("markdownToSlackMrkdwn", () => {
       "*Important:* Check the _docs_ at <https://example.com|link>\n\n• first\n• second",
     );
   });
+
+  it("converts Markdown tables into Slack-safe bullets", () => {
+    const res = markdownToSlackMrkdwn(
+      [
+        "| Item | Estimate |",
+        "|---|---:|",
+        "| 25% deposit | **£45,000** |",
+        "| Legal/survey/mortgage costs | **£2,000–£4,000** |",
+      ].join("\n"),
+      { tableMode: "bullets" },
+    );
+
+    expect(res).toBe("• 25% deposit: *£45,000*\n• Legal/survey/mortgage costs: *£2,000–£4,000*");
+    expect(res).not.toContain("|---|");
+  });
+
+  it("keeps code fences intact while converting surrounding markdown", () => {
+    const res = markdownToSlackMrkdwn(
+      "**before**\n\n```ts\nconst ok = true;\n```\n\n[docs](https://example.com)",
+    );
+
+    expect(res).toBe("*before*\n\n```\nconst ok = true;\n```\n<https://example.com|docs>");
+  });
+
+  it("converts the mortgage cash table sample to Slack mrkdwn", () => {
+    const input = [
+      "Realistically: **the £18k deposit is probably the problem.**",
+      "",
+      "| Item | Estimate |",
+      "|---|---:|",
+      "| 25% deposit | **£45,000** |",
+      "| Additional-property stamp duty | **~£10,100** |",
+      "| Legal/survey/mortgage costs | **£2,000–£4,000** |",
+      "| **Total cash needed** | **~£57k–£59k** |",
+    ].join("\n");
+
+    const res = markdownToSlackMrkdwn(input, { tableMode: "bullets" });
+
+    expect(res).toBe(
+      [
+        "Realistically: *the £18k deposit is probably the problem.*",
+        "",
+        "• 25% deposit: *£45,000*",
+        "• Additional-property stamp duty: *~£10,100*",
+        "• Legal/survey/mortgage costs: *£2,000–£4,000*",
+        "• *Total cash needed*: *~£57k–£59k*",
+      ].join("\n"),
+    );
+    expect(res).not.toContain("**");
+    expect(res).not.toContain("|---|");
+  });
 });

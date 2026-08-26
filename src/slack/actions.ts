@@ -1,10 +1,12 @@
 import type { Block, KnownBlock, WebClient } from "@slack/web-api";
 import { loadConfig } from "../config/config.js";
+import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { logVerbose } from "../globals.js";
 import { resolveSlackAccount } from "./accounts.js";
 import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
 import { createSlackWebClient } from "./client.js";
+import { markdownToSlackMrkdwn } from "./format.js";
 import { sendMessageSlack } from "./send.js";
 import { resolveSlackBotToken } from "./token.js";
 
@@ -33,7 +35,7 @@ export type SlackPin = {
   file?: { id?: string; name?: string };
 };
 
-function resolveToken(explicit?: string, accountId?: string) {
+function resolveAccountContext(explicit?: string, accountId?: string) {
   const cfg = loadConfig();
   const account = resolveSlackAccount({ cfg, accountId });
   const token = resolveSlackBotToken(explicit ?? account.botToken ?? undefined);
@@ -45,7 +47,11 @@ function resolveToken(explicit?: string, accountId?: string) {
     );
     throw new Error("SLACK_BOT_TOKEN or channels.slack.botToken is required for Slack actions");
   }
-  return token;
+  return { cfg, account, token };
+}
+
+function resolveToken(explicit?: string, accountId?: string) {
+  return resolveAccountContext(explicit, accountId).token;
 }
 
 function normalizeEmoji(raw: string) {
@@ -171,13 +177,24 @@ export async function editSlackMessage(
   content: string,
   opts: SlackActionClientOpts & { blocks?: (Block | KnownBlock)[] } = {},
 ) {
-  const client = await getClient(opts);
+  const { cfg, account, token } = resolveAccountContext(opts.token, opts.accountId);
+  const client = opts.client ?? createSlackWebClient(token);
   const blocks = opts.blocks == null ? undefined : validateSlackBlocksArray(opts.blocks);
   const trimmedContent = content.trim();
+  const tableMode = resolveMarkdownTableMode({
+    cfg,
+    channel: "slack",
+    accountId: account.accountId,
+  });
+  const slackText = trimmedContent
+    ? markdownToSlackMrkdwn(trimmedContent, { tableMode })
+    : blocks
+      ? buildSlackBlocksFallbackText(blocks)
+      : " ";
   await client.chat.update({
     channel: channelId,
     ts: messageId,
-    text: trimmedContent || (blocks ? buildSlackBlocksFallbackText(blocks) : " "),
+    text: slackText,
     ...(blocks ? { blocks } : {}),
   });
 }

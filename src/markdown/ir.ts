@@ -384,11 +384,35 @@ function renderTableAsBullets(state: RenderState) {
     return;
   }
 
+  // Two-column tables are usually key/value summaries. Render them as compact
+  // bullets so chat clients do not show raw pipe syntax.
+  const useTwoColumnKeyValues = headers.length === 2 && rows.every((row) => row.length <= 2);
+
   // Determine if first column should be used as row labels
   // (common pattern: first column is category/feature name)
   const useFirstColAsLabel = headers.length > 1 && rows.length > 0;
 
-  if (useFirstColAsLabel) {
+  if (useTwoColumnKeyValues) {
+    for (const row of rows) {
+      const label = row[0];
+      const value = row[1];
+      if (!label?.text && !value?.text) {
+        continue;
+      }
+      state.text += "• ";
+      if (label?.text) {
+        appendCell(state, label);
+      }
+      if (label?.text && value?.text) {
+        state.text += ": ";
+      }
+      if (value?.text) {
+        appendCell(state, value);
+      }
+      state.text += "\n";
+    }
+    state.text += "\n";
+  } else if (useFirstColAsLabel) {
     // Format: each row becomes a section with header as row[0], then key:value pairs
     for (const row of rows) {
       if (row.length === 0) {

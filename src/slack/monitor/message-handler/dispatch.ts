@@ -7,10 +7,12 @@ import { removeAckReactionAfterReply } from "../../../channels/ack-reactions.js"
 import { logAckFailure, logTypingFailure } from "../../../channels/logging.js";
 import { createReplyPrefixOptions } from "../../../channels/reply-prefix.js";
 import { createTypingCallbacks } from "../../../channels/typing.js";
+import { resolveMarkdownTableMode } from "../../../config/markdown-tables.js";
 import { resolveStorePath, updateLastRoute } from "../../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../../globals.js";
 import { removeSlackReaction } from "../../actions.js";
 import { createSlackDraftStream } from "../../draft-stream.js";
+import { markdownToSlackMrkdwn } from "../../format.js";
 import {
   applyAppendOnlyStreamUpdate,
   buildStatusFinalPreviewText,
@@ -158,6 +160,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     nativeStreaming: account.config.nativeStreaming,
   });
   const previewStreamingEnabled = slackStreaming.mode !== "off";
+  const slackTableMode = resolveMarkdownTableMode({
+    cfg,
+    channel: "slack",
+    accountId: account.accountId,
+  });
   const streamingEnabled = isSlackStreamingEnabled({
     mode: slackStreaming.mode,
     nativeStreaming: slackStreaming.nativeStreaming,
@@ -264,7 +271,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             token: ctx.botToken,
             channel: draftChannelId,
             ts: draftMessageId,
-            text: finalText.trim(),
+            text: markdownToSlackMrkdwn(finalText.trim(), { tableMode: slackTableMode }),
           });
           return;
         } catch (err) {

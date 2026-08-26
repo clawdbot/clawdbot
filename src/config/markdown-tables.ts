@@ -15,6 +15,7 @@ type MarkdownConfigSection = MarkdownConfigEntry & {
 
 const DEFAULT_TABLE_MODES = new Map<string, MarkdownTableMode>([
   ["signal", "bullets"],
+  ["slack", "bullets"],
   ["whatsapp", "bullets"],
 ]);
 

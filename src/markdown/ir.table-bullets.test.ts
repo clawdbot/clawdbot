@@ -12,12 +12,9 @@ describe("markdownToIR tableMode bullets", () => {
 
     const ir = markdownToIR(md, { tableMode: "bullets" });
 
-    // Should contain bullet points with header:value format
-    expect(ir.text).toContain("• Value: 1");
-    expect(ir.text).toContain("• Value: 2");
-    // Should use first column as labels
-    expect(ir.text).toContain("A");
-    expect(ir.text).toContain("B");
+    // Two-column tables render as compact key:value bullets.
+    expect(ir.text).toContain("• A: 1");
+    expect(ir.text).toContain("• B: 2");
   });
 
   it("handles table with multiple columns", () => {
@@ -67,20 +64,19 @@ describe("markdownToIR tableMode bullets", () => {
     const ir = markdownToIR(md, { tableMode: "bullets" });
 
     // Should handle empty cell without crashing
-    expect(ir.text).toContain("B");
-    expect(ir.text).toContain("• Value: 2");
+    expect(ir.text).toContain("• A");
+    expect(ir.text).toContain("• B: 2");
   });
 
-  it("bolds row labels in bullets mode", () => {
+  it("preserves explicit bold in two-column bullet labels", () => {
     const md = `
 | Name | Value |
 |------|-------|
-| Row1 | Data1 |
+| **Row1** | Data1 |
 `.trim();
 
     const ir = markdownToIR(md, { tableMode: "bullets" });
 
-    // Should have bold style for row label
     const hasRowLabelBold = ir.styles.some(
       (s) => s.style === "bold" && ir.text.slice(s.start, s.end) === "Row1",
     );
