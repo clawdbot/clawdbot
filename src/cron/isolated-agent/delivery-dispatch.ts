@@ -1,6 +1,8 @@
 /** Dispatches isolated cron output to direct delivery, mirrors, and follow-up queues. */
+import { copyReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import { resolveControlUiSessionUrl } from "../../config/control-ui-link-base.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/inbound.runtime.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type {
@@ -277,6 +279,24 @@ export async function dispatchCronDelivery(
       ).filter((p) => hasReplyPayloadContent(p, { trimText: true }));
       if (payloadsForDelivery.length === 0) {
         return await finishSilentReplyDelivery();
+      }
+      // Add presentation only after suppression so an inspection link cannot
+      // turn a silent or empty run into a visible announcement. Replace rather
+      // than mutate: payload objects can be aliased by the caller's turn output.
+      const inspectionIndex = payloadsForDelivery.findLastIndex((payload) => payload.text?.trim());
+      if (inspectionIndex >= 0) {
+        const inspectionUrl = resolveControlUiSessionUrl(params.cfgWithAgentDefaults, {
+          sessionKey: params.runSessionKey,
+          fallbackAgentId: params.agentId,
+          exactKey: true,
+        });
+        if (inspectionUrl) {
+          const payload = payloadsForDelivery[inspectionIndex]!;
+          payloadsForDelivery[inspectionIndex] = copyReplyPayloadMetadata(payload, {
+            ...payload,
+            text: `${payload.text}\nInspect: ${inspectionUrl}`,
+          });
+        }
       }
       deliveryAttempted = true;
       const { sessionKey: deliverySessionKey, route: directCronOutboundRoute } =

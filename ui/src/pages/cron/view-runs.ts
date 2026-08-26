@@ -31,6 +31,7 @@ type CronRunsSectionProps = {
   basePath: string;
   agentId: string;
   runs: CronRunLogEntry[];
+  highlightedRunId?: string | null;
   runsHasMore: boolean;
   runsLoadingMore: boolean;
   runsStatuses: CronRunsStatusValue[];
@@ -328,7 +329,13 @@ export function renderRunsSection(props: CronRunsSectionProps) {
         : html`
             <div class="cron-runs__list">
               ${runs.map((entry) =>
-                renderRun(entry, props.agentId, props.basePath, props.onNavigateToChat),
+                renderRun(
+                  entry,
+                  props.agentId,
+                  props.basePath,
+                  props.highlightedRunId,
+                  props.onNavigateToChat,
+                ),
               )}
             </div>
           `}
@@ -382,6 +389,7 @@ function renderRun(
   entry: CronRunLogEntry,
   fallbackAgentId: string,
   basePath: string,
+  highlightedRunId?: string | null,
   onNavigateToChat?: (sessionKey: string) => void,
 ) {
   const chatUrl =
@@ -406,8 +414,9 @@ function renderRun(
     entry.summary || formatUiExternalText(entry.error) || t("cron.runEntry.noSummary");
   const showErrorInMeta = Boolean(entry.error) && Boolean(entry.summary);
   const facts = [delivery, entry.model, entry.provider, usageSummary].filter(Boolean);
+  const highlighted = Boolean(highlightedRunId && entry.runId === highlightedRunId);
   return html`
-    <div class="cron-run-entry">
+    <div class="cron-run-entry ${highlighted ? "cron-run-entry--highlighted" : ""}">
       <div class="cron-run-entry__header">
         <div class="cron-run-entry__main">
           <div class="cron-run-entry__title">

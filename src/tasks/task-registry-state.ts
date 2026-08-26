@@ -40,7 +40,10 @@ export const taskFlowSyncRetryTimers = new Map<string, ReturnType<typeof setTime
 export type TaskRegistryDeliveryRuntime = Pick<
   typeof import("./task-registry-delivery-runtime.js"),
   "sendMessage"
->;
+> &
+  Partial<
+    Pick<typeof import("./task-registry-delivery-runtime.js"), "resolveTaskControlUiSessionUrl">
+  >;
 export const TASK_REGISTRY_DELIVERY_RUNTIME_OVERRIDE_KEY = Symbol.for(
   "openclaw.taskRegistry.deliveryRuntimeOverride",
 );
