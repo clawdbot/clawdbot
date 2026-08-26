@@ -453,7 +453,7 @@ extensions/duckduckgo/src/config.ts	1
 extensions/duckduckgo/src/ddg-search-provider.ts	1
 extensions/elevenlabs/config-compat.ts	2
 extensions/elevenlabs/speech-provider.ts	3
-extensions/exa/src/exa-web-search-provider.runtime.ts	11
+extensions/exa/src/exa-web-search-provider.runtime.ts	9
 extensions/fal/image-generation-provider.ts	1
 extensions/fal/music-generation-provider.ts	2
 extensions/fal/video-generation-provider.ts	3
