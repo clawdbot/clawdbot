@@ -412,9 +412,7 @@ suite.define(() => {
 
       const startupCount = (await gateway.getRequests("chat.startup")).length;
       await gateway.setOnline(false);
-      await expect
-        .poll(() => pickerTrigger.locator(".chat-controls__inline-select-label").textContent())
-        .toContain("Offline");
+      await expect.poll(() => pickerTrigger.getAttribute("aria-disabled")).toBe("true");
       await gateway.setOnline(true);
       await gateway.waitForRequest("chat.startup", { after: startupCount });
       await expect
