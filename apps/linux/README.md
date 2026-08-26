@@ -64,8 +64,14 @@ should live:
 
 Public direct connections must use HTTPS or secure WebSockets. Plain HTTP or
 WebSockets are appropriate only for loopback, trusted private networks, or a
-Tailnet. SSH connections use your existing OpenSSH configuration and host-key
-verification; keep the remote Gateway bound to loopback when possible. See the
+Tailnet. If the Gateway configuration specifies a TLS certificate fingerprint,
+choose **SSH tunnel**: the embedded browser cannot enforce certificate pins, so
+the app safely refuses direct connections instead of exposing your credentials.
+Saved remote credentials support literal values and environment- or
+file-backed secret references; exec and shared-store references must be
+resolved on their owning Gateway host. SSH connections use your existing
+OpenSSH configuration and host-key verification; keep the remote Gateway bound
+to loopback when possible. See the
 [remote access guide](https://docs.openclaw.ai/gateway/remote) for Gateway
 authentication and network requirements.
 

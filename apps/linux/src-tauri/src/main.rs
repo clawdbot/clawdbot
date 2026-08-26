@@ -63,6 +63,13 @@ fn native_auth_initialization_script(
     gateway: &Url,
     request: &RemoteGatewayRequest,
 ) -> Result<String, String> {
+    if request.transport == "direct" && request.tls_fingerprint.is_some() {
+        return Err(
+            "The desktop dashboard cannot securely verify a pinned Gateway TLS certificate. \
+             Connect using Remote over SSH instead."
+                .to_string(),
+        );
+    }
     let path = dashboard.path().trim_end_matches('/');
     let origin = serde_json::to_string(&dashboard.origin().ascii_serialization())
         .map_err(|_| "Could not prepare secure Gateway authentication.".to_string())?;
@@ -242,6 +249,7 @@ mod native_browser_tests {
             token: None,
             password: Some("fixture-password".to_string()),
             remote_port: None,
+            tls_fingerprint: None,
         };
         let dashboard = Url::parse("https://gateway.example.com/openclaw").expect("dashboard");
         let gateway = Url::parse("wss://gateway.example.com/openclaw").expect("Gateway");
@@ -277,6 +285,42 @@ mod native_browser_tests {
             output.status.success(),
             "native auth handoff failed: {}",
             String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn pinned_remote_gateway_never_receives_credentials_through_an_unpinned_webview() {
+        let request: RemoteGatewayRequest = serde_json::from_value(serde_json::json!({
+            "transport": "direct",
+            "url": "https://gateway.example.com/openclaw",
+            "token": "fixture-token",
+            "tlsFingerprint": "ab".repeat(32),
+        }))
+        .expect("pinned remote request");
+        let dashboard = Url::parse("https://gateway.example.com/openclaw").expect("dashboard");
+        let gateway = Url::parse("wss://gateway.example.com/openclaw").expect("Gateway");
+        let result = native_auth_initialization_script(&dashboard, &gateway, &request);
+
+        assert!(
+            result.is_err(),
+            "a certificate-pinned Gateway must never receive credentials through an unpinned WebView"
+        );
+        assert!(
+            result
+                .err()
+                .expect("rejected pin")
+                .contains("Remote over SSH"),
+            "the rejection must explain the secure supported transport"
+        );
+
+        let mut tunneled = request;
+        tunneled.transport = "ssh".to_string();
+        let tunneled_dashboard = Url::parse("http://127.0.0.1:18789").expect("tunneled dashboard");
+        let tunneled_gateway = Url::parse("ws://127.0.0.1:18789").expect("tunneled Gateway");
+        assert!(
+            native_auth_initialization_script(&tunneled_dashboard, &tunneled_gateway, &tunneled)
+                .is_ok(),
+            "host-key-verified SSH tunneling must remain available"
         );
     }
 }
@@ -564,7 +608,7 @@ impl DesktopState {
     fn connect_remote_locked(
         &self,
         app: &AppHandle,
-        request: RemoteGatewayRequest,
+        mut request: RemoteGatewayRequest,
     ) -> Result<GatewaySnapshot, String> {
         remote_gateway::validate_request(&request)?;
         let mut active_tunnel = self
@@ -588,21 +632,27 @@ impl DesktopState {
                 .ok_or_else(|| "Enter the URL of your remote Gateway.".to_string())?;
             (None, remote_gateway::normalize_gateway_url(raw)?)
         };
+        remote_gateway::resolve_remote_tls_fingerprint(&mut request, &gateway_url)?;
+        let target = remote_gateway::dashboard_url(&gateway_url, None)?;
+        let script = native_auth_initialization_script(&target, &gateway_url, &request)?;
         remote_gateway::save_config_at(&remote_gateway::config_path()?, &request, &gateway_url)?;
         *active_tunnel = tunnel;
         drop(active_tunnel);
 
-        let target = remote_gateway::dashboard_url(&gateway_url, None)?;
         app.state::<gateway_ws::GatewayClient>().configure(
             app,
             gateway_ws::GatewayWsConfig::new(
                 gateway_url.to_string(),
                 request.token.clone(),
                 request.password.clone(),
-                None,
+                if gateway_url.scheme() == "wss" {
+                    request.tls_fingerprint.clone()
+                } else {
+                    None
+                },
             ),
         );
-        self.navigate_authenticated_remote(app, target, &gateway_url, &request)?;
+        self.navigate_authenticated_remote(app, target, script)?;
         let snapshot = GatewaySnapshot {
             phase: "connected",
             installed: false,
@@ -619,10 +669,8 @@ impl DesktopState {
         &self,
         app: &AppHandle,
         dashboard: Url,
-        gateway: &Url,
-        request: &RemoteGatewayRequest,
+        script: String,
     ) -> Result<(), String> {
-        let script = native_auth_initialization_script(&dashboard, gateway, request)?;
         let window = app
             .get_window("main")
             .ok_or_else(|| "Main window is unavailable.".to_string())?;
@@ -1141,6 +1189,7 @@ async fn connect_remote_gateway(
             token,
             password,
             remote_port,
+            tls_fingerprint: None,
         }))
         .await
 }

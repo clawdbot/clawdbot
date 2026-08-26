@@ -3,7 +3,7 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::env;
 use std::fs::{self, OpenOptions};
-use std::io::{ErrorKind, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::net::{IpAddr, TcpListener, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -34,6 +34,7 @@ pub(crate) struct RemoteGatewayRequest {
     pub token: Option<String>,
     pub password: Option<String>,
     pub remote_port: Option<u16>,
+    pub tls_fingerprint: Option<String>,
 }
 
 pub(crate) fn normalize_gateway_url(raw: &str) -> Result<Url, String> {
@@ -177,23 +178,261 @@ pub(crate) fn has_configured_gateway() -> Result<bool, String> {
         .is_some_and(|gateway| !gateway.is_empty()))
 }
 
-fn configured_secret(value: Option<&Value>, label: &str) -> Result<Option<String>, String> {
-    match value {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::String(value)) => Ok(normalize_optional(Some(value.clone()))),
-        Some(Value::Object(reference)) if reference.get("source").and_then(Value::as_str) == Some("env") => {
-            let id = reference
-                .get("id")
-                .and_then(Value::as_str)
-                .ok_or_else(|| format!("Gateway {label} secret reference is missing its environment name."))?;
-            env::var(id)
-                .map(Some)
-                .map_err(|_| format!("Gateway {label} secret reference environment variable is unavailable."))
-        }
-        Some(_) => Err(format!(
-            "Gateway {label} uses a secret reference this desktop cannot resolve. Configure a local environment-backed secret."
-        )),
+fn valid_secret_name(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    !value.is_empty()
+        && value.len() <= 128
+        && bytes.next().is_some_and(|byte| byte.is_ascii_uppercase())
+        && bytes.all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
+}
+
+fn valid_secret_provider(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    !value.is_empty()
+        && value.len() <= 64
+        && bytes.next().is_some_and(|byte| byte.is_ascii_lowercase())
+        && bytes.all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-')
+        })
+}
+
+fn file_secret(
+    reference: &Map<String, Value>,
+    provider: &Map<String, Value>,
+) -> Result<String, ()> {
+    let id = reference.get("id").and_then(Value::as_str).ok_or(())?;
+    if id != "value"
+        && (!id.starts_with('/')
+            || id
+                .as_bytes()
+                .windows(2)
+                .any(|pair| pair[0] == b'~' && pair[1] != b'0' && pair[1] != b'1')
+            || id.ends_with('~'))
+    {
+        return Err(());
     }
+    let configured_path = provider.get("path").and_then(Value::as_str).ok_or(())?;
+    let path = if let Some(relative) = configured_path.strip_prefix("~/") {
+        PathBuf::from(env::var_os("HOME").ok_or(())?).join(relative)
+    } else {
+        PathBuf::from(configured_path)
+    };
+    if !path.is_absolute() {
+        return Err(());
+    }
+    let inspected = fs::symlink_metadata(&path).map_err(|_| ())?;
+    if inspected.file_type().is_symlink() || !inspected.is_file() {
+        return Err(());
+    }
+    let file = fs::File::open(&path).map_err(|_| ())?;
+    let opened = file.metadata().map_err(|_| ())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if inspected.dev() != opened.dev()
+            || inspected.ino() != opened.ino()
+            || opened.mode() & 0o077 != 0
+        {
+            return Err(());
+        }
+        #[cfg(target_os = "linux")]
+        if opened.uid() != unsafe { libc::geteuid() } {
+            return Err(());
+        }
+    }
+    let max_bytes = provider
+        .get("maxBytes")
+        .map(|value| {
+            value
+                .as_u64()
+                .filter(|limit| *limit > 0 && *limit <= 20 * 1024 * 1024)
+        })
+        .unwrap_or(Some(1024 * 1024))
+        .ok_or(())?;
+    let mut bytes = Vec::new();
+    file.take(max_bytes + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| ())?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(());
+    }
+    let text = std::str::from_utf8(&bytes).map_err(|_| ())?;
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    match provider
+        .get("mode")
+        .and_then(Value::as_str)
+        .unwrap_or("json")
+    {
+        "singleValue" if id == "value" => Ok(text
+            .strip_suffix("\r\n")
+            .or_else(|| text.strip_suffix('\n'))
+            .unwrap_or(text)
+            .to_string()),
+        "json" if id.starts_with('/') => {
+            let payload: Value = serde_json::from_str(text).map_err(|_| ())?;
+            payload
+                .as_object()
+                .and_then(|_| payload.pointer(id))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .ok_or(())
+        }
+        _ => Err(()),
+    }
+}
+
+fn configured_secret(
+    value: Option<&Value>,
+    label: &str,
+    root: &Value,
+) -> Result<Option<String>, String> {
+    let unavailable = || {
+        format!(
+            "Gateway {label} secret reference could not be resolved. Check its provider, permissions, and configured value."
+        )
+    };
+    let reference;
+    let value = match value {
+        None | Some(Value::Null) => return Ok(None),
+        Some(Value::String(value)) => {
+            let trimmed = value.trim();
+            let shorthand = trimmed
+                .strip_prefix("${")
+                .and_then(|name| name.strip_suffix('}'))
+                .or_else(|| trimmed.strip_prefix('$'));
+            let Some(id) = shorthand.filter(|name| valid_secret_name(name)) else {
+                return Ok(normalize_optional(Some(value.clone())));
+            };
+            reference = json!({
+                "source": "env",
+                "provider": root.pointer("/secrets/defaults/env")
+                    .and_then(Value::as_str)
+                    .unwrap_or("default"),
+                "id": id,
+            });
+            reference.as_object().ok_or_else(unavailable)?
+        }
+        Some(Value::Object(value)) => value,
+        Some(_) => return Err(unavailable()),
+    };
+    let source = value
+        .get("source")
+        .and_then(Value::as_str)
+        .ok_or_else(unavailable)?;
+    let provider_name = value
+        .get("provider")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            root.pointer(&format!("/secrets/defaults/{source}"))?
+                .as_str()
+        })
+        .unwrap_or("default");
+    let id = value
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or_else(unavailable)?;
+    if !valid_secret_provider(provider_name) {
+        return Err(unavailable());
+    }
+    let configured_provider = root
+        .pointer("/secrets/providers")
+        .and_then(Value::as_object)
+        .and_then(|providers| providers.get(provider_name))
+        .and_then(Value::as_object);
+    match source {
+        "env" => {
+            if !valid_secret_name(id) {
+                return Err(unavailable());
+            }
+            let default_provider = root
+                .pointer("/secrets/defaults/env")
+                .and_then(Value::as_str)
+                .unwrap_or("default");
+            let provider = configured_provider.filter(|provider| {
+                provider.get("source").and_then(Value::as_str) == Some("env")
+            });
+            if provider.is_none() && provider_name != default_provider {
+                return Err(unavailable());
+            }
+            if let Some(allowlist) = provider.and_then(|provider| provider.get("allowlist")) {
+                if !allowlist
+                    .as_array()
+                    .is_some_and(|values| values.iter().any(|allowed| allowed.as_str() == Some(id)))
+                {
+                    return Err(unavailable());
+                }
+            }
+            env::var(id)
+                .ok()
+                .filter(|value| !value.is_empty())
+                .map(Some)
+                .ok_or_else(unavailable)
+        }
+        "file" => {
+            let provider = configured_provider
+                .filter(|provider| provider.get("source").and_then(Value::as_str) == Some("file"))
+                .ok_or_else(unavailable)?;
+            file_secret(value, provider)
+                .ok()
+                .filter(|secret| !secret.trim().is_empty())
+                .map(Some)
+                .ok_or_else(unavailable)
+        }
+        "exec" | "store" => Err(format!(
+            "Gateway {label} uses a {source} secret provider that requires the Gateway secrets runtime. Configure an environment-backed or private file-backed secret for this desktop."
+        )),
+        _ => Err(unavailable()),
+    }
+}
+
+fn configured_tls_fingerprint(remote: &Map<String, Value>) -> Result<Option<String>, String> {
+    match remote.get("tlsFingerprint") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value))
+            if value.trim().len() == 64
+                && value.trim().bytes().all(|byte| byte.is_ascii_hexdigit()) =>
+        {
+            Ok(Some(value.trim().to_string()))
+        }
+        Some(_) => Err("Gateway TLS fingerprint must be 64 hexadecimal characters.".to_string()),
+    }
+}
+
+pub(crate) fn resolve_remote_tls_fingerprint(
+    request: &mut RemoteGatewayRequest,
+    gateway_url: &Url,
+) -> Result<(), String> {
+    if let Some(fingerprint) = &request.tls_fingerprint {
+        let value = fingerprint.trim();
+        if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err("Gateway TLS fingerprint must be 64 hexadecimal characters.".to_string());
+        }
+        request.tls_fingerprint = Some(value.to_string());
+        return Ok(());
+    }
+    let Some(root) = read_config(&config_path()?)? else {
+        return Ok(());
+    };
+    let Some(remote) = root.pointer("/gateway/remote").and_then(Value::as_object) else {
+        return Ok(());
+    };
+    let previous_url = remote
+        .get("url")
+        .and_then(Value::as_str)
+        .map(normalize_gateway_url)
+        .transpose()?;
+    let same_endpoint = previous_url.as_ref() == Some(gateway_url)
+        && remote
+            .get("transport")
+            .and_then(Value::as_str)
+            .unwrap_or("direct")
+            == request.transport
+        && (request.transport != "ssh"
+            || remote.get("sshTarget").and_then(Value::as_str) == request.ssh_target.as_deref());
+    if same_endpoint {
+        request.tls_fingerprint = configured_tls_fingerprint(remote)?;
+    }
+    Ok(())
 }
 
 pub(crate) fn load_saved_remote() -> Result<Option<RemoteGatewayRequest>, String> {
@@ -237,9 +476,10 @@ fn load_saved_remote_at(path: &Path) -> Result<Option<RemoteGatewayRequest>, Str
             .get("sshTarget")
             .and_then(Value::as_str)
             .map(str::to_string),
-        token: configured_secret(remote.get("token"), "token")?,
-        password: configured_secret(remote.get("password"), "password")?,
+        token: configured_secret(remote.get("token"), "token", &root)?,
+        password: configured_secret(remote.get("password"), "password", &root)?,
         remote_port,
+        tls_fingerprint: configured_tls_fingerprint(remote)?,
     }))
 }
 
@@ -297,6 +537,9 @@ pub(crate) fn save_config_at(
     };
     remote.insert("url".to_string(), json!(gateway_url.as_str()));
     remote.insert("transport".to_string(), json!(request.transport));
+    if let Some(fingerprint) = &request.tls_fingerprint {
+        remote.insert("tlsFingerprint".to_string(), json!(fingerprint));
+    }
     if request.transport == "ssh" {
         remote.insert("sshTarget".to_string(), json!(request.ssh_target));
         remote.insert(
@@ -530,6 +773,7 @@ mod tests {
             token: Some("test-token".to_string()),
             password: None,
             remote_port: None,
+            tls_fingerprint: None,
         }
     }
 
@@ -704,6 +948,140 @@ mod tests {
         assert_eq!(restored.url.as_deref(), Some(url.as_str()));
         assert_eq!(restored.token.as_deref(), Some("test-token"));
         assert!(restored.password.is_none());
+        fs::remove_dir_all(path.parent().unwrap()).expect("cleanup");
+    }
+
+    #[test]
+    fn saved_remote_connection_preserves_certificate_fingerprint() {
+        let path = isolated_path();
+        fs::create_dir_all(path.parent().unwrap()).expect("test directory");
+        let fingerprint = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        fs::write(
+            &path,
+            json!({
+                "gateway": {
+                    "mode": "remote",
+                    "remote": {
+                        "transport": "direct",
+                        "url": "wss://gateway.example.com/",
+                        "tlsFingerprint": fingerprint,
+                    },
+                },
+            })
+            .to_string(),
+        )
+        .expect("pinned configuration");
+
+        let restored = load_saved_remote_at(&path)
+            .expect("load pinned Gateway")
+            .expect("remote mode");
+        let serialized = serde_json::to_value(restored).expect("serialize restored request");
+
+        assert_eq!(serialized["tlsFingerprint"], fingerprint);
+        let mut input = request();
+        input.url = Some("https://gateway.example.com/".to_string());
+        let url = normalize_gateway_url(input.url.as_deref().unwrap()).expect("pinned URL");
+        save_config_at(&path, &input, &url).expect("same-endpoint reconnect");
+        let saved: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved["gateway"]["remote"]["tlsFingerprint"], fingerprint);
+        fs::remove_dir_all(path.parent().unwrap()).expect("cleanup");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn saved_remote_file_secret_refs_follow_provider_contract() {
+        use std::os::unix::fs::PermissionsExt;
+
+        for (mode, id, payload, expected) in [
+            (
+                "singleValue",
+                "value",
+                "fixture-file-token\n",
+                "fixture-file-token",
+            ),
+            (
+                "json",
+                "/gateway~1auth/token~0value",
+                r#"{"gateway/auth":{"token~value":"fixture-json-token"}}"#,
+                "fixture-json-token",
+            ),
+        ] {
+            let path = isolated_path();
+            fs::create_dir_all(path.parent().unwrap()).expect("test directory");
+            let secret_path = path.parent().unwrap().join("gateway-secret");
+            fs::write(&secret_path, payload).expect("secret fixture");
+            fs::set_permissions(&secret_path, fs::Permissions::from_mode(0o600))
+                .expect("private secret fixture");
+            fs::write(
+                &path,
+                json!({
+                    "secrets": {
+                        "providers": {
+                            "gatewayfile": {
+                                "source": "file",
+                                "path": secret_path,
+                                "mode": mode,
+                            },
+                        },
+                    },
+                    "gateway": {
+                        "mode": "remote",
+                        "remote": {
+                            "url": "ws://127.0.0.1:18789",
+                            "token": { "source": "file", "provider": "gatewayfile", "id": id },
+                        },
+                    },
+                })
+                .to_string(),
+            )
+            .expect("file-backed remote config");
+
+            let restored = load_saved_remote_at(&path)
+                .expect("resolve private file reference")
+                .expect("remote mode");
+            assert_eq!(restored.token.as_deref(), Some(expected));
+
+            fs::set_permissions(&secret_path, fs::Permissions::from_mode(0o644))
+                .expect("insecure secret fixture");
+            assert!(load_saved_remote_at(&path).is_err());
+            fs::remove_dir_all(path.parent().unwrap()).expect("cleanup");
+        }
+    }
+
+    #[test]
+    fn saved_remote_env_secret_shorthand_and_provider_allowlists_are_enforced() {
+        let path = isolated_path();
+        fs::create_dir_all(path.parent().unwrap()).expect("test directory");
+        fs::write(
+            &path,
+            json!({
+                "secrets": {
+                    "defaults": { "env": "gatewayenv" },
+                    "providers": {
+                        "gatewayenv": { "source": "env", "allowlist": ["HOME"] },
+                    },
+                },
+                "gateway": {
+                    "mode": "remote",
+                    "remote": {
+                        "url": "ws://127.0.0.1:18789",
+                        "token": "${HOME}",
+                    },
+                },
+            })
+            .to_string(),
+        )
+        .expect("environment-backed remote config");
+
+        let restored = load_saved_remote_at(&path)
+            .expect("resolve environment shorthand")
+            .expect("remote mode");
+        assert_eq!(restored.token.as_deref(), env::var("HOME").ok().as_deref());
+
+        let mut denied: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        denied["secrets"]["providers"]["gatewayenv"]["allowlist"] = json!(["NOT_HOME"]);
+        fs::write(&path, denied.to_string()).expect("restricted environment provider");
+        assert!(load_saved_remote_at(&path).is_err());
         fs::remove_dir_all(path.parent().unwrap()).expect("cleanup");
     }
 

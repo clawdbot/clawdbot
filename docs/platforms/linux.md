@@ -54,6 +54,12 @@ service; the remote host owns its model, provider credentials, and agent state.
 
 Use HTTPS or `wss://` for public direct connections. Plain HTTP or `ws://`
 should be limited to loopback, trusted private networks, and Tailnet hosts.
+When the saved configuration includes `gateway.remote.tlsFingerprint`, select
+**SSH tunnel** instead of a direct connection. The embedded browser cannot
+enforce a certificate pin, so the app rejects direct connections before loading
+the remote dashboard or exposing its credentials. Saved remote token and
+password values can use environment- or file-backed SecretRefs; exec and
+shared-store references must be resolved on their owning Gateway host.
 SSH uses your existing OpenSSH authentication and host-key verification. See
 [Remote access](/gateway/remote) for secure Gateway configuration.
 
