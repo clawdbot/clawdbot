@@ -45,6 +45,24 @@ function seedCachedHistory(
   return cache;
 }
 
+async function loadHistoryWithBrowserTimers(state: ReturnType<typeof createState>): Promise<void> {
+  const globalWithWindow = globalThis as typeof globalThis & {
+    window?: Window & typeof globalThis;
+  };
+  const previousWindow = globalWithWindow.window;
+  globalWithWindow.window = globalThis as unknown as Window & typeof globalThis;
+  try {
+    await loadChatHistory(state);
+    await vi.waitFor(() => expect(state.chatToolMessages).toHaveLength(1));
+  } finally {
+    if (previousWindow) {
+      globalWithWindow.window = previousWindow;
+    } else {
+      Reflect.deleteProperty(globalWithWindow, "window");
+    }
+  }
+}
+
 describe("chat history cursor revalidation", () => {
   it("keeps cached paint while replay updates an existing tool message in place", async () => {
     const cached = message(
@@ -117,6 +135,72 @@ describe("chat history cursor revalidation", () => {
     expect(
       readChatSessionSnapshot(cache, state, { sessionKey: state.sessionKey })?.deltaCursor,
     ).toBe("cursor-2");
+  });
+
+  it("restores active commentary and tools with an empty cached delta", async () => {
+    const cached = message("user", "cached", "cached-user", 1);
+    const handler = vi.fn(async (_params?: unknown) => ({
+      kind: "delta",
+      messages: [],
+      deltaCursor: "cursor-2",
+      sessionInfo: {
+        key: "main",
+        kind: "direct",
+        sessionId: "session-cursor",
+        updatedAt: 2,
+        hasActiveRun: true,
+        activeRunIds: ["run-live"],
+        status: "running",
+      },
+      inFlightRun: {
+        runId: "run-live",
+        text: "",
+        startedAt: 900,
+        events: [
+          {
+            runId: "run-live",
+            seq: 1,
+            stream: "item",
+            ts: 900,
+            sessionKey: "main",
+            data: {
+              kind: "preamble",
+              itemId: "preamble-restored",
+              progressText: "Checking the workspace",
+            },
+          },
+          {
+            runId: "run-live",
+            seq: 2,
+            stream: "tool",
+            ts: 1_000,
+            sessionKey: "main",
+            data: {
+              toolCallId: "call-restored",
+              name: "read",
+              phase: "start",
+              args: { path: "README.md" },
+            },
+          },
+        ],
+      },
+    }));
+    const state = createState(handler);
+    seedCachedHistory(state, [cached], "cursor-1");
+
+    await loadHistoryWithBrowserTimers(state);
+
+    expect(state.chatRunId).toBe("run-live");
+    expect(state.chatStreamSegments).toContainEqual(
+      expect.objectContaining({
+        itemId: "preamble-restored",
+        runId: "run-live",
+        text: "Checking the workspace",
+      }),
+    );
+    expect(state.chatToolMessages).toContainEqual(
+      expect.objectContaining({ runId: "run-live", toolCallId: "call-restored" }),
+    );
   });
 
   it("clears a rejected cursor before falling back to a full tail fetch", async () => {

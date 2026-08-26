@@ -45,6 +45,7 @@ export const ChatHistoryDeltaResultSchema = closedObject({
   deltaCursor: Type.String(),
   sessionInfo: Type.Unknown(),
   agentsList: Type.Optional(Type.Unknown()),
+  inFlightRun: Type.Optional(Type.Unknown()),
   metadata: Type.Optional(Type.Unknown()),
 });
 

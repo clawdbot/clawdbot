@@ -40,8 +40,9 @@ const QaChannelAccountConfigSchema = z
   })
   .strict();
 
-const QaChannelConfigSchema = buildMultiAccountChannelSchema(QaChannelAccountConfigSchema, {
-  accountSchema: QaChannelAccountConfigSchema.partial(),
-});
+const QaChannelConfigSchema = buildMultiAccountChannelSchema(
+  QaChannelAccountConfigSchema.extend({ historyLimit: z.number().int().min(0).optional() }),
+  { accountSchema: QaChannelAccountConfigSchema.partial() },
+);
 
 export const qaChannelPluginConfigSchema = buildChannelConfigSchema(QaChannelConfigSchema);

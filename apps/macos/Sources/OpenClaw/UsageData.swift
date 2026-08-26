@@ -11,11 +11,19 @@ struct GatewayUsageProvider: Codable {
     let displayName: String
     let windows: [GatewayUsageWindow]
     let plan: String?
+    let error: String?
 }
 
 struct GatewayUsageSummary: Codable {
     let updatedAt: Double
     let providers: [GatewayUsageProvider]
+    let refreshing: Bool?
+
+    init(updatedAt: Double, providers: [GatewayUsageProvider], refreshing: Bool? = nil) {
+        self.updatedAt = updatedAt
+        self.providers = providers
+        self.refreshing = refreshing
+    }
 }
 
 struct UsageRow: Identifiable {
@@ -26,6 +34,7 @@ struct UsageRow: Identifiable {
     let windowLabel: String?
     let usedPercent: Double?
     let resetAt: Date?
+    let errorText: String?
 
     var titleText: String {
         if let plan, !plan.isEmpty { return "\(self.displayName) (\(plan))" }
@@ -38,6 +47,7 @@ struct UsageRow: Identifiable {
     }
 
     func detailText(now: Date = .init()) -> String {
+        if let errorText, !errorText.isEmpty { return errorText }
         guard let remaining = self.remainingPercent else { return "No data" }
         var parts = ["\(remaining)% left"]
         if let windowLabel, !windowLabel.isEmpty { parts.append(windowLabel) }
@@ -67,18 +77,31 @@ struct UsageRow: Identifiable {
 extension GatewayUsageSummary {
     func primaryRows() -> [UsageRow] {
         self.providers.compactMap { provider in
-            guard let window = provider.windows.max(by: { $0.usedPercent < $1.usedPercent }) else {
-                return nil
+            if let window = provider.windows.max(by: { $0.usedPercent < $1.usedPercent }) {
+                return UsageRow(
+                    id: "\(provider.provider)-\(window.label)",
+                    providerId: provider.provider,
+                    displayName: provider.displayName,
+                    plan: provider.plan,
+                    windowLabel: window.label,
+                    usedPercent: window.usedPercent,
+                    resetAt: window.resetAt.map { Date(timeIntervalSince1970: $0 / 1000) },
+                    errorText: nil)
             }
 
+            guard let error = provider.error?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !error.isEmpty
+            else { return nil }
+
             return UsageRow(
-                id: "\(provider.provider)-\(window.label)",
+                id: "\(provider.provider)-error",
                 providerId: provider.provider,
                 displayName: provider.displayName,
                 plan: provider.plan,
-                windowLabel: window.label,
-                usedPercent: window.usedPercent,
-                resetAt: window.resetAt.map { Date(timeIntervalSince1970: $0 / 1000) })
+                windowLabel: nil,
+                usedPercent: nil,
+                resetAt: nil,
+                errorText: error)
         }
     }
 }

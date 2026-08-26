@@ -98,10 +98,11 @@ async function runNonInteractiveSetupExclusive(opts: OnboardOptions, runtime: Ru
   if (snapshot.exists && !snapshot.valid) {
     // Avoid rewriting an invalid config snapshot; doctor owns recovery so setup
     // does not erase malformed user state.
-    runtime.error(
+    rejectOnboardingOption(
+      opts,
+      runtime,
       `Config invalid. Run \`${formatCliCommand("openclaw doctor")}\` to repair it, then re-run setup.`,
     );
-    runtime.exit(1);
     return;
   }
 

@@ -411,6 +411,34 @@ describe("bash process registry", () => {
     expect(getActiveBackgroundExecSessionCount()).toBe(0);
   });
 
+  it("resets its own registry after another module instance replaces the global test API", async () => {
+    const testApiKey = Symbol.for("openclaw.bashProcessRegistryTestApi");
+    const globalStore = globalThis as Record<PropertyKey, unknown>;
+    const originalTestApi = globalStore[testApiKey];
+    const session = createRegistrySession({
+      id: "original-registry-session",
+      maxOutputChars: 100,
+      pendingMaxOutputChars: 30_000,
+      backgrounded: true,
+    });
+    addSession(session);
+
+    try {
+      const registrySpecifier = "./bash-process-registry.js?reset-owner-regression";
+      const reloadedRegistry = (await import(
+        registrySpecifier
+      )) as typeof import("./bash-process-registry.js");
+      expect(globalStore[testApiKey]).not.toBe(originalTestApi);
+      expect(reloadedRegistry.listRunningSessions()).toEqual([]);
+
+      resetProcessRegistryForTests();
+      expect(listRunningSessions()).toEqual([]);
+    } finally {
+      globalStore[testApiKey] = originalTestApi;
+      resetProcessRegistryForTests();
+    }
+  });
+
   it("clamps a zero retention TTL to one minute", () => {
     vi.useFakeTimers();
     try {

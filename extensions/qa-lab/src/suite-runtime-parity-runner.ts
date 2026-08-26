@@ -35,6 +35,7 @@ import type {
 } from "./suite-types.js";
 import {
   createQaSuiteTransportAdapter,
+  markQaSuiteNestedRun,
   requireQaSuiteStartLab,
   runQaSuiteCleanupSteps,
   throwQaSuiteCleanupErrors,
@@ -153,39 +154,41 @@ export async function runQaRuntimeParitySuite(params: {
               runtime,
             );
             const cellStartedAt = Date.now();
-            const cellResult = await params.runQaFlowSuite({
-              adapterFactories: params.adapterFactories,
-              channelId: params.channelId,
-              adapterOptions: params.adapterOptions,
-              repoRoot: params.repoRoot,
-              outputDir: cellOutputDir,
-              providerMode: params.providerMode,
-              transportId: params.transportId,
-              channelDriver: params.channelDriver ?? undefined,
-              channelDriverSelection: params.channelDriverSelection,
-              primaryModel: remapModelRefForForcedRuntime({
-                modelRef: params.primaryModel,
+            const cellResult = await params.runQaFlowSuite(
+              markQaSuiteNestedRun({
+                adapterFactories: params.adapterFactories,
+                channelId: params.channelId,
+                adapterOptions: params.adapterOptions,
+                repoRoot: params.repoRoot,
+                outputDir: cellOutputDir,
                 providerMode: params.providerMode,
+                transportId: params.transportId,
+                channelDriver: params.channelDriver ?? undefined,
+                channelDriverSelection: params.channelDriverSelection,
+                primaryModel: remapModelRefForForcedRuntime({
+                  modelRef: params.primaryModel,
+                  providerMode: params.providerMode,
+                  forcedRuntime: runtime,
+                }),
+                alternateModel: remapModelRefForForcedRuntime({
+                  modelRef: params.alternateModel,
+                  providerMode: params.providerMode,
+                  forcedRuntime: runtime,
+                }),
+                fastMode: params.fastMode,
+                thinkingDefault: params.thinkingDefault,
+                claudeCliAuthMode: params.claudeCliAuthMode,
+                scenarioIds: [scenario.id],
+                concurrency: 1,
+                enabledPluginIds: params.enabledPluginIds,
+                startLab,
+                controlUiEnabled: params.controlUiEnabled ?? scenarioRequiresControlUi(scenario),
+                mutateConfig: params.mutateConfig,
                 forcedRuntime: runtime,
+                captureRuntimeParityCell: true,
+                writeEvidenceFile: params.writeEvidenceFile,
               }),
-              alternateModel: remapModelRefForForcedRuntime({
-                modelRef: params.alternateModel,
-                providerMode: params.providerMode,
-                forcedRuntime: runtime,
-              }),
-              fastMode: params.fastMode,
-              thinkingDefault: params.thinkingDefault,
-              claudeCliAuthMode: params.claudeCliAuthMode,
-              scenarioIds: [scenario.id],
-              concurrency: 1,
-              enabledPluginIds: params.enabledPluginIds,
-              startLab,
-              controlUiEnabled: params.controlUiEnabled ?? scenarioRequiresControlUi(scenario),
-              mutateConfig: params.mutateConfig,
-              forcedRuntime: runtime,
-              captureRuntimeParityCell: true,
-              writeEvidenceFile: params.writeEvidenceFile,
-            });
+            );
             for (const startedScenarioId of cellResult.startedScenarioIds) {
               startedScenarioIds.add(startedScenarioId);
             }

@@ -14,6 +14,7 @@ import {
 } from "../agents/agent-scope.js";
 import { getRuntimeConfig, readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isGatewayRpcUnavailableError } from "../gateway/transport-error.js";
 import {
   buildWorkspaceHookStatus,
   type HookStatusEntry,
@@ -110,8 +111,13 @@ function buildHooksReport(config: OpenClawConfig, target: HooksReportTarget): Ho
 async function loadHooksReport(agentId?: string): Promise<HookStatusReport> {
   const config = getRuntimeConfig({ skipPluginValidation: true });
   const target = resolveHooksReportTarget(config, agentId);
+  const {
+    callGateway,
+    isGatewayClientRequestError,
+    isGatewayCredentialsRequiredError,
+    isImplicitLocalGatewayTarget,
+  } = await import("../gateway/call.js");
   try {
-    const { callGateway } = await import("../gateway/call.js");
     return await callGateway<HookStatusReport>({
       config,
       method: "hooks.status",
@@ -121,19 +127,24 @@ async function loadHooksReport(agentId?: string): Promise<HookStatusReport> {
       mode: GATEWAY_CLIENT_MODES.CLI,
     });
   } catch (error) {
-    if (
-      error instanceof Error &&
-      error.name === "GatewayClientRequestError" &&
-      !(
-        (error as Error & { gatewayCode?: unknown }).gatewayCode === "INVALID_REQUEST" &&
-        /^(?:unknown method: hooks\.status|invalid hooks\.status params(?::|$))/iu.test(
+    const isLegacyHookReport =
+      isGatewayClientRequestError(error) &&
+      error.gatewayCode === "INVALID_REQUEST" &&
+      (error.message === "unknown method: hooks.status" ||
+        /^invalid hooks\.status params: (?:unexpected property agentId|at root: unexpected property 'agentId')$/u.test(
           error.message,
-        )
-      )
+        ));
+    if (
+      !(
+        isGatewayCredentialsRequiredError(error) ||
+        isGatewayRpcUnavailableError(error) ||
+        isLegacyHookReport
+      ) ||
+      !(await isImplicitLocalGatewayTarget({ config }))
     ) {
       throw error;
     }
-    // Unavailable and older Gateways retain the selected owner for local read-only discovery.
+    // Only implicit local Gateways may use offline or older-Gateway discovery.
     return buildHooksReport(config, target);
   }
 }

@@ -263,17 +263,9 @@ class ChannelsPage extends OpenClawLightDomElement {
     if (!context) {
       return;
     }
-    const saved = await context.runtimeConfig.save();
-    const saveError = context.runtimeConfig.state.lastError;
-    if (!saved) {
-      await context.runtimeConfig.refresh();
-      if (saveError && !context.runtimeConfig.state.lastError) {
-        context.runtimeConfig.state.lastError = saveError;
-      }
-      this.requestUpdate();
-      return;
+    if (await context.runtimeConfig.save()) {
+      await context.channels.refresh(true);
     }
-    await context.channels.refresh(true);
   }
 
   private async reloadChannelConfig() {
@@ -689,6 +681,7 @@ class ChannelsPage extends OpenClawLightDomElement {
           configForm: config.configForm,
           configUiHints: config.configUiHints,
           configSaving: config.configSaving,
+          configError: config.lastError,
           configFormDirty: config.configFormDirty,
           showAdvancedSettings: this.showAdvancedSettings,
           nostrProfileFormState: this.nostrProfileFormState,

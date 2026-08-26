@@ -239,12 +239,14 @@ export function groupSidebarSessionRows<Row extends SidebarGroupableRow>(
   const groups: Row[] = [];
   const coding: Row[] = [];
   const categories = new Map<string, Row[]>();
+  const knownGroups: string[] = [];
   const people = new Map<string, SidebarSessionSection<Row>>();
   if (grouping === "category") {
     for (const name of options.knownGroups ?? []) {
       const trimmed = name.trim();
       if (trimmed && !categories.has(trimmed)) {
         categories.set(trimmed, []);
+        knownGroups.push(trimmed);
       }
     }
   }
@@ -313,14 +315,9 @@ export function groupSidebarSessionRows<Row extends SidebarGroupableRow>(
       );
     }),
   );
-  const knownGroups = [
-    ...new Set((options.knownGroups ?? []).map((name) => name.trim()).filter(Boolean)),
-  ];
   const orderedCategories = [
-    ...knownGroups.filter((name) => categories.has(name)),
-    ...[...categories.keys()]
-      .filter((name) => !knownGroups.includes(name))
-      .toSorted((a, b) => a.localeCompare(b)),
+    ...knownGroups,
+    ...[...categories.keys()].slice(knownGroups.length).toSorted((a, b) => a.localeCompare(b)),
   ];
   const orderedSections: SidebarSessionSection<Row>[] = orderedCategories.map((category) => ({
     id: `category:${category}`,

@@ -16,9 +16,9 @@ type ChatPaneGatewaySnapshot = Parameters<typeof isDesktopPanelAvailable>[0];
 
 export type ChatProgressCardPlacement = "composer" | "dock" | "rail";
 
-/* Narrowest gutter that still holds a readable card: the dock keeps a 12px gap
- * from the composer and clears the transcript scrollbar strip on the far side,
- * so this leaves it ~250px of its own. */
+/* Narrowest gutter that still clears the composer: the dock is a fixed
+ * --chat-progress-dock-width (250px) inside .chat-gutter-stack, which holds it
+ * 14px off the pane edge and a --space-3 gap clear of the composer. */
 const PROGRESS_CARD_DOCK_MIN_GUTTER_PX = 280;
 
 /** Picks the single live progress-card placement for one chat pane. */

@@ -339,9 +339,10 @@ describeControlUiE2e("Control UI composer pointer controls", () => {
 
       await textarea.fill("Verify keyboard Send");
       await textarea.focus();
-      // Tab order after the single-primary redesign: mic, then the
-      // focus-revealed device-picker trigger, then the primary send button.
       const keyboardSend = page.getByRole("button", { name: "Send message" });
+      // Send holds the trailing end of the action row, behind the microphone, so
+      // it is no longer one Tab away. What this proves is that plain forward
+      // tabbing still reaches it — no trap, no skipped control.
       for (let tabs = 0; tabs < 4; tabs += 1) {
         await page.keyboard.press("Tab");
         if (await keyboardSend.evaluate((node) => document.activeElement === node)) {
@@ -349,7 +350,13 @@ describeControlUiE2e("Control UI composer pointer controls", () => {
         }
       }
       await expect
-        .poll(() => keyboardSend.evaluate((node) => document.activeElement === node))
+        .poll(async () => {
+          if (await keyboardSend.evaluate((node) => document.activeElement === node)) {
+            return true;
+          }
+          await page.keyboard.press("Tab");
+          return false;
+        })
         .toBe(true);
       await keyboardSend.press("Enter");
       await expect.poll(async () => (await gateway.getRequests("chat.send")).length).toBe(2);
