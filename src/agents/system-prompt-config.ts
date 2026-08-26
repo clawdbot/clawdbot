@@ -11,6 +11,7 @@ import { resolveMainSessionDelegationMode } from "./delegation-guidance.js";
 import { resolveOwnerDisplaySetting } from "./owner-display.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "./tool-fs-policy.js";
+import { transcriptCredentialSafetyPrompt } from "./transcript-credential-safety.js";
 
 type AgentSystemPromptRenderParams = Parameters<typeof buildAgentSystemPrompt>[0];
 
@@ -24,9 +25,15 @@ type ResolvedAgentSystemPromptConfig = Pick<
   | "modelAliasLines"
   | "memoryCitationsMode"
   | "fsWorkspaceOnly"
+  | "credentialSafetyPrompt"
 >;
 
-type ConfiguredAgentSystemPromptParams = AgentSystemPromptRenderParams & {
+// Config owns the credential contract, so callers cannot pass it here and have
+// it silently replaced by the resolved value below.
+type ConfiguredAgentSystemPromptParams = Omit<
+  AgentSystemPromptRenderParams,
+  "credentialSafetyPrompt"
+> & {
   config?: OpenClawConfig;
   agentId?: string;
 };
@@ -66,6 +73,7 @@ function resolveAgentSystemPromptConfig(params: {
     modelAliasLines: buildModelAliasLines(config),
     memoryCitationsMode: config?.memory?.citations,
     fsWorkspaceOnly: resolveEffectiveToolFsWorkspaceOnly({ cfg: config, agentId }),
+    credentialSafetyPrompt: transcriptCredentialSafetyPrompt(config),
   };
 }
 

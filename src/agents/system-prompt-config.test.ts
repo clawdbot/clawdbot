@@ -2,7 +2,12 @@
 // the canonical agent prompt facade.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT,
+  SYSTEM_AGENT_SYSTEM_PROMPT,
+} from "../system-agent/assistant-prompts.js";
 import { buildConfiguredAgentSystemPrompt } from "./system-prompt-config.js";
+import { TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT } from "./transcript-credential-safety.js";
 
 vi.mock("../tts/tts-settings.js", () => ({
   buildTtsSystemPromptHint: vi.fn(() => undefined),
@@ -127,5 +132,45 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## Delegation");
+  });
+
+  it("keeps the credential contract unless the operator opts out", () => {
+    expect(buildPrompt({})).toContain(TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT);
+    expect(buildPrompt({ security: {} })).toContain(TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT);
+    expect(buildPrompt({ security: { allowCredentialsInTranscript: false } })).toContain(
+      TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT,
+    );
+  });
+
+  it("drops only the handling rules when the operator opts out", () => {
+    const prompt = buildPrompt({ security: { allowCredentialsInTranscript: true } });
+
+    expect(prompt).not.toContain(TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT);
+    expect(prompt).not.toContain("Never echo or repeat credentials");
+    expect(prompt).not.toContain("Never place, put, or include credentials");
+    expect(prompt).toContain("Safety/oversight > completion");
+  });
+
+  it("never lets the opt-out remove the no-solicitation rule", () => {
+    // Soliciting a credential creates exposure that would not otherwise exist,
+    // and it reaches non-owner participants, so no config value removes it.
+    for (const config of [
+      {},
+      { security: {} },
+      { security: { allowCredentialsInTranscript: false } },
+      { security: { allowCredentialsInTranscript: true } },
+    ]) {
+      expect(buildPrompt(config)).toContain(
+        "never ask or request users to report, share, or provide",
+      );
+    }
+  });
+
+  it("keeps the credential contract in system-agent prompts regardless of the opt-out", () => {
+    // The system agent carries the contract in its own module-scope prompts, so
+    // the operator opt-out cannot reach it no matter how config is resolved.
+    for (const prompt of [SYSTEM_AGENT_SYSTEM_PROMPT, SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT]) {
+      expect(prompt).toContain(TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT);
+    }
   });
 });

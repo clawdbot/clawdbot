@@ -18,6 +18,7 @@ import { buildSkillWorkshopPromptSection } from "./skill-workshop-prompt.js";
 import { buildSubagentSystemPrompt } from "./subagents/spawn/subagent-system-prompt.js";
 import { buildSystemPromptParams } from "./system-prompt-params.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
+import { TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT } from "./transcript-credential-safety.js";
 
 describe("buildAgentSystemPrompt", () => {
   it("resolves helper session keys to scoped prompt surfaces", () => {
@@ -497,6 +498,27 @@ describe("buildAgentSystemPrompt", () => {
       ).toBe(true);
     },
   );
+
+  it("uses the narrowed contract the resolver supplies", () => {
+    const narrowed = "never ask or request users to report, share, or provide them in chat.";
+    const optedOut = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      credentialSafetyPrompt: narrowed,
+    });
+
+    expect(optedOut).toContain(narrowed);
+    expect(optedOut).not.toContain("Never echo or repeat credentials");
+    // The rest of the safety section must survive the opt-out.
+    expect(optedOut).toContain("Safety/oversight > completion");
+  });
+
+  it("keeps the credential contract when a caller never resolves config", () => {
+    // undefined means "nobody resolved this", not "disabled": an unresolved
+    // caller must not silently ship prompts without the contract.
+    const unresolved = buildAgentSystemPrompt({ workspaceDir: "/tmp/openclaw" });
+
+    expect(unresolved).toContain(TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT);
+  });
 
   it("includes voice hint when provided", () => {
     const prompt = buildAgentSystemPrompt({

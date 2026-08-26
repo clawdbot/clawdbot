@@ -46,6 +46,16 @@ export type SecurityConfig = {
     /** Accepted security audit findings to omit from active summary/findings. */
     suppressions?: SecurityAuditSuppression[];
   };
+  /**
+   * Opt out of the transcript credential-safety prompt contract.
+   *
+   * Default false: agents are instructed never to solicit or echo credentials.
+   * Set true only on operator-owned deployments that accept credentials
+   * reaching transcripts, logs, and every transcript-derived store (memory
+   * index, promoted memory, prompt cache). Intended for hosts where no
+   * host-owned masked credential-entry surface is reachable.
+   */
+  allowCredentialsInTranscript?: boolean;
   installPolicy?: {
     /**
      * Enable operator-owned install policy. When true without an exec command,

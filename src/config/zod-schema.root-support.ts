@@ -83,6 +83,7 @@ export const SecuritySchema = z
           .optional(),
       })
       .optional(),
+    allowCredentialsInTranscript: z.boolean().optional(),
   })
   .optional();
 
