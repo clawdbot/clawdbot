@@ -8,8 +8,10 @@ import {
   type OfficialExternalPluginCatalogFeed,
 } from "./official-external-plugin-catalog.js";
 
-const OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PAYLOAD_TYPE =
+export const OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PAYLOAD_TYPE =
   "openclaw.official-external-plugin-catalog-feed.v1";
+export const OFFICIAL_EXTERNAL_PLUGIN_CATALOG_SHARD_ROOT_PAYLOAD_TYPE =
+  "openclaw.official-external-plugin-catalog-shard-root.v1";
 const OFFICIAL_EXTERNAL_PLUGIN_CATALOG_MAX_SIGNATURES = 16;
 
 type OfficialExternalPluginCatalogEnvelopeSignature = {
@@ -26,6 +28,31 @@ type OfficialExternalPluginCatalogTrustedSigningKey = {
   publicKey: string;
 };
 
+type OfficialExternalPluginCatalogEnvelopeVerificationError = {
+  ok: false;
+  error:
+    | "invalid-envelope"
+    | "unsupported-payload"
+    | "invalid-payload"
+    | "missing-trust-key"
+    | "invalid-signature";
+  message: string;
+  authenticatedPayload?: unknown;
+};
+
+type OfficialExternalPluginCatalogEnvelopePayloadVerificationResult =
+  | {
+      ok: true;
+      payloadType: string;
+      payload: unknown;
+      payloadBytes: Buffer;
+      signedBy: string;
+      signedByKeyIds?: readonly string[];
+      signatureCount?: number;
+      threshold?: number;
+    }
+  | OfficialExternalPluginCatalogEnvelopeVerificationError;
+
 type OfficialExternalPluginCatalogEnvelopeVerificationResult =
   | {
       ok: true;
@@ -35,17 +62,8 @@ type OfficialExternalPluginCatalogEnvelopeVerificationResult =
       signatureCount?: number;
       threshold?: number;
     }
-  | {
-      ok: false;
-      error:
-        | "invalid-envelope"
-        | "unsupported-payload"
-        | "invalid-payload"
-        | "missing-trust-key"
-        | "invalid-signature";
-      message: string;
-      authenticatedPayload?: unknown;
-    };
+  | OfficialExternalPluginCatalogEnvelopeVerificationError;
+
 function createOfficialExternalPluginCatalogEnvelopeSigningInput(params: {
   payloadType: string;
   payloadBytes: Buffer;
@@ -53,14 +71,15 @@ function createOfficialExternalPluginCatalogEnvelopeSigningInput(params: {
   return dssePreAuthenticationEncoding(params.payloadType, params.payloadBytes);
 }
 
-export function verifyOfficialExternalPluginCatalogSignedEnvelope(
+export function verifyOfficialExternalPluginCatalogEnvelopePayload(
   raw: unknown,
   params: {
     trustedKeys: readonly OfficialExternalPluginCatalogTrustedSigningKey[];
+    acceptedPayloadTypes: ReadonlySet<string>;
     threshold?: number;
     allowLegacyBetaEnvelope?: boolean;
   },
-): OfficialExternalPluginCatalogEnvelopeVerificationResult {
+): OfficialExternalPluginCatalogEnvelopePayloadVerificationResult {
   const envelope = parseOfficialExternalPluginCatalogSignedEnvelope(raw, {
     allowLegacyBetaEnvelope: params.allowLegacyBetaEnvelope === true,
   });
@@ -71,7 +90,7 @@ export function verifyOfficialExternalPluginCatalogSignedEnvelope(
       message: "hosted catalog signed envelope is malformed",
     };
   }
-  if (envelope.payloadType !== OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PAYLOAD_TYPE) {
+  if (!params.acceptedPayloadTypes.has(envelope.payloadType)) {
     return {
       ok: false,
       error: "unsupported-payload",
@@ -119,17 +138,18 @@ export function verifyOfficialExternalPluginCatalogSignedEnvelope(
   }
   if (trustedSignaturePublicKeys.size >= threshold) {
     const decoded = decodeOfficialExternalPluginCatalogEnvelopePayload(payloadBytes);
-    if (!decoded?.feed) {
+    if (!decoded) {
       return {
         ok: false,
         error: "invalid-payload",
         message: "hosted catalog signed envelope payload is invalid",
-        ...(decoded ? { authenticatedPayload: decoded.raw } : {}),
       };
     }
     return {
       ok: true,
-      feed: decoded.feed,
+      payloadType: envelope.payloadType,
+      payload: decoded.raw,
+      payloadBytes,
       signedBy: trustedSignatureKeyIds[0] ?? "",
       ...(threshold > 1
         ? {
@@ -157,6 +177,41 @@ export function verifyOfficialExternalPluginCatalogSignedEnvelope(
         error: "missing-trust-key",
         message: "hosted catalog signed envelope was not signed by a trusted key",
       };
+}
+
+export function verifyOfficialExternalPluginCatalogSignedEnvelope(
+  raw: unknown,
+  params: {
+    trustedKeys: readonly OfficialExternalPluginCatalogTrustedSigningKey[];
+    threshold?: number;
+    allowLegacyBetaEnvelope?: boolean;
+  },
+): OfficialExternalPluginCatalogEnvelopeVerificationResult {
+  const verification = verifyOfficialExternalPluginCatalogEnvelopePayload(raw, {
+    ...params,
+    acceptedPayloadTypes: new Set([OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PAYLOAD_TYPE]),
+  });
+  if (!verification.ok) {
+    return verification;
+  }
+  if (!isOfficialExternalPluginCatalogFeed(verification.payload)) {
+    return {
+      ok: false,
+      error: "invalid-payload",
+      message: "hosted catalog signed envelope payload is invalid",
+      authenticatedPayload: verification.payload,
+    };
+  }
+  return {
+    ok: true,
+    feed: verification.payload,
+    signedBy: verification.signedBy,
+    ...(verification.signedByKeyIds ? { signedByKeyIds: verification.signedByKeyIds } : {}),
+    ...(verification.signatureCount !== undefined
+      ? { signatureCount: verification.signatureCount }
+      : {}),
+    ...(verification.threshold !== undefined ? { threshold: verification.threshold } : {}),
+  };
 }
 
 function parseOfficialExternalPluginCatalogSignedEnvelope(
@@ -258,13 +313,10 @@ function decodeOfficialExternalPluginCatalogEnvelopePayloadBytes(payload: string
 
 function decodeOfficialExternalPluginCatalogEnvelopePayload(
   payloadBytes: Buffer,
-): { raw: unknown; feed: OfficialExternalPluginCatalogFeed | null } | null {
+): { raw: unknown } | null {
   try {
     const raw = JSON.parse(payloadBytes.toString("utf8")) as unknown;
-    return {
-      raw,
-      feed: isOfficialExternalPluginCatalogFeed(raw) ? raw : null,
-    };
+    return { raw };
   } catch {
     return null;
   }
