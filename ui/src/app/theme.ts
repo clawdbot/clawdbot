@@ -53,6 +53,22 @@ const THEME_FONT_STYLESHEETS: Partial<Record<ThemeName, ControlUiFontStylesheet>
   phosphor: "fonts/phosphor.css",
 };
 type ControlUiFontStylesheet = `fonts/${string}.css`;
+
+const THEME_PALETTE_STYLESHEET_ID = "openclaw-theme-palette";
+/* Built-in palettes other than the default ship outside the startup stylesheet,
+   so the default path does not download tokens for six themes it never paints.
+   index.html links the persisted family before first paint; this keeps the link
+   correct when the theme changes at runtime. Claw has no entry because its
+   tokens are the :root defaults. */
+const THEME_PALETTE_STYLESHEETS: Partial<Record<ThemeName, ControlUiPaletteStylesheet>> = {
+  knot: "themes/knot.css",
+  dash: "themes/dash.css",
+  absolutely: "themes/absolutely.css",
+  tide: "themes/tide.css",
+  beacon: "themes/beacon.css",
+  phosphor: "themes/phosphor.css",
+};
+type ControlUiPaletteStylesheet = `themes/${string}.css`;
 const VALID_THEME_MODES = new Set<ThemeMode>(["system", "light", "dark"]);
 
 function prefersLightScheme(): boolean {
@@ -108,13 +124,14 @@ export function resolveTheme(theme: ThemeName, mode: ThemeMode): ResolvedTheme {
   return resolvedMode === "light" ? "custom-light" : "custom";
 }
 
-/** Loads (or drops) the webfont stylesheet a theme declares. Idempotent. */
-export function syncThemeFontStylesheet(theme: ThemeName): void {
+function syncThemeStylesheet(
+  id: string,
+  asset: ControlUiFontStylesheet | ControlUiPaletteStylesheet | undefined,
+): void {
   if (typeof document === "undefined") {
     return;
   }
-  const asset = THEME_FONT_STYLESHEETS[theme];
-  const existing = document.getElementById(THEME_FONT_STYLESHEET_ID);
+  const existing = document.getElementById(id);
   if (!asset) {
     existing?.remove();
     return;
@@ -127,8 +144,18 @@ export function syncThemeFontStylesheet(theme: ThemeName): void {
     return;
   }
   const link = document.createElement("link");
-  link.id = THEME_FONT_STYLESHEET_ID;
+  link.id = id;
   link.rel = "stylesheet";
   link.href = href;
   document.head.append(link);
+}
+
+/** Loads (or drops) the webfont stylesheet a theme declares. Idempotent. */
+export function syncThemeFontStylesheet(theme: ThemeName): void {
+  syncThemeStylesheet(THEME_FONT_STYLESHEET_ID, THEME_FONT_STYLESHEETS[theme]);
+}
+
+/** Loads (or drops) the palette stylesheet a built-in theme ships. Idempotent. */
+export function syncThemePaletteStylesheet(theme: ThemeName): void {
+  syncThemeStylesheet(THEME_PALETTE_STYLESHEET_ID, THEME_PALETTE_STYLESHEETS[theme]);
 }

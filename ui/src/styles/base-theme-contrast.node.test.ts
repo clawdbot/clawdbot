@@ -101,6 +101,21 @@ type TokenMap = Map<string, string>;
 type RGB = readonly [red: number, green: number, blue: number];
 type Color = { rgb: RGB; alpha: number };
 
+/*
+ * Built-in palettes other than the default live in public/themes so they stay
+ * out of the startup stylesheet. Contrast guarantees still cover every theme,
+ * so the palette sources are read back together here.
+ */
+function readPaletteSources(stylesRoot: string): string {
+  const themesDir = path.join(stylesRoot, "..", "..", "public", "themes");
+  const palettes = fs
+    .readdirSync(themesDir)
+    .filter((entry) => entry.endsWith(".css"))
+    .toSorted()
+    .map((entry) => fs.readFileSync(path.join(themesDir, entry), "utf8"));
+  return [fs.readFileSync(path.join(stylesRoot, "base.css"), "utf8"), ...palettes].join("\n");
+}
+
 function parseThemeBlocks(baseCss: string): Map<string, TokenMap> {
   const blocks = new Map<string, TokenMap>();
   const blockPattern = /(:root(?:\[data-theme(?:-mode)?="[^"]+"\])?)\s*\{([^}]*)\}/g;
@@ -402,7 +417,7 @@ function readBubbleBackgrounds(groupedCss: string): {
 }
 
 describe("Control UI theme contrast", () => {
-  const baseCss = fs.readFileSync(path.join(stylesDir, "base.css"), "utf8");
+  const baseCss = readPaletteSources(stylesDir);
   const themes = resolveThemes(parseThemeBlocks(baseCss));
 
   it("keeps every text token at WCAG AA on every theme surface, AAA on themes that promise it", () => {

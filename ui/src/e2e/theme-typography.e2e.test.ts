@@ -180,6 +180,30 @@ suite.define(() => {
     }
   });
 
+  it("paints a non-default palette without the app bundle", async () => {
+    /*
+     * Palettes ship outside the startup stylesheet, so the only thing standing
+     * between a persisted theme and a flash of the default colours is the
+     * render-blocking link the first-paint script inserts. Blocking every
+     * bundle script isolates that path: if the palette were linked from the app
+     * instead, --bg here would still read as the default Claw value.
+     */
+    const { page } = await openThemedChat("tide", "dark");
+    await page.route("**/assets/**.js", (route) => route.abort());
+    await page.goto(`${suite.server.baseUrl}chat`);
+
+    const report = await page.evaluate(() => ({
+      background: getComputedStyle(document.documentElement).getPropertyValue("--bg").trim(),
+      paletteHref: document.getElementById("openclaw-theme-palette")?.getAttribute("href") ?? null,
+      resolvedTheme: document.documentElement.dataset.theme,
+    }));
+
+    expect(report.resolvedTheme).toBe("tide");
+    expect(report.paletteHref).toBe("/themes/tide.css");
+    // Tide's own --bg, not the Claw default (#0e1015) it would fall back to.
+    expect(report.background).toBe("#10151b");
+  });
+
   it("resolves the font stylesheet against a configured mount path", async () => {
     // A gateway mounted at a base path serves the bundle below that prefix, so
     // root-absolute font URLs 404 there and the theme silently falls back to
@@ -203,6 +227,12 @@ suite.define(() => {
     );
 
     expect(linkHref).toBe(`${basePath}/fonts/absolutely.css`);
+    // The palette link is built in the first-paint script from the mount prefix
+    // the gateway stamps on <html>, so it has to follow the mount too.
+    const paletteHref = await page.evaluate(
+      () => document.getElementById("openclaw-theme-palette")?.getAttribute("href") ?? null,
+    );
+    expect(paletteHref).toBe(`${basePath}/themes/absolutely.css`);
     // The browser must actually fetch below the mount, not at the root.
     await expect.poll(() => requested).toContain(`${basePath}/fonts/absolutely.css`);
   });
