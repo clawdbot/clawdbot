@@ -464,6 +464,7 @@ describe("skill collection review", () => {
 
       expect(secondResult).toMatchObject({ status: "error" });
       expect(secondResult.summary).toContain("timed out waiting for skill collection review claim");
+      expect(secondResult.error).toBe(secondResult.summary);
       expect(runEmbeddedAgent).toHaveBeenCalledOnce();
       expect(readSkillReviewOutcomes({ env: testState.env })).toEqual(stateBeforeContention);
     } finally {

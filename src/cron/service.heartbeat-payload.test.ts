@@ -169,6 +169,7 @@ describe("heartbeat payload execution", () => {
     const { storePath, cleanup } = await makeStorePath();
     const runSkillCollectionReview = vi.fn(async () => ({
       status: "error" as const,
+      summary: "review failed",
       error: "review failed",
     }));
     const { cron, enqueueSystemEvent } = createStartedCronServiceWithFinishedBarrier({
@@ -202,7 +203,7 @@ describe("heartbeat payload execution", () => {
       const failedJob = cron.getJob(job.id);
       expect(failedJob).toMatchObject({
         enabled: true,
-        state: { lastStatus: "error" },
+        state: { lastStatus: "error", lastError: "review failed" },
       });
       expect(failedJob?.state.consecutiveErrors).toBe(11);
       expect(failedJob?.state.autoDisabled).toBeUndefined();

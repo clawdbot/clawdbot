@@ -138,7 +138,10 @@ export async function runSkillCollectionReviewForAgent(params: {
   config: OpenClawConfig;
   agentId: string;
   env?: NodeJS.ProcessEnv;
-}): Promise<{ status: "ok" | "skipped" | "error"; summary: string }> {
+}): Promise<
+  | { status: "ok" | "skipped"; summary: string }
+  | { status: "error"; summary: string; error: string }
+> {
   if (resolveSkillWorkshopConfig(params.config).autonomous.mode !== "auto") {
     return { status: "skipped", summary: "skill collection review disabled" };
   }
@@ -197,19 +200,15 @@ export async function runSkillCollectionReviewForAgent(params: {
             );
             throw outcomeWriteError;
           }
-          return {
-            status: "error" as const,
-            summary: `Skill collection review failed for ${workspaceDir}: ${String(error)}`,
-          };
+          const summary = `Skill collection review failed for ${workspaceDir}: ${String(error)}`;
+          return { status: "error" as const, summary, error: summary };
         }
       },
       stateOptions,
     );
   } catch (error) {
-    return {
-      status: "error",
-      summary: `Skill collection review failed for ${workspaceDir}: ${String(error)}`,
-    };
+    const summary = `Skill collection review failed for ${workspaceDir}: ${String(error)}`;
+    return { status: "error", summary, error: summary };
   }
 }
 
