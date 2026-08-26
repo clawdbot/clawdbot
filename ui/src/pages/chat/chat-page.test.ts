@@ -413,6 +413,11 @@ describe("chat page split layout host", () => {
   });
 
   it("hands each route-provided draft to the active pane only once", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      `${sessionPath("main")}?draft=one-shot%20draft&panel=details#pane`,
+    );
     const page = new ChatPage();
     const navigation = setNavigationContext(page);
     const firstRouteData = { sessionKey: "main", draft: "one-shot draft" };
@@ -428,6 +433,8 @@ describe("chat page split layout host", () => {
     expect(navigation.replace).toHaveBeenCalledOnce();
     expect(navigation.replace).toHaveBeenCalledWith("chat", {
       pathname: sessionPath("main"),
+      search: "?panel=details",
+      hash: "#pane",
     });
     page.data = { ...firstRouteData };
     expect(getRouteDraftForActivePane(page)).toBe("one-shot draft");
@@ -554,6 +561,12 @@ describe("chat page split layout host", () => {
   });
 
   it("keeps catalog identity when consuming a route draft", async () => {
+    const catalogSearch = catalogSessionSearch(CATALOG_KEY);
+    window.history.replaceState(
+      {},
+      "",
+      `/chat/research${catalogSearch}&draft=one-shot%20catalog%20draft&panel=details#pane`,
+    );
     const page = new ChatPage();
     const navigation = setNavigationContext(page);
     page.data = {
@@ -566,10 +579,11 @@ describe("chat page split layout host", () => {
     await Promise.resolve();
     await page.updateComplete;
 
-    const expectedSearch = catalogSessionSearch(CATALOG_KEY);
+    const expectedSearch = `${catalogSearch}&panel=details`;
     expect(navigation.replace).toHaveBeenCalledWith("chat", {
       pathname: "/chat/research",
       search: expectedSearch,
+      hash: "#pane",
     });
     await expect(
       loadChatRoute(
@@ -606,6 +620,7 @@ describe("chat page split layout host", () => {
   });
 
   it("preserves a resolved long prefix through drafts and face changes", async () => {
+    window.history.replaceState({}, "", "/chat/main/1234567890?draft=ship&panel=details#pane");
     const page = new ChatPage();
     const navigation = setNavigationContext(page);
     page.data = {
@@ -621,6 +636,8 @@ describe("chat page split layout host", () => {
 
     expect(navigation.replace).toHaveBeenCalledWith("chat", {
       pathname: "/chat/main/1234567890",
+      search: "?panel=details",
+      hash: "#pane",
     });
     navigation.navigate.mockClear();
     const pane = page.querySelector<RenderedPane>("openclaw-chat-pane");

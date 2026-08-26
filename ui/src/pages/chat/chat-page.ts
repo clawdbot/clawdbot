@@ -17,7 +17,7 @@ import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { persistSessionBoardFace } from "./chat-board-face-persistence.ts";
-import { stillOwnsCanonicalLocation } from "./chat-canonical-location.ts";
+import { currentRouteLocation, stillOwnsCanonicalLocation } from "./chat-canonical-location.ts";
 import { renderChatPagePaneCell } from "./chat-page-pane-render.ts";
 import { ChatPageRetainedSessions } from "./chat-page-retained-sessions.ts";
 import { closeStagedPane, resumeStagedPanes } from "./chat-pane-attachment-handoff.ts";
@@ -404,7 +404,8 @@ export class ChatPage extends OpenClawLightDomElement {
   private updateRoute(sessionKey: string, replace = false, face = this.data.face ?? "chat") {
     const data = this.data;
     if (
-      data?.sessionKey === sessionKey &&
+      data &&
+      areUiSessionKeysEquivalent(data.sessionKey, sessionKey) &&
       (data.face ?? "chat") === face &&
       !data.draft &&
       !data.focusComposer
@@ -419,7 +420,14 @@ export class ChatPage extends OpenClawLightDomElement {
       shortIdLength: data?.sessionKey === sessionKey ? data.shortId?.length : undefined,
     }).options;
     if (replace) {
-      this.context.replace(face, options);
+      this.context.replace(
+        face,
+        data &&
+          areUiSessionKeysEquivalent(data.sessionKey, sessionKey) &&
+          (data.draft || data.focusComposer)
+          ? locationWithoutDraft(currentRouteLocation(), options)
+          : options,
+      );
     } else {
       this.context.navigate(face, options);
     }
