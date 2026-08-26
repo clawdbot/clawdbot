@@ -85,7 +85,6 @@ type AskUserQuestionState = {
   questions: QuestionRequestQuestion[];
   expiresAtMs: number;
   phase: AskUserQuestionPhase;
-  gatewayCall?: AskUserGatewayCall;
   answer?: Promise<QuestionWaitAnswerResult>;
   claim?: ReturnType<typeof registerPendingAgentQuestion>;
   waiters: Set<() => void>;
@@ -423,6 +422,62 @@ async function waitForPromptDelivery(
   return { error: new Error("ask_user prompt is no longer active") };
 }
 
+/** Shares question ownership and prompt delivery without installing a plaintext answer claim. */
+export function beginAskUserPromptDelivery(params: {
+  toolCallId: string;
+  sessionKey?: string;
+  runId?: string;
+  agentId?: string;
+  questions: QuestionRequestQuestion[];
+  timeoutSeconds: number;
+}) {
+  const questionId = buildAskUserQuestionId(
+    params.toolCallId,
+    params.sessionKey,
+    params.runId,
+    params.agentId,
+  );
+  const sessionKey = askUserSessionKey(params.sessionKey, params.agentId);
+  const reserved = askUserQuestions.get(questionId);
+  const existing = findAskUserQuestionForSession(sessionKey);
+  if ((reserved && reserved.phase.kind !== "reserved") || (existing && existing !== reserved)) {
+    throw new ToolInputError(
+      "a question is already pending for this session; wait for it to resolve before requesting another",
+    );
+  }
+  const state: AskUserQuestionState = reserved ?? {
+    questionId,
+    sessionKey,
+    questions: params.questions,
+    expiresAtMs: 0,
+    phase: { kind: "registering" },
+    waiters: new Set(),
+  };
+  Object.assign(state, { sessionKey, questions: params.questions });
+  state.expiresAtMs = Date.now() + params.timeoutSeconds * 1_000;
+  transitionAskUserQuestion(state, { kind: "registering" });
+  askUserQuestions.set(questionId, state);
+  return {
+    questionId,
+    hasSubscriber: reserved !== undefined,
+    markReady() {
+      if (reserved) {
+        markAskUserPromptReady(questionId, params.questions);
+      } else {
+        transitionAskUserQuestion(state, { kind: "answerable" });
+      }
+    },
+    waitForDelivery(signal?: AbortSignal) {
+      return waitForPromptDelivery(state, signal);
+    },
+    release() {
+      if (askUserQuestions.get(questionId) === state) {
+        releaseAskUserQuestion(questionId);
+      }
+    },
+  };
+}
+
 function readQuestionErrorReason(error: unknown): string | undefined {
   if (!error || typeof error !== "object") {
     return undefined;
@@ -504,10 +559,9 @@ export function createAskUserTool(params: {
           questions: normalized.questions,
           expiresAtMs: Date.now() + timeoutMs,
           phase: { kind: "registering" },
-          gatewayCall,
           waiters: new Set(),
         } satisfies AskUserQuestionState);
-      Object.assign(state, { sessionKey, questions: normalized.questions, gatewayCall });
+      Object.assign(state, { sessionKey, questions: normalized.questions });
       state.expiresAtMs = Date.now() + timeoutMs;
       transitionAskUserQuestion(state, { kind: "registering" });
       askUserQuestions.set(questionId, state);

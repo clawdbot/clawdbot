@@ -278,6 +278,28 @@ openclaw-chat-question-panel {
   text-align: center;
 }
 
+.chat-question-panel__store {
+  display: grid;
+  gap: 6px;
+  padding-left: 10px;
+  border-left: 2px solid color-mix(in srgb, var(--accent) 42%, var(--border));
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.chat-question-panel__store-entry {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.chat-question-panel__store-hosts {
+  display: grid;
+  gap: 5px;
+  margin-top: 2px;
+}
+
 .chat-question-panel__other {
   width: 100%;
   min-width: 0;
