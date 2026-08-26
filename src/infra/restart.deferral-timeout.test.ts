@@ -378,6 +378,68 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
     });
   });
 
+  // A beforeEmit hook still pending at maxWaitMs left attemptingEmission set forever, so
+  // the timeout branch's own forced attemptEmission call was a silent no-op (guarded by
+  // that still-true flag) and the bounded restart deadline was defeated indefinitely.
+  it("supersedes a stuck preparation at the deadline with a fresh one, not a bypassed one", async () => {
+    const hooks: RestartDeferralHooks = { onTimeout: vi.fn() };
+    const emitRestart = vi.fn(() => ({ status: "emitted" as const }));
+    let beforeEmitCalls = 0;
+    // First call never settles (the stuck preparation); a fresh attempt started after
+    // superseding it succeeds. beforeEmit must still run for the forced attempt — the
+    // fix must not treat a caller's safety preflight as having already completed.
+    const beforeEmit = vi.fn(() => {
+      beforeEmitCalls += 1;
+      return beforeEmitCalls === 1 ? new Promise<void>(() => {}) : Promise.resolve();
+    });
+
+    deferGatewayRestartUntilIdle({
+      // Idle from the start so the idle-triggered attempt fires at construction and its
+      // beforeEmit starts preparing (and hangs) well before the deadline below.
+      getPendingCount: () => 0,
+      maxWaitMs: 100,
+      pollMs: 10,
+      hooks,
+      timeoutIntent: { force: true },
+      emitHooks: { beforeEmit, emitRestart },
+    });
+
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(hooks.onTimeout).toHaveBeenCalledOnce();
+    // The forced retry must call beforeEmit again (fresh preparation), not skip it.
+    expect(beforeEmitCalls).toBeGreaterThan(1);
+    expect(emitRestart).toHaveBeenCalledOnce();
+  });
+
+  // If the forced attempt's own emission rejects, the deferral must not go silent forever:
+  // the old path stopped the poll before the forced attempt ran, so nothing retried it.
+  it("keeps retrying the forced restart when its emission rejects after the deadline", async () => {
+    const hooks: RestartDeferralHooks = { onTimeout: vi.fn() };
+    let emitAttempts = 0;
+    const emitRestart = vi.fn(() => {
+      emitAttempts += 1;
+      if (emitAttempts < 3) {
+        throw new Error("independent-root admission rejected");
+      }
+      return { status: "emitted" as const };
+    });
+
+    deferGatewayRestartUntilIdle({
+      getPendingCount: () => 1,
+      maxWaitMs: 100,
+      pollMs: 10,
+      hooks,
+      timeoutIntent: { force: true },
+      emitHooks: { emitRestart },
+    });
+
+    await vi.advanceTimersByTimeAsync(150);
+
+    expect(hooks.onTimeout).toHaveBeenCalledOnce();
+    expect(emitAttempts).toBeGreaterThanOrEqual(3);
+  });
+
   // The idle branch (current <= 0) used to return before the maxWaitMs check below it.
   // A probe that keeps reporting idle while emission keeps failing hit that early return
   // on every single tick, so the bounded budget below it was never reached and the
