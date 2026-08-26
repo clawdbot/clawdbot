@@ -97,7 +97,10 @@ function hasRequiredSummarySections(summary: string): boolean {
 
 type SummaryQualityRetentionPlan = {
   minimumChars: number;
-  render: (maxChars: number) => string | null;
+  /** True when the body omits a strict source identifier that render() restores. */
+  restoresIdentifiers: boolean;
+  /** Null when even the protected facts cannot fit `maxChars`. */
+  render: (maxChars: number) => { text: string; trimmed: boolean } | null;
 };
 
 function parseRequiredSummarySectionContents(summary: string): string[] | null {
@@ -173,16 +176,17 @@ export function createSummaryQualityRetentionPlan(
     optionalContents[index] ? `${heading}\n` : heading,
   );
   const minimumSummary = [...optionalScaffolds, marker, ...protectedBlocks].join("\n\n");
+  const bodyHasIdentifiers =
+    !enforceIdentifiers ||
+    params.identifiers.every((identifier) => summaryIncludesIdentifier(summary, identifier));
 
   return {
     minimumChars: minimumSummary.length,
+    restoresIdentifiers: !bodyHasIdentifiers,
     render(maxChars) {
       const bodyHasRequiredAskContext = !requiredAskContext || summary.includes(requiredAskContext);
-      const bodyHasIdentifiers =
-        !enforceIdentifiers ||
-        params.identifiers.every((identifier) => summaryIncludesIdentifier(summary, identifier));
       if (summary.length <= maxChars && bodyHasRequiredAskContext && bodyHasIdentifiers) {
-        return summary;
+        return { text: summary, trimmed: false };
       }
       if (maxChars < minimumSummary.length) {
         return null;
@@ -208,7 +212,15 @@ export function createSummaryQualityRetentionPlan(
         const content = truncateUtf16Safe(optionalContents[index] ?? "", allocations[index] ?? 0);
         return content ? `${heading}\n${content}` : heading;
       });
-      return [...optionalBlocks, marker, ...protectedBlocks].join("\n\n");
+      // The marker only belongs in an artifact that actually lost body text;
+      // an under-budget rebuild that merely restores audited facts is complete.
+      const trimmed = optionalContents.some(
+        (content, index) => content.length > (allocations[index] ?? 0),
+      );
+      return {
+        text: [...optionalBlocks, ...(trimmed ? [marker] : []), ...protectedBlocks].join("\n\n"),
+        trimmed,
+      };
     },
   };
 }
