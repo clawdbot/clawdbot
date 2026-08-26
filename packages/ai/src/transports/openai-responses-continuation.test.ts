@@ -147,6 +147,142 @@ describe("OpenAI Responses continuation", () => {
     );
   });
 
+  it("continues a tool-calling round despite replay re-sanitizing call_id and re-serializing arguments, and restores the raw call_id on the wire delta", () => {
+    // Real shape: the cached lastResponseItems is the raw provider response
+    // (bare call_id, compact JSON string), but replaying history for the
+    // next round runs it through normalizeOpenAIResponsesToolCallIds
+    // (embedded-agent-helpers) for provider-format compatibility -- a real,
+    // necessary id reshape, not a change to what the model actually said.
+    // Before this fixed, that reshape made every multi-round tool-calling
+    // turn permanently ineligible for continuation (history_changed on
+    // every attempt, confirmed live against a real gateway).
+    const rawCallId = "chatcmpl-tool-20cf1f2fabdd434da069764b4dca72eb";
+    const toolCall = {
+      type: "function_call",
+      id: "fc_1",
+      status: "completed",
+      call_id: rawCallId,
+      name: "exec",
+      arguments: '{"command":"echo hi"}',
+    };
+    const state: ResponsesContinuationState = {
+      lastRequest: { model: "gpt-5.6-luna", store: true, input: [firstUser] as never },
+      lastResponseId: "resp_1",
+      lastResponseItems: [{ type: "reasoning" }, toolCall] as never,
+    };
+    // The exact reshape normalizeOpenAIResponsesToolCallIds would have
+    // produced for rawCallId (verified against
+    // normalizeOpenAIResponsesFunctionCallId directly) -- not a
+    // hand-approximated shape, so the restore-to-raw path under test
+    // actually has to recognize it via the real transform, not a lucky
+    // string match.
+    const reshapedCallId = "call_chatcmpl-tool-20cf1f2fabdd434da069764b4dca72eb_d7218567a7";
+    const replayedToolCall = {
+      ...toolCall,
+      id: "fc_1",
+      call_id: reshapedCallId,
+      arguments: '{"command": "echo hi"}',
+    };
+    const toolResult = {
+      type: "function_call_output",
+      call_id: reshapedCallId,
+      output: "hi\n",
+    };
+    const nextRoundRequest: ResponsesContinuationRequest = {
+      model: "gpt-5.6-luna",
+      store: true,
+      input: [firstUser, { type: "reasoning" }, replayedToolCall, toolResult] as never,
+    };
+
+    const result = resolveResponsesContinuationRequest(state, nextRoundRequest);
+
+    // The wire delta must carry the RAW call_id the provider actually
+    // returned, not the client's replay-local reshape of it -- a server
+    // that reconstructs full history from its own cached copy of the raw
+    // response (e.g. a proxy virtualizing previous_response_id
+    // server-side) has no way to know about the client's reshape, and
+    // pairs function_call_output.call_id against the function_call it
+    // cached verbatim.
+    expect(result).toMatchObject({
+      continuationStatus: "continued",
+      request: {
+        previous_response_id: "resp_1",
+        input: [{ type: "function_call_output", call_id: rawCallId, output: "hi\n" }],
+      },
+    });
+  });
+
+  it("does not tolerate an unrelated function-call id change as the known replay reshape", () => {
+    // A changed call_id that ISN'T the client's own reshape of the cached raw
+    // id (e.g. the model made a genuinely different tool call, or a
+    // corrupted replay) must still be treated as real history drift --
+    // canonicalizeReplayedCallId only forgives ids that reshape TO the same
+    // value as the cached raw one, never an arbitrary difference.
+    const toolCall = {
+      type: "function_call",
+      id: "fc_1",
+      status: "completed",
+      call_id: "call_original_abc",
+      name: "exec",
+      arguments: '{"command":"echo hi"}',
+    };
+    const state: ResponsesContinuationState = {
+      lastRequest: { model: "gpt-5.6-luna", store: true, input: [firstUser] as never },
+      lastResponseId: "resp_1",
+      lastResponseItems: [toolCall] as never,
+    };
+    const replayedToolCall = { ...toolCall, call_id: "call_unrelated_xyz" };
+    const toolResult = {
+      type: "function_call_output",
+      call_id: "call_unrelated_xyz",
+      output: "hi\n",
+    };
+    const nextRoundRequest: ResponsesContinuationRequest = {
+      model: "gpt-5.6-luna",
+      store: true,
+      input: [firstUser, replayedToolCall, toolResult] as never,
+    };
+
+    expect(resolveResponsesContinuationRequest(state, nextRoundRequest).continuationStatus).toBe(
+      "history_changed",
+    );
+  });
+
+  it("does not treat two different unsafe-integer arguments as equal (lossless comparison)", () => {
+    // Number.MAX_SAFE_INTEGER + 1 and + 2 both round to the same double
+    // under plain JSON.parse; a lossless comparator must still tell them
+    // apart so a genuinely changed argument is never mistaken for a
+    // re-serialization whitespace difference.
+    const toolCall = {
+      type: "function_call",
+      id: "fc_1",
+      status: "completed",
+      call_id: "call_original_abc",
+      name: "exec",
+      arguments: '{"n":9007199254740993}',
+    };
+    const state: ResponsesContinuationState = {
+      lastRequest: { model: "gpt-5.6-luna", store: true, input: [firstUser] as never },
+      lastResponseId: "resp_1",
+      lastResponseItems: [toolCall] as never,
+    };
+    const replayedToolCall = { ...toolCall, arguments: '{"n": 9007199254740994}' };
+    const toolResult = {
+      type: "function_call_output",
+      call_id: "call_original_abc",
+      output: "hi\n",
+    };
+    const nextRoundRequest: ResponsesContinuationRequest = {
+      model: "gpt-5.6-luna",
+      store: true,
+      input: [firstUser, replayedToolCall, toolResult] as never,
+    };
+
+    expect(resolveResponsesContinuationRequest(state, nextRoundRequest).continuationStatus).toBe(
+      "history_changed",
+    );
+  });
+
   it("ignores turn correlation headers but isolates explicit authorization", () => {
     const first = claim({ turn: "1" });
     first?.commit(continuationState().lastRequest, {
