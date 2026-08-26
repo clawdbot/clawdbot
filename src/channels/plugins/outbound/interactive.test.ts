@@ -790,7 +790,7 @@ describe("presentation capability limits", () => {
       expect(block.type).toBe("text");
       if (block.type === "text") {
         expect(length(block.text)).toBeLessThanOrEqual(6);
-        expect(block.text.isWellFormed()).toBe(true);
+        expect(Buffer.from(block.text, "utf8").toString("utf8")).toBe(block.text);
       }
     }
     expect(renderMessagePresentationFallbackText({ presentation })).toBe(
