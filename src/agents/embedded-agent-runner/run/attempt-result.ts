@@ -3,6 +3,7 @@
  */
 import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
+import { isTransientNetworkError } from "../../../infra/retryable-network-errors.js";
 import {
   buildAgentHookContextChannelFields,
   buildAgentHookContextIdentityFields,
@@ -117,8 +118,13 @@ function resolveSettledTurnFinalizationContext(params: {
   messagesSnapshot: EmbeddedRunAttemptResult["messagesSnapshot"];
   terminal: EmbeddedRunAttemptResult["terminal"];
 }): EmbeddedRunAttemptResult["settledTurnFinalizationContext"] {
-  // A later provider failure does not make an observed compaction/tool timeout safe to retry.
-  if (params.terminal.kind !== "failed" || params.terminal.timeoutObservation) {
+  // Only a transient final provider call can safely recover an already settled tool turn.
+  if (
+    params.terminal.kind !== "failed" ||
+    params.terminal.source !== "prompt" ||
+    params.terminal.timeoutObservation ||
+    !isTransientNetworkError(params.terminal.error)
+  ) {
     return undefined;
   }
   // A turn that already produced visible text has nothing to finalize, and a
