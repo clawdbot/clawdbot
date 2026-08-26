@@ -2891,6 +2891,29 @@ function buildLiveGatewayAuthProfileStore(params: {
   };
 }
 
+function materializeGatewayLiveDiscoveryAuth(params: {
+  env: NodeJS.ProcessEnv;
+  providerList: readonly string[] | undefined;
+  store: AuthProfileStore;
+}): AuthProfileStore {
+  const includesOpenAi =
+    !params.providerList ||
+    params.providerList.some((provider) => normalizeProviderId(provider) === "openai");
+  const apiKey = includesOpenAi ? params.env.OPENAI_API_KEY?.trim() : undefined;
+  if (!apiKey) {
+    return params.store;
+  }
+  return buildLiveGatewayAuthProfileStore({
+    store: params.store,
+    candidates: [
+      {
+        model: createGatewayLiveTestModel("openai", "gpt-5.6-sol"),
+        auth: { apiKey, mode: "api-key", source: "env: OPENAI_API_KEY" },
+      },
+    ],
+  });
+}
+
 function createGatewayLiveModelSession(params: {
   agentId: string;
   credentialAttempt: number;
@@ -3052,6 +3075,36 @@ describe("buildLiveGatewayAuthProfileStore", () => {
     });
     expect(isolated.order?.openai).toEqual(["openai:live"]);
     expect(store.profiles).toEqual({});
+  });
+
+  it("materializes the OpenAI live secret before profile-first discovery", () => {
+    const store: AuthProfileStore = { version: 1, profiles: {} };
+
+    const prepared = materializeGatewayLiveDiscoveryAuth({
+      env: { OPENAI_API_KEY: "prepared-openai-test-key" },
+      providerList: ["openai"],
+      store,
+    });
+
+    expect(prepared.profiles["openai:live"]).toEqual({
+      type: "api_key",
+      provider: "openai",
+      key: "prepared-openai-test-key",
+    });
+    expect(prepared.order?.openai).toEqual(["openai:live"]);
+    expect(store.profiles).toEqual({});
+  });
+
+  it("does not materialize OpenAI auth for another provider's focused sweep", () => {
+    const store: AuthProfileStore = { version: 1, profiles: {} };
+
+    expect(
+      materializeGatewayLiveDiscoveryAuth({
+        env: { OPENAI_API_KEY: "prepared-openai-test-key" },
+        providerList: ["anthropic"],
+        store,
+      }),
+    ).toBe(store);
   });
 
   it("keeps an env-first provider on its prepared direct credential", () => {
@@ -5846,6 +5899,15 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           authProfileStore = authBacked.authProfileStore;
           modelRegistry = authBacked.modelRegistry;
           all = authBacked.all;
+        }
+        const discoveryAuthProfileStore = materializeGatewayLiveDiscoveryAuth({
+          env: process.env,
+          providerList,
+          store: authProfileStore,
+        });
+        if (discoveryAuthProfileStore !== authProfileStore) {
+          authProfileStore = discoveryAuthProfileStore;
+          saveAuthProfileStore(authProfileStore, agentDir);
         }
         const prioritizedRefs = resolvePrioritizedGatewayLiveModelRefs({
           explicitRefs,
