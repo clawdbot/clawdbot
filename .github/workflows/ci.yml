@@ -3582,12 +3582,8 @@ jobs:
     needs: [preflight]
     if: needs.preflight.outputs.run_macos_swift == 'true'
     runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'macos-26' || (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'macos-26' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
-    # The timeout tracks every path runs-on can route to a hosted runner
-    # (breaker fallback, dispatches, retries, and pull requests whose author
-    # association keeps them off Blacksmith), not just trigger type, so hosted
-    # compiles get the hosted budget instead of the tighter Blacksmith one.
-    # Hosted runs may also still be finalizing large Swift caches after every
-    # test passes; that post-job work stays non-blocking.
+    # Hosted paths include untrusted first-attempt PRs, so their timeout must
+    # follow the runner rather than inheriting Blacksmith's tighter budget.
     timeout-minutes: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || github.event_name == 'workflow_dispatch' || github.run_attempt > 1 || github.repository != 'openclaw/openclaw' || (github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association))) && 30 || 20 }}
     env:
       HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}

@@ -3516,6 +3516,27 @@ NODE
         jobName,
       ).toBe(hostedTimeout);
     }
+
+    const macosSwift = workflow.jobs["macos-swift"];
+    for (const [authorAssociation, runner, timeout] of [
+      ["NONE", "macos-26", 30],
+      ["FIRST_TIME_CONTRIBUTOR", "macos-26", 30],
+      ["CONTRIBUTOR", "blacksmith-12vcpu-macos-26", 20],
+    ] as const) {
+      const forkContext = {
+        ...canonicalPullRequest,
+        authorAssociation,
+        headRepository: "contributor/openclaw",
+      };
+      expect(
+        evaluateWorkflowExpression(macosSwift["runs-on"], forkContext),
+        authorAssociation,
+      ).toBe(runner);
+      expect(
+        evaluateWorkflowExpression(macosSwift["timeout-minutes"], forkContext),
+        authorAssociation,
+      ).toBe(timeout);
+    }
   });
 
   it("scans only the pull request commit range for leaked credentials", () => {
@@ -5799,124 +5820,6 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
     expect(buildStep.run.indexOf("swift package --package-path apps/macos reset")).toBeGreaterThan(
       buildStep.run.indexOf("swift build failed"),
     );
-  });
-
-  it("budgets macOS Swift time by runner, so every hosted path gets the hosted timeout", () => {
-    const workflow = readCiWorkflow();
-    const macosSwift = workflow.jobs["macos-swift"];
-    const runsOnExpression = macosSwift["runs-on"];
-    const timeoutExpression = macosSwift["timeout-minutes"];
-
-    // Both expressions must route on the same set of conditions: whichever
-    // path sends runs-on to hosted macos-26 has to send timeout-minutes to
-    // the hosted budget too, or that path keeps the tighter Blacksmith
-    // budget on a slower runner and gets cancelled mid-compile.
-    const scenarios = [
-      {
-        name: "same-repo pull request, first attempt, default backend",
-        context: {
-          eventName: "pull_request",
-          headRepository: "openclaw/openclaw",
-          repository: "openclaw/openclaw",
-          runAttempt: 1,
-        },
-        hosted: false,
-      },
-      {
-        name: "same-repo pull request, breaker routed to GitHub-hosted",
-        context: {
-          eventName: "pull_request",
-          headRepository: "openclaw/openclaw",
-          repository: "openclaw/openclaw",
-          runnerBackend: "github",
-          runAttempt: 1,
-        },
-        hosted: true,
-      },
-      {
-        name: "same-repo pull request retry",
-        context: {
-          eventName: "pull_request",
-          headRepository: "openclaw/openclaw",
-          repository: "openclaw/openclaw",
-          runAttempt: 2,
-        },
-        hosted: true,
-      },
-      {
-        // An untrusted fork cannot spend Blacksmith capacity, so runs-on sends it
-        // to a hosted runner; the budget has to follow it there.
-        name: "untrusted fork pull request, default backend",
-        context: {
-          authorAssociation: "NONE",
-          eventName: "pull_request",
-          headRepository: "contributor/openclaw",
-          repository: "openclaw/openclaw",
-          runAttempt: 1,
-        },
-        hosted: true,
-      },
-      {
-        // A returning contributor's fork still routes to Blacksmith, so it keeps
-        // the tighter budget: the timeout tracks the runner, not fork-ness.
-        name: "returning-contributor fork pull request, default backend",
-        context: {
-          authorAssociation: "CONTRIBUTOR",
-          eventName: "pull_request",
-          headRepository: "contributor/openclaw",
-          repository: "openclaw/openclaw",
-          runAttempt: 1,
-        },
-        hosted: false,
-      },
-      {
-        name: "fork pull request, breaker routed to GitHub-hosted",
-        context: {
-          authorAssociation: "NONE",
-          eventName: "pull_request",
-          headRepository: "contributor/openclaw",
-          repository: "openclaw/openclaw",
-          runnerBackend: "github",
-          runAttempt: 1,
-        },
-        hosted: true,
-      },
-      {
-        name: "manual workflow dispatch",
-        context: {
-          eventName: "workflow_dispatch",
-          repository: "openclaw/openclaw",
-          runAttempt: 1,
-        },
-        hosted: true,
-      },
-      {
-        name: "canonical main push, default backend",
-        context: {
-          eventName: "push",
-          repository: "openclaw/openclaw",
-          runAttempt: 1,
-        },
-        hosted: false,
-      },
-      {
-        name: "canonical main push, breaker routed to GitHub-hosted",
-        context: {
-          eventName: "push",
-          repository: "openclaw/openclaw",
-          runnerBackend: "github",
-          runAttempt: 1,
-        },
-        hosted: true,
-      },
-    ] as const;
-
-    for (const { context, hosted, name } of scenarios) {
-      expect(evaluateWorkflowExpression(runsOnExpression, context), name).toBe(
-        hosted ? "macos-26" : "blacksmith-12vcpu-macos-26",
-      );
-      expect(evaluateWorkflowExpression(timeoutExpression, context), name).toBe(hosted ? 30 : 20);
-    }
   });
 
   it("serializes macOS Swift tests only on hosted dispatches and retries", () => {
