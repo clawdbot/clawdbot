@@ -24,11 +24,6 @@ const suite = createControlUiE2eSuite({
 const TOAST_PROOF_DIR = path.resolve(".artifacts/control-ui-e2e/toast-layering");
 const railProofDir = process.env.OPENCLAW_UI_RAIL_PROOF_DIR?.trim();
 const limitedScopes = ["operator.read", "operator.write"];
-const UPDATE_AVAILABLE = {
-  channel: "stable",
-  currentVersion: "1.0.0",
-  latestVersion: "2.0.0",
-} as const;
 const TOAST_SCENARIO: ControlUiMockGatewayScenario = {
   featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
   methodResponses: {
@@ -268,13 +263,7 @@ suite.define(() => {
   });
 
   it("hosts navigation, search, sessions, and history in web titlebar chrome", async () => {
-    const page = await openPage({
-      scenario: {
-        operatorScopes: ["operator.admin", "operator.read"],
-        updateAvailable: UPDATE_AVAILABLE,
-      },
-      webChrome: true,
-    });
+    const page = await openPage({ webChrome: true });
     const toolbar = page.locator(".macos-titlebar-controls");
     await expect.poll(() => toolbar.isVisible()).toBe(true);
     await expect.poll(() => page.locator(".shell-chrome-controls").isVisible()).toBe(false);
@@ -293,7 +282,7 @@ suite.define(() => {
       .poll(() => page.locator(".shell").getAttribute("class"))
       .toContain("shell--nav-collapsed");
     await expect.poll(() => newThread.isVisible()).toBe(true);
-    await page.locator(".sidebar-attention--floating .sidebar-footer-update").waitFor();
+    await page.locator(".sidebar-attention--floating .sidebar-issues-button").waitFor();
     const toolbarBox = await toolbar.boundingBox();
     const attentionBox = await page.locator(".sidebar-attention--floating").boundingBox();
     expect(toolbarBox).not.toBeNull();

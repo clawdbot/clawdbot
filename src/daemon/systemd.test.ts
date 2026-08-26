@@ -2389,7 +2389,7 @@ describe("stageSystemdService", () => {
         port: 18_789,
         runtime: "node",
         platform: "linux",
-        nodePath: process.execPath,
+        runtimePath: process.execPath,
         wrapperPath,
         existingEnvironment: command?.environment,
         existingEnvironmentValueSources: command?.environmentValueSources,

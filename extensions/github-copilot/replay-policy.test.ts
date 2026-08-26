@@ -87,11 +87,22 @@ describe("sanitizeGithubCopilotReplayHistory", () => {
     ]);
   });
 
-  it("passes history through on OpenAI-compatible transports", () => {
+  it("strips replayed thinking on the OpenAI Responses transport", () => {
     expect(
       sanitizeGithubCopilotReplayHistory({
         provider: "github-copilot",
         modelApi: "openai-responses",
+        modelId: "gpt-5.4",
+        messages,
+      } as never),
+    ).toEqual([{ role: "assistant", content: [{ type: "text", text: "visible" }] }]);
+  });
+
+  it("passes history through on the OpenAI Completions transport", () => {
+    expect(
+      sanitizeGithubCopilotReplayHistory({
+        provider: "github-copilot",
+        modelApi: "openai-completions",
         modelId: "gpt-5.4",
         messages,
       } as never),

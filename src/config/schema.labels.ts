@@ -21,6 +21,7 @@ export const FIELD_LABELS: Record<string, string> = {
   secrets: "Secrets",
   "secrets.egressProxy": "Secret Egress Proxy",
   "secrets.egressProxy.enabled": "Secret Egress Proxy Enabled",
+  "secrets.egressProxy.allowedHosts": "Secret Egress Proxy Allowed Hosts",
   "secrets.egressProxy.bypassHosts": "Secret Egress Proxy Bypass Hosts",
   wizard: "Setup Preferences",
   "wizard.accessMode": "Setup Discovery Access",

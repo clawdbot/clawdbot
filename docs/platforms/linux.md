@@ -8,9 +8,10 @@ read_when:
 title: "Linux app"
 ---
 
-The Gateway is fully supported on Linux and requires Node. Bun can still be used
-as a dependency installer or package-script runner, but it cannot run OpenClaw
-because it does not provide `node:sqlite`.
+The Gateway is fully supported on Linux. Node is the primary, default, and
+recommended runtime; Bun 1.4+ builds with WAL-reset-safe `node:sqlite` can run
+OpenClaw as an explicit opt-in. Use `pnpm` rather than Bun for dependency
+installation.
 
 ## Desktop companion
 

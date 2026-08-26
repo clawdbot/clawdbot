@@ -17,10 +17,8 @@ import android.provider.OpenableColumns
 import android.util.Base64
 import android.util.LruCache
 import androidx.core.graphics.scale
-import androidx.exifinterface.media.ExifInterface
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
-import java.io.InputStream
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -251,7 +249,7 @@ internal fun decodeImageBytes(
       },
     ) ?: return null
 
-  val oriented = JpegSizeLimiter.normalizeOrientation(bitmap, imageOrientation { ByteArrayInputStream(bytes) })
+  val oriented = JpegSizeLimiter.normalizeOrientation(bitmap, JpegSizeLimiter.readOrientation { ByteArrayInputStream(bytes) })
   decodedBitmapCache.put(cacheKey, oriented)
   return oriented
 }
@@ -306,7 +304,7 @@ private fun decodeScaledBitmap(
       )
     } ?: return null
 
-  val oriented = JpegSizeLimiter.normalizeOrientation(decoded, imageOrientation { resolver.openInputStream(uri) })
+  val oriented = JpegSizeLimiter.normalizeOrientation(decoded, JpegSizeLimiter.readOrientation { resolver.openInputStream(uri) })
   val longestEdge = max(oriented.width, oriented.height)
   if (longestEdge <= maxDimension) return oriented
 
@@ -319,12 +317,3 @@ private fun decodeScaledBitmap(
   }
   return scaled
 }
-
-private fun imageOrientation(open: () -> InputStream?): Int =
-  try {
-    open()?.use { stream ->
-      ExifInterface(stream).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
-    } ?: ExifInterface.ORIENTATION_NORMAL
-  } catch (_: Exception) {
-    ExifInterface.ORIENTATION_NORMAL
-  }

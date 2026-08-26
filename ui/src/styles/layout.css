@@ -3906,6 +3906,16 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   text-decoration: none;
 }
 
+.sidebar-footer-build__text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-footer-build__update {
+  color: var(--inbox-attention);
+}
+
 /* Dev-checkout branch strip: only rendered when the gateway runs from a git
    checkout off main. Sits on its own row above the icon bar so the full branch
    name stays readable without crowding the footer controls. */

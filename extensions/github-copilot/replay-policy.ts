@@ -66,7 +66,7 @@ export function buildGithubCopilotReplayPolicy(
 }
 
 export function sanitizeGithubCopilotReplayHistory(ctx: ProviderSanitizeReplayHistoryContext) {
-  return isCopilotAnthropicTransport(ctx.modelApi)
+  return ctx.modelApi === "openai-responses" || isCopilotAnthropicTransport(ctx.modelApi)
     ? stripCopilotAssistantThinkingMessages(ctx.messages)
     : ctx.messages;
 }

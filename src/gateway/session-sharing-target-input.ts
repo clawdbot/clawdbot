@@ -1,6 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions.js";
-import { listSessionEntriesCore } from "../config/sessions/session-accessor.js";
+import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
@@ -13,7 +13,7 @@ export function resolveSessionGroupMutationTargetsByName(
 ): Map<string, SessionMutationTarget[]> {
   const targetsByName = new Map<string, SessionMutationTarget[]>();
   for (const storeTarget of resolveAllAgentSessionStoreTargetsSync(cfg)) {
-    for (const { sessionKey, entry } of listSessionEntriesCore({
+    for (const { sessionKey, entry } of listSessionEntriesReadOnly({
       agentId: storeTarget.agentId,
       storePath: storeTarget.storePath,
     })) {
