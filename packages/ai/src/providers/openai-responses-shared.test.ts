@@ -963,6 +963,21 @@ describe("processResponsesStream", () => {
       status: 500,
       expected: false,
     },
+    {
+      message: "Could not decrypt the provided encrypted_content.",
+      status: 400,
+      expected: true,
+    },
+    {
+      message: "Could not decrypt the provided encrypted_content.",
+      status: 500,
+      expected: false,
+    },
+    {
+      message: "Could not decrypt encrypted_content metadata for the OAuth sidecar.",
+      status: 400,
+      expected: false,
+    },
     { message: "400 The certificate could not be verified.", status: undefined, expected: false },
     { message: "400 The upload could not be decrypted.", status: undefined, expected: false },
   ])(

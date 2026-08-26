@@ -34,10 +34,10 @@ export function isInvalidEncryptedContentError(error: unknown): boolean {
     message.includes("thinking_signature_invalid") ||
     ((record.status === 400 ||
       (record.status == null && /(?:^|[\s(])400(?:[\s):]|$)/.test(message))) &&
-      (message.includes("encrypted content") || message.includes("encrypted_content")) &&
-      (message.includes("could not be verified") ||
-        message.includes("could not be decrypted") ||
-        message.includes("could not decrypt")))
+      (message.includes("could not decrypt the provided encrypted_content") ||
+        (message.includes("encrypted content") &&
+          (message.includes("could not be verified") ||
+            message.includes("could not be decrypted or parsed")))))
   );
 }
 
