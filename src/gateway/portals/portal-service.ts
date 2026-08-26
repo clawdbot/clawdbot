@@ -18,8 +18,6 @@ import {
 
 const PORTAL_PORT_ALLOCATION_ATTEMPTS = 10;
 
-export type { PortalTarget } from "./portal-http-proxy.js";
-
 type PortalEntry = {
   id: string;
   title: string;

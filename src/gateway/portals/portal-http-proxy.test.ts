@@ -9,11 +9,8 @@ import net, { type AddressInfo } from "node:net";
 import { duplexPair, type Duplex } from "node:stream";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { type RawData, WebSocket, WebSocketServer } from "ws";
-import {
-  createGatewayPortalService,
-  type GatewayPortalService,
-  type PortalTarget,
-} from "./portal-service.js";
+import type { PortalTarget } from "./portal-http-proxy.js";
+import { createGatewayPortalService, type GatewayPortalService } from "./portal-service.js";
 
 type HttpResult = {
   status: number;
