@@ -1585,6 +1585,14 @@ allocation. An OS hard limit can terminate Codex rather than backpressure it.
 `plugins.entries.codex.config.discovery.timeoutMs` or disable discovery.
 See [Codex harness reference](/plugins/codex-harness-reference#model-discovery).
 
+**Codex plugin state has reached its row limit:** run `openclaw doctor` to
+check for bindings left behind by deleted or expired OpenClaw sessions. Stop
+the Gateway, then run `openclaw doctor --fix` to remove proven orphaned session
+bindings after session repair. Doctor preserves supervised bindings, active
+leases, ambiguous ownership, and bindings whose session store cannot be read.
+This cleanup does not delete native Codex thread history or managed-thread
+advisory records.
+
 **WebSocket transport fails immediately:** check `appServer.url`,
 `authToken`, headers, and that the remote app-server speaks the same Codex
 app-server protocol version. Codex WebSocket transport remains experimental

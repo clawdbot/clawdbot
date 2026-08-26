@@ -50,6 +50,7 @@ import {
   readOpenClawAgentDatabaseRegistryToken,
   resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
+  withAgentDatabaseMaintenanceLease,
 } from "./openclaw-agent-db.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import {
@@ -3089,6 +3090,88 @@ describe("openclaw agent database", () => {
       releaseOpenClawAgentDatabaseLease(leaseId, { env });
       deletion.rollback();
     }
+  });
+
+  it("closes cached agent databases and fences new writers during maintenance", async () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const database = openOpenClawAgentDatabase({ agentId: "worker-1", env });
+    let assertRetainedOwnership: (() => void) | undefined;
+
+    await withAgentDatabaseMaintenanceLease({ env }, async (maintenance) => {
+      assertRetainedOwnership = () => maintenance.assertOwned();
+      expect(database.db.isOpen).toBe(false);
+      expect(() => openOpenClawAgentDatabase({ agentId: "worker-1", env })).toThrow(
+        "Agent database maintenance is in progress",
+      );
+      expect(() =>
+        claimOpenClawAgentDatabaseLease({
+          agentId: "worker-2",
+          path: path.join(stateDir, "worker-2.sqlite"),
+          env,
+        }),
+      ).toThrow("Agent database maintenance is in progress");
+      expect(() =>
+        runOpenClawStateWriteTransaction(({ db }) => maintenance.assertOwnedInTransaction(db), {
+          env,
+        }),
+      ).not.toThrow();
+    });
+
+    expect(assertRetainedOwnership).toBeDefined();
+    expect(() => assertRetainedOwnership?.()).toThrow("was lost");
+    expect(openOpenClawAgentDatabase({ agentId: "worker-1", env }).db.isOpen).toBe(true);
+  });
+
+  it("refuses maintenance while another owner still holds an agent database lease", async () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const leaseId = claimOpenClawAgentDatabaseLease({
+      agentId: "worker-1",
+      path: path.join(stateDir, "worker-1.sqlite"),
+      env,
+    });
+    const repair = vi.fn(async () => undefined);
+
+    try {
+      await expect(withAgentDatabaseMaintenanceLease({ env }, repair)).rejects.toThrow(
+        "stop that process and rerun openclaw doctor --fix",
+      );
+      expect(repair).not.toHaveBeenCalled();
+      expect(() => assertNoOpenClawAgentDatabaseLeases("worker-1", { env })).toThrow(
+        "database is still open",
+      );
+    } finally {
+      releaseOpenClawAgentDatabaseLease(leaseId, { env });
+    }
+
+    await expect(withAgentDatabaseMaintenanceLease({ env }, repair)).resolves.toBeUndefined();
+    expect(repair).toHaveBeenCalledOnce();
+  });
+
+  it("removes dead agent database owners before beginning fenced maintenance", async () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const leaseId = claimOpenClawAgentDatabaseLease({
+      agentId: "worker-1",
+      path: path.join(stateDir, "worker-1.sqlite"),
+      env,
+    });
+    runOpenClawStateWriteTransaction(
+      ({ db }) =>
+        db
+          .prepare("UPDATE agent_database_leases SET owner_pid = -1 WHERE lease_id = ?")
+          .run(leaseId),
+      { env },
+    );
+
+    await withAgentDatabaseMaintenanceLease({ env }, async () => {
+      expect(
+        openOpenClawStateDatabase({ env })
+          .db.prepare("SELECT lease_id FROM agent_database_leases WHERE lease_id = ?")
+          .get(leaseId),
+      ).toBeUndefined();
+    });
   });
 
   it("serializes concurrent ownership claims for one unowned database", async () => {

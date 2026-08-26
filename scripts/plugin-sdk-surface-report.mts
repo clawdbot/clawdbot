@@ -317,7 +317,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -5: approval display sanitizers moved to a non-public leaf module
       //     (exec-approval-text-sanitize) to break the exec-approvals cycle.
       // +3: typed ask_user option-index contract and two bounded owner-order resolvers.
-      4341,
+      // +2: exact-session deletion parameters and synchronous companion mutation contract.
+      4343,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

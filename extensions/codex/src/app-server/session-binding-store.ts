@@ -18,7 +18,7 @@ export type { StoredCodexAppServerBinding } from "./session-binding.js";
 export function createLazyCodexAppServerBindingStore(
   state: Pick<
     PluginStateSyncKeyedStore<StoredCodexAppServerBinding>,
-    "entries" | "lookup" | "update"
+    "deleteIf" | "entries" | "lookup" | "registerIfAbsent" | "update"
   >,
   managedThreadState?: Pick<
     PluginStateSyncKeyedStore<StoredCodexManagedThread>,
@@ -45,6 +45,8 @@ export function createLazyCodexAppServerBindingStore(
       (await store()).adoptSessionGeneration(identity, previousSessionId),
     resetSessionGeneration: async (identity) => (await store()).resetSessionGeneration(identity),
     retireSessionGeneration: async (identity) => (await store()).retireSessionGeneration(identity),
+    withSessionDeletion: async (identity, assertCurrent, run) =>
+      (await store()).withSessionDeletion(identity, assertCurrent, run),
     withThreadArchiveFence: async (run) => (await store()).withThreadArchiveFence(run),
     withLease: async (identity, run) => (await store()).withLease(identity, run),
   };
