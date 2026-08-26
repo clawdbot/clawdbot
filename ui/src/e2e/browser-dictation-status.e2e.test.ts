@@ -70,11 +70,11 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
 
       await page.getByRole("button", { name: "Start voice input" }).click();
-      await expect.poll(() => page.locator('[data-status="unavailable"]').count()).toBe(2);
-      await expect.poll(() => page.getByRole("button", { name: "Talk settings" }).count()).toBe(1);
+      const unavailable = page.locator('[data-status="unavailable"]');
+      await expect.poll(() => unavailable.count()).toBe(2);
       await expect
-        .poll(() => page.getByRole("button", { name: "Transcription setup" }).count())
-        .toBe(1);
+        .poll(() => unavailable.getByRole("button", { name: "Configure" }).count())
+        .toBe(2);
       await captureComposerProof(page, "microphone-picker-capability-gating.png");
       await page.screenshot({
         animations: "disabled",
@@ -131,14 +131,16 @@ suite.define(() => {
 
         const composer = page.locator(".agent-chat__input--dictating");
         const phase = composer.locator(".agent-chat__dictation-phase");
-        const discard = composer.getByRole("button", { name: "Cancel and discard dictation" });
-        const insert = composer.getByRole("button", { name: "Stop and insert dictation" });
+        const stop = composer.getByRole("button", { name: "Stop and keep text" });
+        const send = composer.getByRole("button", { name: "Send", exact: true });
         await expect.poll(() => phase.isVisible()).toBe(true);
-        await expect.poll(() => phase.textContent()).toBe("Listening…");
+        await expect
+          .poll(() => phase.textContent().then((text) => text?.trim()))
+          .toBe("Listening…");
         expect(await composer.locator(".agent-chat__dictation-wave").count()).toBe(0);
         expect(await composer.locator(".agent-chat__dictation-elapsed").count()).toBe(0);
-        await expect.poll(() => discard.isVisible()).toBe(true);
-        await expect.poll(() => insert.isVisible()).toBe(true);
+        await expect.poll(() => stop.isVisible()).toBe(true);
+        await expect.poll(() => send.isVisible()).toBe(true);
         await captureComposerProof(page, "dictation-status-actions.png");
         await page.screenshot({
           animations: "disabled",
@@ -149,7 +151,7 @@ suite.define(() => {
         if (!composerBox) {
           throw new Error("expected active dictation composer layout box");
         }
-        for (const control of [phase, discard, insert]) {
+        for (const control of [phase, stop, send]) {
           const box = await control.boundingBox();
           expect(box).not.toBeNull();
           if (!box) {
