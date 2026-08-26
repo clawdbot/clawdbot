@@ -2715,7 +2715,7 @@ describe("package acceptance workflow", () => {
     expect(npmTelegramWorkflow).toContain(
       'expected_registry_name="docker-e2e-prepublish-plugin-registry-${PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ID}-${PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ATTEMPT}"',
     );
-    expect(npmTelegramWorkflow).toContain(
+    expect(npmTelegramWorkflow).not.toContain(
       "Prerelease plugin registry and package artifacts must come from the same workflow run attempt.",
     );
     expect(npmTelegramWorkflow).toContain('verify-upload "Prerelease plugin registry"');
@@ -5864,9 +5864,9 @@ describe("package artifact reuse", () => {
     const registryTuple = {
       PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_DIGEST: "d".repeat(64),
       PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_ID: "789",
-      PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_NAME: "docker-e2e-prepublish-plugin-registry-456-2",
-      PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ATTEMPT: "2",
-      PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ID: "456",
+      PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_NAME: "docker-e2e-prepublish-plugin-registry-123-1",
+      PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ATTEMPT: "1",
+      PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ID: "123",
       PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256: "e".repeat(64),
     };
 
@@ -5890,17 +5890,6 @@ describe("package artifact reuse", () => {
     expect(wrongName.status).toBe(1);
     expect(wrongName.stderr).toContain(
       "Prerelease plugin registry artifact name does not match its producer run.",
-    );
-
-    const wrongRun = runNpmTelegramInputValidation({
-      ...packageTuple,
-      ...registryTuple,
-      PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_NAME: "docker-e2e-prepublish-plugin-registry-999-2",
-      PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ID: "999",
-    });
-    expect(wrongRun.status).toBe(1);
-    expect(wrongRun.stderr).toContain(
-      "Prerelease plugin registry and package artifacts must come from the same workflow run attempt.",
     );
   });
 
