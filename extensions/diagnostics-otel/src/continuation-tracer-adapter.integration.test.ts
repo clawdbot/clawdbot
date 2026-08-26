@@ -39,7 +39,6 @@ import {
 } from "../../../src/auto-reply/continuation/work-dispatch.js";
 import { decodeWorkState } from "../../../src/auto-reply/continuation/work-flow-state.js";
 import { consumePendingWork } from "../../../src/auto-reply/continuation/work-store.js";
-import type { DiagnosticTracePropagationBridge } from "../../../src/infra/diagnostic-trace-propagation.js";
 import { resetSystemEventsForTest } from "../../../src/infra/system-events.js";
 import { listTaskFlowsForOwnerKey } from "../../../src/tasks/task-flow-runtime-internal.js";
 import { resetTaskFlowRegistryForTests } from "../../../src/tasks/task-runtime.test-helpers.js";
@@ -254,21 +253,18 @@ function installProductionDiagnostics(provider: BasicTracerProvider) {
     recordSecurityEvent: undefined,
   });
   const unsubscribe = onTrustedInternalDiagnosticEvent(handler);
-  const tracePropagationBridge: DiagnosticTracePropagationBridge<
-    DiagnosticEventPayload,
-    DiagnosticEventMetadata
-  > = {
-    shouldPrepareEvent(event) {
+  const tracePropagationBridge = {
+    shouldPrepareEvent(event: DiagnosticEventPayload) {
       return event.type === "model.call.started" || event.type === "tool.execution.started";
     },
-    prepareEvent(event, metadata) {
+    prepareEvent(event: DiagnosticEventPayload, metadata: DiagnosticEventMetadata) {
       if (event.type === "model.call.started") {
         recorders.recordModelCallStarted(event, metadata);
       } else if (event.type === "tool.execution.started") {
         recorders.recordToolExecutionStarted(event, metadata);
       }
     },
-    resolveTraceContext(traceContext) {
+    resolveTraceContext(traceContext: DiagnosticTraceContext) {
       const spanContext = traces.exportedSpanContextForDiagnosticTraceContext(traceContext);
       return spanContext
         ? {
