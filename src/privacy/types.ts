@@ -88,41 +88,9 @@ export type PrivacyConfig = {
     warnOnBlock?: boolean;
   };
 
-  /**
-   * Controls encryption of session transcripts stored on disk.
-   *
-   * Session JSONL files contain the full conversation history.  Encryption
-   * uses AES-256-GCM with a key derived from the provided passphrase.
-   *
-   * NOTE: This section is a programmatic API only — not exposed in
-   * `openclaw.yml` config validation. Use the `encryptSessionFile` /
-   * `encryptSessionDirectory` functions directly. Config-driven encryption
-   * will ship with a future `openclaw session encrypt` command.
-   *
-   * NOTE: The inference provider still receives plaintext — this only
-   * protects data *at rest* on this machine.
-   */
-  atRest?: {
-    /**
-     * Enable at-rest encryption of session transcript files.
-     * Default: false.
-     */
-    enabled?: boolean;
-
-    /**
-     * PBKDF2 passphrase used to derive the AES-256-GCM encryption key.
-     * Must be set when `enabled = true`.
-     * ⚠ Use an env-var reference: `${OPENCLAW_ENCRYPTION_KEY}` rather than a
-     * literal value to keep the key out of the config file.
-     */
-    passphrase?: string;
-
-    /**
-     * Number of PBKDF2 iterations (higher = slower but stronger).
-     * Default: 210_000 (OWASP recommended minimum for SHA-256 PBKDF2).
-     */
-    pbkdf2Iterations?: number;
-  };
+  // At-rest encryption is planned but not yet implemented. Session
+  // transcripts now use SQLite storage, so the previous JSONL encryption
+  // module was removed. A future implementation will target the SQLite store.
 
   /**
    * Controls how much host-identifying information appears in the system

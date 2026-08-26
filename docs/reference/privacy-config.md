@@ -6,44 +6,54 @@ your machine in LLM inference payloads. All privacy features are
 
 ## Quick start
 
-Add to your `openclaw.yml`:
+Add to your `openclaw.json`:
 
-```yaml
-privacy:
-  enabled: true
+```json5
+{
+  privacy: {
+    enabled: true,
+  },
+}
 ```
 
-This enables PII redaction in system prompts and tool outputs. User
-message redaction is off by default to avoid corrupting developer input.
+This enables PII redaction in system prompts. User message redaction
+is off by default to avoid corrupting developer input.
 
 ## Configuration reference
 
-```yaml
-privacy:
-  enabled: true # Master switch (default: false)
+```json5
+{
+  privacy: {
+    enabled: true, // Master switch (default: false)
 
-  pii:
-    enabled: true # Defaults to true when privacy.enabled=true
-    systemPrompt: true # Redact PII in system prompt context files
-    userMessages: false # Redact PII in user input (off by default)
-    categories:
-      email: { redact: true, placeholder: "[EMAIL]" }
-      phone: { redact: true, placeholder: "[PHONE]" }
-      ssn: { redact: true, placeholder: "[SSN]" }
-      creditCard: { redact: true, placeholder: "[CARD]" }
-      ipv4: { redact: false } # Disable IPv4 redaction
-      uuid: { redact: false } # Disable UUID redaction
+    pii: {
+      enabled: true, // Defaults to true when privacy.enabled=true
+      systemPrompt: true, // Redact PII in system prompt context files
+      userMessages: false, // Redact PII in user input (off by default)
+      categories: {
+        email: { redact: true, placeholder: "[EMAIL]" },
+        phone: { redact: true, placeholder: "[PHONE]" },
+        ssn: { redact: true, placeholder: "[SSN]" },
+        creditCard: { redact: true, placeholder: "[CARD]" },
+        ipv4: { redact: false }, // Disable IPv4 redaction
+        uuid: { redact: false }, // Disable UUID redaction
+      },
+    },
 
-  media:
-    blockAttachments: false # Drop image/audio/video before LLM
-    warnOnBlock: true # Log when attachments are dropped
+    media: {
+      blockAttachments: false, // Drop image/audio/video before LLM
+      warnOnBlock: true, // Log when attachments are dropped
+    },
 
-  systemPrompt:
-    maskHostname: false # Strip host= from Runtime line
-    maskRepoPath: false # Replace repo path with basename
-    maskOs: false # Strip OS name/version
-    maskShell: false # Strip shell field
-    suppressContextFiles: false # Skip workspace context file injection
+    systemPrompt: {
+      maskHostname: false, // Strip host= from Runtime line
+      maskRepoPath: false, // Replace repo path with basename
+      maskOs: false, // Strip OS name/version
+      maskShell: false, // Strip shell field
+      suppressContextFiles: false, // Skip workspace context file injection
+    },
+  },
+}
 ```
 
 ## What gets redacted

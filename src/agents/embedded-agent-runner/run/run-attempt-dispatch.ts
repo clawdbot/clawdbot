@@ -354,10 +354,18 @@ export async function dispatchEmbeddedRunAttempt(input: {
     currentInboundEventKind: params.currentInboundEventKind,
     currentInboundContext: params.currentInboundContext,
     explicitSkillSelections: params.explicitSkillSelections,
-    images:
-      params.config?.privacy?.enabled && params.config.privacy.media?.blockAttachments
-        ? undefined
-        : promptMedia.images,
+    images: (() => {
+      if (params.config?.privacy?.enabled && params.config.privacy.media?.blockAttachments) {
+        const count = (promptMedia.images?.length ?? 0) + (promptMedia.media?.length ?? 0);
+        if (count > 0 && params.config.privacy.media.warnOnBlock !== false) {
+          process.stderr.write(
+            `[privacy] blocked ${count} media attachment(s) due to media.blockAttachments policy\n`,
+          );
+        }
+        return undefined;
+      }
+      return promptMedia.images;
+    })(),
     imageOrder:
       params.config?.privacy?.enabled && params.config.privacy.media?.blockAttachments
         ? undefined

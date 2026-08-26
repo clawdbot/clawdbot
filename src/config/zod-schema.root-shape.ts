@@ -556,9 +556,6 @@ export const OpenClawSchemaShape = {
           warnOnBlock: z.boolean().optional(),
         })
         .optional(),
-      // atRest encryption is available via the programmatic API
-      // (encryptSessionFile / encryptSessionDirectory) but not exposed in
-      // config until an `openclaw session encrypt` enablement path ships.
       systemPrompt: z
         .strictObject({
           maskHostname: z.boolean().optional(),
