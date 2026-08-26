@@ -172,29 +172,6 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
                         >`,
                       )}
                     </span>
-                    ${hasThinkingOverride
-                      ? html`
-                          <button
-                            class="chat-controls__reasoning-reset"
-                            data-chat-thinking-option=""
-                            type="button"
-                            aria-label=${t("chat.modelControls.useDefaultReasoning", {
-                              level: defaultLevelLabel,
-                            })}
-                            ?disabled=${params.thinkingDisabled}
-                            @click=${(event: MouseEvent) => {
-                              event.stopPropagation();
-                              if (params.thinkingDisabled) {
-                                event.preventDefault();
-                                return;
-                              }
-                              commitThinking("");
-                            }}
-                          >
-                            ${t("common.reset")}
-                          </button>
-                        `
-                      : nothing}
                   </div>
                   ${sliderStops.length > 1
                     ? html`

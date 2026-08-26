@@ -6646,35 +6646,6 @@ button.chat-pr__diff {
   color: var(--text);
 }
 
-.chat-controls__reasoning-reset {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 3px;
-  border: none;
-  border-radius: var(--radius-full);
-  background: none;
-  color: var(--muted);
-  font: inherit;
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: lowercase;
-}
-
-.chat-controls__reasoning-reset:hover:not(:disabled),
-.chat-controls__reasoning-reset:focus-visible {
-  background: var(--bg-hover);
-  color: var(--text);
-  outline: none;
-}
-
-.chat-controls__reasoning-reset:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
-}
-
 .chat-controls__effort-heading {
   color: var(--text);
   font-size: 12px;
