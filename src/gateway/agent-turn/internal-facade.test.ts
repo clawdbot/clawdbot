@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { dispatchRestartRecoveryUntilStarted } from "../../agents/main-session-recovery/main-session-restart-dispatch-start.js";
+import type { GatewayRecoveryRuntime } from "../server-instance-runtime.types.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import { createInternalAgentTurnFacade } from "./internal-facade.js";
@@ -37,6 +39,7 @@ function createFacade() {
     getContext: () =>
       ({
         dedupe: new Map(),
+        chatAbortControllers: new Map(),
         getRuntimeConfig: () => ({}),
         logGateway: { error: vi.fn(), warn: vi.fn() },
       }) as unknown as GatewayRequestContext,
@@ -162,6 +165,100 @@ describe("createInternalAgentTurnFacade", () => {
       "same-request",
       "same-request",
     ]);
+  });
+
+  it("keeps a cached replay in flight when the wait reaches a nonterminal timeout", async () => {
+    startTurn.mockImplementation(async ({ io }) => {
+      io.emitAcceptance([true, { runId: "run-pending", status: "in_flight" }, undefined], {
+        cached: true,
+        runId: "run-pending",
+      });
+    });
+    waitForTurn.mockResolvedValue({
+      runId: "run-pending",
+      status: "timeout",
+      timeoutPhase: "gateway_draining",
+    });
+    const onAccepted = vi.fn();
+
+    await expect(
+      createFacade().dispatchRaw(
+        { message: "test", idempotencyKey: "same-pending-request" },
+        { expectFinal: true, onAccepted, timeoutMs: 1_000 },
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      payload: { runId: "run-pending", status: "in_flight" },
+    });
+    expect(onAccepted).toHaveBeenCalledWith({ runId: "run-pending", status: "in_flight" });
+    expect(startTurn).toHaveBeenCalledOnce();
+  });
+
+  it("lets restart recovery abort the exact cached run before reattachment completes", async () => {
+    vi.useFakeTimers();
+    startTurn.mockImplementation(async ({ io }) => {
+      io.emitAcceptance([true, { runId: "recovery-cached", status: "in_flight" }, undefined], {
+        cached: true,
+        runId: "recovery-cached",
+      });
+    });
+    waitForTurn.mockImplementation(async () => await new Promise<never>(() => {}));
+    const facade = createFacade();
+    const abortAgent = vi.fn<GatewayRecoveryRuntime["abortAgent"]>(async () => ({
+      aborted: true,
+    }));
+    const gatewayRuntime: GatewayRecoveryRuntime = {
+      abortAgent,
+      dispatchAgent: async (request, timeoutMs, options) =>
+        await facade.dispatch(request, {
+          expectFinal: options?.expectFinal,
+          onAccepted: options?.onAccepted,
+          onExecutionStarted: options?.onExecutionStarted,
+          onSignalAbort: options?.onSignalAbort,
+          signal: options?.signal,
+          timeoutMs,
+        }),
+      waitForAgent: vi.fn(),
+      sendRecoveryNotice: vi.fn(),
+    };
+
+    try {
+      const outcome = dispatchRestartRecoveryUntilStarted({
+        agentId: "main",
+        agentParams: {
+          agentId: "main",
+          idempotencyKey: "recovery-cached",
+          message: "resume",
+          sessionKey: "agent:main:main",
+        },
+        gatewayRuntime,
+        recoveryRunId: "recovery-cached",
+        sessionKey: "agent:main:main",
+      });
+
+      await vi.waitFor(() => expect(startTurn).toHaveBeenCalledOnce());
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      await expect(outcome).resolves.toMatchObject({
+        kind: "failed",
+        observation: {
+          dispatchAccepted: true,
+          executionStarted: false,
+          preStartAbortAttempted: true,
+          preStartAbortConfirmed: true,
+        },
+      });
+      expect(abortAgent).toHaveBeenCalledWith(
+        {
+          agentId: "main",
+          runId: "recovery-cached",
+          sessionKey: "agent:main:main",
+        },
+        2_000,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("passes the exact internal execution-start observer to the turn", async () => {

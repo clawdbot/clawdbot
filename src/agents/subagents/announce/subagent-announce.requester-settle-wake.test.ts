@@ -6,14 +6,7 @@ import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 
 const deliverSpy = vi.fn(
-  async (
-    _params: Record<string, unknown>,
-  ): Promise<{
-    delivered: boolean;
-    path: string;
-    disposition?: "ambiguous" | "permanent_failure" | "intentional_non_delivery";
-    reason?: string;
-  }> => ({
+  async (_params: Record<string, unknown>): Promise<SubagentAnnounceDeliveryResult> => ({
     delivered: true,
     path: "direct",
   }),
@@ -726,12 +719,29 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     }
   });
 
-  it("replays an ambiguous transport failure with the same idempotency key", async () => {
+  it.each([
+    {
+      label: "ambiguous transport failure",
+      prepare: () => deliverSpy.mockRejectedValueOnce(new Error("connection lost after admission")),
+      expectedState: { replayCount: 1, lastError: "connection lost after admission" },
+    },
+    {
+      label: "authoritative in-flight result",
+      prepare: () =>
+        deliverSpy.mockResolvedValueOnce({
+          delivered: false,
+          path: "direct",
+          reason: "completion_handoff_pending",
+          error: "requester agent run is still in flight",
+          disposition: "retryable",
+        }),
+      expectedState: { lastError: "requester agent run is still in flight" },
+    },
+  ])("replays an $label with the same idempotency key", async ({ prepare, expectedState }) => {
     const firstChild = makeSettledChild({ runId: "run-a" });
     const secondChild = makeSettledChild({ runId: "run-b" });
-    const children = [firstChild, secondChild];
-    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(children);
-    deliverSpy.mockRejectedValueOnce(new Error("connection lost after admission"));
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([firstChild, secondChild]);
+    prepare();
 
     vi.useFakeTimers();
     vi.setSystemTime(0);
@@ -742,16 +752,14 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       expect(firstChild.requesterSettleWake).toMatchObject({
         status: "dispatching",
         attemptCount: 1,
-        replayCount: 1,
         nextAttemptAt: 30_000,
-        lastError: "connection lost after admission",
+        ...expectedState,
       });
 
       await vi.advanceTimersByTimeAsync(30_000);
       expect(
         await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: secondChild })),
       ).toBe(true);
-      expect(deliverSpy).toHaveBeenCalledTimes(2);
       expect(deliverSpy.mock.calls.map(([arg]) => arg.directIdempotencyKey)).toEqual([
         requesterSettleKey("run-a,run-b"),
         requesterSettleKey("run-a,run-b"),

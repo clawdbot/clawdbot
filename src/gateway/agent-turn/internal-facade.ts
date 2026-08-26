@@ -213,22 +213,38 @@ export function createInternalAgentTurnFacade(
       },
     );
     const response = (async () => {
-      const first = acceptance ?? (await acceptancePromise);
+      const first =
+        acceptance ??
+        (await waitForGatewayDispatch(
+          method,
+          acceptancePromise,
+          dispatchOptions.timeoutMs,
+          dispatchOptions.signal,
+          dispatchOptions.onSignalAbort,
+        ));
       const firstPayload = first.payload as { runId?: unknown; status?: unknown } | undefined;
       if (dispatchOptions.expectFinal !== true) {
         return first;
       }
       if (firstPayload?.status === "in_flight") {
+        dispatchOptions.onAccepted?.(first.payload);
         const runId = typeof firstPayload.runId === "string" ? firstPayload.runId.trim() : "";
         if (!runId) {
           return first;
         }
         const timeoutMs = dispatchOptions.timeoutMs;
-        await wait(
+        const waitResult = await wait<{ endedAt?: unknown; status?: unknown }>(
           { runId, ...(timeoutMs !== undefined ? { timeoutMs } : {}) },
-          timeoutMs,
+          undefined,
           dispatchOptions.signal,
+          dispatchOptions.onSignalAbort,
         );
+        const waitReachedNonterminalDeadline =
+          waitResult.status === "pending" ||
+          (waitResult.status === "timeout" && typeof waitResult.endedAt !== "number");
+        if (waitReachedNonterminalDeadline) {
+          return first;
+        }
         // The terminal dedupe payload retains the full result needed by callers;
         // agent.wait is only the liveness rendezvous for the already-admitted run.
         return await dispatchRaw(request, {
@@ -243,15 +259,18 @@ export function createInternalAgentTurnFacade(
       if (postAcceptanceError) {
         throw postAcceptanceError;
       }
-      return final ?? (await createFinalPromise());
+      return (
+        final ??
+        (await waitForGatewayDispatch(
+          method,
+          createFinalPromise(),
+          dispatchOptions.timeoutMs,
+          dispatchOptions.signal,
+          dispatchOptions.onSignalAbort,
+        ))
+      );
     })();
-    return await waitForGatewayDispatch(
-      method,
-      response,
-      dispatchOptions.timeoutMs,
-      dispatchOptions.signal,
-      dispatchOptions.onSignalAbort,
-    );
+    return await response;
   };
 
   const dispatch = async <T = unknown>(

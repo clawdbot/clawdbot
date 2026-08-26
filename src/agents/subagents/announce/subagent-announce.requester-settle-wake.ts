@@ -543,6 +543,21 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
       });
       return false;
     }
+    if (delivery.reason === "completion_handoff_pending" && delivery.disposition === "retryable") {
+      const lastError = delivery.error ?? "requester agent run is still in flight";
+      state = { ...state, lastError };
+      // The Gateway still owns the admitted turn. Keep the frozen dispatch key
+      // until terminal dedupe proves whether it replied or yielded more work.
+      deferRequesterSettleWakeBatch({
+        batchRunIds,
+        state,
+        transitionBatch: params.transitionBatch,
+      });
+      logWarn(
+        `requester settle wake is still in flight; replaying the same idempotency key in ${Math.round(REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS[0] / 1000)}s: ${lastError}`,
+      );
+      return false;
+    }
 
     const attemptCount = attemptIndex + 1;
     const retryDelayMs = REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS[attemptIndex];
