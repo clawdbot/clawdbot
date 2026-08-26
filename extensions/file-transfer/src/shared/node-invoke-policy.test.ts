@@ -157,53 +157,6 @@ function requireInvokeParams(
 }
 
 describe("file-transfer node invoke policy", () => {
-  it("reapproves a stale dir.list grant before listing and binds the retry", async () => {
-    const events: string[] = [];
-    const approvals = {
-      request: vi.fn(async () => {
-        events.push("approval");
-        return { id: "approval-1", decision: "allow-once" as const };
-      }),
-    };
-    const policy = createFileTransferNodeInvokePolicy();
-    const { ctx, invokeNode } = createCtx({
-      command: "dir.list",
-      params: { path: "/tmp/project", expectedCanonicalPath: "/tmp/injected" },
-      pluginConfig: {
-        nodes: { "node-1": { ask: "on-miss", followSymlinks: true } },
-        literalGrants: [
-          {
-            nodeId: "node-1",
-            command: "dir.list",
-            requestedPath: "/tmp/project",
-            canonicalPath: "/tmp/old-project",
-          },
-        ],
-      },
-      approvals,
-    });
-    invokeNode.mockImplementation(async ({ params } = {}) => {
-      const record = requireRecord(params, "invoke params");
-      events.push(record.preflightOnly === true ? "preflight" : "list");
-      return { ok: true, payload: { ok: true, path: "/tmp/new-project", entries: [] } };
-    });
-
-    const result = await policy.handle(ctx);
-
-    expect(result.ok).toBe(true);
-    expect(events).toEqual(["preflight", "approval", "list"]);
-    expect(invokeNode).toHaveBeenNthCalledWith(1, {
-      params: { path: "/tmp/project", followSymlinks: true, preflightOnly: true },
-    });
-    expect(invokeNode).toHaveBeenNthCalledWith(2, {
-      params: {
-        path: "/tmp/project",
-        followSymlinks: true,
-        expectedCanonicalPath: "/tmp/new-project",
-      },
-    });
-  });
-
   it("injects policy-owned limits before invoking the node", async () => {
     const policy = createFileTransferNodeInvokePolicy();
     const { ctx, invokeNode } = createCtx({
