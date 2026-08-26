@@ -214,7 +214,9 @@ describe("new-session model runtime", () => {
     expect(loadingModelTrigger?.classList.contains("chat-controls__model-trigger--loading")).toBe(
       true,
     );
-    expect(loadingModelTrigger?.getAttribute("aria-label")).toBe("Chat model: Loading models…");
+    expect(loadingModelTrigger?.getAttribute("aria-label")).toBe(
+      "Chat model: Loading models…; Effort: Medium",
+    );
     expect(loadingModelTrigger?.getAttribute("aria-disabled")).toBe("false");
     expect(loadingSkeleton).not.toBeNull();
     expect(loadingSkeleton?.getAttribute("aria-hidden")).toBe("true");
@@ -246,7 +248,9 @@ describe("new-session model runtime", () => {
     );
     expect(loadingModelTrigger).not.toBeNull();
     expect(loadingModelTrigger?.getAttribute("aria-busy")).toBe("true");
-    expect(loadingModelTrigger?.getAttribute("aria-label")).toBe("Chat model: Loading models…");
+    expect(loadingModelTrigger?.getAttribute("aria-label")).toBe(
+      "Chat model: Loading models…; Effort: Medium",
+    );
     expect(loadingSkeleton).not.toBeNull();
     expect(loadingSkeleton?.getAttribute("aria-hidden")).toBe("true");
     expect(loadingModelTrigger?.textContent).not.toContain("Loading models");

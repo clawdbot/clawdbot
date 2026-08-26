@@ -6670,8 +6670,10 @@ describe("chat model controls", () => {
     const trigger = getChatModelSelect(container);
 
     expect(trigger.dataset.chatModelTools).toBe("unavailable");
-    expect(trigger.querySelector(".chat-controls__model-capability-badge")).toBeNull();
-    expect(trigger.querySelector(".chat-controls__model-capability-alert")).not.toBeNull();
+    expect(
+      trigger.querySelector(".chat-controls__model-capability-badge")?.textContent?.trim(),
+    ).toBe("Chat only");
+    expect(trigger.querySelector(".chat-controls__model-capability-alert")).toBeNull();
     expect(trigger.getAttribute("aria-label")).toContain("Chat only");
     expect(
       container
