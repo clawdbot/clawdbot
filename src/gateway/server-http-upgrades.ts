@@ -131,7 +131,8 @@ function handleBudgetedGatewayWebSocketUpgrade(params: {
     !allowsRestartStartupPreauth &&
     (ingressName === "Worker" ||
       isGatewayRestartDraining() ||
-      getGatewaySuspendAdmissionPhase() !== "prepared")
+      (getGatewaySuspendAdmissionPhase() !== "draining" &&
+        getGatewaySuspendAdmissionPhase() !== "prepared"))
   ) {
     writeGatewayUpgradeServiceUnavailable(socket, `${ingressName} websocket admission closed`);
     socket.destroy();
@@ -425,7 +426,7 @@ export function attachGatewayUpgradeHandler(opts: {
         return;
       }
       // Plugin-owned upgrade routes have already had the opportunity to claim the socket.
-      // Core Gateway control connections remain reachable while suspension is prepared.
+      // Core Gateway control connections remain reachable throughout a held suspension.
       try {
         handleBudgetedGatewayWebSocketUpgrade({
           req,
