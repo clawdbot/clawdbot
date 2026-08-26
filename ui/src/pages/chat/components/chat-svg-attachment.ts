@@ -126,15 +126,9 @@ class ChatSvgAttachment extends OpenClawLightDomContentsElement {
       this.showFallback();
       return;
     }
-    // Remote SVGs render safely in img without CORS, while fetching their bytes would
-    // reject common CDN sources before the browser gets a chance to display them.
+    // The served Control UI CSP does not admit arbitrary remote image origins.
     if (isCrossOriginHttpSource(this.src)) {
-      this.renderSource = {
-        url: this.src,
-        retainCount: 0,
-        retired: false,
-        revokeOnRetire: false,
-      };
+      this.showFallback();
       return;
     }
     const controller = new AbortController();

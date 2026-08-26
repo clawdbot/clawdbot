@@ -464,6 +464,34 @@ describe("markdown sidebar", () => {
     },
   );
 
+  it.each(["image/svg+xml", "application/octet-stream", undefined])(
+    "keeps external SVG attachments as Files cards with MIME %s",
+    async (mimeType) => {
+      const src = "https://cdn.example/vector.svg";
+      const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
+        content: unknown;
+        updateComplete?: Promise<unknown>;
+      };
+      panel.content = {
+        kind: "attachment",
+        attachmentKind: "image",
+        title: "vector.svg",
+        src,
+        mimeType,
+      };
+      document.body.append(panel);
+      await panel.updateComplete;
+
+      expect(panel.querySelector(".sidebar-attachment-preview__image")).toBeNull();
+      expect(
+        panel
+          .querySelector<HTMLAnchorElement>(".chat-assistant-attachment-card__download")
+          ?.getAttribute("href"),
+      ).toBe(src);
+      panel.remove();
+    },
+  );
+
   it("keeps a canvas scripts ceiling under a trusted global sandbox", async () => {
     const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
       content: unknown;

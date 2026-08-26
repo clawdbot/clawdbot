@@ -171,13 +171,12 @@ describe("attachment sidebar source ownership", () => {
     expect(revokeObjectURL).toHaveBeenCalledWith(objectUrl);
   });
 
-  it("renders a cross-origin SVG directly without requiring CORS", async () => {
-    const intersectAttachment = stubAttachmentIntersection();
+  it("keeps a cross-origin SVG compact under the served image CSP", async () => {
     const source = "https://cdn.example/vector.svg";
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
     const container = document.body.appendChild(document.createElement("div"));
-    const onOpenImage = vi.fn();
+    const onOpenSidebar = vi.fn();
     render(
       renderAssistantAttachments(
         [
@@ -191,18 +190,21 @@ describe("attachment sidebar source ownership", () => {
             },
           },
         ],
-        { onOpenImage },
+        {},
+        onOpenSidebar,
       ),
       container,
     );
 
-    await intersectAttachment();
     await vi.waitFor(() =>
-      expect(container.querySelector("img.chat-message-image")?.getAttribute("src")).toBe(source),
+      expect(container.querySelector(".chat-assistant-attachment-card--compact")).not.toBeNull(),
     );
     expect(fetchMock).not.toHaveBeenCalled();
-    container.querySelector<HTMLButtonElement>(".chat-message-image-button")?.click();
-    expect(onOpenImage).toHaveBeenCalledWith(expect.objectContaining({ src: source }));
+    expect(container.querySelector("img.chat-message-image")).toBeNull();
+    container.querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__expand")?.click();
+    expect(onOpenSidebar).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "attachment", attachmentKind: "document", src: source }),
+    );
   });
 
   it("reloads a same-origin SVG after its element reconnects", async () => {
@@ -399,7 +401,7 @@ describe("attachment sidebar source ownership", () => {
               kind: "document",
               label: "broken.svg",
               mimeType: "image/svg+xml",
-              url: "https://example.com/broken.svg",
+              url: `${window.location.origin}/broken.svg`,
             },
           },
         ],
@@ -480,6 +482,48 @@ describe("attachment sidebar source ownership", () => {
 
     expect(sidebarContent?.src).toBe(source);
     expect(sidebarContent?.resolveSource).toBeUndefined();
+    container.remove();
+  });
+
+  it("does not expose a Files action without a sidebar owner", () => {
+    const container = document.body.appendChild(document.createElement("div"));
+    render(
+      renderAssistantAttachments([managedAttachment("https://example.com/asset.bin")], {}),
+      container,
+    );
+
+    expect(container.querySelector(".chat-assistant-attachment-card__expand")).toBeNull();
+    expect(
+      container.querySelector(".chat-assistant-attachment-card")?.hasAttribute("data-openable"),
+    ).toBe(false);
+    container.remove();
+  });
+
+  it("prefixes managed attachment tickets with the Control UI resource base path", async () => {
+    const attachmentId = crypto.randomUUID();
+    const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${attachmentId}/full`;
+    const ticketedUrl = `${source}?mediaTicket=ticket`;
+    const resolveArtifactDownload = vi.fn(async () => ({ url: ticketedUrl }));
+    const container = document.body.appendChild(document.createElement("div"));
+    const rerender = () =>
+      render(
+        renderAssistantAttachments([managedAttachment(source, `artifact_${attachmentId}`)], {
+          onRequestUpdate: rerender,
+          resourceBasePath: "/rosita",
+          resolveArtifactDownload,
+        }),
+        container,
+      );
+    subscribers.add(rerender);
+
+    rerender();
+    await flushAttachmentResolution();
+
+    expect(
+      container
+        .querySelector<HTMLAnchorElement>(".chat-assistant-attachment-card__download")
+        ?.getAttribute("href"),
+    ).toBe(`/rosita${ticketedUrl}`);
     container.remove();
   });
 

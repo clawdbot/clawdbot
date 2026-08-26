@@ -4720,6 +4720,70 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-assistant-attachment-card")).toBeNull();
   });
 
+  it("routes persisted SVG facts through the bounded attachment renderer", async () => {
+    const source = "https://cdn.example/vector.svg";
+    const container = document.body.appendChild(document.createElement("div"));
+    renderAssistantMessage(
+      container,
+      createAssistantMessage("Vector attached", {
+        __openclaw: {
+          media: [
+            {
+              path: source,
+              contentType: "image/svg+xml",
+              fileName: "vector.svg",
+              sizeBytes: 300_000,
+            },
+          ],
+        },
+      }),
+      { showToolCalls: false },
+    );
+
+    await vi.waitFor(() =>
+      expect(container.querySelector(".chat-assistant-attachment-card--compact")).not.toBeNull(),
+    );
+    expect(container.querySelector("img.chat-message-image")).toBeNull();
+    expect(container.textContent).toContain("vector.svg");
+    container.remove();
+  });
+
+  it("routes structured external SVGs through the CSP-safe attachment fallback", async () => {
+    const source = "https://cdn.example/structured.svg";
+    const container = document.body.appendChild(document.createElement("div"));
+    renderAssistantMessage(
+      container,
+      createAssistantMessage([{ type: "image_url", image_url: { url: source } }]),
+      { showToolCalls: false },
+    );
+
+    await vi.waitFor(() =>
+      expect(container.querySelector(".chat-assistant-attachment-card--compact")).not.toBeNull(),
+    );
+    expect(container.querySelector("img.chat-message-image")).toBeNull();
+    expect(container.textContent).toContain("structured.svg");
+    container.remove();
+  });
+
+  it("deduplicates one SVG represented by structured and persisted media facts", async () => {
+    const source = "https://cdn.example/duplicate.svg";
+    const container = document.body.appendChild(document.createElement("div"));
+    renderAssistantMessage(
+      container,
+      createAssistantMessage([{ type: "image_url", image_url: { url: source } }], {
+        __openclaw: { media: [{ path: source, contentType: "image/svg+xml" }] },
+      }),
+      { showToolCalls: false },
+    );
+
+    await vi.waitFor(() =>
+      expect(container.querySelectorAll(".chat-assistant-attachment-card--compact")).toHaveLength(
+        1,
+      ),
+    );
+    container.remove();
+  });
+
   it("carries the known attachment kind into the sidebar when MIME is absent", () => {
     const container = document.createElement("div");
     const onOpenSidebar = vi.fn();

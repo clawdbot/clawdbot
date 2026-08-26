@@ -47,6 +47,7 @@ import {
 import {
   extractImages,
   extractPairingQrExpiryNotices,
+  extractStructuredSvgAttachments,
   extractTranscriptAttachments,
   schedulePairingQrExpiryRefresh,
   type AttachmentItem,
@@ -288,7 +289,18 @@ export function renderGroupedMessage(
   const assistantAttachments = normalizedMessage.content.filter(
     (item): item is AttachmentItem => item.type === "attachment",
   );
-  const visibleAttachments = [...assistantAttachments, ...extractTranscriptAttachments(message)];
+  const attachmentUrls = new Set<string>();
+  const visibleAttachments = [
+    ...assistantAttachments,
+    ...extractStructuredSvgAttachments(message),
+    ...extractTranscriptAttachments(message),
+  ].filter(({ attachment }) => {
+    if (attachmentUrls.has(attachment.url)) {
+      return false;
+    }
+    attachmentUrls.add(attachment.url);
+    return true;
+  });
   const assistantViewBlocks = normalizedMessage.content.filter(
     (item): item is Extract<MessageContentItem, { type: "canvas" }> => item.type === "canvas",
   );

@@ -35,11 +35,23 @@ import { openInlineChatImage } from "./chat-image-lightbox.ts";
 import "./chat-audio-player.ts";
 import "./chat-video-player.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
+import { isSvgImageMediaPath } from "./chat-message-media.ts";
 import type { AttachmentSidebarRuntime, SidebarContent } from "./chat-sidebar-content-types.ts";
 import { renderSidebarFile, type FileViewControls } from "./chat-sidebar-file-view.ts";
 import "./session-diff-panel.ts";
 
 type ChatDetailPanelContent = Exclude<SidebarContent, { kind: "task" }>;
+
+function isCrossOriginHttpSource(source: string): boolean {
+  try {
+    const url = new URL(source, window.location.href);
+    return (
+      (url.protocol === "http:" || url.protocol === "https:") && url.origin !== location.origin
+    );
+  } catch {
+    return false;
+  }
+}
 
 function renderSidebarAttachment(
   content: Extract<SidebarContent, { kind: "attachment" }>,
@@ -88,7 +100,12 @@ function renderSidebarAttachment(
       .voiceNote=${content.voiceNote === true}
     ></openclaw-chat-audio-player>`;
   }
-  if (content.attachmentKind === "image" || mimeType.startsWith("image/")) {
+  const blockedExternalSvg =
+    isSvgImageMediaPath(content.title, mimeType) && isCrossOriginHttpSource(src);
+  if (
+    !blockedExternalSvg &&
+    (content.attachmentKind === "image" || mimeType.startsWith("image/"))
+  ) {
     return html`<img class="sidebar-attachment-preview__image" src=${src} alt=${content.title} />`;
   }
   return html`<div class="chat-assistant-attachment-card chat-assistant-attachment-card--compact">

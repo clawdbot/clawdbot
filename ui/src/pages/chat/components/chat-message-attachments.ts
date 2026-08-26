@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { normalizeBasePath } from "../../../app-route-paths.ts";
 import { t } from "../../../i18n/index.ts";
 import "./chat-svg-attachment.ts";
 import { openAttachmentCardFromClick, renderAttachmentCardHeader } from "./chat-attachment-card.ts";
@@ -50,6 +51,23 @@ function retainManagedAttachmentUntilExpiry(
   };
   setManagedAttachmentAvailability(resource, retained);
   return retained;
+}
+
+function applyResourceBasePath(source: string, resourceBasePath: string | undefined): string {
+  if (!source.startsWith("/") || source.startsWith("//")) {
+    return source;
+  }
+  try {
+    const parsed = new URL(source, window.location.origin);
+    const basePath = normalizeBasePath(resourceBasePath ?? "");
+    const pathname =
+      basePath && parsed.pathname !== basePath && !parsed.pathname.startsWith(`${basePath}/`)
+        ? `${basePath}${parsed.pathname}`
+        : parsed.pathname;
+    return `${pathname}${parsed.search}${parsed.hash}`;
+  } catch {
+    return source;
+  }
 }
 
 function setManagedAttachmentAvailability(
@@ -387,7 +405,9 @@ export function renderAssistantAttachments(
               resourceBasePath,
               assistantAvailability.mediaTicket,
             )
-          : managedAvailability.url
+          : isManagedOutgoingMediaSource(attachment.url)
+            ? applyResourceBasePath(managedAvailability.url, resourceBasePath)
+            : managedAvailability.url
         : null;
     const sizeBytes =
       assistantAvailability.status === "available"
@@ -432,9 +452,9 @@ export function renderAssistantAttachments(
           ? () => retryManagedAttachmentAvailability(attachment, onRequestUpdate, connectionEpoch)
           : undefined;
     const openAttachmentSidebar =
-      attachmentUrl && (hasLiveSidebarSource || safeAttachmentUrl)
+      onOpenSidebar && attachmentUrl && (hasLiveSidebarSource || safeAttachmentUrl)
         ? () =>
-            onOpenSidebar?.({
+            onOpenSidebar({
               kind: "attachment",
               attachmentKind: attachment.kind,
               title: attachment.label,
@@ -477,7 +497,10 @@ export function renderAssistantAttachments(
                               runtime.resourceBasePath,
                               nextAssistantAvailability.mediaTicket,
                             )
-                          : nextManagedAvailability.url,
+                          : applyResourceBasePath(
+                              nextManagedAvailability.url,
+                              runtime.resourceBasePath,
+                            ),
                         playback:
                           nextAssistantAvailability.playback ?? attachment.playback ?? "native",
                         authToken: localSource ? (runtime.authToken ?? null) : null,

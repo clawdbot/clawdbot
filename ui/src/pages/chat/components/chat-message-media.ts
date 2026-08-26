@@ -401,6 +401,86 @@ function labelForMediaPath(mediaPath: string): string {
   return trimmed.split(/[\\/]/).pop()?.trim() || trimmed;
 }
 
+function crossOriginStructuredSvgAttachment(
+  source: unknown,
+  mediaType: unknown,
+  metadata: Record<string, unknown> = {},
+): AttachmentItem | null {
+  if (typeof source !== "string" || !isSvgImageMediaPath(source, mediaType)) {
+    return null;
+  }
+  try {
+    const url = new URL(source, window.location.href);
+    if (
+      (url.protocol !== "http:" && url.protocol !== "https:") ||
+      url.origin === window.location.origin
+    ) {
+      return null;
+    }
+  } catch {
+    return null;
+  }
+  const sizeBytes = asFiniteNumber(metadata.sizeBytes);
+  return {
+    type: "attachment",
+    attachment: {
+      url: source,
+      kind: "image",
+      label:
+        (typeof metadata.fileName === "string" && metadata.fileName.trim()) ||
+        (typeof metadata.alt === "string" && metadata.alt.trim()) ||
+        labelForMediaPath(source),
+      mimeType: typeof mediaType === "string" ? mediaType : "image/svg+xml",
+      ...(typeof metadata.artifactId === "string" ? { artifactId: metadata.artifactId } : {}),
+      ...(sizeBytes !== undefined ? { sizeBytes } : {}),
+    },
+  };
+}
+
+export function extractStructuredSvgAttachments(message: unknown): AttachmentItem[] {
+  const content = (message as { content?: unknown } | null)?.content;
+  if (!Array.isArray(content)) {
+    return [];
+  }
+  const attachments: AttachmentItem[] = [];
+  const append = (attachment: AttachmentItem | null) => {
+    if (
+      attachment &&
+      !attachments.some((item) => item.attachment.url === attachment.attachment.url)
+    ) {
+      attachments.push(attachment);
+    }
+  };
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const entry = block as Record<string, unknown>;
+    if (entry.type === "image") {
+      const source = entry.source as Record<string, unknown> | undefined;
+      append(
+        crossOriginStructuredSvgAttachment(entry.url, entry.mimeType ?? source?.media_type, entry),
+      );
+    } else if (entry.type === "image_url") {
+      const imageUrl = entry.image_url as Record<string, unknown> | undefined;
+      append(crossOriginStructuredSvgAttachment(imageUrl?.url, undefined));
+    } else if (entry.type === "input_image") {
+      const imageUrl = entry.image_url;
+      const source = entry.source as Record<string, unknown> | undefined;
+      append(
+        crossOriginStructuredSvgAttachment(
+          typeof imageUrl === "string"
+            ? imageUrl
+            : (imageUrl as Record<string, unknown> | undefined)?.url,
+          undefined,
+        ),
+      );
+      append(crossOriginStructuredSvgAttachment(source?.url, source?.media_type));
+    }
+  }
+  return attachments;
+}
+
 export function extractImages(message: unknown): ImageBlock[] {
   const m = message as Record<string, unknown>;
   const content = m.content;
@@ -442,27 +522,39 @@ export function extractImages(message: unknown): ImageBlock[] {
             }),
             ...imageMeta,
           });
-        } else if (typeof b.url === "string") {
+        } else if (
+          typeof b.url === "string" &&
+          !crossOriginStructuredSvgAttachment(b.url, b.mimeType ?? source?.media_type, b)
+        ) {
           appendImageBlock(images, { url: b.url, ...imageMeta });
         }
       } else if (b.type === "image_url") {
         // OpenAI format
         const imageUrl = b.image_url as Record<string, unknown> | undefined;
-        if (typeof imageUrl?.url === "string") {
+        if (
+          typeof imageUrl?.url === "string" &&
+          !crossOriginStructuredSvgAttachment(imageUrl.url, undefined)
+        ) {
           appendImageBlock(images, { url: imageUrl.url });
         }
       } else if (b.type === "input_image") {
         const imageUrl = b.image_url;
-        if (typeof imageUrl === "string") {
+        if (
+          typeof imageUrl === "string" &&
+          !crossOriginStructuredSvgAttachment(imageUrl, undefined)
+        ) {
           appendImageBlock(images, { url: imageUrl });
         } else if (imageUrl && typeof imageUrl === "object") {
           const url = (imageUrl as Record<string, unknown>).url;
-          if (typeof url === "string") {
+          if (typeof url === "string" && !crossOriginStructuredSvgAttachment(url, undefined)) {
             appendImageBlock(images, { url });
           }
         }
         const source = b.source as Record<string, unknown> | undefined;
-        if (typeof source?.url === "string") {
+        if (
+          typeof source?.url === "string" &&
+          !crossOriginStructuredSvgAttachment(source.url, source.media_type)
+        ) {
           appendImageBlock(images, { url: source.url });
         } else if (typeof source?.data === "string") {
           appendImageBlock(images, {
@@ -490,7 +582,7 @@ export function extractImages(message: unknown): ImageBlock[] {
   for (const { path: mediaPath, mediaType, fileName, sizeBytes } of readTranscriptMediaEntries(
     message,
   )) {
-    if (!isImageMediaPath(mediaPath, mediaType)) {
+    if (!isImageMediaPath(mediaPath, mediaType) || isSvgImageMediaPath(mediaPath, mediaType)) {
       continue;
     }
     appendImageBlock(images, { url: mediaPath, fileName, sizeBytes });
@@ -598,14 +690,18 @@ export function extractTranscriptAttachments(message: unknown): AttachmentItem[]
     width,
     height,
   } of readTranscriptMediaEntries(message)) {
-    if (isImageMediaPath(mediaPath, mediaType)) {
+    const image = isImageMediaPath(mediaPath, mediaType);
+    const svg = image && isSvgImageMediaPath(mediaPath, mediaType);
+    if (image && !svg) {
       continue;
     }
-    const kind = isAudioTranscriptMediaPath(mediaPath, mediaType)
-      ? "audio"
-      : isVideoTranscriptMediaPath(mediaPath, mediaType)
-        ? "video"
-        : "document";
+    const kind = svg
+      ? "image"
+      : isAudioTranscriptMediaPath(mediaPath, mediaType)
+        ? "audio"
+        : isVideoTranscriptMediaPath(mediaPath, mediaType)
+          ? "video"
+          : "document";
     attachments.push({
       type: "attachment",
       attachment: {
