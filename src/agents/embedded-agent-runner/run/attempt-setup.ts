@@ -126,13 +126,14 @@ export async function resolveAttemptWorkspaceSandbox(params: AttemptWorkspacePar
   const effectiveWorkspace =
     sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? sandbox.workspaceDir : resolvedWorkspace;
   const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;
-  if (params.permissionMode && !params.sessionRoot) {
-    throw new Error("session permission mode requires a recorded session root");
-  }
-  const sessionPermissionPolicy =
-    params.permissionMode && params.sessionRoot
-      ? { root: params.sessionRoot, mode: params.permissionMode }
-      : undefined;
+  // Recorded roots pin worktree/explicit-cwd boundaries; rootless sessions use
+  // the agent's canonical workspace as their permission boundary.
+  const sessionPermissionPolicy = params.permissionMode
+    ? {
+        root: params.sessionRoot ?? (await fs.realpath(resolvedWorkspace)),
+        mode: params.permissionMode,
+      }
+    : undefined;
   if (sandbox?.enabled && requestedCwd && requestedCwd !== resolvedWorkspace) {
     throw new Error(
       "cwd override is not supported for sandboxed embedded agent runs; omit cwd or use the agent workspace as cwd",

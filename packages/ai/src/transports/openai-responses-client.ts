@@ -424,11 +424,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           initialAttemptKind: NonNullable<ResponsesStreamParams["initialAttemptKind"]> = "initial",
           initialRejectedCompaction?: ResponsesStreamParams["initialRejectedCompaction"],
         ): Promise<AsyncIterable<unknown>> => {
-          const {
-            stream: rawResponseStream,
-            response,
-            attempt,
-          } = await config.createResponseStream({
+          const { stream: responseStream } = await config.createResponseStream({
             client,
             request: initialRequest,
             requestOptions,
@@ -439,26 +435,30 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
             buildFullHistoryRequest: () => buildRequest("full-history"),
             onCompactionRejected: (checkpoint) =>
               suppressOpenAIResponsesCompaction(output, model, responsesOptions, checkpoint),
-          });
-          if (continuationClaim) {
-            continuationBaseline = attempt.request.previous_response_id
-              ? (params as ResponsesContinuationRequest)
-              : (attempt.request as ResponsesContinuationRequest);
-          }
-          return withProviderResponseHook({
-            stream: observeResponsesStream(rawResponseStream, model, requestStartedAt),
-            signal: firstEvent.signal,
-            abort: firstEvent.abort,
-            hook: createOpenAIProviderAcceptanceHook(options, response, model),
-            onReady: () => {
-              emitModelTransportDebug(
-                log,
-                `[responses] headers provider=${model.provider} api=${model.api} model=${model.id} ` +
-                  `transport=sse elapsedMs=${Date.now() - requestStartedAt}`,
-              );
-              startStream();
+            canRetryStream: () => output.content.length === 0,
+            wrapStream: ({ stream: rawResponseStream, response, attempt }) => {
+              if (continuationClaim) {
+                continuationBaseline = attempt.request.previous_response_id
+                  ? (params as ResponsesContinuationRequest)
+                  : (attempt.request as ResponsesContinuationRequest);
+              }
+              return withProviderResponseHook({
+                stream: observeResponsesStream(rawResponseStream, model, requestStartedAt),
+                signal: firstEvent.signal,
+                abort: firstEvent.abort,
+                hook: createOpenAIProviderAcceptanceHook(options, response, model),
+                onReady: () => {
+                  emitModelTransportDebug(
+                    log,
+                    `[responses] headers provider=${model.provider} api=${model.api} model=${model.id} ` +
+                      `transport=sse elapsedMs=${Date.now() - requestStartedAt}`,
+                  );
+                  startStream();
+                },
+              });
             },
           });
+          return responseStream;
         };
 
         let responseStream: AsyncIterable<unknown>;

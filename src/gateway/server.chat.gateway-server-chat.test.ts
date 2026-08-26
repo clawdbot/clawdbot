@@ -6,6 +6,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { createDeferred } from "../../test/helpers/promise.js";
+import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
 import { replyRunRegistry } from "../auto-reply/reply/reply-run-registry.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
@@ -327,6 +328,60 @@ describe("gateway server chat", () => {
       await waitForFast(() => {
         expect(getActiveGatewayRootWorkCount()).toBe(0);
       });
+    });
+  });
+
+  test("delivers a queued WebChat reply over the live Gateway WebSocket after its source ends", async () => {
+    await withMainSessionStore(async () => {
+      let options: InternalGetReplyOptions | undefined;
+      const releaseDispatch = createDeferred();
+      dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
+        options = (args as { replyOptions?: InternalGetReplyOptions }).replyOptions;
+        options?.turnAdoptionLifecycle?.onDeferred?.();
+        await releaseDispatch.promise;
+        return {};
+      });
+
+      const sourceRunId = "idem-live-webchat-late-source";
+      const sourceFinal = onceMessage(
+        ws,
+        (event) =>
+          event.type === "event" &&
+          event.event === "chat" &&
+          event.payload?.state === "final" &&
+          event.payload?.runId === sourceRunId,
+        CHAT_RESPONSE_TIMEOUT_MS,
+      );
+      const response = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "queue a reply while the previous run is active",
+        idempotencyKey: sourceRunId,
+      });
+      expect(response.ok).toBe(true);
+      await waitForFast(() => expect(options?.onQueuedFollowupReplyBatch).toBeTypeOf("function"));
+      releaseDispatch.resolve();
+      await sourceFinal;
+
+      const followupRunId = "idem-live-webchat-late-followup";
+      const queuedFinal = onceMessage(
+        ws,
+        (event) =>
+          event.type === "event" &&
+          event.event === "chat" &&
+          event.payload?.state === "final" &&
+          event.payload?.runId === followupRunId,
+        CHAT_RESPONSE_TIMEOUT_MS,
+      );
+      await options?.onQueuedFollowupReplyBatch?.({
+        kind: "queued-followup",
+        runId: followupRunId,
+        originatingChannel: "webchat",
+        payloads: [{ text: "late answer arrived over the live WebSocket" }],
+      });
+      expect((await queuedFinal).payload?.message).toMatchObject({
+        content: [{ type: "text", text: "late answer arrived over the live WebSocket" }],
+      });
+      options?.turnAdoptionLifecycle?.onSettled?.();
     });
   });
 

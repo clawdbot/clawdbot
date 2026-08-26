@@ -24,6 +24,11 @@ const suite = createControlUiE2eSuite({
 const TOAST_PROOF_DIR = path.resolve(".artifacts/control-ui-e2e/toast-layering");
 const railProofDir = process.env.OPENCLAW_UI_RAIL_PROOF_DIR?.trim();
 const limitedScopes = ["operator.read", "operator.write"];
+const UPDATE_AVAILABLE = {
+  channel: "stable",
+  currentVersion: "1.0.0",
+  latestVersion: "2.0.0",
+} as const;
 const TOAST_SCENARIO: ControlUiMockGatewayScenario = {
   featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
   methodResponses: {
@@ -128,11 +133,13 @@ suite.define(() => {
           canGoBack: false,
           canGoForward: false,
         };
-        const stamp = () =>
+        const stamp = () => {
           document.documentElement.classList.add(
             "openclaw-native-macos",
             "openclaw-native-web-chrome",
           );
+          document.documentElement.style.setProperty("--openclaw-native-titlebar-height", "52px");
+        };
         if (document.documentElement) {
           stamp();
         } else {
@@ -261,7 +268,19 @@ suite.define(() => {
   });
 
   it("hosts navigation, search, sessions, and history in web titlebar chrome", async () => {
-    const page = await openPage({ webChrome: true });
+    const page = await openPage({
+      scenario: {
+        featureMethods: ["chat.metadata", "chat.startup", "sessions.create", "update.run"],
+        operatorScopes: ["operator.admin", "operator.read"],
+        updateAvailable: UPDATE_AVAILABLE,
+        updateSchedule: {
+          channel: "stable",
+          autoEnabled: false,
+          target: { kind: "package", version: "2.0.0" },
+        },
+      },
+      webChrome: true,
+    });
     const toolbar = page.locator(".macos-titlebar-controls");
     await expect.poll(() => toolbar.isVisible()).toBe(true);
     await expect.poll(() => page.locator(".shell-chrome-controls").isVisible()).toBe(false);
@@ -274,12 +293,52 @@ suite.define(() => {
     await expect.poll(() => forward.isDisabled()).toBe(true);
     await expect.poll(() => search.isVisible()).toBe(true);
     await expect.poll(() => newThread.count()).toBe(0);
+    await page.locator(".sidebar-issues-button__count").waitFor();
 
     await toolbar.getByRole("button", { name: "Collapse sidebar" }).click();
     await expect
       .poll(() => page.locator(".shell").getAttribute("class"))
       .toContain("shell--nav-collapsed");
     await expect.poll(() => newThread.isVisible()).toBe(true);
+    await page.locator(".sidebar-attention--floating .sidebar-issues-button").waitFor();
+    const toolbarBox = await toolbar.boundingBox();
+    const attention = page.locator(".sidebar-attention--floating");
+    const attentionBox = await attention.boundingBox();
+    expect(toolbarBox).not.toBeNull();
+    expect(attentionBox).not.toBeNull();
+    expect(attentionBox!.x - (toolbarBox!.x + toolbarBox!.width)).toBeGreaterThanOrEqual(4);
+    const titleBox = await page
+      .locator(".chat-pane-cache__pane--visible .chat-pane__crumbs:visible")
+      .first()
+      .boundingBox();
+    const attentionRight = await attention.evaluate((element) =>
+      Math.max(
+        ...[element, ...element.querySelectorAll("*")].map(
+          (candidate) => candidate.getBoundingClientRect().right,
+        ),
+      ),
+    );
+    expect(titleBox).not.toBeNull();
+    expect(titleBox!.x - attentionRight).toBeGreaterThanOrEqual(8);
+    const topLeftControls = page.locator(
+      ".macos-titlebar-controls button:visible, .sidebar-attention--floating button:visible",
+    );
+    const centerlines = await topLeftControls.evaluateAll((buttons) =>
+      buttons.map((button) => {
+        const box = button.getBoundingClientRect();
+        return box.top + box.height / 2;
+      }),
+    );
+    for (const centerline of centerlines.slice(1)) {
+      expect(centerline).toBeCloseTo(centerlines[0]!, 1);
+    }
+    if (railProofDir) {
+      await mkdir(railProofDir, { recursive: true });
+      await page.screenshot({
+        animations: "disabled",
+        path: path.join(railProofDir, "native-web-top-left-controls.png"),
+      });
+    }
     await search.click();
     await expect.poll(() => page.locator(".cmd-palette-overlay").isVisible()).toBe(true);
     await page.keyboard.press("Escape");

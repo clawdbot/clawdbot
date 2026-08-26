@@ -18,7 +18,7 @@ import {
   WEBHOOK_RATE_LIMIT_DEFAULTS,
   resolveClientIp,
   type OpenClawConfig,
-} from "./runtime-api.js";
+} from "./runtime-support.js";
 import { ZaloWebhookPayloadError } from "./webhook-spool.js";
 
 type ZaloWebhookTarget = {

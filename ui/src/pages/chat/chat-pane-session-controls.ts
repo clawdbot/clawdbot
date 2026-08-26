@@ -17,6 +17,7 @@ import {
   switchChatModel,
   switchChatThinkingLevel,
 } from "./chat-session.ts";
+import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { refreshChatModelCatalogOnDemand } from "./chat-state-refresh.ts";
 import type { ChatProps } from "./chat-view.ts";
@@ -72,9 +73,7 @@ export function resolveChatModelCatalogState(
       : state.chatModelCatalogError
         ? "error"
         : state.chatModelsLoading
-          ? hasSnapshot
-            ? "refreshing"
-            : "loading"
+          ? "loading"
           : "ready",
   };
 }
@@ -154,7 +153,6 @@ export function renderChatPaneComposerControls(params: {
       disabled: !permissionAccess.allowed,
       disabledReason: permissionAccess.allowed ? undefined : permissionAccess.reason,
       mode: selectedSession?.permissionMode,
-      sessionRoot: selectedSession?.sessionRoot,
       onSelect: async (permissionMode) => {
         if (!permissionAccess.allowed) {
           return;
@@ -162,13 +160,30 @@ export function renderChatPaneComposerControls(params: {
         const runWasActive =
           Boolean(state.chatRunId) ||
           Boolean(selectedSession && isSessionRunActive(selectedSession));
+        const sessionKey = state.sessionKey;
+        const client = state.client;
+        const connectionEpoch = state.connectionEpoch;
+        const agentScope = scopedAgentParamsForSession(state, sessionKey);
+        const ownsSelection = () =>
+          state.connected &&
+          state.sessionKey === sessionKey &&
+          state.client === client &&
+          state.connectionEpoch === connectionEpoch &&
+          scopedAgentParamsForSession(state, sessionKey).agentId === agentScope.agentId;
         try {
-          state.chatError = null;
-          await state.sessions.patch(
-            state.sessionKey,
+          state.chatError = state.lastError = null;
+          const patched = await patchChatSessionSettings(
+            state,
+            sessionKey,
             { permissionMode },
-            scopedAgentParamsForSession(state, state.sessionKey),
+            agentScope,
           );
+          if (!ownsSelection()) {
+            return;
+          }
+          if (!patched) {
+            throw new Error("Session capability is unavailable");
+          }
           if (runWasActive) {
             const topbarHeight = toastAnchor
               .querySelector(".chat-pane__header")
@@ -182,7 +197,10 @@ export function renderChatPaneComposerControls(params: {
             });
           }
         } catch (error) {
-          state.chatError = t("chat.permissionControls.updateFailed", {
+          if (!ownsSelection()) {
+            return;
+          }
+          state.chatError = state.lastError = t("chat.permissionControls.updateFailed", {
             error: String(error),
           });
           state.requestUpdate?.();

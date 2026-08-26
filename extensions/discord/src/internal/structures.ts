@@ -11,13 +11,13 @@ import type {
 } from "discord-api-types/v10";
 import {
   createChannelMessage,
-  createUserDmChannel,
   deleteChannelMessage,
   editChannelMessage,
   getChannelMessage,
   pinChannelMessage,
   unpinChannelMessage,
-} from "./api.js";
+} from "./api.messages.js";
+import { createUserDmChannel } from "./api.users.js";
 import { serializePayload, type MessagePayload } from "./payload.js";
 import type { RequestClient } from "./rest.js";
 

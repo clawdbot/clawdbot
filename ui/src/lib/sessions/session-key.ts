@@ -333,7 +333,9 @@ export function buildAgentMainSessionKey(params: {
   return `agent:${agentId}:${mainKey}`;
 }
 
-function normalizeDefaultMainSessionAliasForUi(sessionKey: string | undefined | null): string {
+export function normalizeDefaultMainSessionAliasForUi(
+  sessionKey: string | undefined | null,
+): string {
   const normalized = normalizeSessionKeyForUiComparison(sessionKey);
   return normalized === DEFAULT_MAIN_KEY
     ? buildAgentMainSessionKey({ agentId: DEFAULT_AGENT_ID, mainKey: DEFAULT_MAIN_KEY })

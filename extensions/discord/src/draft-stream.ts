@@ -31,6 +31,8 @@ type DiscordDraftStream = {
   forceNewMessage: (mode?: "preserve" | "discard") => void;
 };
 
+type PendingCleanupMessage = { channelId: string; messageId: string; warnPrefix: string };
+
 export function createDiscordDraftStream(params: {
   rest: RequestClient;
   channelId: string;
@@ -60,7 +62,7 @@ export function createDiscordDraftStream(params: {
   let streamGeneration = 0;
   let activeCreateGeneration: number | undefined;
   let discardActiveCreate = false;
-  let retargetedCleanup: Array<{ channelId: string; messageId: string }> = [];
+  let pendingCleanupMessages: PendingCleanupMessage[] = [];
 
   const sendOrEditStreamMessage = async (text: string): Promise<boolean> => {
     const generation = streamGeneration;
@@ -159,10 +161,6 @@ export function createDiscordDraftStream(params: {
     streamMessageId = undefined;
   };
   const isValidStreamMessageId = (value: unknown): value is string => typeof value === "string";
-  const deleteStreamMessage = async (messageId: string) => {
-    await deleteChannelMessage(rest, channelId, messageId);
-  };
-
   const { loop, update, stop, clear, discardPending, seal } = createFinalizableDraftLifecycle({
     throttleMs,
     state: streamState,
@@ -170,7 +168,7 @@ export function createDiscordDraftStream(params: {
     readMessageId,
     clearMessageId,
     isValidMessageId: isValidStreamMessageId,
-    deleteMessage: deleteStreamMessage,
+    deleteMessage: async (messageId) => await deleteChannelMessage(rest, channelId, messageId),
     warn: params.warn,
     warnPrefix: "discord stream preview cleanup failed",
   });
@@ -190,16 +188,19 @@ export function createDiscordDraftStream(params: {
     loop.resetPending();
     loop.resetThrottleWindow();
   };
+  const deleteCleanupMessage = async (message: PendingCleanupMessage) => {
+    try {
+      await deleteChannelMessage(rest, message.channelId, message.messageId);
+    } catch (err) {
+      pendingCleanupMessages.push(message);
+      params.warn?.(`${message.warnPrefix}: ${formatErrorMessage(err)}`);
+    }
+  };
   const cleanupRetargeted = async () => {
-    const pending = retargetedCleanup;
-    retargetedCleanup = [];
-    for (const stale of pending) {
-      try {
-        await deleteChannelMessage(rest, stale.channelId, stale.messageId);
-      } catch (err) {
-        retargetedCleanup.push(stale);
-        params.warn?.(`discord stream preview retarget cleanup failed: ${formatErrorMessage(err)}`);
-      }
+    const pending = pendingCleanupMessages;
+    pendingCleanupMessages = [];
+    for (const message of pending) {
+      await deleteCleanupMessage(message);
     }
   };
   const retarget = async (nextChannelId: string) => {
@@ -227,34 +228,32 @@ export function createDiscordDraftStream(params: {
       const stale = {
         channelId: previousChannelId,
         messageId: previousMessageId,
+        warnPrefix: "discord stream preview retarget cleanup failed",
       };
       if (!streamMessageId) {
-        retargetedCleanup.push(stale);
+        pendingCleanupMessages.push(stale);
         throw new Error("discord stream preview retarget replacement failed");
       }
-      try {
-        await deleteChannelMessage(rest, previousChannelId, previousMessageId);
-      } catch (err) {
-        retargetedCleanup.push(stale);
-        params.warn?.(`discord stream preview retarget cleanup failed: ${formatErrorMessage(err)}`);
-      }
+      await deleteCleanupMessage(stale);
     }
   };
   const deleteCurrentMessage = async () => {
     loop.resetPending();
     await loop.waitForInFlight();
-    const messageId = streamMessageId;
+    const currentMessage = streamMessageId
+      ? {
+          channelId,
+          messageId: streamMessageId,
+          warnPrefix: "discord stream preview cleanup failed",
+        }
+      : undefined;
     streamMessageId = undefined;
     lastSentText = "";
     loop.resetThrottleWindow();
-    if (!isValidStreamMessageId(messageId)) {
+    if (!currentMessage) {
       return;
     }
-    try {
-      await deleteStreamMessage(messageId);
-    } catch (err) {
-      params.warn?.(`discord stream preview cleanup failed: ${formatErrorMessage(err)}`);
-    }
+    await deleteCleanupMessage(currentMessage);
   };
 
   params.log?.(`discord stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs})`);

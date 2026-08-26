@@ -410,7 +410,6 @@ extensions/discord/src/monitor/provider.deploy.ts	4
 extensions/discord/src/monitor/provider.lifecycle.ts	2
 extensions/discord/src/monitor/provider.startup-log.ts	1
 extensions/discord/src/monitor/provider.startup.ts	2
-extensions/discord/src/monitor/provider.ts	1
 extensions/discord/src/monitor/reply-context.ts	1
 extensions/discord/src/monitor/reply-safety.ts	1
 extensions/discord/src/monitor/rest-fetch.ts	3
@@ -453,7 +452,7 @@ extensions/duckduckgo/src/config.ts	1
 extensions/duckduckgo/src/ddg-search-provider.ts	1
 extensions/elevenlabs/config-compat.ts	2
 extensions/elevenlabs/speech-provider.ts	3
-extensions/exa/src/exa-web-search-provider.runtime.ts	11
+extensions/exa/src/exa-web-search-provider.runtime.ts	9
 extensions/fal/image-generation-provider.ts	1
 extensions/fal/music-generation-provider.ts	2
 extensions/fal/video-generation-provider.ts	3
@@ -469,7 +468,7 @@ extensions/feishu/src/card-action.ts	1
 extensions/feishu/src/card-interaction.ts	1
 extensions/feishu/src/channel.ts	9
 extensions/feishu/src/chat.ts	2
-extensions/feishu/src/client.ts	5
+extensions/feishu/src/client.ts	4
 extensions/feishu/src/comment-handler.ts	2
 extensions/feishu/src/comment-reaction.ts	2
 extensions/feishu/src/comment-shared.ts	1
@@ -590,7 +589,7 @@ extensions/imessage/src/monitor/catchup-bridge.ts	1
 extensions/imessage/src/monitor/catchup.ts	2
 extensions/imessage/src/monitor/conversation-repair.ts	1
 extensions/imessage/src/monitor/inbound-processing.ts	2
-extensions/imessage/src/monitor/monitor-provider.ts	3
+extensions/imessage/src/monitor/monitor-provider.ts	2
 extensions/imessage/src/probe.ts	1
 extensions/imessage/src/remote-host.ts	1
 extensions/imessage/src/send.ts	5
@@ -873,7 +872,6 @@ extensions/msteams/src/reply-dispatcher.ts	4
 extensions/msteams/src/reply-stream-controller.ts	1
 extensions/msteams/src/sdk-proactive.ts	7
 extensions/msteams/src/sdk.ts	10
-extensions/msteams/src/send.ts	1
 extensions/msteams/src/setup-surface.ts	7
 extensions/msteams/src/sqlite-state.ts	1
 extensions/msteams/src/sso-token-store.ts	2
@@ -922,7 +920,7 @@ extensions/ollama/src/provider-models.ts	1
 extensions/ollama/src/setup-pull.ts	1
 extensions/ollama/src/setup.runtime.ts	1
 extensions/ollama/src/stream-compat.ts	1
-extensions/ollama/src/stream.runtime.ts	7
+extensions/ollama/src/stream.runtime.ts	6
 extensions/onepassword/index.ts	2
 extensions/onepassword/src/op-client.ts	2
 extensions/onepassword/src/tool.ts	1
@@ -948,7 +946,6 @@ extensions/openai/realtime-voice-session-policy.ts	4
 extensions/openai/speech-provider.ts	2
 extensions/openai/tts.ts	2
 extensions/openai/video-generation-provider.ts	3
-extensions/opencode-go/provider-catalog.ts	1
 extensions/opencode-go/provider-policy-api.ts	1
 extensions/opencode-go/reasoning-sanitizer.ts	2
 extensions/opencode-go/stream-termination.ts	9
@@ -1291,7 +1288,7 @@ extensions/telegram/src/message-cache.ts	10
 extensions/telegram/src/miniapp/command.ts	1
 extensions/telegram/src/miniapp/init-data.ts	1
 extensions/telegram/src/miniapp/routes.ts	1
-extensions/telegram/src/monitor.ts	3
+extensions/telegram/src/monitor.ts	2
 extensions/telegram/src/network-config.ts	1
 extensions/telegram/src/network-errors.ts	8
 extensions/telegram/src/outbound-adapter.ts	5
@@ -1395,7 +1392,7 @@ extensions/whatsapp/src/approval-handler.runtime.ts	1
 extensions/whatsapp/src/approval-native.ts	1
 extensions/whatsapp/src/approval-reactions.ts	1
 extensions/whatsapp/src/auth-store.ts	3
-extensions/whatsapp/src/auto-reply/monitor.ts	3
+extensions/whatsapp/src/auto-reply/monitor.ts	2
 extensions/whatsapp/src/auto-reply/monitor/inbound-dispatch.ts	4
 extensions/whatsapp/src/auto-reply/monitor/process-message.ts	2
 extensions/whatsapp/src/channel-outbound.ts	1
@@ -1520,7 +1517,7 @@ packages/ai/src/providers/mistral.ts	6
 packages/ai/src/providers/openai-chatgpt-responses-protocol.ts	1
 packages/ai/src/providers/openai-chatgpt-responses.ts	27
 packages/ai/src/providers/openai-completions-tool-calls.ts	5
-packages/ai/src/providers/openai-completions.ts	16
+packages/ai/src/providers/openai-completions.ts	10
 packages/ai/src/providers/openai-reasoning-effort.ts	6
 packages/ai/src/providers/openai-responses-shared.ts	7
 packages/ai/src/providers/openai-responses-tools.ts	2
@@ -1841,7 +1838,7 @@ src/agents/embedded-agent-runner/run/attempt-stop-reason-recovery.ts	3
 src/agents/embedded-agent-runner/run/attempt-stream-prepare.ts	3
 src/agents/embedded-agent-runner/run/attempt-stream.ts	9
 src/agents/embedded-agent-runner/run/attempt-subscription-cleanup.ts	2
-src/agents/embedded-agent-runner/run/attempt-tool-call-replay-sanitization.ts	18
+src/agents/embedded-agent-runner/run/attempt-tool-call-replay-sanitization.ts	17
 src/agents/embedded-agent-runner/run/attempt-tool-call-stream-normalization.ts	7
 src/agents/embedded-agent-runner/run/attempt-tool-call-text-promotion.ts	3
 src/agents/embedded-agent-runner/run/attempt-tool-prepare.ts	3
@@ -2086,7 +2083,7 @@ src/agents/tool-search-runtime.ts	6
 src/agents/tool-search-transcript.ts	3
 src/agents/tool-search.ts	1
 src/agents/tools-effective-inventory-build.ts	2
-src/agents/tools-effective-inventory.ts	5
+src/agents/tools-effective-inventory.ts	4
 src/agents/tools/agent-step.ts	6
 src/agents/tools/agents-wait-tool.ts	1
 src/agents/tools/ask-user-tool-normalization.ts	3
@@ -2263,7 +2260,6 @@ src/auto-reply/usage-bar/translator.ts	4
 src/boards/board-store.ts	1
 src/boards/sqlite-board-codec.ts	7
 src/boards/sqlite-board-store.ts	3
-src/bootstrap/node-extra-ca-certs.ts	2
 src/bootstrap/node-startup-env.ts	1
 src/canvas/documents.ts	2
 src/canvas/serve.runtime.ts	1
@@ -2412,7 +2408,7 @@ src/cli/gateway-cli/qa-parent-watchdog.ts	3
 src/cli/gateway-cli/register.ts	4
 src/cli/gateway-cli/run.ts	12
 src/cli/gateway-cli/suspend-cli.ts	2
-src/cli/hooks-cli.ts	2
+src/cli/hooks-cli.ts	1
 src/cli/logs-cli.ts	1
 src/cli/mcp-cli.ts	1
 src/cli/models-cli.ts	19
@@ -2494,7 +2490,6 @@ src/commands/backup-git.ts	1
 src/commands/backup-restore.ts	1
 src/commands/backup-schedule.ts	2
 src/commands/backup-shared.ts	1
-src/commands/backup-verify-manifest.ts	1
 src/commands/backup-verify.ts	2
 src/commands/channel-setup/channel-plugin-resolution.ts	1
 src/commands/channel-setup/config-compatibility.ts	2
@@ -2542,7 +2537,7 @@ src/commands/doctor-session-incognito-key-repair.ts	4
 src/commands/doctor-session-snapshots.ts	5
 src/commands/doctor-session-sqlite-compact.ts	1
 src/commands/doctor-session-sqlite-migration-run.ts	8
-src/commands/doctor-session-sqlite-readers.ts	11
+src/commands/doctor-session-sqlite-readers.ts	9
 src/commands/doctor-session-sqlite-recover-report.ts	3
 src/commands/doctor-session-sqlite.ts	3
 src/commands/doctor-session-state-providers.ts	3
@@ -2830,7 +2825,6 @@ src/daemon/launchd-lifecycle.ts	4
 src/daemon/launchd-service-files.ts	1
 src/daemon/launchd-stop.ts	2
 src/daemon/launchd-system.ts	2
-src/daemon/runtime-paths.ts	1
 src/daemon/schtasks-control.ts	5
 src/daemon/schtasks-install.ts	2
 src/daemon/schtasks-process.ts	2
@@ -2886,7 +2880,6 @@ src/gateway/conversation-turn.ts	1
 src/gateway/desktop/host-guidance.ts	1
 src/gateway/desktop/managed-linux.ts	1
 src/gateway/desktop/node-source-context.ts	1
-src/gateway/embeddings-http.ts	1
 src/gateway/exec-approval-manager.ts	7
 src/gateway/gateway-cli-backend.live-helpers.ts	4
 src/gateway/gateway-cli-backend.live-probe-helpers.ts	7
@@ -2913,7 +2906,7 @@ src/gateway/node-pairing-ssh-verify.ts	1
 src/gateway/node-registry-private.ts	3
 src/gateway/node-registry.ts	27
 src/gateway/openai-agent-run-usage.ts	1
-src/gateway/openai-http.ts	30
+src/gateway/openai-http.ts	29
 src/gateway/openresponses-http.ts	4
 src/gateway/operator-approval-snapshot.ts	4
 src/gateway/operator-approval-store.ts	8
@@ -3147,7 +3140,7 @@ src/infra/approval-handler-runtime.ts	15
 src/infra/approval-presentation.ts	3
 src/infra/backup-archive-publication.ts	6
 src/infra/backup-create-stream.ts	3
-src/infra/backup-create.ts	3
+src/infra/backup-create.ts	1
 src/infra/backup-tar-retry.ts	4
 src/infra/backup-volatile-stat-cache.ts	1
 src/infra/bonjour-discovery.ts	5
@@ -3819,7 +3812,7 @@ src/state/openclaw-state-db-readonly.ts	1
 src/state/openclaw-state-db-schema-additive.ts	1
 src/state/openclaw-state-db-schema-helpers.ts	4
 src/state/openclaw-state-db-schema-migration-required.ts	2
-src/state/openclaw-state-db-schema-repair.ts	7
+src/state/openclaw-state-db-schema-repair.ts	2
 src/state/openclaw-state-ownership.ts	1
 src/state/openclaw-state-snapshot-sanitizer.ts	1
 src/state/user-profiles-tailscale-avatar.ts	2
@@ -3981,7 +3974,7 @@ ui/src/components/app-sidebar-session-catalog-render.ts	4
 ui/src/components/app-sidebar-session-list-render.ts	2
 ui/src/components/app-sidebar-session-menu-renderers.ts	4
 ui/src/components/app-sidebar-session-narration.ts	5
-ui/src/components/app-sidebar-session-row-render.ts	4
+ui/src/components/app-sidebar-session-row-render.ts	2
 ui/src/components/app-sidebar-session-section-header.ts	6
 ui/src/components/app-sidebar.ts	2
 ui/src/components/app-topbar.ts	1
@@ -4037,7 +4030,6 @@ ui/src/components/sensitive-input.ts	2
 ui/src/components/session-data-controller.ts	2
 ui/src/components/session-data-scroll-controller.ts	1
 ui/src/components/session-group-defaults-dialog.ts	1
-ui/src/components/session-menu.ts	1
 ui/src/components/session-organizer-controller.ts	5
 ui/src/components/settings-sidebar.ts	3
 ui/src/components/settings-ui.ts	7
@@ -4143,7 +4135,7 @@ ui/src/pages/chat/components/chat-composer-slash-menu.ts	1
 ui/src/pages/chat/components/chat-composer-view.ts	1
 ui/src/pages/chat/components/chat-composer.ts	5
 ui/src/pages/chat/components/chat-effort-picker.ts	6
-ui/src/pages/chat/components/chat-header-session-menu.ts	2
+ui/src/pages/chat/components/chat-header-session-menu.ts	1
 ui/src/pages/chat/components/chat-message-attachment-availability.ts	1
 ui/src/pages/chat/components/chat-message-bubble.ts	2
 ui/src/pages/chat/components/chat-message-confirmation.ts	2

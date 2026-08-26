@@ -2,6 +2,7 @@
 import {
   jsonResult,
   readPositiveIntegerParam,
+  readStringArrayParam,
   readStringParam,
   withNormalizedTimestamp,
 } from "openclaw/plugin-sdk/channel-actions";
@@ -617,74 +618,13 @@ function parseMattermostReactActionParams(params: Record<string, unknown>): {
   };
 }
 
-function collectNonBlankStrings(values: Array<string | undefined>): string[] {
-  const collected: string[] = [];
-  const seen = new Set<string>();
-  for (const value of values) {
-    const trimmed = value?.trim();
-    if (trimmed && !seen.has(trimmed)) {
-      seen.add(trimmed);
-      collected.push(trimmed);
-    }
-  }
-  return collected;
-}
-
-function toSnakeCaseKey(key: string): string {
-  return key
-    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2")
-    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
-    .toLowerCase();
-}
-
-function readMattermostParam(params: Record<string, unknown>, key: string): unknown {
-  if (Object.hasOwn(params, key)) {
-    return params[key];
-  }
-  const snakeKey = toSnakeCaseKey(key);
-  return snakeKey === key || !Object.hasOwn(params, snakeKey) ? undefined : params[snakeKey];
-}
-
-function readMattermostStringParam(
-  params: Record<string, unknown>,
-  key: string,
-): string | undefined {
-  const raw = readMattermostParam(params, key);
-  return typeof raw === "string" ? normalizeOptionalString(raw) : undefined;
-}
-
-function readMattermostStringArrayParam(params: Record<string, unknown>, key: string): string[] {
-  const raw = readMattermostParam(params, key);
-  if (Array.isArray(raw)) {
-    return raw
-      .filter((entry): entry is string => typeof entry === "string")
-      .flatMap((entry) => {
-        const normalized = normalizeOptionalString(entry);
-        return normalized ? [normalized] : [];
-      });
-  }
-  if (typeof raw === "string") {
-    const normalized = normalizeOptionalString(raw);
-    return normalized ? [normalized] : [];
-  }
-  return [];
-}
-
-function collectMattermostAttachmentMedia(params: Record<string, unknown>): {
-  mediaUrls: string[];
-  hasUnsupportedAttachmentPayload: boolean;
-} {
-  const mediaUrlCandidates: Array<string | undefined> = [
-    readMattermostStringParam(params, "media"),
-    readMattermostStringParam(params, "mediaUrl"),
-    readMattermostStringParam(params, "path"),
-    readMattermostStringParam(params, "filePath"),
-    readMattermostStringParam(params, "fileUrl"),
-  ];
-  mediaUrlCandidates.push(...readMattermostStringArrayParam(params, "mediaUrls"));
+function resolveMattermostSendAttachmentMedia(params: Record<string, unknown>): string | undefined {
+  const sourceKeys = ["media", "mediaUrl", "path", "filePath", "fileUrl"];
+  const candidates = sourceKeys.map((key) => readStringParam(params, key));
+  candidates.push(...(readStringArrayParam(params, "mediaUrls") ?? []));
 
   let hasUnsupportedAttachmentPayload = Boolean(
-    readMattermostStringParam(params, "buffer") ?? readMattermostStringParam(params, "base64"),
+    readStringParam(params, "buffer") ?? readStringParam(params, "base64"),
   );
   if (Array.isArray(params.attachments)) {
     for (const attachment of params.attachments) {
@@ -692,39 +632,26 @@ function collectMattermostAttachmentMedia(params: Record<string, unknown>): {
         continue;
       }
       const record = attachment as Record<string, unknown>;
-      mediaUrlCandidates.push(
-        readMattermostStringParam(record, "media"),
-        readMattermostStringParam(record, "mediaUrl"),
-        readMattermostStringParam(record, "path"),
-        readMattermostStringParam(record, "filePath"),
-        readMattermostStringParam(record, "fileUrl"),
-        readMattermostStringParam(record, "url"),
-      );
+      candidates.push(...sourceKeys.map((key) => readStringParam(record, key)));
+      candidates.push(readStringParam(record, "url"));
       hasUnsupportedAttachmentPayload ||= Boolean(
-        readMattermostStringParam(record, "buffer") ?? readMattermostStringParam(record, "base64"),
+        readStringParam(record, "buffer") ?? readStringParam(record, "base64"),
       );
     }
   }
 
-  return {
-    mediaUrls: collectNonBlankStrings(mediaUrlCandidates),
-    hasUnsupportedAttachmentPayload,
-  };
-}
-
-function resolveMattermostSendAttachmentMedia(params: Record<string, unknown>): string | undefined {
-  const attachmentMedia = collectMattermostAttachmentMedia(params);
-  if (attachmentMedia.hasUnsupportedAttachmentPayload) {
+  if (hasUnsupportedAttachmentPayload) {
     throw new Error(
       "Mattermost send attachments require media, mediaUrl, path, filePath, fileUrl, mediaUrls, or attachments[] with one of those fields; buffer/base64 payloads are not supported.",
     );
   }
-  if (attachmentMedia.mediaUrls.length > 1) {
+  const mediaUrls = [...new Set(candidates.filter((candidate) => Boolean(candidate)))];
+  if (mediaUrls.length > 1) {
     throw new Error(
       "Mattermost send supports one attachment per message; split multiple mediaUrls or attachments[] entries into separate sends.",
     );
   }
-  return attachmentMedia.mediaUrls[0];
+  return mediaUrls[0];
 }
 
 type MattermostOutboundContext = Parameters<NonNullable<ChannelOutboundAdapter["sendText"]>>[0];

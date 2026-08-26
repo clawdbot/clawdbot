@@ -449,39 +449,55 @@ describe("qa confidence report", () => {
     }
   });
 
-  it("rejects skipped token reports when a live usage source is required", async () => {
-    await writeJson("live-token/qa-runtime-token-efficiency-summary.json", {
-      status: "skipped",
-      pass: true,
-      rows: [],
-    });
+  it.each([
+    ["skipped", "skipped", [], undefined, false, "token summary has no usage rows"],
+    ["empty", "estimated", [], undefined, false, "token summary has no usage rows"],
+    ["missing", "estimated", undefined, undefined, false, "token summary missing rows"],
+    [
+      "executed",
+      "estimated",
+      [{ usageSource: "mock-estimate" }],
+      undefined,
+      true,
+      "summary pass=true",
+    ],
+    ["live", "skipped", [], "live-usage", false, "token summary has no live-usage rows"],
+  ] as const)(
+    "evaluates %s token evidence",
+    async (_name, status, rows, expectedSource, passed, details) => {
+      await writeJson("live-token/qa-runtime-token-efficiency-summary.json", {
+        status,
+        pass: true,
+        ...(rows ? { rows } : {}),
+      });
 
-    const report = await buildQaConfidenceReport({
-      manifest: {
-        version: 1,
-        profile: "codex-100",
-        lanes: [
-          {
-            id: "live-token-efficiency",
-            title: "Live token efficiency",
-            kind: "token-efficiency-summary",
-            artifact: "live-token/qa-runtime-token-efficiency-summary.json",
-            required: true,
-            expectedTokenUsageSource: "live-usage",
-          },
-        ],
-      },
-      artifactRoot: tempRoot,
-      strictZeroUnknowns: true,
-      generatedAt: "2026-05-12T00:00:00.000Z",
-    });
+      const report = await buildQaConfidenceReport({
+        manifest: {
+          version: 1,
+          profile: "codex-100",
+          lanes: [
+            {
+              id: "live-token-efficiency",
+              title: "Live token efficiency",
+              kind: "token-efficiency-summary",
+              artifact: "live-token/qa-runtime-token-efficiency-summary.json",
+              required: true,
+              ...(expectedSource ? { expectedTokenUsageSource: expectedSource } : {}),
+            },
+          ],
+        },
+        artifactRoot: tempRoot,
+        strictGlobalPass: true,
+      });
 
-    expect(report.pass).toBe(false);
-    expect(report.lanes[0]).toMatchObject({
-      status: "unknown",
-      details: "token summary has no live-usage rows",
-    });
-  });
+      expect(report.pass).toBe(passed);
+      expect(report.globalPass).toBe(passed);
+      expect(report.lanes[0]).toMatchObject({
+        status: passed ? "pass" : "unknown",
+        details,
+      });
+    },
+  );
 
   it("preserves partial zero-unknown mode for classified failing lanes", async () => {
     await writeJson("classified/qa-suite-summary.json", {

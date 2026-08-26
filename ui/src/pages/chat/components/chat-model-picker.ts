@@ -23,13 +23,14 @@ import { handleChatComposerDetailsToggle, syncChatPickerOverlay } from "./chat-p
 
 export type ChatModelCatalogState = {
   hasSnapshot: boolean;
-  status: "idle" | "loading" | "refreshing" | "ready" | "error" | "offline";
+  status: "idle" | "loading" | "ready" | "error" | "offline";
 };
 
 type ChatModelPickerParams = {
   contextWindow?: ChatContextWindowControlParams;
   disabled: boolean;
   disabledReason?: string;
+  mobileSecondary?: { disabled: boolean; label: string; value: string };
   modelCatalogState?: ChatModelCatalogState;
   modelSelectionLocked: boolean;
   modelOptions: ChatModelPickerOption[];
@@ -250,15 +251,13 @@ function renderCatalogState(
   const label =
     state.status === "offline"
       ? t("common.offline")
-      : state.status === "refreshing"
-        ? t("chat.modelControls.refreshingModels")
-        : state.status === "error"
-          ? errorLabel
-          : state.status === "ready"
-            ? hasOptions
-              ? `${t("modelSetup.failure.auth")}. ${t("modelSetup.failureGuidance.auth")}`
-              : t("chat.modelControls.noModelsAvailable")
-            : t("chat.modelControls.loadingModels");
+      : state.status === "error"
+        ? errorLabel
+        : state.status === "ready"
+          ? hasOptions
+            ? `${t("modelSetup.failure.auth")}. ${t("modelSetup.failureGuidance.auth")}`
+            : t("chat.modelControls.noModelsAvailable")
+          : t("chat.modelControls.loadingModels");
   return html`
     <div
       class="chat-controls__model-catalog-state ${hasOptions
@@ -413,6 +412,28 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
       highlightModelRow(menu, row);
     }
   };
+  const openEffortPicker = (event: MouseEvent) => {
+    event.stopPropagation();
+    if (params.mobileSecondary?.disabled !== false) {
+      return;
+    }
+    // SAFETY: Lit binds this handler directly to the effort button rendered below.
+    const modelPicker = (event.currentTarget as HTMLElement).closest<HTMLDetailsElement>(
+      ".chat-controls__model-picker",
+    );
+    const effortPicker = modelPicker?.parentElement?.querySelector<HTMLDetailsElement>(
+      ".chat-controls__effort-picker",
+    );
+    if (!modelPicker || !effortPicker) {
+      return;
+    }
+    effortPicker.setAttribute("data-chat-focus-panel", "");
+    modelPicker.open = false;
+    effortPicker.open = true;
+  };
+  const settingsLabel = params.mobileSecondary
+    ? `${t("chat.selectors.model")}: ${triggerTitle}; ${params.mobileSecondary.label}: ${params.mobileSecondary.value}`
+    : `${t("chat.selectors.model")}: ${triggerTitle}`;
   return html`
     <details
       class="chat-controls__inline-select chat-controls__model-picker"
@@ -439,10 +460,11 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
           ? "chat-controls__inline-select-trigger--disabled"
           : ""}"
         data-chat-model-select="true"
+        data-chat-model-settings="true"
         data-chat-model-locked=${params.modelSelectionLocked ? "true" : "false"}
         data-chat-select-value=${params.selectedModelValue}
         data-chat-model-tools=${modelToolsUnavailable ? "unavailable" : "available"}
-        aria-label=${`${t("chat.selectors.model")}: ${triggerTitle}`}
+        aria-label=${settingsLabel}
         aria-disabled=${params.disabled ? "true" : "false"}
         title=${params.disabledReason ?? triggerTitle}
         @click=${(event: MouseEvent) => {
@@ -453,6 +475,9 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
           (event.currentTarget as HTMLElement).focus({ preventScroll: true });
         }}
       >
+        <span class="chat-controls__model-settings-icon" aria-hidden="true"
+          >${icons.slidersHorizontal}</span
+        >
         ${modelToolsUnavailable
           ? html`
               <openclaw-tooltip .content=${t("chat.modelControls.chatOnlyHelp")}>
@@ -486,6 +511,19 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
           class="chat-controls__inline-select-menu chat-controls__model-menu"
           aria-label=${t("chat.selectors.model")}
         >
+          ${params.mobileSecondary
+            ? html`
+                <button
+                  class="chat-controls__inline-select-option chat-controls__mobile-effort-option"
+                  type="button"
+                  ?disabled=${params.mobileSecondary.disabled}
+                  @click=${openEffortPicker}
+                >
+                  <span>${params.mobileSecondary.label}</span>
+                  <span>${params.mobileSecondary.value}</span>
+                </button>
+              `
+            : nothing}
           ${params.modelSelectionLocked
             ? html`
                 <div

@@ -413,6 +413,7 @@ type FollowupRuntimeMetadata = Pick<
   | "queueAbortSignal"
   | "deliveryCorrelations"
   | "turnAdoptionLifecycle"
+  | "queuedFollowupReplyDisposition"
 >;
 
 function hasCurrentTurnRuntimeMetadata(item: FollowupRun): boolean {
@@ -668,6 +669,7 @@ function collectRuntimeMetadata(
     queueAbortSignal: items.find((item) => item.queueAbortSignal)?.queueAbortSignal,
     deliveryCorrelations: deliveryCorrelations.length > 0 ? deliveryCorrelations : undefined,
     turnAdoptionLifecycle: items.length === 1 ? items[0]?.turnAdoptionLifecycle : undefined,
+    queuedFollowupReplyDisposition: items.at(-1)?.queuedFollowupReplyDisposition,
   };
 }
 

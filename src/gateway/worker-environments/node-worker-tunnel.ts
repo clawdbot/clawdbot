@@ -62,11 +62,6 @@ const RETRYABLE_TRANSPORT_CODES = new Set([
   "UNAVAILABLE",
 ]);
 
-type TerminalNodeWorkerSupervisorReceipt = Extract<
-  NodeWorkerSupervisorReceipt,
-  { state: "completed" | "failed" | "interrupted" | "cancelled" }
->;
-
 type NodeWorkerLaunch = (request: {
   deviceId: string;
   input: {
@@ -81,7 +76,7 @@ type NodeWorkerLaunch = (request: {
   timeoutMs: number;
   signal?: AbortSignal;
   onDispatchReady?: () => void;
-}) => Promise<TerminalNodeWorkerSupervisorReceipt>;
+}) => Promise<Exclude<NodeWorkerSupervisorReceipt, { state: "pending" | "running" }>>;
 
 type NodeWorkerWorkspaceBinding = {
   localPath: string;
@@ -572,7 +567,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
             const origin = await workspace.trySyncWorkspace(request, prepared.snapshot.manifestRef);
             recordNodeSyncPath(entry.environmentId, entry.sessionId, origin, originStartedAt);
             if (origin.kind === "synced") {
-              return origin.result;
+              return await workspace.finalizeSync(request, origin.result);
             }
             const transferred = await exec({
               argv: ["openclaw-internal-workspace-transfer"],
@@ -591,11 +586,11 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
             ) {
               throw new Error("Node workspace transfer failed");
             }
-            return {
+            return await workspace.finalizeSync(request, {
               mode: prepared.snapshot.manifest.baseCommit ? ("git" as const) : ("plain" as const),
               remoteWorkspaceDir: transferred.workspaceDir,
               manifestRef: prepared.snapshot.manifestRef,
-            };
+            });
           } finally {
             options.workspaceTransfer.revoke(entry.environmentId, prepared.token);
           }
@@ -713,8 +708,13 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       }
     },
     async stopAll(): Promise<void> {
-      await Promise.all([...entries.values()].map(stopEntry));
-      await options.workspaceTransfer.closeAll();
+      const stopped = await Promise.allSettled([...entries.values()].map(stopEntry));
+      // Shared transfer state outlives every tunnel, even when a sibling's cleanup fails.
+      stopped.push(...(await Promise.allSettled([options.workspaceTransfer.closeAll()])));
+      const failure = stopped.find((result) => result.status === "rejected");
+      if (failure) {
+        throw failure.reason;
+      }
     },
     status(environmentId: string): WorkerTunnelStatus {
       const entry = entries.get(environmentId);

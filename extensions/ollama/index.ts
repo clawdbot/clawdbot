@@ -14,7 +14,6 @@ import {
   type OpenClawPluginApi,
   type ProviderAppGuidedSetupContext,
   type ProviderAuthContext,
-  type ProviderAuthMethod,
   type ProviderAuthMethodNonInteractiveContext,
   type ProviderAuthResult,
   type ProviderAugmentModelCatalogContext,
@@ -43,7 +42,6 @@ import {
   OLLAMA_CLOUD_DEFAULT_MODELS,
   OLLAMA_CLOUD_PROVIDER_ID,
   OLLAMA_DEFAULT_BASE_URL,
-  OLLAMA_DEFAULT_MODEL,
   OLLAMA_GLM52_CLOUD_MODEL_ID,
   resolveOllamaSetupDefaultBaseUrl,
 } from "./src/defaults.js";
@@ -164,88 +162,6 @@ function classifyOllamaFailoverReason(errorMessage: string): "server_error" | un
 const OLLAMA_CLOUD_DEFAULT_MODEL_REF = `${OLLAMA_CLOUD_PROVIDER_ID}/${OLLAMA_CLOUD_DEFAULT_MODELS[0].id}`;
 const OLLAMA_CONFIGURED_SHOW_CONCURRENCY = 4;
 const OLLAMA_CONFIGURED_SHOW_MAX_MODELS = 8;
-
-type OllamaNonInteractiveValidationContext = Parameters<
-  NonNullable<ProviderAuthMethod["validateNonInteractive"]>
->[0];
-
-async function validateOllamaNonInteractive(
-  ctx: OllamaNonInteractiveValidationContext,
-): Promise<boolean> {
-  const configuredBaseUrl =
-    typeof ctx.opts.customBaseUrl === "string" ? ctx.opts.customBaseUrl.trim() : undefined;
-  const baseUrl = resolveOllamaApiBase(configuredBaseUrl || resolveOllamaSetupDefaultBaseUrl());
-  // Reset must only inspect existing models: pulling or storing credentials
-  // here could mutate a healthy installation before its reset is approved.
-  const discovery = await fetchOllamaModels(baseUrl);
-  if (!discovery.reachable) {
-    ctx.runtime.error(
-      `Ollama could not be reached at ${baseUrl}.\nDownload it at https://ollama.com/download`,
-    );
-    ctx.runtime.exit(1);
-    return false;
-  }
-
-  const requestedModel =
-    typeof ctx.opts.customModelId === "string"
-      ? ctx.opts.customModelId.trim().replace(/^ollama\//i, "")
-      : undefined;
-  const selectedModel = requestedModel || OLLAMA_DEFAULT_MODEL;
-  const availableModelNames = discovery.models.map((model) => model.name);
-  const normalizeAvailableModelName = (modelName: string) =>
-    modelName
-      .trim()
-      .toLowerCase()
-      .replace(/:latest$/, "");
-  const selectedModelIsAvailable = availableModelNames.some(
-    (modelName) =>
-      normalizeAvailableModelName(modelName) === normalizeAvailableModelName(selectedModel),
-  );
-
-  if (requestedModel && isOllamaCloudModel(requestedModel)) {
-    const { checkOllamaCloudAuth } = await loadOllamaSetup();
-    const cloudAuth = await checkOllamaCloudAuth(baseUrl);
-    if (!cloudAuth.signedIn) {
-      ctx.runtime.error(
-        `Cloud models on this Ollama host need \`ollama signin\`.\n${
-          cloudAuth.signinUrl ?? "Run `ollama signin` on the configured Ollama host."
-        }`,
-      );
-      ctx.runtime.exit(1);
-      return false;
-    }
-    // Catalog rows can be stale; /api/show confirms every cloud model without
-    // downloading or loading it before the destructive reset is approved.
-    const showInfo = await queryOllamaModelShowInfo(baseUrl, requestedModel);
-    if (typeof showInfo.contextWindow !== "number" && (showInfo.capabilities?.length ?? 0) === 0) {
-      ctx.runtime.error(
-        `Ollama model ${requestedModel} was not found at ${baseUrl}.\nAvailable models: ${
-          availableModelNames.join(", ") || "(none)"
-        }`,
-      );
-      ctx.runtime.exit(1);
-      return false;
-    }
-    return true;
-  }
-
-  if (availableModelNames.length === 0) {
-    ctx.runtime.error(
-      `No Ollama models are available at ${baseUrl}.\nPull a model first, then re-run setup.`,
-    );
-    ctx.runtime.exit(1);
-    return false;
-  }
-  if (!selectedModelIsAvailable) {
-    ctx.runtime.error(
-      `Ollama model ${selectedModel} was not found at ${baseUrl}.\nAvailable models: ${availableModelNames.join(", ")}`,
-    );
-    ctx.runtime.exit(1);
-    return false;
-  }
-
-  return true;
-}
 
 async function buildLocalOllamaProvider(
   configuredBaseUrl?: string,
@@ -1046,7 +962,8 @@ export default definePluginEntry({
               ...(result.defaultModel ? { defaultModel: result.defaultModel } : {}),
             };
           },
-          validateNonInteractive: validateOllamaNonInteractive,
+          validateNonInteractive: async (ctx) =>
+            await (await loadOllamaSetup()).validateOllamaNonInteractive(ctx),
           runNonInteractive: async (ctx: ProviderAuthMethodNonInteractiveContext) => {
             const { configureOllamaNonInteractive } = await loadOllamaSetup();
             return await configureOllamaNonInteractive({

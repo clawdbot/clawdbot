@@ -137,6 +137,65 @@ suite.define(() => {
     );
   });
 
+  it("shows rejected WhatsApp login immediately without waiting for channel status", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            "channels.status": {
+              ts: Date.now(),
+              channelOrder: ["whatsapp"],
+              channelLabels: { whatsapp: "WhatsApp" },
+              channels: {
+                whatsapp: { configured: true, linked: true, running: true, connected: true },
+              },
+              channelAccounts: {},
+              channelDefaultAccountId: {},
+            },
+            "channels.pairing.list": {
+              accounts: [],
+              requests: [],
+              commandOwnerConfigured: true,
+              limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
+            },
+          },
+        });
+
+        expect((await page.goto(`${suite.server.baseUrl}settings/channels`))?.status()).toBe(200);
+        await page.locator(".channels-item", { hasText: "WhatsApp" }).first().click();
+        const detail = page.locator(".channels-detail");
+        const relink = detail.getByRole("button", { name: "Relink" });
+        await relink.waitFor();
+        const statusReadsBefore = (await gateway.getRequests("channels.status")).length;
+        await gateway.deferNext("channels.status", { probe: true });
+        await gateway.deferNext("web.login.start");
+
+        await relink.click();
+        await gateway.waitForRequest("web.login.start");
+        await gateway.rejectDeferred("web.login.start", {
+          code: "INVALID_REQUEST",
+          message: "WhatsApp login rejected",
+        });
+
+        if (captureUiProofEnabled) {
+          await mkdir(uiProofArtifactDir, { recursive: true });
+          await page.screenshot({
+            animations: "disabled",
+            fullPage: true,
+            path: path.join(
+              uiProofArtifactDir,
+              `whatsapp-mutation-${process.env.OPENCLAW_UI_PROOF_LABEL ?? "rejected"}.png`,
+            ),
+          });
+        }
+        await expect.poll(() => detail.textContent()).toContain("WhatsApp login rejected");
+        await expect.poll(() => relink.isEnabled()).toBe(true);
+        expect(await gateway.getRequests("channels.status")).toHaveLength(statusReadsBefore);
+      },
+    );
+  });
+
   it("confirms the explicit default account and preserves a no-op logout", async () => {
     await suite.withPage(
       {

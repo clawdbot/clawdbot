@@ -5,6 +5,7 @@ import { resolveControlUiPaths } from "./browser.ts";
 
 type ControlUiPublicAsset =
   | ControlUiRootPublicAsset
+  | `fonts/${string}.css`
   | `provider-icons/ProviderIcon-${string}.svg`
   | `plugin-art/${string}.webp`
   | `app-art/${string}.webp`;

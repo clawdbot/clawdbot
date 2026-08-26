@@ -486,6 +486,17 @@ describe("Vercel Container Registry publishing", () => {
     expect(copyStep?.run).toContain("${alias}=${SOURCE_IMAGE}@${digest}");
   });
 
+  it("keeps direct VCR recovery blocking without exposing an advisory dispatch input", () => {
+    const reusable = readWorkflow(".github/workflows/vercel-container-registry-publish.yml");
+    const releaseWorkflow = readWorkflow(".github/workflows/openclaw-release-publish.yml");
+
+    expect(reusable.on?.workflow_dispatch?.inputs).not.toHaveProperty("advisory");
+    expect(requireJob(reusable, "publish")["continue-on-error"]).toBe(
+      "${{ inputs.advisory == true }}",
+    );
+    expect(requireJob(releaseWorkflow, "publish_vcr").with?.advisory).toBe(true);
+  });
+
   it("isolates best-effort VCR publication from Docker and GitHub release finalization", () => {
     const reusable = readWorkflow(".github/workflows/vercel-container-registry-publish.yml");
     const dockerRelease = readWorkflow(".github/workflows/docker-release.yml");
@@ -542,7 +553,6 @@ describe("Vercel Container Registry publishing", () => {
     expect(reusablePublish.if).toBe(
       "${{ always() && (inputs.advisory || (needs.validate_recovery.result == 'success' && needs.approve_recovery.result == 'success')) }}",
     );
-    expect(reusablePublish["continue-on-error"]).toBe("${{ inputs.advisory }}");
     expect(reusablePublish.permissions).toEqual({ contents: "read" });
     expect(reusablePublish["timeout-minutes"]).toBe(30);
 
@@ -576,7 +586,6 @@ describe("Vercel Container Registry publishing", () => {
       required: true,
       type: "boolean",
     });
-    expect(reusable.on?.workflow_dispatch?.inputs).not.toHaveProperty("advisory");
     expect(reusable.on?.workflow_dispatch?.inputs).toEqual({
       include_browser: reusable.on?.workflow_call?.inputs?.include_browser,
       source_digests: reusable.on?.workflow_call?.inputs?.source_digests,

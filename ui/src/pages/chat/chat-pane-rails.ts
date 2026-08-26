@@ -62,7 +62,7 @@ export function createChatPaneRails(params: {
     hasPanelSlot(slot) ? closePanelSlot(slot) : openPanelSlot(slot);
   const sessionWorkspaceBase = createSessionWorkspaceProps(state, {
     draftScope: params.presentationId,
-    expanded: hasPanelSlot("workspace"),
+    expanded: isSidebarSlotVisible(sidebarLayout, "workspace"),
     narrowLayout: false,
     presented: params.presented,
   });

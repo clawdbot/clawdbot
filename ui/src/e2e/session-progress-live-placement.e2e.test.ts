@@ -179,11 +179,9 @@ suite.define(() => {
         await expect
           .poll(() => visiblePane.locator('[data-progress-card-placement="rail"]').count())
           .toBe(0);
-        await visiblePane.locator(".side-panel__minimize").evaluate((button) => {
-          if (button instanceof HTMLElement) {
-            button.click();
-          }
-        });
+        const sidePanel = visiblePane.locator(".sidebar-region__right-runtime .side-panel");
+        await sidePanel.locator(".side-panel__minimize").click();
+        await sidePanel.waitFor({ state: "hidden" });
         await expect.poll(() => visiblePane.locator(".session-progress-card").count()).toBe(1);
         await expect
           .poll(() => visiblePane.locator('[data-progress-card-placement="composer"]').isVisible())

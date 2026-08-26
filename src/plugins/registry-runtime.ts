@@ -998,11 +998,49 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
               return await agent.runEmbeddedAgent(runParams);
             });
           };
+          const channelOwnerRecord = pluginRuntimeRecordById.get(pluginId);
+          const runCommandFromIngress: PluginRuntime["agent"]["runCommandFromIngress"] = async (
+            params,
+            commandRuntime,
+          ) => {
+            const { senderIsOwner: claimedOwner, messageChannel, ...remainingParams } = params;
+            const senderIsOwner = claimedOwner === true;
+            // Validate and dispatch the same host-owned values; never re-read plugin-owned authority.
+            const ingressParams = { ...remainingParams, senderIsOwner, messageChannel };
+            if (
+              !channelOwnerRecord ||
+              // Community channels may admit guests; trusted provenance is required only for owner elevation.
+              (senderIsOwner &&
+                channelOwnerRecord.origin !== "bundled" &&
+                channelOwnerRecord.trustedOfficialInstall !== true) ||
+              pluginRuntimeRecordById.get(pluginId) !== channelOwnerRecord ||
+              !activePluginRuntimeRecords.has(channelOwnerRecord) ||
+              isPluginRegistryRetired(registry) ||
+              !registry.plugins.some(
+                (record) => record === channelOwnerRecord && record.status === "loaded",
+              ) ||
+              !registry.channels.some(
+                (channel) => channel.pluginId === pluginId && channel.plugin.id === messageChannel,
+              )
+            ) {
+              throw new Error(
+                `Plugin "${pluginId}" cannot admit authenticated owner authority for channel "${messageChannel ?? "unknown"}".`,
+              );
+            }
+            return await runWithPluginScope(() =>
+              agent.runCommandFromIngress(ingressParams, commandRuntime),
+            );
+          };
           const scopedAgent = Object.create(
             Object.getPrototypeOf(agent),
             Object.getOwnPropertyDescriptors(agent),
           ) as PluginRuntime["agent"];
           Object.defineProperties(scopedAgent, {
+            runCommandFromIngress: {
+              configurable: true,
+              enumerable: true,
+              value: runCommandFromIngress,
+            },
             runEmbeddedAgent: {
               configurable: true,
               enumerable: true,

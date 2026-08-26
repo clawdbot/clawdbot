@@ -110,7 +110,7 @@ describe("Control UI theme contrast", () => {
       requireCssColor(dark, "card"),
     ];
     const timestampRule = readRuleBody(groupedCss, ".chat-group-timestamp");
-    const slashArgsRule = readRuleBody(chatLayoutCss, ".slash-menu-args");
+    const slashArgsRule = readRuleBody(chatLayoutCss, ".slash-menu-args,\n.slash-menu-desc");
 
     expect(timestampRule).toMatch(/color:\s*var\(--muted\)/);
     expect(slashArgsRule).toMatch(/color:\s*var\(--muted\)/);
@@ -145,6 +145,7 @@ describe("Control UI theme contrast", () => {
       ':root[data-theme-mode="light"]',
       ':root[data-theme="openknot-light"]',
       ':root[data-theme="dash-light"]',
+      ':root[data-theme="absolutely-light"]',
     ]) {
       const theme = readCssVarBlock(baseCss, selector);
       const muted = requireCssColor(theme, "muted");

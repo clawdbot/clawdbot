@@ -20,6 +20,24 @@ type SidebarSessionListOwner = {
   requestSessionDataUpdate(): void;
 };
 
+const sidebarSessionErrorOwners = new WeakMap<SidebarSessionListOwner, "list" | "action">();
+
+export function publishSidebarSessionError(
+  owner: SidebarSessionListOwner,
+  error: string | null,
+  source: "list" | "action",
+): void {
+  if (source === "list" && sidebarSessionErrorOwners.get(owner) === "action") {
+    return;
+  }
+  owner.sessionMutationError = error;
+  if (error === null) {
+    sidebarSessionErrorOwners.delete(owner);
+  } else {
+    sidebarSessionErrorOwners.set(owner, source);
+  }
+}
+
 function pruneSidebarAgentSessionCaches(
   owner: SidebarSessionListOwner,
   agentIds: readonly string[],
@@ -97,14 +115,15 @@ export function subscribeFilteredSidebarSessions(
     }
     publishSidebarSessionList(owner, snapshot);
     owner.sessionsLoading = snapshot.loading;
-    if (snapshot.error) {
-      owner.sessionMutationError = snapshot.error;
-    }
+    publishSidebarSessionError(owner, snapshot.error, "list");
     owner.requestSessionDataUpdate();
   };
   const unsubscribe = sessions.subscribeList(scope, apply);
   apply(sessions.listSnapshot(scope));
-  return unsubscribe;
+  return () => {
+    unsubscribe();
+    publishSidebarSessionError(owner, null, "list");
+  };
 }
 
 export function refreshSidebarSessionList(

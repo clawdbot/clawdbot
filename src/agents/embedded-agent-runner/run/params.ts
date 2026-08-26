@@ -17,6 +17,7 @@ import type { SessionEntry, SessionToolOverrides } from "../../../config/session
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { GroupToolPolicyConfig } from "../../../config/types.tools.js";
 import type { CronRuntimeAuthority } from "../../../cron/runtime-authority.js";
+import type { CronScheduledToolCallerOrigin } from "../../../cron/scheduled-tool-policy.js";
 import type { ImageContent } from "../../../llm/types.js";
 import type { MediaFact } from "../../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
@@ -51,6 +52,7 @@ import type { ContextEngineTurnAttemptFacts } from "../../harness/context-engine
 import type { ExpectedAgentHarnessRuntimeArtifact } from "../../harness/runtime-artifact.types.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
 import type { PreparedModelThinkingCapability } from "../../model-catalog-lookup.js";
+import type { ModelFallbackAttemptProvenance } from "../../model-fallback.types.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { ScheduledToolPolicyContext } from "../../scheduled-tool-policy.js";
@@ -252,6 +254,8 @@ export type RunEmbeddedAgentParams = {
   disableTools?: boolean;
   provider?: string;
   model?: string;
+  /** Outer model-fallback owner facts for this admitted attempt. */
+  modelRoutingProvenance?: ModelFallbackAttemptProvenance;
   /** Vision capability resolved by the run owner from its prepared model catalog. */
   modelHasVision?: boolean;
   /** Session-selected context-window option id carried by the run owner. */
@@ -458,4 +462,74 @@ export type RunEmbeddedAgentParams = {
   cleanupBundleMcpOnRunEnd?: boolean;
   /** Mark explicit one-shot local CLI runs so plugin tools can release resources promptly. */
   oneShotCliRun?: boolean;
+};
+
+export type EmbeddedForegroundPromptContext = Pick<
+  RunEmbeddedAgentParams,
+  | "agentDir"
+  | "promptCacheKey"
+  | "reasoningLevel"
+  | "messageChannel"
+  | "messageProvider"
+  | "clientCaps"
+  | "toolBindings"
+  | "chatType"
+  | "agentAccountId"
+  | "trigger"
+  | "messageTo"
+  | "messageThreadId"
+  | "conversationToolPolicy"
+  | "groupId"
+  | "groupChannel"
+  | "groupSpace"
+  | "memberRoleIds"
+  | "messageActionTurnCapability"
+  | "spawnedBy"
+  | "isCanonicalWorkspace"
+  | "senderId"
+  | "senderName"
+  | "senderUsername"
+  | "senderE164"
+  | "senderIsOwner"
+  | "approvalReviewerDeviceId"
+  | "currentChannelId"
+  | "chatId"
+  | "channelContext"
+  | "currentMessagingTarget"
+  | "currentThreadTs"
+  | "currentMessageId"
+  | "currentInboundAudio"
+  | "replyToMode"
+  | "requireExplicitMessageTarget"
+  | "disableMessageTool"
+  | "githubPublicationAvailable"
+  | "conversationRecall"
+  | "toolOverrides"
+  | "skillsSnapshot"
+  | "currentInboundEventKind"
+  | "clientTools"
+  | "disableTools"
+  | "contextWindow"
+  | "promptMode"
+  | "forceMessageTool"
+  | "enableHeartbeatTool"
+  | "forceHeartbeatTool"
+  | "allowGatewaySubagentBinding"
+  | "extraSystemPrompt"
+  | "sourceReplyDeliveryMode"
+  | "taskSuggestionDeliveryMode"
+  | "silentReplyPromptMode"
+  | "ownerNumbers"
+  | "toolsAllow"
+  | "runtimePluginToolGrant"
+  | "inputProvenance"
+  | "scheduledToolPolicy"
+  | "modelThinkingCapability"
+  | "modelFallbacksOverride"
+> & {
+  agentId: string;
+  workspaceDir: string;
+  cwd?: string;
+  sandboxSessionKey: string;
+  cronCreatorCallerOrigin?: CronScheduledToolCallerOrigin;
 };

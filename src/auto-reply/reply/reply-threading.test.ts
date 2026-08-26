@@ -134,6 +134,31 @@ describe("resolveReplyToMode", () => {
     expect(resolveReplyDeliveryAccountId(emptyCfg, "whatsapp")).toBe("work");
     expect(resolveReplyDeliveryAccountId(emptyCfg, "whatsapp", "personal")).toBe("personal");
   });
+
+  it("applies canonical account policy before channel-wide threading defaults", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "irc", source: "test", plugin: createChannelTestPluginBase({ id: "irc" }) },
+      ]),
+    );
+    const cfg: OpenClawConfig = {
+      channels: {
+        irc: {
+          replyToMode: "off",
+          accounts: {
+            "Ops Team": { replyToMode: "all" },
+            support: { replyToMode: "first" },
+          },
+        },
+      },
+    };
+
+    expect(resolveReplyToMode(cfg, "irc", "ops-team", "group")).toBe("all");
+    expect(resolveReplyToMode(cfg, "irc", "OPS TEAM", "direct")).toBe("all");
+    expect(resolveReplyToMode(cfg, "irc", "support", "group")).toBe("first");
+    expect(resolveReplyToMode(cfg, "irc", "unknown", "group")).toBe("off");
+    expect(resolveReplyToMode(cfg, "irc", null, "direct")).toBe("off");
+  });
 });
 
 describe("createReplyToModeFilterForChannel", () => {

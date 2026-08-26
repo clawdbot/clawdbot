@@ -16,6 +16,7 @@ mod operation_executor;
 mod pending_approvals;
 mod quickchat;
 mod quickchat_widgets;
+mod remote_gateway;
 mod tray;
 mod updater;
 
@@ -23,17 +24,109 @@ use cli::{CliError, OpenClawCli};
 use gateway::{GatewayAction, GatewaySnapshot};
 use gateway_operation_queue::{GatewayOperation, GatewayOperationQueue};
 use installer::InstallChannel;
+use remote_gateway::RemoteGatewayRequest;
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, Manager, State, Url, WebviewWindow};
+use tauri::webview::{NewWindowResponse, WebviewBuilder};
+use tauri::{
+    AppHandle, Emitter, LogicalPosition, Manager, State, Url, WebviewUrl, WebviewWindow,
+    WebviewWindowBuilder,
+};
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_global_shortcut::{Code, Modifiers};
+use tauri_plugin_opener::OpenerExt;
 
 const CONNECTED_WATCH_INTERVAL: Duration = Duration::from_secs(15);
 const RECONNECT_INTERVAL: Duration = Duration::from_secs(3);
+const EXTERNAL_LINK_INIT_SCRIPT: &str = r#"document.addEventListener("click", (event) => {
+  const link = event.target?.closest?.('a[target="_blank"]');
+  if (!link) return;
+  try {
+    const destination = new URL(link.href, location.href);
+    if (destination.protocol === "http:" || destination.protocol === "https:") {
+      link.target = "_self";
+    }
+  } catch {}
+}, true);"#;
+fn external_browser_url_allowed(url: &Url) -> bool {
+    matches!(url.scheme(), "http" | "https")
+        && url.has_host()
+        && url.username().is_empty()
+        && url.password().is_none()
+}
+
+fn native_auth_initialization_script(
+    dashboard: &Url,
+    gateway: &Url,
+    request: &RemoteGatewayRequest,
+) -> Result<String, String> {
+    if request.transport == "direct" && request.tls_fingerprint.is_some() {
+        return Err(
+            "The desktop dashboard cannot securely verify a pinned Gateway TLS certificate. \
+             Connect using Remote over SSH instead."
+                .to_string(),
+        );
+    }
+    let path = dashboard.path().trim_end_matches('/');
+    let origin = serde_json::to_string(&dashboard.origin().ascii_serialization())
+        .map_err(|_| "Could not prepare secure Gateway authentication.".to_string())?;
+    let path = serde_json::to_string(if path.is_empty() { "/" } else { path })
+        .map_err(|_| "Could not prepare secure Gateway authentication.".to_string())?;
+    let auth = serde_json::json!({
+        "gatewayUrl": gateway.as_str(),
+        "token": request.token,
+        "password": request.password,
+    });
+    let auth = serde_json::to_string(&auth)
+        .map_err(|_| "Could not prepare secure Gateway authentication.".to_string())?;
+    Ok(format!(
+        r#"(() => {{
+  try {{
+    if (location.origin !== {origin}) return;
+    const base = {path};
+    if (base !== "/" && location.pathname !== base && !location.pathname.startsWith(`${{base}}/`)) return;
+    Object.defineProperty(window, "__OPENCLAW_NATIVE_CONTROL_AUTH__", {{
+      value: {auth},
+      configurable: true,
+    }});
+  }} catch {{}}
+}})();"#
+    ))
+}
+
+fn open_external_browser(app: &AppHandle, url: &Url) {
+    if external_browser_url_allowed(url)
+        && app.opener().open_url(url.as_str(), None::<&str>).is_err()
+    {
+        eprintln!("Could not open the external sign-in page.");
+    }
+}
+
+fn permit_main_navigation(app: &AppHandle, target: &Url) -> bool {
+    let current = app
+        .get_webview("main")
+        .and_then(|webview| webview.url().ok());
+    let Some(current) = current else {
+        return true;
+    };
+    let returns_to_local_shell = app.try_state::<DesktopState>().is_some_and(|state| {
+        let local = &state.inner.local_url;
+        target.scheme() == local.scheme()
+            && target.host_str() == local.host_str()
+            && target.port_or_known_default() == local.port_or_known_default()
+    });
+    if !matches!(current.scheme(), "http" | "https")
+        || target.origin() == current.origin()
+        || returns_to_local_shell
+    {
+        return true;
+    }
+    open_external_browser(app, target);
+    false
+}
 
 fn is_active_onboarding_url(url: &Url) -> bool {
     let path = url.path().trim_end_matches('/');
@@ -114,6 +207,124 @@ mod deep_link_tests {
     }
 }
 
+#[cfg(test)]
+mod native_browser_tests {
+    use super::{
+        external_browser_url_allowed, native_auth_initialization_script, RemoteGatewayRequest, Url,
+    };
+    use std::process::Command;
+
+    #[test]
+    fn oauth_browser_accepts_http_urls_but_never_unsafe_schemes_or_userinfo() {
+        for (candidate, allowed) in [
+            (
+                "https://auth.openai.com/oauth/authorize?state=fixture",
+                true,
+            ),
+            ("http://127.0.0.1:1455/auth/callback", true),
+            ("file:///etc/passwd", false),
+            ("javascript:alert(1)", false),
+            ("data:text/html,fixture", false),
+            ("openclaw://dashboard", false),
+        ] {
+            assert_eq!(
+                external_browser_url_allowed(&Url::parse(candidate).expect("URL")),
+                allowed,
+                "unexpected external-browser decision for {candidate}"
+            );
+        }
+        let userinfo = ["operator", "fixture"].join(":");
+        let credentialed = format!("https://{userinfo}@gateway.example.com");
+        assert!(!external_browser_url_allowed(
+            &Url::parse(&credentialed).expect("credentialed URL")
+        ));
+    }
+
+    #[test]
+    fn native_password_handoff_is_origin_scoped_and_consumed_before_page_code() {
+        let request = RemoteGatewayRequest {
+            transport: "direct".to_string(),
+            url: Some("https://gateway.example.com/openclaw".to_string()),
+            ssh_target: None,
+            token: None,
+            password: Some("fixture-password".to_string()),
+            remote_port: None,
+            tls_fingerprint: None,
+        };
+        let dashboard = Url::parse("https://gateway.example.com/openclaw").expect("dashboard");
+        let gateway = Url::parse("wss://gateway.example.com/openclaw").expect("Gateway");
+        let initialization_script =
+            native_auth_initialization_script(&dashboard, &gateway, &request).expect("auth script");
+        assert!(!dashboard.as_str().contains("fixture-password"));
+        assert!(!gateway.as_str().contains("fixture-password"));
+
+        let runner = r#"
+            const init = new Function('window', 'location', process.argv[1]);
+            const cases = [
+              ['https://gateway.example.com', '/openclaw', true],
+              ['https://gateway.example.com', '/openclaw/settings/model-setup', true],
+              ['https://attacker.example.com', '/openclaw', false],
+              ['https://gateway.example.com', '/openclaw-other', false],
+              ['https://gateway.example.com', '/other', false],
+            ];
+            for (const [origin, pathname, allowed] of cases) {
+              const window = {};
+              init(window, {origin, pathname});
+              const auth = window.__OPENCLAW_NATIVE_CONTROL_AUTH__;
+              if (Boolean(auth) !== allowed) throw new Error('origin/path policy failed');
+              if (allowed && (auth.gatewayUrl !== 'wss://gateway.example.com/openclaw' || auth.password !== 'fixture-password')) {
+                throw new Error('native password was not delivered');
+              }
+            }
+        "#;
+        let output = Command::new("node")
+            .args(["-e", runner, &initialization_script])
+            .output()
+            .expect("Node is required by the OpenClaw workspace");
+        assert!(
+            output.status.success(),
+            "native auth handoff failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn pinned_remote_gateway_never_receives_credentials_through_an_unpinned_webview() {
+        let request: RemoteGatewayRequest = serde_json::from_value(serde_json::json!({
+            "transport": "direct",
+            "url": "https://gateway.example.com/openclaw",
+            "token": "fixture-token",
+            "tlsFingerprint": "ab".repeat(32),
+        }))
+        .expect("pinned remote request");
+        let dashboard = Url::parse("https://gateway.example.com/openclaw").expect("dashboard");
+        let gateway = Url::parse("wss://gateway.example.com/openclaw").expect("Gateway");
+        let result = native_auth_initialization_script(&dashboard, &gateway, &request);
+
+        assert!(
+            result.is_err(),
+            "a certificate-pinned Gateway must never receive credentials through an unpinned WebView"
+        );
+        assert!(
+            result
+                .err()
+                .expect("rejected pin")
+                .contains("Remote over SSH"),
+            "the rejection must explain the secure supported transport"
+        );
+
+        let mut tunneled = request;
+        tunneled.transport = "ssh".to_string();
+        let tunneled_dashboard = Url::parse("http://127.0.0.1:18789").expect("tunneled dashboard");
+        let tunneled_gateway = Url::parse("ws://127.0.0.1:18789").expect("tunneled Gateway");
+        assert!(
+            native_auth_initialization_script(&tunneled_dashboard, &tunneled_gateway, &tunneled)
+                .is_ok(),
+            "host-key-verified SSH tunneling must remain available"
+        );
+    }
+}
+
 #[derive(Default)]
 struct NavigationState {
     // One lock owns both fields so the intent check and WebView navigation cannot interleave.
@@ -185,6 +396,7 @@ struct DesktopInner {
     pending_approvals: Mutex<pending_approvals::PendingApprovalState>,
     local_url: Url,
     tray: Mutex<Option<tray::TrayHandles>>,
+    remote_tunnel: Mutex<Option<remote_gateway::SshTunnel>>,
     quitting: AtomicBool,
 }
 
@@ -203,6 +415,7 @@ impl DesktopState {
                 pending_approvals: Mutex::new(pending_approvals::PendingApprovalState::default()),
                 local_url,
                 tray: Mutex::new(None),
+                remote_tunnel: Mutex::new(None),
                 quitting: AtomicBool::new(false),
             }),
         }
@@ -225,11 +438,24 @@ impl DesktopState {
     }
 
     pub fn connect(&self, app: &AppHandle) -> Result<GatewaySnapshot, String> {
+        self.connect_selected(app, false)
+    }
+
+    fn connect_selected(
+        &self,
+        app: &AppHandle,
+        explicit_local: bool,
+    ) -> Result<GatewaySnapshot, String> {
         let _operation = self
             .inner
             .operation
             .lock()
             .map_err(|_| "Gateway operation lock is unavailable.".to_string())?;
+        if !explicit_local {
+            if let Some(remote) = remote_gateway::load_saved_remote()? {
+                return self.connect_remote_locked(app, remote);
+            }
+        }
         let cli = match self.resolve_cli() {
             Ok(cli) => cli,
             Err(CliError::Missing) => {
@@ -241,6 +467,18 @@ impl DesktopState {
             }
             Err(error) => return Err(error.to_string()),
         };
+        if !explicit_local && !remote_gateway::has_configured_gateway()? {
+            let snapshot = GatewaySnapshot::unconfigured();
+            self.update_tray(&snapshot);
+            return Ok(snapshot);
+        }
+        if explicit_local {
+            self.inner
+                .remote_tunnel
+                .lock()
+                .map_err(|_| "Remote Gateway tunnel lock is unavailable.".to_string())?
+                .take();
+        }
         let ready = gateway::ensure_ready(&cli)?;
         app.state::<gateway_ws::GatewayClient>()
             .configure(app, ready.gateway_ws.clone());
@@ -351,7 +589,142 @@ impl DesktopState {
     pub fn connect_explicit_local(&self, app: &AppHandle) -> Result<GatewaySnapshot, String> {
         // The click returns immediately; a later remote selection still wins while connect runs.
         self.show_local(app, "reconnecting", true, None)?;
-        self.connect(app)
+        self.connect_selected(app, true)
+    }
+
+    pub(crate) fn connect_remote(
+        &self,
+        app: &AppHandle,
+        request: RemoteGatewayRequest,
+    ) -> Result<GatewaySnapshot, String> {
+        let _operation = self
+            .inner
+            .operation
+            .lock()
+            .map_err(|_| "Gateway operation lock is unavailable.".to_string())?;
+        self.connect_remote_locked(app, request)
+    }
+
+    fn connect_remote_locked(
+        &self,
+        app: &AppHandle,
+        mut request: RemoteGatewayRequest,
+    ) -> Result<GatewaySnapshot, String> {
+        remote_gateway::validate_request(&request)?;
+        let mut active_tunnel = self
+            .inner
+            .remote_tunnel
+            .lock()
+            .map_err(|_| "Remote Gateway tunnel lock is unavailable.".to_string())?;
+        active_tunnel.take();
+        let (tunnel, gateway_url) = if request.transport == "ssh" {
+            let saved_url = request
+                .url
+                .as_deref()
+                .map(remote_gateway::normalize_gateway_url)
+                .transpose()?;
+            let (tunnel, url) = remote_gateway::start_tunnel(&request, saved_url.as_ref())?;
+            (Some(tunnel), url)
+        } else {
+            let raw = request
+                .url
+                .as_deref()
+                .ok_or_else(|| "Enter the URL of your remote Gateway.".to_string())?;
+            (None, remote_gateway::normalize_gateway_url(raw)?)
+        };
+        remote_gateway::resolve_remote_tls_fingerprint(&mut request, &gateway_url)?;
+        let target = remote_gateway::dashboard_url(&gateway_url, None)?;
+        let script = native_auth_initialization_script(&target, &gateway_url, &request)?;
+        remote_gateway::save_config_at(&remote_gateway::config_path()?, &request, &gateway_url)?;
+        *active_tunnel = tunnel;
+        drop(active_tunnel);
+
+        app.state::<gateway_ws::GatewayClient>().configure(
+            app,
+            gateway_ws::GatewayWsConfig::new(
+                gateway_url.to_string(),
+                request.token.clone(),
+                request.password.clone(),
+                if gateway_url.scheme() == "wss" {
+                    request.tls_fingerprint.clone()
+                } else {
+                    None
+                },
+            ),
+        );
+        self.navigate_authenticated_remote(app, target, script)?;
+        let snapshot = GatewaySnapshot {
+            phase: "connected",
+            installed: false,
+            running: false,
+            reachable: true,
+            status: "Connected to remote Gateway".to_string(),
+            detail: None,
+        };
+        self.update_tray(&snapshot);
+        Ok(snapshot)
+    }
+
+    fn navigate_authenticated_remote(
+        &self,
+        app: &AppHandle,
+        dashboard: Url,
+        script: String,
+    ) -> Result<(), String> {
+        let window = app
+            .get_window("main")
+            .ok_or_else(|| "Main window is unavailable.".to_string())?;
+        let size = window
+            .inner_size()
+            .map_err(|_| "Could not measure the Gateway window.".to_string())?;
+        let mut navigation = self
+            .inner
+            .navigation
+            .lock()
+            .map_err(|_| "Dashboard navigation lock is unavailable.".to_string())?;
+        let old_webview = app
+            .get_webview("main")
+            .ok_or_else(|| "Main dashboard view is unavailable.".to_string())?;
+        navigation.select_remote();
+        // Keep the native window alive: only its child changes so tray ownership,
+        // geometry and close-to-tray behavior survive auth-bound script injection.
+        old_webview
+            .close()
+            .map_err(|_| "Could not replace the Gateway dashboard view.".to_string())?;
+        let browser_app = app.clone();
+        let navigation_app = app.clone();
+        let builder = WebviewBuilder::new("main", WebviewUrl::External(dashboard))
+            .initialization_script(script)
+            .initialization_script(EXTERNAL_LINK_INIT_SCRIPT)
+            .on_navigation(move |target| permit_main_navigation(&navigation_app, target))
+            .on_new_window(move |url, _features| {
+                open_external_browser(&browser_app, &url);
+                NewWindowResponse::Deny
+            })
+            .auto_resize();
+        if window
+            .add_child(builder, LogicalPosition::new(0, 0), size)
+            .is_err()
+        {
+            navigation.remote_dashboard = false;
+            let browser_app = app.clone();
+            let navigation_app = app.clone();
+            let restore = WebviewBuilder::new("main", WebviewUrl::App("index.html".into()))
+                .initialization_script(EXTERNAL_LINK_INIT_SCRIPT)
+                .on_navigation(move |target| permit_main_navigation(&navigation_app, target))
+                .on_new_window(move |url, _features| {
+                    open_external_browser(&browser_app, &url);
+                    NewWindowResponse::Deny
+                })
+                .auto_resize();
+            let _ = window.add_child(restore, LogicalPosition::new(0, 0), size);
+            return Err(
+                "Could not open the remote Gateway dashboard. Try connecting again.".to_string(),
+            );
+        }
+        drop(navigation);
+        tray::show_window(app);
+        Ok(())
     }
 
     pub fn show_error(&self, app: &AppHandle, _error: &str) {
@@ -363,6 +736,9 @@ impl DesktopState {
     pub fn quit(&self) {
         self.inner.quitting.store(true, Ordering::SeqCst);
         self.cancel_watchdog();
+        if let Ok(mut tunnel) = self.inner.remote_tunnel.lock() {
+            tunnel.take();
+        }
     }
 
     fn is_quitting(&self) -> bool {
@@ -494,7 +870,7 @@ impl DesktopState {
         navigation.select_remote();
         if let Err(error) = window.navigate(target) {
             navigation.remote_dashboard = false;
-            return Err(format!("Could not open discovered gateway: {error}"));
+            return Err(format!("Could not open remote Gateway: {error}"));
         }
         tray::show_window(app);
         Ok(())
@@ -785,8 +1161,37 @@ fn build_info(app: AppHandle) -> BuildInfo {
 #[tauri::command]
 async fn bootstrap(
     operations: State<'_, GatewayOperationQueue>,
+    explicit_local: Option<bool>,
 ) -> Result<GatewaySnapshot, String> {
-    operations.execute(GatewayOperation::Connect).await
+    let operation = if explicit_local == Some(true) {
+        GatewayOperation::ConnectExplicitLocal
+    } else {
+        GatewayOperation::Connect
+    };
+    operations.execute(operation).await
+}
+
+#[tauri::command]
+async fn connect_remote_gateway(
+    operations: State<'_, GatewayOperationQueue>,
+    transport: String,
+    url: Option<String>,
+    ssh_target: Option<String>,
+    token: Option<String>,
+    password: Option<String>,
+    remote_port: Option<u16>,
+) -> Result<GatewaySnapshot, String> {
+    operations
+        .execute(GatewayOperation::ConnectRemote(RemoteGatewayRequest {
+            transport,
+            url,
+            ssh_target,
+            token,
+            password,
+            remote_port,
+            tls_fingerprint: None,
+        }))
+        .await
 }
 
 #[tauri::command]
@@ -851,9 +1256,24 @@ fn main() {
         );
 
     let builder = builder.setup(move |app| {
-        let window = app
-            .get_webview_window("main")
+        let window_config = app
+            .config()
+            .app
+            .windows
+            .iter()
+            .find(|window| window.label == "main")
+            .cloned()
             .expect("tauri.conf.json must define the main window");
+        let browser_app = app.handle().clone();
+        let navigation_app = app.handle().clone();
+        let window = WebviewWindowBuilder::from_config(app.handle(), &window_config)?
+            .initialization_script(EXTERNAL_LINK_INIT_SCRIPT)
+            .on_navigation(move |target| permit_main_navigation(&navigation_app, target))
+            .on_new_window(move |url, _features| {
+                open_external_browser(&browser_app, &url);
+                NewWindowResponse::Deny
+            })
+            .build()?;
         let state = DesktopState::new(window.url()?);
         app.manage(state.clone());
         app.manage(gateway_ws::GatewayClient::new());
@@ -871,6 +1291,9 @@ fn main() {
                 GatewayOperation::Connect => operation_state.connect(&operation_app),
                 GatewayOperation::ConnectExplicitLocal => {
                     operation_state.connect_explicit_local(&operation_app)
+                }
+                GatewayOperation::ConnectRemote(request) => {
+                    operation_state.connect_remote(&operation_app, request)
                 }
                 GatewayOperation::Install(channel) => {
                     operation_state.install_cli(&operation_app, channel)
@@ -904,6 +1327,7 @@ fn main() {
         build_info,
         updater::check_for_updates,
         discovery::connect_discovered_gateway,
+        connect_remote_gateway,
         discovery::discover_gateways,
         install_cli,
         gateway_action,
@@ -959,6 +1383,9 @@ fn main() {
         if matches!(event, tauri::RunEvent::Exit) {
             if let Some(bridge) = app.try_state::<gateway_sleep_logind::SleepBridge>() {
                 bridge.shutdown();
+            }
+            if let Some(state) = app.try_state::<DesktopState>() {
+                state.quit();
             }
         }
         #[cfg(not(target_os = "linux"))]

@@ -1044,6 +1044,7 @@ describe("tasks gateway handlers", () => {
       cfg: {},
       sessionKey: "agent:codex:acp:child",
       reason: "operator requested stop",
+      expectedRunId: "run-cancel-acp-gateway",
     });
     expect(payload?.found).toBe(true);
     expect(payload?.cancelled).toBe(true);

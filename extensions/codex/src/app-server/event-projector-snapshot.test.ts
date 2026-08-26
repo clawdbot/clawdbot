@@ -16,7 +16,6 @@ function buildSnapshot(trigger: EmbeddedRunAttemptParams["trigger"]): AgentMessa
     turnId: "turn-1",
     upstreamUserText: undefined,
     reasoningText: "checking memory",
-    planText: undefined,
     asyncMessages: [],
     commentaryMessages: [],
     toolMessages: [

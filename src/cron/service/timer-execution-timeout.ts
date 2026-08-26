@@ -68,6 +68,7 @@ export type CronJobRunResult = CronRunOutcome &
     completionStatus?: CronCompletionStatus;
     deliveryState?: CronResolvedDeliveryState;
     deliveryError?: string;
+    delivery?: CronDeliveryTrace;
     delivered?: boolean;
     deliveryAttempted?: boolean;
     startedAt: number;

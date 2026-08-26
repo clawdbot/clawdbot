@@ -137,6 +137,39 @@ describe("shared automation mutation options", () => {
     },
   );
 
+  it.each(["", "   ", "topic-42"])(
+    "rejects invalid thread id %j before loading an automation for a combined edit",
+    async (threadId) => {
+      const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      const exitSpy = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined);
+      try {
+        await createMutationProgram().parseAsync(
+          [
+            "edit",
+            "job-1",
+            "--pacing-min",
+            "30m",
+            "--channel",
+            "telegram",
+            "--to",
+            "group-123",
+            "--thread-id",
+            threadId,
+          ],
+          { from: "user" },
+        );
+        expect(errorSpy).toHaveBeenCalledWith(
+          expect.stringContaining("--thread-id must be a positive integer"),
+        );
+        expect(exitSpy).toHaveBeenCalledWith(1);
+        expect(callGatewayFromCli).not.toHaveBeenCalled();
+      } finally {
+        errorSpy.mockRestore();
+        exitSpy.mockRestore();
+      }
+    },
+  );
+
   it("keeps creation defaults out of automation edit patches", () => {
     const program = createMutationProgram();
     const add = program.commands.find((command) => command.name() === "add")!;

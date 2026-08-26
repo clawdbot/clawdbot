@@ -322,10 +322,6 @@ function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]
         delete entry.ui;
       }
     }
-    if (Object.hasOwn(entry, "subagentProgress")) {
-      delete entry.subagentProgress;
-      changes.push(`Removed ${path}.subagentProgress.`);
-    }
   });
 
   let messages = getRecord(raw.messages);
