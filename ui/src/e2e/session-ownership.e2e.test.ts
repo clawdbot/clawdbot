@@ -1,4 +1,4 @@
-// Control UI E2E tests cover session ownership dormancy and owner filtering.
+import { mkdir } from "node:fs/promises";
 import type { Page } from "playwright";
 import { expect as expectBrowser } from "playwright/test";
 import { afterEach, expect, it } from "vitest";
@@ -14,6 +14,7 @@ import {
   openSidebarSortMenu,
   routeAvatarFixtures,
   sessionOwnerProofArtifactDir,
+  uiProofArtifactDir,
 } from "./session-ownership-visuals.test-support.ts";
 
 const suite = createControlUiE2eSuite({

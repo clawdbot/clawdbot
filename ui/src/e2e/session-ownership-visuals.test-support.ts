@@ -4,7 +4,12 @@ import type { BrowserContext, Locator, Page } from "playwright";
 import { expect } from "vitest";
 
 export const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const uiProofArtifactDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "drafts-ux");
+export const uiProofArtifactDir = path.join(
+  process.cwd(),
+  ".artifacts",
+  "control-ui-e2e",
+  "drafts-ux",
+);
 export const sessionOwnerProofArtifactDir = path.join(
   process.cwd(),
   ".artifacts",
