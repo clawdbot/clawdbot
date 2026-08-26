@@ -686,13 +686,7 @@ describe("streamProxy", () => {
   });
 
   it("releases the response reader when terminal stream cancellation never settles", async () => {
-    let resolveReleased: (() => void) | undefined;
-    const released = new Promise<void>((resolve) => {
-      resolveReleased = resolve;
-    });
-    const releaseLock = vi.fn(() => {
-      resolveReleased?.();
-    });
+    const releaseLock = vi.fn();
     vi.stubGlobal(
       "fetch",
       vi.fn(async () =>
@@ -712,14 +706,7 @@ describe("streamProxy", () => {
       authToken: "token",
       proxyUrl: "https://proxy.example",
     }).result();
-    const lockReleased = await Promise.race([
-      released.then(() => true),
-      new Promise<boolean>((resolve) => {
-        setTimeout(() => resolve(false), 100);
-      }),
-    ]);
 
-    expect(lockReleased).toBe(true);
     expect(releaseLock).toHaveBeenCalledTimes(1);
   });
 
