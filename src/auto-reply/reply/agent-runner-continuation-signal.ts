@@ -22,10 +22,8 @@ function formatDelegateEchoForSystemEvent(value: string): string {
 
 type ContinuationUsage = { input?: number; output?: number } | undefined;
 
-// Ports the monolith's continuation-signal handling (CONTINUE_WORK /
-// CONTINUE_DELEGATE bracket + tool forms). Split out of
-// agent-runner-continuation-schedule.ts to keep each module within the
-// max-lines budget. Behavior/order is identical to the monolith.
+// Owns CONTINUE_WORK / CONTINUE_DELEGATE response-signal admission.
+// Bracket delegates enter the same durable TaskFlow dispatch path as tool calls.
 export async function handleContinuationSignal(context: {
   cfg: Parameters<typeof resolveLiveContinuationRuntimeConfig>[0];
   sessionKey: string | undefined;
