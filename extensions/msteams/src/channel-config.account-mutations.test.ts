@@ -74,22 +74,22 @@ describe("msteams account config mutations", () => {
     expect(resolveMSTeamsAccount({ cfg: updated }).accountId).toBe("backup");
   });
 
-  it("falls back to a legacy root identity after deleting the last explicit default", () => {
+  it("falls back to a legacy root identity after deleting the last named default", () => {
     const cfg = {
       channels: {
         msteams: {
           appId: "legacy-app",
           appPassword: "legacy-secret",
           tenantId: "tenant-id",
-          defaultAccount: "default",
+          defaultAccount: "support",
           accounts: {
-            default: { appId: "explicit-app", appPassword: "explicit-secret" },
+            support: { appId: "explicit-app", appPassword: "explicit-secret" },
           },
         },
       },
     } as OpenClawConfig;
 
-    const updated = msteamsConfigAdapter.deleteAccount({ cfg, accountId: "default" });
+    const updated = msteamsConfigAdapter.deleteAccount({ cfg, accountId: "support" });
 
     expect(updated.channels?.msteams?.accounts).toBeUndefined();
     expect(updated.channels?.msteams?.defaultAccount).toBe("default");
