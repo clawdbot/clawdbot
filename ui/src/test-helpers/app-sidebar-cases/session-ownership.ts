@@ -206,7 +206,7 @@ describe("AppSidebar session ownership", () => {
     }
   });
 
-  it("uses the complete facet and requests unloaded owners from the Gateway", async () => {
+  it("keeps an owner filter through transient or narrowed owner facets", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const harness = createSessionsHarness("main", ["agent:main:main", "agent:main:ada"]);
     const result = harness.sessions.state.result;
@@ -247,7 +247,23 @@ describe("AppSidebar session ownership", () => {
     result.owners = [{ type: "human", id: "profile-bob", label: "Bob" }];
     harness.publishList({ result, agentId: "main" });
     await sidebar.updateComplete;
+    expect(sidebar.sessionOwnerFilterId).toBe("profile-bob");
+    expect(harness.setOwnerFilter).not.toHaveBeenCalledWith(null);
+
+    result.owners = undefined;
+    harness.publishList({ result, agentId: "main" });
     await sidebar.updateComplete;
+    expect(sidebar.sessionOwnerFilterId).toBe("profile-bob");
+    expect(sidebar.querySelector('[data-session-key="agent:main:ada"]')).toBeNull();
+    expect(harness.setOwnerFilter).not.toHaveBeenCalledWith(null);
+    const unresolvedMenu = await openOwnerMenu(sidebar);
+    expect(unresolvedMenu.querySelector('[value="owner:"]')).not.toBeNull();
+
+    result.owners = [{ type: "human", id: "profile-ada", label: "Ada" }];
+    harness.publishList({ result, agentId: "main" });
+    await sidebar.updateComplete;
+    await sidebar.updateComplete;
+    expect(sidebar.sessionOwnerFilterId).toBeNull();
     expect(harness.setOwnerFilter).toHaveBeenLastCalledWith(null);
   });
 

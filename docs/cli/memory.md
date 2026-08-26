@@ -85,9 +85,12 @@ absent.
 ## `memory forget`
 
 Delete provenance-tracked durable memory entries derived from selected
-sessions, together with their indexed and short-term copies. Select sessions by
-ID or session key, their external-content hook source, or a participant's actor
-ID:
+sessions, together with their indexed and short-term copies. The concepts
+behind this command — recorded lineage, admission policy, and the deletion
+guarantees and boundaries — are explained in
+[Memory provenance and deletion](/concepts/memory-provenance). Select sessions
+by ID or session key, their external-content hook source, or a participant's
+actor ID:
 
 ```bash
 openclaw memory forget --session <id-or-key> [--session <id-or-key> ...]

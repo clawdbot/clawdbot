@@ -19,6 +19,12 @@ const themeCases = [
   { family: "dash", mode: "light", resolved: "dash-light" },
   { family: "absolutely", mode: "dark", resolved: "absolutely" },
   { family: "absolutely", mode: "light", resolved: "absolutely-light" },
+  { family: "tide", mode: "dark", resolved: "tide" },
+  { family: "tide", mode: "light", resolved: "tide-light" },
+  { family: "beacon", mode: "dark", resolved: "beacon" },
+  { family: "beacon", mode: "light", resolved: "beacon-light" },
+  { family: "phosphor", mode: "dark", resolved: "phosphor" },
+  { family: "phosphor", mode: "light", resolved: "phosphor-light" },
 ] as const;
 
 const textTokens = [
@@ -33,7 +39,7 @@ const textTokens = [
 const surfaceTokens = ["--bg", "--bg-elevated", "--bg-muted", "--card", "--panel"] as const;
 
 function themeConfigResponse(
-  family: "claw" | "knot" | "dash" | "absolutely",
+  family: "claw" | "knot" | "dash" | "absolutely" | "tide" | "beacon" | "phosphor",
   mode: "dark" | "light",
 ) {
   const config = {

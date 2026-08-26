@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 340810,
-  "reason": "sidebar gateway status pill rebased onto the composer-queue main: combined tree measures 340754-340770 B; pinned with jitter headroom",
+  "startupJsGzipBytes": 341333,
+  "reason": "Tide, Beacon, and Phosphor themes: theme-name wiring, three appearance options, locale strings, and two font stylesheet mappings",
   "updatedAt": "2026-08-26"
 }

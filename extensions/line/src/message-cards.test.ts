@@ -15,14 +15,16 @@ import {
 import { registerLineCardCommand } from "./card-command.js";
 import {
   createActionCard,
-  createAppleTvRemoteCard,
-  createDeviceControlCard,
-  createEventCard,
   createImageCard,
   createInfoCard,
   createListCard,
+} from "./flex-templates/basic-cards.js";
+import {
+  createAppleTvRemoteCard,
+  createDeviceControlCard,
   createMediaPlayerCard,
-} from "./flex-templates.js";
+} from "./flex-templates/media-control-cards.js";
+import { createEventCard } from "./flex-templates/schedule-cards.js";
 import {
   buildTemplateMessageFromPayload,
   createConfirmTemplate,

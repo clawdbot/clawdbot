@@ -1,3 +1,5 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentToolResult } from "../../agents/runtime/index.js";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
@@ -208,10 +210,28 @@ export function resolveMessageSendOutcome(
   return sendResult.deliveryStatus satisfies never;
 }
 
-export const isMessageActionSuccessful = (result: MessageActionResult): boolean =>
-  result.kind === "broadcast"
-    ? result.payload.results.every((entry) => entry.ok)
-    : result.kind !== "send" || result.dryRun || resolveMessageSendOutcome(result.sendResult).ok;
+export function resolveMessageActionOutcome(
+  result: MessageActionResult,
+): ReturnType<typeof resolveMessageSendOutcome> {
+  if (result.kind === "broadcast") {
+    const failure = result.payload.results.find((entry) => !entry.ok);
+    return failure ? { ok: false, error: failure.error ?? "Broadcast failed." } : { ok: true };
+  }
+  if (result.dryRun) {
+    return { ok: true };
+  }
+  const outcome =
+    result.kind === "send" ? resolveMessageSendOutcome(result.sendResult) : { ok: true as const };
+  const payload = result.payload;
+  if (!outcome.ok || !isRecord(payload) || payload.ok !== false) {
+    return outcome;
+  }
+  const error =
+    [payload.error, payload.warning, payload.hint, payload.reason]
+      .map(normalizeOptionalString)
+      .find(Boolean) ?? `Message ${result.action} failed.`;
+  return { ok: false, error };
+}
 
 export type ResolvedActionContext = {
   cfg: OpenClawConfig;

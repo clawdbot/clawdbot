@@ -79,6 +79,7 @@ import { SessionAttentionController } from "./session-attention-controller.ts";
 import { SessionDataController } from "./session-data-controller.ts";
 import type { SessionOrganizerController } from "./session-organizer-controller.ts";
 import type { SessionOwnerOption } from "./session-owner-chip.ts";
+import { SessionOwnerFilterController } from "./session-owner-filter-controller.ts";
 import type { SidebarMenusController } from "./sidebar-menus-controller.ts";
 
 /** Session-row projection, selection, sorting, and agent scope navigation. */
@@ -139,13 +140,20 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     this.sessionSortMode = storeSidebarSessionSortMode(mode, this.sessionPeopleSortCapability());
   }
 
-  @state() sessionOwnerFilterId: string | null = null;
-  @state() sessionInvolvingMeFilterActive = false;
+  private readonly sessionOwnerFilter = new SessionOwnerFilterController(this, () => this.context);
+
+  get sessionOwnerFilterId(): string | null {
+    return this.sessionOwnerFilter.ownerId;
+  }
+
+  get sessionInvolvingMeFilterActive(): boolean {
+    return this.sessionOwnerFilter.involvingMe;
+  }
 
   sessionOwnerOptions: readonly SessionOwnerOption[] = [];
   protected activeSessionOwnerId: string | null = null;
   get sessionOwnerFilterActive() {
-    return this.activeSessionOwnerId !== null;
+    return this.sessionOwnerFilter.ownerId !== null;
   }
   sessionOwnershipVisible = false;
 
@@ -206,17 +214,8 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
 
   override updated(changedProperties: PropertyValues<this>) {
     super.updated(changedProperties);
-    const selectedId = this.sessionOwnerFilterId;
     if (this.sessionSortMode === "people" && this.sessionPeopleSortCapability() === false) {
       this.setSessionSortMode("created");
-    }
-    if (
-      selectedId &&
-      (!this.sessionOwnershipVisible ||
-        !this.sessionOwnerOptions.some((owner) => owner.id === selectedId))
-    ) {
-      this.sessionOwnerFilterId = null;
-      void this.context?.sessions.setOwnerFilter(null);
     }
     const activeRouteKey = isSessionRouteId(this.activeRouteId) ? this.getRouteSessionKey() : "";
     if (isSessionRouteId(this.activeRouteId)) {
@@ -252,6 +251,9 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     }
   }
 
+  setSessionOwnerFilter = (ownerId: string | null, involvingMe = false) =>
+    this.sessionOwnerFilter.set(ownerId, involvingMe);
+
   protected applySessionOwnerFilter(
     projected: SidebarRecentSession[],
     ownerFacet: SessionsListResult["owners"],
@@ -262,6 +264,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       selectedOwnerId: this.sessionOwnerFilterId,
       self: this.context?.gateway.snapshot.selfUser,
     });
+    this.sessionOwnerFilter.observeOwnerFacet(ownerFacet !== undefined, result.ownerOptions);
     this.sessionOwnerOptions = result.ownerOptions;
     this.sessionOwnershipVisible = result.ownershipVisible;
     this.activeSessionOwnerId = result.activeOwnerId;

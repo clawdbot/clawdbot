@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createChannelMessageReplyPipeline,
+  createReplyPrefixContext,
   formatChannelProgressDraftLineForEntry,
   isChannelProgressDraftWorkToolName,
   resolveChannelPreviewStreamMode,
@@ -21,6 +22,7 @@ import {
   sendMediaWithLeadingCaption,
 } from "openclaw/plugin-sdk/reply-payload";
 import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-chunking";
+import type { ClawdbotConfig, OutboundIdentity, ReplyPayload, RuntimeEnv } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { resolveConfiguredHttpTimeoutMs } from "./client-timeout.js";
 import { createFeishuClient } from "./client.js";
@@ -38,13 +40,6 @@ import {
   type FeishuReplyDeliveryResultWithFinalization,
   type FeishuReplyDeliverySource,
 } from "./reply-delivery-result.js";
-import {
-  createReplyPrefixContext,
-  type ClawdbotConfig,
-  type OutboundIdentity,
-  type ReplyPayload,
-  type RuntimeEnv,
-} from "./reply-dispatcher-runtime-api.js";
 import { streamingStartBackoffUntilByAccount } from "./reply-dispatcher-state.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { sendMessageFeishu, sendStructuredCardFeishu, type CardHeaderConfig } from "./send.js";

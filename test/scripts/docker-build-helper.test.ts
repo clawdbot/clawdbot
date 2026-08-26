@@ -4682,6 +4682,7 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
     expectTextToIncludeAll(helper, [
       "--allow-unreleased-changelog",
       'local harness_root="${DOCKER_E2E_HARNESS_ROOT_DIR:-$ROOT_DIR}"',
+      '-v "$harness_root/scripts/prepublish-plugin-registry-artifact.mjs:/app/scripts/prepublish-plugin-registry-artifact.mjs:ro"',
       '-v "$harness_root/scripts/windows-cmd-helpers.mjs:/app/scripts/windows-cmd-helpers.mjs:ro"',
       '-v "$harness_root/packages/gateway-client/src:/app/packages/gateway-client/src:ro"',
       '-v "$harness_root/packages/normalization-core/package.json:/app/packages/normalization-core/package.json:ro"',

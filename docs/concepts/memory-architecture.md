@@ -96,6 +96,16 @@ noise, and recall feedback loops:
   structurally marked and never re-extracted as a new memory. A fact recalled
   one hundred times stays one fact.
 
+Beyond per-chunk trust metadata, every pipeline-promoted durable entry also
+records **which sessions it came from**, and that lineage survives
+consolidation merges. Session lineage is what makes two operator guarantees
+possible: excluding configured sources (an email hook, a channel) from
+durable memory by policy, and purging everything derived from a session, a
+person, or a source with `openclaw memory forget` — including a durable
+exclusion that keeps purged sessions from ever being re-ingested. That
+policy story is covered end to end in
+[Memory provenance and deletion](/concepts/memory-provenance).
+
 ## Trust boundaries and limits
 
 Workspace memory files are inside the operator trust boundary: any process
@@ -417,6 +427,7 @@ knobs that exist:
 | Concern                         | Where                                                           | Reference                                                |
 | ------------------------------- | --------------------------------------------------------------- | -------------------------------------------------------- |
 | Dreaming enable, cadence, model | `plugins.entries.memory-core.config.dreaming`                   | [Dreaming](/concepts/dreaming)                           |
+| Session admission exclusions    | `plugins.entries.memory-core.config.memoryPolicy`               | [Provenance & deletion](/concepts/memory-provenance)     |
 | Search providers, hybrid tuning | `memory.search`                                                 | [Memory config](/reference/memory-config)                |
 | Escalation lane mode, scope     | `plugins.entries.active-memory`                                 | [Active memory](/concepts/active-memory)                 |
 | Cross-conversation recall       | `agents.entries.<id>.memory.search.rememberAcrossConversations` | [Active memory](/concepts/active-memory)                 |
@@ -426,6 +437,7 @@ knobs that exist:
 ## Related
 
 - [Memory overview](/concepts/memory)
+- [Memory provenance and deletion](/concepts/memory-provenance)
 - [Dreaming](/concepts/dreaming)
 - [Active memory](/concepts/active-memory)
 - [User model](/concepts/user-model)

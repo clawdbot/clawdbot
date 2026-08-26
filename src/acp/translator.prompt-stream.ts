@@ -11,9 +11,9 @@ import type {
 import { readBool, readMetadataString, readNonNegativeInteger } from "@openclaw/acp-core/meta";
 import type { AcpSessionStore } from "@openclaw/acp-core/session";
 import type { AcpServerOptions } from "@openclaw/acp-core/types";
-import { normalizeLowercaseStringOrEmpty as normalizedChatSendAckStatus } from "@openclaw/normalization-core/string-coerce";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import type { GatewayClient } from "../gateway/client.js";
+import { normalizeTerminalChatSendAckStatus } from "../shared/chat-send-ack-status.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { shortenHomePath } from "../utils.js";
 import { extractAttachmentsFromPrompt, extractTextFromPrompt } from "./event-mapper.js";
@@ -43,15 +43,6 @@ type AcpPendingPromptAdmission = {
   closure: Deferred;
   settled: Deferred;
 };
-
-function isTerminalChatSendAckFailure(status: unknown): boolean {
-  const normalized = normalizedChatSendAckStatus(status);
-  return normalized === "timeout" || normalized === "error";
-}
-
-function isTerminalChatSendAckSuccess(status: unknown): boolean {
-  return normalizedChatSendAckStatus(status) === "ok";
-}
 
 function isAdminScopeProvenanceRejection(err: unknown): boolean {
   if (!(err instanceof Error)) {
@@ -301,7 +292,7 @@ export class AcpTranslatorPromptStream {
           return true;
         };
         const applyTerminalAck = async (ack: ChatSendAck | undefined): Promise<boolean> => {
-          const status = normalizedChatSendAckStatus(ack?.status);
+          const status = normalizeTerminalChatSendAckStatus(ack?.status);
           const pending = () => this.getPendingPrompt(params.sessionId, runId);
           if (status === "timeout") {
             const current = pending();
@@ -331,7 +322,7 @@ export class AcpTranslatorPromptStream {
             }
             return true;
           }
-          return isTerminalChatSendAckFailure(status) || isTerminalChatSendAckSuccess(status);
+          return false;
         };
 
         const sendChat = async (payload: Record<string, unknown>): Promise<boolean> => {

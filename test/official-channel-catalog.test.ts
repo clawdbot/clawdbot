@@ -148,6 +148,19 @@ afterEach(() => {
 describe("buildOfficialChannelCatalog", () => {
   it("keeps the committed official catalog synchronized with repository manifests", () => {
     expect(checkOfficialChannelCatalogSource({ repoRoot: process.cwd() })).toBe(true);
+    const catalog = buildOfficialChannelCatalog({ repoRoot: process.cwd() });
+    const serialized = fs.readFileSync(OFFICIAL_CHANNEL_CATALOG_SOURCE_RELATIVE_PATH, "utf8");
+    const lines = serialized.split("\n");
+
+    expect(JSON.parse(serialized)).toEqual(catalog);
+    expect(lines).toHaveLength(catalog.entries.length + 5);
+    expect(lines.slice(2, -3)).toEqual(
+      catalog.entries.map(
+        (entry, index) =>
+          `    ${JSON.stringify(entry)}${index === catalog.entries.length - 1 ? "" : ","}`,
+      ),
+    );
+    expect(lines.at(-1)).toBe("");
   });
 
   it("keeps the generated channel docs index and navigation synchronized", () => {

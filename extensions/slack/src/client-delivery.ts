@@ -9,6 +9,7 @@ import {
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
+import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import { logVerbose, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -22,7 +23,6 @@ import {
   type SlackPostMessagePayload,
   type SlackUnfurlOptions,
 } from "./post-message-payload.js";
-import { loadOutboundMediaFromUrl } from "./runtime-api.js";
 
 const SLACK_COMMERCIAL_API_HOSTNAME = "slack.com";
 const SLACK_COMMERCIAL_UPLOAD_HOSTNAME = "files.slack.com";

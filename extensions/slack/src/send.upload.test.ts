@@ -100,8 +100,10 @@ vi.mock("openclaw/plugin-sdk/fetch-runtime", async () => {
   };
 });
 
-vi.mock("./runtime-api.js", async () => {
-  const actual = await vi.importActual<typeof import("./runtime-api.js")>("./runtime-api.js");
+vi.mock("openclaw/plugin-sdk/outbound-media", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/outbound-media")>(
+    "openclaw/plugin-sdk/outbound-media",
+  );
   const mockedLoadOutboundMediaFromUrl =
     loadOutboundMediaFromUrlMock as unknown as typeof actual.loadOutboundMediaFromUrl;
   return {
