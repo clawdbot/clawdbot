@@ -7,6 +7,7 @@ import {
 } from "../../gateway/methods/registry.js";
 import type {
   GatewayRequestContext,
+  GatewayRequestHandlerOptions,
   GatewayRequestHandlers,
 } from "../../gateway/server-methods/types.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
@@ -43,11 +44,11 @@ function recorder(boardSnapshot: BoardSnapshot = snapshot) {
 }
 
 function createGatewayAffinityHarness(revision: number) {
-  const calls: string[] = [];
+  const requests: GatewayRequestHandlerOptions["req"][] = [];
   const broadcastToConnIds = vi.fn();
   const handlers: GatewayRequestHandlers = {
     "board.get": ({ req, respond }) => {
-      calls.push(req.method);
+      requests.push(req);
       respond(true, { ...snapshot, revision });
     },
   };
@@ -65,7 +66,7 @@ function createGatewayAffinityHarness(revision: number) {
     getRuntimeConfig: () => ({}),
     resolveGatewayContext: () => context,
   } as unknown as GatewayRequestContext;
-  return { broadcastToConnIds, calls, context };
+  return { broadcastToConnIds, context, requests };
 }
 
 describe("dashboard tool", () => {
@@ -129,10 +130,10 @@ describe("dashboard tool", () => {
     });
   });
 
-  it("keeps reads and broadcasts on the admitted Gateway and rejects its replacement", async () => {
+  it("dispatches through the admitted Gateway and fences replacement or retirement", async () => {
     const admitted = createGatewayAffinityHarness(11);
     const replacement = createGatewayAffinityHarness(22);
-    let current = admitted.context;
+    let current: GatewayRequestContext | undefined = admitted.context;
     const tool = createDashboardTool({ agentSessionKey: "agent:main:main" });
 
     await withPluginRuntimeGatewayRequestScope(
@@ -160,6 +161,7 @@ describe("dashboard tool", () => {
             await expect(tool.execute("late-read", { action: "read" })).rejects.toThrow(
               /dashboard|Gateway|gateway|unavailable/u,
             );
+            current = undefined;
             await expect(
               tool.execute("late-focus", { action: "focus_tab", tabId: "main" }),
             ).rejects.toThrow(/dashboard|Gateway|gateway|unavailable/u);
@@ -167,8 +169,15 @@ describe("dashboard tool", () => {
         ),
     );
 
-    expect(admitted.calls).toEqual(["board.get"]);
-    expect(replacement.calls).toEqual([]);
+    expect(admitted.requests).toEqual([
+      expect.objectContaining({
+        type: "req",
+        id: expect.stringMatching(/^plugin-subagent-/u),
+        method: "board.get",
+        params: expect.objectContaining({ sessionKey: "agent:main:main" }),
+      }),
+    ]);
+    expect(replacement.requests).toEqual([]);
     expect(admitted.broadcastToConnIds).toHaveBeenCalledOnce();
     expect(replacement.broadcastToConnIds).not.toHaveBeenCalled();
   });
