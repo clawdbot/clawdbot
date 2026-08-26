@@ -40,6 +40,36 @@ describe("memory embedding policy", () => {
     expect(batches[0]).toHaveLength(4);
   });
 
+  it("budgets multibyte text and structured inline data by their actual UTF-8 bytes", () => {
+    const textChunks = [chunk("é"), chunk("😀"), chunk("a")];
+    expect(buildMemoryEmbeddingBatches(textChunks, 5).map((batch) => batch.length)).toEqual([1, 2]);
+
+    const structuredChunks = [
+      {
+        ...chunk("this longer fallback text is ignored when parts are present"),
+        embeddingInput: {
+          text: "this fallback is also ignored",
+          parts: [
+            { type: "text" as const, text: "é" },
+            { type: "inline-data" as const, mimeType: "a/b", data: "😀" },
+          ],
+        },
+      },
+      {
+        ...chunk("the second fallback is ignored too"),
+        embeddingInput: {
+          text: "unused fallback",
+          parts: [{ type: "text" as const, text: "é" }],
+        },
+      },
+    ];
+
+    expect(buildMemoryEmbeddingBatches(structuredChunks, 10).map((batch) => batch.length)).toEqual([
+      1, 1,
+    ]);
+    expect(buildMemoryEmbeddingBatches(structuredChunks, 11)).toEqual([structuredChunks]);
+  });
+
   it("filters empty chunks before embedding", () => {
     const chunks = filterNonEmptyMemoryChunks([chunk("\n\n"), chunk("hello"), chunk("   ")]);
 
