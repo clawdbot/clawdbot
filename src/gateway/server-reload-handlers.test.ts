@@ -23,6 +23,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { CronService } from "../cron/service.js";
 import {
   consumeGatewaySigusr1RestartIntent,
   isGatewaySigusr1RestartExternallyAllowed,
@@ -1273,6 +1274,92 @@ describe("provider auth hot reload path ownership", () => {
 });
 
 describe("gateway hot reload model state", () => {
+  it("revokes an active skill review before publishing autonomous mode off", async () => {
+    const fixtureDir = autoCleanupTempDirs.make("openclaw-skill-review-reload-");
+    const outputPath = path.join(fixtureDir, "skills", "candidate", "SKILL.md");
+    const reviewStarted = createDeferred<AbortSignal>();
+    const releaseReview = createDeferred();
+    const releaseReconciliation = createDeferred();
+    const cron = new CronService({
+      storePath: path.join(fixtureDir, "jobs.json"),
+      cronEnabled: true,
+      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      runSkillCollectionReview: async ({ abortSignal }) => {
+        if (!abortSignal) {
+          throw new Error("skill review cancellation signal missing");
+        }
+        reviewStarted.resolve(abortSignal);
+        await releaseReview.promise;
+        abortSignal.throwIfAborted();
+        await writeFile(outputPath, "review output", "utf8");
+        return { status: "ok" as const, summary: "reviewed main" };
+      },
+    });
+    const previousConfig = {
+      skills: { workshop: { autonomous: { mode: "auto" } } },
+    } satisfies OpenClawConfig;
+    const nextConfig = {
+      skills: { workshop: { autonomous: { mode: "off" } } },
+    } satisfies OpenClawConfig;
+    let activeRun: Promise<unknown> | undefined;
+
+    try {
+      await cron.start();
+      const added = await cron.add(
+        {
+          declarationKey: "skill-collection-review:main",
+          name: "skill-collection-review-main",
+          enabled: true,
+          schedule: { kind: "every", everyMs: 7 * 24 * 60 * 60_000 },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "skillCollectionReview" },
+        },
+        { enabledExplicit: true, systemOwned: true },
+      );
+      const job = "job" in added ? added.job : added;
+      activeRun = cron.run(job.id, "force");
+      const abortSignal = await reviewStarted.promise;
+      const reconcileHeartbeatJobs = vi.fn(async () => {
+        await releaseReconciliation.promise;
+      });
+      let state = {
+        ...createDefaultGatewayReloadState(),
+        cronState: createTestCronState({ cron, cronEnabled: true, reconcileHeartbeatJobs }),
+      };
+      const { applyHotReload } = createGatewayReloadHandlers({
+        getState: () => state,
+        setState: (nextState) => {
+          state = nextState;
+        },
+      });
+
+      await applyHotReload(
+        buildGatewayReloadPlan(["skills.workshop.autonomous.mode"]),
+        nextConfig,
+        {
+          sourceConfig: previousConfig,
+          isCurrent: () => true,
+          publish: async (commit) => await commit(),
+        },
+      );
+
+      expect(reconcileHeartbeatJobs).toHaveBeenCalledWith(nextConfig);
+      expect(abortSignal.aborted).toBe(true);
+      releaseReview.resolve();
+      await activeRun;
+      await expect(readFile(outputPath, "utf8")).rejects.toThrow();
+    } finally {
+      releaseReview.resolve();
+      releaseReconciliation.resolve();
+      await activeRun?.catch(() => undefined);
+      cron.stop();
+    }
+  });
+
   it("keeps a supervised on-exit child alive exactly once across same-store cron reload", async () => {
     const fixtureDir = autoCleanupTempDirs.make("openclaw-cron-exit-reload-");
     const childScriptPath = path.join(fixtureDir, "watcher.cjs");

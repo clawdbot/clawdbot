@@ -44,6 +44,7 @@ import {
   collectChannelOperationFailures,
   disposeMcpRuntimesWithTimeout,
   resetPreparedModelRuntimeStateForHotReload,
+  revokeActiveSkillReviewsBeforeConfigPublication,
 } from "./server-reload-utils.js";
 import { startGatewayCronWithLogging } from "./server-runtime-services.js";
 import { resolveHookClientIpConfig } from "./server/hook-client-ip-config.js";
@@ -193,6 +194,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         if (plan.restartHeartbeat) {
           nextState.heartbeatRunner.updateConfig(nextConfig);
         }
+        revokeActiveSkillReviewsBeforeConfigPublication(nextConfig);
         if (plan.restartHeartbeat || plan.reconcileSkillReviewJobs) {
           void nextState.cronState.reconcileHeartbeatJobs(nextConfig).catch((error: unknown) => {
             params.logReload.warn(`cron monitor reconvergence failed: ${String(error)}`);
