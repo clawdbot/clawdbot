@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { A2aProtocolError } from "./protocol.js";
 import { A2aTaskStore } from "./task-store.js";
 
 describe("A2A task store", () => {
@@ -62,9 +61,7 @@ describe("A2A task store", () => {
     const bob = store.create("ctx-shared", "bob");
 
     expect(store.get(alice.id, "bob")).toBeUndefined();
-    expect(() => store.cancel(alice.id, "bob")).toThrow(
-      expect.objectContaining({ code: -32001, message: "Task not found" }),
-    );
+    expect(store.get(bob.id, "alice")).toBeUndefined();
     expect(store.completeNext("ctx-shared", "bob only", "bob")?.id).toBe(bob.id);
     expect(alice.status.state).toBe("TASK_STATE_SUBMITTED");
     expect(store.completeNext("ctx-shared", "alice only", "alice")?.id).toBe(alice.id);
@@ -82,28 +79,6 @@ describe("A2A task store", () => {
       },
       artifacts: [],
     });
-  });
-
-  it("rejects unknown or terminal cancellations and discards canceled replies", async () => {
-    const store = createTaskStore();
-    const canceled = store.create("ctx-alice");
-    const next = store.create("ctx-alice");
-    store.start(canceled.id);
-    store.start(next.id);
-    const waiting = store.wait(canceled.id, 10_000);
-
-    expect(store.cancel(canceled.id).status.state).toBe("TASK_STATE_CANCELED");
-    await expect(waiting).resolves.toMatchObject({ status: { state: "TASK_STATE_CANCELED" } });
-    expect(store.completeNext("ctx-alice", "canceled late reply")).toBeUndefined();
-    expect(next.status.state).toBe("TASK_STATE_WORKING");
-    expect(store.completeNext("ctx-alice", "next reply")?.id).toBe(next.id);
-
-    expect(() => store.cancel("missing")).toThrow(
-      expect.objectContaining({ code: -32001, message: "Task not found" }),
-    );
-    expect(() => store.cancel(canceled.id)).toThrow(
-      expect.objectContaining({ code: -32002, message: "Task cannot be canceled" }),
-    );
   });
 
   it("records bounded failures and policy rejections without consuming sibling replies", () => {
@@ -174,11 +149,5 @@ describe("A2A task store", () => {
 
     expect(store.get(completed.id)).toBeUndefined();
     expect(store.get(active.id)).toBe(active);
-  });
-
-  it("uses typed protocol errors for cancellation failures", () => {
-    const store = createTaskStore();
-
-    expect(() => store.cancel("missing")).toThrow(A2aProtocolError);
   });
 });

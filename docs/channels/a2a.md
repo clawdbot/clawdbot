@@ -96,7 +96,7 @@ To return immediately while the agent continues working, add `"configuration": {
 
 Older clients can use `message/send` as an alias for `SendMessage`.
 
-## Poll or cancel a task
+## Poll a task
 
 Poll a task by sending its ID to `GetTask`:
 
@@ -112,7 +112,9 @@ curl http://127.0.0.1:18789/a2a/v1 \
   }'
 ```
 
-The task transitions from `TASK_STATE_WORKING` to `TASK_STATE_COMPLETED`, `TASK_STATE_FAILED`, or `TASK_STATE_REJECTED`. Use `CancelTask` with the same `params` shape to cancel a nonterminal task; canceled tasks report `TASK_STATE_CANCELED`. Older clients can use `tasks/get` and `tasks/cancel` as compatibility aliases.
+The task transitions from `TASK_STATE_WORKING` to `TASK_STATE_COMPLETED`, `TASK_STATE_FAILED`, or `TASK_STATE_REJECTED`. Older clients can use `tasks/get` as a compatibility alias.
+
+`CancelTask` is refused with JSON-RPC error `-32004` rather than acknowledged. A dispatched agent run has no plugin-facing abort seam, so reporting `TASK_STATE_CANCELED` would tell the peer the work stopped while the run kept using tools. Refusing keeps the reported state honest.
 
 ## Configure outbound peers
 
@@ -153,6 +155,12 @@ Address outbound messages to `a2a:hermes`. The plugin sends `SendMessage` direct
 
 Peer names must begin with a lowercase letter or number and can also contain periods, underscores, and hyphens.
 
+## Session isolation
+
+Each authenticated peer and A2A `contextId` pair gets its own agent session. A2A pins the most
+isolated direct-message scope rather than inheriting `session.dmScope`, so remote peer content never
+joins the operator's main session and one peer cannot read another peer's conversation history.
+
 ## Security
 
 Agent Card discovery is intentionally public: anyone who can reach the gateway can read the instance description and exposed agent IDs. Use `exposeAgents` to limit disclosure, and expose the gateway through HTTPS when it is reachable over an untrusted network.
@@ -165,9 +173,9 @@ Outbound destinations come only from operator-configured peer URLs. Inbound call
 
 ## A2A 1.0 limitations
 
-The current plugin supports text messages and structured JSON data parts, which are appended as compact JSON text. File URL and raw binary parts are ignored. Streaming, server-sent events, push notifications, task listing, extended Agent Cards, and multi-tenant routing are not supported.
+The current plugin supports text messages and structured JSON data parts, which are appended as compact JSON text. File URL and raw binary parts are ignored. Streaming, server-sent events, push notifications, task cancellation, task listing, extended Agent Cards, and multi-tenant routing are not supported.
 
-Tasks remain in memory only. Completed and other terminal tasks are retained for up to 24 hours, with a maximum of 500 retained entries; restarting the gateway discards all tasks and task history. The Agent Card advertises that state transition history is unavailable.
+Tasks remain in memory only. Completed and other terminal tasks are retained for up to 24 hours, with a maximum of 500 retained entries; restarting the gateway discards all tasks and task history.
 
 ## Related
 

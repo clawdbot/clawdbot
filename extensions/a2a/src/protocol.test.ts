@@ -44,10 +44,10 @@ describe("A2A JSON-RPC request contracts", () => {
   it.each([
     ["SendMessage", "SendMessage"],
     ["GetTask", "GetTask"],
-    ["CancelTask", "CancelTask"],
+    ["CancelTask", "unsupported"],
     ["message/send", "SendMessage"],
     ["tasks/get", "GetTask"],
-    ["tasks/cancel", "CancelTask"],
+    ["tasks/cancel", "unsupported"],
     ["SendStreamingMessage", "unsupported"],
     ["ListTasks", "unsupported"],
     ["tasks/send", undefined],

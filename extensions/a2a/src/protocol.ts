@@ -83,20 +83,23 @@ export const A2aTaskRequestParamsSchema = z.object({
   tenant: z.string().optional(),
 });
 
-type A2aCanonicalMethod = "SendMessage" | "GetTask" | "CancelTask";
+type A2aCanonicalMethod = "SendMessage" | "GetTask";
 
 // Hermes-generation A2A 0.3 peers use dotted RPC names; only these three
 // explicitly supported interoperability aliases are accepted.
 const A2A_METHOD_ALIASES: Readonly<Record<string, A2aCanonicalMethod>> = {
   SendMessage: "SendMessage",
   GetTask: "GetTask",
-  CancelTask: "CancelTask",
   "message/send": "SendMessage",
   "tasks/get": "GetTask",
-  "tasks/cancel": "CancelTask",
 };
 
 const A2A_UNSUPPORTED_METHODS = new Set([
+  // Cancellation is refused rather than faked: a dispatched agent run has no
+  // plugin-facing abort seam, so acknowledging it would report a terminal state
+  // while the run kept using tools.
+  "CancelTask",
+  "tasks/cancel",
   "ListTasks",
   "SendStreamingMessage",
   "SubscribeToTask",

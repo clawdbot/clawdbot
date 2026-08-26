@@ -434,42 +434,49 @@ describe("A2A JSON-RPC protocol boundary", () => {
     });
   });
 
-  it("rejects task inspection and cancellation from a different configured peer", async () => {
+  it("rejects task inspection from a different configured peer", async () => {
     const harness = await startHttpHarness({ onDispatch: async () => {} });
     const createdResponse = await harness.post(sendRequest({ returnImmediately: true }));
     const created = (await createdResponse.json()) as { result: { task: { id: string } } };
 
-    for (const method of ["GetTask", "CancelTask"]) {
-      const response = await harness.post(
-        { jsonrpc: "2.0", id: method, method, params: { id: created.result.task.id } },
-        "beta-secret",
-      );
-      await expect(response.json()).resolves.toMatchObject({
-        id: method,
-        error: { code: -32001, message: "Task not found" },
-      });
-    }
-  });
-
-  it("cancels working tasks and rejects cancellation once they are terminal", async () => {
-    const harness = await startHttpHarness({ onDispatch: async () => {} });
-    const createdResponse = await harness.post(sendRequest({ returnImmediately: true }));
-    const created = (await createdResponse.json()) as { result: { task: { id: string } } };
-    const request = {
-      jsonrpc: "2.0",
-      id: "cancel",
-      method: "tasks/cancel",
-      params: { id: created.result.task.id },
-    };
-
-    const canceled = await harness.post(request);
-    await expect(canceled.json()).resolves.toMatchObject({
-      result: { status: { state: "TASK_STATE_CANCELED" } },
+    const response = await harness.post(
+      { jsonrpc: "2.0", id: "GetTask", method: "GetTask", params: { id: created.result.task.id } },
+      "beta-secret",
+    );
+    await expect(response.json()).resolves.toMatchObject({
+      id: "GetTask",
+      error: { code: -32001, message: "Task not found" },
     });
-
-    const repeated = await harness.post(request);
-    await expect(repeated.json()).resolves.toMatchObject({ error: { code: -32002 } });
   });
+
+  it.each(["CancelTask", "tasks/cancel"])(
+    "refuses %s instead of reporting a terminal state it cannot enforce",
+    async (method) => {
+      const harness = await startHttpHarness({ onDispatch: async () => {} });
+      const createdResponse = await harness.post(sendRequest({ returnImmediately: true }));
+      const created = (await createdResponse.json()) as { result: { task: { id: string } } };
+
+      const response = await harness.post({
+        jsonrpc: "2.0",
+        id: "cancel",
+        method,
+        params: { id: created.result.task.id },
+      });
+
+      // A dispatched agent run has no plugin-facing abort seam, so acknowledging
+      // cancellation would report a terminal state while the run kept going.
+      await expect(response.json()).resolves.toMatchObject({ error: { code: -32004 } });
+      const after = await harness.post({
+        jsonrpc: "2.0",
+        id: "after",
+        method: "GetTask",
+        params: { id: created.result.task.id },
+      });
+      await expect(after.json()).resolves.toMatchObject({
+        result: { status: { state: "TASK_STATE_WORKING" } },
+      });
+    },
+  );
 
   it("transitions the task to FAILED when inbound dispatch throws", async () => {
     const harness = await startHttpHarness({

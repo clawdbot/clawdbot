@@ -175,7 +175,7 @@ export function createA2aHttpHandler(params: A2aHttpHandlerParams) {
       if (method === "unsupported") {
         throw new A2aProtocolError(
           -32004,
-          "Unsupported operation; supported methods are SendMessage, GetTask, and CancelTask",
+          "Unsupported operation; supported methods are SendMessage and GetTask",
         );
       }
 
@@ -224,10 +224,7 @@ export function createA2aHttpHandler(params: A2aHttpHandlerParams) {
         if (!taskParams.success) {
           throw new A2aProtocolError(-32602, "Invalid task params: id is required");
         }
-        const task =
-          method === "CancelTask"
-            ? params.taskStore.cancel(taskParams.data.id, peerName)
-            : params.taskStore.get(taskParams.data.id, peerName);
+        const task = params.taskStore.get(taskParams.data.id, peerName);
         if (!task) {
           throw new A2aProtocolError(-32001, "Task not found");
         }

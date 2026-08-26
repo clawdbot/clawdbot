@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { A2aProtocolError, type A2aMessageRecord, type A2aTaskRecord } from "./protocol.js";
+import type { A2aMessageRecord, A2aTaskRecord } from "./protocol.js";
 
 const A2A_TERMINAL_MAX_TASKS = 500;
 const A2A_TERMINAL_RETENTION_MS = 24 * 60 * 60 * 1000;
@@ -8,11 +8,6 @@ const A2A_ERROR_MAX_LENGTH = 512;
 type A2aTaskWaiter = {
   resolve: (task: A2aTaskRecord) => void;
   timer: ReturnType<typeof setTimeout>;
-};
-
-type A2aPendingDelivery = {
-  taskId: string;
-  canceled: boolean;
 };
 
 function isTerminalTask(task: A2aTaskRecord): boolean {
@@ -31,7 +26,7 @@ function createStatusMessage(contextId: string, text: string): A2aMessageRecord 
 export class A2aTaskStore {
   readonly #tasks = new Map<string, A2aTaskRecord>();
   readonly #taskOwners = new Map<string, string>();
-  readonly #pendingByContext = new Map<string, A2aPendingDelivery[]>();
+  readonly #pendingByContext = new Map<string, string[]>();
   readonly #terminalTasks = new Map<string, number>();
   readonly #waiters = new Map<string, Set<A2aTaskWaiter>>();
 
@@ -50,7 +45,7 @@ export class A2aTaskStore {
     }
     const conversationKey = this.#conversationKey(contextId, ownerPeer);
     const pending = this.#pendingByContext.get(conversationKey) ?? [];
-    pending.push({ taskId: task.id, canceled: false });
+    pending.push(task.id);
     this.#pendingByContext.set(conversationKey, pending);
     return task;
   }
@@ -81,17 +76,15 @@ export class A2aTaskStore {
     if (!queue?.length) {
       return undefined;
     }
-    const delivery = queue.shift();
+    const nextTaskId = queue.shift();
     if (queue.length === 0) {
       this.#pendingByContext.delete(conversationKey);
     }
-    if (!delivery || delivery.canceled) {
-      // A canceled dispatch still emits its own final reply; consume its FIFO
-      // slot so that stale reply cannot complete the next conversation task.
+    if (!nextTaskId) {
       return undefined;
     }
 
-    const task = this.#tasks.get(delivery.taskId);
+    const task = this.#tasks.get(nextTaskId);
     if (!task || isTerminalTask(task)) {
       return undefined;
     }
@@ -115,25 +108,6 @@ export class A2aTaskStore {
 
   reject(taskId: string, reason: string): A2aTaskRecord | undefined {
     return this.#finishWithMessage(taskId, "TASK_STATE_REJECTED", reason);
-  }
-
-  cancel(taskId: string, ownerPeer?: string): A2aTaskRecord {
-    const task = this.get(taskId, ownerPeer);
-    if (!task) {
-      throw new A2aProtocolError(-32001, "Task not found");
-    }
-    if (isTerminalTask(task)) {
-      throw new A2aProtocolError(-32002, "Task cannot be canceled");
-    }
-    const conversationKey = this.#conversationKey(task.contextId, this.#taskOwners.get(task.id));
-    const delivery = this.#pendingByContext
-      .get(conversationKey)
-      ?.find((pending) => pending.taskId === taskId);
-    if (delivery) {
-      delivery.canceled = true;
-    }
-    task.status = { state: "TASK_STATE_CANCELED", timestamp: new Date().toISOString() };
-    return this.#finishTask(task);
   }
 
   wait(taskId: string, timeoutMs: number): Promise<A2aTaskRecord | undefined> {
@@ -187,7 +161,7 @@ export class A2aTaskStore {
     const conversationKey = this.#conversationKey(task.contextId, this.#taskOwners.get(task.id));
     const queue = this.#pendingByContext.get(conversationKey);
     if (queue) {
-      const position = queue.findIndex((pending) => pending.taskId === taskId);
+      const position = queue.indexOf(taskId);
       if (position !== -1) {
         queue.splice(position, 1);
       }
