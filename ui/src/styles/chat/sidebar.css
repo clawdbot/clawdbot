@@ -975,7 +975,8 @@ openclaw-chat-sidebar-region,
   opacity: 1;
 }
 
-.chat-workspace-rail__row-action {
+.chat-workspace-rail__row-action,
+.chat-workspace-rail__row-actions :where(.chat-copy-btn) {
   display: inline-grid;
   width: 24px;
   height: 24px;
@@ -987,13 +988,15 @@ openclaw-chat-sidebar-region,
 }
 
 .chat-workspace-rail__row-action:hover,
-.chat-workspace-rail__row-action:focus-visible {
+.chat-workspace-rail__row-action:focus-visible,
+.chat-workspace-rail__row-actions :where(.chat-copy-btn:hover, .chat-copy-btn:focus-visible) {
   border-color: color-mix(in srgb, var(--border-strong) 72%, transparent);
   background: color-mix(in srgb, var(--bg-elevated) 82%, transparent);
   color: var(--text);
 }
 
-.chat-workspace-rail__row-action svg {
+.chat-workspace-rail__row-action svg,
+.chat-workspace-rail__row-actions :where(.chat-copy-btn svg) {
   width: 14px;
   height: 14px;
   fill: none;
