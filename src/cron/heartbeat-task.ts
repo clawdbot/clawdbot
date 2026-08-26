@@ -2,7 +2,7 @@
 import { createHash } from "node:crypto";
 import type { CronJob } from "./types.js";
 
-const HEARTBEAT_TASK_DECLARATION_PREFIX = "heartbeat-task:";
+export const HEARTBEAT_TASK_DECLARATION_PREFIX = "heartbeat-task:";
 
 /** Whether a declaration key belongs to the doctor-owned heartbeat-task namespace. */
 export function isHeartbeatTaskDeclarationKey(declarationKey: string | undefined): boolean {

@@ -1298,6 +1298,7 @@ const CRON_PAYLOAD_CODE_LANGUAGES: Record<CronFormState["payloadKind"], string> 
   script: "javascript",
   command: "bash",
   heartbeat: "",
+  skillCollectionReview: "",
   systemEvent: "",
   agentTurn: "",
 };
@@ -1307,7 +1308,13 @@ function renderPromptSection(
   ctx: { payloadLocked: boolean; isAgentTurn: boolean },
 ) {
   const lockedPayloadLabel =
-    props.form.payloadKind === "script" ? t("cron.form.script") : t("cron.form.command");
+    props.form.payloadKind === "script"
+      ? t("cron.form.script")
+      : props.form.payloadKind === "heartbeat"
+        ? "Heartbeat monitor"
+        : props.form.payloadKind === "skillCollectionReview"
+          ? "Skill collection review"
+          : t("cron.form.command");
   const promptLabel = ctx.payloadLocked
     ? lockedPayloadLabel
     : props.form.payloadKind === "systemEvent"
