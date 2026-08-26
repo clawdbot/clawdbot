@@ -514,13 +514,26 @@ export function renderAssistantAttachments(
                 : {}),
             })
         : undefined;
+    const normalizedMimeType = attachment.mimeType?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+    const inferTypeFromExtension =
+      !normalizedMimeType || normalizedMimeType === "application/octet-stream";
     const svgImage =
-      isSvgImageMediaPath(attachment.url, attachment.mimeType) ||
-      (attachmentUrl !== null && isSvgImageMediaPath(attachmentUrl, attachment.mimeType));
+      normalizedMimeType === "image/svg+xml" ||
+      (inferTypeFromExtension &&
+        (isSvgImageMediaPath(attachment.url, undefined) ||
+          (attachmentUrl !== null && isSvgImageMediaPath(attachmentUrl, undefined)) ||
+          isSvgImageMediaPath(attachment.label, undefined)));
     if (
       attachment.kind === "image" ||
       (attachment.kind === "document" &&
-        (svgImage || isImageMediaPath(attachment.url, attachment.mimeType)))
+        (svgImage ||
+          isImageMediaPath(
+            attachment.url,
+            inferTypeFromExtension ? undefined : attachment.mimeType,
+          ) ||
+          (inferTypeFromExtension &&
+            !isSvgImageMediaPath(attachment.label, undefined) &&
+            isImageMediaPath(attachment.label, undefined))))
     ) {
       if (!attachmentUrl) {
         return renderAssistantAttachmentStatusCard({

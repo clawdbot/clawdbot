@@ -90,6 +90,111 @@ describe("attachment sidebar source ownership", () => {
     container.remove();
   });
 
+  it("keeps a raster filename image-shaped when its source URL is opaque", () => {
+    const source = `${window.location.origin}/download/opaque`;
+    const container = document.body.appendChild(document.createElement("div"));
+    const onOpenImage = vi.fn();
+    render(
+      renderAssistantAttachments(
+        [
+          {
+            type: "attachment",
+            attachment: {
+              kind: "document",
+              label: "photo.png",
+              mimeType: "application/octet-stream",
+              url: source,
+            },
+          },
+        ],
+        { onOpenImage },
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-assistant-attachment-card")).toBeNull();
+    expect(container.querySelector("img.chat-message-image")?.getAttribute("src")).toBe(source);
+    container.querySelector<HTMLButtonElement>(".chat-message-image-button")?.click();
+    expect(onOpenImage).toHaveBeenCalledWith(expect.objectContaining({ src: source }));
+    container.remove();
+  });
+
+  it("routes an SVG filename with an opaque source through the bounded SVG renderer", () => {
+    const container = document.body.appendChild(document.createElement("div"));
+    render(
+      renderAssistantAttachments(
+        [
+          {
+            type: "attachment",
+            attachment: {
+              kind: "document",
+              label: "vector.svg",
+              mimeType: "application/octet-stream",
+              url: "https://files.example/download/opaque",
+            },
+          },
+        ],
+        {},
+      ),
+      container,
+    );
+
+    expect(container.querySelector("openclaw-chat-svg-attachment")).not.toBeNull();
+    expect(container.querySelector("img.chat-message-image")).toBeNull();
+    container.remove();
+  });
+
+  it("does not let an SVG-shaped label override a document MIME type", () => {
+    const container = document.body.appendChild(document.createElement("div"));
+    render(
+      renderAssistantAttachments(
+        [
+          {
+            type: "attachment",
+            attachment: {
+              kind: "document",
+              label: "vector.svg",
+              mimeType: "application/pdf",
+              url: "https://files.example/document.pdf",
+            },
+          },
+        ],
+        {},
+      ),
+      container,
+    );
+
+    expect(container.querySelector("openclaw-chat-svg-attachment")).toBeNull();
+    expect(container.querySelector(".chat-assistant-attachment-card")).not.toBeNull();
+    container.remove();
+  });
+
+  it("infers a raster URL when generic MIME includes parameters", () => {
+    const source = `${window.location.origin}/download/photo.png`;
+    const container = document.body.appendChild(document.createElement("div"));
+    render(
+      renderAssistantAttachments(
+        [
+          {
+            type: "attachment",
+            attachment: {
+              kind: "document",
+              label: "photo",
+              mimeType: "application/octet-stream; charset=binary",
+              url: source,
+            },
+          },
+        ],
+        {},
+      ),
+      container,
+    );
+
+    expect(container.querySelector("img.chat-message-image")?.getAttribute("src")).toBe(source);
+    expect(container.querySelector(".chat-assistant-attachment-card")).toBeNull();
+    container.remove();
+  });
+
   it("loads SVG attachments through an image object URL", async () => {
     const intersectAttachment = stubAttachmentIntersection();
     const source = `${window.location.origin}/vector.svg`;

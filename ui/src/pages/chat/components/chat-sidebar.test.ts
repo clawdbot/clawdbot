@@ -465,13 +465,21 @@ describe("markdown sidebar", () => {
   );
 
   it.each([
-    { title: "vector.svg", mimeType: "image/svg+xml" },
-    { title: "vector.svg", mimeType: "application/octet-stream" },
-    { title: "diagram", mimeType: undefined },
+    { title: "vector.svg", mimeType: "image/svg+xml", src: "https://cdn.example/vector.svg" },
+    {
+      title: "vector.svg",
+      mimeType: "application/octet-stream",
+      src: "https://cdn.example/vector.svg",
+    },
+    { title: "diagram", mimeType: undefined, src: "https://cdn.example/vector.svg" },
+    {
+      title: "vector.svg",
+      mimeType: "application/octet-stream",
+      src: "https://cdn.example/download/opaque",
+    },
   ])(
     "keeps external SVG attachments as Files cards with title $title and MIME $mimeType",
-    async ({ title, mimeType }) => {
-      const src = "https://cdn.example/vector.svg";
+    async ({ title, mimeType, src }) => {
       const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
         content: unknown;
         updateComplete?: Promise<unknown>;

@@ -100,9 +100,13 @@ function renderSidebarAttachment(
       .voiceNote=${content.voiceNote === true}
     ></openclaw-chat-audio-player>`;
   }
+  const inferTypeFromExtension = !mimeType || mimeType === "application/octet-stream";
   const blockedExternalSvg =
-    (isSvgImageMediaPath(content.sourceIdentity ?? "", mimeType) ||
-      isSvgImageMediaPath(src, mimeType)) &&
+    (mimeType === "image/svg+xml" ||
+      (inferTypeFromExtension &&
+        (isSvgImageMediaPath(content.sourceIdentity ?? "", undefined) ||
+          isSvgImageMediaPath(src, undefined) ||
+          isSvgImageMediaPath(content.title, undefined)))) &&
     isCrossOriginHttpSource(src);
   if (
     !blockedExternalSvg &&
