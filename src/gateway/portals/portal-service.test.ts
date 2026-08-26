@@ -45,6 +45,24 @@ async function getDistinctFreePort(excluded: number): Promise<number> {
   throw new Error("Failed to reserve a distinct test port");
 }
 
+describe("portal open authority fence", () => {
+  it("refuses to mutate a reused portal when the caller's authority lapsed", async () => {
+    const { service } = makeService(["127.0.0.1"]);
+    const first = (await service.open({ targetPort: 41234, title: "Live" })).portal;
+    await expect(
+      service.open({
+        targetPort: 41234,
+        title: "Hijacked",
+        assertCurrent: () => {
+          throw new Error("authority lapsed");
+        },
+      }),
+    ).rejects.toThrow("authority lapsed");
+    const summary = service.list().find((portal) => portal.id === first.id);
+    expect(summary?.title).toBe("Live");
+  });
+});
+
 describe("gateway portal service", () => {
   it("allocates one port across every frozen bind host", async () => {
     const { service, httpServers } = makeService(["127.0.0.1", "::1"]);

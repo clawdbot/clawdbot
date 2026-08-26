@@ -41,6 +41,8 @@ type PortalRuntimeEntry = {
 type GatewayPortalOpenParams = {
   targetPort: number;
   target?: PortalTarget;
+  /** Revalidated inside the serialized operation; reuse must not mutate a live portal for a caller whose authority lapsed. */
+  assertCurrent?: () => void;
   onClose?: () => Promise<void> | void;
   origin?: string;
   title?: string;
@@ -175,6 +177,7 @@ export function createGatewayPortalService(params: {
         if (closed) {
           throw new Error("portals unavailable");
         }
+        input.assertCurrent?.();
         const existing = entries.get(id);
         if (existing) {
           existing.portal.title = input.title?.trim() || existing.portal.title;

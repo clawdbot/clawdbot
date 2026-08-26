@@ -110,6 +110,7 @@ export function createWorkerPortalToolExecutor(params: WorkerPortalToolExecutorD
       request.signal?.throwIfAborted();
       const opened = await service.open({
         targetPort: remotePort,
+        assertCurrent: assertPortalAuthority,
         target: {
           kind: "worker",
           environmentId: environment.environmentId,
