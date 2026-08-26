@@ -872,8 +872,12 @@ export function buildGatewayCronService(params: {
         deps: { ...params.deps, runtime: defaultRuntime },
       });
     },
-    runSkillCollectionReview: ({ agentId }) =>
-      runSkillCollectionReviewForAgent({ config: getRuntimeConfig(), agentId }),
+    runSkillCollectionReview: ({ agentId, abortSignal }) =>
+      runSkillCollectionReviewForAgent({
+        config: getRuntimeConfig(),
+        agentId,
+        ...(abortSignal ? { abortSignal } : {}),
+      }),
     runIsolatedAgentJob: async ({
       job,
       message,

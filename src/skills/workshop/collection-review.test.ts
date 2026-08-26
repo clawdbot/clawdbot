@@ -18,6 +18,7 @@ import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { writeWorkspaceSkills } from "../test-support/e2e-test-helpers.js";
 import { MAX_RECONCILED_SKILLS, MAX_RECONCILED_SKILL_BYTES } from "./collection-contracts.js";
 import {
+  listSkillCollectionReviewOutcomes,
   readSkillReviewOutcomes,
   recordSkillCollectionReviewHistory,
   recordSkillCollectionReviewStatus,
@@ -40,12 +41,14 @@ async function runReview(params: {
   env?: NodeJS.ProcessEnv;
   onError?: (error: unknown, workspaceDir: string) => void;
   agentId?: string;
+  abortSignal?: AbortSignal;
 }) {
   const agentId = params.agentId ?? listAgentIds(params.config)[0] ?? "main";
   const result = await runSkillCollectionReviewForAgent({
     config: params.config,
     agentId,
     env: params.env,
+    ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
   });
   if (result.status === "error") {
     params.onError?.(
@@ -477,6 +480,67 @@ describe("skill collection review", () => {
       releaseReview?.();
       await first;
     }
+  });
+
+  it("rejects the final reconcile after cron authority is revoked", async () => {
+    const workspaceDir = await makeWorkspaceDir("openclaw-collection-review-revoked-");
+    await writeWorkspaceSkills(workspaceDir, [
+      { name: "owned", description: "Workshop-owned procedure" },
+    ]);
+    const skillFile = path.join(workspaceDir, "skills", "owned", "SKILL.md");
+    const originalContent = await fs.readFile(skillFile, "utf8");
+    let releaseReview: (() => void) | undefined;
+    let markStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    runEmbeddedAgent.mockImplementation(async (params) => {
+      markStarted?.();
+      await new Promise<void>((resolve) => {
+        releaseReview = resolve;
+      });
+      const tool = createSkillWorkshopTool({
+        workspaceDir: params.workspaceDir,
+        config: params.config,
+        agentId: params.agentId,
+        env: params.skillWorkshopProposalEnv,
+        collectionReconcile: params.skillWorkshopCollectionReconcile,
+      });
+      await tool.execute("read", { action: "read", skill_name: "owned" });
+      await tool.execute("reconcile", {
+        action: "reconcile",
+        collection: [
+          {
+            action: "write",
+            name: "owned",
+            description: "Changed procedure",
+            content: "# Owned\n\nChanged after revocation.\n",
+          },
+        ],
+      });
+      return {};
+    });
+    const config = {
+      agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
+      skills: { workshop: { autonomous: { mode: "auto" as const } } },
+    };
+    const controller = new AbortController();
+    const review = runReview({
+      config,
+      env: testState.env,
+      abortSignal: controller.signal,
+    });
+    await started;
+
+    controller.abort(new Error("Cron job disabled by operator."));
+    releaseReview?.();
+
+    await expect(review).resolves.toMatchObject({
+      status: "error",
+      error: expect.stringContaining("Cron job disabled by operator."),
+    });
+    expect(await fs.readFile(skillFile, "utf8")).toBe(originalContent);
+    expect(listSkillCollectionReviewOutcomes(workspaceDir, { env: testState.env })).toEqual([]);
   });
 
   it("rejects oversized skill counts and bytes before model dispatch", async () => {

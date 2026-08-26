@@ -41,7 +41,10 @@ async function runSkillCollectionReview(params: {
   config: OpenClawConfig;
   workspaceDir: string;
   env?: NodeJS.ProcessEnv;
+  abortSignal?: AbortSignal;
+  assertCurrent: () => void;
 }): Promise<SkillCollectionReconcileResult | null> {
+  params.assertCurrent();
   const skills = listWritableSkillCollection(params.workspaceDir, {
     agentId: params.agentId,
     agentIds: params.agentIds,
@@ -81,6 +84,7 @@ async function runSkillCollectionReview(params: {
           }).map((skill) => skill.name),
         ),
     ),
+    assertCurrent: params.assertCurrent,
   };
   const { runEmbeddedAgent } = await import("../../agents/embedded-agent.js");
   const preparedRunAdmission = prepareSystemAgentRunAdmission(
@@ -103,6 +107,7 @@ async function runSkillCollectionReview(params: {
       agentHarnessRuntimeOverride: "openclaw",
       workspaceDir: params.workspaceDir,
       config: params.config,
+      ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
       prompt: buildCollectionReviewPrompt(skills, params.env),
       provider: model.provider,
       model: model.model,
@@ -138,10 +143,13 @@ export async function runSkillCollectionReviewForAgent(params: {
   config: OpenClawConfig;
   agentId: string;
   env?: NodeJS.ProcessEnv;
+  abortSignal?: AbortSignal;
 }): Promise<
   | { status: "ok" | "skipped"; summary: string }
   | { status: "error"; summary: string; error: string }
 > {
+  const assertCurrent = () => params.abortSignal?.throwIfAborted();
+  assertCurrent();
   if (resolveSkillWorkshopConfig(params.config).autonomous.mode !== "auto") {
     return { status: "skipped", summary: "skill collection review disabled" };
   }
@@ -160,6 +168,7 @@ export async function runSkillCollectionReviewForAgent(params: {
       workspaceDir,
       async () => {
         const attemptedAtMs = Date.now();
+        assertCurrent();
         recordSkillCollectionReviewStatus(workspaceDir, { attemptedAtMs }, stateOptions);
         try {
           const reviewModels = reviewAgentIds.map((agentId) =>
@@ -182,7 +191,10 @@ export async function runSkillCollectionReviewForAgent(params: {
             agentIds: reviewAgentIds,
             workspaceDir,
             env: params.env,
+            ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
+            assertCurrent,
           });
+          assertCurrent();
           recordSkillCollectionReviewStatus(
             workspaceDir,
             { attemptedAtMs, succeededAtMs: Date.now() },
@@ -190,6 +202,7 @@ export async function runSkillCollectionReviewForAgent(params: {
           );
           return { status: "ok" as const, summary: "skill collection review completed" };
         } catch (error) {
+          assertCurrent();
           try {
             recordSkillCollectionReviewStatus(workspaceDir, { attemptedAtMs, error }, stateOptions);
           } catch (recordError) {

@@ -174,6 +174,7 @@ export async function executeJobCore(
             effectiveJob,
             state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId,
           ),
+          ...(abortSignal ? { abortSignal } : {}),
         })
       : { status: "skipped" as const, summary: "skill collection review runner unavailable" };
     return triggerEval ? { ...result, triggerEval } : result;

@@ -1,6 +1,7 @@
 // The system heartbeat monitor payload replaces the dedicated interval
 // scheduler: firing it must only poke the heartbeat wake queue.
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { heartbeatTaskDeclarationKey } from "./heartbeat-task.js";
 import {
   createCronStoreHarness,
@@ -158,8 +159,71 @@ describe("heartbeat payload execution", () => {
       await expect(cron.remove(job.id)).rejects.toThrow(/system-owned/);
 
       await expect(cron.run(job.id, "force")).resolves.toMatchObject({ ok: true });
-      expect(runSkillCollectionReview).toHaveBeenCalledWith({ agentId: "main" });
+      expect(runSkillCollectionReview).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: "main", abortSignal: expect.any(AbortSignal) }),
+      );
     } finally {
+      cron.stop();
+      await cleanup();
+    }
+  });
+
+  it("revokes an active skill review before a disabled monitor can write", async () => {
+    const { storePath, cleanup } = await makeStorePath();
+    const started = createDeferred<AbortSignal>();
+    const release = createDeferred();
+    const settled = createDeferred();
+    const finalWrite = vi.fn();
+    const runSkillCollectionReview = vi.fn(
+      async ({ abortSignal }: { agentId: string; abortSignal?: AbortSignal }) => {
+        if (!abortSignal) {
+          throw new Error("skill review cancellation signal missing");
+        }
+        started.resolve(abortSignal);
+        try {
+          await release.promise;
+          abortSignal.throwIfAborted();
+          finalWrite();
+          return { status: "ok" as const, summary: "reviewed main" };
+        } finally {
+          settled.resolve();
+        }
+      },
+    );
+    const { cron } = createStartedCronServiceWithFinishedBarrier({
+      storePath,
+      logger: noopLogger,
+      runSkillCollectionReview,
+    });
+    const monitor = {
+      declarationKey: "skill-collection-review:main",
+      name: "skill-collection-review-main",
+      agentId: "main",
+      enabled: true,
+      schedule: { kind: "every" as const, everyMs: 7 * 24 * 60 * 60_000 },
+      payload: { kind: "skillCollectionReview" as const },
+      sessionTarget: "main" as const,
+      wakeMode: "next-heartbeat" as const,
+    };
+    let activeRun: Promise<unknown> | undefined;
+    try {
+      await cron.start();
+      const added = await cron.add(monitor, { enabledExplicit: true, systemOwned: true });
+      const job = "job" in added ? added.job : added;
+      activeRun = cron.run(job.id, "force");
+      const abortSignal = await started.promise;
+
+      await cron.add({ ...monitor, enabled: false }, { enabledExplicit: true, systemOwned: true });
+
+      expect(abortSignal.aborted).toBe(true);
+      release.resolve();
+      await settled.promise;
+      await activeRun;
+      expect(finalWrite).not.toHaveBeenCalled();
+      expect(cron.getJob(job.id)?.enabled).toBe(false);
+    } finally {
+      release.resolve();
+      await activeRun?.catch(() => undefined);
       cron.stop();
       await cleanup();
     }

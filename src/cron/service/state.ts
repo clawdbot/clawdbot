@@ -179,6 +179,7 @@ export type CronServiceDeps = {
   }) => Promise<HeartbeatRunResult>;
   runSkillCollectionReview?: (params: {
     agentId: string;
+    abortSignal?: AbortSignal;
   }) => Promise<
     | { status: "ok" | "skipped"; summary: string }
     | { status: "error"; summary: string; error: string }
