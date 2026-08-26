@@ -14,25 +14,6 @@ type MSTeamsSentMessageRecord = {
   sentAt: number;
 };
 
-const sentMessages = createPersistentDedupeCache<MSTeamsSentMessageRecord>({
-  globalKey: MSTEAMS_SENT_MESSAGES_KEY,
-  ttlMs: TTL_MS,
-  maxSize: MAX_ENTRIES,
-  persistent: {
-    namespace: PERSISTENT_NAMESPACE,
-    maxEntries: PERSISTENT_MAX_ENTRIES,
-    openStore: (options) => getOptionalMSTeamsRuntime()?.state.openKeyedStore(options),
-    logError: createPluginStateErrorReporter(
-      getOptionalMSTeamsRuntime,
-      "msteams",
-      "sent-message-state",
-      "Microsoft Teams persistent sent-message state failed",
-    ),
-    // Re-prime with the original send time so restored entries keep their TTL window.
-    readTimestamp: (record) => record.sentAt,
-  },
-});
-
 type MSTeamsSentMessageScope = {
   accountId?: string | null;
 };
@@ -42,20 +23,59 @@ function normalizeSentMessageAccountId(accountId?: string | null): string {
   return trimmed ? trimmed : "default";
 }
 
-function makeKey(
-  conversationId: string,
-  messageId: string,
-  options?: MSTeamsSentMessageScope,
-): string {
-  const accountId = normalizeSentMessageAccountId(options?.accountId);
-  const messageKey = `${conversationId}:${messageId}`;
+function makeAccountDigest(accountId: string): string {
+  return createHash("sha256").update(accountId).digest("hex");
+}
+
+const namedAccountCaches = new Map<
+  string,
+  ReturnType<typeof createPersistentDedupeCache<MSTeamsSentMessageRecord>>
+>();
+
+function createSentMessageCache(accountId: string) {
+  const isDefault = accountId === "default";
+  const accountDigest = isDefault ? undefined : makeAccountDigest(accountId);
+  return createPersistentDedupeCache<MSTeamsSentMessageRecord>({
+    globalKey: isDefault
+      ? MSTEAMS_SENT_MESSAGES_KEY
+      : Symbol.for(`openclaw.msteamsSentMessages.account.v1.${accountDigest}`),
+    ttlMs: TTL_MS,
+    maxSize: MAX_ENTRIES,
+    persistent: {
+      // Each named account owns its retention budget; keep the shipped default namespace intact.
+      namespace: isDefault
+        ? PERSISTENT_NAMESPACE
+        : `${PERSISTENT_NAMESPACE}.account.v1.${accountDigest}`,
+      maxEntries: PERSISTENT_MAX_ENTRIES,
+      openStore: (options) => getOptionalMSTeamsRuntime()?.state.openKeyedStore(options),
+      logError: createPluginStateErrorReporter(
+        getOptionalMSTeamsRuntime,
+        "msteams",
+        "sent-message-state",
+        "Microsoft Teams persistent sent-message state failed",
+      ),
+      // Re-prime with the original send time so restored entries keep their TTL window.
+      readTimestamp: (record) => record.sentAt,
+    },
+  });
+}
+
+const defaultSentMessages = createSentMessageCache("default");
+
+function getSentMessageCache(accountId: string) {
   if (accountId === "default") {
-    return messageKey;
+    return defaultSentMessages;
   }
-  const digest = createHash("sha256")
-    .update(JSON.stringify([accountId, conversationId, messageId]))
-    .digest("hex");
-  return `account:v1:${digest}`;
+  let cache = namedAccountCaches.get(accountId);
+  if (!cache) {
+    cache = createSentMessageCache(accountId);
+    namedAccountCaches.set(accountId, cache);
+  }
+  return cache;
+}
+
+function makeKey(conversationId: string, messageId: string): string {
+  return `${conversationId}:${messageId}`;
 }
 
 export function recordMSTeamsSentMessage(
@@ -67,8 +87,9 @@ export function recordMSTeamsSentMessage(
     return;
   }
   const sentAt = Date.now();
-  void sentMessages.register(
-    makeKey(conversationId, messageId, options),
+  const accountId = normalizeSentMessageAccountId(options?.accountId);
+  void getSentMessageCache(accountId).register(
+    makeKey(conversationId, messageId),
     { sentAt },
     {
       at: sentAt,
@@ -84,5 +105,8 @@ export async function wasMSTeamsMessageSentWithPersistence(params: {
   if (!params.conversationId || !params.messageId) {
     return false;
   }
-  return await sentMessages.lookup(makeKey(params.conversationId, params.messageId, params));
+  const accountId = normalizeSentMessageAccountId(params.accountId);
+  return await getSentMessageCache(accountId).lookup(
+    makeKey(params.conversationId, params.messageId),
+  );
 }

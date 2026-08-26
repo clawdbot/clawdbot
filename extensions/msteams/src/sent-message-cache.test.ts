@@ -1,4 +1,5 @@
 // Msteams tests cover sent message cache plugin behavior.
+import { createHash } from "node:crypto";
 import { resolveGlobalDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -7,6 +8,14 @@ const sentMessageMemory = resolveGlobalDedupeCache(Symbol.for("openclaw.msteamsS
   ttlMs: TTL_MS,
   maxSize: 20_000,
 });
+
+function resolveNamedAccountMemory(accountId: string) {
+  const digest = createHash("sha256").update(accountId).digest("hex");
+  return resolveGlobalDedupeCache(Symbol.for(`openclaw.msteamsSentMessages.account.v1.${digest}`), {
+    ttlMs: TTL_MS,
+    maxSize: 20_000,
+  });
+}
 
 let setMSTeamsRuntime: typeof import("./runtime.js").setMSTeamsRuntime;
 let recordMSTeamsSentMessage: typeof import("./sent-message-cache.js").recordMSTeamsSentMessage;
@@ -162,7 +171,7 @@ describe("msteams sent message cache", () => {
     ).resolves.toBe(false);
     await vi.waitFor(() => expect(register).toHaveBeenCalledTimes(1));
     const supportKey = register.mock.calls[0]?.[0];
-    expect(supportKey).toMatch(/^account:v1:[a-f0-9]{64}$/);
+    expect(supportKey).toBe("conv-1:msg-1");
     await expect(
       wasMSTeamsMessageSentWithPersistence({
         conversationId: "conv-1",
@@ -171,8 +180,12 @@ describe("msteams sent message cache", () => {
       }),
     ).resolves.toBe(false);
     const financeKey = lookup.mock.calls[0]?.[0];
-    expect(financeKey).toMatch(/^account:v1:[a-f0-9]{64}$/);
-    expect(financeKey).not.toBe(supportKey);
+    expect(financeKey).toBe("conv-1:msg-1");
+    const namespaces = openKeyedStore.mock.calls.map(([options]) => options.namespace);
+    expect(namespaces).toHaveLength(2);
+    expect(namespaces[0]).toMatch(/^msteams\.sent-messages\.account\.v1\.[a-f0-9]{64}$/);
+    expect(namespaces[1]).toMatch(/^msteams\.sent-messages\.account\.v1\.[a-f0-9]{64}$/);
+    expect(namespaces[1]).not.toBe(namespaces[0]);
   });
 
   it("prevents named-account keys from colliding with legacy default keys", async () => {
@@ -204,7 +217,67 @@ describe("msteams sent message cache", () => {
     const defaultKey = register.mock.calls[0]?.[0];
     const namedKey = register.mock.calls[1]?.[0];
     expect(defaultKey).toBe("19:conversation:message");
-    expect(namedKey).toMatch(/^account:v1:[a-f0-9]{64}$/);
+    expect(namedKey).toBe("conversation:message");
     expect(namedKey).not.toBe(defaultKey);
+    expect(openKeyedStore.mock.calls[0]?.[0].namespace).toBe("msteams.sent-messages");
+    expect(openKeyedStore.mock.calls[1]?.[0].namespace).toMatch(
+      /^msteams\.sent-messages\.account\.v1\.[a-f0-9]{64}$/,
+    );
+  });
+
+  it("isolates named-account persistent retention across overflow and memory loss", async () => {
+    const stores = new Map<string, Map<string, MSTeamsSentMessageRecordForTest>>();
+    const openKeyedStore = vi.fn((options: { namespace: string; maxEntries?: number }) => {
+      let values = stores.get(options.namespace);
+      if (!values) {
+        values = new Map();
+        stores.set(options.namespace, values);
+      }
+      return {
+        register: vi.fn(async (key: string, value: MSTeamsSentMessageRecordForTest) => {
+          values?.delete(key);
+          values?.set(key, value);
+          while (values && values.size > (options.maxEntries ?? Number.POSITIVE_INFINITY)) {
+            const oldestKey = values.keys().next().value;
+            if (oldestKey !== undefined) {
+              values.delete(oldestKey);
+            }
+          }
+        }),
+        lookup: vi.fn(async (key: string) => values?.get(key)),
+        consume: vi.fn(),
+        delete: vi.fn(),
+        entries: vi.fn(),
+        clear: vi.fn(),
+      };
+    });
+    setMSTeamsRuntime({
+      state: { openKeyedStore },
+      logging: { getChildLogger: () => ({ warn: vi.fn() }) },
+    } as never);
+
+    recordMSTeamsSentMessage("finance-conv", "finance-msg", { accountId: "finance" });
+    for (let index = 0; index <= 1000; index += 1) {
+      recordMSTeamsSentMessage("support-conv", `support-${index}`, { accountId: "support" });
+    }
+    await vi.waitFor(() => {
+      const registrations = [...stores.values()].reduce((sum, store) => sum + store.size, 0);
+      expect(registrations).toBe(1001);
+    });
+
+    resolveNamedAccountMemory("finance").clear();
+    await expect(
+      wasMSTeamsMessageSentWithPersistence({
+        conversationId: "finance-conv",
+        messageId: "finance-msg",
+        accountId: "finance",
+      }),
+    ).resolves.toBe(true);
+    expect(stores.size).toBe(2);
+    expect([...stores.values()].map((store) => store.size).sort((a, b) => a - b)).toEqual([
+      1, 1000,
+    ]);
   });
 });
+
+type MSTeamsSentMessageRecordForTest = { sentAt: number };
