@@ -1338,21 +1338,22 @@ async function* parseGoogleSseChunks(
           .filter((line) => line.startsWith("data:"))
           .map((line) => line.slice(5).trim())
           .join("\n");
-        if (!trailingData) {
+        const trailingPayload = trailingData || buffer.trim();
+        if (!trailingPayload || (!trailingData && !trailingPayload.startsWith("{"))) {
           completed = true;
           break;
         }
         let trailingChunk: unknown;
         try {
-          trailingChunk = JSON.parse(trailingData);
+          trailingChunk = JSON.parse(trailingPayload);
         } catch {
           throw new Error("Google SSE stream ended with an incomplete frame");
         }
         if (!isRecord(trailingChunk) || !isRecord(trailingChunk.error)) {
           throw new Error("Google SSE stream ended with an incomplete frame");
         }
-        // A complete provider-error payload owns its typed failure even when EOF omits the delimiter.
-        buffer += "\n\n";
+        // Provider errors can arrive as bare JSON or data frames without their final delimiter.
+        buffer = `data: ${JSON.stringify(trailingChunk)}\n\n`;
       } else {
         buffer += decoder.decode(value, { stream: true });
       }

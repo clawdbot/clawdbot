@@ -1343,9 +1343,14 @@ describe("google transport stream", () => {
     });
   });
 
-  it.each(["google-generative-ai", "google-vertex"] as const)(
-    "preserves an undelimited terminal provider error from %s",
-    async (api) => {
+  it.each([
+    { api: "google-generative-ai", prefix: "data: ", framing: "framed" },
+    { api: "google-generative-ai", prefix: "", framing: "bare" },
+    { api: "google-vertex", prefix: "data: ", framing: "framed" },
+    { api: "google-vertex", prefix: "", framing: "bare" },
+  ] as const)(
+    "preserves an undelimited $framing terminal provider error from $api",
+    async ({ api, prefix }) => {
       if (api === "google-vertex") {
         vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
         vi.stubEnv("GOOGLE_CLOUD_LOCATION", "global");
@@ -1354,7 +1359,7 @@ describe("google transport stream", () => {
       guardedFetchMock.mockResolvedValueOnce(
         buildRawSseResponse(
           'data: {"candidates":[{"finishReason":"STOP"}]}\n\n' +
-            'data: {"error":{"code":429,"status":"RESOURCE_EXHAUSTED","message":"quota exhausted"}}',
+            `${prefix}{"error":{"code":429,"status":"RESOURCE_EXHAUSTED","message":"quota exhausted"}}`,
         ),
       );
       const result =
@@ -1370,42 +1375,48 @@ describe("google transport stream", () => {
     },
   );
 
-  it("preserves an undelimited provider error over a real Google HTTP/SSE stream", async () => {
-    const server = createServer((request, response) => {
-      request.resume();
-      request.on("end", () => {
-        response.writeHead(200, { "content-type": "text/event-stream" });
-        response.write('data: {"candidates":[{"finishReason":"STOP"}]}\n\n');
-        response.end(
-          'data: {"error":{"code":429,"status":"RESOURCE_EXHAUSTED","message":"live quota exhausted"}}',
+  it.each([
+    { prefix: "data: ", framing: "framed" },
+    { prefix: "", framing: "bare" },
+  ])(
+    "preserves an undelimited $framing error over a real Google HTTP/SSE stream",
+    async ({ prefix }) => {
+      const server = createServer((request, response) => {
+        request.resume();
+        request.on("end", () => {
+          response.writeHead(200, { "content-type": "text/event-stream" });
+          response.write('data: {"candidates":[{"finishReason":"STOP"}]}\n\n');
+          response.end(
+            `${prefix}{"error":{"code":429,"status":"RESOURCE_EXHAUSTED","message":"live quota exhausted"}}`,
+          );
+        });
+      });
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+
+      try {
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          throw new Error("Missing Google loopback server address");
+        }
+        guardedFetchMock.mockImplementation((_url, init) =>
+          fetch(`http://127.0.0.1:${address.port}/stream`, init),
         );
-      });
-    });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
+        const result = await runGeminiStreamResult({ options: { apiKey: "test-google-key" } });
 
-    try {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("Missing Google loopback server address");
+        expect(result).toMatchObject({
+          stopReason: "error",
+          errorCode: "RESOURCE_EXHAUSTED",
+          errorMessage: expect.stringContaining("live quota exhausted"),
+        });
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
       }
-      guardedFetchMock.mockImplementation((_url, init) =>
-        fetch(`http://127.0.0.1:${address.port}/stream`, init),
-      );
-      const result = await runGeminiStreamResult({ options: { apiKey: "test-google-key" } });
-
-      expect(result).toMatchObject({
-        stopReason: "error",
-        errorCode: "RESOURCE_EXHAUSTED",
-        errorMessage: expect.stringContaining("live quota exhausted"),
-      });
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
-  });
+    },
+  );
 
   it.each(["google-generative-ai", "google-vertex"] as const)(
     "keeps an unspecified %s finish reason nonterminal",
