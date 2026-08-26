@@ -79,6 +79,18 @@ function readTranscriptUpdateLifecycleOwner(
   return lifecycleRevision ? { lifecycleRevision } : {};
 }
 
+function isTranscriptUpdateLifecycleCurrent(
+  update: InternalSessionTranscriptUpdate,
+  lifecycleRevision: string,
+): boolean {
+  const currentLifecycleOwner = readTranscriptUpdateLifecycleOwner(update);
+  return Boolean(
+    currentLifecycleOwner &&
+    (!currentLifecycleOwner.lifecycleRevision ||
+      currentLifecycleOwner.lifecycleRevision === lifecycleRevision),
+  );
+}
+
 /** Creates a serialized transcript-update broadcaster for session websocket clients. */
 export function createTranscriptUpdateBroadcastHandler(params: {
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
@@ -322,21 +334,24 @@ async function handleTranscriptUpdateBroadcast(
         )
       : undefined;
   }
-  if (lifecycleRevision) {
-    // A reset can retain sessionId, so validate the captured owner after every
-    // awaited transcript read before projecting the current session snapshot.
-    const currentLifecycleOwner = readTranscriptUpdateLifecycleOwner(update);
-    if (
-      !currentLifecycleOwner ||
-      (currentLifecycleOwner.lifecycleRevision &&
-        currentLifecycleOwner.lifecycleRevision !== lifecycleRevision)
-    ) {
-      return;
-    }
+  if (lifecycleRevision && !isTranscriptUpdateLifecycleCurrent(update, lifecycleRevision)) {
+    return;
   }
   // Message frames must keep transcript-derived live usage (dashboard API
   // contract from #50101); the 64KB cap bounds the per-message tail read.
-  const modelCatalog = routingAgentId ? await params.loadModelCatalog?.(routingAgentId) : undefined;
+  const shouldLoadModelCatalog =
+    routingAgentId !== undefined && params.loadModelCatalog !== undefined;
+  const modelCatalog =
+    routingAgentId && params.loadModelCatalog
+      ? await params.loadModelCatalog(routingAgentId)
+      : undefined;
+  if (
+    lifecycleRevision &&
+    shouldLoadModelCatalog &&
+    !isTranscriptUpdateLifecycleCurrent(update, lifecycleRevision)
+  ) {
+    return;
+  }
   const sessionRow = loadGatewaySessionRow(sessionKey, {
     agentId: routingAgentId,
     transcriptUsageMaxBytes: 64 * 1024,
