@@ -2925,6 +2925,44 @@ describe("deliverReplies", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      name: "an explicit current-message reply",
+      reply: { text: "current", replyToId: "700", replyToCurrent: true },
+      expectedReplyTo: 700,
+    },
+    {
+      name: "an explicit reply tag",
+      reply: { text: "tagged", replyToId: "701", replyToTag: true },
+      expectedReplyTo: 701,
+    },
+    {
+      name: "an implicit reply",
+      reply: { text: "implicit", replyToId: "702" },
+      expectedReplyTo: undefined,
+    },
+    {
+      name: "a status notice whose target was stripped upstream",
+      reply: { text: "status", replyToCurrent: true, isStatusNotice: true },
+      expectedReplyTo: undefined,
+    },
+    {
+      name: "an explicit tag without a target",
+      reply: { text: "untargeted", replyToTag: true },
+      expectedReplyTo: undefined,
+    },
+  ])("replyToMode 'off' handles $name", async ({ reply, expectedReplyTo }) => {
+    const { runtime, sendMessage, bot } = createSendMessageHarness();
+
+    await deliverWith({ replies: [reply], runtime, bot });
+
+    expect(mockCallArg(sendMessage, 0, 2)).toEqual(
+      expectedReplyTo === undefined
+        ? expect.not.objectContaining({ reply_to_message_id: expect.anything() })
+        : expect.objectContaining({ reply_to_message_id: expectedReplyTo }),
+    );
+  });
+
   it("replyToMode 'first' keeps native reply-to for a single text chunk", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn().mockResolvedValue({

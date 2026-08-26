@@ -34,6 +34,9 @@ type SendDurableMessageBatchRequest = {
   cfg?: unknown;
   channel?: string;
   to?: string;
+  reply?: { source: "explicit" | "implicit"; replyToId: string };
+  replyToId?: string | null;
+  replyToMode?: string;
   threadId?: string | number | null;
   durability?: string;
   requireUnknownSendReconciliation?: boolean;
@@ -114,6 +117,49 @@ describe("durable inbound reply delivery", () => {
     expect(request.threadId).toBeNull();
     expect(request.durability).toBe("best_effort");
     expect(request.gatewayClientScopes).toEqual([]);
+  });
+
+  it.each([
+    {
+      name: "an explicit current-message reply",
+      payload: { text: "current", replyToCurrent: true },
+      replyToId: "700",
+      expectedReply: { source: "explicit", replyToId: "700" },
+    },
+    {
+      name: "an explicit reply tag",
+      payload: { text: "tagged", replyToTag: true },
+      replyToId: "701",
+      expectedReply: { source: "explicit", replyToId: "701" },
+    },
+    {
+      name: "an implicit reply",
+      payload: { text: "implicit" },
+      replyToId: "702",
+      expectedReply: undefined,
+    },
+    {
+      name: "a compaction notice",
+      payload: { text: "compacting", replyToCurrent: true, isCompactionNotice: true },
+      replyToId: "703",
+      expectedReply: undefined,
+    },
+  ])("keeps $name explicit when durable implicit replies are off", async (testCase) => {
+    await deliverInboundReplyWithMessageSendContextCore({
+      cfg: {},
+      channel: "telegram",
+      agentId: "main",
+      info: { kind: "final" },
+      payload: testCase.payload,
+      replyToId: testCase.replyToId,
+      replyToMode: "off",
+      ctxPayload: ctxPayload({ OriginatingTo: "chat-1" }),
+    });
+
+    const request = latestSendDurableMessageBatchRequest();
+    expect(request.reply).toEqual(testCase.expectedReply);
+    expect(request.replyToId).toBe(testCase.replyToId);
+    expect(request.replyToMode).toBe("off");
   });
 
   it("does not require unknown-send reconciliation for the default best-effort final path", async () => {

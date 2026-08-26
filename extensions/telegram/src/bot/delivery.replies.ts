@@ -804,7 +804,9 @@ export async function deliverReplies(params: {
     const reactionEmoji =
       typeof telegramData?.reaction?.emoji === "string" ? telegramData.reaction.emoji : undefined;
     const replyToId =
-      params.replyToMode === "off" ? undefined : resolveTelegramReplyId(reply.replyToId);
+      params.replyToMode === "off" && !reply.replyToTag && !reply.replyToCurrent
+        ? undefined
+        : resolveTelegramReplyId(reply.replyToId);
     if (reactionEmoji && typeof replyToId !== "number") {
       params.runtime.error?.(danger("Telegram reaction requires a reply target"));
       continue;

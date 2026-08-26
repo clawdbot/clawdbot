@@ -1,7 +1,7 @@
 // Durable final-reply delivery for inbound channel turns.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
-import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { isReplyPayloadStatusNotice, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeDeliverableOutboundChannel } from "../../infra/outbound/channel-resolution.js";
@@ -85,15 +85,6 @@ function resolveDurableInboundReplyToId(
   );
 }
 
-function resolveDurableInboundReplyThreadId(
-  params: DurableInboundReplyDeliveryParams,
-): string | number | null | undefined {
-  if ("threadId" in params) {
-    return params.threadId;
-  }
-  return params.ctxPayload.MessageThreadId;
-}
-
 function stringifyThreadId(value: string | number | null | undefined): string | undefined {
   return value == null ? undefined : String(value);
 }
@@ -166,7 +157,7 @@ export async function deliverInboundReplyWithMessageSendContextCore(
   }
 
   const replyToId = resolveDurableInboundReplyToId(params);
-  const threadId = resolveDurableInboundReplyThreadId(params);
+  const threadId = "threadId" in params ? params.threadId : params.ctxPayload.MessageThreadId;
   const requiredCapabilities =
     params.requiredCapabilities ??
     deriveDurableFinalDeliveryRequirements({
@@ -222,6 +213,12 @@ export async function deliverInboundReplyWithMessageSendContextCore(
         }
       : {}),
     threadId,
+    reply:
+      replyToId &&
+      !isReplyPayloadStatusNotice(params.payload) &&
+      (params.payload.replyToTag || params.payload.replyToCurrent)
+        ? { source: "explicit", replyToId }
+        : undefined,
     replyToId,
     replyToMode: params.replyToMode,
     formatting: params.formatting,

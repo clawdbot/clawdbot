@@ -2,9 +2,13 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { deliverInboundReplyWithMessageSendContext } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createPluginRuntimeMock,
   createStartAccountContext,
+  createTestRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -743,6 +747,68 @@ describe("telegramPlugin gateway startup", () => {
 });
 
 describe("telegramPlugin outbound attachments", () => {
+  it.each([
+    {
+      name: "an explicit current-message reply",
+      payload: { text: "current", replyToCurrent: true },
+      replyToId: "700",
+      expectedReplyTo: 700,
+    },
+    {
+      name: "an explicit reply tag",
+      payload: { text: "tagged", replyToTag: true },
+      replyToId: "701",
+      expectedReplyTo: 701,
+    },
+    {
+      name: "an implicit reply",
+      payload: { text: "implicit" },
+      replyToId: "702",
+      expectedReplyTo: undefined,
+    },
+    {
+      name: "a compaction notice",
+      payload: { text: "compacting", replyToCurrent: true, isCompactionNotice: true },
+      replyToId: "703",
+      expectedReplyTo: undefined,
+    },
+  ])("threads $name correctly through durable Telegram delivery", async (testCase) => {
+    await useTempStateDir();
+    installTelegramRuntime();
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]),
+    );
+    sendMessageTelegram.mockResolvedValue({ messageId: "tg-durable", chatId: "12345" });
+
+    try {
+      const result = await deliverInboundReplyWithMessageSendContext({
+        cfg: createTelegramConfig(),
+        channel: "telegram",
+        accountId: "default",
+        agentId: "main",
+        info: { kind: "final" },
+        payload: testCase.payload,
+        replyToId: testCase.replyToId,
+        replyToMode: "off",
+        ctxPayload: {
+          CommandAuthorized: true,
+          CommandTurn: { kind: "normal", source: "message", authorized: false },
+          OriginatingTo: "telegram:12345",
+        },
+        deps: { sendTelegram: sendMessageTelegram },
+      });
+
+      expect(result.status).toBe("handled_visible");
+      expect(sendMessageTelegram).toHaveBeenCalledTimes(1);
+      expect(sendMessageOptionsAt(0).replyToMessageId).toBe(testCase.expectedReplyTo);
+      expect(sendMessageOptionsAt(0).replyToIdSource).toBe(
+        testCase.expectedReplyTo === undefined ? undefined : "explicit",
+      );
+    } finally {
+      resetPluginRuntimeStateForTest();
+    }
+  });
+
   it("preserves default markdown rendering unless a parse mode is explicit", async () => {
     installTelegramRuntime();
     sendMessageTelegram.mockResolvedValue({ messageId: "tg-1", chatId: "12345" });
