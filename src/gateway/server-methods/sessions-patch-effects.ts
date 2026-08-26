@@ -18,7 +18,7 @@ export async function publishSessionPatchEffects(params: {
   callerScopes: readonly string[];
   callerCanManageCron: boolean;
   category: SessionsPatchParams["category"];
-  loadModelCatalog: (agentId: string) => Promise<ModelCatalogEntry[] | undefined>;
+  modelCatalogByAgent: ReadonlyMap<string, Promise<ModelCatalogEntry[]>>;
   targets: Array<{
     entry: SessionEntry;
     target: {
@@ -45,7 +45,10 @@ export async function publishSessionPatchEffects(params: {
       sessionKey: target.canonicalKey,
       targetAgentId: target.targetAgentId,
     });
-    const modelCatalog = await params.loadModelCatalog(target.targetAgentId);
+    const modelCatalogPromise = params.modelCatalogByAgent.get(target.targetAgentId);
+    const modelCatalog = modelCatalogPromise
+      ? await modelCatalogPromise.catch(() => undefined)
+      : undefined;
     emitSessionsChanged(params.context, {
       sessionKey: target.canonicalKey,
       ...(target.requestedAgentId ? { agentId: target.requestedAgentId } : {}),

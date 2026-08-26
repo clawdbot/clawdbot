@@ -133,6 +133,39 @@ test.each([{ pinned: true }, { label: "Renamed" }, { label: " Taken " }])(
   },
 );
 
+test("sessions.patch does not load model metadata after committing an unrelated patch", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const targetKey = "agent:main:no-catalog-patch-target";
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: targetKey },
+      { sessionId: "session-no-catalog-patch-target", updatedAt: 1 },
+    );
+    const loadGatewayModelCatalog = vi.fn(async () => {
+      throw new Error("catalog unavailable");
+    });
+    const respond = vi.fn();
+
+    await sessionMutationHandlers["sessions.patch"]!({
+      params: { key: targetKey, pinned: true },
+      respond,
+      context: {
+        getRuntimeConfig: () => ({}),
+        loadGatewayModelCatalog,
+        broadcastToConnIds: vi.fn(),
+        getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+        chatAbortControllers: new Map(),
+        chatQueuedTurns: new Map(),
+        dedupe: new Map(),
+      } as unknown as GatewayRequestContext,
+      client: humanClient(),
+    } as never);
+
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+    expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
+    expect(loadSessionEntry({ agentId: "main", sessionKey: targetKey })).toHaveProperty("pinnedAt");
+  });
+});
+
 test("sessions.patchMany archives 30 human sessions without transcript hydration", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const targets = Array.from({ length: 30 }, (_, index) => ({

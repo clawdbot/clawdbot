@@ -262,19 +262,6 @@ async function executeSessionPatchMutations(params: {
     }
     return promise;
   };
-  const eventModelCatalogByAgent = new Map<string, Promise<ModelCatalog | undefined>>();
-  const loadEventModelCatalog = (agentId: string) => {
-    let promise = eventModelCatalogByAgent.get(agentId);
-    if (!promise) {
-      promise =
-        typeof params.context.loadGatewayModelCatalog === "function"
-          ? params.context.loadGatewayModelCatalog({ agentId })
-          : Promise.resolve(undefined);
-      eventModelCatalogByAgent.set(agentId, promise);
-    }
-    return promise;
-  };
-
   if (prepared.length > 0) {
     const releaseArchiveDrains = async () =>
       prepared.forEach((target) => releaseSessionPatchArchive(target.archivePreparation));
@@ -618,7 +605,7 @@ async function executeSessionPatchMutations(params: {
     callerScopes,
     callerCanManageCron,
     category: params.patch.category,
-    loadModelCatalog: loadEventModelCatalog,
+    modelCatalogByAgent,
     targets: prepared.flatMap((target) => {
       const outcome = outcomes[target.index];
       return outcome?.ok && outcome.applied ? [{ target, entry: outcome.entry }] : [];
