@@ -44,6 +44,7 @@ type MemorySessionTombstoneRow = {
 type MemoryOriginDatabase = {
   memory_entry_origins: MemoryEntryOriginRow;
   memory_session_tombstones: MemorySessionTombstoneRow;
+  memory_index_state: { id: number; revision: number };
 };
 type SqliteSchemaDatabase = { sqlite_schema: { type: string; name: string } };
 const ensuredDatabases = new WeakSet<DatabaseSync>();
@@ -202,8 +203,40 @@ export function recordMemorySessionTombstones(params: {
       );
       recorded += Number(result.numAffectedRows ?? 0n);
     }
+    if (recorded > 0) {
+      // A shadow index can have no published chunks yet. Its existing revision
+      // fence must still reject a rebuild prepared before this deletion.
+      executeSqliteQuerySync(
+        db,
+        kysely
+          .updateTable("memory_index_state")
+          .set((expression) => ({ revision: expression("revision", "+", 1) }))
+          .where("id", "=", 1),
+      );
+    }
     return recorded;
   });
+}
+
+export function hasMemorySessionTombstone(
+  db: DatabaseSync,
+  agentId: string,
+  sessionId: string,
+): boolean {
+  if (!ensuredTombstoneDatabases.has(db) && !hasMemoryTable(db, "memory_session_tombstones")) {
+    return false;
+  }
+  const kysely = getNodeSqliteKysely<MemoryOriginDatabase>(db);
+  return (
+    executeSqliteQuerySync(
+      db,
+      kysely
+        .selectFrom("memory_session_tombstones")
+        .select("session_id")
+        .where("agent_id", "=", agentId)
+        .where("session_id", "=", sessionId),
+    ).rows.length > 0
+  );
 }
 
 export function recordMemoryEntryOrigins(params: {

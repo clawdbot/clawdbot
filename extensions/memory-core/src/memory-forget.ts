@@ -8,6 +8,7 @@ import {
 import {
   buildSessionEntry,
   listSessionTranscriptCorpusEntriesForAgent,
+  parseUsageCountedSessionIdFromFileName,
   resolveMemorySessionTargets,
 } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
@@ -36,6 +37,7 @@ import {
   recordMemorySessionTombstones,
 } from "./memory-entry-origins.js";
 import { collectTranscriptWrites } from "./memory-forget-curated-writes.js";
+import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import { closeMemoryDatabase, openMemoryDatabaseAtPath } from "./memory/manager-db.js";
 import { isMemorySessionIndexable } from "./memory/manager-session-sync-state.js";
 import {
@@ -62,6 +64,7 @@ type ForgetDatabase = {
   memory_index_chunks_fts: { id: string; path: string; source: string };
   memory_index_chunks_vec: { id: string };
   memory_embedding_cache: { hash: string };
+  memory_index_state: { id: number; revision: number };
 };
 
 type MemoryBackup = { createdAt: string; content: string; contentHash: string };
@@ -120,11 +123,20 @@ function referencesSession(
   agentId: string,
   sessionIds: ReadonlySet<string>,
 ): boolean {
-  return [...sessionIds].some(
-    (sessionId) =>
-      value.includes(`sessions/${agentId}/${sessionId}`) ||
-      value.includes(`${agentId}:${sessionId}`) ||
-      new RegExp(`\\bSession ID:\\s*${escapePattern(sessionId)}(?:[;\\s]|$)`, "iu").test(value),
+  const agent = escapePattern(agentId);
+  const references = new RegExp(
+    `(?:^|[\\s[/:])(?:sessions/${agent}/|${agent}:(?!sessions/))([^\\s\\]#;:/]+)`,
+    "gu",
+  );
+  // Decode archive filenames with the session owner's grammar; a shared prefix
+  // or an arbitrary dotted suffix is not the selected session's identity.
+  return (
+    [...value.matchAll(references)].some(([, reference]) =>
+      sessionIds.has(parseUsageCountedSessionIdFromFileName(reference!) ?? reference!),
+    ) ||
+    [...value.matchAll(/\bSession ID:\s*([^;\s]+)/giu)].some(([, sessionId]) =>
+      sessionIds.has(sessionId!),
+    )
   );
 }
 
@@ -325,7 +337,7 @@ async function planMemoryIndex(params: {
   return { ...result.value, vectorRows };
 }
 
-export async function forgetMemoryEntries(params: {
+type MemoryForgetParams = {
   cfg: OpenClawConfig;
   agentId: string;
   sessionIds?: string[];
@@ -333,11 +345,24 @@ export async function forgetMemoryEntries(params: {
   participants?: string[];
   since?: string;
   dryRun?: boolean;
-}): Promise<MemoryForgetReport> {
+};
+
+export async function forgetMemoryEntries(params: MemoryForgetParams): Promise<MemoryForgetReport> {
   if (!params.sessionIds?.length && !params.hookSources?.length && !params.participants?.length) {
     throw new Error("memory forget requires a session, hook source, or participant selector");
   }
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
+  // Plan against the same locked state we remove; staging and promotion must
+  // not publish an earlier snapshot after a successful purge. Preview never writes a lock.
+  return params.dryRun
+    ? forgetWorkspaceMemory(params, workspaceDir)
+    : withMemoryWorkspaceLock(workspaceDir, () => forgetWorkspaceMemory(params, workspaceDir));
+}
+
+async function forgetWorkspaceMemory(
+  params: MemoryForgetParams,
+  workspaceDir: string,
+): Promise<MemoryForgetReport> {
   const targets = resolveMemorySessionTargets({
     agentId: params.agentId,
     sessionIds: params.sessionIds,
@@ -610,7 +635,21 @@ export async function forgetMemoryEntries(params: {
 
     // Forget is durable admission policy: persist it before removing the
     // checkpoints that would otherwise make this session look newly eligible.
-    recordMemorySessionTombstones({ agentId: params.agentId, sessionIds: [...sessionIds] });
+    const recorded = recordMemorySessionTombstones({
+      agentId: params.agentId,
+      sessionIds: [...sessionIds],
+    });
+    if (recorded === 0 && changedPaths.size > 0) {
+      // Repeating a partial purge can still rewrite an unindexed file. Fence
+      // pending shadow rebuilds before any filesystem mutation, even on failure.
+      executeSqliteQuerySync(
+        db,
+        kysely
+          .updateTable("memory_index_state")
+          .set((expression) => ({ revision: expression("revision", "+", 1) }))
+          .where("id", "=", 1),
+      );
+    }
 
     for (const rewrite of [...memoryRewrites, ...corpusRewrites]) {
       if (rewrite.remove) {

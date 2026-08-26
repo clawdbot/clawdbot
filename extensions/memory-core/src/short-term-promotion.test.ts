@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { listMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -25,7 +26,10 @@ import {
   SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
   SHORT_TERM_RECALL_NAMESPACE,
 } from "./dreaming-state.js";
-import { deleteShortTermLockEntryIfCurrent } from "./short-term-promotion-store.js";
+import {
+  deleteShortTermLockEntryIfCurrent,
+  withMemoryWorkspaceLock,
+} from "./memory-workspace-lock.js";
 import {
   applyShortTermPromotions,
   auditShortTermPromotionArtifacts,
@@ -2574,6 +2578,72 @@ describe("short-term promotion", () => {
       vi.useRealTimers();
     }
   });
+
+  it("preserves recall updates from sequential and parallel nested workspace writers", async (workspaceDir) => {
+    const result = memoryRecallResult(
+      "memory/2026-04-03.md",
+      1,
+      1,
+      0.9,
+      "Nested workspace writers retain every recall signal.",
+    );
+    await withMemoryWorkspaceLock(workspaceDir, async () => {
+      await recordMemoryRecalls(workspaceDir, "first", [result]);
+      await withMemoryWorkspaceLock(workspaceDir, async () => {
+        await Promise.all(
+          ["second", "third"].map((query) => recordMemoryRecalls(workspaceDir, query, [result])),
+        );
+      });
+    });
+
+    const entries = Object.values(await readRecallStoreEntries(workspaceDir));
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.recallCount).toBe(3);
+  });
+
+  baseIt.each(["root", "nested"] as const)(
+    "queues work resumed from a closed %s workspace scope behind the current writer",
+    async (closedScope) => {
+      await withTempWorkspace(async (workspaceDir) => {
+        const resume = createDeferred<void>();
+        const attempted = createDeferred<void>();
+        const entered = createDeferred<void>();
+        const release = createDeferred<void>();
+        const order: string[] = [];
+        const retainWork = async () => ({
+          work: resume.promise.then(async () => {
+            attempted.resolve();
+            await withMemoryWorkspaceLock(workspaceDir, async () => {
+              order.push("resumed");
+            });
+          }),
+        });
+        let retained =
+          closedScope === "root"
+            ? await withMemoryWorkspaceLock(workspaceDir, retainWork)
+            : undefined;
+        const owner = withMemoryWorkspaceLock(workspaceDir, async () => {
+          if (closedScope === "nested") {
+            retained = await withMemoryWorkspaceLock(workspaceDir, retainWork);
+          }
+          entered.resolve();
+          await release.promise;
+          order.push("released");
+        });
+        try {
+          await entered.promise;
+          resume.resolve();
+          await attempted.promise;
+          expect(order).toEqual([]);
+        } finally {
+          release.resolve();
+          await owner;
+          await retained?.work;
+        }
+        expect(order).toEqual(["released", "resumed"]);
+      });
+    },
+  );
 
   it("reports stale sqlite locks as repairable audit issues", async (workspaceDir) => {
     await testing.writeShortTermLock(workspaceDir, {
