@@ -701,6 +701,7 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
         );
       }
       const applied = await applyShortTermPromotions({
+        agentId,
         workspaceDir,
         candidates,
         limit: params.config.limit,

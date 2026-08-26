@@ -159,6 +159,7 @@ export type RankShortTermPromotionOptions = {
 };
 
 export type ApplyShortTermPromotionsOptions = {
+  agentId?: string;
   workspaceDir: string;
   candidates: PromotionCandidate[];
   limit?: number;
