@@ -8,10 +8,42 @@ read_when:
 
 ## Status
 
-Proposal (2026-08-25), awaiting maintainer acceptance. No schema, protocol, or
-plugin SDK changes land before acceptance; phase 1 below intentionally needs
-none of those. Written from direct source inspection of this repo and the
+Accepted 2026-08-26 (maintainer: "build live test document PR land"). Phase 1
+is implemented in `extensions/crabbox/` and live-proven; phases 2 and 3 remain
+gated as designed. Written from direct source inspection of this repo and the
 sibling `openclaw/crabbox` checkout (`../crabbox` @ 19bd2f51).
+
+Live proof (2026-08-26, isolated dev gateway, Crabbox dev build with the
+fixed-ID fork contract):
+
+- Local-container backend, full loop: cold dispatch → `active` in 101s;
+  reclaim ran scrub + `checkpoint create` (docker-commit) in a 37s teardown;
+  warm dispatch forked the checkpoint to `active` in **40s (2.5x faster)**.
+  Fork proven by container image ancestry (worker container ran the exact
+  checkpoint-commit image), preinstalled CLI reuse, and zero fallback
+  warnings. A second reclaim skipped capture because a fresh image existed
+  (single-flight/dedupe path). Scrub boundary verified: the captured image
+  contains no `~/.openclaw/cloud-workers` (no node identity, device token,
+  bundles, or workspace bytes).
+- AWS via managed Crabbox coordinator: two cold dispatches to `active` (221s,
+  311s) through real EC2 + node enrollment; capture correctly degraded to
+  cold-only with one warning and teardown proceeded — coordinator-brokered
+  native checkpoint creation is admin-token-gated in Crabbox today (see
+  follow-ups). All leases and checkpoints were cleaned; zero orphans.
+
+Live findings folded back into the code: capture phases need a 180s budget
+(60s starves a real `crabbox run`/snapshot round trip under coordinator
+latency). Rig traps recorded for operators: unreleased Gateway builds need the
+exact locally packed version installed by `setup` (npm >= 11.16 quarantines
+install scripts for URL tarballs — install with `--ignore-scripts` to a
+prefix; stock Ubuntu AMIs with root umask 077 need `chmod -R a+rX` after
+`sudo npm install`).
+
+Follow-ups (upstream `openclaw/crabbox`): allow owner-scoped native checkpoint
+create/fork on coordinator-brokered leases (today the image API requires
+`broker.adminToken`, so warm images on managed-coordinator profiles degrade to
+cold-only); investigate the fresh-AWS-lease early-reboot window that kills the
+first `crabbox run` shortly after warmup reports ready.
 
 ## Problem
 
