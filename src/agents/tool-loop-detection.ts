@@ -119,14 +119,22 @@ function extractTextContent(result: unknown): string {
   if (!isPlainObject(result) || !Array.isArray(result.content)) {
     return "";
   }
-  return result.content
-    .filter(
-      (entry): entry is { type: string; text: string } =>
-        isPlainObject(entry) && typeof entry.type === "string" && typeof entry.text === "string",
-    )
-    .map((entry) => entry.text)
-    .join("\n")
-    .trim();
+  return (
+    result.content
+      .filter(
+        (entry): entry is { type: string; text: string } =>
+          isPlainObject(entry) && typeof entry.type === "string" && typeof entry.text === "string",
+      )
+      .map((entry) => entry.text)
+      .join("\n")
+      // External-content wrappers carry a fresh anti-forgery nonce per result
+      // (src/security/external-content.ts createExternalContentMarkerId); hashing it
+      // defeats no-progress loop blocking for any wrapped tool result (#130210), the
+      // same defect class as volatile send ids (#89090). Strip the nonce before
+      // hashing; the delivered wrapper keeps its nonce, so anti-forgery is unaffected.
+      .replace(/(<<<(?:END_)?EXTERNAL_UNTRUSTED_CONTENT\s+id=)"[^"]*">>>/gu, '$1">>>')
+      .trim()
+  );
 }
 
 function formatErrorForHash(error: unknown): string {

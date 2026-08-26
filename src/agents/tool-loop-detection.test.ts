@@ -13,6 +13,7 @@ const isMessagingToolSendActionMock = vi.hoisted(() =>
 vi.mock("./embedded-agent-messaging.js", () => ({
   isMessagingToolSendAction: isMessagingToolSendActionMock,
 }));
+import { wrapExternalContent } from "../security/external-content.js";
 import { reconcileToolCallExecutionParams } from "./tool-loop-call-reconciliation.js";
 import {
   UNKNOWN_TOOL_THRESHOLD,
@@ -508,6 +509,48 @@ describe("tool-loop-detection", () => {
         expect(loopResult.level).toBe("critical");
         expect(loopResult.detector).toBe("global_circuit_breaker");
         expect(loopResult.message).toContain("global circuit breaker");
+      }
+    });
+
+    it("blocks repeated wrapped external-content results despite per-call nonce", () => {
+      // External-content wrappers carry a fresh anti-forgery nonce per result, so a
+      // naive resultHash would differ every call and defeat no-progress blocking for
+      // any wrapped tool result (#130210). The detector strips the nonce before
+      // hashing, so identical wrapped payloads still reach the breaker.
+      const state = createState();
+      const toolName = "browser";
+      const params = { action: "act", request: { kind: "press", key: "Esc" } };
+      const failurePayload = 'Error: keyboard.press: Unknown key: "Esc"';
+
+      for (let i = 0; i < GLOBAL_CIRCUIT_BREAKER_THRESHOLD + 5; i += 1) {
+        const toolCallId = `browser-${i}`;
+        const result = {
+          content: [
+            {
+              type: "text" as const,
+              text: wrapExternalContent(failurePayload, {
+                source: "browser",
+                includeWarning: false,
+              }),
+            },
+          ],
+          details: { ok: false, targetId: "tab-1" },
+        };
+        recordToolCall(state, toolName, params, toolCallId, enabledLoopDetectionConfig);
+        recordToolCallOutcome(state, {
+          toolName,
+          toolParams: params,
+          toolCallId,
+          result,
+          config: enabledLoopDetectionConfig,
+        });
+      }
+
+      const loopResult = detectToolCallLoop(state, toolName, params, enabledLoopDetectionConfig);
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("critical");
+        expect(loopResult.detector).toBe("global_circuit_breaker");
       }
     });
 
