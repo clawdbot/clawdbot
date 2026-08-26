@@ -387,6 +387,15 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     effortMutationDisabled ||
     (thinking.options.length === 0 && (!showFastMode || fastMode.disabled));
   const effortLabel = thinking.selection.displayLabel.replace(/^Inherited:\s*/u, "");
+  const showReasoning = thinking.options.length > 0;
+  const mobileSecondary =
+    showReasoning || (showFastMode && fastMode.supported)
+      ? {
+          disabled: effortDisabled,
+          label: showReasoning ? t("chat.modelControls.effort") : t("chat.modelControls.fastMode"),
+          value: showReasoning ? effortLabel : fastMode.label,
+        }
+      : undefined;
   return html`
     <div class="chat-controls__session chat-controls__model chat-controls__model-settings">
       ${renderChatModelPicker({
@@ -404,8 +413,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
             : undefined,
         disabled: modelDisabled,
         disabledReason: props.modelMutationDisabledReason,
-        mobileEffortDisabled: effortDisabled,
-        mobileEffortLabel: effortLabel,
+        mobileSecondary,
         modelCatalogState: managedCatalog,
         modelSelectionLocked: props.modelSelectionLocked === true,
         modelOptions,

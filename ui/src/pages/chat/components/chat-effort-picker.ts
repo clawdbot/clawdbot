@@ -121,9 +121,50 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
   return html`
     <details
       class="chat-controls__inline-select chat-controls__effort-picker"
+      @keydown=${(event: KeyboardEvent) => {
+        if (event.key !== "Escape") {
+          return;
+        }
+        // SAFETY: Lit binds this handler directly to the effort picker details element.
+        const details = event.currentTarget as HTMLDetailsElement;
+        const trigger = details.querySelector<HTMLElement>("summary");
+        if (!trigger || getComputedStyle(trigger).display !== "none") {
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        const composer = details.closest(".agent-chat__input");
+        const activeElement = document.activeElement;
+        if (activeElement instanceof HTMLElement && details.contains(activeElement)) {
+          activeElement.blur();
+        }
+        details.open = false;
+        queueMicrotask(() => {
+          composer
+            ?.querySelector<HTMLElement>(
+              ".chat-controls__model-settings .chat-controls__model-picker > summary",
+            )
+            ?.focus({ preventScroll: true });
+        });
+      }}
       @toggle=${(event: Event) => {
+        const details = event.currentTarget as HTMLDetailsElement;
         handleChatComposerDetailsToggle(event);
-        syncChatPickerOverlay(event.currentTarget as HTMLDetailsElement);
+        syncChatPickerOverlay(details);
+        if (!details.open) {
+          return;
+        }
+        if (!details.hasAttribute("data-chat-focus-panel")) {
+          return;
+        }
+        details.removeAttribute("data-chat-focus-panel");
+        queueMicrotask(() => {
+          details
+            .querySelector<HTMLElement>(
+              "[data-chat-thinking-slider]:not(:disabled), [data-chat-thinking-option]:not(:disabled), [data-chat-speed-toggle]:not(:disabled)",
+            )
+            ?.focus({ preventScroll: true });
+        });
       }}
     >
       <summary

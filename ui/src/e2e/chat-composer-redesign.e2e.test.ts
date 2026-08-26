@@ -94,6 +94,22 @@ suite.define(() => {
         expect(footerBox.y + footerBox.height).toBeLessThanOrEqual(853);
         await page.keyboard.press("Escape");
       }
+      await mobileModelSettings.press("Enter");
+      const mobileEffortOption = composer.locator(".chat-controls__mobile-effort-option");
+      await expect.poll(() => mobileEffortOption.isVisible()).toBe(true);
+      await mobileEffortOption.press("Enter");
+      const focusedEffortControl = composer.locator(
+        "[data-chat-thinking-slider]:not([disabled]), [data-chat-speed-toggle]:not([disabled])",
+      );
+      await expect
+        .poll(() =>
+          focusedEffortControl.first().evaluate((node) => node === document.activeElement),
+        )
+        .toBe(true);
+      await page.keyboard.press("Escape");
+      await expect
+        .poll(() => mobileModelSettings.evaluate((node) => node === document.activeElement))
+        .toBe(true);
     });
   });
 
