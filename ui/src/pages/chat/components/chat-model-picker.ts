@@ -12,7 +12,10 @@ import {
   type ChatContextWindowControlParams,
   renderContextWindowControl,
 } from "./chat-context-window-control.ts";
-import { renderChatModelCatalogState } from "./chat-model-catalog-state.ts";
+import {
+  type ChatModelCatalogState,
+  renderChatModelCatalogState,
+} from "./chat-model-catalog-state.ts";
 import {
   renderChatModelPickerOption,
   renderChatModelPickerTargetOption,
@@ -22,10 +25,7 @@ import {
 } from "./chat-model-picker-options.ts";
 import { handleChatComposerDetailsToggle, syncChatPickerOverlay } from "./chat-picker-overlay.ts";
 
-export type ChatModelCatalogState = {
-  hasSnapshot: boolean;
-  status: "idle" | "loading" | "ready" | "error" | "offline";
-};
+export type { ChatModelCatalogState } from "./chat-model-catalog-state.ts";
 
 type ChatModelPickerParams = {
   contextWindow?: ChatContextWindowControlParams;

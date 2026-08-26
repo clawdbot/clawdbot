@@ -1,7 +1,11 @@
 import { html, nothing } from "lit";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
-import type { ChatModelCatalogState } from "./chat-model-picker.ts";
+
+export type ChatModelCatalogState = {
+  hasSnapshot: boolean;
+  status: "idle" | "loading" | "ready" | "error" | "offline";
+};
 
 export function renderChatModelCatalogState(
   state: ChatModelCatalogState | undefined,
