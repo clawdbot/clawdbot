@@ -5205,6 +5205,7 @@ public struct SessionsListParams: Codable, Sendable {
     public let boardface: AnyCodable?
     public let creatorid: String?
     public let ownerid: String?
+    public let ownerfirst: Bool?
     public let involvingme: Bool?
     public let spawnedby: String?
     public let agentid: String?
@@ -5226,6 +5227,7 @@ public struct SessionsListParams: Codable, Sendable {
         boardface: AnyCodable? = nil,
         creatorid: String? = nil,
         ownerid: String? = nil,
+        ownerfirst: Bool? = nil,
         involvingme: Bool? = nil,
         spawnedby: String? = nil,
         agentid: String? = nil,
@@ -5246,6 +5248,7 @@ public struct SessionsListParams: Codable, Sendable {
         self.boardface = boardface
         self.creatorid = creatorid
         self.ownerid = ownerid
+        self.ownerfirst = ownerfirst
         self.involvingme = involvingme
         self.spawnedby = spawnedby
         self.agentid = agentid
@@ -5268,6 +5271,7 @@ public struct SessionsListParams: Codable, Sendable {
         case boardface = "boardFace"
         case creatorid = "creatorId"
         case ownerid = "ownerId"
+        case ownerfirst = "ownerFirst"
         case involvingme = "involvingMe"
         case spawnedby = "spawnedBy"
         case agentid = "agentId"

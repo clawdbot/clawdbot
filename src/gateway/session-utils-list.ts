@@ -23,6 +23,7 @@ import {
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import { SESSIONS_LIST_OWNER_LIMIT } from "../shared/session-list-limits.js";
 import type { SessionOwnerFacetIdentity } from "../shared/session-types.js";
 import { type SessionEntryPair, sortAndLimitSessionEntries } from "./session-list-order.js";
 import {
@@ -88,6 +89,7 @@ type ListSessionsFromStoreParams = {
 
 type SessionEntrySelection = {
   entries: SessionEntryPair[];
+  ownerCount: number;
   ownerFacet: SessionOwnerFacetIdentity[];
   totalCount: number;
   limitApplied?: number;
@@ -390,8 +392,14 @@ function selectSessionEntries(params: {
   const sharedEntries =
     limit === undefined ? sortedWindow.slice(offset) : sortedWindow.slice(offset, offset + limit);
   let entries = sharedEntries;
+  let ownerCount = 0;
   if (params.ownerFirstActorId && offset === 0) {
-    const owned = sortAndLimitSessionEntries(ownerEntries, limit, params.opts.sortBy);
+    const owned = sortAndLimitSessionEntries(
+      ownerEntries,
+      Math.min(limit ?? SESSIONS_LIST_OWNER_LIMIT, SESSIONS_LIST_OWNER_LIMIT),
+      params.opts.sortBy,
+    );
+    ownerCount = owned.length;
     const ownedKeys = new Set(owned.map(([key]) => key));
     entries = [...owned, ...sharedEntries.filter(([key]) => !ownedKeys.has(key))];
   }
@@ -399,6 +407,7 @@ function selectSessionEntries(params: {
   const hasMore = nextOffset < filtered.length;
   return {
     entries,
+    ownerCount,
     ownerFacet,
     totalCount: filtered.length,
     limitApplied: limit,
@@ -476,10 +485,8 @@ function prepareSessionList(params: ListSessionsFromStoreParams) {
     ...selection,
     includeDerivedTitles: opts.includeDerivedTitles === true,
     includeLastMessage: opts.includeLastMessage === true,
-    // This request replaces two independently enriched pages; retain their combined bound.
-    transcriptFieldRows: params.ownerFirstActorId
-      ? SESSIONS_LIST_TRANSCRIPT_FIELD_ROWS * 2
-      : SESSIONS_LIST_TRANSCRIPT_FIELD_ROWS,
+    // The independent owner window must not consume the shared page's transcript budget.
+    transcriptFieldRows: SESSIONS_LIST_TRANSCRIPT_FIELD_ROWS + selection.ownerCount,
     now,
     configuredAgentIds,
     rowContext: sharedRowContext,

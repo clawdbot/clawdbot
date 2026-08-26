@@ -938,6 +938,42 @@ describe("sessions.list single-flight", () => {
     });
   });
 
+  it.each(["ownerFirst", "involvingMe"] as const)(
+    "keeps administrator %s projections scoped to their authenticated profiles",
+    async (projection) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const config: OpenClawConfig = { agents: { list: [{ id: "main", default: true }] } };
+        const context = requestContext(config);
+        const clients = ["ada@example.com", "bob@example.com"].map((email) => {
+          const client = identifiedClient(ensureProfileForEmail(email).id);
+          client.connect.scopes = ["operator.admin"];
+          return client;
+        });
+        for (const [index, client] of clients.entries()) {
+          await upsertSessionEntryCore(
+            { agentId: "main", sessionKey: `agent:main:profile-${index}` },
+            {
+              sessionId: `profile-${index}`,
+              updatedAt: index + 1,
+              createdActor: { type: "human", id: client.authenticatedUserProfile!.profileId },
+            },
+          );
+        }
+        const request: SessionsListParams = { agentId: "main", limit: 1, [projection]: true };
+
+        const results = await Promise.all(
+          clients.map((client) => listSessions({ client, context, request })),
+        );
+
+        for (const [index, client] of clients.entries()) {
+          expect(results[index]?.sessions[0]?.key).toBe(`agent:main:profile-${index}`);
+          expect(await listSessions({ client, context, request })).toBe(results[index]);
+        }
+        expect(loader.calls).toHaveBeenCalledTimes(2);
+      });
+    },
+  );
+
   it("fences cached rows across client identities and operator-role changes", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const config = await seedSessions();

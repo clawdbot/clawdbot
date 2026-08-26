@@ -1,3 +1,4 @@
+import { SESSIONS_LIST_OWNER_LIMIT } from "../../../../src/shared/session-list-limits.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { formatUiError } from "../format-error.ts";
 import { createSessionEventRefreshCoordinator } from "./event-refresh-coordinator.ts";
@@ -44,8 +45,6 @@ type ManagedSessionListRefresh = {
   offset?: number;
   invalidated?: true;
 };
-
-const OWNER_FIRST_SESSION_LIST_LIMIT = 60;
 
 type ManagedSessionListQuery = Readonly<Record<string, unknown>> & { readonly limit: number };
 
@@ -315,9 +314,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       if (bootstrap && !host.connection.isCurrent(scope)) {
         return null;
       }
-      result ??= bootstrap
-        ? await requestSessionListParams(scope.client, listParams)
-        : await requestSessionList(scope.client, requestOptions);
+      result ??= await requestSessionListParams(scope.client, listParams);
       if (!host.connection.isCurrent(scope)) {
         return null;
       }
@@ -414,7 +411,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       return options;
     }
     const limit = Math.max(
-      OWNER_FIRST_SESSION_LIST_LIMIT,
+      SESSIONS_LIST_OWNER_LIMIT,
       typeof options.limit === "number" && options.limit > 0
         ? Math.floor(options.limit)
         : DEFAULT_SESSION_LIST_QUERY.limit,
