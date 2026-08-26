@@ -25,6 +25,7 @@ import {
 import {
   hasAlreadyFlushedForCurrentCompaction,
   resolveMemoryFlushContextWindowTokens,
+  resolveMemoryFlushThreshold,
   shouldRunMemoryFlush,
   shouldRunPreflightCompaction,
 } from "./memory-flush.js";
@@ -287,6 +288,44 @@ describe("shouldRunMemoryFlush", () => {
       }),
     ).toBe(false);
   });
+
+  it.each([
+    [8_000, 2_000],
+    [16_000, 4_000],
+    [24_000, 4_000],
+    [32_000, 8_000],
+    [128_000, 104_000],
+    [200_000, 176_000],
+  ])(
+    "preserves a usable %i-token model window with a %i-token maintenance threshold",
+    (contextWindowTokens, threshold) => {
+      const params = {
+        contextWindowTokens,
+        reserveTokensFloor: 20_000,
+        softThresholdTokens: 4_000,
+      };
+
+      expect(resolveMemoryFlushThreshold(params)).toBe(threshold);
+      expect(
+        shouldRunMemoryFlush({
+          ...params,
+          entry: { totalTokens: threshold, totalTokensFresh: true, totalTokensVersion: 1 },
+        }),
+      ).toBe(true);
+      expect(
+        shouldRunPreflightCompaction({
+          ...params,
+          entry: { totalTokens: threshold - 1, totalTokensFresh: true, totalTokensVersion: 1 },
+        }),
+      ).toBe(false);
+      expect(
+        shouldRunPreflightCompaction({
+          ...params,
+          entry: { totalTokens: threshold, totalTokensFresh: true, totalTokensVersion: 1 },
+        }),
+      ).toBe(true);
+    },
+  );
 
   it("skips when under threshold", () => {
     expect(

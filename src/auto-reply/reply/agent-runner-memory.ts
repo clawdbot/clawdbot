@@ -71,6 +71,7 @@ import {
   hasAlreadyFlushedForCurrentCompaction,
   resolveMaxActiveTranscriptBytes,
   resolveMemoryFlushContextWindowTokens,
+  resolveMemoryFlushThreshold,
   resolveResponsesServerCompactionThreshold,
   shouldRunMemoryFlush,
   shouldRunPreflightCompaction,
@@ -794,10 +795,12 @@ export async function runPreflightCompactionIfNeeded(params: {
     provider: params.followupRun.run.provider,
     modelId: params.followupRun.run.model ?? params.defaultModel,
   });
-  const threshold = Math.max(
-    contextWindowTokens - reserveTokensFloor - softThresholdTokens,
-    responsesServerCompactionThreshold ?? 0,
-  );
+  const threshold = resolveMemoryFlushThreshold({
+    contextWindowTokens,
+    reserveTokensFloor,
+    softThresholdTokens,
+    minimumThresholdTokens: responsesServerCompactionThreshold,
+  });
   const freshNeedsOutputRead =
     typeof freshPersistedTokens === "number" &&
     typeof promptTokenEstimate === "number" &&
@@ -1173,8 +1176,11 @@ export async function runMemoryFlushIfNeeded(params: {
       : undefined;
   const hasFreshPersistedPromptTokens = resolveFreshSessionTotalTokens(entry) !== undefined;
 
-  const flushThreshold =
-    contextWindowTokens - memoryFlushPlan.reserveTokensFloor - memoryFlushPlan.softThresholdTokens;
+  const flushThreshold = resolveMemoryFlushThreshold({
+    contextWindowTokens,
+    reserveTokensFloor: memoryFlushPlan.reserveTokensFloor,
+    softThresholdTokens: memoryFlushPlan.softThresholdTokens,
+  });
 
   // When totals are stale/unknown, derive prompt + last output from transcript so memory
   // flush can still be evaluated against projected next-input size.

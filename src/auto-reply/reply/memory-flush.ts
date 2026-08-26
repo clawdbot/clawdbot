@@ -1,6 +1,7 @@
 // Builds memory flush prompts when conversation context exceeds model budget.
 import { resolveAnthropicServerCompactionPlan } from "@openclaw/ai/internal/anthropic";
 import { resolveOpenAIResponsesServerCompactionPlan } from "@openclaw/ai/internal/openai-responses-payload-policy";
+import { resolveEffectiveCompactionReserveTokens } from "../../agents/agent-compaction-constants.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelExtraParamSources } from "../../agents/model-extra-params.js";
@@ -40,6 +41,27 @@ function resolvePositiveTokenCount(value: number | undefined): number | undefine
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? Math.floor(value)
     : undefined;
+}
+
+/** Resolves one model-aware maintenance threshold for memory flush and preflight compaction. */
+export function resolveMemoryFlushThreshold(params: {
+  contextWindowTokens: number;
+  reserveTokensFloor: number;
+  softThresholdTokens: number;
+  minimumThresholdTokens?: number;
+}): number {
+  const contextWindow = Math.max(1, Math.floor(params.contextWindowTokens));
+  const reserveTokens = resolveEffectiveCompactionReserveTokens({
+    contextTokenBudget: contextWindow,
+    reserveTokens: params.reserveTokensFloor,
+  });
+  const promptBudget = contextWindow - reserveTokens;
+  // Maintenance headroom must not consume the usable prompt budget on small-context models.
+  const softThreshold = Math.min(
+    Math.max(0, Math.floor(params.softThresholdTokens)),
+    Math.floor(promptBudget / 2),
+  );
+  return Math.max(promptBudget - softThreshold, Math.floor(params.minimumThresholdTokens ?? 0));
 }
 
 export function resolveResponsesServerCompactionThreshold(params: {
@@ -122,19 +144,7 @@ function resolveMemoryFlushGateState<
     return null;
   }
 
-  const contextWindow = Math.max(1, Math.floor(params.contextWindowTokens));
-  const reserveTokens = Math.max(0, Math.floor(params.reserveTokensFloor));
-  const softThreshold = Math.max(0, Math.floor(params.softThresholdTokens));
-  const threshold = Math.max(
-    0,
-    contextWindow - reserveTokens - softThreshold,
-    Math.floor(params.minimumThresholdTokens ?? 0),
-  );
-  if (threshold <= 0) {
-    return null;
-  }
-
-  return { entry: params.entry, totalTokens, threshold };
+  return { entry: params.entry, totalTokens, threshold: resolveMemoryFlushThreshold(params) };
 }
 
 export function shouldRunMemoryFlush(params: {
