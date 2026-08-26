@@ -621,6 +621,7 @@ describe("update attention", () => {
       canDismiss,
       dismissal,
       forced,
+      requiresAction: true,
       severity: "warning",
       visible: true,
     });
@@ -769,6 +770,7 @@ describe("sidebar Inbox projection", () => {
       canDismiss: true,
       dismissal: { kind: "updateAvailable", signature: '["2026.8.3","boot-a"]' },
       forced: true,
+      requiresAction: true,
       severity: "warning",
       visible: true,
     });
@@ -797,6 +799,31 @@ describe("sidebar Inbox projection", () => {
       "scopeUpgrade",
       "attention",
     ]);
+  });
+
+  it("keeps informational updates visible without adding them to attention counts", () => {
+    const update = buildUpdateInboxEntry({
+      canDismiss: false,
+      dismissal: { kind: "updateAvailable", signature: '["2026.8.3","boot-a"]' },
+      forced: false,
+      requiresAction: false,
+      severity: "warning",
+      visible: true,
+    });
+    const entries = buildSidebarInboxEntries({
+      approvals: [],
+      attention: [],
+      scopeUpgrade: null,
+      update,
+    });
+
+    expect(entries).toHaveLength(1);
+    expect(sidebarInboxTabCounts(entries)).toEqual({
+      all: 0,
+      approvals: 0,
+      automations: 0,
+      system: 0,
+    });
   });
 });
 
