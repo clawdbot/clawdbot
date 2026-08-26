@@ -192,6 +192,19 @@ import WatchKit
     {
         self.defaults = defaults
         self.restorePersistedState()
+        if [self.replyStatus?.code, self.appSnapshotStatus?.code, self.appCommandStatus?.code].contains(.sending) {
+            // Attempt ownership never survives app restoration, so interrupted sends must be retryable.
+            if self.replyStatus?.code == .sending {
+                self.replyStatus?.code = .failed
+            }
+            if self.appSnapshotStatus?.code == .sending {
+                self.appSnapshotStatus?.code = .failed
+            }
+            if self.appCommandStatus?.code == .sending {
+                self.appCommandStatus?.code = .failed
+            }
+            self.persistState()
+        }
         self.pruneExecApprovalTerminalTombstones(now: Date())
         self.pruneExpiredExecApprovals(nowMs: Self.nowMs())
         if requestNotificationAuthorization {

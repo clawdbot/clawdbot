@@ -29,8 +29,9 @@ struct WatchInboxStoreOperationTests {
 
             let restoredStore = WatchInboxStore(defaults: defaults, requestNotificationAuthorization: false)
             #expect(restoredStore.promptId == "replacement-prompt")
-            #expect(restoredStore.replyStatus?.code == .sending)
+            #expect(restoredStore.replyStatus?.code == .failed)
             #expect(restoredStore.replyStatus?.actionLabel == replacementAction.label)
+            #expect(!restoredStore.isReplySending)
 
             #expect(store.markReplyResult(
                 Self.result(.delivered),
@@ -52,6 +53,29 @@ struct WatchInboxStoreOperationTests {
             #expect(store.replyStatus?.actionLabel == action.label)
             #expect(store.markReplyResult(Self.result(.delivered), actionLabel: action.label, attemptID: attempt))
             #expect(store.markReplySending(actionLabel: action.label) != nil)
+        }
+    }
+
+    @Test func `restored interrupted operations become recoverable before actions reopen`() throws {
+        try Self.withStore { store, defaults in
+            let action = WatchPromptAction(id: "approve", label: "Approve")
+            store.consume(message: Self.prompt(id: "current-prompt", action: action), transport: "sendMessage")
+            store.consume(appSnapshot: Self.snapshot(id: "current-snapshot"))
+            _ = try #require(store.markReplySending(actionLabel: action.label))
+            _ = store.markAppSnapshotRequestStarted()
+            _ = store.markAppCommandSending(.sendChat)
+
+            let restored = WatchInboxStore(defaults: defaults, requestNotificationAuthorization: false)
+            #expect(restored.replyStatus?.code == .failed)
+            #expect(restored.appSnapshotStatus?.code == .failed)
+            #expect(restored.appCommandStatus?.code == .failed)
+            #expect(!restored.isReplySending)
+
+            let reopened = WatchInboxStore(defaults: defaults, requestNotificationAuthorization: false)
+            #expect(reopened.replyStatus?.code == .failed)
+            #expect(reopened.appSnapshotStatus?.code == .failed)
+            #expect(reopened.appCommandStatus?.code == .failed)
+            #expect(reopened.markReplySending(actionLabel: action.label) != nil)
         }
     }
 
