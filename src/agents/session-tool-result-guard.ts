@@ -29,6 +29,10 @@ import {
   resolveTerminalAssistantTranscriptRunId,
 } from "../sessions/transcript-events.js";
 import { isTranscriptOnlyOpenClawAssistantModel } from "../shared/transcript-only-openclaw-assistant.js";
+import {
+  CODE_MODE_CONTROL_DETAILS_KEY,
+  readCodeModeControlPresentation,
+} from "./code-mode-control-tools.js";
 import { formatContextLimitTruncationNotice } from "./embedded-agent-runner/context-truncation-notice.js";
 import {
   DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
@@ -412,6 +416,10 @@ function buildPersistedDetailsFallback(
       MAX_PERSISTED_DETAIL_FALLBACK_STRING_CHARS,
       redactionConfig,
     );
+    const codeModeControl = readCodeModeControlPresentation(src);
+    if (codeModeControl) {
+      fallback[CODE_MODE_CONTROL_DETAILS_KEY] = codeModeControl;
+    }
   }
   return fallback;
 }
@@ -509,6 +517,10 @@ function sanitizeToolResultDetailsForPersistence(
     redactionConfig,
   });
   copyPersistedResultStateFields(out, src, MAX_PERSISTED_DETAIL_STRING_CHARS, redactionConfig);
+  const codeModeControl = readCodeModeControlPresentation(src);
+  if (codeModeControl) {
+    out[CODE_MODE_CONTROL_DETAILS_KEY] = codeModeControl;
+  }
   if (typeof src.tail === "string") {
     out.tail = redactPersistedDetailString(
       src.tail,

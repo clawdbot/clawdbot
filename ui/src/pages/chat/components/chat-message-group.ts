@@ -264,7 +264,15 @@ export function renderActivityGroup(
     : undefined;
   const groupSummaryLabel = runningCard
     ? `${resolveToolRowText(runningCard, opts.runActive)}…`
-    : summarizeToolGroup(cards.map((card) => ({ name: card.name, args: card.args })));
+    : summarizeToolGroup(
+        cards.map((card) => ({
+          callId: card.callId,
+          parentCallId: card.parentCallId,
+          codeModeControl: card.codeModeControl,
+          name: card.name,
+          args: card.args,
+        })),
+      );
   const activityDisclosureId = `activity:${firstGroup.key}`;
   const activityBodyId = `activity-body-${fnv1aUtf16(firstGroup.key).toString(16)}`;
   const activityExpanded = opts.isToolMessageExpanded?.(activityDisclosureId) ?? false;

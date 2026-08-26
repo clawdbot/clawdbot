@@ -378,8 +378,11 @@ function isCommandToolName(name: string | undefined): boolean {
 }
 
 function isCommandProgressItem(input: Extract<ChannelProgressDraftLineInput, { event: "item" }>) {
+  if (typeof input.commandBearing === "boolean") {
+    return input.commandBearing;
+  }
   const itemKind = normalizeOptionalLowercaseString(input.itemKind);
-  return input.commandBearing === true || itemKind === "command" || isCommandToolName(input.name);
+  return itemKind === "command" || isCommandToolName(input.name);
 }
 
 function resolveProgressDraftLineId(

@@ -4,6 +4,7 @@ import { createCacheTrace } from "../../cache-trace.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import type { AgentSession } from "../../sessions/index.js";
+import { installToolSearchTargetTranscriptPersistence } from "../../tool-search.js";
 import { getProviderPromptState } from "../provider-prompt-state.js";
 import { getEmbeddedSessionPromptState } from "../session-prompt-state.js";
 import type { createEmbeddedAttemptExternalAbortController } from "./attempt-finalize.js";
@@ -55,7 +56,11 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     | "sessionAgentId"
     | "transcriptLifecycle"
     | "withOwnedTranscriptWrite"
-  >;
+  > & {
+    toolSearchTargetTranscriptProjections: Parameters<
+      typeof installToolSearchTargetTranscriptPersistence
+    >[0]["projections"];
+  };
   agentSession: Pick<
     AgentSessionInput,
     | "agentCoreThinkingLevel"
@@ -193,7 +198,14 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     settingsManager,
     sandbox: input.transport.sandbox,
   });
-  input.lifecycle.onContextGuardsInstalled(contextGuards.remove);
+  const removeTargetTranscriptPersistence = installToolSearchTargetTranscriptPersistence({
+    sessionManager,
+    projections: input.sessionManager.toolSearchTargetTranscriptProjections,
+  });
+  input.lifecycle.onContextGuardsInstalled(() => {
+    removeTargetTranscriptPersistence();
+    contextGuards.remove();
+  });
 
   const cacheTrace = createCacheTrace({
     cfg: attempt.config,

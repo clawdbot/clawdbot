@@ -218,6 +218,38 @@ function resolveToolCallId(
   );
 }
 
+function resolveParentToolCallId(
+  item: Record<string, unknown>,
+  message: Record<string, unknown>,
+): string | undefined {
+  const value = item.parentToolCallId ?? message.parentToolCallId;
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function resolveCodeModeControl(
+  item: Record<string, unknown>,
+  message: Record<string, unknown>,
+): ToolCard["codeModeControl"] | undefined {
+  const candidates = [
+    item.codeModeControl,
+    message.codeModeControl,
+    readRecord(item.details)?.openclawCodeModeControl,
+    readRecord(message.details)?.openclawCodeModeControl,
+  ];
+  for (const candidate of candidates) {
+    const value = readRecord(candidate);
+    if (value?.kind !== "exec" && value?.kind !== "wait") {
+      continue;
+    }
+    const language = value.language;
+    return {
+      kind: value.kind,
+      ...(language === "javascript" || language === "typescript" ? { language } : {}),
+    };
+  }
+  return undefined;
+}
+
 function resolveToolName(item: Record<string, unknown>, message: Record<string, unknown>): string {
   return (
     (typeof item.name === "string" && item.name.trim()) ||
@@ -356,10 +388,14 @@ function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] {
     if (isToolCall) {
       const args = coerceArgs(item.arguments ?? item.args ?? item.input);
       const callId = resolveToolCallId(item, m);
+      const parentCallId = resolveParentToolCallId(item, m);
+      const codeModeControl = resolveCodeModeControl(item, m);
       const details = item.details ?? m.details;
       cards.push({
         id: resolveToolCardId(item, m, index, prefix),
         ...(callId ? { callId } : {}),
+        ...(parentCallId ? { parentCallId } : {}),
+        ...(codeModeControl ? { codeModeControl } : {}),
         name: resolveToolName(item, m),
         args,
         inputText: serializeToolInput(args),
@@ -377,6 +413,8 @@ function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] {
       const name = resolveToolName(item, m);
       const cardId = resolveToolCardId(item, m, index, prefix);
       const callId = resolveToolCallId(item, m);
+      const parentCallId = resolveParentToolCallId(item, m);
+      const codeModeControl = resolveCodeModeControl(item, m);
       const existing =
         cards.find((card) => card.id === cardId) ??
         cards.find(
@@ -395,6 +433,8 @@ function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] {
       if (existing) {
         fallbackMatchedCards.add(existing);
         existing.callId ??= callId;
+        existing.parentCallId ??= parentCallId;
+        existing.codeModeControl ??= codeModeControl;
         // Live tool-stream messages emit a toolresult block for partial
         // `update` output too; completion there is owned by the stream's
         // resultReceived marker (set at card creation), not block presence —
@@ -418,6 +458,8 @@ function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] {
       cards.push({
         id: cardId,
         ...(callId ? { callId } : {}),
+        ...(parentCallId ? { parentCallId } : {}),
+        ...(codeModeControl ? { codeModeControl } : {}),
         name,
         completed: true,
         outputText: text,
@@ -445,10 +487,14 @@ function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] {
       "tool";
     const text = extractTextCached(message) ?? undefined;
     const callId = resolveToolCallId({}, m);
+    const parentCallId = resolveParentToolCallId({}, m);
+    const codeModeControl = resolveCodeModeControl({}, m);
     const exitCode = readToolExitCode(m, m.details, text ? parseJsonRecord(text) : undefined);
     cards.push({
       id: resolveToolCardId({}, m, 0, prefix),
       ...(callId ? { callId } : {}),
+      ...(parentCallId ? { parentCallId } : {}),
+      ...(codeModeControl ? { codeModeControl } : {}),
       name,
       completed: isToolResultMessage(message) || role === "tool" || role === "function",
       outputText: text,

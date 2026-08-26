@@ -164,6 +164,20 @@ describe("buildChannelProgressDraftLine", () => {
       )?.text,
     ).toContain("echo private");
   });
+
+  it("honors producer-recorded non-command Code Mode progress", () => {
+    const line = buildChannelProgressDraftLine({
+      event: "item",
+      itemKind: "tool",
+      name: "exec",
+      phase: "start",
+      commandBearing: false,
+      meta: "run JavaScript workflow",
+    });
+
+    expect(line?.detail).toBe("run JavaScript workflow");
+    expect(line?.text).toContain("run JavaScript workflow");
+  });
 });
 
 // Claude CLI tool names arrive capitalized. Each tool call is described twice —

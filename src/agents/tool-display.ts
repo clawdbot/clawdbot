@@ -15,6 +15,7 @@ import {
   formatToolDetailText,
   formatDetailKey,
   normalizeToolDisplayName,
+  resolveCodeModeSourceLanguage,
   resolveToolVerbAndDetailForArgs,
 } from "./tool-display-common.js";
 import { TOOL_DISPLAY_CONFIG } from "./tool-display-config.js";
@@ -122,6 +123,10 @@ export function isShellToolDisplayName(name: string | undefined): boolean {
 
 /** Provider-defined tool names are not enough: namespaced tools can carry executable commands. */
 export function isCommandBearingToolCall(name: string | undefined, args?: unknown): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(name);
+  if (normalized === "exec" && resolveCodeModeSourceLanguage(args)) {
+    return false;
+  }
   if (isShellToolDisplayName(name)) {
     return true;
   }

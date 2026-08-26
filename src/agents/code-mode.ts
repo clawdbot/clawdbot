@@ -12,6 +12,7 @@ import {
   type CodeModeCatalogBinding,
 } from "./code-mode-catalog.js";
 import {
+  attachCodeModeControlPresentation,
   CODE_MODE_EXEC_TOOL_NAME,
   CODE_MODE_WAIT_TOOL_NAME,
   createCodeModeExecDescriptionUpdater,
@@ -241,7 +242,10 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
           },
         }),
       );
-      return formatToolSearchControlResult(result, runtime, undefined, result.status);
+      return attachCodeModeControlPresentation(
+        formatToolSearchControlResult(result, runtime, undefined, result.status),
+        { kind: "exec", language: input.language ?? "javascript" },
+      );
     },
   } as AnyAgentTool);
   const waitTool = markCodeModeControlTool({
@@ -271,7 +275,10 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
           },
         }),
       );
-      return formatToolSearchControlResult(result, runtime, undefined, result.status);
+      return attachCodeModeControlPresentation(
+        formatToolSearchControlResult(result, runtime, undefined, result.status),
+        { kind: "wait" },
+      );
     },
   } as AnyAgentTool);
   return [execTool, waitTool];

@@ -44,6 +44,17 @@ export function normalizeToolDisplayName(name?: string): string {
   return (name ?? "tool").trim();
 }
 
+/** Identify the language of an OpenClaw Code Mode exec payload. */
+export function resolveCodeModeSourceLanguage(
+  args: unknown,
+): "JavaScript" | "TypeScript" | undefined {
+  const record = asRecord(args);
+  if (!normalizeOptionalString(record?.code)) {
+    return undefined;
+  }
+  return record?.language === "typescript" ? "TypeScript" : "JavaScript";
+}
+
 /** Convert a tool identifier into a human-readable title. */
 export function defaultTitle(name: string): string {
   const cleaned = name.replace(/_/g, " ").trim();
@@ -745,7 +756,11 @@ function resolveToolVerbAndDetail(params: {
   const verb = normalizeVerb(actionSpec?.label ?? params.action ?? fallbackVerb);
 
   let detail: string | undefined;
-  if (params.toolKey === "exec" || params.toolKey === "bash") {
+  const codeModeLanguage =
+    params.toolKey === "exec" ? resolveCodeModeSourceLanguage(params.args) : undefined;
+  if (codeModeLanguage) {
+    detail = `run ${codeModeLanguage} workflow`;
+  } else if (params.toolKey === "exec" || params.toolKey === "bash") {
     detail = resolveExecDetail(params.args, { detailMode: params.toolDetailMode });
   }
   if (!detail && params.toolKey === "read") {

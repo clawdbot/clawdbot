@@ -8,6 +8,61 @@ describe("summarizeToolGroup", () => {
   it.each<[string, ToolGroupSummaryInput[], string]>([
     ["a single command", [{ name: "bash", args: { command: "ls" } }], "Ran a command"],
     [
+      "a code-mode wrapper with its child operation",
+      [
+        {
+          name: "exec",
+          args: { code: 'return await read({ path: "/repo/a.ts" });' },
+          callId: "outer-exec",
+          codeModeControl: { kind: "exec", language: "javascript" },
+        } as ToolGroupSummaryInput & { callId: string },
+        {
+          name: "read",
+          args: { path: "/repo/a.ts" },
+          parentCallId: "outer-exec",
+        } as ToolGroupSummaryInput & { parentCallId: string },
+      ],
+      "Read a file",
+    ],
+    [
+      "a suspended code-mode workflow",
+      [
+        {
+          name: "exec",
+          args: { code: 'return await read({ path: "/repo/a.ts" });' },
+          callId: "outer-exec",
+          codeModeControl: { kind: "exec", language: "javascript" },
+        },
+        {
+          name: "read",
+          args: { path: "/repo/a.ts" },
+          parentCallId: "outer-exec",
+        },
+        {
+          name: "wait",
+          args: { runId: "cm_1" },
+          codeModeControl: { kind: "wait" },
+        },
+      ],
+      "Read a file",
+    ],
+    [
+      "a standalone code-mode continuation",
+      [{ name: "wait", args: { runId: "cm_1" }, codeModeControl: { kind: "wait" } }],
+      "Ran a code workflow",
+    ],
+    [
+      "a standalone code-mode workflow",
+      [
+        {
+          name: "exec",
+          args: { code: "return 42;", language: "javascript" },
+          callId: "outer-exec",
+        } as ToolGroupSummaryInput & { callId: string },
+      ],
+      "Ran a code workflow",
+    ],
+    [
       "distinct paths over call count",
       [
         { name: "read", args: { path: "/repo/a.ts" } },

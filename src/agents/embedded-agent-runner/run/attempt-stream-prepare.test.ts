@@ -383,6 +383,42 @@ describe("prepareEmbeddedAttemptStream", () => {
     expect(Object.isFrozen(returned.details)).toBe(true);
   });
 
+  it("routes hidden-tool updates through the nested lifecycle identity", async () => {
+    const projections: ToolSearchTargetTranscriptProjection[] = [];
+    const nestedUpdate = vi.fn();
+    const outerUpdate = vi.fn();
+    const execute = vi.fn(async (_id, _input, _signal, onUpdate) => {
+      onUpdate?.({ content: [], details: { status: "working" } });
+      return { content: [{ type: "text" as const, text: "done" }], details: { ok: true } };
+    });
+    mocks.subscribe.mockReturnValue({
+      toolMetas: [],
+      runToolLifecycle: vi.fn(async ({ execute: run }) => await run(() => undefined, nestedUpdate)),
+      isCompacting: vi.fn(() => false),
+    });
+    const prepared = prepareCatalogExecutor(projections);
+
+    await prepared.toolSearchCatalogExecutor({
+      tool: {
+        name: "read",
+        description: "Read a file",
+        parameters: { type: "object", properties: {}, additionalProperties: false },
+        execute,
+      } as never,
+      toolName: "read",
+      source: "openclaw",
+      sourceName: "core",
+      toolCallId: "nested-read",
+      parentToolCallId: "outer-exec",
+      input: { path: "README.md" },
+      onUpdate: outerUpdate,
+      acceptResultBeforeProjection: async (candidate) => candidate,
+    });
+
+    expect(nestedUpdate).toHaveBeenCalledOnce();
+    expect(outerUpdate).not.toHaveBeenCalled();
+  });
+
   it("marks accepted canonical failures in hidden tool transcript projections", async () => {
     const projections: ToolSearchTargetTranscriptProjection[] = [];
     const failedResult = {

@@ -441,6 +441,14 @@ describe("normalizeAssistantReplayContent", () => {
       openclawTranscriptAssistant("delivery-mirror"),
       bedrockAssistant([{ type: "text", text: "real reply" }]),
       openclawTranscriptAssistant("gateway-injected"),
+      {
+        role: "toolResult",
+        toolCallId: "display-only-call",
+        toolName: "read",
+        content: [{ type: "text", text: "display-only result" }],
+        provider: "openclaw",
+        model: "gateway-injected",
+      } as unknown as AgentMessage,
     ];
     const out = normalizeAssistantReplayContent(messages);
     expect(out).toHaveLength(2);

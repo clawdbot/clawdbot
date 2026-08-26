@@ -8,6 +8,8 @@
 
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
+import { resolveCodeModeSourceLanguage } from "../../../../src/agents/tool-display-common.js";
+import { t } from "../../i18n/index.ts";
 import {
   buildWriteDiffLines,
   computeLineDiff,
@@ -19,16 +21,28 @@ import {
 } from "./tool-call-diff.ts";
 import { parsePatchView, type PatchFileOperation } from "./tool-call-patch.ts";
 
-export type ToolCallKind = "command" | "read" | "edit" | "write" | "search" | "fetch" | "generic";
+export type ToolCallKind =
+  | "code"
+  | "command"
+  | "read"
+  | "edit"
+  | "write"
+  | "search"
+  | "fetch"
+  | "generic";
 
 type ToolCallViewSource = {
   name: string;
   args?: unknown;
   details?: unknown;
+  codeModeControl?: { kind: "exec" | "wait"; language?: "javascript" | "typescript" };
 };
 
 export type ToolCallView = {
   kind: ToolCallKind;
+  /** Full Code Mode source, shown only after expanding the row. */
+  code?: string;
+  language?: "JavaScript" | "TypeScript";
   /** Full command text for `command` rows (first line shown collapsed). */
   command?: string;
   /** File basename or primary target shown bold in the row. */
@@ -270,7 +284,11 @@ export function resolveToolCallFileOperations(
   return resolvePatchData(asRecord(args))?.fileOperations;
 }
 
-export function resolveToolCallKind(name: string, args?: unknown): ToolCallKind {
+export function resolveToolCallKind(
+  name: string,
+  args?: unknown,
+  codeModeControl?: ToolCallViewSource["codeModeControl"],
+): ToolCallKind {
   const key = normalizeKey(name);
   if (TEXT_EDITOR_TOOL_NAMES.has(key)) {
     switch (resolveTextEditorCommand(args)) {
@@ -287,6 +305,15 @@ export function resolveToolCallKind(name: string, args?: unknown): ToolCallKind 
     }
   }
   if (COMMAND_TOOL_NAMES.has(key)) {
+    // Persisted Code Mode rows from before producer metadata still carry the
+    // canonical `exec` + `code` input shape.
+    if (
+      key === "exec" &&
+      (codeModeControl?.kind === "exec" ||
+        (!codeModeControl && resolveCodeModeSourceLanguage(args)))
+    ) {
+      return "code";
+    }
     return "command";
   }
   if (READ_TOOL_NAMES.has(key)) {
@@ -317,7 +344,12 @@ export function resolveToolCallKind(name: string, args?: unknown): ToolCallKind 
 // diff) later on the same args identity, which must invalidate the cache.
 const toolCallViewCache = new WeakMap<
   object,
-  { details: unknown; name: string; view: ToolCallView }
+  {
+    codeModeControl: ToolCallViewSource["codeModeControl"];
+    details: unknown;
+    name: string;
+    view: ToolCallView;
+  }
 >();
 
 export function resolveToolCallView(source: ToolCallViewSource): ToolCallView {
@@ -326,13 +358,23 @@ export function resolveToolCallView(source: ToolCallViewSource): ToolCallView {
   const name = normalizeKey(source.name);
   if (cacheKey) {
     const cached = toolCallViewCache.get(cacheKey);
-    if (cached && cached.details === source.details && cached.name === name) {
+    if (
+      cached &&
+      cached.codeModeControl === source.codeModeControl &&
+      cached.details === source.details &&
+      cached.name === name
+    ) {
       return cached.view;
     }
   }
   const view = buildToolCallView(source, args);
   if (cacheKey) {
-    toolCallViewCache.set(cacheKey, { details: source.details, name, view });
+    toolCallViewCache.set(cacheKey, {
+      codeModeControl: source.codeModeControl,
+      details: source.details,
+      name,
+      view,
+    });
   }
   return view;
 }
@@ -352,11 +394,22 @@ function buildToolCallView(
   source: ToolCallViewSource,
   args: Record<string, unknown> | null,
 ): ToolCallView {
-  const kind = resolveToolCallKind(source.name, source.args);
+  const kind = resolveToolCallKind(source.name, source.args, source.codeModeControl);
   const key = normalizeKey(source.name);
   const editorCommand = TEXT_EDITOR_TOOL_NAMES.has(key)
     ? resolveTextEditorCommand(source.args)
     : undefined;
+
+  if (kind === "code") {
+    const language =
+      source.codeModeControl?.language === "typescript"
+        ? "TypeScript"
+        : (resolveCodeModeSourceLanguage(args) ?? "JavaScript");
+    const code = args
+      ? (readNonBlankString(args.code) ?? readNonBlankString(args.command))
+      : undefined;
+    return { kind, code, language, target: t("chat.toolCards.codeWorkflow", { language }) };
+  }
 
   if (kind === "command") {
     const command = args ? readNonBlankString(args.command) : undefined;

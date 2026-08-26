@@ -22,7 +22,10 @@ import {
   normalizeInputProvenance,
 } from "../../sessions/input-provenance.js";
 import { hasPersistedMedia } from "../../sessions/user-turn-media.js";
-import { isTranscriptOnlyOpenClawAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
+import {
+  isTranscriptOnlyOpenClawAssistantMessage,
+  isTranscriptOnlyOpenClawMessage,
+} from "../../shared/transcript-only-openclaw-assistant.js";
 import { stripStaleAssistantUsageBeforeLatestCompaction } from "../compaction-usage.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
@@ -315,6 +318,15 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
   let touched = false;
   const out: AgentMessage[] = [];
   for (const message of messages) {
+    if (
+      isTranscriptOnlyOpenClawMessage(message) ||
+      isTranscriptOnlyOpenClawAssistantMessage(message)
+    ) {
+      // Drop from the in-memory replay copy; the persisted transcript keeps
+      // display-only activity artifacts for history surfaces.
+      touched = true;
+      continue;
+    }
     if (message?.role === "user") {
       const sanitizedUserMessage = sanitizeUserReplayContent(message);
       if (sanitizedUserMessage) {
@@ -327,12 +339,6 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
     }
     if (!message || message.role !== "assistant") {
       out.push(message);
-      continue;
-    }
-    if (isTranscriptOnlyOpenClawAssistantMessage(message)) {
-      // Drop from the in-memory replay copy; the persisted JSONL keeps the
-      // entry so user-facing transcript surfaces are unchanged.
-      touched = true;
       continue;
     }
     let assistantMessage: AssistantReplayMessage = message;

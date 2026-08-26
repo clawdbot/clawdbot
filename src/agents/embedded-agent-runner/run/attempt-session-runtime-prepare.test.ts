@@ -44,7 +44,8 @@ type PrepareInput = Parameters<typeof prepareEmbeddedAttemptSessionRuntime>[0];
 
 function createFixture() {
   const order: string[] = [];
-  const sessionManager = { kind: "manager" };
+  const appendMessage = vi.fn((_message: unknown) => "test-entry");
+  const sessionManager = { kind: "manager", appendMessage };
   const activeSession = {
     messages: [{ role: "user" }, { role: "assistant" }],
     sessionId: "active-session",
@@ -139,7 +140,7 @@ function createFixture() {
   });
 
   const lifecycle = {
-    onContextGuardsInstalled: vi.fn(() => order.push("own-context-guards")),
+    onContextGuardsInstalled: vi.fn((_cleanup: () => void) => order.push("own-context-guards")),
     onSessionCreated: vi.fn(() => order.push("own-session")),
     onSessionManagerCreated: vi.fn(() => order.push("own-manager")),
     onSessionSettleTrackerReady: vi.fn(() => order.push("own-settle-tracker")),
@@ -193,6 +194,7 @@ function createFixture() {
   return {
     abortActiveSession,
     activeSession,
+    appendMessage,
     anthropicPayloadLogger,
     boundary,
     buildAbortSettlePromise,
@@ -299,9 +301,15 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
 
     expect(fixture.lifecycle.onSessionManagerCreated).toHaveBeenCalledWith(fixture.sessionManager);
     expect(fixture.lifecycle.onSessionCreated).toHaveBeenCalledWith(fixture.activeSession);
-    expect(fixture.lifecycle.onContextGuardsInstalled).toHaveBeenCalledWith(
-      fixture.contextGuards.remove,
-    );
+    const cleanup = fixture.lifecycle.onContextGuardsInstalled.mock.calls[0]?.[0];
+    expect(cleanup).toBeTypeOf("function");
+    expect(fixture.sessionManager.appendMessage).not.toBe(fixture.appendMessage);
+    const wrappedAppend = fixture.sessionManager.appendMessage;
+    cleanup?.();
+    expect(fixture.sessionManager.appendMessage).not.toBe(wrappedAppend);
+    fixture.sessionManager.appendMessage({ role: "user", content: "after cleanup" });
+    expect(fixture.appendMessage).toHaveBeenCalledOnce();
+    expect(fixture.contextGuards.remove).toHaveBeenCalledOnce();
     expect(fixture.lifecycle.onSessionSettleTrackerReady).toHaveBeenCalledWith(
       fixture.buildAbortSettlePromise,
     );

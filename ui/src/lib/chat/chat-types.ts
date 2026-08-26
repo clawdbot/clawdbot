@@ -251,6 +251,9 @@ export type NormalizedMessage = {
 export type ToolCard = {
   id: string;
   callId?: string;
+  /** Outer Code Mode or Tool Search call that dispatched this tool. */
+  parentCallId?: string;
+  codeModeControl?: { kind: "exec" | "wait"; language?: "javascript" | "typescript" };
   name: string;
   args?: unknown;
   inputText?: string;

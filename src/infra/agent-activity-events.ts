@@ -18,6 +18,8 @@ export type AgentItemEventData = Record<string, unknown> & {
   meta?: string;
   commandBearing?: boolean;
   toolCallId?: string;
+  parentToolCallId?: string;
+  codeModeControl?: { kind: "exec" | "wait"; language?: "javascript" | "typescript" };
   startedAt?: number;
   endedAt?: number;
   error?: string;
@@ -37,6 +39,7 @@ export type AgentCommandOutputEventFields = {
   phase: "delta" | "end";
   title: string;
   toolCallId: string;
+  parentToolCallId?: string;
   name?: string;
   output?: string;
   status?: AgentItemEventStatus | "running";
@@ -52,6 +55,7 @@ export type AgentPatchSummaryEventData = Record<string, unknown> & {
   phase: "end";
   title: string;
   toolCallId: string;
+  parentToolCallId?: string;
   name?: string;
   added: string[];
   modified: string[];

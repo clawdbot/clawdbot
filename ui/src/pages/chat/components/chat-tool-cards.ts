@@ -55,6 +55,15 @@ export function shouldToggleSelectableDisclosure(event: MouseEvent): boolean {
   );
 }
 
+function resolveCardView(card: ToolCard): ToolCallView {
+  return resolveToolCallView({
+    name: card.name,
+    args: card.args,
+    details: card.details,
+    codeModeControl: card.codeModeControl,
+  });
+}
+
 function formatToolOutputForSidebar(text: string): string {
   if (isMarkdownBlockArtText(text)) {
     return "```\n" + text + "\n```";
@@ -254,6 +263,15 @@ function resolveMutationVerbKind(view: ToolCallView): keyof typeof MUTATION_VERB
 }
 
 function resolveToolRowVerb(view: ToolCallView, outcome: ToolCardOutcome): string | undefined {
+  if (view.kind === "code") {
+    return t(
+      outcome === "running"
+        ? "chat.toolCards.verbs.running"
+        : outcome === "succeeded"
+          ? "chat.toolCards.verbs.ran"
+          : "chat.toolCards.verbs.run",
+    );
+  }
   const mutation = resolveMutationVerbKind(view);
   if (mutation) {
     const keys = MUTATION_VERB_KEYS[mutation];
@@ -270,6 +288,7 @@ function resolveToolRowVerb(view: ToolCallView, outcome: ToolCardOutcome): strin
 }
 
 const TOOL_ROW_ICONS: Partial<Record<ToolCallView["kind"], string>> = {
+  code: "braces",
   command: "squareTerminal",
   read: "fileText",
   edit: "pencil",
@@ -748,7 +767,7 @@ export function isRunningToolCard(card: ToolCard, runActive: boolean | undefined
 }
 
 export function resolveToolRowText(card: ToolCard, runActive?: boolean): string {
-  const view = resolveToolCallView({ name: card.name, args: card.args, details: card.details });
+  const view = resolveCardView(card);
   if (view.kind === "command" && view.command) {
     return `$ ${firstCommandLine(view.command)}`;
   }
@@ -832,7 +851,7 @@ export function renderToolCard(
   if (progressReceipt) {
     return progressReceipt;
   }
-  const view = resolveToolCallView({ name: card.name, args: card.args, details: card.details });
+  const view = resolveCardView(card);
   const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
   const isRunning = outcome === "running";
   const expanded = opts.expanded;
@@ -923,7 +942,7 @@ export function renderExpandedToolCardContent(
   runActive?: boolean,
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void,
 ) {
-  const view = resolveToolCallView({ name: card.name, args: card.args, details: card.details });
+  const view = resolveCardView(card);
   const display = resolveToolDisplay({ name: card.name, args: card.args });
   // File/search rows already carry their target; the "with …" connector only
   // reads well for generic tools ("with query …"), not "with from sessions.ts".
@@ -988,6 +1007,37 @@ export function renderExpandedToolCardContent(
           </openclaw-tooltip>
         `
       : nothing;
+
+  if (view.kind === "code" && view.code) {
+    const argsRecord = asNullableRecord(card.args);
+    const extraArgs = Object.fromEntries(
+      Object.entries(argsRecord ?? {}).filter(
+        ([key]) => key !== "code" && key !== "command" && key !== "language",
+      ),
+    );
+    return html`
+      <div class="chat-tool-card ${isError ? "chat-tool-card--error" : ""}">
+        <div class="chat-tool-card__header">
+          <div class="chat-tool-card__detail">${view.target}</div>
+          <div class="chat-tool-card__actions">${sidebarAction}</div>
+        </div>
+        ${renderToolDataBlock({
+          label: t("chat.toolCards.codeSource", { language: view.language ?? "JavaScript" }),
+          text: view.code,
+        })}
+        ${Object.keys(extraArgs).length > 0 ? renderArgsKeyValueList(extraArgs) : nothing}
+        ${hasOutput
+          ? renderRawOutputToggle(card.outputText!)
+          : isError
+            ? renderToolDataBlock({
+                label: t("chat.toolCards.toolError"),
+                text: t("chat.toolCards.noOutputFailed"),
+              })
+            : nothing}
+        ${renderToolOutcome(outcome, card.exitCode)}
+      </div>
+    `;
+  }
 
   // Command calls render terminal-style: `$ command` + raw output. Remaining
   // args (workdir, timeout, env…) stay visible as key-value rows so identical

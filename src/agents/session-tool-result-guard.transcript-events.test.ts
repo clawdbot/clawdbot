@@ -3,6 +3,7 @@ import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -17,11 +18,36 @@ import {
   createUserTurnTranscriptRecorder,
   type UserTurnTranscriptRecorder,
 } from "../sessions/user-turn-transcript.js";
+import { isTranscriptOnlyOpenClawAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
+import { normalizeAssistantReplayContent } from "./embedded-agent-runner/replay-history.js";
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
+import { installToolSearchTargetTranscriptPersistence } from "./tool-search.js";
 
 const listeners: Array<() => void> = [];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let fixtureId = 0;
+
+function createAssistantMessage(params: {
+  content: AssistantMessage["content"];
+  stopReason: AssistantMessage["stopReason"];
+  timestamp: number;
+}): AssistantMessage {
+  return {
+    role: "assistant",
+    api: "openai-responses",
+    provider: "openai",
+    model: "gpt-5.6-luna",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    ...params,
+  };
+}
 
 async function openPersistedSessionManager() {
   const root = tempDirs.make("openclaw-transcript-events-");
@@ -48,6 +74,128 @@ afterEach(() => {
 });
 
 describe("guardSessionManager transcript updates", () => {
+  it("persists paired nested activity after its wrapper while preserving the terminal leaf", async () => {
+    const { root, target } = await openPersistedSessionManager();
+    const projections = [
+      {
+        parentToolCallId: "wrapper-call",
+        toolCallId: "nested-call",
+        toolName: "read",
+        input: { path: "large.txt" },
+        result: {
+          content: [{ type: "text" as const, text: "x".repeat(200_000) }],
+          details: {},
+        },
+        isError: false,
+        timestamp: 3,
+      },
+    ];
+    const guarded = guardSessionManager(SessionManager.open(target, root), {
+      agentId: target.agentId,
+      sessionKey: target.sessionKey,
+      contextWindowTokens: 128,
+    });
+    const restore = installToolSearchTargetTranscriptPersistence({
+      sessionManager: guarded,
+      projections,
+    });
+
+    guarded.appendMessage(
+      createAssistantMessage({
+        content: [
+          {
+            type: "toolCall",
+            id: "wrapper-call",
+            name: "exec",
+            arguments: { code: 'return await read({ path: "large.txt" });' },
+          },
+        ],
+        stopReason: "toolUse",
+        timestamp: 1,
+      }),
+    );
+    guarded.appendMessage({
+      role: "toolResult",
+      toolCallId: "wrapper-call",
+      toolName: "exec",
+      content: [{ type: "text", text: "completed" }],
+      details: {
+        openclawCodeModeControl: { kind: "exec", language: "javascript" },
+        oversized: "y".repeat(200_000),
+      },
+      isError: false,
+      timestamp: 2,
+    });
+    const finalEntryId = guarded.appendMessage(
+      createAssistantMessage({
+        content: [{ type: "text", text: "done" }],
+        stopReason: "stop",
+        timestamp: 4,
+      }),
+    );
+    restore();
+    guarded.flushPendingToolResults?.();
+
+    const messages = guarded
+      .getBranch()
+      .filter((entry) => entry.type === "message")
+      .map((entry) => entry.message);
+    expect(
+      messages.map((message) => ({
+        role: message.role,
+        provider: (message as { provider?: unknown }).provider,
+        toolCallId: (message as { toolCallId?: unknown }).toolCallId,
+        artifact: (message as { openclawTranscriptArtifact?: unknown }).openclawTranscriptArtifact,
+      })),
+    ).toEqual([
+      { role: "assistant", provider: "openai", toolCallId: undefined, artifact: undefined },
+      { role: "toolResult", provider: undefined, toolCallId: "wrapper-call", artifact: undefined },
+      {
+        role: "assistant",
+        provider: undefined,
+        toolCallId: undefined,
+        artifact: { kind: "nested-tool", version: 1 },
+      },
+      {
+        role: "toolResult",
+        provider: undefined,
+        toolCallId: "nested-call",
+        artifact: { kind: "nested-tool", version: 1 },
+      },
+      { role: "assistant", provider: "openai", toolCallId: undefined, artifact: undefined },
+    ]);
+    expect(guarded.getLeafId()).toBe(finalEntryId);
+    expect((messages[1] as { details?: unknown }).details).toMatchObject({
+      openclawCodeModeControl: { kind: "exec", language: "javascript" },
+    });
+    const nestedResult = messages[3] as Extract<AgentMessage, { role: "toolResult" }>;
+    const nestedText = Array.isArray(nestedResult.content)
+      ? nestedResult.content.map((part) => ("text" in part ? part.text : "")).join("")
+      : "";
+    expect(nestedText.length).toBeLessThan(200_000);
+    expect(normalizeAssistantReplayContent(messages)).toEqual([
+      messages[0],
+      messages[1],
+      messages[4],
+    ]);
+    const currentMainReplay = messages.filter(
+      (message) => !isTranscriptOnlyOpenClawAssistantMessage(message),
+    );
+    expect(currentMainReplay.slice(2, 4)).toEqual([messages[2], messages[3]]);
+    expect((currentMainReplay[2] as { content?: Array<{ id?: string }> }).content?.[0]?.id).toBe(
+      (currentMainReplay[3] as { toolCallId?: string }).toolCallId,
+    );
+
+    const reopened = SessionManager.open(target, root);
+    expect(reopened.getLeafId()).toBe(finalEntryId);
+    expect(
+      reopened
+        .getBranch()
+        .filter((entry) => entry.type === "message")
+        .map((entry) => entry.message.role),
+    ).toEqual(["assistant", "toolResult", "assistant", "toolResult", "assistant"]);
+  });
+
   it("records the admission anchor when adopting an ingress-persisted user", async () => {
     const { root, target } = await openPersistedSessionManager();
     const message = {

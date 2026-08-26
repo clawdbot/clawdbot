@@ -28,7 +28,7 @@ import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
 } from "../../embedded-agent-messaging.types.js";
-import type { AgentMessage, StreamFn } from "../../runtime/index.js";
+import type { AgentMessage, AgentToolUpdateCallback, StreamFn } from "../../runtime/index.js";
 import {
   getModelRegistryRuntime,
   initializeModelRegistryRuntime,
@@ -64,6 +64,7 @@ function normalizeMockProviderId(providerId?: string): string {
 }
 
 type SessionManagerMocks = {
+  appendMessage: (...args: unknown[]) => unknown;
   getLeafEntry: UnknownMock;
   getEntry: UnknownMock;
   getBoundaryCount: UnknownMock;
@@ -119,6 +120,7 @@ type AttemptSpawnWorkspaceHoisted = {
   systemPromptTexts: string[];
   embeddedSystemPromptInputs: unknown[];
   trajectoryEvents: CapturedTrajectoryEvent[];
+  sessionManagerAppendMessageMock: UnknownMock;
   sessionManager: SessionManagerMocks;
 };
 
@@ -133,8 +135,12 @@ function createSubscriptionMock(): SubscriptionMock {
     getLatestMcpConnectAction: () => undefined,
     toolMetas: [] as Array<{ toolName: string; meta?: string; asyncStarted?: boolean }>,
     runToolLifecycle: async <T>(toolParams: {
-      execute: (onImplementationStart: () => void) => Promise<T>;
-    }) => await toolParams.execute(() => undefined),
+      execute: (onImplementationStart: () => void, onUpdate: AgentToolUpdateCallback) => Promise<T>;
+    }) =>
+      await toolParams.execute(
+        () => undefined,
+        () => undefined,
+      ),
     unsubscribe: () => {},
     setTerminalLifecycleMeta: () => {},
     waitForCompactionRetry: async () => {},
@@ -234,7 +240,9 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const systemPromptTexts: string[] = [];
   const embeddedSystemPromptInputs: unknown[] = [];
   const trajectoryEvents: CapturedTrajectoryEvent[] = [];
+  const sessionManagerAppendMessageMock = vi.fn(() => "test-entry");
   const sessionManager = {
+    appendMessage: sessionManagerAppendMessageMock,
     getLeafEntry: vi.fn(() => null),
     getEntry: vi.fn(() => undefined),
     getBoundaryCount: vi.fn(() => 0),
@@ -288,6 +296,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     systemPromptTexts,
     embeddedSystemPromptInputs,
     trajectoryEvents,
+    sessionManagerAppendMessageMock,
     sessionManager,
   };
 });
@@ -1093,6 +1102,8 @@ export function resetEmbeddedAttemptHarness(
   hoisted.systemPromptTexts.length = 0;
   hoisted.embeddedSystemPromptInputs.length = 0;
   hoisted.trajectoryEvents.length = 0;
+  hoisted.sessionManagerAppendMessageMock.mockReset().mockReturnValue("test-entry");
+  hoisted.sessionManager.appendMessage = hoisted.sessionManagerAppendMessageMock;
   hoisted.sessionManager.getLeafEntry.mockReset().mockReturnValue(null);
   hoisted.sessionManager.getEntry.mockReset().mockReturnValue(undefined);
   hoisted.sessionManager.getBoundaryCount.mockReset().mockReturnValue(0);

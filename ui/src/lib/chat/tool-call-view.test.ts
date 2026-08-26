@@ -13,6 +13,14 @@ describe("resolveToolCallKind", () => {
   it.each([
     ["bash", undefined, "command"],
     ["exec", undefined, "command"],
+    [
+      "exec",
+      {
+        code: 'return await read({ path: "src/agents/code-mode.ts" });',
+        command: 'return await read({ path: "src/agents/code-mode.ts" });',
+      },
+      "code",
+    ],
     ["Read", undefined, "read"],
     ["read_file", undefined, "read"],
     ["edit", undefined, "edit"],
@@ -68,6 +76,23 @@ describe("unwrapShellWrapperCommand", () => {
 });
 
 describe("resolveToolCallView", () => {
+  it("keeps code-mode source out of the command view", () => {
+    const source = 'return await read({ path: "src/agents/code-mode.ts" });';
+
+    expect(
+      resolveToolCallView({
+        name: "exec",
+        args: { code: source, command: source, language: "typescript" },
+        codeModeControl: { kind: "exec", language: "typescript" },
+      }),
+    ).toEqual({
+      kind: "code",
+      code: source,
+      language: "TypeScript",
+      target: "TypeScript workflow",
+    });
+  });
+
   it("returns the command text for command rows", () => {
     expect(resolveToolCallView({ name: "bash", args: { command: "git status" } })).toEqual({
       kind: "command",

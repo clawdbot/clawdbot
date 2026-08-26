@@ -65,12 +65,15 @@ export function handleToolExecutionUpdate(
   evt: AgentEvent & {
     toolName: string;
     toolCallId: string;
+    parentToolCallId?: string;
     partialResult?: unknown;
     hideFromChannelProgress?: boolean;
   },
 ) {
   const toolName = normalizeToolPolicyName(evt.toolName);
   const toolCallId = evt.toolCallId;
+  const parentToolCallId = evt.parentToolCallId;
+  const codeModeControl = ctx.state.toolMetaById.get(toolCallId)?.codeModeControl;
   const hideFromChannelProgress = evt.hideFromChannelProgress === true;
   const partial = evt.partialResult;
   const sanitized = sanitizeToolResult(partial);
@@ -88,6 +91,8 @@ export function handleToolExecutionUpdate(
         phase: "update",
         name: toolName,
         toolCallId,
+        ...(parentToolCallId ? { parentToolCallId } : {}),
+        ...(codeModeControl ? { codeModeControl } : {}),
         partialResult: liveResult,
         ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       },
@@ -101,6 +106,8 @@ export function handleToolExecutionUpdate(
     status: "running",
     name: toolName,
     toolCallId,
+    ...(parentToolCallId ? { parentToolCallId } : {}),
+    ...(codeModeControl ? { codeModeControl } : {}),
     commandBearing: ctx.state.toolMetaById.get(toolCallId)?.commandBearing,
     ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
     ...(ctx.state.toolMetaById.get(toolCallId)?.commandBearing && !isExecTool
@@ -118,11 +125,13 @@ export function handleToolExecutionUpdate(
         phase: "update",
         name: toolName,
         toolCallId,
+        ...(parentToolCallId ? { parentToolCallId } : {}),
+        ...(codeModeControl ? { codeModeControl } : {}),
         ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       },
     });
   }
-  if (isExecTool) {
+  if (isExecTool && ctx.state.toolMetaById.get(toolCallId)?.commandBearing) {
     const output = extractLiveExecOutput(liveResult);
     const commandData: AgentItemEventData = {
       itemId: buildCommandItemId(toolCallId),
@@ -133,6 +142,7 @@ export function handleToolExecutionUpdate(
       name: toolName,
       meta: ctx.state.toolMetaById.get(toolCallId)?.meta,
       toolCallId,
+      ...(parentToolCallId ? { parentToolCallId } : {}),
       ...(emitDetailedLiveUpdate && output ? { progressText: output } : {}),
     };
     emitTrackedItemEvent(ctx, commandData);
@@ -142,6 +152,7 @@ export function handleToolExecutionUpdate(
         phase: "delta",
         title: commandData.title,
         toolCallId,
+        ...(parentToolCallId ? { parentToolCallId } : {}),
         name: toolName,
         output,
         status: "running",

@@ -203,11 +203,13 @@ export function buildToolCallSummary(
   instanceReplaySafe: boolean,
   ownerKey: string | undefined,
   structuredReplaySafe: boolean,
+  codeModeControl?: { kind: "exec" | "wait"; language?: "javascript" | "typescript" },
 ): ToolCallSummary {
   const mutation = buildToolMutationState(toolName, args, ownerKey ? { ownerKey } : undefined);
   return {
     meta,
-    commandBearing: isCommandBearingToolCall(toolName, args),
+    ...(codeModeControl ? { codeModeControl } : {}),
+    commandBearing: codeModeControl ? false : isCommandBearingToolCall(toolName, args),
     instanceReplaySafe,
     mutatingAction: mutation.mutatingAction,
     ...(ownerKey ? { ownerKey } : {}),
@@ -316,6 +318,8 @@ export function handleToolExecutionStart(
   evt: AgentEvent & {
     toolName: string;
     toolCallId: string;
+    parentToolCallId?: string;
+    codeModeControl?: { kind: "exec" | "wait"; language?: "javascript" | "typescript" };
     args: unknown;
     replaySafe?: boolean;
     hideFromChannelProgress?: boolean;
@@ -372,6 +376,7 @@ export function handleToolExecutionStart(
     const toolName = normalizeToolPolicyName(rawToolName);
     const hideFromChannelProgress = evt.hideFromChannelProgress === true;
     const toolCallId = evt.toolCallId;
+    const parentToolCallId = evt.parentToolCallId;
     const args = evt.args;
     const runId = ctx.params.runId;
     ctx.state.toolExecutionSinceLastBlockReply = true;
@@ -464,6 +469,7 @@ export function handleToolExecutionStart(
       instanceReplaySafe,
       ctx.params.sideEffectToolOwners?.get(toolName),
       false,
+      evt.codeModeControl,
     );
     ctx.state.toolMetaById.set(toolCallId, callSummary);
     ctx.log.debug(
@@ -478,6 +484,8 @@ export function handleToolExecutionStart(
         phase: "start",
         name: toolName,
         toolCallId,
+        ...(parentToolCallId ? { parentToolCallId } : {}),
+        ...(callSummary.codeModeControl ? { codeModeControl: callSummary.codeModeControl } : {}),
         args: sanitizeToolArgs(args) as Record<string, unknown>,
         ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       },
@@ -492,6 +500,8 @@ export function handleToolExecutionStart(
       meta,
       commandBearing: callSummary.commandBearing,
       toolCallId,
+      ...(parentToolCallId ? { parentToolCallId } : {}),
+      ...(callSummary.codeModeControl ? { codeModeControl: callSummary.codeModeControl } : {}),
       startedAt,
       ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       ...(callSummary.commandBearing && !isExecToolName(toolName)
@@ -506,12 +516,14 @@ export function handleToolExecutionStart(
         phase: "start",
         name: toolName,
         toolCallId,
+        ...(parentToolCallId ? { parentToolCallId } : {}),
+        ...(callSummary.codeModeControl ? { codeModeControl: callSummary.codeModeControl } : {}),
         args: sanitizeToolArgs(args) as Record<string, unknown>,
         ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       },
     });
 
-    if (isExecToolName(toolName)) {
+    if (isExecToolName(toolName) && callSummary.commandBearing) {
       emitTrackedItemEvent(ctx, {
         itemId: buildCommandItemId(toolCallId),
         phase: "start",
@@ -521,6 +533,7 @@ export function handleToolExecutionStart(
         name: toolName,
         meta,
         toolCallId,
+        ...(parentToolCallId ? { parentToolCallId } : {}),
         startedAt,
       });
     } else if (resolveFileMutationToolName(toolName) === "apply_patch") {
@@ -533,6 +546,7 @@ export function handleToolExecutionStart(
         name: toolName,
         meta,
         toolCallId,
+        ...(parentToolCallId ? { parentToolCallId } : {}),
         startedAt,
       });
     }

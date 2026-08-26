@@ -21,6 +21,7 @@ import {
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { raceWithAbortSignal } from "../../agent-tools.abort.js";
 import { recordStructuredReplayTrustForToolCall } from "../../agent-tools.before-tool-call.js";
+import { resolveCodeModeControlPresentation } from "../../code-mode-control-tools.js";
 import { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
 import { cancelPendingAgentQuestionForSession } from "../../harness/gateway-question.js";
 import { runAgentHarnessBeforeAgentFinalizeHook } from "../../harness/lifecycle-hook-helpers.js";
@@ -347,15 +348,20 @@ export function prepareEmbeddedAttemptStream(input: {
           attempt.runId,
         );
       }
-      const lifecycle = subscription.runToolLifecycle({
+      const result = await subscription.runToolLifecycle({
         toolName: toolParams.toolName,
         toolCallId: toolParams.toolCallId,
+        parentToolCallId: toolParams.parentToolCallId,
+        codeModeControl: resolveCodeModeControlPresentation({
+          tool: toolParams.tool,
+          args: toolParams.input,
+        }),
         args: toolParams.input,
         replaySafe: input.isReplaySafeTool(toolParams.tool),
         hideFromChannelProgress:
           "hideFromChannelProgress" in toolParams.tool &&
           toolParams.tool.hideFromChannelProgress === true,
-        execute: (onImplementationStart) =>
+        execute: (onImplementationStart, onUpdate) =>
           raceWithAbortSignal(
             (async () => {
               signal.throwIfAborted();
@@ -366,7 +372,7 @@ export function prepareEmbeddedAttemptStream(input: {
                   toolParams.toolCallId,
                   toolParams.input,
                   signal,
-                  toolParams.onUpdate,
+                  onUpdate,
                   undefined as never,
                 );
               }
@@ -374,7 +380,7 @@ export function prepareEmbeddedAttemptStream(input: {
                 toolCallId: toolParams.toolCallId,
                 args: toolParams.input,
                 signal,
-                onUpdate: toolParams.onUpdate,
+                onUpdate,
               });
               try {
                 if (prepared.kind === "immediate") {
@@ -392,7 +398,6 @@ export function prepareEmbeddedAttemptStream(input: {
             yieldRunSignal,
           ),
       });
-      const result = await raceWithAbortSignal(lifecycle, signal, yieldRunSignal);
       // Settlement persists every queued projection. Validate the final result
       // first so a rejected hidden-tool value never enters session history.
       const acceptedResult = await toolParams.acceptResultBeforeProjection(result);

@@ -3,7 +3,9 @@ import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import type { AssistantIdentity } from "../../../lib/assistant-identity.ts";
-import type { ChatItem } from "../../../lib/chat/chat-types.ts";
+import type { ChatItem, MessageGroup } from "../../../lib/chat/chat-types.ts";
+import { summarizeToolGroup } from "../../../lib/chat/tool-call-grouping.ts";
+import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { formatDurationCompact } from "../../../lib/format.ts";
 import { renderChatAvatar } from "../chat-avatar.ts";
 import type { ChatRunStartupPhase } from "../chat-run-startup.ts";
@@ -153,15 +155,36 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
 
 /**
  * Collapsed-turn rollup header: one slim "Worked for X" disclosure standing in
- * for the turn's intermediate work once the run is done. The check icon is
- * the turn's done indicator; the expanded groups render after this row.
+ * for the turn's intermediate work once the run is done. The expanded groups
+ * render after this row.
  */
 export function renderWorkGroupSummary(
-  item: { key: string; durationMs: number | null },
+  item: { key: string; groups: MessageGroup[]; durationMs: number | null },
   opts: { expanded: boolean; onToggle: () => void; presentation?: "standalone" | "continuation" },
 ) {
   const duration = formatDurationCompact(item.durationMs);
-  const label = duration ? t("chat.workRun.workedFor", { duration }) : t("chat.workRun.worked");
+  const cards = item.groups.flatMap((group) =>
+    group.messages.flatMap((message) => extractToolCardsCached(message.message, message.key)),
+  );
+  const summary =
+    cards.length === 0
+      ? undefined
+      : summarizeToolGroup(
+          cards.map((card) => ({
+            callId: card.callId,
+            parentCallId: card.parentCallId,
+            codeModeControl: card.codeModeControl,
+            name: card.name,
+            args: card.args,
+          })),
+        );
+  const label = summary
+    ? duration
+      ? t("chat.workRun.summaryFor", { summary, duration })
+      : summary
+    : duration
+      ? t("chat.workRun.workedFor", { duration })
+      : t("chat.workRun.worked");
   const content = html`
     <div class="chat-activity-group chat-work-group ${opts.expanded ? "is-open" : ""}">
       <button

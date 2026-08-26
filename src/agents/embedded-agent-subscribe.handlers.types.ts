@@ -46,6 +46,7 @@ type EmbeddedSubscribeLogger = {
 /** Per-tool metadata tracked between tool start/update/end events. */
 export type ToolCallSummary = {
   meta?: string;
+  codeModeControl?: { kind: "exec" | "wait"; language?: "javascript" | "typescript" };
   commandBearing: boolean;
   instanceReplaySafe: boolean;
   replaySafe: boolean;

@@ -384,6 +384,8 @@ export async function runEmbeddedAttempt(
               replayAllowedToolNames: toolSearchRunPlan.replayAllowedToolNames,
               resolveActiveContextEnginePluginId,
               sessionAgentId,
+              toolSearchTargetTranscriptProjections:
+                preparedToolBase.toolSearchTargetTranscriptProjections,
               transcriptLifecycle,
               withOwnedTranscriptWrite,
             },

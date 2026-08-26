@@ -152,6 +152,59 @@ describe("app-tool-stream approval lifecycle", () => {
 });
 
 describe("app-tool-stream throttled projections", () => {
+  it("retains producer-recorded code-mode control identity", () => {
+    useToolStreamFakeTimers();
+    try {
+      const host = createHost();
+      handleAgentEvent(
+        host,
+        agentEvent("run-1", 1, "tool", {
+          phase: "start",
+          name: "exec",
+          toolCallId: "outer-exec",
+          codeModeControl: { kind: "exec", language: "javascript" },
+          args: { code: "return 1;" },
+        }),
+      );
+      vi.advanceTimersByTime(80);
+
+      expect(host.chatToolMessages[0]).toMatchObject({
+        content: [
+          expect.objectContaining({
+            codeModeControl: expect.objectContaining({ kind: "exec" }),
+          }),
+        ],
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retains the parent call identity for nested code-mode tools", () => {
+    useToolStreamFakeTimers();
+    try {
+      const host = createHost();
+      handleAgentEvent(
+        host,
+        agentEvent("run-1", 1, "tool", {
+          phase: "start",
+          name: "read",
+          toolCallId: "nested-read",
+          parentToolCallId: "outer-exec",
+          args: { path: "README.md" },
+        }),
+      );
+      vi.advanceTimersByTime(80);
+
+      expect(host.chatToolMessages[0]).toMatchObject({
+        toolCallId: "nested-read",
+        parentToolCallId: "outer-exec",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each(["start", "update"] as const)(
     "renders a deferred tool %s when its projection flushes",
     (phase) => {

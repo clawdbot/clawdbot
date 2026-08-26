@@ -615,6 +615,9 @@ export type AgentEvent =
   | {
       type: "tool_execution_start";
       toolCallId: string;
+      /** Outer control-tool call that dispatched this nested tool. */
+      parentToolCallId?: string;
+      codeModeControl?: { kind: "exec" | "wait"; language?: "javascript" | "typescript" };
       toolName: string;
       args: unknown;
       hideFromChannelProgress?: boolean;
@@ -622,6 +625,8 @@ export type AgentEvent =
   | {
       type: "tool_execution_update";
       toolCallId: string;
+      /** Outer control-tool call that dispatched this nested tool. */
+      parentToolCallId?: string;
       toolName: string;
       args: unknown;
       partialResult: unknown;
@@ -630,6 +635,9 @@ export type AgentEvent =
   | {
       type: "tool_execution_end";
       toolCallId: string;
+      /** Outer control-tool call that dispatched this nested tool. */
+      parentToolCallId?: string;
+      codeModeControl?: { kind: "exec" | "wait"; language?: "javascript" | "typescript" };
       toolName: string;
       result: unknown;
       isError: boolean;

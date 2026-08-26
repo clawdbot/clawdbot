@@ -4,6 +4,7 @@
  */
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { isPlainObject } from "../utils.js";
+import type { AgentToolResult } from "./runtime/index.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -18,6 +19,11 @@ const CODE_MODE_EXEC_TOOL_KIND = "code_mode_exec";
 type CodeModeExecToolKind = typeof CODE_MODE_EXEC_TOOL_KIND;
 /** Source language accepted by the Code Mode exec tool. */
 type CodeModeExecToolInputKind = "javascript" | "typescript";
+type CodeModeControlPresentation = {
+  kind: "exec" | "wait";
+  language?: CodeModeExecToolInputKind;
+};
+export const CODE_MODE_CONTROL_DETAILS_KEY = "openclawCodeModeControl";
 /** Metadata attached to before-tool-call events for Code Mode exec. */
 type CodeModeExecHookMetadata = {
   toolKind: CodeModeExecToolKind;
@@ -76,6 +82,59 @@ export function createCodeModeExecDescriptionUpdater(tool: AnyAgentTool): {
 /** Return whether a tool was marked as code-mode owned. */
 export function isCodeModeControlTool(tool: object): boolean {
   return codeModeControlTools.has(tool);
+}
+
+/** Resolve producer-owned presentation metadata for a marked control tool. */
+export function resolveCodeModeControlPresentation(params: {
+  tool: object & { name?: unknown };
+  args: unknown;
+}): CodeModeControlPresentation | undefined {
+  if (!isCodeModeControlTool(params.tool)) {
+    return undefined;
+  }
+  const name = normalizeToolPolicyName(
+    typeof params.tool.name === "string" ? params.tool.name : "",
+  );
+  if (name === CODE_MODE_WAIT_TOOL_NAME) {
+    return { kind: "wait" };
+  }
+  if (name !== CODE_MODE_EXEC_TOOL_NAME) {
+    return undefined;
+  }
+  const language = resolveCodeModeExecToolInputKind(params.args);
+  return { kind: "exec", ...(language ? { language } : {}) };
+}
+
+/** Attach display-only control identity without changing model-facing result text. */
+export function attachCodeModeControlPresentation<T extends object>(
+  result: AgentToolResult<T>,
+  presentation: CodeModeControlPresentation,
+): AgentToolResult<T & { openclawCodeModeControl: CodeModeControlPresentation }> {
+  const details = Object.assign(result.details, {
+    [CODE_MODE_CONTROL_DETAILS_KEY]: presentation,
+  });
+  return {
+    ...result,
+    details,
+  };
+}
+
+/** Read validated display metadata from a persisted tool result. */
+export function readCodeModeControlPresentation(
+  details: unknown,
+): CodeModeControlPresentation | undefined {
+  if (!isPlainObject(details)) {
+    return undefined;
+  }
+  const value = details[CODE_MODE_CONTROL_DETAILS_KEY];
+  if (!isPlainObject(value) || (value.kind !== "exec" && value.kind !== "wait")) {
+    return undefined;
+  }
+  const language = value.language;
+  return {
+    kind: value.kind,
+    ...(language === "javascript" || language === "typescript" ? { language } : {}),
+  };
 }
 
 function isCodeModeExecTool(tool: AnyAgentTool): boolean {

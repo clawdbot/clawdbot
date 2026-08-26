@@ -70,6 +70,7 @@ describe("Code Mode wait, scope, and suspended runs", () => {
     );
 
     expect(first.status).toBe("waiting");
+    expect(first.openclawCodeModeControl).toEqual({ kind: "exec", language: "javascript" });
     expect(first.reason).toBe("yield");
     expect(first.replaySafe).toBe(true);
     expect(first.output).toEqual([{ type: "text", text: "before" }]);
@@ -84,6 +85,7 @@ describe("Code Mode wait, scope, and suspended runs", () => {
     );
 
     expect(resumed.status).toBe("completed");
+    expect(resumed.openclawCodeModeControl).toEqual({ kind: "wait" });
     expect(resumed.value).toBe("done");
     expect(resumed.output).toEqual([{ type: "text", text: "after" }]);
   });

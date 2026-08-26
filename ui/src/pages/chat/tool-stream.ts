@@ -33,6 +33,18 @@ const TOOL_STREAM_LIMIT = 50;
 const TOOL_STREAM_THROTTLE_MS = 80;
 const TOOL_OUTPUT_CHAR_LIMIT = 120_000;
 
+function normalizeCodeModeControl(value: unknown): ToolStreamEntry["codeModeControl"] | undefined {
+  const record = readRecord(value);
+  if (record?.kind !== "exec" && record?.kind !== "wait") {
+    return undefined;
+  }
+  const language = record.language;
+  return {
+    kind: record.kind,
+    ...(language === "javascript" || language === "typescript" ? { language } : {}),
+  };
+}
+
 type AgentEventPayload = {
   runId: string;
   seq: number;
@@ -56,6 +68,8 @@ type SessionOperationEventPayload = {
 
 export type ToolStreamEntry = {
   toolCallId: string;
+  parentToolCallId?: string;
+  codeModeControl?: { kind: "exec" | "wait"; language?: "javascript" | "typescript" };
   runId: string;
   sessionKey?: string;
   name: string;
@@ -257,6 +271,7 @@ function buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown>
     type: "toolcall",
     name: entry.name,
     arguments: entry.args ?? {},
+    ...(entry.codeModeControl ? { codeModeControl: entry.codeModeControl } : {}),
     ...(entry.details !== undefined ? { details: entry.details } : {}),
   });
   // Emit the result block whenever a result landed, even with empty output;
@@ -266,6 +281,7 @@ function buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown>
       type: "toolresult",
       name: entry.name,
       text: entry.output ?? "",
+      ...(entry.codeModeControl ? { codeModeControl: entry.codeModeControl } : {}),
       ...(entry.details !== undefined ? { details: entry.details } : {}),
       ...(entry.isError !== undefined ? { isError: entry.isError } : {}),
       ...(entry.exitCode !== undefined ? { exitCode: entry.exitCode } : {}),
@@ -274,6 +290,7 @@ function buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown>
   return {
     role: "assistant",
     toolCallId: entry.toolCallId,
+    ...(entry.parentToolCallId ? { parentToolCallId: entry.parentToolCallId } : {}),
     runId: entry.runId,
     content,
     timestamp: entry.startedAt,
@@ -1114,6 +1131,8 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   const toolStreamIdentity = buildToolStreamIdentity(payload.runId, toolCallId);
   let entry = host.toolStreamById.get(toolStreamIdentity);
   const phase = typeof data.phase === "string" ? data.phase : "";
+  const parentToolCallId = toTrimmedString(data.parentToolCallId) ?? entry?.parentToolCallId;
+  const codeModeControl = normalizeCodeModeControl(data.codeModeControl) ?? entry?.codeModeControl;
   const approvalReview = phase === "review" ? normalizeToolApprovalReview(data.review) : null;
   if (phase === "review" && !approvalReview) {
     return true;
@@ -1159,6 +1178,8 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     rolloverChatStream(host, { runId: payload.runId, toolCallId, timestamp: now });
     entry = {
       toolCallId,
+      ...(parentToolCallId ? { parentToolCallId } : {}),
+      ...(codeModeControl ? { codeModeControl } : {}),
       runId: payload.runId,
       sessionKey,
       name,
@@ -1177,6 +1198,8 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     host.toolStreamOrder.push(toolStreamIdentity);
   } else {
     entry.name = name;
+    entry.parentToolCallId = parentToolCallId ?? undefined;
+    entry.codeModeControl = codeModeControl ?? undefined;
     if (args !== undefined) {
       entry.args = args;
     }

@@ -72,7 +72,10 @@ export {
   resolveToolSearchCatalogTool,
 } from "./tool-search-directory.js";
 export { ToolSearchRuntime } from "./tool-search-runtime.js";
-export { projectToolSearchTargetTranscriptMessages } from "./tool-search-transcript.js";
+export {
+  installToolSearchTargetTranscriptPersistence,
+  projectToolSearchTargetTranscriptMessages,
+} from "./tool-search-transcript.js";
 export {
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,

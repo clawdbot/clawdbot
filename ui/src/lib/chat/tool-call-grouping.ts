@@ -13,6 +13,9 @@ import {
 import { resolveToolDisplay } from "./tool-display.ts";
 
 type ToolGroupSummaryInput = {
+  callId?: string;
+  parentCallId?: string;
+  codeModeControl?: { kind: "exec" | "wait"; language?: "javascript" | "typescript" };
   name: string;
   args?: unknown;
 };
@@ -25,6 +28,7 @@ type FileActivityCounts = {
 };
 
 type GroupCounts = {
+  codeWorkflows: number;
   commands: number;
   files: Record<FileActivity, FileActivityCounts>;
   searches: number;
@@ -44,7 +48,7 @@ function countFiles(counts: GroupCounts, activity: FileActivity, paths: readonly
 }
 
 function countCard(counts: GroupCounts, card: ToolGroupSummaryInput): void {
-  const kind: ToolCallKind = resolveToolCallKind(card.name, card.args);
+  const kind: ToolCallKind = resolveToolCallKind(card.name, card.args, card.codeModeControl);
   const fileOperations = resolveToolCallFileOperations(card.name, card.args);
   if (fileOperations) {
     for (const { operation, path } of fileOperations) {
@@ -54,6 +58,9 @@ function countCard(counts: GroupCounts, card: ToolGroupSummaryInput): void {
   } else {
     const pathKeys = resolveToolCallTargetPaths(card.name, card.args);
     switch (kind) {
+      case "code":
+        counts.codeWorkflows += 1;
+        break;
       case "command":
         counts.commands += 1;
         break;
@@ -95,6 +102,7 @@ function fileCount(calls: number, paths: Set<string>): number {
  */
 export function summarizeToolGroup(cards: readonly ToolGroupSummaryInput[]): string {
   const counts: GroupCounts = {
+    codeWorkflows: 0,
     commands: 0,
     files: {
       read: { calls: 0, paths: new Set() },
@@ -107,11 +115,30 @@ export function summarizeToolGroup(cards: readonly ToolGroupSummaryInput[]): str
     otherNames: new Set(),
     others: 0,
   };
-  for (const card of cards) {
+  const childParentIds = new Set(
+    cards.map((card) => card.parentCallId).filter((callId): callId is string => Boolean(callId)),
+  );
+  const summarizedCards = cards.filter(
+    (card) =>
+      card.codeModeControl?.kind !== "wait" &&
+      (resolveToolCallKind(card.name, card.args, card.codeModeControl) !== "code" ||
+        !card.callId ||
+        !childParentIds.has(card.callId)),
+  );
+  for (const card of summarizedCards) {
     countCard(counts, card);
   }
 
   const segments: string[] = [];
+  if (counts.codeWorkflows > 0) {
+    segments.push(
+      countLabel(
+        counts.codeWorkflows,
+        "chat.toolCards.group.codeOne",
+        "chat.toolCards.group.codeMany",
+      ),
+    );
+  }
   if (counts.commands > 0) {
     segments.push(
       countLabel(
@@ -175,9 +202,12 @@ export function summarizeToolGroup(cards: readonly ToolGroupSummaryInput[]): str
     );
   }
 
+  if (cards.length > 0 && summarizedCards.length === 0) {
+    segments.push(t("chat.toolCards.group.codeOne"));
+  }
   if (segments.length === 0) {
     return countLabel(
-      cards.length,
+      summarizedCards.length,
       "chat.toolCards.group.emptyOne",
       "chat.toolCards.group.emptyMany",
     );
