@@ -35,8 +35,12 @@ Use `himalaya` for IMAP/SMTP email from shell.
 
 ```bash
 himalaya --version
-himalaya account configure
+himalaya
 ```
+
+For Himalaya v2.1+, the bare command opens the account wizard and prints the
+current TOML configuration. Save or merge that output into the config path
+below before running the account checks.
 
 Config path: `~/.config/himalaya/config.toml`.
 
