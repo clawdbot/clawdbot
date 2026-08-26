@@ -216,6 +216,29 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
     expect(result.meta.error).toBeUndefined();
   });
 
+  it("keeps parked nested tool work fail-closed when compaction rotates the session", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeReplayUnsafeMidTurnOverflow({ activeCount: 1 }),
+    );
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "Compacted into a successor session",
+        firstKeptEntryId: "entry-rotated-exec",
+        tokensBefore: 201_000,
+        sessionId: "rotated-session",
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      runId: "run-midturn-waiting-exec-rotated",
+    });
+
+    expect(mockedCompactDirect).toHaveBeenCalledOnce();
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
+    expect(result.payloads?.[0]?.text).toContain("Try /reset (or /new)");
+  });
+
   it.each([
     ["a tool call without a recorded result", { resultRecorded: false }, true],
     ["asynchronous tool activity", { asyncStarted: true }, false],

@@ -185,6 +185,28 @@ export async function recoverEmbeddedRunOverflow(
       } else if (compactResult.ok && compactResult.compacted) {
         previousSessionId = await input.adoptCompactionTranscript(compactResult);
         const adoptedSession = input.getActiveSession();
+        if (
+          previousSessionId !== undefined &&
+          preflightRecovery?.source === "mid-turn" &&
+          input.attempt.itemLifecycle.activeCount > 0
+        ) {
+          // Parked nested tool work (code-mode exec status "waiting") is bound
+          // to the session it started in; `wait` rejects any other session. A
+          // rotated successor cannot redeem it, so keep this path fail-closed
+          // and surface overflow guidance instead of a doomed continuation.
+          log.warn(
+            `[context-overflow-recovery] compaction rotated ${previousSessionId} -> ${adoptedSession.id} ` +
+              `while nested tool work was parked; not continuing mid-turn for ${input.provider}/${input.modelId}`,
+          );
+          compactResult = {
+            ok: false,
+            compacted: false,
+            reason: "compaction rotated the session while nested tool work was parked",
+          };
+        }
+      }
+      if (compactResult.ok && compactResult.compacted) {
+        const adoptedSession = input.getActiveSession();
         await runContextEngineMaintenance({
           contextEngine: input.contextEngine,
           sessionId: adoptedSession.id,
