@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import {
   resolveAgentWorkspaceDir,
   type OpenClawConfig,
@@ -20,6 +19,7 @@ import { listMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-ho
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
+  openNodeSqliteDatabase,
   openOpenClawAgentDatabase,
   runSqliteImmediateTransactionSync,
   withOpenClawAgentDatabaseReadOnly,
@@ -280,7 +280,7 @@ async function planMemoryIndex(params: {
   }
   let vectorRows = 0;
   if (result.value.hasVectorTable && result.value.chunks.length > 0) {
-    const probe = new DatabaseSync(":memory:", { allowExtension: true });
+    const probe = openNodeSqliteDatabase(":memory:", { allowExtension: true });
     let extensionPath: string;
     try {
       const loaded = await loadSqliteVecExtension({ db: probe });
