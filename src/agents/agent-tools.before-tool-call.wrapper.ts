@@ -11,6 +11,7 @@ import { resolveDiagnosticModelContentCapturePolicy } from "../infra/diagnostic-
 import {
   createChildDiagnosticTraceContext,
   freezeDiagnosticTraceContext,
+  runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { copyPluginToolMeta, getPluginToolMeta } from "../plugins/tools.js";
@@ -534,13 +535,19 @@ export function wrapToolWithBeforeToolCallHook(
       try {
         let result: Awaited<ReturnType<ForwardedToolExecution>>;
         try {
-          result = await (execute as ForwardedToolExecution)(
-            toolCallId,
-            executeParams,
-            signal,
-            forwardedOnUpdate,
-            ...executionArgs,
-          );
+          const executeImplementation = () =>
+            (execute as ForwardedToolExecution)(
+              toolCallId,
+              executeParams,
+              signal,
+              forwardedOnUpdate,
+              ...executionArgs,
+            );
+          // The start event synchronously prepares this exact tool span. Install
+          // its logical context only for implementation-owned child work.
+          result = await (trace
+            ? runWithDiagnosticTraceContext(trace, executeImplementation)
+            : executeImplementation());
         } catch (error) {
           throw tool.resultContentSource === "network" &&
             getBeforeToolCallFailureDisposition(error) === undefined
