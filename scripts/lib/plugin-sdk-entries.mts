@@ -46,6 +46,7 @@ export const publicPluginSdkSubpaths = publicPluginSdkEntrypoints;
 const nonProductionPluginSdkSubpathSet = new Set([
   "agent-runtime-test-contracts",
   "channel-contract-testing",
+  "channel-ingress-test-runtime",
   "channel-target-testing",
   "channel-test-helpers",
   "plugin-test-api",
