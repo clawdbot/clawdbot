@@ -59,10 +59,12 @@ function makeReplayUnsafeMidTurnOverflow(params?: {
   activeCount?: number;
   asyncStarted?: boolean;
   resultRecorded?: boolean;
+  codeModeEngaged?: boolean;
 }) {
   const activeCount = params?.activeCount ?? 0;
   const resultRecorded = params?.resultRecorded ?? true;
   return makeAttemptResult({
+    ...(params?.codeModeEngaged ? { codeModeEngaged: true } : {}),
     promptError: makeOverflowError("Context overflow: prompt too large (mid-turn precheck)."),
     promptErrorSource: "precheck",
     preflightRecovery: {
@@ -195,7 +197,9 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
     // exec returned status "waiting" (result persisted) but its nested call keeps
     // a lifecycle item active; the run stays resumable through `wait`.
     mockedRunEmbeddedAttempt
-      .mockResolvedValueOnce(makeReplayUnsafeMidTurnOverflow({ activeCount: 1 }))
+      .mockResolvedValueOnce(
+        makeReplayUnsafeMidTurnOverflow({ activeCount: 1, codeModeEngaged: true }),
+      )
       .mockResolvedValueOnce(makeAttemptResult());
     mockedCompactDirect.mockResolvedValueOnce(
       makeCompactionSuccess({
@@ -218,7 +222,7 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
 
   it("keeps parked nested tool work fail-closed when compaction rotates the session", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      makeReplayUnsafeMidTurnOverflow({ activeCount: 1 }),
+      makeReplayUnsafeMidTurnOverflow({ activeCount: 1, codeModeEngaged: true }),
     );
     mockedCompactDirect.mockResolvedValueOnce(
       makeCompactionSuccess({
@@ -241,6 +245,7 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
 
   it.each([
     ["a tool call without a recorded result", { resultRecorded: false }, true],
+    ["a generic tool with an active lifecycle item", { activeCount: 1 }, true],
     ["asynchronous tool activity", { asyncStarted: true }, false],
   ])("keeps %s fail-closed", async (_label, attemptParams, expectsWarning) => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeReplayUnsafeMidTurnOverflow(attemptParams));

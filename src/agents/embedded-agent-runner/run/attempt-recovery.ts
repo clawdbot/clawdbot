@@ -114,14 +114,18 @@ export async function recoverEmbeddedRunAttempt(input: {
   const terminalInterrupted = isEmbeddedRunTerminalInterrupted(terminalState.outcome);
   const currentAttemptReplaySafe = isCurrentAttemptReplaySafe(attempt);
   // Mid-turn overflow continues from the persisted tool results and never
-  // replays the assistant call, so a recorded result is the settlement proof.
-  // Nested code-mode items still executing (exec status "waiting") belong to the
-  // code-mode run registry and resume through `wait`, exactly as across turns;
-  // requiring balanced lifecycle counters here stranded that work until expiry.
+  // replays the assistant call. Generic tools must still be fully settled; only
+  // a Code Mode run may continue with lifecycle items active, because its outer
+  // exec result is persisted while the nested call it parked stays owned by the
+  // code-mode run registry and resumes through `wait`, exactly as across turns.
+  const settledEvidence = resolveSettledToolBatchEvidence(attempt);
+  const midTurnBatchSettled =
+    settledEvidence.allToolsProvenSettled ||
+    (attempt.codeModeEngaged === true && settledEvidence.allToolCallsRecorded);
   const canContinueSettledMidTurnOverflow =
     promptErrorSource === "precheck" &&
     attempt.preflightRecovery?.source === "mid-turn" &&
-    resolveSettledToolBatchEvidence(attempt).allToolCallsRecorded &&
+    midTurnBatchSettled &&
     !hasAsyncActivity(attempt.toolMetas);
   const { signalOwnedInterruption } = terminalState;
   const assistantOverflowCandidate =
