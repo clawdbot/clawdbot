@@ -249,6 +249,10 @@ describe("sidebar attention refresh ownership", () => {
         snapshot: { approvalQueue: [] },
         subscribe: () => () => undefined,
       },
+      agentSelection: {
+        state: { selectedId: null, scopeId: null },
+        subscribe: () => () => undefined,
+      },
       scopeUpgrade: hiddenScopeUpgradeCapability,
     } as unknown as ApplicationContext);
     const element = document.createElement("openclaw-sidebar-attention") as SidebarAttentionElement;
