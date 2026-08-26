@@ -5870,6 +5870,18 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           env: process.env,
         });
         const workspaceDir = resolveAgentWorkspaceDir(cfg, DEFAULT_AGENT_ID);
+        const discoveryAgentDir = resolveDefaultAgentDir(cfg);
+        const discoveryAuthProfileStore = ensureAuthProfileStore(discoveryAgentDir, {
+          allowKeychainPrompt: false,
+        });
+        const preparedDiscoveryAuthProfileStore = materializeGatewayLiveDiscoveryAuth({
+          env: process.env,
+          providerList,
+          store: discoveryAuthProfileStore,
+        });
+        if (preparedDiscoveryAuthProfileStore !== discoveryAuthProfileStore) {
+          saveAuthProfileStore(preparedDiscoveryAuthProfileStore, discoveryAgentDir);
+        }
         logProgress("[all-models] preparing models.json");
         const modelsJsonResult = await withGatewayLiveSetupTimeout(
           ensureOpenClawModelsJson(cfg, undefined, {
@@ -5919,15 +5931,6 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           authProfileStore = authBacked.authProfileStore;
           modelRegistry = authBacked.modelRegistry;
           all = authBacked.all;
-        }
-        const discoveryAuthProfileStore = materializeGatewayLiveDiscoveryAuth({
-          env: process.env,
-          providerList,
-          store: authProfileStore,
-        });
-        if (discoveryAuthProfileStore !== authProfileStore) {
-          authProfileStore = discoveryAuthProfileStore;
-          saveAuthProfileStore(authProfileStore, agentDir);
         }
         const prioritizedRefs = resolvePrioritizedGatewayLiveModelRefs({
           explicitRefs,
