@@ -356,10 +356,12 @@ export function streamProxy(
       const toolArgumentPreviewSchedules = new Map<number, ToolArgumentPreviewSchedule>();
 
       const processSseLine = (line: string) => {
-        if (!line.startsWith("data: ")) {
+        // The SSE spec makes the space after "data:" optional; accept both
+        // `data:{...}` and `data: {...}`, mirroring provider-transport-fetch.
+        if (!line.startsWith("data:")) {
           return;
         }
-        const data = line.slice(6).trim();
+        const data = line.slice("data:".length).trim();
         if (!data) {
           return;
         }
