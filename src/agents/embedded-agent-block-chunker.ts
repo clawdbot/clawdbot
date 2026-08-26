@@ -110,7 +110,19 @@ function findFenceCloseLineStart(buffer: string, fence: FenceSpan, offset = 0): 
     return -1;
   }
   const lastNewline = buffer.lastIndexOf("\n", relativeFenceEnd - 1);
-  return lastNewline >= 0 ? lastNewline + 1 : -1;
+  if (lastNewline < 0) {
+    return -1;
+  }
+  // Open spans also end at the buffer boundary; consuming their final content
+  // line as a closing marker would silently drop streamed code.
+  const closingMarker = buffer
+    .slice(lastNewline + 1, relativeFenceEnd)
+    .match(/^ {0,3}(`{3,}|~{3,})[ \t]*\r?$/)?.[1];
+  return closingMarker &&
+    closingMarker.charAt(0) === fence.marker.charAt(0) &&
+    closingMarker.length >= fence.marker.length
+    ? lastNewline + 1
+    : -1;
 }
 
 function resolveFenceReopenLine(fence: FenceSpan, maxChars: number): string | undefined {

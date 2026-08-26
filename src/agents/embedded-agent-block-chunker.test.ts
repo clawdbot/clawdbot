@@ -212,6 +212,63 @@ describe("EmbeddedBlockChunker", () => {
   });
 
   it.each([
+    { marker: "```", finalLine: "XXXXXXXX", force: true },
+    { marker: "~~~", finalLine: "XXXXXXXX", force: true },
+    { marker: "  ```", finalLine: "XXXXXXXX", force: true },
+    { marker: "````", finalLine: "XXXXXXXX", force: true },
+    { marker: "```", finalLine: "😀😀😀😀", force: true },
+    { marker: "```", finalLine: "``` XXXXXXXX", force: true },
+    { marker: "```", finalLine: "~~~ XXXXXXXX", force: true },
+    { marker: "```", finalLine: "    ``` XXXXXXXX", force: true },
+    { marker: "```", finalLine: "XXXXXXXX", force: false },
+    { marker: "~~~", finalLine: "XXXXXXXX", force: false },
+  ])(
+    "preserves the final content line in an unfinished $marker fence (force: $force)",
+    ({ marker, finalLine, force }) => {
+      const chunker = new EmbeddedBlockChunker({
+        minChars: 1,
+        maxChars: 20,
+        breakPreference: "paragraph",
+      });
+      chunker.append(`${marker}txt\n12345678\n${finalLine}`);
+
+      const chunks = drainChunks(chunker, force);
+      if (!force) {
+        chunks.push(...drainChunks(chunker, true));
+      }
+
+      expectChunksWithinLength(chunks, 20);
+      const contentCodePoint = finalLine.includes("😀") ? "😀" : "X";
+      expect(
+        Array.from(chunks.join("")).filter((value) => value === contentCodePoint),
+      ).toHaveLength(Array.from(finalLine).filter((value) => value === contentCodePoint).length);
+      expect(chunker.bufferedText).toBe("");
+    },
+  );
+
+  it.each([
+    { marker: "```", closingMarker: "`````" },
+    { marker: "```", closingMarker: "   ``` \t" },
+    { marker: "~~~", closingMarker: " ~~~~\t" },
+    { marker: "  ```", closingMarker: "```" },
+    { marker: "```", closingMarker: "```\r" },
+  ])("recognizes valid $marker closing-fence variants", ({ marker, closingMarker }) => {
+    const chunker = new EmbeddedBlockChunker({
+      minChars: 1,
+      maxChars: 20,
+      breakPreference: "paragraph",
+    });
+    chunker.append(`${marker}txt\n${"q".repeat(32)}\n${closingMarker}`);
+
+    const chunks = drainChunks(chunker, true);
+
+    expectChunksWithinLength(chunks, 20);
+    expect(chunks.join("").match(/q/g)).toHaveLength(32);
+    expect(chunks.every((chunk) => chunk.includes("q"))).toBe(true);
+    expect(chunker.bufferedText).toBe("");
+  });
+
+  it.each([
     { name: "default", maxChars: 1_200, bodyChars: 2_383, marker: "```" },
     { name: "Discord", maxChars: 2_000, bodyChars: 3_983, marker: "```" },
     { name: "Telegram", maxChars: 4_000, bodyChars: 7_983, marker: "```" },
