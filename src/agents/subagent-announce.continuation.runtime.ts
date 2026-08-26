@@ -82,16 +82,11 @@ async function rejectCrossSessionTargeting(params: {
   return true;
 }
 
-function reportOriginDelegateAdmissionFailure(params: {
-  childSessionKey: string;
-  eventSessionKey: string;
-}): void {
-  defaultRuntime.error?.(
-    `[continuation:delegate-admission-failed] child=${params.childSessionKey} durable TaskFlow create failed`,
-  );
+function reportDelegateAdmissionFailure(childSessionKey: string, eventSessionKey: string): void {
+  defaultRuntime.error?.(`[continuation:delegate-admission-failed] child=${childSessionKey}`);
   enqueueSystemEvent(
     "[continuation] Delegate was not scheduled because durable TaskFlow admission failed. Retry the delegation.",
-    { sessionKey: params.eventSessionKey, trusted: true },
+    { sessionKey: eventSessionKey, trusted: true },
   );
 }
 
@@ -393,10 +388,7 @@ export async function coordinateSubagentContinuation(params: {
         originRunId: params.childRunId,
       });
       if (!staged) {
-        reportOriginDelegateAdmissionFailure({
-          childSessionKey: params.childSessionKey,
-          eventSessionKey: params.targetRequesterSessionKey,
-        });
+        reportDelegateAdmissionFailure(params.childSessionKey, params.targetRequesterSessionKey);
         bracketDrainArmed = true;
       } else {
         originDelegateFlowStatus = staged.status;
@@ -437,7 +429,7 @@ export async function coordinateSubagentContinuation(params: {
           task: signal.task,
         })
       ) {
-        bracketReserved = false;
+        // Policy rejection already emitted its visible outcome; no flow is admitted.
       } else {
         const delayMs =
           (signal.delayMs ?? 0) > 0
@@ -459,10 +451,7 @@ export async function coordinateSubagentContinuation(params: {
           originRunId: params.childRunId,
         });
         if (!admitted) {
-          reportOriginDelegateAdmissionFailure({
-            childSessionKey: params.childSessionKey,
-            eventSessionKey: params.targetRequesterSessionKey,
-          });
+          reportDelegateAdmissionFailure(params.childSessionKey, params.targetRequesterSessionKey);
           bracketDrainArmed = true;
         } else {
           originDelegateFlowStatus = admitted.status;
