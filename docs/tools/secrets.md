@@ -19,8 +19,7 @@ non-primary runs do not receive it.
 It is enabled by default and governed by the normal tool policy — there is no
 dedicated config key. To remove it, deny it like any other tool (for example
 `tools.deny: ["secrets"]` in `openclaw.json`); allowlists and tool profiles
-apply to it the same way. Creating a credential request also requires an
-`operator.admin` Gateway client, which the agent's own client satisfies.
+apply to it the same way.
 
 ## Actions
 
@@ -45,11 +44,21 @@ value must enter the store, it arrives through the human prompt, the
 ## Answering a request
 
 The web Control UI docks the prompt above the composer with a masked input.
-The prompt always shows who is asking (agent and session), the entry name and
-kind, the agent's stated reason, and — for secret entries — an editable list of
-allowed hosts, so you have the final say on where the credential may be used.
-If the name already exists, the prompt says so and shows when and by whom the
-entry was last updated; submitting replaces the stored value.
+The prompt always shows who is asking (agent and session), the entry name, the
+agent's stated reason, and an editable list of allowed hosts, so you have the
+final say on where the credential may be used. If the name already exists, the
+prompt says so and shows when and by whom the entry was last updated;
+submitting replaces the stored value.
+
+<Warning>
+Leave at least one allowed host in place. A secret with no allowed hosts is
+stored but can never be substituted at egress, so the request appears to
+succeed and the credential is unusable. Narrow the list rather than clearing
+it.
+</Warning>
+
+Skipping the prompt, or letting it expire, tells the agent that no credential
+arrived; it continues with best judgment rather than failing the turn.
 
 iOS, macOS, and Android render the same card with a masked secret field.
 
@@ -59,8 +68,9 @@ a credential into a chat message is exactly what this flow exists to avoid, so
 a plain-text reply is not captured as an answer.
 
 Creating a credential request requires an `operator.admin` client (the agent's
-own Gateway client qualifies). Answering needs only the normal question scope,
-because answering provides a value rather than reading one.
+own Gateway client qualifies) and is bound to the requesting agent run.
+Answering needs only the normal question scope, because answering provides a
+value rather than reading one.
 
 ## Using a stored credential
 
