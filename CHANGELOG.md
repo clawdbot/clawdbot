@@ -69,9 +69,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **OpenShell sandbox reliability:** preserve sandbox creation on current and older OpenShell releases, serialize shared mirror execution through workspace publication, preserve backend registration ownership across plugin reloads, resolve attachments against each backend's actual workspace, and activate only configured sandbox plugins for CLI status and recreation. Fixes #127441, #127438, #98446. Thanks @DaveFan-NCHC and @harjothkhara.
-- **File-tool destination integrity:** preserve existing literal `@`-prefixed workspace paths across reads, writes, edits, patches, policy metadata, and memory flushing while retaining safe file-completion shorthand. Fixes #119270. Thanks @yetval and @harjothkhara.
-- **Plugin registry refresh:** restore installed plugin projections after policy-only refreshes, preserve legitimate orphan records, and compare equivalent install-owner maps independently of insertion order. Fixes #89606. Thanks @cjagwani and @qingminglong.
 - **Control UI terminal transcript settlement:** retire live commentary, tool, and streamed reply projections atomically when the matching durable terminal message arrives, preventing duplicated final responses and transient row overlap after steering. Fixes #127209. Thanks @shakkernerd.
 - **Control UI Codex compaction history:** preserve successful native context compactions as durable, model-excluded activity inside completed work traces after the composer status clears or the session reloads. Fixes #127206. Thanks @shakkernerd.
 - **Control UI Codex steering:** preserve pre-steer commentary and tool activity in durable transcript order, keep it visible while active, and collapse it before the steering message after completion. Fixes #126938. Thanks @shakkernerd.
