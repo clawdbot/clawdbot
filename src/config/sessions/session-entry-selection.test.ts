@@ -29,9 +29,21 @@ describe("inheritSessionSelection", () => {
     });
     expect(automatic.authProfileOverrideCompactionCount).toBeUndefined();
   });
-});
+  it("does not persist legacy source:auto model overrides into child entries", () => {
+    expect(
+      inheritSessionSelection({
+        sessionId: "legacy-auto-model",
+        updatedAt: 1,
+        providerOverride: "google-vertex",
+        modelOverride: "gemini-fallback",
+        modelOverrideSource: "auto",
+      }),
+    ).not.toMatchObject({
+      providerOverride: expect.any(String),
+      modelOverride: expect.any(String),
+    });
+  });
 
-describe("SessionLabelOwnerIndex", () => {
   it("indexes the store once and answers repeated conflicts without rescanning entries", () => {
     const labelReads = vi.fn();
     const entry = (sessionId: string, label: string): SessionEntry => {

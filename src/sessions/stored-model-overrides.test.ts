@@ -66,6 +66,24 @@ describe("resolveStoredModelOverride", () => {
     ).toBeNull();
   });
 
+  it("does not inherit legacy source:auto overrides without provenance", () => {
+    expect(
+      resolveStoredModelOverride({
+        defaultProvider: "openai",
+        sessionKey: "agent:main:discord:channel:root:thread:child",
+        sessionStore: {
+          "agent:main:discord:channel:root": {
+            sessionId: "legacy-parent-session",
+            updatedAt: 1,
+            providerOverride: "google-vertex",
+            modelOverride: "gemini-fallback",
+            modelOverrideSource: "auto",
+          },
+        },
+      }),
+    ).toBeNull();
+  });
+
   it("continues to inherit deliberate parent model pins", () => {
     expect(
       resolveStoredModelOverride({
