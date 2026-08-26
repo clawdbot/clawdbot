@@ -300,14 +300,13 @@ suite.define(() => {
       expect(mobileModelSettingsBox.x + mobileModelSettingsBox.width).toBeLessThanOrEqual(
         mobileFooterBox.x + mobileFooterBox.width,
       );
+      await captureProjectUiProof(page, "mobile-new-session-idle.png");
       await mobileModelSettings.click();
-      await expect
-        .poll(() => page.locator(".chat-controls__model-menu").isVisible())
-        .toBe(true);
+      await expect.poll(() => page.locator(".chat-controls__model-menu").isVisible()).toBe(true);
+      await captureProjectUiProof(page, "mobile-new-session-model-open.png");
       await page.locator(".chat-controls__mobile-effort-option").click();
-      await expect
-        .poll(() => page.locator(".chat-controls__effort-menu").isVisible())
-        .toBe(true);
+      await expect.poll(() => page.locator(".chat-controls__effort-menu").isVisible()).toBe(true);
+      await captureProjectUiProof(page, "mobile-new-session-effort-open.png");
       await page.keyboard.press("Escape");
       await page.setViewportSize({ width: 1280, height: 900 });
 
