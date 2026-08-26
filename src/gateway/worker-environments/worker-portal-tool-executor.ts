@@ -103,12 +103,12 @@ export function createWorkerPortalToolExecutor(params: WorkerPortalToolExecutorD
       ownerEpoch: environment.ownerEpoch,
       remotePort,
     });
-    let openedPortalId: string | undefined;
+    let createdPortalId: string | undefined;
     try {
       // Node discovery can yield; a replaced turn must never publish its former owner's portal.
       assertPortalAuthority();
       request.signal?.throwIfAborted();
-      const portal = await service.open({
+      const opened = await service.open({
         targetPort: remotePort,
         target: {
           kind: "worker",
@@ -125,17 +125,24 @@ export function createWorkerPortalToolExecutor(params: WorkerPortalToolExecutorD
           : {}),
         ...(request.request.path !== undefined ? { path: request.request.path } : {}),
       });
-      openedPortalId = portal.id;
+      if (opened.created) {
+        createdPortalId = opened.portal.id;
+      } else {
+        // Reuse keeps the existing entry's connect/onClose; this turn's carrier handle is redundant.
+        await connection.close();
+      }
       assertPortalAuthority();
       params.portals.onChanged();
       return {
         resultJson: serializeWorkerSessionToolResult(
-          formatPortalResult({ action: "open", result: portal }),
+          formatPortalResult({ action: "open", result: opened.portal }),
         ),
       };
     } catch (error) {
-      if (openedPortalId) {
-        await service.close(openedPortalId);
+      // Only tear down what this turn created: closing a reused portal here would let a
+      // revoked turn destroy the live portal a still-authorized predecessor established.
+      if (createdPortalId) {
+        await service.close(createdPortalId);
         params.portals.onChanged();
       } else {
         await connection.close();

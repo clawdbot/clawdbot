@@ -124,7 +124,7 @@ describe("worker portal tool execution", () => {
     };
     sessionEntries.clear();
     sessionEntries.set(SOURCE.sessionKey, { sessionId: SOURCE.sessionId, updatedAt: Date.now() });
-    portalOpen.mockReset().mockResolvedValue(PORTAL);
+    portalOpen.mockReset().mockResolvedValue({ portal: PORTAL, created: true });
     portalList.mockReset().mockReturnValue([PORTAL]);
     portalWorkerList.mockReset().mockReturnValue([PORTAL]);
     portalClose.mockReset().mockResolvedValue(undefined);
@@ -319,6 +319,54 @@ describe("worker portal tool execution", () => {
     ).rejects.toThrow("Worker source environment changed");
     expect(portalCarrierClose).toHaveBeenCalledOnce();
     expect(portalOpen).not.toHaveBeenCalled();
+  });
+
+  it("never closes a reused portal when authority is lost after open", async () => {
+    // Regression: a revoked turn's duplicate open must not tear down the live
+    // portal a still-authorized predecessor established.
+    portalOpen.mockImplementationOnce(async () => {
+      sourceEnvironmentEpoch += 1;
+      return { portal: PORTAL, created: false };
+    });
+
+    await expect(
+      execute({
+        identity,
+        toolName: "portal",
+        request: { toolCallId: "reused-worker-portal", action: "open", port: 4321 },
+      }),
+    ).rejects.toThrow("Worker source environment changed");
+    expect(portalClose).not.toHaveBeenCalled();
+    expect(portalCarrierClose).toHaveBeenCalled();
+  });
+
+  it("closes the redundant carrier handle when an existing portal is reused", async () => {
+    portalOpen.mockResolvedValueOnce({ portal: PORTAL, created: false });
+
+    const result = await execute({
+      identity,
+      toolName: "portal",
+      request: { toolCallId: "reuse-worker-portal", action: "open", port: 4321 },
+    });
+    expect(result.resultJson).toContain(PORTAL.id);
+    expect(portalCarrierClose).toHaveBeenCalledOnce();
+    expect(portalClose).not.toHaveBeenCalled();
+  });
+
+  it("closes only the portal this turn created when authority is lost after open", async () => {
+    portalOpen.mockImplementationOnce(async () => {
+      sourceEnvironmentEpoch += 1;
+      return { portal: PORTAL, created: true };
+    });
+
+    await expect(
+      execute({
+        identity,
+        toolName: "portal",
+        request: { toolCallId: "created-worker-portal", action: "open", port: 4321 },
+      }),
+    ).rejects.toThrow("Worker source environment changed");
+    expect(portalClose).toHaveBeenCalledWith(PORTAL.id);
   });
 
   it("rejects SSH-backed placements before preparing a node portal", async () => {

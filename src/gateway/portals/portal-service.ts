@@ -49,7 +49,10 @@ type GatewayPortalOpenParams = {
 };
 
 export type GatewayPortalService = {
-  open: (params: GatewayPortalOpenParams) => Promise<PortalOpenResult>;
+  /** `created` is false when an already-registered portal was reused; its target and onClose are unchanged. */
+  open: (
+    params: GatewayPortalOpenParams,
+  ) => Promise<{ portal: PortalOpenResult; created: boolean }>;
   list: () => PortalSummary[];
   listWorkerPortals: (environmentId: string, ownerEpoch: number) => PortalSummary[];
   close: (id: string, assertCurrent?: () => void) => Promise<void>;
@@ -184,7 +187,7 @@ export function createGatewayPortalService(params: {
           if (input.origin !== undefined) {
             existing.portal.origin = input.origin;
           }
-          return summarize(existing.portal);
+          return { portal: summarize(existing.portal), created: false };
         }
         if (params.httpBindHosts.length === 0) {
           throw new Error("Gateway listener must start before opening a portal");
@@ -278,7 +281,7 @@ export function createGatewayPortalService(params: {
           upgradedSockets,
           ...(input.onClose ? { onClose: input.onClose } : {}),
         });
-        return summarize(portal);
+        return { portal: summarize(portal), created: true };
       });
     },
     list: () => summarizeEntries(entries.values()),
