@@ -31,7 +31,7 @@ export function createGatewayEvent(
   };
 }
 
-export class FakeGatewayClient {
+class FakeGatewayClient {
   started = 0;
   stopped = 0;
   readonly instanceId: string;
