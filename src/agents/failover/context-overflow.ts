@@ -23,13 +23,42 @@ function hasRateLimitTpmHint(raw: string): boolean {
   return matchesContextOverflowMessage(raw, "tpm-rate-limit-hint");
 }
 
+const STATED_TOKEN_LIMIT_RE = /\blimit\s+([\d,]+)/i;
+const STATED_TOKENS_REQUESTED_RE = /\brequested\s+([\d,]+)/i;
+
+function readStatedTokenCount(raw: string, pattern: RegExp): number | undefined {
+  const digits = pattern.exec(raw)?.[1]?.replaceAll(",", "");
+  if (!digits) {
+    return undefined;
+  }
+  const parsed = Number(digits);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+/**
+ * Groq denominates a per-request size ceiling per minute: an oversized single request is refused
+ * with a 413 naming TPM that states both `Limit <n>` and `Requested <m>`. A request larger than
+ * the whole limit does not fit even an empty bucket, so waiting can never admit it and the
+ * failure is an overflow. Ordinary throttling states a requested size within the limit and
+ * remains a rate limit.
+ */
+function statesRequestAboveWholeTokenLimit(raw: string): boolean {
+  if (!hasRateLimitTpmHint(raw)) {
+    return false;
+  }
+  const limit = readStatedTokenCount(raw, STATED_TOKEN_LIMIT_RE);
+  const requested = readStatedTokenCount(raw, STATED_TOKENS_REQUESTED_RE);
+  return limit !== undefined && requested !== undefined && requested > limit;
+}
+
 /** Detect explicit context-window overflow without confusing TPM rate limits. */
 export function isContextOverflowErrorFromTables(errorMessage?: string): boolean {
   if (!errorMessage) {
     return false;
   }
-  // Groq uses 413 for TPM (tokens per minute) limits, which is a rate limit, not context overflow.
-  if (hasRateLimitTpmHint(errorMessage)) {
+  // Groq uses 413 for TPM (tokens per minute) limits, which is a rate limit, not context
+  // overflow — unless the request alone exceeds the whole limit, which no wait can satisfy.
+  if (hasRateLimitTpmHint(errorMessage) && !statesRequestAboveWholeTokenLimit(errorMessage)) {
     return false;
   }
 
@@ -58,6 +87,12 @@ export function isContextOverflowError(errorMessage?: string): boolean {
 export function isLikelyContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) {
     return false;
+  }
+
+  // Settle an unsatisfiable request size first: the TPM and rate-limit exclusions below would
+  // otherwise claim the message on its rate-limit wording alone.
+  if (statesRequestAboveWholeTokenLimit(errorMessage)) {
+    return isContextOverflowErrorFromTables(errorMessage);
   }
 
   // Groq uses 413 for TPM (tokens per minute) limits, which is a rate limit, not context overflow.
