@@ -24,6 +24,20 @@ const noteMock = vi.hoisted(() => vi.fn<(message: string, title?: string) => voi
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: noteMock }));
 
+async function withStdoutIsTTY<T>(isTTY: boolean, run: () => Promise<T>): Promise<T> {
+  const original = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+  Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: isTTY });
+  try {
+    return await run();
+  } finally {
+    if (original) {
+      Object.defineProperty(process.stdout, "isTTY", original);
+    } else {
+      Reflect.deleteProperty(process.stdout, "isTTY");
+    }
+  }
+}
+
 type ConfigHealthDatabase = Pick<OpenClawStateKyselyDatabase, "config_health_entries">;
 
 function readConfigHealthRow(env: NodeJS.ProcessEnv, configPath: string) {
@@ -84,40 +98,40 @@ describe("runDoctorConfigPreflight", () => {
   });
 
   it("logs config warnings as structured records when stdout is non-interactive", async () => {
-    setLoggerOverride({ level: "silent", consoleLevel: "warn", consoleStyle: "json" });
-    const consoleSink = loggingState.rawConsole ?? console;
-    const warnSpy = vi.spyOn(consoleSink, "warn").mockImplementation(() => undefined);
+    await withStdoutIsTTY(false, async () => {
+      setLoggerOverride({ level: "silent", consoleLevel: "warn", consoleStyle: "json" });
+      const consoleSink = loggingState.rawConsole ?? console;
+      const warnSpy = vi.spyOn(consoleSink, "warn").mockImplementation(() => undefined);
 
-    await withTempHome(async (home) => {
-      await writeOpenClawConfig(home, {
-        models: { providers: { openai: { contextTokens: 64_000 } } },
+      await withTempHome(async (home) => {
+        await writeOpenClawConfig(home, {
+          models: { providers: { openai: { contextTokens: 64_000 } } },
+        });
+
+        await runDoctorConfigPreflight({
+          migrateState: false,
+          migrateLegacyConfig: false,
+          invalidConfigNote: false,
+        });
       });
 
-      await runDoctorConfigPreflight({
-        migrateState: false,
-        migrateLegacyConfig: false,
-        invalidConfigNote: false,
-      });
+      const records = warnSpy.mock.calls
+        .map(([value]) => String(value).trim())
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      expect(records).toContainEqual(
+        expect.objectContaining({
+          level: "warn",
+          subsystem: "config",
+          message: expect.stringContaining("models.providers.openai.contextTokens"),
+        }),
+      );
+      expect(noteMock).not.toHaveBeenCalledWith(expect.anything(), "Config warnings");
     });
-
-    const records = warnSpy.mock.calls
-      .map(([value]) => String(value).trim())
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as Record<string, unknown>);
-    expect(records).toContainEqual(
-      expect.objectContaining({
-        level: "warn",
-        subsystem: "config",
-        message: expect.stringContaining("models.providers.openai.contextTokens"),
-      }),
-    );
-    expect(noteMock).not.toHaveBeenCalledWith(expect.anything(), "Config warnings");
   });
 
   it("renders legacy context-budget notices with their config paths", async () => {
-    const originalIsTTY = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
-    Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true });
-    try {
+    await withStdoutIsTTY(true, async () => {
       await withTempHome(async (home) => {
         await writeOpenClawConfig(home, {
           models: { providers: { openai: { contextTokens: 64_000 } } },
@@ -133,13 +147,7 @@ describe("runDoctorConfigPreflight", () => {
         expect(output).toContain("- models.providers.openai.contextTokens:");
         expect(output).not.toContain("- : ");
       });
-    } finally {
-      if (originalIsTTY) {
-        Object.defineProperty(process.stdout, "isTTY", originalIsTTY);
-      } else {
-        Reflect.deleteProperty(process.stdout, "isTTY");
-      }
-    }
+    });
   });
 
   it("supports non-observing config reads", async () => {

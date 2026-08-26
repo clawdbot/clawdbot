@@ -9,6 +9,10 @@ import {
 import type { OpenClawConfig } from "./types.js";
 import { shouldWarnOnTouchedVersion } from "./version.js";
 
+function sanitizeConfigWarningSegment(value: string): string {
+  return sanitizeTerminalText(value).replace(/\s*(?:\r\n|[\r\n])+\s*/gu, " ");
+}
+
 export function warnOnConfigMiskeys(raw: unknown, logger: Pick<typeof console, "warn">): void {
   if (!raw || typeof raw !== "object") {
     return;
@@ -36,16 +40,16 @@ export function logConfigWarningsOnce(params: {
   const details = params.warnings
     .map(
       (warning) =>
-        `- ${sanitizeTerminalText(warning.path || "<root>")}: ${sanitizeTerminalText(warning.message)}`,
+        `${sanitizeConfigWarningSegment(warning.path || "<root>")}: ${sanitizeConfigWarningSegment(warning.message)}`,
     )
-    .join("\n");
+    .join("; ");
   const fingerprint = hashConfigRaw(details);
   if (loggedConfigWarningFingerprints.get(params.configPath) === fingerprint) {
     setBoundedConfigIoWarningEntry(loggedConfigWarningFingerprints, params.configPath, fingerprint);
     return;
   }
   setBoundedConfigIoWarningEntry(loggedConfigWarningFingerprints, params.configPath, fingerprint);
-  params.logger.warn(`Config warnings:\n${details}`);
+  params.logger.warn(`Config warnings: ${details}`);
 }
 
 export function warnIfConfigFromFuture(
