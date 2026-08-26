@@ -296,7 +296,7 @@ describe("OpenAI ChatGPT Responses inference streaming", () => {
       {
         api: "openai-chatgpt-responses",
         elapsedMs: expect.any(Number),
-        errorMessage: "Compaction timed out",
+        errorName: "Error",
         model: "gpt-5.6-luna",
         provider: "openai",
         stopReason: "aborted",
@@ -317,6 +317,8 @@ describe("OpenAI ChatGPT Responses inference streaming", () => {
           error: { code: "invalid_prompt", message: "rejected" },
         },
       };
+      const logWarn = vi.fn();
+      configureAiTransportHost({ logWarn });
       const fetchMock = vi.fn();
       vi.stubGlobal("fetch", fetchMock);
 
@@ -367,6 +369,17 @@ describe("OpenAI ChatGPT Responses inference streaming", () => {
           errorMessage: "invalid_prompt: rejected",
         },
       });
+      // Provider message text reaches the stream consumer only; the transport
+      // log keeps timing and classification and never the message body.
+      expect(logWarn).toHaveBeenCalledTimes(1);
+      const logged = logWarn.mock.calls[0]?.[2];
+      expect(logged).toMatchObject({
+        stopReason: "error",
+        errorName: "ResponsesStreamFailure",
+        transport,
+      });
+      expect(logged).not.toHaveProperty("errorMessage");
+      expect(JSON.stringify(logged)).not.toContain("rejected");
       if (transport === "websocket") {
         expect(fetchMock).not.toHaveBeenCalled();
       }

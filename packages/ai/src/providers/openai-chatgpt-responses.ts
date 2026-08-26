@@ -633,13 +633,14 @@ export const streamOpenAICodexResponses: StreamFunction<
         delete (block as { partialJson?: string }).partialJson;
       }
       const terminal = projectProviderError(normalizedError, options?.signal);
-      const diagnostic = projectProviderError(
+      const diagnosticSource =
         options?.signal?.aborted && options.signal.reason !== undefined
           ? options.signal.reason
-          : normalizedError,
-        options?.signal,
-      );
-      // Record only bounded transport metadata; never request or response content.
+          : normalizedError;
+      const diagnostic = projectProviderError(diagnosticSource, options?.signal);
+      // Log only timing, stop classification, and structured codes. The projected
+      // message is excluded: provider message/body text survives redaction and can
+      // carry prompt- or response-derived content.
       getAiTransportHost().logWarn("openai-transport", "ChatGPT Responses stream terminated", {
         provider: model.provider,
         api: model.api,
@@ -647,7 +648,11 @@ export const streamOpenAICodexResponses: StreamFunction<
         transport: options?.transport || "auto",
         elapsedMs: Math.max(0, Date.now() - startedAt),
         stopReason: diagnostic.stopReason,
-        errorMessage: truncateUtf16Safe(diagnostic.errorMessage, 500),
+        ...(diagnosticSource instanceof Error
+          ? { errorName: truncateUtf16Safe(diagnosticSource.name, 64) }
+          : {}),
+        ...(diagnostic.errorCode ? { errorCode: diagnostic.errorCode } : {}),
+        ...(diagnostic.errorType ? { errorType: diagnostic.errorType } : {}),
       });
       Object.assign(output, terminal);
       stream.push({ type: "error", reason: terminal.stopReason, error: output });
