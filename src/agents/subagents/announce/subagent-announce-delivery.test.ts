@@ -3798,6 +3798,56 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("does not fallback-steer an ordinary completion after an in-flight handoff owns it", async () => {
+    const callGateway = createGatewayMock({
+      runId: "subagent:child:replay",
+      status: "in_flight",
+    });
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
+    let activityChecks = 0;
+    testing.setDepsForTest({
+      callGateway,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session-channel",
+        isActive: activityChecks++ > 0,
+      }),
+      getRuntimeConfig: () => ({}) as never,
+      queueEmbeddedAgentMessageWithOutcome,
+    });
+    const origin = { channel: "slack", to: "channel:C123", accountId: "acct-1" };
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:main:slack:channel:C123",
+      targetRequesterSessionKey: "agent:main:slack:channel:C123",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterOrigin: origin,
+      requesterSessionOrigin: origin,
+      completionDirectOrigin: origin,
+      directOrigin: origin,
+      requesterIsSubagent: false,
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: "announce-channel-completion-replay",
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+      phases: [
+        {
+          phase: "direct-primary",
+          delivered: true,
+          path: "direct",
+          error: undefined,
+        },
+      ],
+    });
+    expect(callGateway).toHaveBeenCalledOnce();
+    expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
+    expect(activityChecks).toBe(1);
+  });
+
   it("does not fail stale channel subagent completions only because the parent stayed private", async () => {
     const callGateway = createPayloadGatewayMock();
     const sendMessage = createSendMessageMock();

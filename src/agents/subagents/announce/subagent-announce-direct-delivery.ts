@@ -434,9 +434,12 @@ export async function sendSubagentAnnounceDirectly(params: {
 
     if (isGatewayAgentRunPending(directAnnounceResponse)) {
       const directAnnounceStatus = directAnnounceResponse.status;
-      // Fresh acceptance transfers ordinary completion ownership. Replays and
-      // started runs stay pending until terminal evidence can retire a durable wake.
-      if (!params.requireVisibleReply && directAnnounceStatus === "accepted") {
+      // Any nonterminal ordinary completion handoff already owns the prompt;
+      // fallback steering would inject it twice. Settle wakes still need terminal evidence on replay.
+      if (
+        !params.requireVisibleReply &&
+        (params.expectsCompletionMessage || directAnnounceStatus === "accepted")
+      ) {
         return {
           delivered: true,
           path: "direct",
