@@ -260,7 +260,7 @@ final class StatusMenuRenderer: NSObject {
         case .about:
             AppNavigationActions.openSettings(tab: .about)
         case .quit:
-            NSApplication.shared.terminate(nil)
+            AppDelegate.requestTermination()
         case .debug:
             break
         }

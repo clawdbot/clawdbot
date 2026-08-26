@@ -33,11 +33,12 @@ actor RemoteTunnelManager {
     private var retirementInFlight: (token: UUID, task: Task<Void, Never>)?
     private var tunnelGeneration: UInt64 = 0
     private var lifecycleGeneration: UInt64 = 0
+    private var isShutDown = false
     private var lastRestartAt: Date?
     private let restartBackoffSeconds: TimeInterval = 2.0
 
     func controlTunnelRouteIfRunning() async -> Route? {
-        guard self.retirementInFlight == nil else { return nil }
+        guard !self.isShutDown, self.retirementInFlight == nil else { return nil }
         guard let configuration = try? RemotePortTunnel.configuration(
             remotePort: GatewayEnvironment.gatewayPort())
         else {
@@ -162,7 +163,8 @@ actor RemoteTunnelManager {
     }
 
     func ensureControlTunnelRoute() async throws -> Route {
-        try await self.ensureControlTunnelRoute(
+        guard !self.isShutDown else { throw CancellationError() }
+        return try await self.ensureControlTunnelRoute(
             lifecycleGeneration: self.lifecycleGeneration)
     }
 
@@ -360,6 +362,12 @@ actor RemoteTunnelManager {
             "ssh tunnel ready localPort=\(resolvedPort, privacy: .public) " +
                 "generation=\(route.generation, privacy: .public)")
         return route
+    }
+
+    func shutdown() async {
+        // Quit closes admission permanently; reconnect and mode changes still use stopAll.
+        self.isShutDown = true
+        await self.stopAll()
     }
 
     func stopAll() async {
