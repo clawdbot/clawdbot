@@ -28,6 +28,7 @@ import {
   type RoleSnapshotOptions,
   type RoleRefMap,
 } from "./pw-role-snapshot.js";
+import { pageTargetInfo } from "./pw-session-connection.js";
 import {
   assertPageNavigationCompletedSafely,
   closeBlockedNavigationTarget,
@@ -480,7 +481,7 @@ export async function navigateViaPlaywright(opts: {
   timeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
   browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"];
-}): Promise<{ url: string; download?: BrowserDownloadResult }> {
+}): Promise<{ url: string; targetId?: string; download?: BrowserDownloadResult }> {
   const isRetryableNavigateError = (err: unknown): boolean => {
     const msg =
       typeof err === "string"
@@ -604,8 +605,10 @@ export async function navigateViaPlaywright(opts: {
     throw err;
   }
   const finalUrl = navigationResult.download?.url || page.url();
+  const targetId = (await pageTargetInfo(page).catch(() => null))?.targetId;
   return {
     url: finalUrl,
+    ...(targetId ? { targetId } : {}),
     ...(navigationResult.download ? { download: navigationResult.download } : {}),
   };
 }

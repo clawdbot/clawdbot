@@ -159,6 +159,21 @@ export class ExtensionRelayBridge {
     return [...this.tabs.values()].map((tab) => tab.info);
   }
 
+  /** Capture the exact extension connection and tab instance for one browser operation. */
+  captureOperationTarget(targetId: string): (() => string | undefined) | undefined {
+    const extension = this.extension;
+    const target = this.tabByTargetId(targetId);
+    if (!extension || !target) {
+      return undefined;
+    }
+    // Chrome tab ids survive renderer swaps but can be reused by another browser;
+    // pin both the authenticated extension owner and the exact granted tab instance.
+    return () =>
+      this.extension === extension && this.tabs.get(target.tabId) === target.tab
+        ? target.tab.attached?.targetId
+        : undefined;
+  }
+
   /**
    * DevTools-style descriptors for `/json/list`: RelayTabInfo plus the `id`
    * and `type` fields CDP discovery clients expect. `id` is the live debugger
