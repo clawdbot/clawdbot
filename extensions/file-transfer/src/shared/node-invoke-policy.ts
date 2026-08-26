@@ -592,6 +592,13 @@ type PreflightResult =
   | {
       ok: false;
       result: OpenClawPluginNodeInvokePolicyResult;
+      canonicalChanged?: false;
+    }
+  | {
+      ok: false;
+      result: OpenClawPluginNodeInvokePolicyResult;
+      canonicalChanged: true;
+      canonicalPath: string;
     };
 
 async function invokePreflight(input: {
@@ -600,12 +607,16 @@ async function invokePreflight(input: {
   params: Record<string, unknown>;
   requestedPath: string;
   startedAt: number;
+  expectedCanonicalPath?: string;
 }): Promise<PreflightResult> {
   const nodeDisplayName = input.ctx.node?.displayName;
   const preflight = await input.ctx.invokeNode({
     params: {
       ...input.params,
       preflightOnly: true,
+      ...(input.expectedCanonicalPath
+        ? { expectedCanonicalPath: input.expectedCanonicalPath }
+        : {}),
     },
   });
   if (!preflight.ok) {
@@ -633,12 +644,17 @@ async function invokePreflight(input: {
 
   const payload = readResultPayload(preflight);
   if (payload?.ok === false) {
+    const canonicalPath =
+      typeof payload.canonicalPath === "string" ? payload.canonicalPath : undefined;
+    if (input.expectedCanonicalPath && payload.code === "CANONICAL_PATH_CHANGED" && canonicalPath) {
+      return { ok: false, result: preflight, canonicalChanged: true, canonicalPath };
+    }
     await appendFileTransferAudit({
       op: input.op,
       nodeId: input.ctx.nodeId,
       nodeDisplayName,
       requestedPath: input.requestedPath,
-      canonicalPath: typeof payload.canonicalPath === "string" ? payload.canonicalPath : undefined,
+      canonicalPath,
       decision: "error",
       errorCode: typeof payload.code === "string" ? payload.code : undefined,
       errorMessage: typeof payload.message === "string" ? payload.message : undefined,
@@ -702,7 +718,7 @@ async function validateCanonicalAuthorization(input: {
     }
     input.authorization.source = "approval";
     input.authorization.persist = approval.decision === "allow-always";
-    input.authorization.expectedCanonicalPath = undefined;
+    input.authorization.expectedCanonicalPath = input.canonicalPath;
   }
 
   const policyInput = {
@@ -738,6 +754,68 @@ async function validateCanonicalAuthorization(input: {
   });
 }
 
+async function invokeAuthorizedPreflight(input: {
+  ctx: OpenClawPluginNodeInvokePolicyContext;
+  op: FileTransferAuditOp;
+  kind: FilePolicyKind;
+  authorization: GrantedAuthorization;
+  params: Record<string, unknown>;
+  requestedPath: string;
+  startedAt: number;
+}): Promise<PreflightResult> {
+  const expectedCanonicalPath =
+    input.authorization.source === "literal"
+      ? input.authorization.expectedCanonicalPath
+      : undefined;
+  const preflight = await invokePreflight({ ...input, expectedCanonicalPath });
+  if (preflight.ok || preflight.canonicalChanged !== true) {
+    return preflight;
+  }
+
+  const denied = await validateCanonicalAuthorization({
+    ctx: input.ctx,
+    op: input.op,
+    kind: input.kind,
+    authorization: input.authorization,
+    requestedPath: input.requestedPath,
+    canonicalPath: preflight.canonicalPath,
+    startedAt: input.startedAt,
+  });
+  if (denied) {
+    return { ok: false, result: denied };
+  }
+
+  // The operator approved the newly resolved target. Bind the retry to that
+  // exact target so another replacement cannot race ahead of preflight I/O.
+  const retry = await invokePreflight({
+    ...input,
+    expectedCanonicalPath: input.authorization.expectedCanonicalPath,
+  });
+  if (retry.ok || retry.canonicalChanged !== true) {
+    return retry;
+  }
+  await appendFileTransferAudit({
+    op: input.op,
+    nodeId: input.ctx.nodeId,
+    nodeDisplayName: input.ctx.node?.displayName,
+    requestedPath: input.requestedPath,
+    canonicalPath: retry.canonicalPath,
+    decision: "denied:symlink_escape",
+    errorCode: "CANONICAL_PATH_CHANGED",
+    reason: "canonical path changed again after reapproval",
+    durationMs: Date.now() - input.startedAt,
+  });
+  return {
+    ok: false,
+    result: policyDeniedResult({
+      op: input.op,
+      code: "CANONICAL_PATH_CHANGED",
+      message: "the canonical path changed again after reapproval; retry the operation",
+      details: { path: retry.canonicalPath },
+    }),
+  };
+}
+
 async function runPathPreflight(input: {
   ctx: OpenClawPluginNodeInvokePolicyContext;
   op: FileTransferAuditOp;
@@ -749,7 +827,7 @@ async function runPathPreflight(input: {
 }): Promise<
   { ok: true; canonicalPath: string } | { ok: false; result: OpenClawPluginNodeInvokePolicyResult }
 > {
-  const preflight = await invokePreflight(input);
+  const preflight = await invokeAuthorizedPreflight(input);
   if (!preflight.ok) {
     return { ok: false, result: preflight.result };
   }
@@ -779,7 +857,7 @@ async function runDirFetchPreflight(input: {
 }): Promise<
   { ok: true; canonicalPath: string } | { ok: false; result: OpenClawPluginNodeInvokePolicyResult }
 > {
-  const preflight = await invokePreflight(input);
+  const preflight = await invokeAuthorizedPreflight({ ...input, kind: "read" });
   if (!preflight.ok) {
     return { ok: false, result: preflight.result };
   }

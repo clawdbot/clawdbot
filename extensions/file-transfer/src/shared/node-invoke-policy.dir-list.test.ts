@@ -22,6 +22,17 @@ describe("file-transfer dir.list policy", () => {
       async ({ params } = {}) => {
         const record = requireRecord(params, "invoke params");
         events.push(record.preflightOnly === true ? "preflight" : "list");
+        if (record.preflightOnly === true && record.expectedCanonicalPath === "/tmp/old-project") {
+          return {
+            ok: true,
+            payload: {
+              ok: false,
+              code: "CANONICAL_PATH_CHANGED",
+              message: "canonical path differs from the authorized target",
+              canonicalPath: "/tmp/new-project",
+            },
+          };
+        }
         return { ok: true, payload: { ok: true, path: "/tmp/new-project", entries: [] } };
       },
     );
@@ -48,11 +59,24 @@ describe("file-transfer dir.list policy", () => {
     };
 
     expect((await createFileTransferNodeInvokePolicy().handle(ctx)).ok).toBe(true);
-    expect(events).toEqual(["preflight", "approval", "list"]);
+    expect(events).toEqual(["preflight", "approval", "preflight", "list"]);
     expect(invokeNode).toHaveBeenNthCalledWith(1, {
-      params: { path: "/tmp/project", followSymlinks: true, preflightOnly: true },
+      params: {
+        path: "/tmp/project",
+        followSymlinks: true,
+        preflightOnly: true,
+        expectedCanonicalPath: "/tmp/old-project",
+      },
     });
     expect(invokeNode).toHaveBeenNthCalledWith(2, {
+      params: {
+        path: "/tmp/project",
+        followSymlinks: true,
+        preflightOnly: true,
+        expectedCanonicalPath: "/tmp/new-project",
+      },
+    });
+    expect(invokeNode).toHaveBeenNthCalledWith(3, {
       params: {
         path: "/tmp/project",
         followSymlinks: true,
