@@ -167,10 +167,13 @@ export function createSlackDraftStream(params: {
   };
 
   const dropDetachedMessages = () => {
-    const drain = cleanupTail.then(async () => {
+    cleanupTail = cleanupTail.then(async () => {
       // Retain failures for retry without letting one stale preview block the rest.
       for (let index = 0; index < pendingCleanupMessages.length;) {
         const message = pendingCleanupMessages[index];
+        if (!message) {
+          return;
+        }
         try {
           await remove(message.channelId, message.messageId, {
             token: params.token,
@@ -184,8 +187,7 @@ export function createSlackDraftStream(params: {
         }
       }
     });
-    cleanupTail = drain;
-    return drain;
+    return cleanupTail;
   };
 
   const clear = async () => {
