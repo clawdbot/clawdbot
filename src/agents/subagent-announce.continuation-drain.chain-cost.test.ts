@@ -84,9 +84,13 @@ const consumePendingDelegatesMock = vi.fn((_sessionKey: string): ConsumedToolDel
 const markPendingDelegateFailedMock = vi.fn();
 // capture durable delayed-bracket delegate enqueues (replaces the old
 // volatile setTimeout path).
-const enqueuePendingDelegateMock = vi.fn((_sessionKey: string, _delegate: unknown) => {});
+const enqueuePendingDelegateMock = vi.fn((_sessionKey: string, _delegate: unknown) => ({
+  status: "queued",
+}));
 const clearQueuedDelegatesChainTokensFoldMock = vi.fn((_sessionKey: string) => 0);
-const stagePostCompactionDelegateMock = vi.fn((_sessionKey: string, _delegate: unknown) => {});
+const stagePostCompactionDelegateMock = vi.fn((_sessionKey: string, _delegate: unknown) => ({
+  status: "queued",
+}));
 const spawnSubagentDirectMock = vi.fn(
   async (_params: Record<string, unknown>, _ctx: unknown): Promise<SpawnSubagentResult> => ({
     status: "accepted",
@@ -368,9 +372,9 @@ describe("subagent-announce continuation drain (F7)", () => {
       .mockResolvedValue({ delivered: true, path: "direct" });
     consumePendingDelegatesMock.mockReset().mockReturnValue([]);
     markPendingDelegateFailedMock.mockReset();
-    enqueuePendingDelegateMock.mockReset();
+    enqueuePendingDelegateMock.mockReset().mockReturnValue({ status: "queued" });
     clearQueuedDelegatesChainTokensFoldMock.mockReset().mockReturnValue(0);
-    stagePostCompactionDelegateMock.mockReset();
+    stagePostCompactionDelegateMock.mockReset().mockReturnValue({ status: "queued" });
     spawnSubagentDirectMock.mockReset().mockResolvedValue({
       status: "accepted",
       childSessionKey: "agent:main:subagent:grandchild",

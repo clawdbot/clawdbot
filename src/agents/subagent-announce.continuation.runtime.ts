@@ -82,6 +82,19 @@ async function rejectCrossSessionTargeting(params: {
   return true;
 }
 
+function reportOriginDelegateAdmissionFailure(params: {
+  childSessionKey: string;
+  eventSessionKey: string;
+}): void {
+  defaultRuntime.error?.(
+    `[continuation:delegate-admission-failed] child=${params.childSessionKey} durable TaskFlow create failed`,
+  );
+  enqueueSystemEvent(
+    "[continuation] Delegate was not scheduled because durable TaskFlow admission failed. Retry the delegation.",
+    { sessionKey: params.eventSessionKey, trusted: true },
+  );
+}
+
 async function drainChildContinuationQueue(params: {
   cfg: OpenClawConfig;
   childSessionKey: string;
@@ -379,11 +392,19 @@ export async function coordinateSubagentContinuation(params: {
         ...(signal.model ? { model: signal.model } : {}),
         originRunId: params.childRunId,
       });
-      originDelegateFlowStatus = staged?.status;
-      enqueueSystemEvent(
-        `[continuation:delegate-staged-post-compaction] Bracket delegate staged for post-compaction release: ${signal.task}`,
-        { sessionKey: params.childSessionKey, trusted: true },
-      );
+      if (!staged) {
+        reportOriginDelegateAdmissionFailure({
+          childSessionKey: params.childSessionKey,
+          eventSessionKey: params.targetRequesterSessionKey,
+        });
+        bracketDrainArmed = true;
+      } else {
+        originDelegateFlowStatus = staged.status;
+        enqueueSystemEvent(
+          `[continuation:delegate-staged-post-compaction] Bracket delegate staged for post-compaction release: ${signal.task}`,
+          { sessionKey: params.childSessionKey, trusted: true },
+        );
+      }
     } else {
       const config = resolveContinuationRuntimeConfig(params.cfg);
       const childChainHop = parseContinuationChainHop(params.task) ?? 0;
@@ -437,31 +458,39 @@ export async function coordinateSubagentContinuation(params: {
           ...(signal.model ? { model: signal.model } : {}),
           originRunId: params.childRunId,
         });
-        originDelegateFlowStatus = admitted?.status;
-        const shouldDrainBracketNow =
-          delayMs === 0 || accounting.childChainTokensToFold > 0 || toolDelegates.length === 0;
-        if (shouldDrainBracketNow) {
-          const state = accounting.buildChildContinuationSpawnState(childChainHop);
-          const dispatchResult = await drainChildContinuationQueue({
-            cfg: params.cfg,
+        if (!admitted) {
+          reportOriginDelegateAdmissionFailure({
             childSessionKey: params.childSessionKey,
-            requesterOrigin: params.targetRequesterOrigin,
-            ...(accounting.childChainTokensToFold > 0 ? { dispatchRegardlessOfDelay: true } : {}),
-            chainStateOverride: {
-              currentChainCount: state.count,
-              chainStartedAt: state.startedAt,
-              accumulatedChainTokens: state.tokens,
-              chainId: state.chainId,
-            },
-            inheritedSilent: params.silentAnnounce === true,
-            inheritedWake: params.wakeOnReturn === true,
+            eventSessionKey: params.targetRequesterSessionKey,
           });
-          bracketReserved = (dispatchResult?.dispatched ?? 0) > 0;
-          originDelegateFlowStatus = findContinuationDelegateFlowByOriginRun(
-            params.childSessionKey,
-            params.childRunId,
-          )?.status;
           bracketDrainArmed = true;
+        } else {
+          originDelegateFlowStatus = admitted.status;
+          const shouldDrainBracketNow =
+            delayMs === 0 || accounting.childChainTokensToFold > 0 || toolDelegates.length === 0;
+          if (shouldDrainBracketNow) {
+            const state = accounting.buildChildContinuationSpawnState(childChainHop);
+            const dispatchResult = await drainChildContinuationQueue({
+              cfg: params.cfg,
+              childSessionKey: params.childSessionKey,
+              requesterOrigin: params.targetRequesterOrigin,
+              ...(accounting.childChainTokensToFold > 0 ? { dispatchRegardlessOfDelay: true } : {}),
+              chainStateOverride: {
+                currentChainCount: state.count,
+                chainStartedAt: state.startedAt,
+                accumulatedChainTokens: state.tokens,
+                chainId: state.chainId,
+              },
+              inheritedSilent: params.silentAnnounce === true,
+              inheritedWake: params.wakeOnReturn === true,
+            });
+            bracketReserved = (dispatchResult?.dispatched ?? 0) > 0;
+            originDelegateFlowStatus = findContinuationDelegateFlowByOriginRun(
+              params.childSessionKey,
+              params.childRunId,
+            )?.status;
+            bracketDrainArmed = true;
+          }
         }
       }
     }

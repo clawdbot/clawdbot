@@ -79,9 +79,13 @@ const consumePendingDelegatesMock = vi.fn((_sessionKey: string): ConsumedToolDel
 const markPendingDelegateFailedMock = vi.fn();
 // capture durable delayed-bracket delegate enqueues (replaces the old
 // volatile setTimeout path).
-const enqueuePendingDelegateMock = vi.fn((_sessionKey: string, _delegate: unknown) => {});
+const enqueuePendingDelegateMock = vi.fn((_sessionKey: string, _delegate: unknown) => ({
+  status: "queued",
+}));
 const clearQueuedDelegatesChainTokensFoldMock = vi.fn((_sessionKey: string) => 0);
-const stagePostCompactionDelegateMock = vi.fn((_sessionKey: string, _delegate: unknown) => {});
+const stagePostCompactionDelegateMock = vi.fn((_sessionKey: string, _delegate: unknown) => ({
+  status: "queued",
+}));
 const spawnSubagentDirectMock = vi.fn(
   async (_params: Record<string, unknown>, _ctx: unknown): Promise<SpawnSubagentResult> => ({
     status: "accepted",
@@ -359,9 +363,9 @@ describe("subagent-announce continuation drain (F7)", () => {
       .mockResolvedValue({ delivered: true, path: "direct" });
     consumePendingDelegatesMock.mockReset().mockReturnValue([]);
     markPendingDelegateFailedMock.mockReset();
-    enqueuePendingDelegateMock.mockReset();
+    enqueuePendingDelegateMock.mockReset().mockReturnValue({ status: "queued" });
     clearQueuedDelegatesChainTokensFoldMock.mockReset().mockReturnValue(0);
-    stagePostCompactionDelegateMock.mockReset();
+    stagePostCompactionDelegateMock.mockReset().mockReturnValue({ status: "queued" });
     spawnSubagentDirectMock.mockReset().mockResolvedValue({
       status: "accepted",
       childSessionKey: "agent:main:subagent:grandchild",
@@ -369,7 +373,7 @@ describe("subagent-announce continuation drain (F7)", () => {
     });
   });
 
-  it("spawns a delayed bracket delegate immediately (no durable enqueue) when the child chain-cost persist fails", async () => {
+  it("force-dispatches a durably admitted delayed bracket when the child chain-cost persist fails", async () => {
     const store: Record<string, Record<string, unknown>> = {
       "agent:main:subagent:bracket-fail": {
         sessionId: "session-child",
@@ -402,12 +406,17 @@ describe("subagent-announce continuation drain (F7)", () => {
       roundOneReply: "Research result.\n[[CONTINUE_DELEGATE: keep working +30s]]",
     });
 
-    // Fail closed: a durable delayed delegate would recover from the stale child
-    // entry and under-enforce the cost cap, so the hop is spawned immediately via
-    // the in-process path (correct live folded cost basis) and NOT enqueued
-    // durably where restart recovery could re-drive it on stale cost.
-    expect(enqueuePendingDelegateMock).not.toHaveBeenCalled();
-    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+    expect(enqueuePendingDelegateMock).toHaveBeenCalledTimes(1);
+    expect(dispatchToolDelegatesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dispatchQueuedRegardlessOfDelay: true,
+        chainState: expect.objectContaining({
+          currentChainCount: 1,
+          accumulatedChainTokens: 31_000,
+        }),
+      }),
+    );
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 
   it("rejects a bracket delegate when the parent chain-cost persist fails and the folded basis exceeds the cap", async () => {
@@ -604,6 +613,15 @@ describe("subagent-announce continuation drain (F7)", () => {
     consumePendingDelegatesMock.mockReturnValue([
       { task: "tool-row delegate", flowId: "flow-tool-mixed", expectedRevision: 2 },
     ]);
+    dispatchToolDelegatesMock.mockResolvedValueOnce({
+      dispatched: 1,
+      rejected: 0,
+      chainState: {
+        currentChainCount: 2,
+        chainStartedAt: 1_700_000_000_000,
+        accumulatedChainTokens: 7_000,
+      },
+    });
 
     await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:mixed",
@@ -624,14 +642,13 @@ describe("subagent-announce continuation drain (F7)", () => {
       setTimeout(resolve, 50);
     });
 
-    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(2);
-    const [bracketSpawnValue, toolSpawnValue] = spawnSubagentDirectMock.mock.calls.map(
-      ([params]) => params,
-    );
-    const bracketSpawn = expectDefined(bracketSpawnValue, "bracket spawn");
+    expect(dispatchToolDelegatesMock).toHaveBeenCalledTimes(1);
+    expect(dispatchToolDelegatesMock.mock.calls[0]?.[0]).toMatchObject({
+      chainState: { currentChainCount: 1, accumulatedChainTokens: 7_000 },
+    });
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+    const [toolSpawnValue] = spawnSubagentDirectMock.mock.calls.map(([params]) => params);
     const toolSpawn = expectDefined(toolSpawnValue, "tool spawn");
-    expect(bracketSpawn.task).toEqual(expect.stringContaining("[continuation:chain-hop:2]"));
-    expect(bracketSpawn.continuationChainState).toMatchObject({ count: 2, tokens: 7_000 });
     expect(toolSpawn.task).toEqual(expect.stringContaining("[continuation:chain-hop:3]"));
     expect(toolSpawn.continuationChainState).toMatchObject({ count: 3, tokens: 7_000 });
     expect(toolSpawn.continuationDelegateFlowId).toBe("flow-tool-mixed");
@@ -667,6 +684,15 @@ describe("subagent-announce continuation drain (F7)", () => {
       expectedRevision: 2,
     };
     consumePendingDelegatesMock.mockReturnValue([toolDelegate]);
+    dispatchToolDelegatesMock.mockResolvedValueOnce({
+      dispatched: 1,
+      rejected: 0,
+      chainState: {
+        currentChainCount: 2,
+        chainStartedAt: 1_700_000_000_000,
+        accumulatedChainTokens: 7_000,
+      },
+    });
 
     await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:mixed-cap",
@@ -687,10 +713,8 @@ describe("subagent-announce continuation drain (F7)", () => {
       setTimeout(resolve, 50);
     });
 
-    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
-    expect(spawnSubagentDirectMock.mock.calls[0]?.[0].task).toEqual(
-      expect.stringContaining("[continuation:chain-hop:2]"),
-    );
+    expect(dispatchToolDelegatesMock).toHaveBeenCalledTimes(1);
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
     expect(markPendingDelegateFailedMock).toHaveBeenCalledWith(
       toolDelegate,
       "Tool delegate rejected: chain length 3 exceeds maxChainLength 2.",

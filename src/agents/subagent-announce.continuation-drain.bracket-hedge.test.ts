@@ -1,6 +1,7 @@
 // "RFC §" references herein cite docs/design/continue-work-signal-v2.md (Agent Self-Elected Turn Continuation / CONTINUE_WORK).
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { peekSystemEventEntries, resetSystemEventsForTest } from "../infra/system-events.js";
 import { createSubagentAnnounceDeliveryRuntimeMock } from "./subagents/announce/subagent-announce.test-support.js";
 import type { SpawnSubagentResult } from "./subagents/spawn/subagent-spawn.js";
 
@@ -82,9 +83,15 @@ const markPendingDelegateSpawnAcceptedMock = vi.fn(
 );
 // capture durable delayed-bracket delegate enqueues (replaces the old
 // volatile setTimeout path).
-const enqueuePendingDelegateMock = vi.fn((_sessionKey: string, _delegate: unknown) => {});
+const enqueuePendingDelegateMock = vi.fn(
+  (_sessionKey: string, _delegate: unknown): { status: string } | null => ({
+    status: "queued",
+  }),
+);
 const clearQueuedDelegatesChainTokensFoldMock = vi.fn((_sessionKey: string) => 0);
-const stagePostCompactionDelegateMock = vi.fn((_sessionKey: string, _delegate: unknown) => {});
+const stagePostCompactionDelegateMock = vi.fn((_sessionKey: string, _delegate: unknown) => ({
+  status: "queued",
+}));
 const spawnSubagentDirectMock = vi.fn(
   async (_params: Record<string, unknown>, _ctx: unknown): Promise<SpawnSubagentResult> => ({
     status: "accepted",
@@ -365,14 +372,15 @@ describe("subagent-announce continuation drain (F7)", () => {
     consumePendingDelegatesMock.mockReset().mockReturnValue([]);
     markPendingDelegateFailedMock.mockReset();
     markPendingDelegateSpawnAcceptedMock.mockReset().mockReturnValue(true);
-    enqueuePendingDelegateMock.mockReset();
+    enqueuePendingDelegateMock.mockReset().mockReturnValue({ status: "queued" });
     clearQueuedDelegatesChainTokensFoldMock.mockReset().mockReturnValue(0);
-    stagePostCompactionDelegateMock.mockReset();
+    stagePostCompactionDelegateMock.mockReset().mockReturnValue({ status: "queued" });
     spawnSubagentDirectMock.mockReset().mockResolvedValue({
       status: "accepted",
       childSessionKey: "agent:main:subagent:grandchild",
       runId: "run-grandchild",
     });
+    resetSystemEventsForTest();
   });
 
   it("does not reserve a current-chain hop when an immediate bracket delegate is rejected", async () => {
@@ -446,6 +454,48 @@ describe("subagent-announce continuation drain (F7)", () => {
       expect.stringContaining("chain length"),
       "Delegate rejected",
     );
+  });
+
+  it("surfaces failed durable bracket admission without spawning or draining", async () => {
+    const childSessionKey = "agent:main:subagent:failed-bracket-admission";
+    loadSessionStoreMock.mockImplementation(
+      () =>
+        ({
+          [childSessionKey]: {
+            sessionId: "session-child",
+            updatedAt: Date.now(),
+            continuationChainCount: 1,
+            continuationChainStartedAt: 1_700_000_000_000,
+            continuationChainTokens: 7_000,
+          },
+          "agent:main:main": { sessionId: "session-main", updatedAt: Date.now() },
+        }) as Record<string, unknown>,
+    );
+    enqueuePendingDelegateMock.mockReturnValueOnce(null);
+
+    await runSubagentAnnounceFlow({
+      childSessionKey,
+      childRunId: "run-failed-bracket-admission",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "[continuation:chain-hop:1] Delegated from sub-agent: prior hop",
+      timeoutMs: 100,
+      cleanup: "delete",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "done\n[[CONTINUE_DELEGATE: persist me]]",
+    });
+
+    expect(enqueuePendingDelegateMock).toHaveBeenCalledTimes(1);
+    expect(dispatchToolDelegatesMock).not.toHaveBeenCalled();
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(
+      peekSystemEventEntries("agent:main:main").some((entry) =>
+        entry.text.includes("durable TaskFlow admission failed"),
+      ),
+    ).toBe(true);
   });
 
   it("does not reserve a current-chain hop for a post-compaction bracket delegate before tool delegates drain", async () => {
