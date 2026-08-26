@@ -3064,6 +3064,7 @@ describe("matrix monitor handler draft streaming", () => {
     info: { kind: string },
   ) => Promise<unknown>;
   type ReplyOpts = {
+    preserveProgressCallbackStartOrder?: boolean;
     onReplyStart?: () => Promise<void> | void;
     onPartialReply?: (payload: { text: string }) => void;
     onBlockReplyQueued?: (
@@ -3212,6 +3213,15 @@ describe("matrix monitor handler draft streaming", () => {
 
     return { dispatch, redactEventMock, logVerboseMessage };
   }
+
+  it("preserves progress callback start order for reasoning lifecycle", async () => {
+    const { dispatch } = createStreamingHarness();
+    const { opts, finish } = await dispatch();
+
+    expect(opts.preserveProgressCallbackStartOrder).toBe(true);
+
+    await finish();
+  });
 
   it("records a failed block typing restart without replaying the accepted delivery", async () => {
     const acceptedDelivery = createMockMatrixDeliveryResult("$accepted", "Already delivered block");

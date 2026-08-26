@@ -564,6 +564,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               onSettled: () => draftController.cancelProgressDraft(),
             },
             replyOptions: {
+              preserveProgressCallbackStartOrder: true,
               skillFilter: roomConfig?.skills,
               reasoningPayloadsEnabled: true,
               // Preserve explicit block streaming with draft previews: drafts update the live
