@@ -263,7 +263,7 @@ jobs:
         run: bash scripts/mantis/telegram-visible-prepare-codex.sh
 
       - name: Prepare Codex action runtime
-        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56
+        uses: openai/codex-action@86365089eb2b84e0a8fb0717b304f8bdcb13b20e
         with:
           openai-api-key: ${{ secrets.OPENCLAW_MANTIS_AGENT_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
           codex-home: /tmp/mantis-codex-home-${{ github.run_id }}
