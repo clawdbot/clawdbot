@@ -1,7 +1,6 @@
 import {
   embeddedAgentLog,
   formatErrorMessage,
-  resolveActiveEmbeddedRunSessionId,
   resolveSandboxContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-scope-runtime";
@@ -134,8 +133,13 @@ type CodexConversationRunOptions = {
   pluginConfig?: unknown;
   config?: CodexConversationConfig;
   timeoutMs?: number;
+  resolveSourceRunProgressState: ResolveSourceRunProgressStateFn;
   resumeCodexCliSessionOnNode?: ResumeCodexCliSessionOnNodeFn;
 };
+
+type ResolveSourceRunProgressStateFn = (
+  sessionId: string,
+) => Promise<"queued" | "running" | undefined> | "queued" | "running" | undefined;
 
 type ResumeCodexCliSessionOnNodeFn = (
   params: Omit<Parameters<typeof resumeCodexCliSessionOnNode>[0], "runtime">,
@@ -467,6 +471,7 @@ async function handleCodexConversationInboundClaim(
         incognito,
         pluginConfig: options.pluginConfig,
         timeoutMs: options.timeoutMs,
+        resolveSourceRunProgressState: options.resolveSourceRunProgressState,
       });
     });
     return { handled: true, reply: result.reply };
@@ -1214,6 +1219,7 @@ async function runBoundTurnWithMissingThreadRecovery(params: {
   sessionKey?: string;
   incognito: boolean;
   timeoutMs?: number;
+  resolveSourceRunProgressState: ResolveSourceRunProgressStateFn;
 }): Promise<BoundTurnResult> {
   await prepareConversationBinding(params);
   try {
@@ -1235,6 +1241,7 @@ async function prepareConversationBinding(
     config?: CodexConversationConfig;
     sessionKey?: string;
     incognito: boolean;
+    resolveSourceRunProgressState: ResolveSourceRunProgressStateFn;
   },
   options: { forceNew?: boolean } = {},
 ): Promise<void> {
@@ -1300,18 +1307,8 @@ async function prepareConversationBinding(
       await params.bindingStore.withLease(sourceIdentity, async () => {
         const source = await params.bindingStore.read(sourceIdentity);
         if (source && source.threadId === params.data.source?.threadId) {
-          const sourceSessionKey =
-            sourceIdentity.sessionKey ??
-            resolveTranscriptSessionKeyBySessionId({
-              agentId: sourceIdentity.agentId,
-              sessionId: sourceIdentity.sessionId,
-              storePath: resolveStorePath(params.config?.session?.store, {
-                agentId: sourceIdentity.agentId,
-              }),
-            });
           if (
-            sourceSessionKey &&
-            resolveActiveEmbeddedRunSessionId(sourceSessionKey) === sourceIdentity.sessionId
+            (await params.resolveSourceRunProgressState(sourceIdentity.sessionId)) === "running"
           ) {
             throw new Error(
               "Codex source session has an active run; stop it before binding this conversation.",

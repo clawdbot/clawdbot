@@ -347,6 +347,8 @@ export default definePluginEntry({
         bindingStore,
         pluginConfig: resolveCurrentPluginConfig(),
         config: resolveCurrentConfig(),
+        resolveSourceRunProgressState:
+          ctx.resolveRunProgressState ?? (async () => "running" as const),
         resumeCodexCliSessionOnNode: (params) =>
           resumeCodexCliSessionOnNode({ runtime: api.runtime, ...params }),
       }),

@@ -226,14 +226,31 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
               ...state.hookState.inboundClaimEvent,
               senderIsOwner: bindingAuthorization.senderIsOwner,
             };
-            return await state.runWithDispatchLifecycleAdmission(
-              async () =>
-                await hookRunner.runInboundClaimForPluginOutcome(
-                  pluginOwnedBinding.pluginId,
-                  authorizedInboundClaimEvent,
-                  { ...state.hookState.inboundClaimContext, pluginBinding: pluginOwnedBinding },
-                ),
-            );
+            let claimActive = true;
+            try {
+              return await state.runWithDispatchLifecycleAdmission(
+                async () =>
+                  await hookRunner.runInboundClaimForPluginOutcome(
+                    pluginOwnedBinding.pluginId,
+                    authorizedInboundClaimEvent,
+                    {
+                      ...state.hookState.inboundClaimContext,
+                      pluginBinding: pluginOwnedBinding,
+                      resolveRunProgressState: async (sessionId) => {
+                        if (!claimActive) {
+                          return "running";
+                        }
+                        const runtime = await import("../../agents/embedded-agent-runner/runs.js");
+                        return claimActive
+                          ? runtime.resolveEmbeddedAgentRunProgressState(sessionId)
+                          : "running";
+                      },
+                    },
+                  ),
+              );
+            } finally {
+              claimActive = false;
+            }
           })()
         : (() => {
             const pluginLoaded =
