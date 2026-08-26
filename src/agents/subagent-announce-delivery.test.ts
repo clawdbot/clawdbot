@@ -996,6 +996,42 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
 });
 
 describe("deliverSubagentAnnouncement completion delivery", () => {
+  it.each(["empty reply", "failed handoff"])(
+    "does not invent a media warning for a text-only harness completion after %s",
+    async (outcome) => {
+      const previousTestFast = process.env.OPENCLAW_TEST_FAST;
+      process.env.OPENCLAW_TEST_FAST = "1";
+      try {
+        const callGateway =
+          outcome === "empty reply"
+            ? createPayloadGatewayMock()
+            : (vi.fn(async () => {
+                throw new Error("requester handoff failed before dispatch");
+              }) as unknown as typeof runtimeCallGateway);
+        const sendMessage = createSendMessageMock();
+
+        const result = await deliverDiscordDirectMessageCompletion({
+          callGateway,
+          sendMessage,
+          sourceTool: "agent_harness_task",
+          internalEvents: taskCompletionEvents({ childSessionId: "child-session-id" }),
+        });
+
+        expect(result.delivered).toBe(false);
+        expect(sendMessage).not.toHaveBeenCalled();
+        expect(
+          generatedMediaWakeMocks.wakeSessionForGeneratedMediaDirectDelivery,
+        ).not.toHaveBeenCalled();
+      } finally {
+        if (previousTestFast === undefined) {
+          delete process.env.OPENCLAW_TEST_FAST;
+        } else {
+          process.env.OPENCLAW_TEST_FAST = previousTestFast;
+        }
+      }
+    },
+  );
+
   it("uses an active requester queue as the completion handoff when message-tool delivery is not required", async () => {
     const callGateway = createGatewayMock();
     const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);

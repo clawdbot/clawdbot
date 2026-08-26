@@ -1234,6 +1234,7 @@ async function sendSubagentAnnounceDirectly(params: {
         failureNotice ??
         (params.allowGeneratedMediaDirectFallback &&
         agentMediatedCompletion &&
+        hasGeneratedMediaCompletionEvent(params.internalEvents) &&
         expectedMediaUrls.length === 0
           ? `${mediaLabel[0]?.toUpperCase() ?? "M"}${mediaLabel.slice(1)} generation completed, but the generated media could not be attached here.`
           : undefined);
