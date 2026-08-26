@@ -49,6 +49,7 @@ suite.define(() => {
         buffer: Buffer.from("mobile composer attachment"),
       });
       await composer.locator(".chat-attachments-preview").waitFor({ state: "visible" });
+      const mobileModelSettings = composer.locator('[data-chat-model-settings="true"]');
 
       for (const picker of [
         {
@@ -60,13 +61,22 @@ suite.define(() => {
           trigger: '[data-chat-thinking-select="true"]',
         },
       ]) {
-        await composer.locator(picker.trigger).click();
+        if (picker.menu === ".chat-controls__effort-menu") {
+          await mobileModelSettings.click();
+          await composer.locator(".chat-controls__mobile-effort-option").click();
+        } else {
+          await composer.locator(picker.trigger).click();
+        }
         await page.waitForTimeout(100);
+        const visibleTrigger =
+          picker.menu === ".chat-controls__effort-menu"
+            ? mobileModelSettings
+            : composer.locator(picker.trigger);
         const [composerBox, footerBox, menuBox, triggerBox] = await Promise.all([
           composer.boundingBox(),
           composer.locator(".agent-chat__composer-footer").boundingBox(),
           page.locator(picker.menu).boundingBox(),
-          composer.locator(picker.trigger).boundingBox(),
+          visibleTrigger.boundingBox(),
         ]);
         expect(composerBox).not.toBeNull();
         expect(footerBox).not.toBeNull();
@@ -82,13 +92,19 @@ suite.define(() => {
         expect(menuBox.y + menuBox.height).toBeLessThanOrEqual(composerBox.y + 1);
         expect(triggerBox.y + triggerBox.height).toBeLessThanOrEqual(376);
         expect(footerBox.y + footerBox.height).toBeLessThanOrEqual(376);
-        await composer.locator(picker.trigger).click();
+        await page.keyboard.press("Escape");
       }
     });
   });
 
   it("keeps the model in the bottom bar, session settings in the header, and holds send beside the microphone in every input state", async () => {
-    await suite.withPage({ viewport: { width: 1920, height: 1080 } }, async ({ page }) => {
+    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    await suite.withPage({
+      viewport: { width: 1920, height: 1080 },
+      ...(artifactDir
+        ? { recordVideo: { dir: artifactDir, size: { width: 393, height: 852 } } }
+        : {}),
+    }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         assistantName: "Rosita",
         deferredMethods: ["chat.send"],
@@ -536,6 +552,24 @@ suite.define(() => {
       await expect
         .poll(() => stop.evaluate((node) => getComputedStyle(node).backgroundColor))
         .not.toBe(brandFill);
+      await page.setViewportSize({ width: 393, height: 852 });
+      const mobileModelSettings = composer.locator('[data-chat-model-settings="true"]');
+      await expect.poll(() => mobileModelSettings.isVisible()).toBe(true);
+      const [activeMobileSettingsBox, activeMobileStopBox] = await Promise.all([
+        mobileModelSettings.boundingBox(),
+        stop.boundingBox(),
+      ]);
+      expect(activeMobileSettingsBox?.width).toBeGreaterThanOrEqual(44);
+      expect(activeMobileSettingsBox?.height).toBeGreaterThanOrEqual(44);
+      expect(activeMobileStopBox?.width).toBeGreaterThanOrEqual(44);
+      expect(activeMobileStopBox?.height).toBeGreaterThanOrEqual(44);
+      if (artifactDir) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: `${artifactDir}/mobile-composer-active-run.png`,
+        });
+      }
       await textarea.press("Escape");
       const abortRequest = await gateway.waitForRequest("chat.abort");
       expect(abortRequest.params).toMatchObject({
@@ -563,7 +597,6 @@ suite.define(() => {
         })
         .toBeGreaterThanOrEqual(-1);
 
-      await page.setViewportSize({ width: 393, height: 852 });
       await expect.poll(() => camera.count()).toBe(0);
       expect(await page.evaluate(() => matchMedia("(pointer: coarse)").matches)).toBe(false);
       await expect
@@ -577,47 +610,49 @@ suite.define(() => {
           return settled ? settled.x + settled.width : Number.POSITIVE_INFINITY;
         })
         .toBeLessThanOrEqual(393);
-      const [mobileAttachBox, mobileModelBox, mobileSettingsBox, mobileContextBox, mobileVoiceBox] =
-        await Promise.all([
-          attach.boundingBox(),
-          model.boundingBox(),
-          settings.boundingBox(),
-          contextUsage.boundingBox(),
-          voice.boundingBox(),
-        ]);
+      await expect.poll(() => mobileModelSettings.isVisible()).toBe(true);
+      await expect.poll(() => effort.isVisible()).toBe(false);
+      const [
+        mobileAttachBox,
+        mobileModelSettingsBox,
+        mobileSettingsBox,
+        mobileContextBox,
+        mobileVoiceBox,
+      ] = await Promise.all([
+        attach.boundingBox(),
+        mobileModelSettings.boundingBox(),
+        settings.boundingBox(),
+        contextUsage.boundingBox(),
+        voice.boundingBox(),
+      ]);
       expect(mobileAttachBox).not.toBeNull();
-      expect(mobileModelBox).not.toBeNull();
+      expect(mobileModelSettingsBox).not.toBeNull();
       expect(mobileSettingsBox).not.toBeNull();
       expect(mobileContextBox).not.toBeNull();
       expect(mobileVoiceBox).not.toBeNull();
       if (
         !mobileAttachBox ||
-        !mobileModelBox ||
+        !mobileModelSettingsBox ||
         !mobileSettingsBox ||
         !mobileContextBox ||
         !mobileVoiceBox
       ) {
         throw new Error("expected mobile composer controls to have layout boxes");
       }
-      await expect
-        .poll(() =>
-          model.evaluate((node) => {
-            const style = getComputedStyle(node);
-            return [style.paddingInlineStart, style.paddingInlineEnd];
-          }),
-        )
-        .toEqual(["0px", "0px"]);
-      await expect
-        .poll(() =>
-          effort.evaluate((node) => {
-            const style = getComputedStyle(node);
-            return [style.paddingInlineStart, style.paddingInlineEnd];
-          }),
-        )
-        .toEqual(["4px", "4px"]);
-      for (const control of [mobileModelBox, mobileContextBox]) {
+      expect(mobileModelSettingsBox.width).toBeGreaterThanOrEqual(44);
+      expect(mobileModelSettingsBox.height).toBeGreaterThanOrEqual(44);
+      const settingsContextGap =
+        mobileContextBox.x -
+        (mobileModelSettingsBox.x + mobileModelSettingsBox.width);
+      expect(settingsContextGap).toBeGreaterThanOrEqual(-1);
+      expect(settingsContextGap).toBeLessThanOrEqual(9);
+      for (const control of [mobileModelSettingsBox, mobileContextBox]) {
         expect(
-          Math.abs(control.y + control.height / 2 - (mobileModelBox.y + mobileModelBox.height / 2)),
+          Math.abs(
+            control.y +
+              control.height / 2 -
+              (mobileModelSettingsBox.y + mobileModelSettingsBox.height / 2),
+          ),
         ).toBeLessThanOrEqual(2);
       }
       expect(mobileSettingsBox.x).toBeGreaterThanOrEqual(0);
@@ -655,7 +690,7 @@ suite.define(() => {
         .toBe(true);
       await textarea.fill("");
       await expect.poll(() => camera.count()).toBe(0);
-      await model.click();
+      await mobileModelSettings.click();
       await expect
         .poll(() => composer.locator(".chat-controls__model-menu").isVisible())
         .toBe(true);
@@ -666,7 +701,11 @@ suite.define(() => {
       }
       expect(mobilePickerBox.x).toBeGreaterThanOrEqual(0);
       expect(mobilePickerBox.x + mobilePickerBox.width).toBeLessThanOrEqual(393);
-      await model.click();
+      await composer.locator(".chat-controls__mobile-effort-option").click();
+      await expect
+        .poll(() => composer.locator(".chat-controls__effort-menu").isVisible())
+        .toBe(true);
+      await page.keyboard.press("Escape");
       await settings.click();
       await expect.poll(() => viewMenu.isVisible()).toBe(true);
       await settings.click();
@@ -684,7 +723,6 @@ suite.define(() => {
       await expect
         .poll(() => microphonePicker.evaluate((node) => getComputedStyle(node).borderLeftWidth))
         .toBe("0px");
-      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
       if (artifactDir) {
         await composerShell.screenshot({
           animations: "disabled",

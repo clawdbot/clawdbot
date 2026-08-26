@@ -5288,10 +5288,7 @@ button.chat-pr__diff {
   }
 
   .agent-chat__input .agent-chat__composer-controls {
-    --chat-mobile-model-control-min-width: 144px;
-    --chat-mobile-picker-padding-end: 10px;
-    --chat-mobile-picker-padding-start: 10px;
-    min-width: 187px;
+    min-width: 44px;
   }
 
   .agent-chat__input .agent-chat__composer-run-status {
@@ -5329,20 +5326,48 @@ button.chat-pr__diff {
     margin-left: 0;
   }
 
-  /* Reserve the readable model trigger, 44px effort target, and their gap, so
-     transient status text yields before either picker does. */
+  /* Model and effort share one fixed settings target on phones. Transient
+     status text yields before this control so configuration stays reachable. */
   .agent-chat__input .agent-chat__composer-controls .chat-composer-model-control {
-    flex: 0 1 auto;
-    min-width: var(--chat-mobile-model-control-min-width);
-  }
-
-  .agent-chat__input .agent-chat__composer-controls .chat-controls__model-picker {
-    flex: 1 1 auto;
-  }
-
-  .agent-chat__input .agent-chat__composer-controls .chat-controls__effort-picker {
-    flex: 0 0 auto;
+    flex: 0 0 44px;
     min-width: 44px;
+  }
+
+  .agent-chat__input .chat-controls__model-settings,
+  .agent-chat__input .chat-controls__model-picker {
+    width: 44px;
+    min-width: 44px;
+    max-width: 44px;
+  }
+
+  .agent-chat__input .chat-controls__model-trigger {
+    display: flex;
+    justify-content: center;
+    width: 44px;
+    padding: 0;
+  }
+
+  .agent-chat__input .chat-controls__model-trigger > :not(.chat-controls__model-settings-icon) {
+    display: none;
+  }
+
+  .agent-chat__input .chat-controls__model-settings-icon,
+  .agent-chat__input .chat-controls__mobile-effort-option {
+    display: inline-flex;
+  }
+
+  .agent-chat__input .chat-controls__model-settings-icon svg {
+    width: 19px;
+    height: 19px;
+  }
+
+  .agent-chat__input .chat-controls__effort-picker {
+    position: absolute;
+    width: 0;
+  }
+
+  .agent-chat__input .chat-controls__effort-picker > .chat-controls__effort-trigger {
+    display: none;
   }
 
   /* The borderless trigger is 30px on desktop; keep a >=44px touch target
@@ -5968,6 +5993,11 @@ button.chat-pr__diff {
   display: flex;
   align-items: center;
   gap: 2px;
+}
+
+.chat-controls__model-settings-icon,
+.chat-controls__mobile-effort-option {
+  display: none;
 }
 
 .chat-controls__model-settings .chat-controls__inline-select-trigger {

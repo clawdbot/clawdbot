@@ -278,6 +278,39 @@ suite.define(() => {
       expect(await page.locator(".new-session-page__message").getAttribute("rows")).toBe("1");
       await captureProjectUiProof(page, "new-session-control-layout.png");
 
+      await page.setViewportSize({ width: 393, height: 852 });
+      const mobileModelSettings = page.locator(
+        '.new-session-page__composer [data-chat-model-settings="true"]',
+      );
+      await expect.poll(() => mobileModelSettings.isVisible()).toBe(true);
+      const [mobileFooterBox, mobileModelSettingsBox] = await Promise.all([
+        page.locator(".new-session-page__composer .agent-chat__composer-footer").boundingBox(),
+        mobileModelSettings.boundingBox(),
+      ]);
+      expect(mobileFooterBox).not.toBeNull();
+      expect(mobileModelSettingsBox).not.toBeNull();
+      if (!mobileFooterBox || !mobileModelSettingsBox) {
+        throw new Error("expected mobile new-session composer controls");
+      }
+      expect(mobileModelSettingsBox.width).toBeGreaterThanOrEqual(44);
+      expect(mobileModelSettingsBox.height).toBeGreaterThanOrEqual(44);
+      expect(mobileModelSettingsBox.x).toBeGreaterThan(
+        mobileFooterBox.x + mobileFooterBox.width / 2,
+      );
+      expect(mobileModelSettingsBox.x + mobileModelSettingsBox.width).toBeLessThanOrEqual(
+        mobileFooterBox.x + mobileFooterBox.width,
+      );
+      await mobileModelSettings.click();
+      await expect
+        .poll(() => page.locator(".chat-controls__model-menu").isVisible())
+        .toBe(true);
+      await page.locator(".chat-controls__mobile-effort-option").click();
+      await expect
+        .poll(() => page.locator(".chat-controls__effort-menu").isVisible())
+        .toBe(true);
+      await page.keyboard.press("Escape");
+      await page.setViewportSize({ width: 1280, height: 900 });
+
       const agentPicker = page.locator(".new-session-page__select--agent openclaw-agent-select");
       await agentPicker.locator(".agent-select__trigger").click();
       await pollLocatorText(agentPicker.locator(".agent-select__menu-title")).toBe("Agents");

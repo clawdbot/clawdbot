@@ -428,10 +428,12 @@ function composerControlsHtml(crowded = false) {
       <div class="chat-composer-model-control">
         <div class="chat-controls__session chat-controls__model chat-controls__model-settings">
           <details class="chat-controls__inline-select chat-controls__model-picker">
-          <summary class="chat-controls__inline-select-trigger chat-controls__model-trigger" data-chat-composer-model="true" aria-label="Chat model">
+          <summary class="chat-controls__inline-select-trigger chat-controls__model-trigger" data-chat-composer-model="true" data-chat-model-settings="true" aria-label="Chat model: GPT-5.6 Luna; Chat thinking level: Medium">
+            <span class="chat-controls__model-settings-icon">${iconSvg()}</span>
             <span class="chat-controls__inline-select-label">GPT-5.6 Luna</span>
           </summary>
           <div class="chat-controls__inline-select-menu chat-controls__model-menu">
+            <button class="chat-controls__inline-select-option chat-controls__mobile-effort-option">Effort <span>Medium</span></button>
             <div class="chat-controls__model-search-wrap"><input class="chat-controls__model-search" placeholder="Search models" /></div>
             <div class="chat-controls__model-options">
               <button class="chat-controls__inline-select-option chat-controls__model-option chat-controls__inline-select-option--selected">Default model</button>
@@ -3056,7 +3058,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
-  it("keeps transient footer controls from crushing the mobile model pickers", async () => {
+  it("keeps transient footer controls from crushing mobile model settings", async () => {
     const page = await openFixture(320, 568, { crowdedComposerFooter: true });
     try {
       await expectNoHorizontalOverflow(page);
@@ -3075,19 +3077,17 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         };
         return {
           controls: rectFor(".agent-chat__composer-controls"),
-          effort: rectFor(".chat-controls__effort-trigger"),
           footer: rectFor(".agent-chat__composer-footer"),
           meta: rectFor(".agent-chat__composer-meta"),
-          model: rectFor(".chat-controls__model-trigger"),
-          modelLabel: rectFor(".chat-controls__model-trigger .chat-controls__inline-select-label"),
           overrides: rectFor(".agent-chat__session-overrides-pill"),
+          settings: rectFor(".chat-controls__model-trigger"),
           status: rectFor(".agent-chat__composer-run-status"),
           typing: rectFor(".agent-chat__typing-indicator--outside"),
         };
       });
 
       expect(layout.controls.scrollWidth).toBeLessThanOrEqual(layout.controls.clientWidth + 1);
-      for (const control of [layout.status, layout.overrides, layout.model, layout.effort]) {
+      for (const control of [layout.status, layout.overrides, layout.settings]) {
         expect(control.x).toBeGreaterThanOrEqual(layout.footer.x - 1);
         expect(control.x + control.width).toBeLessThanOrEqual(
           layout.footer.x + layout.footer.width + 1,
@@ -3095,16 +3095,12 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       }
       expect(layout.typing.x).toBeGreaterThanOrEqual(0);
       expect(layout.typing.x + layout.typing.width).toBeLessThanOrEqual(320);
-      for (const trigger of [layout.model, layout.effort]) {
-        expect(trigger.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
-        expect(trigger.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
-      }
-      expect(layout.modelLabel.scrollWidth).toBeLessThanOrEqual(layout.modelLabel.clientWidth + 1);
+      expect(layout.settings.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
+      expect(layout.settings.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
       for (const [left, right] of [
         [layout.status, layout.overrides],
-        [layout.overrides, layout.model],
-        [layout.model, layout.effort],
-        [layout.effort, layout.meta],
+        [layout.overrides, layout.settings],
+        [layout.settings, layout.meta],
       ] as const) {
         expect(rectsOverlap(left, right)).toBe(false);
       }
@@ -3165,6 +3161,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             textarea: rectFor(".agent-chat__composer-combobox > textarea"),
             meta: rectFor(".agent-chat__composer-meta"),
             model: rectFor(".chat-composer-model-control"),
+            modelSettings: rectFor(".chat-controls__model-trigger"),
             modelTrigger: rectFor(".chat-controls__model-trigger"),
             modelTriggerPadding: paddingFor(".chat-controls__model-trigger"),
             modelLabel: rectFor(
@@ -3189,15 +3186,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         const textarea = expectControlRect(controls.textarea, "composer textarea");
         const meta = expectControlRect(controls.meta, "composer metadata");
         const model = expectControlRect(controls.model, "composer model control");
-        const modelTrigger = expectControlRect(controls.modelTrigger, "composer model trigger");
-        const modelLabel = expectControlRect(controls.modelLabel, "composer model label");
-        const effortTrigger = expectControlRect(
-          controls.effortTrigger,
-          "composer thinking trigger",
-        );
-        expect(controls.modelTriggerPadding).not.toBeNull();
-        expect(controls.effortTriggerPadding).not.toBeNull();
-        const effortLabel = expectControlRect(controls.effortLabel, "composer thinking label");
         const context = expectControlRect(controls.context, "composer context control");
         const attach = expectControlRect(controls.attach, "composer attach control");
         const send = expectControlRect(controls.send, "composer send control");
@@ -3207,8 +3195,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           textarea,
           meta,
           model,
-          modelTrigger,
-          effortTrigger,
           context,
           attach,
           send,
@@ -3239,28 +3225,21 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         expect(rectsOverlap(model, send)).toBe(false);
         const contextModelGap = model.x - (context.x + context.width);
         expect(contextModelGap).toBeGreaterThanOrEqual(-1);
+        expect(contextModelGap).toBeLessThanOrEqual(9);
         const composerFontSize = await page
           .locator(".agent-chat__composer-combobox > textarea")
           .evaluate((textareaNode) => Number.parseFloat(getComputedStyle(textareaNode).fontSize));
         if (width <= 768) {
-          const modelPadding = width <= 480 ? 0 : 4;
-          expect(controls.modelTriggerPadding).toEqual({
-            end: modelPadding,
-            start: modelPadding,
-          });
-          expect(controls.effortTriggerPadding).toEqual({ end: 4, start: 4 });
           expect(composerFontSize).toBe(16);
+          const modelSettings = expectControlRect(
+            controls.modelSettings,
+            "composer model settings",
+          );
           expect(model.width).toBeGreaterThanOrEqual(40);
           expect(model.width).toBeLessThanOrEqual(footer.width);
-          for (const trigger of [modelTrigger, effortTrigger]) {
-            expect(trigger.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
-            expect(trigger.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
-          }
-          for (const label of [modelLabel, effortLabel]) {
-            expect(label.clientWidth).toBeDefined();
-            expect(label.scrollWidth).toBeDefined();
-            expect(label.scrollWidth ?? 0).toBeLessThanOrEqual((label.clientWidth ?? 0) + 1);
-          }
+          expect(modelSettings.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
+          expect(modelSettings.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
+          expect(modelSettings.x).toBeGreaterThanOrEqual(context.x + context.width - 1);
           expect(send.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
           expect(send.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
           for (const control of [model, context]) {
@@ -3270,6 +3249,20 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           }
           expect(footer.height).toBeLessThanOrEqual(53);
         } else {
+          const modelTrigger = expectControlRect(controls.modelTrigger, "composer model trigger");
+          const modelLabel = expectControlRect(controls.modelLabel, "composer model label");
+          const effortTrigger = expectControlRect(
+            controls.effortTrigger,
+            "composer thinking trigger",
+          );
+          const effortLabel = expectControlRect(controls.effortLabel, "composer thinking label");
+          expect(controls.modelTriggerPadding).not.toBeNull();
+          expect(controls.effortTriggerPadding).not.toBeNull();
+          for (const label of [modelLabel, effortLabel]) {
+            expect(label.scrollWidth ?? 0).toBeLessThanOrEqual((label.clientWidth ?? 0) + 1);
+          }
+          expect(modelTrigger.x).toBeGreaterThanOrEqual(model.x - 1);
+          expect(effortTrigger.x).toBeGreaterThanOrEqual(modelTrigger.x + modelTrigger.width - 1);
           // The editor reads at input size, while the controls around it stay
           // chrome-sized — that difference is what marks the text as the
           // subject of the surface.
