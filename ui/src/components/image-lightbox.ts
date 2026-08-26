@@ -47,6 +47,8 @@ class OpenClawImageLightbox extends OpenClawLitElement {
   private panzoom?: PanzoomObject;
   private panzoomImage?: HTMLImageElement;
   private panzoomStage?: HTMLDivElement;
+  private backdropPointer: { pointerId: number; clientX: number; clientY: number } | undefined;
+  private motionQuery?: MediaQueryList;
 
   static override styles = css`
     :host {
@@ -255,10 +257,23 @@ class OpenClawImageLightbox extends OpenClawLitElement {
         min-height: 44px;
       }
     }
+
+    @media (prefers-reduced-motion: reduce) {
+      openclaw-modal-dialog {
+        --show-duration: 0ms;
+        --hide-duration: 0ms;
+      }
+
+      .actions .action {
+        transition: none;
+      }
+    }
   `;
 
   override connectedCallback() {
     super.connectedCallback();
+    this.motionQuery = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)");
+    this.motionQuery?.addEventListener("change", this.handleMotionPreferenceChange);
     if (this.hasUpdated) {
       void this.resolveOriginalUrl();
       void this.updateComplete.then(() => {
@@ -272,6 +287,8 @@ class OpenClawImageLightbox extends OpenClawLitElement {
 
   override disconnectedCallback() {
     this.originalUrlRequest += 1;
+    this.motionQuery?.removeEventListener("change", this.handleMotionPreferenceChange);
+    this.motionQuery = undefined;
     this.destroyPanzoom();
     this.revokeOriginalBlobUrl();
     super.disconnectedCallback();
@@ -307,6 +324,7 @@ class OpenClawImageLightbox extends OpenClawLitElement {
                       href=${this.openOriginalUrl}
                       target="_blank"
                       rel="noreferrer"
+                      aria-label=${t("chat.imageLightbox.openOriginal")}
                     >
                       <span class="open-original-label">
                         ${t("chat.imageLightbox.openOriginal")}
@@ -320,6 +338,7 @@ class OpenClawImageLightbox extends OpenClawLitElement {
               <button
                 class="action close"
                 type="button"
+                autofocus
                 aria-label=${t("chat.imageLightbox.close")}
                 @click=${this.emitClose}
               >
@@ -327,7 +346,13 @@ class OpenClawImageLightbox extends OpenClawLitElement {
               </button>
             </div>
           </header>
-          <div class="stage" @click=${this.handleStageClick} @dblclick=${this.handleDoubleClick}>
+          <div
+            class="stage"
+            @pointerdown=${this.handleStagePointerDown}
+            @pointerup=${this.handleStagePointerUp}
+            @pointercancel=${this.resetBackdropPointer}
+            @dblclick=${this.handleDoubleClick}
+          >
             <img
               class=${this.scale > 1 ? "image zoomed" : "image"}
               src=${this.src}
@@ -396,6 +421,7 @@ class OpenClawImageLightbox extends OpenClawLitElement {
     this.panzoomImage = image;
     this.panzoomStage = stage;
     this.panzoom = Panzoom(image, {
+      duration: this.motionQuery?.matches ? 0 : 200,
       maxScale: MAX_SCALE,
       minScale: 1,
       panOnlyWhenZoomed: true,
@@ -455,10 +481,47 @@ class OpenClawImageLightbox extends OpenClawLitElement {
     this.panzoom?.zoomToPoint(DOUBLE_TAP_SCALE, event);
   };
 
-  private handleStageClick = (event: MouseEvent) => {
-    if (event.target === event.currentTarget) {
+  private handleStagePointerDown = (event: PointerEvent) => {
+    const stage = event.currentTarget;
+    if (
+      event.button !== 0 ||
+      !event.isPrimary ||
+      event.target !== stage ||
+      !(stage instanceof HTMLElement)
+    ) {
+      this.backdropPointer = undefined;
+      return;
+    }
+    this.backdropPointer = {
+      pointerId: event.pointerId,
+      clientX: event.clientX,
+      clientY: event.clientY,
+    };
+    stage.setPointerCapture?.(event.pointerId);
+  };
+
+  private handleStagePointerUp = (event: PointerEvent) => {
+    const pointer = this.backdropPointer;
+    this.backdropPointer = undefined;
+    const stage = event.currentTarget;
+    const releaseTarget = this.shadowRoot?.elementFromPoint?.(event.clientX, event.clientY);
+    const shouldClose =
+      event.button === 0 &&
+      event.isPrimary &&
+      pointer?.pointerId === event.pointerId &&
+      releaseTarget === stage &&
+      Math.hypot(event.clientX - pointer.clientX, event.clientY - pointer.clientY) <= 4;
+    if (shouldClose) {
       this.emitClose();
     }
+  };
+
+  private resetBackdropPointer = () => {
+    this.backdropPointer = undefined;
+  };
+
+  private handleMotionPreferenceChange = (event: MediaQueryListEvent) => {
+    this.panzoom?.setOptions({ duration: event.matches ? 0 : 200 });
   };
 
   private zoomIn = () => this.panzoom?.zoomIn();

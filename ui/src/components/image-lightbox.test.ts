@@ -89,7 +89,7 @@ describe("openclaw-image-lightbox", () => {
       expect(root?.querySelector<HTMLAnchorElement>("a")?.href).toBe("blob:lightbox-original"),
     );
     expect(fetchImage).toHaveBeenCalledTimes(1);
-    expect(root?.querySelector<HTMLButtonElement>(".close")?.hasAttribute("autofocus")).toBe(false);
+    expect(root?.querySelector<HTMLButtonElement>(".close")?.hasAttribute("autofocus")).toBe(true);
   });
 
   it("accepts parameters on safe raster MIME types", async () => {
@@ -248,5 +248,71 @@ describe("openclaw-image-lightbox", () => {
 
     dialogAdapter.dispatchEvent(new CustomEvent("modal-cancel", { bubbles: true }));
     expect(closes).toBe(2);
+  });
+
+  it("dismisses only a pointer gesture that starts and ends on the backdrop", async () => {
+    const { modal } = await renderLightbox();
+    const stage = modal.shadowRoot?.querySelector<HTMLElement>(".stage");
+    const image = modal.shadowRoot?.querySelector<HTMLImageElement>(".image");
+    Object.defineProperty(modal.shadowRoot!, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => stage ?? null),
+    });
+    let closes = 0;
+    modal.addEventListener("image-lightbox-close", () => {
+      closes += 1;
+    });
+
+    image?.dispatchEvent(
+      new PointerEvent("pointerdown", { bubbles: true, button: 0, isPrimary: true, pointerId: 1 }),
+    );
+    stage?.dispatchEvent(
+      new PointerEvent("pointerup", { bubbles: true, button: 0, isPrimary: true, pointerId: 1 }),
+    );
+    expect(closes).toBe(0);
+
+    stage?.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        bubbles: true,
+        button: 0,
+        clientX: 10,
+        clientY: 10,
+        isPrimary: true,
+        pointerId: 2,
+      }),
+    );
+    stage?.dispatchEvent(
+      new PointerEvent("pointerup", {
+        bubbles: true,
+        button: 0,
+        clientX: 30,
+        clientY: 30,
+        isPrimary: true,
+        pointerId: 2,
+      }),
+    );
+    expect(closes).toBe(0);
+
+    stage?.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        bubbles: true,
+        button: 0,
+        clientX: 10,
+        clientY: 10,
+        isPrimary: true,
+        pointerId: 3,
+      }),
+    );
+    stage?.dispatchEvent(
+      new PointerEvent("pointerup", {
+        bubbles: true,
+        button: 0,
+        clientX: 10,
+        clientY: 10,
+        isPrimary: true,
+        pointerId: 3,
+      }),
+    );
+    expect(closes).toBe(1);
   });
 });
