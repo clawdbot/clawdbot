@@ -37,7 +37,11 @@ export function sanitizeApprovalScope(scope: ApprovalScope): ApprovalScope | nul
 
   switch (scope.kind) {
     case "message-send": {
-      const recipients = scope.recipients?.map(sanitizeExecApprovalDisplayText);
+      // Previews are a subset of recipientCount; the count stays authoritative,
+      // so excess previews are clamped rather than rendered inconsistently.
+      const recipients = scope.recipients
+        ?.slice(0, scope.recipientCount)
+        .map(sanitizeExecApprovalDisplayText);
       if (recipients?.some((recipient) => exceedsApprovalScopeStringLimit(recipient, 128))) {
         return null;
       }
