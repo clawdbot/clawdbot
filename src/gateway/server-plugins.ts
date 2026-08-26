@@ -527,7 +527,7 @@ function createGatewayPluginRuntimeBindings(
       hooks: {
         dispatchHookAgentTurn: async (params) => {
           const pluginId = getPluginRuntimeGatewayRequestScope()?.pluginId;
-          const gatewayContext = resolveBoundGatewayContext();
+          const gatewayContext = resolveBoundGatewayContext?.();
           if (!pluginId || !gatewayContext?.dispatchHookAgentTurn) {
             throw new Error("Plugin hook runtime requires an active Gateway and plugin identity.");
           }
