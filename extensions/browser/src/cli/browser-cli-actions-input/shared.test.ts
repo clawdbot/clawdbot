@@ -1,4 +1,5 @@
 // Browser tests cover shared plugin behavior.
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
@@ -47,6 +48,17 @@ describe("readFields", () => {
       readFields({ fields: "[]", fieldsFile: "/tmp/openclaw-browser-fields.json" }),
     ).rejects.toThrow("Specify only one of --fields or --fields-file");
   });
+
+  it("preserves oversized fields files that normalize to a small request", async () => {
+    await withTempDir("openclaw-browser-fields-", async (tempDir) => {
+      const fieldsPath = path.join(tempDir, "fields.json");
+      await fs.writeFile(fieldsPath, `[${" ".repeat(1_048_577)}{"ref":"1","value":"ok"}]`);
+
+      await expect(readFields({ fieldsFile: fieldsPath })).resolves.toEqual([
+        { ref: "1", type: "text", value: "ok" },
+      ]);
+    });
+  });
 });
 
 describe("readActionsPayload", () => {
@@ -54,6 +66,11 @@ describe("readActionsPayload", () => {
     await expect(
       readActionsPayload({ actions: "[]", actionsFile: "/tmp/openclaw-browser-actions.json" }),
     ).rejects.toThrow("Specify only one of --actions or --actions-file");
+  });
+
+  it("preserves inline actions larger than the file input ceiling", async () => {
+    const actions = " ".repeat(1_000_001);
+    await expect(readActionsPayload({ actions })).resolves.toBe(actions);
   });
 
   it("bounds action files with the same byte limit as stdin", async () => {
@@ -99,4 +116,16 @@ describe("readActionsPayload", () => {
       });
     });
   });
+
+  it.skipIf(process.platform === "win32")(
+    "rejects FIFO action files without opening them",
+    async () => {
+      await withTempDir("openclaw-browser-actions-", async (tempDir) => {
+        const fifoPath = path.join(tempDir, "actions.pipe");
+        execFileSync("mkfifo", [fifoPath]);
+
+        await expect(readActionsPayload({ actionsFile: fifoPath })).rejects.toThrow("regular file");
+      });
+    },
+  );
 });
