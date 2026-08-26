@@ -6,7 +6,7 @@ import { resolveAccountEntry } from "openclaw/plugin-sdk/account-core";
 import { fireAndForgetBoundedHook } from "openclaw/plugin-sdk/hook-runtime";
 import { getChildLogger } from "openclaw/plugin-sdk/logging-core";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
-import type { OpenClawConfig } from "../runtime-api.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   rememberWhatsAppBaileysCacheEntry,
   readWhatsAppBaileysCacheEntry,
