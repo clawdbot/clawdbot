@@ -370,61 +370,27 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
       },
     });
 
-    try {
-      await waitFor(
-        () =>
-          listSubagentRunsForRequester(hop1ChildSessionKey).some((entry) =>
-            entry.task.includes("[continuation:chain-hop:2]"),
-          ),
-        4_000,
-      );
-    } catch {
-      throw new Error(
-        JSON.stringify({
-          rootRuns: listSubagentRunsForRequester(rootSessionKey).map((entry) => ({
-            runId: entry.runId,
-            childSessionKey: entry.childSessionKey,
-            requesterSessionKey: entry.requesterSessionKey,
-            task: entry.task,
-            endedAt: entry.execution.endedAt,
-            cleanupCompletedAt: entry.cleanupCompletedAt,
-          })),
-          childRuns: listSubagentRunsForRequester(hop1ChildSessionKey).map((entry) => ({
-            runId: entry.runId,
-            childSessionKey: entry.childSessionKey,
-            requesterSessionKey: entry.requesterSessionKey,
-            task: entry.task,
-          })),
-          pendingDelegates: pendingDelegateCount(hop1ChildSessionKey),
-          logs: logSpy.mock.calls.map(([message]: [unknown]) => String(message)),
-          errors: errorSpy.mock.calls.map(([message]: [unknown]) => String(message)),
-        }),
-      );
-    }
+    await waitFor(
+      () =>
+        listSubagentRunsForRequester(hop1ChildSessionKey).some((entry) =>
+          entry.task.includes("[continuation:chain-hop:2]"),
+        ),
+      4_000,
+    );
     const requesterRuns = listSubagentRunsForRequester(hop1ChildSessionKey);
     const hop2Run = requesterRuns.find((entry) =>
       entry.task.includes("[continuation:chain-hop:2]"),
     );
 
     if (!hop2Run) {
-      const childRunIds = requesterRuns.map((entry) => `${entry.runId}:${entry.task}`);
-      const agentCallCount = callGatewayMock.mock.calls.filter(
-        ([request]) => request.method === "agent",
-      ).length;
-      const logMessages = logSpy.mock.calls
-        .map(([message]: [unknown]) => (typeof message === "string" ? message : String(message)))
-        .slice(0, 12);
-      throw new Error(
-        `hop2 run missing childRuns=${JSON.stringify(childRunIds)} agentCalls=${agentCallCount} logs=${JSON.stringify(logMessages)}`,
-      );
+      throw new Error("expected one registered depth-2 delegate");
     }
-    expect(hop2Run).toBeDefined();
-    expect(hop2Run?.requesterSessionKey).toBe(hop1ChildSessionKey);
-    expect(hop2Run?.controllerSessionKey).toBe(hop1ChildSessionKey);
-    expect(hop2Run?.cleanup).toBe("keep");
-    expect(hop2Run?.continuationTargetSessionKey).toBeUndefined();
-    expect(hop2Run?.continuationTargetSessionKeys).toEqual([hop1ChildSessionKey, rootSessionKey]);
-    expect(hop2Run?.continuationFanoutMode).toBe("tree");
+    expect(hop2Run.requesterSessionKey).toBe(hop1ChildSessionKey);
+    expect(hop2Run.controllerSessionKey).toBe(hop1ChildSessionKey);
+    expect(hop2Run.cleanup).toBe("keep");
+    expect(hop2Run.continuationTargetSessionKey).toBeUndefined();
+    expect(hop2Run.continuationTargetSessionKeys).toEqual([hop1ChildSessionKey, rootSessionKey]);
+    expect(hop2Run.continuationFanoutMode).toBe("tree");
 
     await waitFor(() => {
       const intermediate = getSubagentRunByChildSessionKey(hop1ChildSessionKey);
@@ -434,22 +400,13 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
       );
     }, 4_000);
     const waitingIntermediate = getSubagentRunByChildSessionKey(hop1ChildSessionKey);
-    if (waitingIntermediate?.wakeOnDescendantSettle !== true) {
-      throw new Error(
-        JSON.stringify({
-          intermediate: waitingIntermediate,
-          pendingDescendants: countPendingDescendantRuns(hop1ChildSessionKey),
-          childRuns: listSubagentRunsForRequester(hop1ChildSessionKey),
-          logs: logSpy.mock.calls.map(([message]: [unknown]) => String(message)),
-          errors: errorSpy.mock.calls.map(([message]: [unknown]) => String(message)),
-        }),
-      );
-    }
+    expect(countPendingDescendantRuns(hop1ChildSessionKey)).toBe(1);
     expect(waitingIntermediate?.runId).toBe(hop1RunId);
+    expect(waitingIntermediate?.wakeOnDescendantSettle).toBe(true);
     expect(waitingIntermediate?.cleanupCompletedAt).toBeUndefined();
 
-    const hop2SessionKey = hop2Run?.childSessionKey as string;
-    const hop2RunId = hop2Run?.runId as string;
+    const hop2SessionKey = hop2Run.childSessionKey;
+    const hop2RunId = hop2Run.runId;
     const hop2StartedAt = Date.now() - 500;
     const hop2EndedAt = Date.now();
     gatewayState.waitResults.set(hop2RunId, {
@@ -489,33 +446,19 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
       });
     emitHop2Completion();
 
-    try {
-      await waitFor(
-        () =>
-          countReturns(rootSessionKey, grandchildDone) === rootGrandchildReturnsBefore + 1 &&
-          countReturns(hop1ChildSessionKey, grandchildDone) === hop1GrandchildReturnsBefore + 1 &&
-          inProcessDispatchMock.mock.calls.some(
-            ([method, params]) =>
-              method === "agent" &&
-              params.sessionKey === hop1ChildSessionKey &&
-              typeof params.message === "string" &&
-              params.message.includes(grandchildDone),
-          ),
-        4_000,
-      );
-    } catch {
-      throw new Error(
-        JSON.stringify({
-          intermediate: getSubagentRunByChildSessionKey(hop1ChildSessionKey),
-          grandchild: getSubagentRunByChildSessionKey(hop2SessionKey),
-          rootReturns: countReturns(rootSessionKey, grandchildDone),
-          intermediateReturns: countReturns(hop1ChildSessionKey, grandchildDone),
-          inProcessDispatches: inProcessDispatchMock.mock.calls,
-          logs: logSpy.mock.calls.map(([message]: [unknown]) => String(message)),
-          errors: errorSpy.mock.calls.map(([message]: [unknown]) => String(message)),
-        }),
-      );
-    }
+    await waitFor(
+      () =>
+        countReturns(rootSessionKey, grandchildDone) === rootGrandchildReturnsBefore + 1 &&
+        countReturns(hop1ChildSessionKey, grandchildDone) === hop1GrandchildReturnsBefore + 1 &&
+        inProcessDispatchMock.mock.calls.some(
+          ([method, params]) =>
+            method === "agent" &&
+            params.sessionKey === hop1ChildSessionKey &&
+            typeof params.message === "string" &&
+            params.message.includes(grandchildDone),
+        ),
+      4_000,
+    );
 
     const recoveredIntermediate = getSubagentRunByChildSessionKey(hop1ChildSessionKey);
     if (!recoveredIntermediate || recoveredIntermediate.runId === hop1RunId) {
