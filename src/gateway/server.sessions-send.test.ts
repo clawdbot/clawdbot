@@ -246,6 +246,104 @@ describe("sessions_send gateway loopback", () => {
     expect(firstCall?.inputProvenance?.sourceTool).toBe("sessions_send");
   });
 
+  it("includes configured non-default requester identity for an unscoped session", async () => {
+    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    if (!configPath) {
+      throw new Error("OPENCLAW_CONFIG_PATH missing in gateway test environment");
+    }
+    const dir = tempDirs.make("openclaw-sessions-send-identity-");
+    const requesterSessionKey = "main";
+    const targetSessionKey = "agent:orion:main";
+    const config: OpenClawConfig = {
+      tools: {
+        sessions: { visibility: "all" },
+        agentToAgent: { enabled: true },
+      },
+      agents: {
+        list: [
+          { id: "main", default: true, identity: { name: "Wrong Main" } },
+          { id: "stevo", identity: { name: "Stevo" } },
+          { id: "orion" },
+        ],
+      },
+    };
+    let previousConfig: string | undefined;
+    try {
+      previousConfig = await fs.readFile(configPath, "utf-8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    }
+
+    testState.sessionStorePath = path.join(dir, "sessions.json");
+    testState.agentsConfig = config.agents;
+    try {
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf-8");
+      await writeSessionStore({
+        entries: {
+          [requesterSessionKey]: { sessionId: "identity-stevo", updatedAt: Date.now() },
+          [targetSessionKey]: { sessionId: "identity-orion", updatedAt: Date.now() },
+        },
+      });
+      await prepareGatewayReplyRuntimeForTest({ force: true });
+
+      const spy = agentCommandMock as unknown as Mock<(opts: unknown) => Promise<void>>;
+      spy.mockReset();
+      spy.mockImplementation(async (opts: unknown) =>
+        emitLifecycleAssistantReply({
+          opts,
+          defaultSessionId: "identity-orion",
+          resolveText: (extraSystemPrompt) => {
+            if (extraSystemPrompt?.includes("Agent-to-agent reply step")) {
+              return "REPLY_SKIP";
+            }
+            if (extraSystemPrompt?.includes("Agent-to-agent announce step")) {
+              return "ANNOUNCE_SKIP";
+            }
+            return "orion saw requester identity";
+          },
+        }),
+      );
+
+      const tool = createOpenClawTools({
+        requesterAgentIdOverride: "stevo",
+        agentSessionKey: requesterSessionKey,
+        agentChannel: "discord",
+        config,
+      }).find((candidate) => candidate.name === "sessions_send");
+      if (!tool) {
+        throw new Error("missing sessions_send tool");
+      }
+
+      const result = await tool.execute("call-gateway-identity-proof", {
+        sessionKey: targetSessionKey,
+        message: "prove requester identity",
+        timeoutSeconds: 5,
+      });
+      expectSessionsSendDetails(result, {
+        reply: "orion saw requester identity",
+        sessionKey: targetSessionKey,
+      });
+
+      const targetRun = spy.mock.calls
+        .map(([opts]) => opts as { sessionKey?: string; extraSystemPrompt?: string })
+        .find((call) => call.sessionKey === targetSessionKey);
+      expect(targetRun?.extraSystemPrompt).toContain("Agent-to-agent message context");
+      expect(targetRun?.extraSystemPrompt).toContain("Agent 1 (requester) name: Stevo.");
+      expect(targetRun?.extraSystemPrompt).not.toContain("Wrong Main");
+    } finally {
+      testState.agentsConfig = undefined;
+      testState.sessionStorePath = undefined;
+      if (previousConfig === undefined) {
+        await fs.rm(configPath, { force: true });
+      } else {
+        await fs.writeFile(configPath, previousConfig, "utf-8");
+      }
+    }
+  });
+
   it.each([
     {
       label: "direct",

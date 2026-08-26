@@ -883,6 +883,7 @@ describe("worker session tool topology", () => {
       expect.objectContaining({
         args: expect.objectContaining({ sessionKey: TARGET.sessionKey }),
         options: expect.objectContaining({
+          agentId: SOURCE.agentId,
           expectedTargetSessionId: TARGET.sessionId,
           idempotencyKey: expect.stringMatching(/^worker-session-send:/u),
         }),

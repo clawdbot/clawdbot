@@ -50,7 +50,7 @@ import { recordSessionParticipantBestEffort } from "../../sessions/session-parti
 import { registerSessionStateWatch } from "../../sessions/session-state-events.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
-import { listAgentIds, resolveSessionAgentId } from "../agent-scope.js";
+import { listAgentIds, resolveAgentConfig, resolveSessionAgentId } from "../agent-scope.js";
 import {
   type EmbeddedAgentQueueMessageOptions,
   type EmbeddedAgentQueueMessageOutcome,
@@ -190,6 +190,14 @@ type GatewayCaller = AgentToolGatewayRequestCaller;
 const SESSIONS_SEND_REPLY_HISTORY_LIMIT = 50;
 const SESSIONS_SEND_MESSAGE_ALIASES = ["SendMessage", "content", "text"] as const;
 const NO_REPLY_MESSAGE = "No visible reply or pending announcement. Continue or retry if needed.";
+
+function resolveRequesterIdentityName(params: {
+  cfg: OpenClawConfig;
+  requesterAgentId: string;
+}): string | undefined {
+  const name = resolveAgentConfig(params.cfg, params.requesterAgentId)?.identity?.name?.trim();
+  return name || undefined;
+}
 
 function normalizeSessionsSendArguments(args: unknown): Record<string, unknown> {
   const params =
@@ -525,6 +533,7 @@ export function createSessionsSendTool(opts?: {
       }
 
       const a2aPolicy = createAgentToAgentPolicy(cfg);
+      const requesterName = resolveRequesterIdentityName({ cfg, requesterAgentId });
       const sessionVisibility = resolveEffectiveSessionToolsVisibility({
         cfg,
         sandboxed: opts?.sandboxed === true,
@@ -1013,6 +1022,7 @@ export function createSessionsSendTool(opts?: {
               : undefined;
 
           const agentMessageContext = buildAgentToAgentMessageContext({
+            requesterName,
             requesterSessionKey: replyRequesterSessionKey,
             requesterChannel,
             targetSessionKey: displayKey,
@@ -1115,6 +1125,7 @@ export function createSessionsSendTool(opts?: {
                   // Cron runs are isolated jobs; target replies must not become new
                   // requester turns, but the target-side announce still runs.
                   maxPingPongTurns: isIsolatedCronRequester ? 0 : maxPingPongTurns,
+                  requesterName,
                   requesterSessionKey: replyRequesterSessionKey,
                   requesterAgentId,
                   requesterChannel,

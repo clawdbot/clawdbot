@@ -472,6 +472,7 @@ export function createWorkerSessionToolExecutor(params: {
       };
       assertCurrentTarget();
       const tool = createSessionsSendTool({
+        agentId: operation.source.agentId,
         agentSessionKey: operation.source.sessionKey,
         expectedTargetSessionId: operation.target.sessionId,
         idempotencyKey: operation.idempotencyKey,
