@@ -9,7 +9,7 @@ import { extractNonEmptyAssistantText, isLiveTestEnabled } from "openclaw/plugin
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import {
-  buildStaticOpencodeZenProviderConfig,
+  buildOpencodeZenLiveProviderConfig,
   listOpencodeZenModelCatalogEntries,
 } from "./provider-catalog.js";
 
@@ -20,7 +20,7 @@ const LIVE_MODEL_ID =
   process.env.OPENCLAW_LIVE_OPENCODE_DEEPSEEK_MODEL?.trim() || "deepseek-v4-flash-free";
 const LIVE = isLiveTestEnabled(["OPENCODE_LIVE_TEST"]) && OPENCODE_API_KEY.length > 0;
 const describeLive = LIVE ? describe : describe.skip;
-const describeCatalogLive = isLiveTestEnabled(["OPENCODE_LIVE_TEST"]) ? describe : describe.skip;
+const describeCatalogLive = LIVE ? describe : describe.skip;
 
 type OpencodeModelsResponse = {
   data?: Array<{ id?: unknown; object?: unknown }>;
@@ -85,52 +85,30 @@ async function fetchOpencodeZenModelIds(): Promise<string[]> {
   return modelIds;
 }
 
-function listStaticOpencodeZenModelIds(): string[] {
-  return buildStaticOpencodeZenProviderConfig()
-    .models.map((model) => model.id)
-    .toSorted();
-}
-
 describeCatalogLive("opencode Zen live catalog drift", () => {
-  it("covers every global live id with trusted metadata and filters deprecated rows", async () => {
+  it("discovers active live ids from authoritative metadata without hardcoding the catalog", async () => {
     const liveIds = await fetchOpencodeZenModelIds();
-    const staticIds = listStaticOpencodeZenModelIds();
-    expect(new Set(staticIds).size).toBe(staticIds.length);
+    const discovered = await buildOpencodeZenLiveProviderConfig({
+      apiKey: OPENCODE_API_KEY,
+      discoveryApiKey: OPENCODE_API_KEY,
+    });
+    const discoveredIds = discovered.models.map((model) => model.id).toSorted();
+    expect(new Set(discoveredIds).size).toBe(discoveredIds.length);
 
     const trustedRows = listOpencodeZenModelCatalogEntries();
     const trustedIdSet = new Set(trustedRows.map((row) => row.id));
     const missingTrustedMetadata = liveIds.filter((id) => !trustedIdSet.has(id));
-    const deprecatedLiveIds = trustedRows
-      .filter((row) => row.status === "deprecated" && liveIds.includes(row.id))
-      .map((row) => row.id)
-      .toSorted();
-    const expectedActiveIds = liveIds.filter((id) => !deprecatedLiveIds.includes(id));
+    const deprecatedIds = new Set(
+      trustedRows.filter((row) => row.status === "deprecated").map((row) => row.id),
+    );
 
-    expect(
-      { missingTrustedMetadata, deprecatedLiveIds, staticIds },
-      [
-        "OpenCode Zen global catalog has ids without trusted provider metadata,",
-        "or active discovery no longer matches global availability after lifecycle filtering.",
-        "Key-scoped absence is not retirement evidence.",
-      ].join(" "),
-    ).toEqual({
-      missingTrustedMetadata: [],
-      deprecatedLiveIds: [
-        "claude-opus-4-8",
-        "claude-sonnet-4",
-        "glm-5",
-        "gpt-5-codex",
-        "gpt-5.1-codex",
-        "gpt-5.1-codex-max",
-        "gpt-5.1-codex-mini",
-        "gpt-5.2-codex",
-        "gpt-5.5",
-        "kimi-k2.5",
-        "ling-3.0-flash-free",
-        "minimax-m2.5",
-        "minimax-m2.7",
-      ],
-      staticIds: expectedActiveIds,
+    expect(missingTrustedMetadata).toEqual([]);
+    expect(discoveredIds.every((id) => liveIds.includes(id) && !deprecatedIds.has(id))).toBe(true);
+    expect(discovered.models.find((model) => model.id === "x-preview-f-free")).toMatchObject({
+      api: "openai-completions",
+      contextWindow: 1_000_000,
+      maxTokens: 131_072,
+      compat: { supportedReasoningEfforts: ["low", "high", "max"] },
     });
   }, 30_000);
 });

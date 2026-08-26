@@ -99,30 +99,38 @@ provider ids split so upstream per-model routing stays correct.
 
 ### Zen
 
-| Property         | Value                                                                                                                 |
-| ---------------- | --------------------------------------------------------------------------------------------------------------------- |
-| Runtime provider | `opencode`                                                                                                            |
-| Example models   | `opencode/gpt-5.6-sol`, `opencode/kimi-k3`, `opencode/gemini-3.6-flash`, `opencode/minimax-m3`, `opencode/big-pickle` |
+| Property         | Value                                                                                                                                              |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Runtime provider | `opencode`                                                                                                                                         |
+| Example models   | `opencode/gpt-5.6-sol`, `opencode/kimi-k3`, `opencode/gemini-3.6-flash`, `opencode/minimax-m3`, `opencode/big-pickle`, `opencode/x-preview-f-free` |
 
 Run `openclaw models list --provider opencode` for the current active list,
 which also includes the promoted free-tier rows `opencode/big-pickle`,
 `opencode/deepseek-v4-flash-free`, `opencode/laguna-s-2.1-free`,
 `opencode/ling-3.0-tiny-free`, `opencode/longcat-2.0-free`,
 `opencode/mimo-v2.5-free`,
-`opencode/nemotron-3-ultra-free`, and `opencode/north-mini-code-free`.
+`opencode/nemotron-3-ultra-free`, `opencode/north-mini-code-free`, and
+`opencode/x-preview-f-free` (Ox Alpha Free).
 
-Live discovery safely intersects OpenCode's returned IDs with trusted OpenClaw
-metadata. A key-scoped response can omit models that are unavailable to that
-workspace; that absence does not retire the offline definition. Deprecated
-explicit refs remain resolvable for existing configurations but are not shown
-as current recommendations.
+Live discovery combines the models available to your OpenCode account with
+authoritative model metadata from `https://models.opencode.ai/api.json`.
+OpenClaw fetches and caches that catalog only when OpenCode Zen or Go is
+configured or explicitly selected with OpenCode credentials; startup and
+unrelated providers never download it. New upstream models become available
+without an OpenClaw update. A key-scoped response can omit models unavailable
+to that workspace. Deprecated explicit refs remain resolvable for existing
+configurations but are not shown as current recommendations.
+
+Ox Alpha Free is available for a limited time. OpenCode says this model has
+zero data retention and is not used for model training; see the current
+[OpenCode Zen pricing and policy](https://opencode.ai/docs/zen/).
 
 ### Go
 
-| Property         | Value                                                                        |
-| ---------------- | ---------------------------------------------------------------------------- |
-| Runtime provider | `opencode-go`                                                                |
-| Example models   | `opencode-go/kimi-k3`, `opencode-go/gpt-5.6-luna`, `opencode-go/qwen3.8-max` |
+| Property         | Value                                                                                                     |
+| ---------------- | --------------------------------------------------------------------------------------------------------- |
+| Runtime provider | `opencode-go`                                                                                             |
+| Example models   | `opencode-go/kimi-k3`, `opencode-go/gpt-5.6-luna`, `opencode-go/qwen3.8-max`, `opencode-go/ox-alpha-free` |
 
 See [OpenCode Go](/providers/opencode-go) for the full Go model table.
 
