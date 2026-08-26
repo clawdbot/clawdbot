@@ -8,7 +8,7 @@
   },
   "type": "module",
   "dependencies": {
-    "@agentclientprotocol/claude-agent-acp": "0.69.0",
+    "@agentclientprotocol/claude-agent-acp": "0.70.0",
     "@agentclientprotocol/codex-acp": "1.4.0",
     "acpx": "0.13.1",
     "smol-toml": "1.8.0",

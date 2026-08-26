@@ -1483,6 +1483,14 @@ describe("release validation no-push transport", () => {
     expect(dockerCall.with).toEqual({
       tag: "${{ inputs.tag }}",
       release_sha: "${{ needs.resolve_release_target.outputs.sha }}",
+      focused_release_evidence_run_id:
+        "${{ inputs.release_evidence_mode == 'authorized-beta-focused-v1' && inputs.focused_release_evidence_run_id || '' }}",
+      focused_release_evidence_run_attempt:
+        "${{ needs.resolve_release_target.outputs.focused_release_evidence_run_attempt }}",
+      focused_release_evidence_workflow_full_ref:
+        "${{ needs.resolve_release_target.outputs.focused_release_evidence_workflow_full_ref }}",
+      focused_release_evidence_workflow_sha:
+        "${{ needs.resolve_release_target.outputs.focused_release_evidence_workflow_sha }}",
     });
     expect(dockerCall.secrets).toEqual({
       DOCKERHUB_USERNAME: "${{ secrets.DOCKERHUB_USERNAME }}",

@@ -171,6 +171,46 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
     expect(firstCopilotRuntimeAuthRequest().githubToken).toBe("test-token-placeholder");
   });
 
+  it.each([
+    { label: "enterprise", profileDomain: "acme.ghe.com" },
+    { label: "public", profileDomain: "github.com" },
+  ])(
+    "preserves the selected $label OAuth account's domain for embedding auth",
+    async (testCase) => {
+      resolveFirstGithubTokenMock.mockResolvedValueOnce({
+        githubToken: "durable-github-token",
+        githubDomain: testCase.profileDomain,
+        hasProfile: true,
+      });
+      mockDiscoveryResponse({
+        ok: true,
+        json: buildModelsResponse([
+          { id: "text-embedding-3-small", supported_endpoints: ["/v1/embeddings"] },
+        ]),
+      });
+
+      await githubCopilotMemoryEmbeddingProviderAdapter.create({
+        ...defaultCreateOptions(),
+        config: {
+          models: {
+            providers: {
+              "github-copilot": {
+                baseUrl: "https://api.githubcopilot.com",
+                models: [],
+                params: { githubDomain: "other.ghe.com" },
+              },
+            },
+          },
+        },
+      });
+
+      expect(firstCopilotRuntimeAuthRequest()).toMatchObject({
+        githubToken: "durable-github-token",
+        githubDomain: testCase.profileDomain,
+      });
+    },
+  );
+
   it("matches embedding-capable models when supported_endpoints is missing or malformed", async () => {
     mockDiscoveryResponse({
       ok: true,

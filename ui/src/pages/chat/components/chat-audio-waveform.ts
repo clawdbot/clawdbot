@@ -117,15 +117,10 @@ function makeRoomForChatAudioBlob(sizeBytes: number): boolean {
   return true;
 }
 
-export function retainCachedChatAudioBlob(
+function retainChatAudioBlobEntry(
   cacheKey: string,
-): { value: CachedChatAudioBlob; release: () => void } | null {
-  const entry = chatAudioBlobCache.get(cacheKey);
-  if (!entry) {
-    return null;
-  }
-  chatAudioBlobCache.delete(cacheKey);
-  chatAudioBlobCache.set(cacheKey, entry);
+  entry: ChatAudioBlobCacheEntry,
+): { value: CachedChatAudioBlob; release: () => void } {
   entry.retainCount += 1;
   let released = false;
   return {
@@ -144,6 +139,18 @@ export function retainCachedChatAudioBlob(
   };
 }
 
+export function retainCachedChatAudioBlob(
+  cacheKey: string,
+): { value: CachedChatAudioBlob; release: () => void } | null {
+  const entry = chatAudioBlobCache.get(cacheKey);
+  if (!entry) {
+    return null;
+  }
+  chatAudioBlobCache.delete(cacheKey);
+  chatAudioBlobCache.set(cacheKey, entry);
+  return retainChatAudioBlobEntry(cacheKey, entry);
+}
+
 export function cacheAndRetainChatAudioBlob(
   cacheKey: string,
   value: CachedChatAudioBlob,
@@ -159,22 +166,7 @@ export function cacheAndRetainChatAudioBlob(
     URL.revokeObjectURL(value.blobUrl);
     return null;
   }
-  const entry = { ...value, retainCount: 1 };
+  const entry = { ...value, retainCount: 0 };
   chatAudioBlobCache.set(cacheKey, entry);
-  trimChatAudioBlobCache();
-  let released = false;
-  return {
-    value: entry,
-    release: () => {
-      if (released) {
-        return;
-      }
-      released = true;
-      const current = chatAudioBlobCache.get(cacheKey);
-      if (current && current.retainCount > 0) {
-        current.retainCount -= 1;
-      }
-      trimChatAudioBlobCache();
-    },
-  };
+  return retainChatAudioBlobEntry(cacheKey, entry);
 }

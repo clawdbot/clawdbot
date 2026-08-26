@@ -39,8 +39,11 @@ import {
 import { resolveSessionToolTargetAgentId } from "./scoped-session-access.js";
 import {
   createAgentToAgentPolicy,
+  formatSessionToolAccessDenial,
+  recordSessionToolActionFact,
   resolveEffectiveSessionToolsVisibility,
   resolveSessionToolAccess,
+  runSessionToolActionWithConflictReceipt,
 } from "./sessions-access.js";
 import { resolveSessionToolContext } from "./sessions-helpers.js";
 import { resolveSessionReference, shouldResolveSessionIdInput } from "./sessions-resolution.js";
@@ -310,7 +313,12 @@ async function resolvePatchTarget(
       callGateway,
     });
     if (!access.allowed) {
-      throw new ToolAuthorizationError(access.error);
+      throw new ToolAuthorizationError(
+        formatSessionToolAccessDenial(access, {
+          action: "status",
+          targetSessionKey: resolved.displayKey,
+        }),
+      );
     }
   }
   return {
@@ -350,9 +358,24 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         }
         const agentScope = parseAgentSessionKey(key) ? {} : { agentId };
         if (action === "reset") {
-          return jsonResult(
-            await callGateway("sessions.reset", { key, ...agentScope, reason: "reset" }),
-          );
+          const result = await runSessionToolActionWithConflictReceipt({
+            operation: "reset",
+            targetAgentId: agentId,
+            targetSessionKey: key,
+            run: async () =>
+              await callGateway("sessions.reset", {
+                key,
+                ...agentScope,
+                reason: "reset",
+              }),
+          });
+          recordSessionToolActionFact({
+            operation: "reset",
+            fact: "committed",
+            targetAgentId: agentId,
+            targetSessionKey: key,
+          });
+          return jsonResult(result);
         }
         // Archive returns the exact row generation. Carry it into the locked
         // delete so a concurrent reset cannot delete a replacement session.
@@ -362,13 +385,19 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         if (!expectedSessionId) {
           throw new ToolInputError("Session lifecycle action requires a durable session identity");
         }
-        const archived = await callGateway<{
-          entry?: { sessionId?: string; lifecycleRevision?: string };
-        }>("sessions.patch", {
-          key,
-          ...agentScope,
-          expectedSessionId,
-          archived: true,
+        const archived = await runSessionToolActionWithConflictReceipt({
+          operation: "delete",
+          targetAgentId: agentId,
+          targetSessionKey: key,
+          run: async () =>
+            await callGateway<{
+              entry?: { sessionId?: string; lifecycleRevision?: string };
+            }>("sessions.patch", {
+              key,
+              ...agentScope,
+              expectedSessionId,
+              archived: true,
+            }),
         });
         const archivedSessionId = normalizeOptionalString(archived.entry?.sessionId);
         if (!archivedSessionId) {
@@ -377,16 +406,29 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         const expectedLifecycleRevision = normalizeOptionalString(
           archived.entry?.lifecycleRevision,
         );
-        return jsonResult(
-          await callGateway("sessions.delete", {
-            key,
-            ...agentScope,
-            archivedOnly: true,
-            expectedSessionId: archivedSessionId,
-            ...(expectedLifecycleRevision ? { expectedLifecycleRevision } : {}),
-            deleteTranscript: readBooleanParam(params, "deleteTranscript") ?? true,
-          }),
-        );
+        const result = await runSessionToolActionWithConflictReceipt({
+          operation: "delete",
+          targetAgentId: agentId,
+          targetSessionKey: key,
+          run: async () =>
+            await callGateway<{ deleted?: boolean }>("sessions.delete", {
+              key,
+              ...agentScope,
+              archivedOnly: true,
+              expectedSessionId: archivedSessionId,
+              ...(expectedLifecycleRevision ? { expectedLifecycleRevision } : {}),
+              deleteTranscript: readBooleanParam(params, "deleteTranscript") ?? true,
+            }),
+        });
+        recordSessionToolActionFact({
+          operation: "delete",
+          // Archive is part of this composite action and already committed.
+          // A delete miss therefore cannot make the whole operation a no-op.
+          fact: "committed",
+          targetAgentId: agentId,
+          targetSessionKey: key,
+        });
+        return jsonResult(result);
       }
       if (action === "group_list") {
         return jsonResult(await callGateway("sessions.groups.list", {}));
@@ -635,6 +677,13 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
                 log.warn(`deferred self-archive failed for ${key}: ${formatErrorMessage(error)}`);
               });
 
+            recordSessionToolActionFact({
+              operation: "archive",
+              fact: "scheduled",
+              targetAgentId: agentId,
+              targetSessionKey: key,
+            });
+
             return jsonResult(
               withBoundedSessionsResolved(
                 {
@@ -649,7 +698,20 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         }
       }
 
-      const result = await callSessionPatch({ ...patch, ...agentScope });
+      const operation =
+        archived === true ? "archive" : archived === false ? "restore" : ("patch" as const);
+      const result = await runSessionToolActionWithConflictReceipt({
+        operation,
+        targetAgentId: agentId,
+        targetSessionKey: key,
+        run: async () => await callSessionPatch({ ...patch, ...agentScope }),
+      });
+      recordSessionToolActionFact({
+        operation,
+        fact: "committed",
+        targetAgentId: agentId,
+        targetSessionKey: key,
+      });
       return jsonResult(
         withBoundedSessionsResolved(
           {

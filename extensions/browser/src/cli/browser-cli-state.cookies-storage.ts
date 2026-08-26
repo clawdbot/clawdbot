@@ -27,7 +27,7 @@ async function runMutationRequest(params: {
   successMessage: string;
 }) {
   try {
-    const result = await callBrowserRequest(params.parent, params.request, { timeoutMs: 20000 });
+    const result = await callBrowserRequest(params.parent, params.request);
     if (params.parent?.json) {
       defaultRuntime.writeJson(result);
       return;
@@ -51,18 +51,14 @@ export function registerBrowserCookiesAndStorageCommands(
     const profile = parent?.browserProfile;
     const targetId = resolveTargetId(opts.targetId, cmd);
     try {
-      const result = await callBrowserRequest<{ cookies?: unknown[] }>(
-        parent,
-        {
-          method: "GET",
-          path: "/cookies",
-          query: {
-            targetId,
-            profile,
-          },
+      const result = await callBrowserRequest<{ cookies?: unknown[] }>(parent, {
+        method: "GET",
+        path: "/cookies",
+        query: {
+          targetId,
+          profile,
         },
-        { timeoutMs: 20000 },
-      );
+      });
       if (parent?.json) {
         defaultRuntime.writeJson(result);
         return;
@@ -143,19 +139,15 @@ export function registerBrowserCookiesAndStorageCommands(
         const profile = parent?.browserProfile;
         const targetId = resolveTargetId(opts.targetId, cmd2);
         try {
-          const result = await callBrowserRequest<{ values?: Record<string, string> }>(
-            parent,
-            {
-              method: "GET",
-              path: `/storage/${kind}`,
-              query: {
-                key: normalizeOptionalString(key),
-                targetId,
-                profile,
-              },
+          const result = await callBrowserRequest<{ values?: Record<string, string> }>(parent, {
+            method: "GET",
+            path: `/storage/${kind}`,
+            query: {
+              key: normalizeOptionalString(key),
+              targetId,
+              profile,
             },
-            { timeoutMs: 20000 },
-          );
+          });
           if (parent?.json) {
             defaultRuntime.writeJson(result);
             return;

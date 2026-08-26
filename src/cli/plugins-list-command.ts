@@ -77,11 +77,17 @@ export async function runPluginsListCommand(
     theme,
   } = await loadHumanListModules();
 
-  const workspaceScopeDiagnostic = report.diagnostics.find(
-    (diagnostic) => diagnostic.code === "workspace-scope-omitted",
+  const diagnostics = [...report.diagnostics, ...report.registryDiagnostics].filter(
+    (diagnostic) =>
+      diagnostic.level !== "info" &&
+      (diagnostic.level !== "error" ||
+        !list.some((plugin) => plugin.status === "error" && plugin.error === diagnostic.message)),
   );
-  if (workspaceScopeDiagnostic) {
-    runtime.log(theme.warn(`Warning: ${workspaceScopeDiagnostic.message}`));
+  for (const { level, message } of diagnostics) {
+    const format = level === "error" ? theme.error : theme.warn;
+    runtime.log(format(`${level === "error" ? "Error" : "Warning"}: ${message}`));
+  }
+  if (diagnostics.length > 0) {
     runtime.log("");
   }
 

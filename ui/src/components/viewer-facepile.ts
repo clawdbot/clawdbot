@@ -1,6 +1,6 @@
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
-import type { PresenceEntry } from "../api/types.ts";
+import { readPresenceEntries } from "../app/user-profile.ts";
 import {
   presenceViewerLabel,
   projectPresenceEntries,
@@ -19,14 +19,6 @@ import {
   type PersonActivityRouting,
 } from "./person-activity-link.ts";
 import "./tooltip.ts";
-
-function readPresenceEntries(value: unknown): PresenceEntry[] {
-  if (!value || typeof value !== "object") {
-    return [];
-  }
-  const presence = (value as { presence?: unknown }).presence;
-  return Array.isArray(presence) ? (presence as PresenceEntry[]) : [];
-}
 
 function normalized(value: string | null | undefined): string | undefined {
   const trimmed = value?.trim();
@@ -92,7 +84,7 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
 
   override render() {
     const projection = projectPresenceEntries(
-      readPresenceEntries(this.presencePayload),
+      readPresenceEntries(this.presencePayload) ?? [],
       this.selfUserId,
       this.selfInstanceId,
     );

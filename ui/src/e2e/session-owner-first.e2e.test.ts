@@ -63,7 +63,7 @@ suite.define(() => {
       sessions: sharedRoster.sessions.slice(0, 1),
     };
     const gateway = await installMockGateway(page, {
-      deferredMethods: ["sessions.list"],
+      deferredMethods: ["sessions.list", "sessions.list"],
       presenceUsers: [{ self: true, id: "profile-ada", name: "Ada" }],
       sessionKey: "agent:main:ada",
       methodResponses: {
@@ -79,23 +79,20 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server?.baseUrl ?? ""}chat`);
       await expect
-        .poll(async () =>
-          (await gateway.getRequests("sessions.list")).some(
-            (request) =>
-              (request.params as { ownerId?: unknown } | undefined)?.ownerId === "profile-ada",
-          ),
-        )
-        .toBe(true);
-      await gateway.deferNext("sessions.list", { agentId: "main", limit: 60 });
+        .poll(async () => (await gateway.getRequests("sessions.list")).length)
+        .toBeGreaterThanOrEqual(2);
+      expect(
+        (await gateway.getRequests("sessions.list")).some(
+          (request) =>
+            (request.params as { ownerId?: unknown } | undefined)?.ownerId === "profile-ada",
+        ),
+      ).toBe(true);
       await gateway.resolveDeferred("sessions.list", ownerRoster);
 
       const adaRow = page.locator('[data-session-key="agent:main:ada"]');
       const bobRow = page.locator('[data-session-key="agent:main:bob"]');
       await adaRow.waitFor();
       await expect.poll(() => bobRow.count()).toBe(0);
-      await expect
-        .poll(async () => (await gateway.getRequests("sessions.list")).length)
-        .toBeGreaterThanOrEqual(2);
       await captureSidebar(page, "owner-first-roster.png");
 
       await gateway.resolveDeferred("sessions.list", sharedRoster);

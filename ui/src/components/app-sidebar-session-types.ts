@@ -256,23 +256,6 @@ const SIDEBAR_HIDDEN_SESSION_CATALOGS_STORAGE_KEY = "openclaw:sidebar:sessions:h
 export const SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT =
   "openclaw:sidebar-hidden-catalogs-changed";
 
-export function limitSidebarSessionRows(rows: SidebarRecentSession[], limit: number) {
-  const requiredCount = rows.filter((row) => row.active || row.pinned).length;
-  let optionalSlots = Math.max(0, limit - requiredCount);
-  // Active and pinned sessions remain reachable without changing their
-  // relative order, even when their sort position falls outside the page.
-  return rows.filter((row) => {
-    if (row.active || row.pinned) {
-      return true;
-    }
-    if (optionalSlots === 0) {
-      return false;
-    }
-    optionalSlots -= 1;
-    return true;
-  });
-}
-
 export function loadStoredSidebarSessionsGrouping(): SidebarSessionsGrouping {
   return normalizeSidebarSessionsGrouping(
     getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_GROUPING_STORAGE_KEY),

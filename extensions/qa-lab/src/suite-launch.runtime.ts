@@ -43,10 +43,12 @@ import {
 import { createQaSuiteProgressController } from "./suite-progress.js";
 import {
   buildQaSuiteSummaryJson,
+  shouldLogQaSuiteProgress,
   type QaSuiteResult,
   type QaSuiteRunParams,
   type QaSuiteScenarioResult,
   type QaSuiteSummaryJson,
+  writeQaSuiteProgress,
 } from "./suite.js";
 import * as dockerBatch from "./test-file-scenario-docker-batch.js";
 import {
@@ -412,21 +414,14 @@ async function resolveSuiteExecutionPlan(
     testFileScenariosByKind,
   };
 }
+
 async function runQaTestFileSuiteFromRuntime(params: {
   env?: NodeJS.ProcessEnv;
   runParams: QaSuiteRunParams | undefined;
   scenarios: readonly QaTestFileScenario[];
 }): Promise<QaTestFileScenarioRunResult> {
   const runParams = params.runParams;
-  if (runParams?.runtimePair) {
-    throw new Error("--runtime-pair requires execution.kind: flow scenarios.");
-  }
-  if (runParams?.forcedRuntime) {
-    throw new Error("forced runtime execution requires execution.kind: flow scenarios.");
-  }
-  if (runParams?.captureRuntimeParityCell) {
-    throw new Error("runtime parity capture requires execution.kind: flow scenarios.");
-  }
+  rejectFlowOnlySuiteOptionsForUnifiedRun(runParams);
   const repoRoot = path.resolve(runParams?.repoRoot ?? process.cwd());
   const outputDir = await resolveQaSuiteOutputDir(repoRoot, runParams?.outputDir);
   const providerMode = normalizeQaProviderMode(runParams?.providerMode ?? DEFAULT_QA_PROVIDER_MODE);
@@ -435,6 +430,9 @@ async function runQaTestFileSuiteFromRuntime(params: {
     evidenceMode: runParams?.evidenceMode,
     ...(params.env ? { env: params.env, envMode: "replace" as const } : {}),
     ...(runParams?.failFast ? { failFast: true } : {}),
+    ...(shouldLogQaSuiteProgress()
+      ? { progress: (message: string) => writeQaSuiteProgress(true, message) }
+      : {}),
     repoRoot,
     outputDir,
     providerMode,

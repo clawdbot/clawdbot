@@ -668,6 +668,10 @@
     "target": "Doctor"
   },
   {
+    "source": "Triage",
+    "target": "Triage"
+  },
+  {
     "source": "Config",
     "target": "配置"
   },

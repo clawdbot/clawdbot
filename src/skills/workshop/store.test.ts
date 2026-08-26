@@ -72,7 +72,6 @@ describe("Skill Workshop SQLite store", () => {
     const existing = new DatabaseSync(databasePath);
     existing.exec(`
       DROP TABLE skill_workshop_proposal_events;
-      DROP TABLE skill_workshop_proposal_origin_runs;
       DROP TABLE skill_workshop_proposal_rollbacks;
       DROP TABLE skill_workshop_proposals;
       DROP TABLE skill_workshop_collection_reviews;

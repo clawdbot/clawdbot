@@ -75,6 +75,7 @@ export const SessionRowSchema = Type.Object(
     pinnedAt: Type.Optional(Type.Number()),
     unread: Type.Optional(Type.Boolean()),
     lastReadAt: Type.Optional(Type.Number()),
+    markedUnreadAt: Type.Optional(Type.Number()),
     lastActivityAt: Type.Optional(Type.Number()),
     lastInteractionAt: Type.Optional(Type.Number()),
     status: Type.Optional(

@@ -19,7 +19,10 @@ import {
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
 import { buildPluginMetadataProviderFacts } from "./plugin-metadata-provider-facts.js";
-import { registerPluginMetadataSnapshotReaders } from "./plugin-metadata-snapshot.runtime.js";
+import {
+  adoptCurrentPluginMetadataSnapshotIfAbsentRuntime,
+  registerPluginMetadataSnapshotReaders,
+} from "./plugin-metadata-snapshot.runtime.js";
 import type {
   LoadPluginMetadataSnapshotParams,
   PluginMetadataSnapshot,
@@ -329,11 +332,31 @@ export function completePluginMetadataSnapshot(params: {
     return params.snapshot;
   }
   const workspaceDir = params.workspaceDir ?? params.snapshot.workspaceDir;
-  return loadPluginMetadataSnapshot({
+  const manifestStartedAt = performance.now();
+  const manifestRegistry = loadPluginManifestRegistryForInstalledIndex({
+    index: params.snapshot.index,
     config: params.config,
     env: params.env ?? process.env,
-    index: params.snapshot.index,
     ...(workspaceDir ? { workspaceDir } : {}),
+    includeDisabled: true,
+  });
+  const manifestRegistryMs = performance.now() - manifestStartedAt;
+  const completed = rebasePluginMetadataSnapshotManifestRegistry(params.snapshot, manifestRegistry);
+  const { pluginIds: _pluginIds, ...unscoped } = completed;
+  return freezeSnapshotValue({
+    ...unscoped,
+    configFingerprint: resolvePluginControlPlaneFingerprint({
+      config: params.config,
+      env: params.env,
+      index: completed.index,
+      policyHash: completed.policyHash,
+      workspaceDir,
+    }),
+    metrics: {
+      ...completed.metrics,
+      manifestRegistryMs,
+      totalMs: completed.metrics.totalMs + manifestRegistryMs,
+    },
   });
 }
 
@@ -357,7 +380,19 @@ export function resolvePluginMetadataSnapshot(
         : {}),
     });
     if (!current) {
-      return loadPluginMetadataSnapshot(params);
+      const snapshot = loadPluginMetadataSnapshot(params);
+      // Scoped or caller-owned discovery must never become process-wide metadata.
+      if (
+        params.index === undefined &&
+        params.workspaceDir === undefined &&
+        params.pluginIds === undefined &&
+        params.pluginIdScope === undefined &&
+        snapshot.workspaceDir === undefined &&
+        snapshot.pluginIds === undefined
+      ) {
+        adoptCurrentPluginMetadataSnapshotIfAbsentRuntime(snapshot, params);
+      }
+      return snapshot;
     }
     if (!params.index || isCurrentPluginMetadataSnapshotRuntimeGeneration(current)) {
       return current;

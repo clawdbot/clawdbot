@@ -167,7 +167,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     face: BoardFace,
   ) => void;
   @property({ attribute: false }) onFocusPane?: (paneId: string) => void;
-  @property({ attribute: false }) onPaneSessionChange?: (
+  onPaneSessionChange?: (
     paneId: string,
     nextSessionKey: string,
     options?: PaneSessionChangeOptions,
@@ -380,6 +380,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     }
   >();
   protected headerRenameInitialLabel: string | null = null;
+  protected headerRenameInitialValue = "";
   protected headerRenameSessionKey = "";
   protected headerCopiedTimer: number | null = null;
   protected composerPrefillAttentionTimer: number | null = null;

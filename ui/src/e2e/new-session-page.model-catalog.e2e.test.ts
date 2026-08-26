@@ -142,11 +142,7 @@ suite.define(() => {
       await gateway.waitForRequest("chat.metadata");
 
       const modelSelect = page.locator('[data-chat-model-select="true"]');
-      const errorState = page.locator('[data-chat-model-catalog-state="error"]');
-      await pollLocatorText(
-        errorState.locator(".chat-controls__model-catalog-state-label > span"),
-      ).toBe("Models unavailable");
-      expect(await errorState.count()).toBe(1);
+      await expect.poll(() => modelSelect.getAttribute("title")).toBe("Models unavailable");
       expect(await page.locator("[data-chat-model-option]").count()).toBe(0);
 
       await modelSelect.click();
@@ -202,13 +198,19 @@ suite.define(() => {
       const modelSelect = page.locator(
         '.new-session-page__composer [data-chat-model-select="true"]',
       );
+      await expect.poll(() => modelSelect.getAttribute("aria-disabled")).toBe("false");
       await modelSelect.click();
       await expect
         .poll(() => page.locator('[data-chat-model-option="openai/gpt-5.6-luna"]').textContent())
         .toContain(recoveredModel.name);
 
-      // The picker's own revalidation lands after the rows render, so wait for it.
+      // Explicit picker discovery refreshes the recovered metadata owner once.
       await expect.poll(async () => (await gateway.getRequests("chat.metadata")).length).toBe(3);
+      expect(await gateway.getRequests("models.list")).toEqual([
+        expect.objectContaining({
+          params: { view: "configured", agentId: "main", refresh: true },
+        }),
+      ]);
       expect(await gateway.getRequests("chat.metadata")).toEqual([
         expect.objectContaining({ params: { agentId: "main" } }),
         expect.objectContaining({ params: { agentId: "main" } }),
@@ -219,7 +221,7 @@ suite.define(() => {
     }
   });
 
-  it("shows a retryable CLI-agent failure and recovers both picker catalogs", async () => {
+  it("recovers a failed CLI-agent catalog without reloading model metadata for its retry", async () => {
     if (captureCatalogRetryProof) {
       await mkdir(catalogRetryProofDir, { recursive: true });
     }
@@ -336,7 +338,7 @@ suite.define(() => {
           catalogDiscoveryRequests(await gateway.getRequests("sessions.catalog.list")),
         )
         .toHaveLength(3);
-      await expect.poll(async () => (await gateway.getRequests("chat.metadata")).length).toBe(3);
+      await expect.poll(async () => (await gateway.getRequests("chat.metadata")).length).toBe(2);
       await expect
         .poll(() => page.locator('[data-chat-model-target="anthropic"]').isVisible())
         .toBe(true);

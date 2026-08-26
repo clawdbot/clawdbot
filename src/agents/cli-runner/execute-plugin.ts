@@ -13,11 +13,14 @@ import type {
 } from "../../plugins/cli-backend.types.js";
 import type { RunExit, TerminationReason } from "../../process/supervisor/types.js";
 import { resolveAdmittedRunActiveAssertion } from "../admitted-run-context.js";
+import { runBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
 import type { CliTerminalInterruption } from "../cli-output-contracts.js";
 import { resolveExecDefaults } from "../exec-defaults.js";
 import { isSignalTimeoutReason, type FailoverError } from "../failover-error.js";
 import { runStructuredInput } from "../harness/structured-input-execution.js";
 import { compileStructuredInputQuestions } from "../harness/structured-input.js";
+import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
+import { normalizeToolPolicyName } from "../tool-policy.js";
 import { callGatewayTool } from "../tools/gateway.js";
 import {
   closeCliLiveSession,
@@ -75,6 +78,123 @@ function createPluginToolPermissionHandler(params: {
       return denyTool(`OpenClaw denied native tool ${toolName}: it is unavailable to this run.`);
     }
 
+    // Provider schemas are not policy schemas: match canonical names and file operands.
+    const canonicalToolName = normalizeToolPolicyName(
+      toolName.replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2").replace(/([a-z0-9])([A-Z])/g, "$1_$2"),
+    );
+    const nativeFileTool =
+      ["read", "write", "edit"].includes(canonicalToolName) &&
+      Object.hasOwn(request.toolInput, "file_path");
+    let policyInput = request.toolInput;
+    if (nativeFileTool) {
+      const nativePath = request.toolInput.file_path;
+      if (typeof nativePath !== "string") {
+        return denyTool("OpenClaw denied native file tool use: invalid file path.");
+      }
+      if (Object.hasOwn(request.toolInput, "path") && request.toolInput.path !== nativePath) {
+        return denyTool("OpenClaw denied native file tool use: conflicting file paths.");
+      }
+      policyInput = { ...request.toolInput, path: nativePath };
+      if (canonicalToolName === "edit") {
+        const { old_string: oldText, new_string: newText, edits } = request.toolInput;
+        if (typeof oldText !== "string" || typeof newText !== "string") {
+          return denyTool("OpenClaw denied native edit tool use: invalid replacement.");
+        }
+        if (
+          edits !== undefined &&
+          (!Array.isArray(edits) ||
+            edits.length !== 1 ||
+            !isRecord(edits[0]) ||
+            edits[0].oldText !== oldText ||
+            edits[0].newText !== newText)
+        ) {
+          return denyTool("OpenClaw denied native edit tool use: conflicting replacements.");
+        }
+        policyInput.edits = [{ oldText, newText }];
+      }
+    }
+
+    const requester = {
+      ...((run.messageChannel ?? run.messageProvider)
+        ? { channel: run.messageChannel ?? run.messageProvider }
+        : {}),
+      ...(run.agentAccountId ? { accountId: run.agentAccountId } : {}),
+      ...(run.senderId ? { senderId: run.senderId } : {}),
+      ...(run.senderIsOwner !== undefined ? { senderIsOwner: run.senderIsOwner } : {}),
+    };
+    const hookResult = await runBeforeToolCallHook({
+      toolName: canonicalToolName,
+      params: policyInput,
+      ...(request.toolCallId ? { toolCallId: request.toolCallId } : {}),
+      signal,
+      ctx: {
+        ...(run.agentId ? { agentId: run.agentId } : {}),
+        ...(run.config ? { config: run.config } : {}),
+        cwd: params.context.cwd ?? params.context.workspaceDir,
+        workspaceDir: params.context.workspaceDir,
+        ...(run.sessionKey ? { sessionKey: run.sessionKey } : {}),
+        sessionId: run.sessionId,
+        runId: run.runId,
+        ...(run.trigger ? { trigger: run.trigger } : {}),
+        ...(run.approvalReviewerDeviceId
+          ? { approvalReviewerDeviceId: run.approvalReviewerDeviceId }
+          : {}),
+        ...(run.currentChannelId ? { channelId: run.currentChannelId } : {}),
+        ...(Object.keys(requester).length > 0 ? { requester } : {}),
+        turnSourceChannel: run.messageChannel ?? run.messageProvider,
+        turnSourceTo: run.chatId ?? run.currentChannelId,
+        turnSourceAccountId: run.agentAccountId,
+        turnSourceThreadId: run.currentThreadTs,
+        loopDetection: resolveToolLoopDetectionConfig({
+          cfg: run.config,
+          agentId: run.agentId,
+        }),
+      },
+    });
+    try {
+      assertActive();
+    } catch {
+      return denyTool("OpenClaw denied native tool use: the admitted run closed during policy.");
+    }
+    if (hookResult.blocked) {
+      return denyTool(hookResult.reason);
+    }
+    if (!isRecord(hookResult.params)) {
+      return denyTool("OpenClaw denied native tool use: before_tool_call returned invalid input.");
+    }
+    let toolInput = hookResult.params;
+    // SDK permission replies must return the native schema, never policy-only aliases.
+    if (nativeFileTool) {
+      if (typeof toolInput.path !== "string") {
+        return denyTool("OpenClaw denied native file tool use: invalid rewritten file path.");
+      }
+      if (toolInput === policyInput) {
+        toolInput = request.toolInput;
+      } else {
+        toolInput = { ...toolInput, file_path: toolInput.path };
+        if (!Object.hasOwn(request.toolInput, "path")) {
+          delete toolInput.path;
+        }
+        if (canonicalToolName === "edit") {
+          const edits = toolInput.edits;
+          if (
+            !Array.isArray(edits) ||
+            edits.length !== 1 ||
+            !isRecord(edits[0]) ||
+            typeof edits[0].oldText !== "string" ||
+            typeof edits[0].newText !== "string"
+          ) {
+            return denyTool("OpenClaw denied an unrepresentable native edit rewrite.");
+          }
+          toolInput.old_string = edits[0].oldText;
+          toolInput.new_string = edits[0].newText;
+          if (!Object.hasOwn(request.toolInput, "edits")) {
+            delete toolInput.edits;
+          }
+        }
+      }
+    }
+
     const plan = resolveCliNativeToolApprovalPlan(permission);
     if (plan === "deny") {
       return denyTool(
@@ -84,7 +204,7 @@ function createPluginToolPermissionHandler(params: {
     const currentGrants = getCliLiveSessionApprovalGrants(params.context) ?? grants;
     if (plan === "allow" || (permission.ask !== "always" && currentGrants.has(toolName))) {
       assertActive();
-      return { behavior: "allow", updatedInput: request.toolInput };
+      return { behavior: "allow", updatedInput: toolInput };
     }
 
     params.onPendingApproval(1);
@@ -92,7 +212,7 @@ function createPluginToolPermissionHandler(params: {
     try {
       outcome = await requestCliNativeToolApproval({
         toolName,
-        toolInput: request.toolInput,
+        toolInput,
         pluginId: params.context.backendResolved.id,
         sessionKey: run.sessionKey,
         agentId: run.agentId,
@@ -122,7 +242,7 @@ function createPluginToolPermissionHandler(params: {
     if (outcome.grantAlways) {
       currentGrants.add(toolName);
     }
-    return { behavior: "allow", updatedInput: request.toolInput };
+    return { behavior: "allow", updatedInput: toolInput };
   };
 }
 

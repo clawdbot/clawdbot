@@ -10,10 +10,11 @@
   --shell-chrome-controls-inset: 10px;
   --shell-chrome-control-size: 32px;
   --shell-chrome-controls-gap: 4px;
-  --shell-access-width: 0px;
+  --shell-native-titlebar-controls-inset: 92px;
+  --shell-native-titlebar-controls-width: 156px;
   /* Collapsed navigation adds new-thread to the two persistent controls.
      Optional controls contribute only while they are actually mounted. */
-  --shell-controls-width: calc(104px + var(--shell-access-width));
+  --shell-controls-width: 104px;
   --shell-chrome-safe-area-left: calc(var(--shell-controls-width) - 18px);
   /* Desktop has no topbar row — the sidebar owns navigation. Narrow viewports
      (layout.mobile.css) and the chat split toolbar restore the row height. */
@@ -172,51 +173,8 @@
   stroke-linejoin: round;
 }
 
-.shell:has(.scope-upgrade-shell-status) {
-  --shell-access-width: 36px;
-}
-
 .shell:has(.shell-chrome-controls__custodian) {
-  --shell-controls-width: calc(140px + var(--shell-access-width));
-}
-
-.scope-upgrade-shell-status {
-  position: fixed;
-  top: 10px;
-  left: calc(
-    var(--shell-nav-width) + var(--shell-chrome-controls-inset) + 2 *
-      (var(--shell-chrome-control-size) + var(--shell-chrome-controls-gap))
-  );
-  z-index: 45;
-}
-
-.shell--nav-collapsed .scope-upgrade-shell-status {
-  left: calc(
-    var(--shell-chrome-controls-inset) + 3 *
-      (var(--shell-chrome-control-size) + var(--shell-chrome-controls-gap))
-  );
-}
-
-:is(.shell--settings, .shell--onboarding:not(.shell--mobile-nav)) .scope-upgrade-shell-status {
-  left: calc(var(--shell-nav-width) + var(--shell-chrome-controls-inset));
-}
-
-.shell--nav-collapsed:has(.scope-upgrade-shell-status) .shell-chrome-controls__custodian {
-  margin-left: calc(var(--shell-chrome-control-size) + var(--shell-chrome-controls-gap));
-}
-
-.shell--mobile-nav .scope-upgrade-shell-status {
-  top: max(10px, env(safe-area-inset-top));
-  right: max(58px, env(safe-area-inset-right));
-  left: auto;
-  width: 40px;
-  height: 40px;
-  border-color: transparent;
-  box-shadow: none;
-}
-
-.shell--onboarding.shell--mobile-nav .scope-upgrade-shell-status {
-  right: max(12px, env(safe-area-inset-right));
+  --shell-controls-width: 140px;
 }
 
 .shell--mobile-nav .shell-chrome-controls {
@@ -240,12 +198,6 @@ html.openclaw-native-macos .shell-chrome-controls {
   top: 52px;
 }
 
-html.openclaw-native-macos:not(.openclaw-native-web-chrome)
-  .shell:not(.shell--mobile-nav)
-  .scope-upgrade-shell-status {
-  top: 52px;
-}
-
 /* Newer Mac apps host a native sidebar toggle in the titlebar next to
    back/forward and add openclaw-native-nav; the in-page nav toggles would
    duplicate it, so they disappear (⌘B and the accessible titlebar button
@@ -259,31 +211,9 @@ html.openclaw-native-nav .topbar .topbar-nav-toggle {
   display: none;
 }
 
-html.openclaw-native-nav:not(.openclaw-native-web-chrome)
-  .shell:not(.shell--mobile-nav)
-  .scope-upgrade-shell-status {
-  left: calc(
-    var(--shell-nav-width) + var(--shell-chrome-controls-inset) + var(--shell-chrome-control-size) +
-      var(--shell-chrome-controls-gap)
-  );
-}
-
-html.openclaw-native-nav:not(.openclaw-native-web-chrome)
-  .shell--nav-collapsed:not(.shell--mobile-nav)
-  .scope-upgrade-shell-status {
-  left: var(--shell-chrome-controls-inset);
-}
-
 /* Web-chrome hosts provide this entire cluster in the native titlebar. */
 html.openclaw-native-web-chrome .shell-chrome-controls {
   display: none;
-}
-
-html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav) .scope-upgrade-shell-status {
-  top: 11px;
-  left: 252px;
-  width: 28px;
-  height: 28px;
 }
 
 .macos-titlebar-controls {
@@ -291,14 +221,14 @@ html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav) .scope-upgrade-sh
   top: 0;
   /* Clear the traffic lights (~74px cluster) with breathing room before the
      first hosted button, so the two groups read as separate. */
-  left: 92px;
+  left: var(--shell-native-titlebar-controls-inset);
   /* Above app chrome (<=45), below dropdowns/dialogs (>=100). */
   z-index: 50;
   display: flex;
   align-items: center;
   gap: 4px;
   width: max-content;
-  min-width: 156px;
+  min-width: var(--shell-native-titlebar-controls-width);
   height: var(--openclaw-native-titlebar-height, 50px);
 }
 
@@ -1845,8 +1775,6 @@ openclaw-settings-save-indicator:empty {
    here so gateway threads and native coding catalogs cannot drift apart. */
 .sidebar-recent-session {
   --sidebar-child-session-toggle-width: max(34px, calc(36px * var(--control-ui-text-scale)));
-  /* Title line box, shared by the label's line-height and the overlaid actions:
-     both must resolve the same value or the buttons drift off the title. */
   --sidebar-title-line-height: calc(18px * var(--control-ui-text-scale));
 
   display: flex;
@@ -2151,9 +2079,6 @@ openclaw-settings-save-indicator:empty {
   padding-right: 2px;
 }
 
-/* Actions ride the title line: on a single-line row that is the row centre, and
-   on a two-line row it keeps them off the subtitle. The buttons re-enable their
-   own pointer-events on hover/focus. */
 .sidebar-recent-session:not(.sidebar-recent-session--child) > .sidebar-recent-session__aside {
   position: absolute;
   inset: 50% 2px auto auto;
@@ -2161,8 +2086,6 @@ openclaw-settings-save-indicator:empty {
   pointer-events: none;
 }
 
-/* Title line midpoint = the link's top padding plus half the title's line box.
-   Deriving it keeps the buttons on the title when either value changes. */
 .sidebar-recent-session:not(.sidebar-recent-session--child, .sidebar-recent-session--single-line)
   > .sidebar-recent-session__link {
   padding-block: 1px;
@@ -2190,21 +2113,17 @@ openclaw-settings-save-indicator:empty {
   right: calc(var(--sidebar-child-session-toggle-width) + 4px);
 }
 
-/* Only the title yields width to the actions. The second line keeps subtitle,
-   badges, state and time visible, which is the point of moving the buttons up. */
 .sidebar-recent-session:not(
     .sidebar-recent-session--child,
     .sidebar-recent-session--single-line
   ):is(:hover, :focus-within)
   .sidebar-recent-session__title-row {
-  padding-right: var(--row-actions-reserve);
+  padding-right: var(--session-row-actions-reserve);
 }
 
-/* Single-line rows put the endcap beside the title, so the reservation has to
-   cover the whole line there rather than the title alone. */
 .sidebar-recent-session--single-line:not(.sidebar-recent-session--child):is(:hover, :focus-within)
   .sidebar-recent-session__text {
-  padding-right: var(--row-actions-reserve);
+  padding-right: var(--session-row-actions-reserve);
 }
 
 .nav-collapse-toggle__icon {
@@ -2589,6 +2508,10 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   font: inherit;
   font-size: calc(13px * var(--control-ui-text-scale));
   text-align: left;
+}
+
+.row.session-menu__label {
+  gap: 8px;
 }
 
 /* Web Awesome's shadow row adds `margin-inline-end: 0.75em !important` to the
@@ -3055,10 +2978,8 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
     inset: 50% 2px auto auto;
   }
 
-  /* Always-visible 44px controls span a two-line row, so reserve their width
-     from the whole text column rather than letting them cover the endcap. */
   .sidebar-recent-session:not(.sidebar-recent-session--child) .sidebar-recent-session__text {
-    padding-right: var(--row-actions-reserve);
+    padding-right: var(--session-row-actions-reserve);
   }
 
   .sidebar-recent-session:not(.sidebar-recent-session--child) .sidebar-recent-session__title-row {
@@ -3413,72 +3334,17 @@ openclaw-sidebar-attention {
   min-width: 0;
 }
 
-.sidebar-identity-card__name,
-.sidebar-identity-card__subtitle {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .sidebar-identity-card__name {
   display: flex;
   align-items: center;
   gap: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--text-strong);
   font-size: calc(13.5px * var(--control-ui-text-scale));
   font-weight: 600;
   line-height: 18px;
-}
-
-.sidebar-identity-card__subtitle {
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  line-height: 1.2;
-}
-
-.sidebar-identity-card__subtitle--gateway {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.sidebar-identity-card__gateway-health {
-  width: 6px;
-  height: 6px;
-  flex: none;
-  border-radius: 50%;
-  background: var(--muted);
-}
-
-.sidebar-identity-card__gateway-health[data-health="ok"] {
-  background: var(--ok);
-}
-
-.sidebar-identity-card__gateway-health[data-health="error"] {
-  background: var(--danger);
-}
-
-.sidebar-identity-card__gateway-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sidebar-identity-card__gateway-primary {
-  flex: none;
-}
-
-.sidebar-identity-card__status {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
 }
 
 openclaw-tooltip.sidebar-hover-tooltip {
@@ -3616,6 +3482,13 @@ openclaw-tooltip.sidebar-hover-tooltip {
   background: color-mix(in srgb, var(--danger) 18%, transparent);
 }
 
+.sidebar-footer-bar__status--restarting,
+.sidebar-footer-bar__status--restarting:hover {
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  color: var(--warn);
+  cursor: default;
+}
+
 .sidebar-footer-bar__status:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
@@ -3632,6 +3505,16 @@ openclaw-tooltip.sidebar-hover-tooltip {
   height: 6px;
   border-radius: var(--radius-full);
   background: var(--danger);
+}
+
+.sidebar-footer-bar__status--restarting .sidebar-footer-bar__status-dot {
+  background: var(--warn);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .sidebar-footer-bar__status--restarting .sidebar-footer-bar__status-dot {
+    animation: pulse-subtle 1.2s ease-in-out infinite;
+  }
 }
 
 .sidebar-session-group-running {
@@ -3982,6 +3865,16 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
 .sidebar-footer-build:focus-visible {
   color: var(--text);
   text-decoration: none;
+}
+
+.sidebar-footer-build__text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-footer-build__update {
+  color: var(--inbox-attention);
 }
 
 /* Dev-checkout branch strip: only rendered when the gateway runs from a git
@@ -4429,24 +4322,17 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   min-width: 0;
 }
 
-/* Action reservations on this viewport and the single-line text column are
-   deliberately not transitioned: the marquee measures their clipping width
-   on the next frame, so an animated width would make it scroll short. */
 .sidebar-recent-session__title-row {
   display: flex;
   align-items: center;
   min-width: 0;
 }
 
-/* Desktop action hitboxes belong entirely to the title line. Grow that line to
-   the 24px target and reclaim the space from the link padding above. */
 .sidebar-recent-session:not(.sidebar-recent-session--child, .sidebar-recent-session--single-line)
   .sidebar-recent-session__title-row {
   height: max(24px, var(--sidebar-title-line-height));
 }
 
-/* Single-line rows lay the text column out in a row, so the title box has to
-   absorb the shrink there the way the bare label used to. */
 .sidebar-recent-session--single-line .sidebar-recent-session__title-row {
   flex: 1 1 0;
 }
@@ -4491,17 +4377,13 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   color: var(--muted);
 }
 
-/* The endcap shares the trailing column with the action icons on the line
-   above, and those sit inset inside their hover targets, so it borrows the same
-   inset rather than running flush to the row edge. */
 .sidebar-recent-session__details-endcap {
   display: inline-flex;
   align-items: center;
-  gap: var(--row-glyph-gap, 6px);
+  gap: 6px;
   max-width: 100%;
   height: 18px;
   min-width: 0;
-  padding-right: calc((var(--row-action-size) - 14px) / 2);
   overflow: hidden;
   flex: 0 1 auto;
   margin-left: auto;

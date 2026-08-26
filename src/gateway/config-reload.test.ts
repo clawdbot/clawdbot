@@ -381,6 +381,7 @@ describe("buildGatewayReloadPlan", () => {
     "plugins.load.paths.0",
     "gateway.auth.mode",
     "secrets.egressProxy.enabled",
+    "secrets.egressProxy.allowedHosts",
     "secrets.egressProxy.bypassHosts",
   ])("keeps restart-owned path restart-backed: %s", (path) => {
     const plan = buildGatewayReloadPlan([path]);
@@ -435,6 +436,19 @@ describe("buildGatewayReloadPlan", () => {
       noopPaths: [],
       ...expected,
     });
+  });
+
+  it("hot reloads Skill Workshop autonomous mode changes", () => {
+    const path = "skills.workshop.autonomous.mode";
+    const plan = buildGatewayReloadPlan([path]);
+
+    expect(plan).toMatchObject({
+      restartGateway: false,
+      hotReasons: [path],
+      noopPaths: [],
+      reconcileSkillReviewJobs: true,
+    });
+    expect(isNoopGatewayReloadPlan(plan)).toBe(false);
   });
 
   it.each([

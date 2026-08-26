@@ -455,4 +455,48 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
       model: EMBEDDING_MODEL,
     });
   });
+
+  it("keeps API key rotation out of memory identity without dropping tenant headers", async () => {
+    const readIdentity = async (headers: Record<string, string>) =>
+      (
+        await lmstudioMemoryEmbeddingProviderAdapter.create({
+          config: buildConfig({ provider: { params: { preload: false } } }),
+          provider: "lmstudio",
+          model: EMBEDDING_MODEL,
+          fallback: "none",
+          remote: { headers },
+        })
+      ).runtime?.cacheKeyData;
+
+    const defaultIdentity = await readIdentity({});
+    const firstTenant = await readIdentity({
+      Authorization: "Bearer synthetic-before",
+      "X-API-KEY": "synthetic-key-before",
+      "X-Tenant": "tenant-a",
+    });
+    const rotatedTenant = await readIdentity({
+      Authorization: "Bearer synthetic-after",
+      "x-Api-Key": "synthetic-key-after",
+      "X-Tenant": "tenant-a",
+    });
+    const otherTenant = await readIdentity({
+      "X-Api-Key": "synthetic-key-after",
+      "X-Tenant": "tenant-b",
+    });
+
+    expect(defaultIdentity).toEqual({
+      provider: "lmstudio",
+      baseUrl: "http://localhost:1234/v1",
+      model: EMBEDDING_MODEL,
+      headers: [["Content-Type", "application/json"]],
+    });
+    expect(firstTenant).toEqual(rotatedTenant);
+    expect(firstTenant).not.toEqual(otherTenant);
+    expect(firstTenant).toMatchObject({
+      headers: [
+        ["Content-Type", "application/json"],
+        ["X-Tenant", "tenant-a"],
+      ],
+    });
+  });
 });

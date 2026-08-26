@@ -480,8 +480,12 @@ describe("cron task run history", () => {
       1,
       storeKey,
     );
+    task.error = "legacy error";
+    task.terminalSummary = "legacy summary";
     task.detail = {
-      ...(task.detail as Record<string, TaskRecord["detail"]>),
+      kind: "cron-run",
+      status: "ok",
+      storeKey,
       internalFutureField: "secret",
       triggerState: { secret: true },
       delivery: "malformed",
@@ -492,6 +496,7 @@ describe("cron task run history", () => {
     expect(Object.hasOwn(entry ?? {}, "storeKey")).toBe(false);
     expect(Object.hasOwn(entry ?? {}, "internalFutureField")).toBe(false);
     expect(Object.hasOwn(entry ?? {}, "triggerState")).toBe(false);
+    expect(entry).toMatchObject({ error: "legacy error", summary: "legacy summary" });
     expect(entry?.delivery).toBeUndefined();
     expect(entry?.failureNotificationDelivery).toBeUndefined();
   });

@@ -4,14 +4,13 @@
 // max-lines budget.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetConfigRuntimeState, type OpenClawConfig } from "../config/config.js";
-import { startHeartbeatRunner } from "./heartbeat-runner.js";
+import { wake as wakeCronService } from "../cron/service/wake.js";
+import { setHeartbeatsEnabled, startHeartbeatRunner } from "./heartbeat-runner.js";
 import { requestHeartbeat } from "./heartbeat-wake.js";
 
 describe("startHeartbeatRunner targeted unscheduled wake dispatch", () => {
   type RunOnce = Parameters<typeof startHeartbeatRunner>[0]["runOnce"];
   type MockRunOnce = RunOnce & { mock: { calls: unknown[][] } };
-  const TEST_SCHEDULER_SEED = "heartbeat-runner-test-seed";
-
   function useFakeHeartbeatTime() {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(0));
@@ -50,7 +49,6 @@ describe("startHeartbeatRunner targeted unscheduled wake dispatch", () => {
     const runner = startHeartbeatRunner({
       cfg: params.cfg,
       runOnce: params.runSpy,
-      stableSchedulerSeed: TEST_SCHEDULER_SEED,
     });
 
     requestHeartbeat(params.wake);
@@ -63,9 +61,121 @@ describe("startHeartbeatRunner targeted unscheduled wake dispatch", () => {
   }
 
   afterEach(() => {
+    setHeartbeatsEnabled(true);
     resetConfigRuntimeState();
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it.each(["now", "next-heartbeat"] as const)(
+    "runs a targeted manual %s wake when recurring heartbeats are disabled",
+    async (mode) => {
+      useFakeHeartbeatTime();
+      const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+      const runner = startHeartbeatRunner({
+        cfg: {
+          agents: { defaults: { heartbeat: { every: "0m" } }, list: [{ id: "main" }] },
+        } as OpenClawConfig,
+        runOnce: runSpy,
+      });
+      const enqueueSystemEvent = vi.fn();
+      const state = {
+        deps: {
+          enqueueSystemEvent,
+          requestHeartbeat: (wake: Parameters<typeof requestHeartbeat>[0]) =>
+            requestHeartbeat({ ...wake, coalesceMs: 0 }),
+        },
+      } as unknown as Parameters<typeof wakeCronService>[0];
+
+      expect(
+        wakeCronService(state, {
+          mode,
+          text: "Operator requested a session update.",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+        }),
+      ).toEqual({ ok: true });
+      expect(enqueueSystemEvent).toHaveBeenCalledWith("Operator requested a session update.", {
+        agentId: "main",
+        sessionKey: "agent:main:main",
+      });
+
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(runSpy).toHaveBeenCalledOnce();
+      expectRunCallFields(runSpy, 0, {
+        agentId: "main",
+        source: "manual",
+        intent: "immediate",
+        reason: "wake",
+        sessionKey: "agent:main:main",
+      });
+      runner.stop();
+    },
+  );
+
+  it.each([
+    {
+      name: "without a session target",
+      wake: { agentId: "main", sessionKey: undefined },
+    },
+    {
+      name: "for an unconfigured agent",
+      wake: { agentId: "unknown", sessionKey: "agent:unknown:main" },
+    },
+    {
+      name: "with event intent",
+      wake: { agentId: "main", sessionKey: "agent:main:main", intent: "event" as const },
+    },
+    {
+      name: "with a non-manual reason",
+      wake: { agentId: "main", sessionKey: "agent:main:main", reason: "manual" },
+    },
+  ])("rejects an unscheduled manual wake $name", async ({ wake }) => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: { defaults: { heartbeat: { every: "0m" } }, list: [{ id: "main" }] },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+    });
+
+    requestHeartbeat({
+      source: "manual",
+      intent: "immediate",
+      reason: "wake",
+      ...wake,
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(runSpy).not.toHaveBeenCalled();
+    runner.stop();
+  });
+
+  it("keeps targeted manual wakes disabled when heartbeats are globally disabled", async () => {
+    useFakeHeartbeatTime();
+    setHeartbeatsEnabled(false);
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: { defaults: { heartbeat: { every: "0m" } }, list: [{ id: "main" }] },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+    });
+
+    requestHeartbeat({
+      source: "manual",
+      intent: "immediate",
+      reason: "wake",
+      sessionKey: "agent:main:main",
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(runSpy).not.toHaveBeenCalled();
+    runner.stop();
   });
 
   it.each([
@@ -162,7 +272,6 @@ describe("startHeartbeatRunner targeted unscheduled wake dispatch", () => {
     const runner = startHeartbeatRunner({
       cfg: { agents: { list: [{ id: "main", heartbeat: { every: "30m" } }] } } as OpenClawConfig,
       runOnce: runSpy,
-      stableSchedulerSeed: TEST_SCHEDULER_SEED,
     });
 
     requestHeartbeat({

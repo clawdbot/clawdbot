@@ -14,14 +14,12 @@ import { pruneExpiredDeliveryQueueTombstones } from "../infra/delivery-queue-sql
 import { pruneExpiredDevicePairSetupCompletions } from "../infra/device-bootstrap.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { pruneOrphanedDeliveryQueueMedia } from "../infra/outbound/delivery-queue-media-spool.js";
+import { generateSecureInt } from "../infra/secure-random.js";
 import { checkTelemetryUpdate } from "../infra/telemetry.js";
 import { cleanOldMedia, pruneOutboundMedia, prunePlaybackTranscodeCache } from "../media/store.js";
 import { isGatewayWorkAdmissionClosed } from "../process/gateway-work-admission.js";
 import { createLazyPromiseLoader } from "../shared/lazy-promise.js";
-import {
-  runScheduledSkillCollectionReviews,
-  startSkillCollectionMaintenance,
-} from "../skills/workshop/collection-review.js";
+import { registerSkillUsageTracking } from "../skills/workshop/curator.js";
 import {
   abortChatRunById,
   type ChatAbortControllerEntry,
@@ -97,8 +95,6 @@ export function startGatewayMaintenanceTimers(params: {
   runWorktreeGc?: () => Promise<unknown>;
   runDeliveryQueueMediaGc?: () => Promise<unknown>;
   runManagedOutgoingMediaGc?: () => Promise<unknown>;
-  enableSkillCurator?: boolean;
-  runSkillCollectionReconcile?: () => Promise<unknown>;
 }): {
   tickInterval: ReturnType<typeof setInterval>;
   healthInterval: ReturnType<typeof setInterval>;
@@ -106,7 +102,7 @@ export function startGatewayMaintenanceTimers(params: {
   startMediaCleanup: () => void;
   stopMediaCleanup: () => Promise<MediaCleanupStopResult>;
   worktreeCleanup: ReturnType<typeof setInterval>;
-  skillCuratorCleanup: () => void;
+  skillUsageCleanup: () => void;
 } {
   setBroadcastHealthUpdate((snap: HealthSummary) => {
     params.broadcast("health", snap, {
@@ -130,8 +126,7 @@ export function startGatewayMaintenanceTimers(params: {
     logger: params.logHealth,
   });
 
-  let nextTelemetryCheckAtMs =
-    Date.now() + Math.floor(Math.random() * TELEMETRY_MAINTENANCE_INTERVAL_MS);
+  let nextTelemetryCheckAtMs = Date.now() + generateSecureInt(TELEMETRY_MAINTENANCE_INTERVAL_MS);
   // periodic keepalive
   const tickInterval = setInterval(() => {
     void hostThawRecovery.tick();
@@ -140,7 +135,7 @@ export function startGatewayMaintenanceTimers(params: {
       nextTelemetryCheckAtMs =
         now +
         TELEMETRY_MAINTENANCE_INTERVAL_MS +
-        Math.floor(Math.random() * TELEMETRY_MAINTENANCE_INTERVAL_MS);
+        generateSecureInt(TELEMETRY_MAINTENANCE_INTERVAL_MS);
       void checkTelemetryUpdate(params.getRuntimeConfig(), { surface: "gateway" }).catch(() => {});
     }
     const payload = { ts: now };
@@ -226,23 +221,7 @@ export function startGatewayMaintenanceTimers(params: {
   };
   void performDevicePairSetupCompletionGc(Date.now());
 
-  let skillCuratorCleanup = () => {};
-  if (params.enableSkillCurator) {
-    skillCuratorCleanup = startSkillCollectionMaintenance({
-      onError: (err) =>
-        params.logHealth.error(`skill collection review failed: ${formatError(err)}`),
-      run:
-        params.runSkillCollectionReconcile ??
-        (() =>
-          runScheduledSkillCollectionReviews({
-            config: params.getRuntimeConfig(),
-            onError: (err, workspaceDir) =>
-              params.logHealth.error(
-                `skill collection review failed for ${workspaceDir}: ${formatError(err)}`,
-              ),
-          })),
-    });
-  }
+  const skillUsageCleanup = registerSkillUsageTracking();
 
   // dedupe cache cleanup
   const dedupeCleanup = setInterval(() => {
@@ -522,6 +501,6 @@ export function startGatewayMaintenanceTimers(params: {
     startMediaCleanup,
     stopMediaCleanup,
     worktreeCleanup,
-    skillCuratorCleanup,
+    skillUsageCleanup,
   };
 }

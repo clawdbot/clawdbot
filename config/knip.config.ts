@@ -74,7 +74,6 @@ const repositoryScriptEntries = [
   // Invoked by scripts/lib/live-docker-stage.sh during container validation.
   "scripts/live-docker-normalize-config.ts!",
   "scripts/mcp-code-mode-gateway-e2e.ts!",
-  "scripts/memory-index-manager.sync-repro.ts!",
   // Mantis invokes the trusted proof collector through its workflow shell step.
   "scripts/mantis/telegram-visible-proof.mjs!",
   "scripts/openclaw-release-clawhub-plan.ts!",
@@ -95,7 +94,6 @@ const repositoryScriptEntries = [
   // Changed-file checks invoke this targeted UI Stylelint entrypoint by path.
   "scripts/run-stylelint.mts!",
   "scripts/secrets/openclaw-bws-resolver.mjs!",
-  "scripts/sqlite-session-entry-cache-lifetime-proof.ts!",
   "scripts/sync-labels.ts!",
   "scripts/test-built-bundled-channel-entry-smoke.mts!",
   "scripts/update-clawtributors.ts!",
@@ -228,6 +226,7 @@ const bundledPluginEntries = [
   "*-api.ts!",
   "cli-metadata.ts!",
   "channel-entry.ts!",
+  "configured-state.ts!",
   // Manifest and SDK loaders resolve these public artifacts by basename.
   "auth-presence.ts!",
   "thread-bindings-runtime.ts!",
@@ -415,7 +414,6 @@ const config = {
     // Runtime reason values are exported now so protocol schemas can derive from one tuple later.
     "src/agents/failover/signal.ts": ["exports"],
     "src/context-engine/registry.ts": ["exports", "types"],
-    "src/plugins/compaction-provider.ts": ["exports"],
     "src/plugins/interactive-registry.ts": ["exports"],
     "src/plugins/memory-state.ts": ["exports", "types"],
     "src/plugins/session-discussion-registry.ts": ["exports"],
@@ -751,8 +749,6 @@ const config = {
     [`${BUNDLED_PLUGIN_ROOT_DIR}/kilocode`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/kimi-coding`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/matrix`]: bundledPluginWorkspace([
-      // Native import wrapper shipped alongside the Matrix runtime bundle.
-      "src/plugin-entry.runtime.js!",
       // The monitor lazy-loads outbound behavior on inbound-only processes.
       "src/matrix/send.ts!",
     ]),
@@ -850,7 +846,7 @@ const config = {
       // crypto dependencies. The protocol barrel is the vendored library's
       // public surface, so its exports are intentional even where the channel
       // consumes only a subset.
-      entry: [...bundledPluginEntries, "protocol/index.ts!", "protocol/node.ts!"],
+      entry: [...bundledPluginEntries, "protocol/index.ts!"],
       project: ["**/*.{js,mjs,ts}!"],
       ignoreDependencies: bundledPluginIgnoredRuntimeDependencies,
     },

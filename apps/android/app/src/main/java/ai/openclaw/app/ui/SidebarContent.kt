@@ -5,7 +5,6 @@ import ai.openclaw.app.GatewayConnectionDisplay
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.i18n.nativeString
-import ai.openclaw.app.selectableAgents
 import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.design.OpenClawMascot
 import androidx.compose.foundation.background
@@ -34,8 +33,6 @@ import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.outlined.AccessTime
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Dashboard
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -44,7 +41,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -57,7 +53,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -91,25 +86,6 @@ internal val SidebarDestination.compactLabelSource: String
     }
 
 internal fun SidebarDestination.compactLocalizedLabel(): String = nativeString(compactLabelSource)
-
-internal data class SidebarAgentRoster(
-  val selected: GatewayAgentSummary?,
-  val others: List<GatewayAgentSummary>,
-)
-
-internal fun sidebarAgentRoster(
-  agents: List<GatewayAgentSummary>,
-  selectedAgentId: String?,
-): SidebarAgentRoster {
-  val selectable = agents.selectableAgents().distinctBy(GatewayAgentSummary::id)
-  val selected =
-    selectable.firstOrNull { it.id == selectedAgentId?.trim() }
-      ?: selectable.firstOrNull()
-  return SidebarAgentRoster(
-    selected = selected,
-    others = selectable.filterNot { it.id == selected?.id },
-  )
-}
 
 private const val SIDEBAR_SESSION_LIMIT = 8
 
@@ -161,7 +137,7 @@ private fun ChatSessionEntry.isDashboardSession(): Boolean {
 
 internal fun sidebarSessionTitle(session: ChatSessionEntry): String = sessionPresentationTitle(session) { session.key }
 
-internal fun sidebarAgentName(agent: GatewayAgentSummary): String = agent.name?.trim()?.takeIf(String::isNotEmpty) ?: agent.id
+internal fun sidebarAgentName(agent: GatewayAgentSummary): String = agentPickerName(agent)
 
 internal data class SidebarPalette(
   val background: Color,
@@ -213,10 +189,9 @@ internal fun OpenClawSidebar(
   onSelectDestination: (SidebarDestination) -> Unit,
 ) {
   val palette = sidebarPalette()
-  val roster = sidebarAgentRoster(agents, selectedAgentId)
+  val agentPicker = agentPickerState(agents, selectedAgentId)
   val storedGroups by viewModel.sessionCustomGroups.collectAsState()
   var query by rememberSaveable { mutableStateOf("") }
-  var agentsExpanded by remember { mutableStateOf(false) }
   var sessionsExpanded by rememberSaveable { mutableStateOf(false) }
   val recentPresentation =
     sidebarSessionPresentation(
@@ -330,46 +305,13 @@ internal fun OpenClawSidebar(
             }
         }
       } else {
-        SidebarSectionTitle(nativeString("Agents"), palette)
-        roster.selected?.let { selected ->
-          SidebarAgentRow(
-            agent = selected,
-            selected = true,
-            palette = palette,
-            onClick = { onSelectAgent(selected.id) },
+        if (agentPicker.selected != null) {
+          SidebarSectionTitle(nativeString("Agents"), palette)
+          AgentPicker(
+            state = agentPicker,
+            onSelectAgent = onSelectAgent,
+            modifier = Modifier.fillMaxWidth(),
           )
-        }
-        if (roster.others.isNotEmpty()) {
-          Box {
-            SidebarActionRow(
-              label = nativeString("More Agents"),
-              icon = Icons.Default.KeyboardArrowDown,
-              palette = palette,
-              onClick = { agentsExpanded = true },
-            )
-            DropdownMenu(
-              expanded = agentsExpanded,
-              onDismissRequest = { agentsExpanded = false },
-              containerColor = palette.elevated,
-            ) {
-              roster.others.forEach { agent ->
-                DropdownMenuItem(
-                  text = {
-                    Text(
-                      text = sidebarAgentName(agent),
-                      color = palette.text,
-                      maxLines = 1,
-                      overflow = TextOverflow.Ellipsis,
-                    )
-                  },
-                  onClick = {
-                    agentsExpanded = false
-                    onSelectAgent(agent.id)
-                  },
-                )
-              }
-            }
-          }
         }
 
         SidebarSectionTitle(nativeString("Pages"), palette, modifier = Modifier.padding(top = 12.dp))

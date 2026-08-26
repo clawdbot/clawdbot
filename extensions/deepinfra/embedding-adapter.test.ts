@@ -11,7 +11,10 @@ vi.mock("./embedding-provider.js", () => ({
   DEFAULT_DEEPINFRA_EMBEDDING_MODEL: "BAAI/bge-m3",
 }));
 
-import { deepinfraEmbeddingProviderAdapter } from "./embedding-adapter.js";
+import {
+  buildDeepInfraEmbeddingAdapter,
+  deepinfraEmbeddingProviderAdapter,
+} from "./embedding-adapter.js";
 
 const memoryProvider: MemoryEmbeddingProvider = {
   id: "deepinfra",
@@ -25,10 +28,22 @@ const memoryProvider: MemoryEmbeddingProvider = {
 describe("DeepInfra generic embedding adapter", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.createDeepInfraEmbeddingProvider.mockResolvedValue({
-      provider: memoryProvider,
-      client: { model: "BAAI/bge-m3-resolved" },
-    });
+    mocks.createDeepInfraEmbeddingProvider.mockImplementation(
+      async (options: {
+        remote?: { baseUrl?: string; apiKey?: string; headers?: Record<string, string> };
+      }) => ({
+        provider: memoryProvider,
+        client: {
+          model: "BAAI/bge-m3-resolved",
+          baseUrl: options.remote?.baseUrl ?? "https://api.deepinfra.com/v1/openai",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${options.remote?.apiKey ?? "fixture-default-key"}`,
+            ...options.remote?.headers,
+          },
+        },
+      }),
+    );
   });
 
   it("declares the existing provider id, default model, transport, and auth owner", () => {
@@ -38,6 +53,36 @@ describe("DeepInfra generic embedding adapter", () => {
       transport: "remote",
       authProviderId: "deepinfra",
       create: expect.any(Function),
+    });
+  });
+
+  it("keeps the discovered embedding model as the dynamic adapter default", async () => {
+    const adapter = buildDeepInfraEmbeddingAdapter({
+      embedModels: [{ id: "BAAI/discovered-model" }] as never,
+    });
+
+    expect(adapter.defaultModel).toBe("BAAI/discovered-model");
+    await adapter.create({ config: {}, model: "BAAI/discovered-model" });
+    expect(mocks.createDeepInfraEmbeddingProvider).toHaveBeenCalledWith(
+      expect.objectContaining({ defaultModel: "BAAI/discovered-model" }),
+    );
+  });
+
+  it.each([
+    undefined,
+    "https://api.deepinfra.com/v1/openai",
+    "https://api.deepinfra.com/v1/openai/",
+    "https://API.DEEPINFRA.COM:443/v1/openai/",
+  ])("preserves the exact existing default identity for %s", async (baseUrl) => {
+    const result = await deepinfraEmbeddingProviderAdapter.create({
+      config: {},
+      model: "BAAI/bge-m3",
+      remote: { apiKey: "fixture-default-key", ...(baseUrl ? { baseUrl } : {}) },
+    });
+
+    expect(result.runtime?.cacheKeyData).toEqual({
+      provider: "deepinfra",
+      model: "BAAI/bge-m3-resolved",
     });
   });
 
@@ -79,13 +124,76 @@ describe("DeepInfra generic embedding adapter", () => {
     });
     expect(result.runtime).toEqual({
       id: "deepinfra",
-      cacheKeyData: { provider: "deepinfra", model: "BAAI/bge-m3-resolved" },
+      cacheKeyData: {
+        provider: "deepinfra",
+        model: "BAAI/bge-m3-resolved",
+        baseUrl: "https://api.deepinfra.com/v1/openai",
+        headers: [["x-deployment", "tenant-a"]],
+      },
     });
     expect(result.provider).toMatchObject({
       id: "deepinfra",
       model: "BAAI/bge-m3",
       maxInputTokens: 8192,
     });
+  });
+
+  it("partitions endpoints and tenants while excluding rotated credentials", async () => {
+    const baseUrl = "https://deepinfra-region-a.example.test/v1/openai";
+    const createForTenant = async (
+      tenant: string,
+      endpoint = baseUrl,
+      apiKey = "fixture-deepinfra-key-before",
+      headers: Record<string, string> = {},
+    ) =>
+      await deepinfraEmbeddingProviderAdapter.create({
+        config: {},
+        model: "BAAI/bge-m3",
+        remote: {
+          baseUrl: endpoint,
+          apiKey,
+          headers: { "x-deployment": "deployment-a", "X-Tenant": tenant, ...headers },
+        },
+      });
+
+    const first = await createForTenant("tenant-a", baseUrl, "fixture-deepinfra-key-before", {
+      "X-Api-Key": "fixture-proxy-key-before",
+      "api-key": "fixture-azure-key-before",
+      version: "tenant-api-v1",
+    });
+    const rotated = await createForTenant("tenant-a", baseUrl, "fixture-deepinfra-key-after", {
+      version: "tenant-api-v1",
+      "Api-Key": "fixture-azure-key-after",
+      "x-aPI-kEY": "fixture-proxy-key-after",
+    });
+    const otherTenant = await createForTenant("tenant-b");
+    const otherEndpoint = await createForTenant(
+      "tenant-a",
+      "https://deepinfra-region-b.example.test/v1/openai",
+    );
+    const firstProvider = await mocks.createDeepInfraEmbeddingProvider.mock.results[0]?.value;
+
+    expect(firstProvider?.client.headers).toMatchObject({
+      Authorization: "Bearer fixture-deepinfra-key-before",
+      "X-Api-Key": "fixture-proxy-key-before",
+      "api-key": "fixture-azure-key-before",
+      "x-deployment": "deployment-a",
+      "X-Tenant": "tenant-a",
+    });
+    expect(first.runtime?.cacheKeyData).toMatchObject({
+      provider: "deepinfra",
+      model: "BAAI/bge-m3-resolved",
+      baseUrl,
+      headers: expect.arrayContaining([
+        ["x-deployment", "deployment-a"],
+        ["X-Tenant", "tenant-a"],
+        ["version", "tenant-api-v1"],
+      ]),
+    });
+    expect(first.runtime?.cacheKeyData).toEqual(rotated.runtime?.cacheKeyData);
+    expect(first.runtime?.cacheKeyData).not.toEqual(otherTenant.runtime?.cacheKeyData);
+    expect(first.runtime?.cacheKeyData).not.toEqual(otherEndpoint.runtime?.cacheKeyData);
+    expect(JSON.stringify(first.runtime?.cacheKeyData)).not.toContain("fixture-");
   });
 
   it("adapts generic query and batch calls without changing text or cancellation", async () => {
@@ -105,11 +213,18 @@ describe("DeepInfra generic embedding adapter", () => {
         { signal: abortController.signal, inputType: "query" },
       ),
     ).resolves.toEqual([1, 0]);
+    await expect(provider.embed("query without an explicit type")).resolves.toEqual([1, 0]);
     await expect(
       provider.embedBatch(["document one", { text: "document two" }], {
         signal: abortController.signal,
         inputType: "document",
       }),
+    ).resolves.toEqual([
+      [0, 1],
+      [0, 1],
+    ]);
+    await expect(
+      provider.embedBatch(["query one", "query two"], { inputType: "query" }),
     ).resolves.toEqual([
       [0, 1],
       [0, 1],

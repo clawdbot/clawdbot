@@ -55,8 +55,10 @@ function renderSidebarMenuRadioItem(params: {
       <span slot="details" class="session-menu__check" aria-hidden="true"
         >${params.checked ? icons.check : nothing}</span
       >
-      ${params.owner ? renderSessionOwnerChip(params.owner, "row", "owned") : nothing}
-      <span class="session-menu__text">${params.label}</span>
+      <span class="row session-menu__label">
+        ${params.owner ? renderSessionOwnerChip(params.owner, "row", "owned") : nothing}
+        <span class="session-menu__text">${params.label}</span>
+      </span>
     </wa-dropdown-item>
   `;
 }

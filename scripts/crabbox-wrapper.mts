@@ -275,7 +275,7 @@ const jsRuntimeEntrypoints = new Set([
 ]);
 const awsMacosCorepackEntrypoints = new Set(["pnpm", "yarn", "corepack"]);
 const awsMacosBunEntrypoints = new Set(["bun", "bunx"]);
-const awsMacosBunVersion = "1.3.14";
+const awsMacosBunVersion = "1.4.0";
 const awsMacosSwiftEntrypoints = new Set(["swift", "xcodebuild"]);
 const awsMacosSwiftScriptTargets = new Set([
   "mac:package",

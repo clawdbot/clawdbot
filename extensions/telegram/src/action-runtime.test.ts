@@ -1960,19 +1960,35 @@ describe("handleTelegramAction", () => {
       expectedOptions: { mediaUrl: "https://example.com/image.jpg" },
     },
     {
-      name: "quoteText",
+      name: "quoteText preserving exact whitespace",
       params: {
         action: "sendMessage",
         to: "123456",
         content: "Replying now",
         replyToMessageId: 144,
-        quoteText: "The text you want to quote",
+        quoteText: "  The text you want to quote\n  ",
       },
       expectedTo: "123456",
       expectedContent: "Replying now",
       expectedOptions: {
         replyToMessageId: 144,
-        quoteText: "The text you want to quote",
+        quoteText: "  The text you want to quote\n  ",
+      },
+    },
+    {
+      name: "snake-case quoteText preserving exact whitespace",
+      params: {
+        action: "sendMessage",
+        to: "123456",
+        content: "Replying now",
+        replyToMessageId: 144,
+        quote_text: " \nThe text you want to quote  ",
+      },
+      expectedTo: "123456",
+      expectedContent: "Replying now",
+      expectedOptions: {
+        replyToMessageId: 144,
+        quoteText: " \nThe text you want to quote  ",
       },
     },
     {

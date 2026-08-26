@@ -111,6 +111,29 @@ describe("sendPayloadWithChunkedTextAndMedia", () => {
     expect(result).toEqual({ channel: "test", messageId: "gamma" });
   });
 
+  it("sends the full text when the chunker returns no chunks", async () => {
+    const sendText = vi.fn(async (ctx: { text: string }) => ({
+      channel: "test",
+      messageId: ctx.text,
+    }));
+    const onResult = vi.fn();
+
+    const result = await sendPayloadWithChunkedTextAndMedia({
+      ctx: { payload: { text: "visible reply" } },
+      textChunkLimit: 64,
+      chunker: () => [],
+      sendText,
+      sendMedia: async () => ({ channel: "test", messageId: "media" }),
+      emptyResult: { channel: "test", messageId: "" },
+      onResult,
+    });
+
+    expect(sendText).toHaveBeenCalledOnce();
+    expect(sendText).toHaveBeenCalledWith(expect.objectContaining({ text: "visible reply" }));
+    expect(onResult).toHaveBeenCalledWith({ channel: "test", messageId: "visible reply" });
+    expect(result).toEqual({ channel: "test", messageId: "visible reply" });
+  });
+
   it("detects numeric target IDs", () => {
     expect(isNumericTargetId("12345")).toBe(true);
     expect(isNumericTargetId("  987  ")).toBe(true);
@@ -263,6 +286,35 @@ describe("sendTextMediaPayload", () => {
     expect(sendText).toHaveBeenCalledOnce();
     expect(sendText).toHaveBeenCalledWith(expect.objectContaining({ text: "caption" }));
     expect(result).toEqual({ channel: "test", messageId: "caption" });
+  });
+
+  it("sends the full text when the adapter chunker returns no chunks", async () => {
+    const sendText = vi.fn(async ({ text }) => ({ channel: "test", messageId: text }));
+    const onDeliveryResult = vi.fn();
+
+    const result = await sendTextMediaPayload({
+      channel: "test",
+      ctx: {
+        cfg: {},
+        to: "target",
+        text: "",
+        payload: { text: "visible reply" },
+        onDeliveryResult,
+      },
+      adapter: {
+        textChunkLimit: 64,
+        chunker: () => [],
+        sendText,
+      },
+    });
+
+    expect(sendText).toHaveBeenCalledOnce();
+    expect(sendText).toHaveBeenCalledWith(expect.objectContaining({ text: "visible reply" }));
+    expect(onDeliveryResult).toHaveBeenCalledWith({
+      channel: "test",
+      messageId: "visible reply",
+    });
+    expect(result).toEqual({ channel: "test", messageId: "visible reply" });
   });
 
   it("reports each completed text chunk before a later chunk fails", async () => {
@@ -868,6 +920,24 @@ describe("deliverTextOrMediaReply", () => {
     expect(sendText).toHaveBeenNthCalledWith(1, "alpha");
     expect(sendText).toHaveBeenNthCalledWith(2, "beta");
     expect(sendText).toHaveBeenNthCalledWith(3, "gamma");
+    expect(sendMedia).not.toHaveBeenCalled();
+  });
+
+  it("preserves non-empty text when the reply chunker returns no chunks", async () => {
+    const sendMedia = vi.fn(async () => undefined);
+    const sendText = vi.fn(async () => undefined);
+
+    await expect(
+      deliverTextOrMediaReply({
+        payload: { text: "visible reply" },
+        text: "visible reply",
+        chunkText: () => [],
+        sendText,
+        sendMedia,
+      }),
+    ).resolves.toBe("text");
+
+    expect(sendText).toHaveBeenCalledExactlyOnceWith("visible reply");
     expect(sendMedia).not.toHaveBeenCalled();
   });
 

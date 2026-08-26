@@ -212,7 +212,7 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
     | Key                    | Type     | Default                | Description                                |
     | ---------------------- | -------- | ---------------------- | ------------------------------------------- |
     | `model`                | `string` | `gemini-embedding-001` | Also supports `gemini-embedding-2`         |
-    | `outputDimensionality` | `number` | `3072`                 | For Embedding 2: 768, 1536, or 3072        |
+    | `outputDimensionality` | `number` | `3072`                 | 128-3072; recommended: 768, 1536, or 3072  |
 
     The legacy `gemini-embedding-2-preview` identifier remains accepted during
     migration to the stable model.
@@ -226,8 +226,10 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
     configuration. Before this release, the stable model's dimension was
     omitted from index identity whether `outputDimensionality` was absent or
     explicitly set. After upgrade, an absent setting resolves to 3072, while an
-    explicit 768, 1536, or 3072 setting becomes part of the identity. For either
-    path, check the affected agent with
+    explicit setting between 128 and 3072 becomes part of the identity. The
+    default `gemini-embedding-001` keeps its existing identity when this setting
+    is absent; an explicitly configured value that was previously ignored now
+    also changes the identity. For either path, check the affected agent with
     `openclaw memory status --deep --agent <id>`, then rebuild when ready with
     `openclaw memory index --force --agent <id>`.
     </Warning>
@@ -498,6 +500,10 @@ allows it).
 `rememberAcrossConversations` does not widen that setting. It supplies a
 separate runtime-only authorization limited to same-agent private
 transcripts during the bounded Active Memory pass.
+
+An explicit `memory_search` request for the `sessions` corpus requires session
+search to be enabled for that agent. If it is unavailable, OpenClaw explains
+how to enable session indexing instead of silently searching memory files.
 
 The examples below place these settings under top-level `memory.search`. You can also
 apply equivalent settings in a per-agent `memory.search` override when only one

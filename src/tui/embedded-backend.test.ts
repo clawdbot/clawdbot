@@ -219,7 +219,6 @@ vi.mock("../config/sessions/startup-migration.js", () => ({
 
 vi.mock("../gateway/chat-display-projection.js", () => ({
   projectChatDisplayMessages: (messages: unknown[]) => messages,
-  projectRecentChatDisplayMessages: (messages: unknown[]) => messages,
   resolveEffectiveChatHistoryMaxChars: () => 100_000,
 }));
 

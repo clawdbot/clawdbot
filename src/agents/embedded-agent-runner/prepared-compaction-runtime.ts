@@ -2,6 +2,7 @@
  * Builds the skills, tools, capability profile, and system prompt used by one
  * prepared direct compaction attempt.
  */
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
@@ -44,7 +45,6 @@ import {
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { formatDateStamp, resolveUserTimezone } from "../date-time.js";
 import { resolveOpenClawReferencePaths } from "../docs-path.js";
-import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import { prepareAgentMemoryPrompt } from "../memory-prompt-prepare.js";
 import {
   applyAuthHeaderOverride,
@@ -113,7 +113,9 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
     ? permissionModes[params.execOverrides.mode]
     : (params.permissionMode ?? params.sessionEntry?.permissionMode);
   const root = params.sessionRoot ?? params.sessionEntry?.sessionRoot;
-  const sessionPermissionPolicy = mode && root ? { mode, root } : undefined;
+  const sessionPermissionPolicy = mode
+    ? { mode, root: root ?? (await fs.realpath(resolvedWorkspace)) }
+    : undefined;
   const execOverrides = sessionPermissionPolicy
     ? { ...params.execOverrides, mode: resolveSessionPermissionExecMode(sessionPermissionPolicy) }
     : params.execOverrides;
@@ -468,7 +470,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
             accountId: params.agentAccountId,
           })
         : undefined;
-    const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
+    const { sessionAgentId } = resolveSessionAgentIds({
       sessionKey: params.sessionKey,
       config: params.config,
       agentId: params.agentId,
@@ -602,11 +604,6 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
         extraSystemPrompt: params.extraSystemPrompt,
         ownerNumbers: params.ownerNumbers,
         reasoningTagHint,
-        heartbeatPrompt: resolveHeartbeatPromptForSystemPrompt({
-          config: params.config,
-          agentId: sessionAgentId,
-          defaultAgentId,
-        }),
         skillsPrompt,
         docsPath: openClawReferences.docsPath ?? undefined,
         sourcePath: openClawReferences.sourcePath ?? undefined,

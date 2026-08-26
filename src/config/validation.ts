@@ -190,7 +190,7 @@ function validateConfigObjectWithPluginsBase(
     }
   }
   const config = opts.applyDefaults
-    ? materializeRuntimeConfig(parsedConfig, "snapshot", {
+    ? materializeRuntimeConfig(parsedConfig, {
         manifestRegistry:
           registryInfo?.registry ??
           (opts.pluginValidation === "core-only" ? { plugins: [] } : undefined),

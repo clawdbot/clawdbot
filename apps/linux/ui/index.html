@@ -38,6 +38,106 @@
           Finding your gateway and preparing the Control UI.
         </p>
 
+        <section id="welcome-screen" class="welcome-screen hidden" aria-labelledby="title">
+          <div class="feature-list">
+            <div class="feature-row">
+              <span class="feature-icon" aria-hidden="true">✦</span>
+              <div>
+                <strong>Ask, create, and automate</strong>
+                <span>Give your assistant tasks and let it help across your computer.</span>
+              </div>
+            </div>
+            <div class="feature-row">
+              <span class="feature-icon" aria-hidden="true">◉</span>
+              <div>
+                <strong>Chat wherever you like</strong>
+                <span>This app, WhatsApp, Telegram, Discord, Slack — your choice.</span>
+              </div>
+            </div>
+            <div class="feature-row">
+              <span class="feature-icon" aria-hidden="true">◇</span>
+              <div>
+                <strong>Stay in control</strong>
+                <span>Everything runs where you decide, with permissions you grant.</span>
+              </div>
+            </div>
+          </div>
+          <p class="welcome-notice">
+            OpenClaw can take actions using the permissions and services you enable.
+            Review prompts and only connect tools you trust.
+          </p>
+          <button id="welcome-continue" class="primary welcome-continue" type="button">
+            Get started
+          </button>
+        </section>
+
+        <section id="connection-choices" class="connection-choices hidden" aria-labelledby="title">
+          <button id="connection-local" class="connection-card selected" type="button" aria-pressed="true">
+            <span class="connection-icon" aria-hidden="true">▣</span>
+            <span class="connection-copy">
+              <strong>On this computer</strong>
+              <span>Private to this computer. Installs and starts automatically.</span>
+            </span>
+            <span class="connection-badge">Recommended</span>
+          </button>
+          <button id="connection-remote" class="connection-card" type="button" aria-pressed="false">
+            <span class="connection-icon" aria-hidden="true">◎</span>
+            <span class="connection-copy">
+              <strong>On another computer</strong>
+              <span id="remote-subtitle">Connect to a Gateway running elsewhere.</span>
+            </span>
+          </button>
+
+          <section id="remote-details" class="remote-details hidden" aria-labelledby="remote-title">
+            <div class="remote-heading">
+              <strong id="remote-title">Remote connection</strong>
+              <span>Connect with a Gateway address or an SSH tunnel.</span>
+            </div>
+
+            <div class="transport-picker" role="group" aria-label="Remote connection type">
+              <button id="remote-transport-direct" class="transport-option selected" type="button" aria-pressed="true">
+                Gateway URL
+              </button>
+              <button id="remote-transport-ssh" class="transport-option" type="button" aria-pressed="false">
+                SSH tunnel
+              </button>
+            </div>
+
+            <div id="remote-url-field" class="remote-field">
+              <label for="remote-url">Gateway URL</label>
+              <input id="remote-url" type="url" placeholder="https://gateway.example.ts.net" autocomplete="url" />
+            </div>
+
+            <div id="remote-ssh-field" class="remote-field hidden">
+              <label for="remote-ssh-target">SSH target</label>
+              <input id="remote-ssh-target" type="text" placeholder="you@gateway.example.com" autocomplete="off" spellcheck="false" />
+              <label for="remote-port">Gateway port</label>
+              <input id="remote-port" type="number" min="1" max="65535" value="18789" inputmode="numeric" />
+            </div>
+
+            <details class="remote-auth">
+              <summary>Gateway authentication</summary>
+              <div class="remote-field">
+                <label for="remote-token">Gateway token</label>
+                <input id="remote-token" type="password" placeholder="Optional gateway access token" autocomplete="off" />
+                <label for="remote-password">Gateway password</label>
+                <input id="remote-password" type="password" placeholder="Optional gateway password" autocomplete="off" />
+              </div>
+            </details>
+
+            <p id="remote-feedback" class="remote-feedback hidden" role="status"></p>
+            <button id="remote-connect" class="primary remote-connect" type="button">
+              Connect to Gateway
+            </button>
+          </section>
+
+          <div class="setup-navigation">
+            <button id="setup-back" class="button-subtle" type="button">Back</button>
+            <span id="setup-progress" class="setup-progress" aria-label="Step 2 of 2">2 of 2</span>
+            <button id="setup-continue" class="primary" type="button">Continue</button>
+          </div>
+        </section>
+
         <div id="activity" class="activity">
           <span class="spinner" aria-hidden="true"></span>
           <span id="activity-label">Checking local services…</span>
@@ -80,7 +180,7 @@
       </section>
 
       <footer>
-        <span>LOCAL GATEWAY</span>
+        <span id="footer-mode">LOCAL GATEWAY</span>
         <span class="footer-separator"></span>
         <span>CLOSE TO TRAY</span>
       </footer>

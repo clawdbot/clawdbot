@@ -103,6 +103,43 @@ describe("OpenClaw database maintenance schema validation", () => {
     }
   });
 
+  it("keeps lifecycle bindings additive and keyed only by canonical owner identity", () => {
+    const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
+      "CREATE TABLE IF NOT EXISTS execution_owner_lifecycle_bindings (",
+    );
+    const endMarker = ") STRICT;";
+    const end = start >= 0 ? OPENCLAW_STATE_SCHEMA_SQL.indexOf(endMarker, start) : -1;
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const previousSchema = `${OPENCLAW_STATE_SCHEMA_SQL.slice(0, start)}${OPENCLAW_STATE_SCHEMA_SQL.slice(end + endMarker.length)}`;
+    const database = createGlobalDatabase();
+    try {
+      expect(() =>
+        assertSqliteSchemaContains(database, "previous global schema", previousSchema),
+      ).not.toThrow();
+      expect(
+        database.prepare("PRAGMA table_info(execution_owner_lifecycle_bindings)").all(),
+      ).toEqual([
+        { cid: 0, name: "owner_kind", type: "TEXT", notnull: 1, dflt_value: null, pk: 1 },
+        { cid: 1, name: "owner_id", type: "TEXT", notnull: 1, dflt_value: null, pk: 2 },
+        { cid: 2, name: "context_id", type: "TEXT", notnull: 1, dflt_value: null, pk: 0 },
+        { cid: 3, name: "execution_id", type: "TEXT", notnull: 1, dflt_value: null, pk: 0 },
+      ]);
+      expect(
+        database
+          .prepare(
+            `SELECT COUNT(*) AS count
+             FROM sqlite_schema
+             WHERE type = 'index' AND tbl_name = 'execution_owner_lifecycle_bindings'
+               AND sql IS NOT NULL`,
+          )
+          .get(),
+      ).toEqual({ count: 0 });
+    } finally {
+      database.close();
+    }
+  });
+
   it("accepts compatible future columns in shared-state and agent databases", () => {
     const globalDatabase = createGlobalDatabase();
     const agentDatabase = createAgentDatabase();

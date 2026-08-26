@@ -345,28 +345,6 @@ export function projectChatDisplayMessages(
   return projectChatDisplayMessagesWithState(messages, options).messages;
 }
 
-function limitChatDisplayMessages<T>(messages: T[], maxMessages?: number): T[] {
-  if (
-    typeof maxMessages !== "number" ||
-    !Number.isFinite(maxMessages) ||
-    maxMessages <= 0 ||
-    messages.length <= maxMessages
-  ) {
-    return messages;
-  }
-  return messages.slice(-Math.floor(maxMessages));
-}
-
-export function projectRecentChatDisplayMessages(
-  messages: unknown[],
-  options?: ChatDisplayProjectionOptions & { maxMessages?: number },
-): Array<Record<string, unknown>> {
-  return limitChatDisplayMessages(
-    projectChatDisplayMessages(messages, options),
-    options?.maxMessages,
-  );
-}
-
 export function projectChatDisplayMessage(
   message: unknown,
   options?: ChatDisplayProjectionOptions,

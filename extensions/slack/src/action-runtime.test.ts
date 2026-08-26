@@ -729,7 +729,10 @@ describe("handleSlackAction", () => {
     expect(requireRecordArg(downloadSlackFile, "downloadSlackFile", 0, 1).maxBytes).toBe(
       20 * 1024 * 1024,
     );
-    expect(requireDetails(result).ok).toBe(false);
+    expect(requireDetails(result)).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/requested Slack channel or explicit thread/i),
+    });
   });
 
   it("fails closed for downloadFile when no channel target can be authorized", async () => {

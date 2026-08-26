@@ -18,30 +18,33 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
 import { loadOrCreateDeviceIdentity } from "../../../../src/infra/device-identity.js";
+import { NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND } from "../../../../src/infra/node-commands.js";
 import {
   BASELINE_PROMPT,
   BASELINE_REPLY,
   COMMITTED_MARKERS,
   CONTEXT_PROMPT,
   CONTEXT_REPLY,
-  createSshdFixture,
-  initializeRepository,
-  killSshdProcessTree,
   MIDTURN_PROMPT,
   MODEL_REF,
   PROOF_TIMEOUT_MS,
   startMidturnProvider,
-  stopSshd,
   VOLATILE_TEXT,
   waitFor,
 } from "./cloud-worker-midturn-loss-fixture.js";
+import {
+  closeWireServer,
+  createPairedNodeWorkerHost,
+  createPublishedWireWorkspace,
+  type PairedNodeWorkerHost,
+  type PublishedWireWorkspace,
+} from "./paired-node-worker-wire-fixture.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
 
 const SCENARIO_ID = "cloud-worker-midturn-loss";
 const VERDICT_FILE = `${SCENARIO_ID}-verdict.json`;
 const SESSION_KEY = "agent:qa:qa-channel:direct:cloud-midturn-loss";
 const SENDER_ID = "cloud-midturn-loss";
-const PROFILE_ID = "development";
 
 type ProducerOptions = { artifactBase: string; repoRoot: string };
 type Gateway = Awaited<ReturnType<typeof startQaGatewayChild>>;
@@ -105,7 +108,7 @@ async function connectOperator(
       clientVersion: "1.0.0",
       platform: process.platform,
       mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-      scopes: ["operator.admin", "operator.read", "operator.write"],
+      scopes: ["operator.admin", "operator.pairing", "operator.read", "operator.write"],
       deviceIdentity,
       requestTimeoutMs: PROOF_TIMEOUT_MS,
       onEvent: (event) => events.push(event),
@@ -269,20 +272,22 @@ function waitForChatError(events: readonly GatewayEvent[], runId: string) {
 }
 
 async function runProof(options: ProducerOptions) {
+  const state = createQaBusState();
   // openclaw-temp-dir: allow standalone QA producer owns and removes this fixture root.
   const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cloud-midturn-loss-"));
-  const state = createQaBusState();
-  const bus = await startQaBusServer({ state });
-  const provider = await startMidturnProvider();
-  const ssh = await createSshdFixture(fixtureRoot);
-  let sshd = await ssh.start();
+  let bus: Awaited<ReturnType<typeof startQaBusServer>> | undefined;
+  let provider: Awaited<ReturnType<typeof startMidturnProvider>> | undefined;
   let gateway: Gateway | undefined;
   let operator: GatewayClient | undefined;
+  let workerNode: PairedNodeWorkerHost | undefined;
+  let published: PublishedWireWorkspace | undefined;
+  let workerLaunchId: string | undefined;
   let proofError: unknown;
   let verdict: Record<string, unknown> | undefined;
   try {
-    const repo = await initializeRepository(fixtureRoot);
-    const sshPrivateKey = await fs.readFile(ssh.clientKeyPath, "utf8");
+    bus = await startQaBusServer({ state });
+    provider = await startMidturnProvider();
+    published = await createPublishedWireWorkspace(fixtureRoot);
     const transport = createQaChannelTransport(state);
     gateway = await startQaGatewayChild({
       repoRoot: options.repoRoot,
@@ -296,32 +301,12 @@ async function runProof(options: ProducerOptions) {
       enabledPluginIds: ["qa-lab"],
       controlUiEnabled: false,
       controlUiAllowedOrigins: ["http://127.0.0.1"],
-      runtimeEnvPatch: { OPENCLAW_QA_STATIC_SSH_KEY: sshPrivateKey },
       mutateConfig: (config) => ({
         ...config,
         session: { ...config.session, dmScope: "per-peer" },
-        secrets: {
-          ...config.secrets,
-          providers: { ...config.secrets?.providers, default: { source: "env" } },
-        },
-        cloudWorkers: {
-          profiles: {
-            [PROFILE_ID]: {
-              provider: "static-ssh",
-              install: "bundle",
-              settings: {
-                host: "127.0.0.1",
-                port: ssh.port,
-                user: ssh.user,
-                hostKey: ssh.hostKey,
-                keyRef: {
-                  source: "env",
-                  provider: "default",
-                  id: "OPENCLAW_QA_STATIC_SSH_KEY",
-                },
-              },
-            },
-          },
+        nodeHost: {
+          ...config.nodeHost,
+          workerRuns: { enabled: true },
         },
       }),
     });
@@ -330,14 +315,38 @@ async function runProof(options: ProducerOptions) {
       path: path.join(fixtureRoot, "operator-identity.sqlite"),
     });
     operator = await connectOperator(gateway, events, deviceIdentity);
+    workerNode = await createPairedNodeWorkerHost({
+      gateway,
+      operator,
+      root: fixtureRoot,
+      label: "midturn-worker",
+      onInvoke: (frame) => {
+        if (frame.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND && frame.paramsJSON) {
+          workerLaunchId = (JSON.parse(frame.paramsJSON) as { launchId?: string }).launchId;
+        }
+      },
+    });
     await operator.request("sessions.create", {
       key: SESSION_KEY,
       agentId: "qa",
       worktree: true,
       worktreeName: `cloud-midturn-${randomUUID().slice(0, 8)}`,
       worktreeBaseRef: "main",
-      cwd: repo,
+      cwd: published.source,
     });
+    const created = requireRecord(
+      await gateway.call("sessions.describe", { key: SESSION_KEY }),
+      "created session",
+    );
+    const session = requireRecord(created.session, "created session details");
+    const localWorkspaceDir = session.execCwd ?? session.spawnedCwd;
+    if (typeof localWorkspaceDir !== "string") {
+      throw new Error("created session did not expose its managed workspace");
+    }
+    await Promise.all([
+      fs.writeFile(path.join(localWorkspaceDir, "checkpoint-1.txt"), "CLOUD-MIDTURN-TOOL-1\n"),
+      fs.writeFile(path.join(localWorkspaceDir, "checkpoint-2.txt"), "CLOUD-MIDTURN-TOOL-2\n"),
+    ]);
     await operator.request("sessions.messages.subscribe", { key: SESSION_KEY });
 
     const baselineCursor = state.getSnapshot().messages.length;
@@ -351,7 +360,7 @@ async function runProof(options: ProducerOptions) {
 
     await gateway.call(
       "sessions.dispatch",
-      { key: SESSION_KEY, profileId: PROFILE_ID },
+      { key: SESSION_KEY, deviceId: workerNode.identity.deviceId },
       { timeoutMs: PROOF_TIMEOUT_MS },
     );
     const runId = `cloud-midturn-loss-${randomUUID()}`;
@@ -372,7 +381,22 @@ async function runProof(options: ProducerOptions) {
     });
     await waitForVolatilePreview(events, runId);
 
-    const killed = await killSshdProcessTree(sshd);
+    const node = workerNode;
+    const activeWorker = await waitFor("proof-owned active node worker", async () => {
+      if (!workerLaunchId) {
+        return undefined;
+      }
+      const receipt = await node.supervisor.status(workerLaunchId);
+      return receipt?.state === "running" && receipt.runId === runId && receipt.worker
+        ? receipt.worker
+        : undefined;
+    });
+    process.kill(activeWorker.pid, "SIGKILL");
+    const killed = {
+      killedProcessCount: 1,
+      nodeDeviceId: node.identity.deviceId,
+      workerPid: activeWorker.pid,
+    };
     const waitResult = await operator.request<GatewayRunResult>(
       "agent.wait",
       { runId, timeoutMs: PROOF_TIMEOUT_MS },
@@ -401,11 +425,13 @@ async function runProof(options: ProducerOptions) {
       throw new Error(`unexpected durable cutoff: ${JSON.stringify(committedSequence)}`);
     }
 
-    sshd = await ssh.start();
+    // Keep the node connected until its supervisor delivers the worker's terminal receipt.
+    await node.disconnect();
+    await node.connect();
     const redispatched = requireRecord(
       await gateway.call(
         "sessions.dispatch",
-        { key: SESSION_KEY, profileId: PROFILE_ID },
+        { key: SESSION_KEY, deviceId: workerNode.identity.deviceId },
         { timeoutMs: PROOF_TIMEOUT_MS },
       ),
       "sessions.dispatch redispatch",
@@ -435,9 +461,10 @@ async function runProof(options: ProducerOptions) {
         : undefined;
     });
     const recoveryCounts = markerCounts(historyAfterRecovery);
+    const recoveryContext = provider.contextRequest;
     if (
-      !COMMITTED_MARKERS.every((marker) => provider.contextRequest.includes(marker)) ||
-      provider.contextRequest.includes(VOLATILE_TEXT) ||
+      !COMMITTED_MARKERS.every((marker) => recoveryContext.includes(marker)) ||
+      recoveryContext.includes(VOLATILE_TEXT) ||
       Object.values(recoveryCounts).some((count) => count !== 1)
     ) {
       throw new Error(
@@ -450,7 +477,7 @@ async function runProof(options: ProducerOptions) {
       throw new Error("operator was unavailable after recovery");
     }
     const activeDiskSpace = await waitFor(
-      "real static-SSH worker disk-space projection",
+      "real paired-node worker disk-space projection",
       async () =>
         readActiveWorkerDiskSpace(await qaOperator.request<SessionsList>("sessions.list", {})),
     );
@@ -470,7 +497,7 @@ async function runProof(options: ProducerOptions) {
       status: "pass",
       providerMode: "mock-openai",
       channel: "qa-channel",
-      workerProvider: "static-ssh",
+      workerProvider: "device",
       sessionKey: SESSION_KEY,
       killedWorker: killed,
       durableTranscript: {
@@ -517,25 +544,26 @@ async function runProof(options: ProducerOptions) {
     );
   } catch (error) {
     proofError = error;
-  }
-
-  const cleanup = await Promise.allSettled([
-    operator?.stopAndWait({ timeoutMs: 1_000 }) ?? Promise.resolve(),
-    gateway?.stop() ?? Promise.resolve(),
-    stopSshd(sshd),
-    provider.stop(),
-    bus.stop(),
-    fs.rm(fixtureRoot, { recursive: true, force: true }),
-  ]);
-  const cleanupFailures = cleanup.flatMap((result) =>
-    result.status === "rejected" ? [result.reason] : [],
-  );
-  if (cleanupFailures.length > 0) {
-    proofError = new AggregateError(
-      proofError ? [proofError, ...cleanupFailures] : cleanupFailures,
-      "cloud worker mid-turn loss cleanup failed",
-      proofError ? { cause: proofError } : undefined,
+  } finally {
+    const cleanup = await Promise.allSettled([
+      operator?.stopAndWait({ timeoutMs: 1_000 }) ?? Promise.resolve(),
+      workerNode?.stop() ?? Promise.resolve(),
+      gateway?.stop() ?? Promise.resolve(),
+      published ? closeWireServer(published.server) : Promise.resolve(),
+      provider?.stop() ?? Promise.resolve(),
+      bus?.stop() ?? Promise.resolve(),
+      fs.rm(fixtureRoot, { recursive: true, force: true }),
+    ]);
+    const cleanupFailures = cleanup.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
     );
+    if (cleanupFailures.length > 0) {
+      proofError = new AggregateError(
+        proofError ? [proofError, ...cleanupFailures] : cleanupFailures,
+        "cloud worker mid-turn loss cleanup failed",
+        proofError ? { cause: proofError } : undefined,
+      );
+    }
   }
   if (proofError) {
     throw proofError;
@@ -574,7 +602,7 @@ async function runProducer(options: ProducerOptions): Promise<QaEvidenceSummaryJ
     return await writer.write({
       artifacts: [{ filePath: VERDICT_FILE, kind: "verdict" }],
       details:
-        "static-SSH process-tree loss preserved the exact committed transcript prefix, surfaced an error, and redispatched with continuous context",
+        "paired-node worker loss preserved the exact committed transcript prefix, surfaced an error, and redispatched with continuous context",
       durationMs: Math.max(1, Date.now() - startedAt),
       status: "pass",
     });

@@ -529,6 +529,8 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     create: mutations.create,
     recover: mutations.recover,
     patch: mutations.patch,
+    archiveVisibility: mutations.archiveVisibility,
+    setArchiveVisibility: mutations.setArchiveVisibility,
     assignOwner: mutations.assignOwner,
     retireModelOverride: mutations.retireModelOverride,
     setModelOverride: mutations.setModelOverride,

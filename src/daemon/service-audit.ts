@@ -15,13 +15,16 @@ import { parseKeyValueOutput } from "./runtime-parse.js";
 import {
   isSystemNodePath,
   isVersionManagedNodePath,
+  resolveBunRuntimeInfo,
   resolveSystemNodePath,
 } from "./runtime-paths.js";
 import { getMinimalServicePathPartsFromEnv, SERVICE_PROXY_ENV_KEYS } from "./service-env.js";
 import {
   collectInlineManagedServiceEnvKeys,
   collectInlineServiceEnvKeys,
+  hasInlineEnvironmentSource,
   isEnvironmentFileOnlySource,
+  readEnvironmentValueSource,
 } from "./service-managed-env.js";
 import { isNonMinimalServicePathEntry, normalizeServicePathEntry } from "./service-path-policy.js";
 import type { GatewayServiceEnvironmentValueSource } from "./service-types.js";
@@ -41,6 +44,7 @@ export type ServiceConfigIssue = {
   code: string;
   message: string;
   detail?: string;
+  environmentKeys?: string[];
   level?: "recommended" | "aggressive";
 };
 
@@ -404,6 +408,7 @@ function auditManagedServiceEnvironment(
     code: SERVICE_AUDIT_CODES.gatewayManagedEnvEmbedded,
     message: "Gateway service embeds managed environment values that should load at runtime.",
     detail: `inline keys: ${inlineKeys.join(", ")}`,
+    environmentKeys: inlineKeys,
     level: "recommended",
   });
 }
@@ -420,6 +425,17 @@ function auditProxyServiceEnvironment(
     code: SERVICE_AUDIT_CODES.gatewayProxyEnvEmbedded,
     message: "Gateway service embeds proxy environment values that should not be persisted.",
     detail: `inline keys: ${inlineKeys.join(", ")}`,
+    environmentKeys: Object.entries(command?.environment ?? {})
+      .filter(
+        ([key, value]) =>
+          value.trim() &&
+          SERVICE_PROXY_ENV_KEYS.some((proxyKey) => proxyKey === key) &&
+          hasInlineEnvironmentSource(
+            readEnvironmentValueSource(command?.environmentValueSources, key),
+          ),
+      )
+      .map(([key]) => key)
+      .toSorted(),
     level: "recommended",
   });
 }
@@ -537,12 +553,16 @@ async function auditGatewayRuntime(
   }
 
   if (isBunRuntime(execPath)) {
-    issues.push({
-      code: SERVICE_AUDIT_CODES.gatewayRuntimeBun,
-      message: "Gateway service uses Bun; OpenClaw runtime state requires node:sqlite.",
-      detail: execPath,
-      level: "recommended",
-    });
+    const runtime = await resolveBunRuntimeInfo(execPath);
+    if (!runtime.supported) {
+      issues.push({
+        code: SERVICE_AUDIT_CODES.gatewayRuntimeBun,
+        message:
+          "Gateway service uses an unsupported Bun runtime; Bun 1.4+ with WAL-reset-safe node:sqlite is required.",
+        detail: execPath,
+        level: "recommended",
+      });
+    }
     return;
   }
 

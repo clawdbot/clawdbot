@@ -20,6 +20,9 @@ import {
   buildAdjustedParamsKey,
   recordToolExecutionTracked,
 } from "./agent-tools.before-tool-call.state.js";
+import { addSession, deleteSession, markExited } from "./bash-process-registry.js";
+import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
+import { createProcessTool } from "./bash-tools.process.js";
 import { projectEmbeddedMessageDeliveryFact } from "./embedded-agent-message-delivery.js";
 import type { MessagingToolSend } from "./embedded-agent-messaging.types.js";
 import { buildEmbeddedRunPayloads } from "./embedded-agent-runner/run/payloads.js";
@@ -38,6 +41,7 @@ import {
   reserveAskUserPromptDelivery,
 } from "./tools/ask-user-tool.js";
 import { resetPendingAskUserQuestionsForTest } from "./tools/ask-user-tool.test-support.js";
+import { createSecretsTool } from "./tools/secrets-tool.js";
 
 type ToolExecutionStartEvent = Omit<Extract<AgentEvent, { type: "tool_execution_start" }>, "type">;
 type ToolExecutionEndEvent = Omit<Extract<AgentEvent, { type: "tool_execution_end" }>, "type">;
@@ -433,6 +437,53 @@ describe("handleToolExecutionStart read path checks", () => {
       },
     });
     await activation.finish();
+  });
+
+  it("delivers credential requests as absolute Control UI links without answer affordances", async () => {
+    const { ctx } = createTestContext();
+    const onToolResult = vi.fn();
+    ctx.params.onToolResult = onToolResult;
+    ctx.params.config = {
+      gateway: {
+        publicOrigin: "https://console.example.test",
+        controlUi: { basePath: "/control" },
+      },
+    };
+    const args = { action: "request", name: "TEST_API_KEY", kind: "secret" };
+    let questionId = "";
+    let resolveAnswer: ((value: { status: "cancelled" }) => void) | undefined;
+    const tool = createSecretsTool({
+      agentId: "agent-test-id",
+      sessionKey: "agent:unit-session",
+      runId: "run-test",
+      gatewayCall: async (method, _options, params) => {
+        if (method === "question.request") {
+          questionId = String(requireRecord(params, "question request").id);
+          return { id: questionId };
+        }
+        if (method === "question.get") {
+          return { question: { questions: [] } };
+        }
+        if (method === "question.waitAnswer") {
+          return await new Promise((resolve) => {
+            resolveAnswer = resolve;
+          });
+        }
+        throw new Error(`unexpected method ${method}`);
+      },
+    });
+
+    await startTool(ctx, { toolName: "secrets", toolCallId: "secret-call-1", args });
+    const pending = tool.execute("secret-call-1", args);
+    await vi.waitFor(() => expect(onToolResult).toHaveBeenCalledOnce());
+
+    expect(onToolResult).toHaveBeenCalledWith({
+      text: `🔑 Agent requests credential TEST_API_KEY (secret). Reply is disabled for secrets — open to provide it: https://console.example.test/control/ask/${questionId}`,
+    });
+    expect(onToolResult.mock.calls[0]?.[0]).not.toHaveProperty("channelData");
+    expect(onToolResult.mock.calls[0]?.[0]).not.toHaveProperty("presentation");
+    resolveAnswer?.({ status: "cancelled" });
+    await pending;
   });
 
   it.each([
@@ -2158,6 +2209,27 @@ describe("handleToolExecutionEnd timeout metadata", () => {
     expect(ctx.state.toolMetas[2]?.asyncStarted).toBe(true);
   });
 
+  it("marks a parked Code Mode exec only when the tool is the marked control tool", async () => {
+    const { ctx } = createTestContext();
+    ctx.params.codeModeExecToolNames = new Set(["exec"]);
+
+    await endTool(ctx, {
+      toolName: "exec",
+      toolCallId: "tool-code-mode-waiting",
+      isError: false,
+      result: { details: { status: "waiting", runId: "cm_parked", reason: "pending_tools" } },
+    });
+    ctx.params.codeModeExecToolNames = new Set();
+    await endTool(ctx, {
+      toolName: "exec",
+      toolCallId: "tool-plain-exec-waiting",
+      isError: false,
+      result: { details: { status: "waiting", runId: "cm_impostor" } },
+    });
+
+    expect(ctx.state.toolMetas.map((entry) => entry.codeModeSuspended)).toEqual([true, undefined]);
+  });
+
   it("records intentional termination with its exact tool call id", async () => {
     const { ctx } = createTestContext();
 
@@ -2267,19 +2339,42 @@ describe("handleToolExecutionEnd timeout metadata", () => {
   }
 
   it.each(["poll", "log"])(
-    "projects a structured terminal process diagnostic from %s",
+    "projects a structured diagnostic from the real terminal process %s result",
     async (action) => {
       const { ctx } = createTestContext();
-      await executeProcessResult(ctx, { action, details: { exitCode: 7 } });
-
-      expect(ctx.state.lastToolError).toMatchObject({
-        toolName: "process",
-        terminalDiagnostic: {
-          kind: "process",
-          sessionId: "wild-lagoon",
-          reason: { kind: "exit", exitCode: 7 },
-        },
+      const sessionId = `wild-lagoon-${action}`;
+      const session = createProcessSessionFixture({
+        id: sessionId,
+        command: "test",
+        backgrounded: true,
       });
+      addSession(session);
+      markExited(session, 0, null, "failed", "overall-timeout", false);
+
+      try {
+        const args = { action, sessionId } as Parameters<
+          ReturnType<typeof createProcessTool>["execute"]
+        >[1];
+        const result = await createProcessTool().execute(`tool-real-process-${action}`, args);
+        await executeTool(ctx, {
+          toolName: "process",
+          toolCallId: `tool-process-${action}`,
+          args,
+          isError: false,
+          result,
+        });
+
+        expect(ctx.state.lastToolError).toMatchObject({
+          toolName: "process",
+          terminalDiagnostic: {
+            kind: "process",
+            sessionId,
+            reason: { kind: "timeout", timeoutKind: "overall-timeout" },
+          },
+        });
+      } finally {
+        deleteSession(sessionId);
+      }
     },
   );
 
@@ -3361,6 +3456,57 @@ describe("messaging tool media URL tracking", () => {
       threadId: "171.222",
       threadImplicit: true,
     });
+  });
+
+  it.each([
+    { label: "suppressed adapter thread", currentThreadId: undefined },
+    { label: "prepared native topic", currentThreadId: "42" },
+  ])("keeps the $label independent from scoped session identity", async ({ currentThreadId }) => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "telegram" }),
+            threading: {
+              resolveAutoThreadId: ({
+                toolContext,
+              }: {
+                toolContext?: { currentThreadTs?: string };
+              }) => toolContext?.currentThreadTs,
+            },
+          },
+          source: "test",
+        },
+      ]),
+    );
+    const { ctx } = createTestContext();
+    Object.assign(ctx.params, {
+      sessionKey: "agent:main:main:thread:1234:42",
+      messageChannel: "telegram",
+      currentChannelId: "1234",
+      currentMessagingTarget: "1234",
+      currentThreadId,
+      replyToMode: "all",
+    });
+    const toolCallId = `tool-message-scoped-thread-${currentThreadId ?? "none"}`;
+
+    await startTool(ctx, {
+      toolName: "message",
+      toolCallId,
+      args: { action: "send", to: "1234", message: "thread ownership" },
+    });
+
+    expect(ctx.state.pendingMessagingTargets.get(toolCallId)?.threadId).toBe(currentThreadId);
+
+    await endTool(ctx, {
+      toolName: "message",
+      toolCallId,
+      isError: false,
+      result: { details: { messageId: "message-scoped-thread" } },
+    });
+
+    expect(requireSingleMessagingTarget(ctx).threadId).toBe(currentThreadId);
   });
 
   it("preserves the pre-send reply state when committing implicit thread evidence", async () => {

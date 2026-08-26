@@ -581,6 +581,26 @@ function createRuntime(opts?: { throwsOnExit?: boolean }): RuntimeEnv {
   };
 }
 
+const defaultSetupOptions = {
+  acceptRisk: true,
+  flow: "quickstart",
+  authChoice: "skip",
+  installDaemon: false,
+  skipChannels: true,
+  skipSkills: true,
+  skipSearch: true,
+  skipHealth: true,
+  skipUi: true,
+} satisfies Parameters<typeof runSetupWizard>[0];
+
+async function runWizard(
+  options: Parameters<typeof runSetupWizard>[0] = {},
+  runtime = createRuntime(),
+  prompter = buildWizardPrompter(),
+) {
+  await runSetupWizard({ ...defaultSetupOptions, ...options }, runtime, prompter);
+}
+
 describe("runSetupWizard", () => {
   let suiteRoot = "";
   let suiteCase = 0;
@@ -713,22 +733,7 @@ describe("runSetupWizard", () => {
       sessionMigrationWarnings: ["Run `openclaw doctor --fix` and retry setup."],
     }));
 
-    await runSetupWizard(
-      {
-        acceptRisk: true,
-        flow: "quickstart",
-        authChoice: "skip",
-        installDaemon: false,
-        skipChannels: true,
-        skipSkills: true,
-        skipSearch: true,
-        skipHealth: true,
-        skipUi: true,
-        workspace: "/tmp/openclaw-workspace",
-      },
-      createRuntime(),
-      prompter,
-    );
+    await runWizard({ workspace: "/tmp/openclaw-workspace" }, createRuntime(), prompter);
 
     expect(prompter.text).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -959,22 +964,10 @@ describe("runSetupWizard", () => {
       return config;
     });
 
-    await runSetupWizard(
-      {
-        acceptRisk: true,
-        flow: "quickstart",
-        authChoice: "skip",
-        installDaemon: false,
-        skipChannels: false,
-        skipSkills: true,
-        skipSearch: true,
-        skipHealth: true,
-        skipUi: true,
-        workspace: "/tmp/concurrent-onboarding-workspace",
-      },
-      createRuntime(),
-      buildWizardPrompter(),
-    );
+    await runWizard({
+      skipChannels: false,
+      workspace: "/tmp/concurrent-onboarding-workspace",
+    });
 
     expect(diskConfig.ui?.seamColor).toBe("green");
     expect(diskConfig.agents?.defaults?.workspace).toBe("/tmp/concurrent-onboarding-workspace");
@@ -1003,22 +996,7 @@ describe("runSetupWizard", () => {
       return { config: diskConfig, persistedHash: diskHash };
     });
 
-    await runSetupWizard(
-      {
-        acceptRisk: true,
-        flow: "quickstart",
-        authChoice: "skip",
-        installDaemon: false,
-        skipChannels: true,
-        skipSkills: true,
-        skipSearch: true,
-        skipHealth: true,
-        skipUi: true,
-        workspace: "/tmp/conflicting-onboarding-workspace",
-      },
-      createRuntime(),
-      buildWizardPrompter(),
-    );
+    await runWizard({ workspace: "/tmp/conflicting-onboarding-workspace" });
 
     expect(writeAttempts).toBe(4);
     expect(diskConfig.ui?.seamColor).toBe("green");
@@ -1320,21 +1298,7 @@ describe("runSetupWizard", () => {
     const prompter = buildWizardPrompter({});
     const runtime = createRuntime({ throwsOnExit: true });
 
-    await runSetupWizard(
-      {
-        acceptRisk: true,
-        flow: "quickstart",
-        authChoice: "skip",
-        installDaemon: false,
-        skipChannels: true,
-        skipSkills: true,
-        skipSearch: true,
-        skipHealth: true,
-        skipUi: true,
-      },
-      runtime,
-      prompter,
-    );
+    await runWizard({}, runtime, prompter);
 
     expect(setupInternalHooks).not.toHaveBeenCalled();
     expect(enableDefaultOnboardingInternalHooks).toHaveBeenCalledOnce();
@@ -1356,22 +1320,7 @@ describe("runSetupWizard", () => {
     const prompter = buildWizardPrompter({});
     const runtime = createRuntime({ throwsOnExit: true });
 
-    await runSetupWizard(
-      {
-        acceptRisk: true,
-        flow: "quickstart",
-        authChoice: "skip",
-        installDaemon: false,
-        skipChannels: true,
-        skipSkills: true,
-        skipSearch: true,
-        skipHealth: true,
-        skipUi: true,
-        skipHooks: true,
-      },
-      runtime,
-      prompter,
-    );
+    await runWizard({ skipHooks: true }, runtime, prompter);
 
     expect(enableDefaultOnboardingInternalHooks).not.toHaveBeenCalled();
     const finalCallIndex = replaceConfigFile.mock.calls.length - 1;
@@ -1468,22 +1417,7 @@ describe("runSetupWizard", () => {
   it("leaves feature-stat telemetry unset during non-interactive wizard setup", async () => {
     const prompter = buildWizardPrompter();
 
-    await runSetupWizard(
-      {
-        acceptRisk: true,
-        nonInteractive: true,
-        flow: "quickstart",
-        authChoice: "skip",
-        installDaemon: false,
-        skipChannels: true,
-        skipSkills: true,
-        skipSearch: true,
-        skipHealth: true,
-        skipUi: true,
-      },
-      createRuntime({ throwsOnExit: true }),
-      prompter,
-    );
+    await runWizard({ nonInteractive: true }, createRuntime({ throwsOnExit: true }), prompter);
 
     expect(persistedWizardConfigs().at(-1)?.telemetry).toBeUndefined();
     expect(prompter.select).not.toHaveBeenCalledWith(
@@ -1499,23 +1433,7 @@ describe("runSetupWizard", () => {
     const prompter = buildWizardPrompter({});
     const runtime = createRuntime();
 
-    await runSetupWizard(
-      {
-        acceptRisk: true,
-        flow: "quickstart",
-        authChoice: "skip",
-        installDaemon: false,
-        skipBootstrap: true,
-        skipChannels: true,
-        skipSkills: true,
-        skipSearch: true,
-        skipHealth: true,
-        skipUi: true,
-        workspace: workspaceDir,
-      },
-      runtime,
-      prompter,
-    );
+    await runWizard({ skipBootstrap: true, workspace: workspaceDir }, runtime, prompter);
 
     const replaceParams = requireRecord(
       getMockCallArg(replaceConfigFile, 0, 0, "config replacement"),
@@ -1550,22 +1468,7 @@ describe("runSetupWizard", () => {
     const prompter = buildWizardPrompter();
     const runtime = createRuntime();
 
-    await runSetupWizard(
-      {
-        acceptRisk: true,
-        flow: "quickstart",
-        authChoice: "skip",
-        installDaemon: false,
-        skipChannels: true,
-        skipSkills: true,
-        skipSearch: true,
-        skipHealth: true,
-        skipUi: true,
-        workspace: workspaceDir,
-      },
-      runtime,
-      prompter,
-    );
+    await runWizard({ workspace: workspaceDir }, runtime, prompter);
 
     expect(runSetupMemoryImportStep).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1587,23 +1490,7 @@ describe("runSetupWizard", () => {
     const prompter = buildWizardPrompter();
     const runtime = createRuntime();
 
-    await runSetupWizard(
-      {
-        acceptRisk: true,
-        flow: "quickstart",
-        importFrom: "hermes",
-        authChoice: "skip",
-        installDaemon: false,
-        skipChannels: true,
-        skipSkills: true,
-        skipSearch: true,
-        skipHealth: true,
-        skipUi: true,
-        workspace: workspaceDir,
-      },
-      runtime,
-      prompter,
-    );
+    await runWizard({ importFrom: "hermes", workspace: workspaceDir }, runtime, prompter);
 
     expect(runSetupMigrationImport).toHaveBeenCalledOnce();
     expect(runSetupMemoryImportStep).not.toHaveBeenCalled();
@@ -1710,23 +1597,7 @@ describe("runSetupWizard", () => {
       acknowledgePromotion,
     });
 
-    await runSetupWizard(
-      {
-        acceptRisk: true,
-        flow: "quickstart",
-        importFrom: "hermes",
-        authChoice: "skip",
-        installDaemon: false,
-        skipChannels: true,
-        skipSkills: true,
-        skipSearch: true,
-        skipHealth: true,
-        skipUi: true,
-        workspace: workspaceDir,
-      },
-      createRuntime(),
-      buildWizardPrompter(),
-    );
+    await runWizard({ importFrom: "hermes", workspace: workspaceDir });
 
     expect(finalizeSetupWizard).toHaveBeenCalledOnce();
     expect(acknowledgePromotion).toHaveBeenCalledOnce();
@@ -1743,23 +1614,7 @@ describe("runSetupWizard", () => {
     const runtime = createRuntime();
     const prompter = buildWizardPrompter();
 
-    await runSetupWizard(
-      {
-        acceptRisk: true,
-        flow: "quickstart",
-        importFrom: "hermes",
-        agentName: "robby",
-        authChoice: "skip",
-        installDaemon: false,
-        skipChannels: true,
-        skipSkills: true,
-        skipSearch: true,
-        skipHealth: true,
-        skipUi: true,
-      },
-      runtime,
-      prompter,
-    );
+    await runWizard({ importFrom: "hermes", agentName: "robby" }, runtime, prompter);
 
     expect(runtime.error).toHaveBeenCalledWith(
       "--agent-name cannot be combined with an import that supplies an agent roster. Remove --agent-name or choose an import without agents.",
@@ -1791,23 +1646,7 @@ describe("runSetupWizard", () => {
     const confirm = vi.fn(async () => true) as unknown as WizardPrompter["confirm"];
     const prompter = buildWizardPrompter({ confirm });
 
-    await runSetupWizard(
-      {
-        acceptRisk: true,
-        flow: "quickstart",
-        importFrom: "hermes",
-        authChoice: "skip",
-        installDaemon: false,
-        skipChannels: true,
-        skipSkills: true,
-        skipSearch: true,
-        skipHealth: true,
-        skipUi: true,
-        workspace: workspaceDir,
-      },
-      createRuntime(),
-      prompter,
-    );
+    await runWizard({ importFrom: "hermes", workspace: workspaceDir }, createRuntime(), prompter);
 
     expect(verifySetupInferenceConfig).not.toHaveBeenCalled();
     expect(applyAuthChoice).not.toHaveBeenCalled();
@@ -1834,23 +1673,11 @@ describe("runSetupWizard", () => {
       )
       .mockResolvedValue(configSnapshot(importedConfig));
 
-    await runSetupWizard(
-      {
-        acceptRisk: true,
-        flow: "quickstart",
-        importFrom: "hermes",
-        authChoice: "demo-provider",
-        installDaemon: false,
-        skipChannels: true,
-        skipSkills: true,
-        skipSearch: true,
-        skipHealth: true,
-        skipUi: true,
-        workspace: workspaceDir,
-      },
-      createRuntime(),
-      buildWizardPrompter(),
-    );
+    await runWizard({
+      importFrom: "hermes",
+      authChoice: "demo-provider",
+      workspace: workspaceDir,
+    });
 
     expect(applyAuthChoice).toHaveBeenCalledOnce();
   });
@@ -1875,20 +1702,8 @@ describe("runSetupWizard", () => {
     const confirm = vi.fn(async () => false) as unknown as WizardPrompter["confirm"];
     const prompter = buildWizardPrompter({ confirm });
 
-    await runSetupWizard(
-      {
-        acceptRisk: true,
-        flow: "quickstart",
-        importFrom: "claude",
-        authChoice: "demo-provider",
-        installDaemon: false,
-        skipChannels: true,
-        skipSkills: true,
-        skipSearch: true,
-        skipHealth: true,
-        skipUi: true,
-        workspace: workspaceDir,
-      },
+    await runWizard(
+      { importFrom: "claude", authChoice: "demo-provider", workspace: workspaceDir },
       createRuntime(),
       prompter,
     );
@@ -1919,20 +1734,8 @@ describe("runSetupWizard", () => {
       .mockResolvedValue(configSnapshot(importedConfig));
     const confirm = vi.fn(async () => false) as unknown as WizardPrompter["confirm"];
 
-    await runSetupWizard(
-      {
-        acceptRisk: true,
-        flow: "quickstart",
-        importFrom: "hermes",
-        authChoice: "skip",
-        installDaemon: false,
-        skipChannels: true,
-        skipSkills: true,
-        skipSearch: true,
-        skipHealth: true,
-        skipUi: true,
-        workspace: requestedWorkspace,
-      },
+    await runWizard(
+      { importFrom: "hermes", workspace: requestedWorkspace },
       createRuntime(),
       buildWizardPrompter({ confirm }),
     );
@@ -2051,23 +1854,7 @@ describe("runSetupWizard", () => {
     const prompter = buildWizardPrompter({ select });
     const runtime = createRuntime();
 
-    await runSetupWizard(
-      {
-        acceptRisk: true,
-        flow: "quickstart",
-        authChoice: "skip",
-        installDaemon: false,
-        skipBootstrap: true,
-        skipChannels: true,
-        skipSkills: true,
-        skipSearch: true,
-        skipHealth: true,
-        skipUi: true,
-        workspace: workspaceDir,
-      },
-      runtime,
-      prompter,
-    );
+    await runWizard({ skipBootstrap: true, workspace: workspaceDir }, runtime, prompter);
 
     // Initial commit (including migration) + conflicted persist + retry + final write.
     expect(replaceConfigFile).toHaveBeenCalledTimes(4);
@@ -2228,22 +2015,7 @@ describe("runSetupWizard", () => {
     const confirm = vi.fn(async () => true);
     const prompter = buildWizardPrompter({ confirm });
 
-    await runSetupWizard(
-      {
-        acceptRisk: true,
-        flow: "quickstart",
-        authChoice: "skip",
-        installDaemon: false,
-        skipChannels: true,
-        skipSkills: true,
-        skipSearch: true,
-        skipHealth: true,
-        skipUi: true,
-        workspace: requestedWorkspace,
-      },
-      createRuntime(),
-      prompter,
-    );
+    await runWizard({ workspace: requestedWorkspace }, createRuntime(), prompter);
 
     expect(confirm).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -2335,21 +2107,7 @@ describe("runSetupWizard", () => {
       const prompter = buildWizardPrompter({ note });
       const runtime = createRuntime();
 
-      await runSetupWizard(
-        {
-          acceptRisk: true,
-          flow: "quickstart",
-          authChoice: "skip",
-          installDaemon: false,
-          skipChannels: true,
-          skipSkills: true,
-          skipSearch: true,
-          skipHealth: true,
-          skipUi: true,
-        },
-        runtime,
-        prompter,
-      );
+      await runWizard({}, runtime, prompter);
 
       const calls = getWizardNoteCalls(note);
       expect(calls.length).toBeGreaterThan(0);
@@ -2400,21 +2158,7 @@ describe("runSetupWizard", () => {
     const prompter = buildWizardPrompter({});
     const runtime = createRuntime();
 
-    await runSetupWizard(
-      {
-        acceptRisk: true,
-        flow: "quickstart",
-        authChoice: "skip",
-        installDaemon: false,
-        skipChannels: false,
-        skipSkills: true,
-        skipSearch: true,
-        skipHealth: true,
-        skipUi: true,
-      },
-      runtime,
-      prompter,
-    );
+    await runWizard({ skipChannels: false }, runtime, prompter);
 
     expectMockCallArgNotNull(setupChannels, 0, 0, "channel setup");
     expectMockCallArgNotNull(setupChannels, 0, 1, "channel setup");
@@ -2494,21 +2238,7 @@ describe("runSetupWizard", () => {
     const prompter = buildWizardPrompter({ select });
     const runtime = createRuntime();
 
-    await runSetupWizard(
-      {
-        acceptRisk: true,
-        flow: "quickstart",
-        authChoice: "skip",
-        installDaemon: false,
-        skipChannels: false,
-        skipSkills: true,
-        skipSearch: true,
-        skipHealth: true,
-        skipUi: true,
-      },
-      runtime,
-      prompter,
-    );
+    await runWizard({ skipChannels: false }, runtime, prompter);
 
     expect(setupChannels).toHaveBeenCalledOnce();
     expect(select).toHaveBeenCalledWith(
@@ -2695,19 +2425,8 @@ describe("runSetupWizard", () => {
   });
 
   it("keeps an explicit auth skip cold when a provider credential flag is supplied", async () => {
-    await runSetupWizard(
-      {
-        acceptRisk: true,
-        flow: "quickstart",
-        authChoice: "skip",
-        nvidiaApiKey: "nvidia-credential-fixture",
-        installDaemon: false,
-        skipChannels: true,
-        skipSkills: true,
-        skipSearch: true,
-        skipHealth: true,
-        skipUi: true,
-      },
+    await runWizard(
+      { authChoice: "skip", nvidiaApiKey: "nvidia-credential-fixture" },
       createRuntime(),
       buildWizardPrompter({}),
     );
@@ -2872,18 +2591,10 @@ describe("runSetupWizard", () => {
     const prompter = buildWizardPrompter({});
     const runtime = createRuntime();
 
-    await runSetupWizard(
+    await runWizard(
       {
-        acceptRisk: true,
-        flow: "quickstart",
         authChoice: "openai-chatgpt-api-key",
         openaiApiKey: "sk-flag-value",
-        installDaemon: false,
-        skipChannels: true,
-        skipSkills: true,
-        skipSearch: true,
-        skipHealth: true,
-        skipUi: true,
         skipHooks: true,
       },
       runtime,
@@ -2914,21 +2625,7 @@ describe("runSetupWizard", () => {
     const prompter = buildWizardPrompter({});
     const runtime = createRuntime();
 
-    await runSetupWizard(
-      {
-        acceptRisk: true,
-        flow: "quickstart",
-        authChoice: "google-api-key",
-        installDaemon: false,
-        skipChannels: true,
-        skipSkills: true,
-        skipSearch: true,
-        skipHealth: true,
-        skipUi: true,
-      },
-      runtime,
-      prompter,
-    );
+    await runWizard({ authChoice: "google-api-key" }, runtime, prompter);
 
     expect(applyAuthChoice).toHaveBeenCalledTimes(1);
     const call = getMockCallArg(applyAuthChoice, 0, 0, "google auth choice");
@@ -2975,21 +2672,7 @@ describe("runSetupWizard", () => {
     const prompter = buildWizardPrompter({ note, select });
     const runtime = createRuntime();
 
-    await runSetupWizard(
-      {
-        acceptRisk: true,
-        flow: "quickstart",
-        authChoice: "skip",
-        installDaemon: false,
-        skipChannels: true,
-        skipSkills: true,
-        skipSearch: true,
-        skipHealth: true,
-        skipUi: true,
-      },
-      runtime,
-      prompter,
-    );
+    await runWizard({}, runtime, prompter);
 
     const calls = getWizardNoteCalls(note);
     const noteTitles = calls.map((call) => call?.[1]);
@@ -3039,22 +2722,7 @@ describe("runSetupWizard", () => {
     const runtime = createRuntime();
 
     try {
-      await runSetupWizard(
-        {
-          acceptRisk: true,
-          flow: "quickstart",
-          mode: "local",
-          authChoice: "skip",
-          installDaemon: false,
-          skipChannels: true,
-          skipSkills: true,
-          skipSearch: true,
-          skipHealth: true,
-          skipUi: true,
-        },
-        runtime,
-        prompter,
-      );
+      await runWizard({ mode: "local" }, runtime, prompter);
     } finally {
       if (previous === undefined) {
         delete process.env.OPENCLAW_GATEWAY_PASSWORD;
@@ -3102,23 +2770,7 @@ describe("runSetupWizard", () => {
       const prompter = buildWizardPrompter({});
       const runtime = createRuntime();
 
-      await runSetupWizard(
-        {
-          acceptRisk: true,
-          flow: "advanced",
-          mode: "local",
-          authChoice: "skip",
-          ...gatewayOptions,
-          installDaemon: false,
-          skipChannels: true,
-          skipSkills: true,
-          skipSearch: true,
-          skipHealth: true,
-          skipUi: true,
-        },
-        runtime,
-        prompter,
-      );
+      await runWizard({ flow: "advanced", mode: "local", ...gatewayOptions }, runtime, prompter);
 
       expectRecordFields(
         getMockCallArg(probeGatewayReachable, 0, 0, "gateway probe"),
@@ -3148,18 +2800,10 @@ describe("runSetupWizard", () => {
     const prompter = buildWizardPrompter({});
     const runtime = createRuntime();
 
-    await runSetupWizard(
+    await runWizard(
       {
-        acceptRisk: true,
         flow: "quickstart",
         mode: "local",
-        authChoice: "skip",
-        installDaemon: false,
-        skipChannels: true,
-        skipSkills: true,
-        skipSearch: true,
-        skipHealth: true,
-        skipUi: true,
         secretInputMode: "ref", // pragma: allowlist secret
       },
       runtime,
@@ -3219,22 +2863,14 @@ describe("runSetupWizard", () => {
       },
     }));
 
-    await runSetupWizard(
+    await runWizard(
       {
-        acceptRisk: true,
         flow: "quickstart",
         mode: "local",
-        authChoice: "skip",
         gatewayPort: 19001,
         gatewayBind: "lan",
         gatewayAuth: "password",
         gatewayPassword: password,
-        installDaemon: false,
-        skipChannels: true,
-        skipSkills: true,
-        skipSearch: true,
-        skipHealth: true,
-        skipUi: true,
       },
       runtime,
       prompter,
@@ -3275,21 +2911,7 @@ describe("runSetupWizard", () => {
     const runtime = createRuntime();
 
     try {
-      await runSetupWizard(
-        {
-          acceptRisk: true,
-          flow: "quickstart",
-          authChoice: "skip",
-          installDaemon: false,
-          skipChannels: true,
-          skipSkills: true,
-          skipSearch: true,
-          skipHealth: true,
-          skipUi: true,
-        },
-        runtime,
-        prompter,
-      );
+      await runWizard({}, runtime, prompter);
     } finally {
       if (previousPort === undefined) {
         delete process.env.OPENCLAW_GATEWAY_PORT;
@@ -3318,21 +2940,7 @@ describe("runSetupWizard", () => {
     const runtime = createRuntime();
 
     try {
-      await runSetupWizard(
-        {
-          acceptRisk: true,
-          flow: "quickstart",
-          authChoice: "skip",
-          installDaemon: false,
-          skipChannels: true,
-          skipSkills: true,
-          skipSearch: true,
-          skipHealth: true,
-          skipUi: true,
-        },
-        runtime,
-        prompter,
-      );
+      await runWizard({}, runtime, prompter);
     } finally {
       if (previousPort === undefined) {
         delete process.env.OPENCLAW_GATEWAY_PORT;
@@ -3434,21 +3042,7 @@ describe("runSetupWizard", () => {
     const confirm = vi.fn(async () => true) as unknown as WizardPrompter["confirm"];
     const prompter = buildWizardPrompter({ confirm });
 
-    await runSetupWizard(
-      {
-        acceptRisk: true,
-        flow: "quickstart",
-        authChoice: "demo-provider",
-        installDaemon: false,
-        skipChannels: true,
-        skipSkills: true,
-        skipSearch: true,
-        skipHealth: true,
-        skipUi: true,
-      },
-      createRuntime(),
-      prompter,
-    );
+    await runWizard({ authChoice: "demo-provider" }, createRuntime(), prompter);
 
     expect(confirm).toHaveBeenCalledWith(
       expect.objectContaining({ message: "Test AI access now with a live completion?" }),
@@ -3564,21 +3158,7 @@ describe("runSetupWizard", () => {
     const prompter = buildWizardPrompter({ confirm: vi.fn(async () => true), select });
 
     try {
-      await runSetupWizard(
-        {
-          acceptRisk: true,
-          flow: "quickstart",
-          authChoice: "demo-provider",
-          installDaemon: false,
-          skipChannels: true,
-          skipSkills: true,
-          skipSearch: true,
-          skipHealth: true,
-          skipUi: true,
-        },
-        createRuntime(),
-        prompter,
-      );
+      await runWizard({ authChoice: "demo-provider" }, createRuntime(), prompter);
 
       expect(applyAuthChoice).toHaveBeenCalledTimes(3);
       expect(promptAuthChoiceGrouped).toHaveBeenCalledTimes(2);
@@ -3643,21 +3223,7 @@ describe("runSetupWizard", () => {
     const prompter = buildWizardPrompter({ confirm: vi.fn(async () => true), select });
 
     try {
-      await runSetupWizard(
-        {
-          acceptRisk: true,
-          flow: "quickstart",
-          authChoice: "demo-provider",
-          installDaemon: false,
-          skipChannels: true,
-          skipSkills: true,
-          skipSearch: true,
-          skipHealth: true,
-          skipUi: true,
-        },
-        createRuntime(),
-        prompter,
-      );
+      await runWizard({ authChoice: "demo-provider" }, createRuntime(), prompter);
 
       expect(applyAuthChoice).toHaveBeenCalledTimes(2);
       expect(promptAuthChoiceGrouped).toHaveBeenCalledOnce();
@@ -3717,21 +3283,7 @@ describe("runSetupWizard", () => {
     const prompter = buildWizardPrompter({ confirm: vi.fn(async () => true), select });
 
     try {
-      await runSetupWizard(
-        {
-          acceptRisk: true,
-          flow: "quickstart",
-          authChoice: "demo-provider",
-          installDaemon: false,
-          skipChannels: true,
-          skipSkills: true,
-          skipSearch: true,
-          skipHealth: true,
-          skipUi: true,
-        },
-        createRuntime(),
-        prompter,
-      );
+      await runWizard({ authChoice: "demo-provider" }, createRuntime(), prompter);
 
       expect(applyAuthChoice).toHaveBeenCalledTimes(2);
       expect(promptAuthChoiceGrouped).toHaveBeenCalledTimes(2);

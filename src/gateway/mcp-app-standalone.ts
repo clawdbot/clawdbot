@@ -6,6 +6,7 @@ import { buildMcpAppSandboxPath, resolveMcpAppSandboxPort } from "../agents/mcp-
 import { getMcpAppViewLease, type McpAppViewLease } from "../agents/mcp-ui-resource.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
+import { respondPlainText } from "./control-ui-http-utils.js";
 import {
   classifyMcpAppStandalonePath,
   MCP_APP_STANDALONE_PATH,
@@ -16,6 +17,7 @@ import {
   executeMcpAppOperation,
   type McpAppActiveView,
   parseMcpAppOperation,
+  requireMcpAppInteraction,
   withMcpAppActiveView,
 } from "./mcp-app-operations.js";
 
@@ -210,10 +212,26 @@ function supportsStandaloneToolOperations(
   return view.allowedAppToolNames !== undefined && view.readOnly !== true;
 }
 
-function sendText(res: ServerResponse, statusCode: number, body: string): void {
+async function supportsStandaloneResourceOperations(view: McpAppViewLease): Promise<boolean> {
+  try {
+    await requireMcpAppInteraction(view);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function sendJsonRepresentation(
+  req: IncomingMessage,
+  res: ServerResponse,
+  statusCode: number,
+  body: unknown,
+): void {
+  const serialized = JSON.stringify(body);
   res.statusCode = statusCode;
-  res.setHeader("Content-Type", "text/plain; charset=utf-8");
-  res.end(body);
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.setHeader("Content-Length", String(Buffer.byteLength(serialized)));
+  res.end(req.method === "HEAD" ? undefined : serialized);
 }
 
 function runStandaloneMcpAppHost(config: {
@@ -593,20 +611,20 @@ export async function handleMcpAppStandaloneHttpRequest(
     req.method !== "HEAD" &&
     !(url.pathname === MCP_APP_STANDALONE_VIEW_PATH && req.method === "POST")
   ) {
-    sendText(res, 404, "Not Found");
+    respondPlainText(res, 404, "Not Found");
     return true;
   }
 
   const gatewayPort = options.gatewayPort ?? req.socket.localPort;
   if (!gatewayPort) {
-    sendText(res, 503, "MCP App host unavailable");
+    respondPlainText(res, 503, "MCP App host unavailable");
     return true;
   }
   let sandboxPort: number;
   try {
     sandboxPort = resolveMcpAppSandboxPort(gatewayPort, options.sandboxPort);
   } catch {
-    sendText(res, 503, "MCP App host unavailable");
+    respondPlainText(res, 503, "MCP App host unavailable");
     return true;
   }
 
@@ -622,6 +640,7 @@ export async function handleMcpAppStandaloneHttpRequest(
     const shell = standaloneHostHtml();
     res.statusCode = 200;
     res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.setHeader("Content-Length", String(Buffer.byteLength(shell.html)));
     res.setHeader(
       "Content-Security-Policy",
       `default-src 'none'; script-src 'sha256-${shell.scriptHash}'; style-src 'unsafe-inline'; connect-src 'self'; frame-src ${frameOrigin}; base-uri 'none'; form-action 'none'; object-src 'none'`,
@@ -639,7 +658,7 @@ export async function handleMcpAppStandaloneHttpRequest(
   const active = ticket ? resolveTicketActiveView(ticket, nowMs, secret) : undefined;
   if (!active) {
     res.setHeader("WWW-Authenticate", "MCP-App");
-    sendText(res, 401, "Unauthorized");
+    respondPlainText(res, 401, "Unauthorized");
     return true;
   }
   if (req.method === "POST") {
@@ -676,38 +695,32 @@ export async function handleMcpAppStandaloneHttpRequest(
   }
 
   try {
-    return await withMcpAppActiveView(active, "read", () => {
+    return await withMcpAppActiveView(active, "read", async () => {
       const { runtime, view } = active;
-      res.statusCode = 200;
-      res.setHeader("Content-Type", "application/json; charset=utf-8");
-      res.end(
-        req.method === "HEAD"
-          ? undefined
-          : JSON.stringify({
-              sandboxUrl: buildMcpAppSandboxPath(view.csp),
-              sandboxPort,
-              ...(options.sandboxOrigin
-                ? { sandboxOrigin: new URL(options.sandboxOrigin).origin }
-                : {}),
-              html: view.html,
-              ...(view.csp ? { csp: view.csp } : {}),
-              toolInput: view.toolInput,
-              toolResult: view.toolResult,
-              serverTools: supportsStandaloneToolOperations(view),
-              serverResources: runtime.readResource !== undefined,
-              ...(view.requestTimeoutMs !== undefined
-                ? {
-                    // Keep the browser's outer deadline behind the SDK request
-                    // so a valid near-deadline response can reach the App.
-                    operationTimeoutMs: addTimerTimeoutGraceMs(view.requestTimeoutMs),
-                  }
-                : {}),
-            }),
-      );
+      const serverResources =
+        runtime.readResource !== undefined && (await supportsStandaloneResourceOperations(view));
+      sendJsonRepresentation(req, res, 200, {
+        sandboxUrl: buildMcpAppSandboxPath(view.csp),
+        sandboxPort,
+        ...(options.sandboxOrigin ? { sandboxOrigin: new URL(options.sandboxOrigin).origin } : {}),
+        html: view.html,
+        ...(view.csp ? { csp: view.csp } : {}),
+        toolInput: view.toolInput,
+        toolResult: view.toolResult,
+        serverTools: supportsStandaloneToolOperations(view),
+        serverResources,
+        ...(view.requestTimeoutMs !== undefined
+          ? {
+              // Keep the browser's outer deadline behind the SDK request
+              // so a valid near-deadline response can reach the App.
+              operationTimeoutMs: addTimerTimeoutGraceMs(view.requestTimeoutMs),
+            }
+          : {}),
+      });
       return true;
     });
   } catch (error) {
-    sendJson(res, 429, { ok: false, error: formatErrorMessage(error) });
+    sendJsonRepresentation(req, res, 429, { ok: false, error: formatErrorMessage(error) });
     return true;
   }
 }

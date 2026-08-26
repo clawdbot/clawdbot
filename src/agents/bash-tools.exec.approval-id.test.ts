@@ -1622,7 +1622,8 @@ describe("exec approvals", () => {
 
     const approvalRequest = requireExecApprovalRequestCall();
     expect(approvalRequest.options.expectFinal).toBe(false);
-    expect(approvalRequest.params.suppressDelivery).toBe(true);
+    expect(approvalRequest.params.suppressDelivery).toBeUndefined();
+    expect(approvalRequest.params.deliverToApprovalClientsOnly).toBe(true);
     expect(
       vi
         .mocked(callGatewayTool)
@@ -1691,6 +1692,7 @@ describe("exec approvals", () => {
     expect(result.details.status).toBe("completed");
     expect(getResultText(result)).toContain("cron-node-ok");
     expect(requireExecApprovalRequestCall().params.suppressDelivery).toBe(true);
+    expect(requireExecApprovalRequestCall().params.deliverToApprovalClientsOnly).toBeUndefined();
     const systemRun = requireRecord(systemRunInvoke, "system.run invoke");
     expect(systemRun.command).toBe("system.run");
     const params = requireRecord(systemRun.params, "system.run params");
@@ -1722,7 +1724,8 @@ describe("exec approvals", () => {
         command: "echo cron-denied",
       }),
     ).rejects.toThrow("Automation runs cannot wait for interactive exec approval");
-    expect(requireExecApprovalRequestCall().params.suppressDelivery).toBe(true);
+    expect(requireExecApprovalRequestCall().params.suppressDelivery).toBeUndefined();
+    expect(requireExecApprovalRequestCall().params.deliverToApprovalClientsOnly).toBe(true);
   });
 
   it("denies node cron no-route approvals when askFallback is deny", async () => {
@@ -1761,6 +1764,7 @@ describe("exec approvals", () => {
       }),
     ).rejects.toThrow("Automation runs cannot wait for interactive exec approval");
     expect(requireExecApprovalRequestCall().params.suppressDelivery).toBe(true);
+    expect(requireExecApprovalRequestCall().params.deliverToApprovalClientsOnly).toBeUndefined();
     expect(
       vi
         .mocked(callGatewayTool)

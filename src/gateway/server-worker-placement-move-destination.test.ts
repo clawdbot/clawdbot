@@ -35,6 +35,13 @@ describe("worker placement move destination owner", () => {
       expectedError: "worker profile incompatible does not support remote-exec placement",
       barrierCalls: 0,
     },
+    {
+      name: "carries runtime-owned node command requirements into a compatible cloud profile",
+      target: { kind: "profile" as const, profileId: "compatible" },
+      supported: true,
+      expectedError: "source placement barrier started",
+      barrierCalls: 1,
+    },
   ])("$name", async ({ target, supported, expectedError, barrierCalls }) => {
     const source = Object.freeze({
       sessionId: "session-move-source",
@@ -47,10 +54,15 @@ describe("worker placement move destination owner", () => {
     const sourceBefore = JSON.stringify(source);
     const entry = { sessionId: source.sessionId, worktree: { id: "worktree-recovery" } };
     const config = {
-      cloudWorkers: { profiles: { incompatible: { provider: "worker-only" } } },
+      cloudWorkers: {
+        profiles: {
+          compatible: { provider: "multimode-cloud" },
+          incompatible: { provider: "worker-only" },
+        },
+      },
       gateway: { nodes: { commands: { allow: [CODEX_COMMAND] } } },
     };
-    const supportsExecutionMode = vi.fn(() => false);
+    const supportsExecutionMode = vi.fn((profileId: string) => profileId === "compatible");
     const environments = { supportsExecutionMode };
     bindDeviceWorkerAvailability(environments, async (deviceId) => ({
       available: true,
@@ -66,33 +78,35 @@ describe("worker placement move destination owner", () => {
         commands: [CODEX_COMMAND],
       },
     }));
-    const resolveDestination = createGatewayWorkerPlacementMoveDestinationResolver({
-      environments: environments as never,
-      getConfig: () => config,
-      loadSessionRuntime: async () =>
-        ({
-          managedWorktrees: {
-            findLiveByOwner: () => ({
-              id: "worktree-recovery",
-              ownerId: SESSION_KEY,
-              path: "/gateway/workspace",
+    const resolveDestination = vi.fn(
+      createGatewayWorkerPlacementMoveDestinationResolver({
+        environments: environments as never,
+        getConfig: () => config,
+        loadSessionRuntime: async () =>
+          ({
+            managedWorktrees: {
+              findLiveByOwner: () => ({
+                id: "worktree-recovery",
+                ownerId: SESSION_KEY,
+                path: "/gateway/workspace",
+              }),
+            },
+            resolveGatewaySessionStoreTargetWithStore: () => ({
+              agentId: "main",
+              canonicalKey: SESSION_KEY,
+              storePath: "/gateway/session.sqlite",
+              storeKeys: [SESSION_KEY],
+              store: { [SESSION_KEY]: entry },
             }),
-          },
-          resolveGatewaySessionStoreTargetWithStore: () => ({
-            agentId: "main",
-            canonicalKey: SESSION_KEY,
-            storePath: "/gateway/session.sqlite",
-            storeKeys: [SESSION_KEY],
-            store: { [SESSION_KEY]: entry },
-          }),
-          resolveCanonicalSessionEntryFromStoreKeys: () => entry,
-          resolveWorkerPlacementSessionRuntime: () => "codex",
-          resolveWorkerPlacementCapabilities: () => ({
-            executionMode: "remote-exec",
-            ...(supported ? { devicePlacement: DEVICE_REQUIREMENT } : {}),
-          }),
-        }) as never,
-    });
+            resolveCanonicalSessionEntryFromStoreKeys: () => entry,
+            resolveWorkerPlacementSessionRuntime: () => "codex",
+            resolveWorkerPlacementCapabilities: () => ({
+              executionMode: "remote-exec",
+              ...(supported ? { devicePlacement: DEVICE_REQUIREMENT } : {}),
+            }),
+          }) as never,
+      }),
+    );
     const runMoveBarrier = vi.fn(async () => {
       throw new Error("source placement barrier started");
     });
@@ -135,8 +149,14 @@ describe("worker placement move destination owner", () => {
     expect(dispatch).not.toHaveBeenCalled();
     expect(destroy).not.toHaveBeenCalled();
     expect(JSON.stringify(source)).toBe(sourceBefore);
+    if (supported) {
+      await expect(resolveDestination.mock.results[0]?.value).resolves.toMatchObject({
+        executionMode: "remote-exec",
+        devicePlacement: DEVICE_REQUIREMENT,
+      });
+    }
     if (target.kind === "profile") {
-      expect(supportsExecutionMode).toHaveBeenCalledWith("incompatible", "remote-exec");
+      expect(supportsExecutionMode).toHaveBeenCalledWith(target.profileId, "remote-exec");
     }
   });
 });

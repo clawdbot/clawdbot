@@ -2007,8 +2007,16 @@ describe("subagent announce formatting", () => {
     });
 
     expect(delivery.delivered).toBe(false);
+    expect(delivery.reason).toBe("steer_dropped");
+    expect(delivery.terminal).toBeUndefined();
     expect(delivery.phases).toEqual([
-      { phase: "steer-primary", delivered: false, path: "none", error: undefined },
+      {
+        phase: "steer-primary",
+        delivered: false,
+        path: "none",
+        reason: "steer_dropped",
+        error: undefined,
+      },
     ]);
     expect(direct).not.toHaveBeenCalled();
   });

@@ -1,6 +1,7 @@
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { AgentsListResult, GatewaySessionRow, SessionBranch } from "../../api/types.ts";
 import type { ApplicationInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
+import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import type { SessionCapability, SessionMessageSubscription } from "../../lib/sessions/index.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
@@ -53,6 +54,7 @@ export type ChatState = {
   agentsList?: ChatAgentsListSnapshot | null;
   agentsSelectedId?: string | null;
   hello: GatewayHelloOk | null;
+  selfUser?: AuthenticatedUser | null;
   canvasPluginSurfaceUrl?: string | null;
   settings?: { chatPersistCommentary?: boolean; gatewayUrl?: string | null };
   sessions?: Partial<SessionCapability>;

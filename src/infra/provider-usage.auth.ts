@@ -297,6 +297,7 @@ function resolveUsageCredentialProviderIds(params: {
 async function resolveOAuthToken(params: {
   state: UsageAuthState;
   provider: string;
+  excludeProfileIds?: string[];
 }): Promise<ProviderAuth | null> {
   if (!params.state.allowAuthProfileStore) {
     return null;
@@ -308,8 +309,12 @@ async function resolveOAuthToken(params: {
     provider: params.provider,
   });
   const deduped = dedupeProfileIds(order);
+  const excludedProfileIds = new Set(params.excludeProfileIds ?? []);
 
   for (const profileId of deduped) {
+    if (excludedProfileIds.has(profileId)) {
+      continue;
+    }
     const cred = store.profiles[profileId];
     if (!cred || (cred.type !== "oauth" && cred.type !== "token")) {
       continue;
@@ -385,6 +390,7 @@ async function resolveProviderUsageAuthViaPlugin(params: {
         const auth = await resolveOAuthToken({
           state: params.state,
           provider: options?.provider ?? params.provider,
+          excludeProfileIds: options?.excludeProfileIds,
         });
         return auth
           ? {

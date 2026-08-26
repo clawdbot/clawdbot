@@ -185,6 +185,7 @@ describe("worker turn launcher failure recovery", () => {
     });
     const environments: WorkerTurnEnvironmentService & WorkerDispatchEnvironmentService = {
       ...unusedEnvironments(),
+      supportsProviderExecutionMode: vi.fn(() => true),
       get: vi.fn(() => environment),
       acquireTurnCredential: vi.fn(async () => credential()),
       acknowledgeCredentialDelivery: vi.fn(() => true),

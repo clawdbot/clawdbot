@@ -24,6 +24,7 @@ describe("codex package manifest", () => {
 
     expect(packageJson.devDependencies).toHaveProperty("@openclaw/plugin-sdk");
     expect(packageJson.dependencies?.["@openai/codex"]).toBe(CODEX_APP_SERVER_VERSION);
+    expect(packageJson.dependencies?.semver).toBe("7.8.5");
     expect(packageJson.openclaw?.release?.requireLatestDependencies).toEqual(["@openai/codex"]);
     expect(packageJson.openclaw?.install?.requiredPlatformPackages).toEqual([
       "@openai/codex-linux-x64",

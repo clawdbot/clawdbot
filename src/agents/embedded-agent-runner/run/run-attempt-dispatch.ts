@@ -283,6 +283,8 @@ export async function dispatchEmbeddedRunAttempt(input: {
     messageProvider: params.messageProvider,
     clientCaps: params.clientCaps,
     toolBindings: params.toolBindings,
+    // Preserve the Gateway's tri-state capability; undefined hides both GitHub tools.
+    githubPublicationAvailable: params.githubPublicationAvailable,
     chatType: params.chatType,
     agentAccountId: params.agentAccountId,
     messageTo: params.messageTo,
@@ -482,6 +484,8 @@ export async function dispatchEmbeddedRunAttempt(input: {
     scheduledRuntimeAuthority: params.scheduledRuntimeAuthority,
     scheduledRuntimeAuthorityRecoveryRequired: params.scheduledRuntimeAuthorityRecoveryRequired,
     toolsAllow: params.toolsAllow,
+    toolExecutionAllow: params.toolExecutionAllow,
+    sessionPersistence: params.sessionPersistence,
     ...(params.systemAgentTool ? { systemAgentTool: params.systemAgentTool } : {}),
     cleanupBundleMcpOnRunEnd: params.cleanupBundleMcpOnRunEnd,
     disableMessageTool: params.disableMessageTool,

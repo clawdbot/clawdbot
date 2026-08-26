@@ -40,7 +40,6 @@ function scenario(
   options: {
     custodian?: boolean;
     operatorScopes?: string[];
-    updateAvailable?: ControlUiMockGatewayScenario["updateAvailable"];
   } = {},
 ): ControlUiMockGatewayScenario {
   return {
@@ -84,7 +83,6 @@ function scenario(
       },
     },
     ...(options.operatorScopes ? { operatorScopes: options.operatorScopes } : {}),
-    ...(options.updateAvailable ? { updateAvailable: options.updateAvailable } : {}),
     sessionKey,
     workspace: "/workspace/openclaw",
     workspaceGit: true,
@@ -161,7 +159,7 @@ async function expectPanelHeaderControlsClearShellChrome(page: Page): Promise<vo
     ].map(rect);
     const shells = [
       ...document.querySelectorAll(
-        ":is(.shell-chrome-controls, .macos-titlebar-controls, .sidebar-attention--floating) button:not([hidden]), .scope-upgrade-shell-status:not([hidden])",
+        ":is(.shell-chrome-controls, .macos-titlebar-controls, .sidebar-attention--floating) button:not([hidden])",
       ),
     ]
       .map(rect)
@@ -210,13 +208,11 @@ suite.define(() => {
       deviceLess: false,
       direction: "ltr",
       expectedControl: ".shell-chrome-controls__search",
-      expectedUpdate: false,
       name: "expanded navigation",
       navCollapsed: false,
       operatorScopes: undefined,
       proof: "expanded-nav",
       themeMode: "dark" as const,
-      updateAvailable: undefined,
     },
     {
       beforeExpandProof: undefined,
@@ -224,13 +220,11 @@ suite.define(() => {
       deviceLess: false,
       direction: "ltr",
       expectedControl: ".shell-chrome-controls__search",
-      expectedUpdate: false,
       name: "collapsed navigation",
       navCollapsed: true,
       operatorScopes: undefined,
       proof: "collapsed-nav",
       themeMode: "dark" as const,
-      updateAvailable: undefined,
     },
     {
       beforeExpandProof: undefined,
@@ -238,45 +232,23 @@ suite.define(() => {
       deviceLess: false,
       direction: "ltr",
       expectedControl: ".shell-chrome-controls__custodian",
-      expectedUpdate: true,
       name: "collapsed navigation with custodian and attention",
       navCollapsed: true,
       operatorScopes: undefined,
       proof: "collapsed-nav-custodian-attention",
       themeMode: "dark" as const,
-      updateAvailable: {
-        channel: "stable",
-        currentVersion: "2026.8.1",
-        latestVersion: "2026.8.2",
-      },
-    },
-    {
-      beforeExpandProof: undefined,
-      custodian: false,
-      deviceLess: true,
-      direction: "ltr",
-      expectedControl: ".scope-upgrade-shell-status",
-      expectedUpdate: false,
-      name: "limited-access status",
-      navCollapsed: false,
-      operatorScopes: limitedScopes,
-      proof: "limited-access",
-      themeMode: "light" as const,
-      updateAvailable: undefined,
     },
     {
       beforeExpandProof: undefined,
       custodian: false,
       deviceLess: true,
       direction: "rtl",
-      expectedControl: ".scope-upgrade-shell-status",
-      expectedUpdate: false,
+      expectedControl: ".sidebar-attention--floating .sidebar-issues-button",
       name: "collapsed RTL limited-access status and attention",
       navCollapsed: true,
       operatorScopes: limitedScopes,
       proof: "collapsed-rtl-limited-attention",
       themeMode: "dark" as const,
-      updateAvailable: undefined,
     },
   ])("keeps expanded panel controls in a compact safe gap for $name", async (testCase) => {
     await suite.withPage(
@@ -296,7 +268,6 @@ suite.define(() => {
           scenario({
             custodian: testCase.custodian,
             operatorScopes: testCase.operatorScopes,
-            updateAvailable: testCase.updateAvailable,
           }),
         );
         await openExpandedFilesPanel(page, testCase.beforeExpandProof);
@@ -311,77 +282,9 @@ suite.define(() => {
           await page.locator(".sidebar-attention--floating .sidebar-issues-button").waitFor();
         }
         await page.locator(testCase.expectedControl).waitFor();
-        if (testCase.expectedUpdate) {
-          const updateSlot = page.locator(
-            ".sidebar-attention--floating .sidebar-footer-update-slot",
-          );
-          await updateSlot.waitFor();
-          await updateSlot.hover();
-          await waitForShellLayout(page);
-          await expectPanelHeaderControlsClearShellChrome(page);
-          await page.mouse.move(800, 700);
-          await updateSlot.locator(".sidebar-footer-update").focus();
-          await waitForShellLayout(page);
-          await expectPanelHeaderControlsClearShellChrome(page);
-        }
         await waitForShellLayout(page);
         await expectPanelHeaderControlsClearShellChrome(page);
         await capturePanel(page, testCase.proof);
-      },
-    );
-  });
-
-  it("keeps the mobile limited-access header below the topbar without a desktop gutter", async () => {
-    await suite.withPage(
-      {
-        colorScheme: "light",
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 844, width: 390 },
-      },
-      async ({ page }) => {
-        await failNextDeviceIdentityMint(page);
-        await seedSettings(page, "light");
-        await installMockGateway(page, scenario({ operatorScopes: limitedScopes }));
-        await openExpandedFilesPanel(page);
-        const status = page.locator(".scope-upgrade-shell-status");
-        await status.waitFor();
-        const geometry = await page.evaluate(() => {
-          const header = document
-            .querySelector(".sidebar-region__right-runtime .side-panel > .side-panel__header")
-            ?.getBoundingClientRect();
-          const firstControl = document
-            .querySelector(
-              ".sidebar-region__right-runtime .side-panel > .side-panel__header :is(button, wa-tab)",
-            )
-            ?.getBoundingClientRect();
-          const panelControls = [
-            ...document.querySelectorAll(
-              ".sidebar-region__right-runtime .side-panel > .side-panel__header :is(button, wa-tab)",
-            ),
-          ].map((element) => element.getBoundingClientRect());
-          const scopeStatus = document
-            .querySelector(".scope-upgrade-shell-status")
-            ?.getBoundingClientRect();
-          if (!header || !firstControl || !scopeStatus) {
-            throw new Error("Mobile limited-access geometry is incomplete");
-          }
-          return {
-            controlInset: firstControl.left - header.left,
-            overlaps: panelControls.some((control) => {
-              const overlapX =
-                Math.min(control.right, scopeStatus.right) -
-                Math.max(control.left, scopeStatus.left);
-              const overlapY =
-                Math.min(control.bottom, scopeStatus.bottom) -
-                Math.max(control.top, scopeStatus.top);
-              return overlapX > 0.5 && overlapY > 0.5;
-            }),
-          };
-        });
-        expect(geometry.overlaps).toBe(false);
-        expect(geometry.controlInset).toBeLessThanOrEqual(16);
-        await capturePanel(page, "mobile-limited-access");
       },
     );
   });

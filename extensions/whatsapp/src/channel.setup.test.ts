@@ -14,13 +14,9 @@ import {
   createWhatsAppLinkingHarness,
   createWhatsAppOwnerAllowlistHarness,
   createWhatsAppPersonalPhoneHarness,
-  createWhatsAppRootAllowFromConfig,
   expectNoWhatsAppLoginFollowup,
   expectWhatsAppAllowlistModeSetup,
   expectWhatsAppLoginFollowup,
-  expectWhatsAppOpenPolicySetup,
-  expectWhatsAppOwnerAllowlistSetup,
-  expectWhatsAppPersonalPhoneSetup,
   expectWhatsAppSeparatePhoneDisabledSetup,
 } from "./setup-test-helpers.js";
 
@@ -178,19 +174,6 @@ describe("whatsapp setup wizard", () => {
     hoisted.resolveWhatsAppAuthDir.mockReturnValue({ authDir: "/tmp/openclaw-whatsapp-test" });
   });
 
-  it("applies owner allowlist when forceAllowFrom is enabled", async () => {
-    const harness = createWhatsAppOwnerAllowlistHarness(createQueuedWizardPrompter);
-
-    const result = await runConfigureWithHarness({
-      harness,
-      forceAllowFrom: true,
-    });
-
-    expect(result.accountId).toBe(DEFAULT_ACCOUNT_ID);
-    expect(hoisted.loginWeb).not.toHaveBeenCalled();
-    expectWhatsAppOwnerAllowlistSetup(result.cfg, harness);
-  });
-
   it("rejects invalid owner numbers during prompt validation", async () => {
     const harness = createWhatsAppOwnerAllowlistHarness(createQueuedWizardPrompter);
 
@@ -257,17 +240,6 @@ describe("whatsapp setup wizard", () => {
     ).rejects.toThrow("Invalid WhatsApp allowFrom list");
   });
 
-  it("enables allowlist self-chat mode for personal-phone setup", async () => {
-    hoisted.hasWebCredsSync.mockReturnValue(true);
-    const harness = createWhatsAppPersonalPhoneHarness(createQueuedWizardPrompter);
-
-    const result = await runConfigureWithHarness({
-      harness,
-    });
-
-    expectWhatsAppPersonalPhoneSetup(result.cfg);
-  });
-
   it("throws a user-facing error instead of crashing when personal-phone input is undefined", async () => {
     hoisted.hasWebCredsSync.mockReturnValue(true);
     const harness = createWhatsAppPersonalPhoneHarness(createQueuedWizardPrompter);
@@ -278,20 +250,6 @@ describe("whatsapp setup wizard", () => {
         harness,
       }),
     ).rejects.toThrow("Invalid WhatsApp owner number");
-  });
-
-  it("forces wildcard allowFrom for open policy without allowFrom follow-up prompts", async () => {
-    hoisted.hasWebCredsSync.mockReturnValue(true);
-    const harness = createSeparatePhoneHarness({
-      selectValues: ["separate", "open"],
-    });
-
-    const result = await runConfigureWithHarness({
-      harness,
-      cfg: createWhatsAppRootAllowFromConfig() as OpenClawConfig,
-    });
-
-    expectWhatsAppOpenPolicySetup(result.cfg, harness);
   });
 
   it("surfaces accounts.default group warning paths for named accounts", () => {

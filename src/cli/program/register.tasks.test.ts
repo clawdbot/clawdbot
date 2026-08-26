@@ -104,7 +104,38 @@ describe("registerTasksCommand", () => {
     });
   });
 
+  it("advertises the displayed blocked status on the root and list commands", () => {
+    const program = new Command();
+    registerTasksCommand(program);
+    const tasks = program.commands.find((command) => command.name() === "tasks");
+    const list = tasks?.commands.find((command) => command.name() === "list");
+
+    for (const command of [tasks, list]) {
+      expect(command?.options.find((option) => option.long === "--status")?.description).toContain(
+        "blocked",
+      );
+    }
+  });
+
   it.each([
+    {
+      label: "blocked status on the bare task list",
+      args: ["tasks", "--status", "blocked"],
+      handler: mocks.tasksListCommand,
+      expected: { json: false, status: "blocked" },
+    },
+    {
+      label: "blocked status before the task list leaf",
+      args: ["tasks", "--status", "blocked", "list"],
+      handler: mocks.tasksListCommand,
+      expected: { json: false, status: "blocked" },
+    },
+    {
+      label: "blocked status after the task list leaf",
+      args: ["tasks", "list", "--status", "blocked"],
+      handler: mocks.tasksListCommand,
+      expected: { json: false, status: "blocked" },
+    },
     {
       label: "task list options before the leaf",
       args: ["tasks", "--json", "--runtime", "acp", "--status", "running", "list"],

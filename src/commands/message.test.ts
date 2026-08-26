@@ -604,7 +604,66 @@ describe("messageCommand", () => {
         channelId: "general",
       },
     });
+    expect(json).not.toHaveProperty("ok");
   });
+
+  it.each([
+    {
+      status: "suppressed" as const,
+      suppressionReason: "cancelled_by_message_sending_hook" as const,
+      expected: "Message send suppressed: cancelled_by_message_sending_hook.",
+    },
+    {
+      status: "failed" as const,
+      error: "provider rejected the message",
+      expected: "provider rejected the message",
+    },
+    {
+      status: "partial_failed" as const,
+      error: "second attachment rejected",
+      messageId: "first-part-1",
+      expected: "second attachment rejected",
+    },
+  ])(
+    "reports $status sends truthfully in JSON output",
+    async ({ status, suppressionReason, error, messageId, expected }) => {
+      const sendResult = {
+        channel: "discord",
+        to: "channel:general",
+        via: "direct" as const,
+        mediaUrl: null,
+        deliveryStatus: status,
+        ...(suppressionReason ? { suppressionReason } : {}),
+        ...(error ? { error } : {}),
+        ...(messageId ? { result: { channel: "discord", messageId } } : {}),
+        ...(status === "partial_failed" ? { sentBeforeError: true as const } : {}),
+      };
+      runMessageActionMock.mockResolvedValueOnce({
+        kind: "send",
+        channel: "discord",
+        action: "send",
+        to: "channel:general",
+        handledBy: "core",
+        payload: sendResult,
+        sendResult,
+        dryRun: false,
+      });
+
+      await runMessageCommand({ channel: "discord", target: "channel:general" });
+
+      const json = JSON.parse(String(vi.mocked(runtime.log).mock.calls[0]?.[0]));
+      expect(json).toMatchObject({
+        ok: false,
+        deliveryStatus: status,
+        error: { type: "cli_error", message: expected },
+      });
+      expect(json.payload).toEqual(sendResult);
+      if (messageId) {
+        expect(json.messageId).toBe(messageId);
+        expect(json.sentBeforeError).toBe(true);
+      }
+    },
+  );
 
   it("rejects unknown message actions before dispatch", async () => {
     await expect(runMessageCommand({ action: "nope" })).rejects.toThrow("Unknown message action");

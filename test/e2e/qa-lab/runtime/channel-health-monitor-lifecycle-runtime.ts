@@ -152,6 +152,7 @@ export async function runChannelHealthMonitorLifecycleProof(): Promise<MonitorPr
 
     const operations: string[] = [];
     let snapshotCalls = 0;
+    let firstSnapshotAt: number | undefined;
     let activeSnapshots = 0;
     let maxActiveSnapshots = 0;
     let failNextSnapshot = true;
@@ -166,6 +167,7 @@ export async function runChannelHealthMonitorLifecycleProof(): Promise<MonitorPr
     const manager = {
       getRuntimeSnapshot() {
         snapshotCalls += 1;
+        firstSnapshotAt ??= Date.now();
         activeSnapshots += 1;
         maxActiveSnapshots = Math.max(maxActiveSnapshots, activeSnapshots);
         try {
@@ -204,21 +206,23 @@ export async function runChannelHealthMonitorLifecycleProof(): Promise<MonitorPr
       isAutoRestartScheduled: () => false,
     } as unknown as ChannelManager;
 
+    const monitorStartupGraceMs = 250;
+    const monitorStartedAt = Date.now();
     const monitor = startChannelHealthMonitor({
       channelManager: manager,
       checkIntervalMs: 20,
       cooldownCycles: 2,
       maxRestartsPerHour: 1,
       timing: {
-        monitorStartupGraceMs: 250,
+        monitorStartupGraceMs,
         channelConnectGraceMs: 0,
         staleEventThresholdMs: 100,
       },
     });
 
-    await sleep(40);
-    const graceRespected = snapshotCalls === 0;
     await waitFor(() => operations.includes("start:qa-channel:monitored"), "first restart");
+    const graceRespected =
+      firstSnapshotAt !== undefined && firstSnapshotAt - monitorStartedAt >= monitorStartupGraceMs;
     await waitFor(() => snapshotCalls >= 3, "settled rearm");
     const callsAfterRecovery = snapshotCalls;
     await sleep(55);

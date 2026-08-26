@@ -55,7 +55,6 @@ type GeminiTaskType = NonNullable<MemoryEmbeddingProviderCreateOptions["taskType
 const GEMINI_EMBEDDING_2_MODELS = new Set(["gemini-embedding-2", "gemini-embedding-2-preview"]);
 
 const GEMINI_EMBEDDING_2_DEFAULT_DIMENSIONS = 3072;
-const GEMINI_EMBEDDING_2_VALID_DIMENSIONS = [768, 1536, 3072] as const;
 const GEMINI_EMBEDDING_2_TASK_PREFIXES: Record<GeminiTaskType, string> = {
   RETRIEVAL_QUERY: "task: search result | query:",
   RETRIEVAL_DOCUMENT: "title: none | text:",
@@ -165,29 +164,22 @@ export function buildGeminiEmbeddingRequest(params: {
   return request;
 }
 
-/**
- * Returns true if the given model name is a gemini-embedding-2 variant that
- * supports `outputDimensionality` and extended task types.
- */
+/** Returns true for Gemini Embedding 2 variants with multimodal and extended task support. */
 export function isGeminiEmbedding2Model(model: string): boolean {
   return GEMINI_EMBEDDING_2_MODELS.has(normalizeGeminiModel(model));
 }
 
-/**
- * Validate and return the `outputDimensionality` for gemini-embedding-2 models.
- * Returns `undefined` for older models (they don't support the param).
- */
 function resolveGeminiOutputDimensionality(model: string, requested?: number): number | undefined {
-  if (!isGeminiEmbedding2Model(model)) {
+  const isEmbedding2 = isGeminiEmbedding2Model(model);
+  if (!isEmbedding2 && model !== DEFAULT_GEMINI_EMBEDDING_MODEL) {
     return undefined;
   }
   if (requested == null) {
-    return GEMINI_EMBEDDING_2_DEFAULT_DIMENSIONS;
+    return isEmbedding2 ? GEMINI_EMBEDDING_2_DEFAULT_DIMENSIONS : undefined;
   }
-  const valid: readonly number[] = GEMINI_EMBEDDING_2_VALID_DIMENSIONS;
-  if (!valid.includes(requested)) {
+  if (!Number.isInteger(requested) || requested < 128 || requested > 3072) {
     throw new Error(
-      `Invalid outputDimensionality ${requested} for ${model}. Valid values: ${valid.join(", ")}`,
+      `Invalid outputDimensionality ${requested} for ${model}. Use an integer between 128 and 3072.`,
     );
   }
   return requested;
@@ -302,7 +294,6 @@ export async function createGeminiEmbeddingProvider(
     client.baseUrl,
     `${client.modelPath}:batchEmbedContents`,
   );
-  const isV2 = isGeminiEmbedding2Model(client.model);
   const outputDimensionality = client.outputDimensionality;
 
   const embedQuery = async (
@@ -320,14 +311,11 @@ export async function createGeminiEmbeddingProvider(
         model: client.model,
         role: "query",
         taskType: options.taskType ?? "RETRIEVAL_QUERY",
-        outputDimensionality: isV2 ? outputDimensionality : undefined,
+        outputDimensionality,
       }),
       signal: callOptions?.signal,
     });
-    return sanitizeGeminiEmbedding(
-      readGeminiSingleEmbedding(payload),
-      isV2 ? outputDimensionality : undefined,
-    );
+    return sanitizeGeminiEmbedding(readGeminiSingleEmbedding(payload), outputDimensionality);
   };
 
   const embedBatchInputs = async (
@@ -348,16 +336,14 @@ export async function createGeminiEmbeddingProvider(
             role: "document",
             modelPath: client.modelPath,
             taskType: options.taskType ?? "RETRIEVAL_DOCUMENT",
-            outputDimensionality: isV2 ? outputDimensionality : undefined,
+            outputDimensionality,
           }),
         ),
       },
       signal: callOptions?.signal,
     });
     const embeddings = readGeminiBatchEmbeddings(payload, inputs.length);
-    return embeddings.map((values) =>
-      sanitizeGeminiEmbedding(values, isV2 ? outputDimensionality : undefined),
-    );
+    return embeddings.map((values) => sanitizeGeminiEmbedding(values, outputDimensionality));
   };
 
   const embedBatch = async (

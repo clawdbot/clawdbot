@@ -122,7 +122,6 @@ function createInput(options?: {
     coreReadAuthorized: options?.coreReadAllowed !== false,
     clientToolCallSlots: [],
     clientToolDefs: [],
-    clientToolLoopDetection: { enabled: true },
     replaySafeToolNames: new Set(["read"]),
     replaySafeTools: new Set(allCustomTools),
   };

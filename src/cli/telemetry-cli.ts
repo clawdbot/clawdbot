@@ -10,6 +10,7 @@ import { runCommandWithRuntime } from "./cli-utils.js";
 
 const TELEMETRY_REASON_LABELS = {
   enabled: "enabled in configuration",
+  "automated-environment": "disabled in an automated environment (CI is set)",
   "do-not-track": "disabled by DO_NOT_TRACK",
   "config-disabled": "disabled in configuration",
   "never-asked": "consent has not been requested",
@@ -26,8 +27,8 @@ async function showTelemetry(options: { json?: boolean }): Promise<void> {
     : undefined;
 
   if (options.json) {
-    defaultRuntime.log(
-      JSON.stringify({
+    defaultRuntime.writeJson(
+      {
         featureStatsEnabled: telemetry.enabled,
         reason: telemetry.reason,
         endpoint: telemetry.endpoint,
@@ -39,7 +40,8 @@ async function showTelemetry(options: { json?: boolean }): Promise<void> {
               ...(payload ? { payload } : {}),
             }
           : null,
-      }),
+      },
+      0,
     );
     return;
   }

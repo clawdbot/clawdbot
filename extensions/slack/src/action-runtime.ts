@@ -925,7 +925,8 @@ export async function handleSlackAction(
         if (!downloaded) {
           return jsonResult({
             ok: false,
-            error: "File could not be downloaded (not found, too large, or inaccessible).",
+            error:
+              "File could not be downloaded. Confirm the fileId came from the requested Slack channel or explicit thread and that the file is accessible and within the size limit.",
           });
         }
         if (!isImageContentType(downloaded.contentType)) {

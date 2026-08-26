@@ -403,7 +403,7 @@ export function openSessionEntryReadView(
         clone: false,
         sessionKey,
       })?.entry,
-    entries: () => listSessionEntryRows({ ...scope, clone: false }),
+    entries: () => listSessionEntriesReadOnly({ ...scope, clone: false }),
   };
 }
 

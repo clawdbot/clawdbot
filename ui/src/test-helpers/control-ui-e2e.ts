@@ -209,6 +209,7 @@ export const defaultControlUiFeatureMethods = [
   "device.scopes.waitUpgrade",
   "session.members.add",
   "session.members.list",
+  "session.members.listEvidence",
   "session.members.remove",
   "session.visibility.set",
   "sessions.abort",
@@ -345,6 +346,8 @@ export type ControlUiMockGatewayScenario = {
   cliAgentsEnabled?: boolean;
   workspace?: string;
   workspaceGit?: boolean;
+  /** Local media preview roots served in the bootstrap config; tilde sources expand against these. */
+  localMediaPreviewRoots?: string[];
 };
 
 type NormalizedControlUiMockGatewayScenario = Required<ControlUiMockGatewayScenario>;
@@ -918,6 +921,7 @@ function normalizeScenario(
     cliAgentsEnabled: scenario.cliAgentsEnabled ?? false,
     workspace: scenario.workspace ?? "",
     workspaceGit: scenario.workspaceGit ?? false,
+    localMediaPreviewRoots: scenario.localMediaPreviewRoots ?? [],
   };
 }
 
@@ -932,7 +936,7 @@ export function createControlUiMockBootstrapConfig(scenario: ControlUiMockGatewa
     basePath: normalizedScenario.basePath,
     devGitBranch: normalizedScenario.devGitBranch || undefined,
     embedSandbox: "scripts",
-    localMediaPreviewRoots: [],
+    localMediaPreviewRoots: normalizedScenario.localMediaPreviewRoots,
     serverVersion: normalizedScenario.serverVersion,
     serverBuildId: normalizedScenario.serverBuildId,
     terminalEnabled: normalizedScenario.terminalEnabled,
@@ -1059,6 +1063,7 @@ function installControlUiMockGateway(
   const requests: BrowserRequest[] = [];
   const methodResponseSequenceIndexes = new Map<string, number>();
   const sessionPatches = new Map<string, Record<string, unknown>>();
+  let sessionPatchTimestamp = 1_800_000_000_000;
   const createdSessions = new Map<string, Record<string, unknown>>();
   const terminalSessions = new Map<string, MockTerminalSession>();
   let terminalSessionSequence = 0;
@@ -1377,6 +1382,7 @@ function installControlUiMockGateway(
       "model",
       "thinkingLevel",
       "fastMode",
+      "permissionMode",
       "label",
       "category",
       "icon",
@@ -1388,6 +1394,14 @@ function installControlUiMockGateway(
       if (hasOwn(params, key)) {
         patch[key] = params[key];
       }
+    }
+    if (params.unread === true) {
+      sessionPatchTimestamp += 1;
+      patch.markedUnreadAt = sessionPatchTimestamp;
+    } else if (params.unread === false) {
+      sessionPatchTimestamp += 1;
+      patch.lastReadAt = sessionPatchTimestamp;
+      patch.markedUnreadAt = undefined;
     }
     if (scenario.sessionArchiveFiltering && hasOwn(params, "archived")) {
       patch.archived = params.archived;
@@ -1804,6 +1818,15 @@ function installControlUiMockGateway(
         return {
           commands: [],
           models: scenario.models,
+        };
+      case "talk.catalog":
+        return {
+          modes: [],
+          transports: [],
+          brains: [],
+          speech: { providers: [] },
+          transcription: { providers: [] },
+          realtime: { ready: true, providers: [] },
         };
       case "chat.send":
         return {
@@ -2354,7 +2377,16 @@ function installControlUiMockGateway(
   (window as unknown as WindowWithGateway).openclawControlUiE2eGateway = exposed;
   const RoutedWebSocket = function (url: string | URL, protocols?: string | string[]) {
     const resolvedUrl = String(url);
-    if (scenario.webSocketPassthroughPrefixes.some((prefix) => resolvedUrl.startsWith(prefix))) {
+    // Vite's dev client must keep its real socket: the mock would fake the
+    // open handshake, and a later setOnline(false) close would make the client
+    // believe the dev server restarted and reload the page mid-test.
+    const isViteHmr = Array.isArray(protocols)
+      ? protocols.includes("vite-hmr")
+      : protocols === "vite-hmr";
+    if (
+      isViteHmr ||
+      scenario.webSocketPassthroughPrefixes.some((prefix) => resolvedUrl.startsWith(prefix))
+    ) {
       return protocols === undefined
         ? new NativeWebSocket(resolvedUrl)
         : new NativeWebSocket(resolvedUrl, protocols);

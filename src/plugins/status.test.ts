@@ -722,12 +722,12 @@ describe("plugin status reports", () => {
     ]);
   });
 
-  it("builds inspect reports for every loaded plugin", () => {
+  it("prefers exact plugin ids over display names in individual and all inspect reports", () => {
     setPluginLoadResult({
       plugins: [
         createPluginRecord({
           id: "lca",
-          name: "LCA",
+          name: "microsoft",
           description: "Legacy hook plugin",
           hookCount: 1,
         }),
@@ -742,6 +742,9 @@ describe("plugin status reports", () => {
       ],
       hooks: [createCustomHook({ pluginId: "lca", events: ["message"] })],
     });
+
+    expect(expectInspectReport("microsoft").plugin.id).toBe("microsoft");
+    expect(expectInspectReport("Microsoft").plugin.id).toBe("microsoft");
 
     const inspect = buildAllPluginInspectReports();
 

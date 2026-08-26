@@ -22,7 +22,7 @@ const MARKDOWN_PARSER = new MarkdownIt({ html: false });
 const HTML_MARKDOWN_PARSER = new MarkdownIt({ html: true });
 type MarkdownToken = ReturnType<typeof MARKDOWN_PARSER.parse>[number];
 const VERBATIM_MDX_ELEMENTS = new Set(["code", "pre", "script", "style", "textarea"]);
-const MINTLIFY_CLI_VERSION = "4.2.804";
+const MINTLIFY_CLI_VERSION = "4.2.808";
 const MINTLIFY_BROKEN_LINKS_ARGS = [
   "exec",
   "--yes",

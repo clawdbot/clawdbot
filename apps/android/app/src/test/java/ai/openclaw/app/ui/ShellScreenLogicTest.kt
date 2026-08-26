@@ -13,6 +13,7 @@ import ai.openclaw.app.GatewayPendingDeviceSummary
 import ai.openclaw.app.GatewaySkillWorkshopProposal
 import ai.openclaw.app.GatewaySkillWorkshopSummary
 import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.gatewayConnectionDisplay
 import ai.openclaw.app.i18n.resolveNativeText
 import ai.openclaw.app.i18n.verbatimText
 import ai.openclaw.app.normalizeOperatorScopes
@@ -840,6 +841,21 @@ class ShellScreenLogicTest {
   fun gatewaySummaryFallsBackToGenericAuthLabelWithoutAKnownReason() {
     assertEquals("Authentication needed", gatewaySummary("auth failed", isConnected = false, gatewayConnectionProblem = null))
     assertEquals("Authentication needed", gatewaySummary("auth failed", isConnected = false, gatewayConnectionProblem = authProblem("SOME_UNMAPPED_CODE")))
+  }
+
+  @Test
+  fun gatewaySummaryPreservesNodeFailureWhileOperatorStaysConnected() {
+    val display =
+      gatewayConnectionDisplay(
+        operatorConnected = true,
+        nodeConnected = false,
+        operatorStatusText = "Connected",
+        nodeStatusText = "Gateway error: pairing required",
+        operatorProblem = null,
+        nodeProblem = authProblem("PAIRING_REQUIRED"),
+      )
+
+    assertEquals("Connected (node offline)", gatewaySummary(display))
   }
 
   @Test

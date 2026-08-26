@@ -239,11 +239,15 @@ async function listWorkerProfilesWithMachines(context: GatewayRequestContext) {
   const summaries = listWorkerProfiles(context);
   return await Promise.all(
     summaries.map(async (summary) => {
-      const executionMode = (["worker-turn", "remote-exec"] as const).find(
+      const executionModes = (["worker-turn", "remote-exec"] as const).filter(
         (mode) =>
           context.workerEnvironmentService?.supportsExecutionMode?.(summary.id, mode) === true,
       );
-      const resolvedSummary = Object.assign(summary, executionMode ? { executionMode } : {});
+      const executionMode = executionModes[0];
+      const resolvedSummary = Object.assign(
+        summary,
+        executionMode ? { executionMode, executionModes } : {},
+      );
       try {
         const options = await context.workerEnvironmentService?.listMachineOptions?.(summary.id);
         const machines = options ?? [];

@@ -1,5 +1,6 @@
 // Imported by dispatch-from-config.test.ts to keep its mocked suite in one Vitest module graph.
 import { AsyncResource } from "node:async_hooks";
+import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
@@ -1484,7 +1485,7 @@ describe("dispatchReplyFromConfig", () => {
         remoteMediaMode?: string;
       };
       expect(params.sessionKey).toBe("agent:main:imessage:direct:user");
-      expect(params.workspaceDir).toContain(".openclaw/workspace");
+      expect(params.workspaceDir).toContain(path.join(".openclaw", "workspace"));
       expect(params.remoteMediaMode).toBe("cache");
       params.ctx.media = [{ path: stagedPath, url: stagedPath, contentType: "image/jpeg" }];
       params.sessionCtx.media = params.ctx.media;

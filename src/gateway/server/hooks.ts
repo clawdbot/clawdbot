@@ -422,17 +422,26 @@ export function createGatewayHooksRequestHandler(params: {
     });
     const admissionTimeoutError = new Error(HOOK_AGENT_START_ADMISSION_TIMEOUT_ERROR);
     const startupAbortController = new AbortController();
-    admissionTimer = setTimeout(() => {
-      admissionTimedOut = true;
-      startupAbortController.abort(admissionTimeoutError);
-      settleAdmission(
-        createHookAdmissionFailure({
-          runId,
-          statusCode: 503,
-        }),
-      );
-    }, agentStartAdmissionTimeoutMs);
-    admissionTimer.unref?.();
+    const settleSuccessfulAdmission = () => {
+      startupAbortController.signal.throwIfAborted();
+      settleAdmission({ ok: true, runId });
+    };
+    // Background admission (fan-out items) skips the start deadline: the
+    // producer's redelivery plus the replay cache own retry semantics, and a
+    // canceled slow admission would keep every redelivery equally cold.
+    if (value.admissionMode !== "background") {
+      admissionTimer = setTimeout(() => {
+        admissionTimedOut = true;
+        startupAbortController.abort(admissionTimeoutError);
+        settleAdmission(
+          createHookAdmissionFailure({
+            runId,
+            statusCode: 503,
+          }),
+        );
+      }, agentStartAdmissionTimeoutMs);
+      admissionTimer.unref?.();
+    }
 
     // Queue identity is fixed when accepted; the isolated runner still receives
     // the original session expression and fresh config, preserving hook routing.
@@ -484,13 +493,21 @@ export function createGatewayHooksRequestHandler(params: {
               // cannot starve them. Aggregate capacity stays bounded by the lane
               // group that owns both lanes.
               lane: CommandLane.HookDispatch,
-              abortSignal: startupAbortController.signal,
-              onExecutionStarted: () => {
-                // Existing runner-entry callbacks are the final owner-boundary fence:
-                // a deadline that wins this race prevents the runner call itself.
-                startupAbortController.signal.throwIfAborted();
-                settleAdmission({ ok: true, runId });
+              executionIdentity: {
+                ingress: {
+                  kind: "webhook",
+                  boundary: "gateway.hooks.agent",
+                  state: "present",
+                  ...(acceptedValue.mappingId ? { rawSourceRef: acceptedValue.mappingId } : {}),
+                },
               },
+              abortSignal: startupAbortController.signal,
+              onLaneWait: (info) => {
+                if (info?.waiting === false) {
+                  settleSuccessfulAdmission();
+                }
+              },
+              onExecutionStarted: settleSuccessfulAdmission,
             });
           const result = await runWithScheduledGatewayContext({
             ...(scheduledGatewayContextResolver

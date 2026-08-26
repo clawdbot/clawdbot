@@ -43,7 +43,7 @@ describe("gateway cli backend live helpers", () => {
     delete process.env.ANTHROPIC_API_KEY_OLD;
   });
 
-  it("applies and restores live env including minimal gateway mode", async () => {
+  it("applies and restores live env including full gateway mode", async () => {
     const { applyCliBackendLiveEnv, restoreCliBackendLiveEnv, snapshotCliBackendLiveEnv } =
       liveHelpers;
 
@@ -74,7 +74,7 @@ describe("gateway cli backend live helpers", () => {
     expect(process.env.OPENCLAW_SKIP_CANVAS_HOST).toBe("1");
     expect(process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER).toBe("1");
     expect(process.env.OPENCLAW_BUNDLED_PLUGINS_DIR).toBe("old-bundled");
-    expect(process.env.OPENCLAW_TEST_MINIMAL_GATEWAY).toBe("1");
+    expect(process.env.OPENCLAW_TEST_MINIMAL_GATEWAY).toBe("0");
     expect(process.env.ANTHROPIC_API_KEY).toBeUndefined();
     expect(process.env.ANTHROPIC_API_KEY_OLD).toBeUndefined();
 

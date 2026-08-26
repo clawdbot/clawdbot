@@ -26,9 +26,9 @@ import {
 import { t } from "../../i18n/index.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { languageLabel, renderLanguageSelect } from "./language-select.ts";
+import { APPEARANCE_SETTINGS_TARGET_IDS } from "./route-data.ts";
 import { renderSessionObserverSettings } from "./session-observer-settings.ts";
 import { renderSettingsSelectRow } from "./settings-select-row.ts";
-import { APPEARANCE_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
 import type { ConfigProps } from "./view-types.ts";
 
 export function serverUiPrefProvenanceHint(provenance: ServerUiPrefProvenance): string {

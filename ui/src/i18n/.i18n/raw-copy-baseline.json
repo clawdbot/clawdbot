@@ -353,6 +353,13 @@
     },
     {
       "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/chat/components/chat-model-picker-options.ts",
+      "text": "i"
+    },
+    {
+      "count": 1,
       "kind": "object-property",
       "name": "title",
       "path": "ui/src/pages/chat/components/chat-pane-header.test-support.ts",

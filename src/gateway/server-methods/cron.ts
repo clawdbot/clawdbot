@@ -79,6 +79,7 @@ import {
 import { isCronInvalidRequestError } from "./cron-error-classification.js";
 import { listCronPageForCallerScope } from "./cron-list-caller-scope.js";
 import { cronRunLogPageFilters, filterCronRunLogJobsByAgent } from "./cron-run-log-filters.js";
+import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
@@ -848,6 +849,20 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     const callerScope = readCronCallerScope(client);
+    const operatorActor = callerScope ? undefined : resolveOperatorSessionCreation(client).actor;
+    // Agent-tool clients own one exact signed session. Read that session's creator instead of
+    // reclassifying spawn context as the automation creator; params never carry this provenance.
+    const actor =
+      operatorActor ??
+      (callerScope?.sessionKey
+        ? loadGatewaySessionEntryReadOnly(callerScope.sessionKey, {
+            agentId: callerScope.agentId,
+          }).entry?.createdActor
+        : undefined);
+    const actorId = normalizeOptionalString(actor?.id);
+    const createdActor = actor
+      ? { type: actor.type, ...(actorId ? { id: actorId } : {}) }
+      : undefined;
     let captureRuntimeAuthority: (() => CronRuntimeAuthority | undefined) | undefined;
     try {
       captureRuntimeAuthority = resolveCronCreatorAuthorityCapture(callerScope);
@@ -908,6 +923,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     try {
       result = await context.cron.add(jobCreate, {
         enabledExplicit,
+        ...(createdActor ? { createdActor } : {}),
         ...(commitGuard ? { commitGuard } : {}),
         ...(captureRuntimeAuthority ? { captureRuntimeAuthority } : {}),
         matchesExisting: (job) =>

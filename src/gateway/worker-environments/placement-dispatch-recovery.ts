@@ -3,6 +3,7 @@ import {
   isCurrentActiveWorkerEnvironment,
   isUnavailableEnvironment,
   type WorkerActiveDispatchPlacement,
+  type WorkerDispatchEnvironmentService,
   type WorkerDispatchPlacement,
   type WorkerFailedDispatchPlacement,
 } from "./placement-dispatch-failure.js";
@@ -34,6 +35,28 @@ function workerDisappearanceError(
   return new Error(
     `cloud worker disappeared: ${environment.error ?? `environment state ${environment.state}`}`,
   );
+}
+
+function activePlacementExecutionError(
+  placement: WorkerActiveDispatchPlacement,
+  environment: NonNullable<ReturnType<WorkerDispatchEnvironmentService["get"]>>,
+  environments: Pick<WorkerDispatchEnvironmentService, "supportsProviderExecutionMode">,
+): Error | undefined {
+  const provisionedMode = environment.profileSnapshot.executionMode;
+  if (provisionedMode !== undefined && provisionedMode !== placement.executionMode) {
+    return new Error("Active worker placement execution mode does not match its environment");
+  }
+  if (placement.executionMode === "worker-turn" && !environment.nodeDeviceId) {
+    return new Error("Active worker-turn placement requires a node lease");
+  }
+  if (
+    !environments.supportsProviderExecutionMode(environment.providerId, placement.executionMode)
+  ) {
+    return new Error(
+      `Worker provider ${environment.providerId} does not support ${placement.executionMode} placement`,
+    );
+  }
+  return undefined;
 }
 
 function blockingWorkspaceJournalSessions(
@@ -71,8 +94,8 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
   const { environments, failure, placements } = deps;
 
   const adoptActive = async (placement: WorkerActiveDispatchPlacement): Promise<void> => {
-    // Worker turns are one-shot SSH children owned by the previous gateway process. A durable
-    // claim cannot prove that child remains live after restart, so fence the whole placement.
+    // Turn claims belong to the previous Gateway lifecycle and cannot prove live authority
+    // after restart, so fence the whole placement before attempting to adopt it.
     if (placement.turnClaim) {
       const error = new Error(
         "Active worker turn claim cannot be proven live after gateway restart",
@@ -101,9 +124,12 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
       return;
     }
     try {
-      // Paired nodes are persistent runners, not one-shot SSH children. Their
-      // dormant lease remains authoritative while offline; validate and create
-      // the reconnect-scoped tunnel lazily when the next turn actually launches.
+      const executionError = activePlacementExecutionError(placement, environment, environments);
+      if (executionError) {
+        throw executionError;
+      }
+      // Node leases stay authoritative while offline; their reconnect-scoped
+      // tunnel is validated lazily when the next turn actually launches.
       if (!environment.nodeDeviceId) {
         await environments.startTunnel({
           environmentId: environment.environmentId,
@@ -236,12 +262,17 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
         );
         continue;
       }
-      if (!isCurrentActiveWorkerEnvironment(placement, environment)) {
+      if (!environment || !isCurrentActiveWorkerEnvironment(placement, environment)) {
         await failure.reclaimActive(
           placement,
           environment,
           new Error("Active worker placement does not match its environment owner"),
         );
+        continue;
+      }
+      const executionError = activePlacementExecutionError(placement, environment, environments);
+      if (executionError) {
+        await failure.failActive(placement, executionError, { forceClaimFence: true });
       }
     }
   };
