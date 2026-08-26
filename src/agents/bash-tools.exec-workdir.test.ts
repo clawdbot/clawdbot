@@ -98,7 +98,7 @@ describe("resolveExecWorkdir", () => {
   });
 
   it("canonicalizes local workdirs before approval and execution", async () => {
-    await withTempDir(async (workspaceDir) => {
+    await withTestDir(async (workspaceDir) => {
       const target = path.join(workspaceDir, "target");
       const link = path.join(workspaceDir, "link");
       await mkdir(target);
