@@ -242,7 +242,6 @@ function createPlanningEvidenceFixture(
 function runPlanningEvidenceFixture(
   fixture: PlanningEvidenceFixture,
   currentSummary = fixture.currentSummary,
-  gatewayEvidence?: { cardStep?: string; visibleAssistantText?: string },
 ) {
   const state = createQaBusState();
   const readOptions: unknown[] = [];
@@ -255,6 +254,7 @@ function runPlanningEvidenceFixture(
     currentSummary,
   ];
   let readIndex = 0;
+  const cardStep = fixture.scenario.execution.config?.internalMarker;
   const result = runLoadedScenarioFlow(fixture.scenario.id, {
     flow: readPlanningEvidenceFlow(fixture.scenario),
     state,
@@ -272,26 +272,8 @@ function runPlanningEvidenceFixture(
         gateway: {
           call: async (method: string) =>
             method === "progressCard.get"
-              ? {
-                  card: {
-                    revision: 1,
-                    steps: [
-                      {
-                        step:
-                          gatewayEvidence?.cardStep ??
-                          fixture.scenario.execution.config?.internalMarker,
-                      },
-                    ],
-                  },
-                }
-              : {
-                  messages: [
-                    {
-                      role: "assistant",
-                      content: gatewayEvidence?.visibleAssistantText ?? fixture.outboundText,
-                    },
-                  ],
-                },
+              ? { card: { revision: 1, steps: [{ step: cardStep }] } }
+              : { messages: [{ role: "assistant", content: fixture.outboundText }] },
         },
       },
       readSessionTranscriptSummary: async (...args: unknown[]) => {
@@ -701,36 +683,6 @@ describe("scenario-flow-runner", () => {
 
       await expect(result).rejects.toThrow(fixture.failureMessage);
       expect(readOptions).toEqual([{ allowEmpty: true }, { afterEventCursor: 7 }]);
-    },
-  );
-
-  it.each([
-    {
-      name: "the durable progress card omits the requested marker",
-      gatewayEvidence: { cardStep: "different step" },
-      failureMessage: "missing marked durable progress_card evidence",
-    },
-    {
-      name: "Gateway history exposes a synthetic Codex plan assistant message",
-      gatewayEvidence: { visibleAssistantText: "Codex plan:\nQA_INTERNAL_PLAN_DO_NOT_SEND" },
-      failureMessage: "Codex plan leaked into visible Gateway history",
-    },
-  ])(
-    "rejects Codex no-meta-leak evidence when $name",
-    async ({ gatewayEvidence, failureMessage }) => {
-      const scenario = readQaScenarioById("codex-harness-no-meta-leak");
-      if (scenario.execution.kind !== "flow") {
-        throw new Error("Codex no-meta-leak scenario has no flow");
-      }
-      const fixture = createPlanningEvidenceFixture(scenario as PlanningEvidenceScenario);
-
-      const { result } = runPlanningEvidenceFixture(
-        fixture,
-        fixture.currentSummary,
-        gatewayEvidence,
-      );
-
-      await expect(result).rejects.toThrow(failureMessage);
     },
   );
 

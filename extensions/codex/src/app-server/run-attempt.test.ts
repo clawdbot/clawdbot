@@ -76,6 +76,7 @@ import {
 } from "./protocol.js";
 import { itemNotification, rawItemCompleted, turnCompleted } from "./protocol.test-helpers.js";
 import { resolveCodexDynamicToolDirectNames } from "./run-attempt-tools.js";
+import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
 import * as userInputBridge from "./user-input-bridge.js";
 
 type CodexAppServerToolTelemetry = Parameters<CodexAppServerEventProjector["buildResult"]>[0];
@@ -2623,12 +2624,7 @@ describe("runCodexAppServerAttempt", () => {
       }),
     );
     expect(
-      result.messagesSnapshot.some(
-        (message) =>
-          message.role === "assistant" &&
-          (message as { __openclaw?: { mirrorIdentity?: string } }).__openclaw?.mirrorIdentity ===
-            "turn-1:plan",
-      ),
+      result.messagesSnapshot.some((message) => readMirrorIdentity(message) === "turn-1:plan"),
     ).toBe(false);
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain("Codex plan:");
   });
