@@ -18,6 +18,7 @@ const PROFILE = {
   class: "standard",
   ttl: "24h",
   idleTimeout: "60m",
+  warmImage: true,
 };
 const WALLPAPER_PATH = fileURLToPath(
   new URL("../assets/openclaw-worker-wallpaper.png", import.meta.url),
@@ -200,10 +201,10 @@ describe("Crabbox profile warm images", () => {
     }
   });
 
-  it("enables warm images by default while preserving explicit boolean choices", () => {
-    expect(parseCrabboxProfile(PROFILE).warmImage).toBe(true);
-    expect(parseCrabboxProfile({ ...PROFILE, warmImage: true }).warmImage).toBe(true);
-    expect(parseCrabboxProfile({ ...PROFILE, warmImage: false }).warmImage).toBe(false);
+  it("keeps warm images disabled by default and rejects non-boolean opt-ins", () => {
+    const { warmImage, ...withoutWarmImage } = PROFILE;
+    expect(warmImage).toBe(true);
+    expect(parseCrabboxProfile(withoutWarmImage).warmImage).toBe(false);
     expect(() => parseCrabboxProfile({ ...PROFILE, warmImage: "yes" })).toThrow(
       "Crabbox profile warmImage must be a boolean",
     );
@@ -238,10 +239,10 @@ describe("Crabbox profile warm images", () => {
     expect(scrub?.options.input).toContain("kill -TERM");
     expect(scrub?.options.input).toContain("kill -KILL");
     expect(scrub?.options.input).toContain('rm -rf "$worker_root"');
-    // Scrub and native capture share one bounded coordinator round-trip budget.
-    expect(scrub?.options.timeoutMs).toBeGreaterThan(0);
-    expect(scrub?.options.timeoutMs).toBeLessThanOrEqual(180_000);
-    expect(calls[1]?.options.timeoutMs).toBeLessThanOrEqual(scrub?.options.timeoutMs ?? 0);
+    // Capture phases ride a full crabbox run/snapshot round trip; 60s starves
+    // them under coordinator latency (live-measured on AWS 2026-08-26).
+    expect(scrub?.options.timeoutMs).toBe(180_000);
+    expect(calls[1]?.options.timeoutMs).toBe(180_000);
     const home = tempDirs.make("openclaw-crabbox-warm-scrub-");
     const workspace = path.join(
       home,
@@ -284,40 +285,6 @@ describe("Crabbox profile warm images", () => {
     expect(calls.find(({ argv }) => argv[2] === "fork")?.argv[3]).toBe(CHECKPOINT_ID);
     expect(calls.some(({ argv }) => argv[1] === "warmup")).toBe(false);
   });
-
-  it.each([
-    { elapsedMs: 120_000, remainingMs: 60_000 },
-    { elapsedMs: 180_000, remainingMs: 0 },
-  ])(
-    "shares the capture deadline after scrub consumes $elapsedMs ms",
-    async ({ elapsedMs, remainingMs }) => {
-      let now = Date.now();
-      vi.spyOn(Date, "now").mockImplementation(() => now);
-      const { provider, calls, warn } = createWarmProvider(({ argv, options }) => {
-        if (argv[1] === "run" && options.input?.toString().includes("kill -TERM")) {
-          now += elapsedMs;
-        }
-        return undefined;
-      });
-
-      await captureWarmImage(provider);
-
-      const scrub = calls.find(
-        ({ argv, options }) =>
-          argv[1] === "run" && options.input?.toString().includes("kill -TERM"),
-      );
-      expect(scrub?.options.timeoutMs).toBe(180_000);
-      const create = calls.find(({ argv }) => argv[2] === "create");
-      if (remainingMs > 0) {
-        expect(create?.options.timeoutMs).toBe(remainingMs);
-        expect(warn).not.toHaveBeenCalled();
-      } else {
-        expect(create).toBeUndefined();
-        expect(warn).toHaveBeenCalledOnce();
-      }
-      expect(calls.at(-1)?.argv[1]).toBe("stop");
-    },
-  );
 
   it.each([
     { action: "run", name: "scrub fails", result: { code: 7, stderr: "scrub failed" } },
