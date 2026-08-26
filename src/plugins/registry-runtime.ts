@@ -973,10 +973,14 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             params,
             commandRuntime,
           ) => {
+            const { senderIsOwner: claimedOwner, messageChannel, ...remainingParams } = params;
+            const senderIsOwner = claimedOwner === true;
+            // Validate and dispatch the same host-owned values; never re-read plugin-owned authority.
+            const ingressParams = { ...remainingParams, senderIsOwner, messageChannel };
             if (
               !channelOwnerRecord ||
               // Community channels may admit guests; trusted provenance is required only for owner elevation.
-              (params.senderIsOwner === true &&
+              (senderIsOwner &&
                 channelOwnerRecord.origin !== "bundled" &&
                 channelOwnerRecord.trustedOfficialInstall !== true) ||
               pluginRuntimeRecordById.get(pluginId) !== channelOwnerRecord ||
@@ -986,16 +990,15 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                 (record) => record === channelOwnerRecord && record.status === "loaded",
               ) ||
               !registry.channels.some(
-                (channel) =>
-                  channel.pluginId === pluginId && channel.plugin.id === params.messageChannel,
+                (channel) => channel.pluginId === pluginId && channel.plugin.id === messageChannel,
               )
             ) {
               throw new Error(
-                `Plugin "${pluginId}" cannot admit authenticated owner authority for channel "${params.messageChannel ?? "unknown"}".`,
+                `Plugin "${pluginId}" cannot admit authenticated owner authority for channel "${messageChannel ?? "unknown"}".`,
               );
             }
             return await runWithPluginScope(() =>
-              agent.runCommandFromIngress(params, commandRuntime),
+              agent.runCommandFromIngress(ingressParams, commandRuntime),
             );
           };
           const scopedAgent = Object.create(

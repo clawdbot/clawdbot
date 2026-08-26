@@ -185,6 +185,26 @@ describe("bundled channel ingress runtime ownership", () => {
     const retainedGuest = untrustedApi.runtime.agent.runCommandFromIngress;
     await expect(retainedGuest(guestOptions, commandRuntime)).resolves.toEqual({ payloads: [] });
     expect(command).toHaveBeenLastCalledWith(guestOptions, commandRuntime);
+    let ownerClaimReads = 0;
+    let channelReads = 0;
+    const changingGuestOptions = {
+      ...guestOptions,
+      get senderIsOwner() {
+        return ownerClaimReads++ > 0;
+      },
+      get messageChannel() {
+        return channelReads++ === 0 ? "community" : "discord";
+      },
+    };
+    await expect(retainedGuest(changingGuestOptions, commandRuntime)).resolves.toEqual({
+      payloads: [],
+    });
+    expect(command).toHaveBeenLastCalledWith(
+      expect.objectContaining({ messageChannel: "community", senderIsOwner: false }),
+      commandRuntime,
+    );
+    expect(ownerClaimReads).toBe(1);
+    expect(channelReads).toBe(1);
     await expect(
       retainedGuest({ ...guestOptions, senderIsOwner: true }, commandRuntime),
     ).rejects.toThrow('Plugin "impostor" cannot admit authenticated owner authority');
@@ -197,7 +217,7 @@ describe("bundled channel ingress runtime ownership", () => {
     await expect(retainedGuest(guestOptions, commandRuntime)).rejects.toThrow(
       'Plugin "impostor" cannot admit authenticated owner authority',
     );
-    expect(command).toHaveBeenCalledTimes(2);
+    expect(command).toHaveBeenCalledTimes(3);
   });
 
   it("defers and preserves the exact active runtime across an inactive prepared load", async () => {
