@@ -278,6 +278,28 @@ openclaw-chat-question-panel {
   text-align: center;
 }
 
+.chat-question-panel__store {
+  display: grid;
+  gap: 6px;
+  padding-left: 10px;
+  border-left: 2px solid color-mix(in srgb, var(--accent) 42%, var(--border));
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.chat-question-panel__store-entry {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.chat-question-panel__store-hosts {
+  display: grid;
+  gap: 5px;
+  margin-top: 2px;
+}
+
 .chat-question-panel__other {
   width: 100%;
   min-width: 0;
@@ -289,6 +311,23 @@ openclaw-chat-question-panel {
   color: var(--text);
   font: inherit;
   outline: none;
+}
+
+/*
+ * The hosts field sits outside an option row, so it cannot borrow the row's
+ * border/focus treatment; give it its own so the one field the operator is
+ * meant to review does not read as static text.
+ */
+.chat-question-panel__hosts {
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+}
+
+.chat-question-panel__hosts:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
 }
 
 .chat-question-panel__option--other:has(.chat-question-panel__other:focus-visible) {

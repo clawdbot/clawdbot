@@ -7601,6 +7601,8 @@ button.chat-pr__diff {
 
   .agent-chat__composer-lead .chat-controls__permission-trigger {
     width: var(--chat-composer-control-size);
+    justify-content: center;
+    padding-inline: 0;
   }
 
   .agent-chat__composer-lead
@@ -7740,6 +7742,8 @@ button.chat-pr__diff {
 @media (max-width: 640px) {
   .agent-chat__composer-meta .chat-controls__permission-trigger {
     width: 44px;
+    justify-content: center;
+    padding-inline: 0;
   }
 
   .agent-chat__composer-meta

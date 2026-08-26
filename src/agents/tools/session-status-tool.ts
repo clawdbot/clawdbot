@@ -96,6 +96,7 @@ import {
 } from "./session-status-session-resolve.js";
 import {
   createAgentToAgentPolicy,
+  formatSessionToolAccessDenial,
   resolveCurrentSessionClientAlias,
   resolveEffectiveSessionToolsVisibility,
   resolveSandboxedSessionToolContext,
@@ -668,7 +669,7 @@ export function createSessionStatusTool(opts?: {
         if (cached) {
           return cached;
         }
-        let access = await resolveSessionToolAccess({
+        const access = await resolveSessionToolAccess({
           action: "status",
           requesterAgentId,
           requesterSessionKey: visibilityRequesterKey,
@@ -681,28 +682,6 @@ export function createSessionStatusTool(opts?: {
           a2aPolicy,
           callGateway: gatewayCall,
         });
-        if (
-          !access.allowed &&
-          target.targetAgentId !== requesterAgentId &&
-          !target.requesterOwned &&
-          !target.authorizationTargetSessionKey.startsWith("agent:") &&
-          !access.error.includes("ownership lookup failed")
-        ) {
-          if (!a2aPolicy.enabled) {
-            access = {
-              allowed: false,
-              status: "forbidden",
-              error:
-                "Agent-to-agent status is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent access.",
-            };
-          } else if (!a2aPolicy.isAllowed(requesterAgentId, target.targetAgentId)) {
-            access = {
-              allowed: false,
-              status: "forbidden",
-              error: "Agent-to-agent session status denied by tools.agentToAgent.allow.",
-            };
-          }
-        }
         accessByTarget.set(cacheKey, access);
         return access;
       };
@@ -779,7 +758,12 @@ export function createSessionStatusTool(opts?: {
           requesterOwned: false,
         });
         if (!access.allowed) {
-          throw new Error(access.error);
+          throw new Error(
+            formatSessionToolAccessDenial(access, {
+              action: "status",
+              targetSessionKey: requestedKeyInput,
+            }),
+          );
         }
       }
       let storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
@@ -849,7 +833,12 @@ export function createSessionStatusTool(opts?: {
               requesterOwned: visibleSession.requesterOwned,
             });
             if (!access.allowed) {
-              throw new Error(access.error);
+              throw new Error(
+                formatSessionToolAccessDenial(access, {
+                  action: "status",
+                  targetSessionKey: visibleSession.displayKey,
+                }),
+              );
             }
           }
           resolvedRequesterOwned = visibleSession.requesterOwned;
@@ -966,7 +955,12 @@ export function createSessionStatusTool(opts?: {
         requesterOwned: resolvedRequesterOwned,
       });
       if (!access.allowed) {
-        throw new Error(access.error);
+        throw new Error(
+          formatSessionToolAccessDenial(access, {
+            action: "status",
+            targetSessionKey: requestedKeyInput,
+          }),
+        );
       }
       let scopedResolved = resolved;
 

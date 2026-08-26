@@ -5,16 +5,16 @@ import os from "node:os";
 import path from "node:path";
 import { App, type Receiver, type ReceiverEvent } from "@slack/bolt";
 import type { WebClientOptions } from "@slack/web-api";
+import {
+  closeOpenClawStateDatabaseForTest,
+  createChannelIngressQueueForTests,
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import type {
   ChannelIngressMonitorLifecycle,
   ChannelIngressQueue,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginJsonValue } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  closeOpenClawStateDatabaseForTest,
-  createChannelIngressQueueForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
   peekSystemEventEntries,

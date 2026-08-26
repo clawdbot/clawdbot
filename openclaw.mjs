@@ -509,7 +509,7 @@ const resolveLauncherHomeDir = () => {
   const explicit = normalizeLauncherHomeValue(process.env.OPENCLAW_HOME);
   const rawHome =
     explicit && (explicit === "~" || explicit.startsWith("~/") || explicit.startsWith("~\\"))
-      ? explicit.replace(/^~(?=$|[\\/])/, resolveLauncherOsHomeDir())
+      ? explicit.replace(/^~(?=$|[\\/])/, () => resolveLauncherOsHomeDir())
       : (explicit ?? resolveLauncherOsHomeDir());
   return path.resolve(rawHome);
 };

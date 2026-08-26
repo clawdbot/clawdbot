@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
@@ -61,8 +62,20 @@ export function recordNodeSyncPath(
 }
 
 async function localGit(root: string, args: string[]): Promise<string> {
+  // Inspection runs inside the Gateway process against a user checkout, so
+  // checkout-configured hook/fsmonitor commands must never execute here.
   const result = await runCommandWithTimeout(
-    ["git", ...GIT_NONINTERACTIVE_ARGS, "-C", root, ...args],
+    [
+      "git",
+      "-c",
+      `core.hooksPath=${os.devNull}`,
+      "-c",
+      "core.fsmonitor=false",
+      ...GIT_NONINTERACTIVE_ARGS,
+      "-C",
+      root,
+      ...args,
+    ],
     {
       timeoutMs: GIT_TIMEOUT_MS,
       maxOutputBytes: 256 * 1024,

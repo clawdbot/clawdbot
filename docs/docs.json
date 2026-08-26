@@ -1182,6 +1182,7 @@
               {
                 "group": "Developer and self-hosted",
                 "pages": [
+                  "channels/a2a",
                   "channels/buzz",
                   "channels/clickclack",
                   "channels/irc",
@@ -1408,6 +1409,7 @@
                   "tools/music-generation",
                   "tools/pdf",
                   "tools/reactions",
+                  "tools/secrets",
                   "tools/thinking",
                   "tools/tokenjuice",
                   "tools/tool-search",

@@ -969,9 +969,11 @@ export function createGatewayCloseHandler(
         clearInterval(timer);
       }
       params.nodePresenceTimers.clear();
+      // Omit rather than null: ShutdownEventSchema declares an optional integer,
+      // and clients key the restart presentation on the field's presence.
       params.broadcast("shutdown", {
         reason,
-        restartExpectedMs,
+        ...(restartExpectedMs === null ? {} : { restartExpectedMs }),
       });
       if (params.maintenance) {
         clearInterval(params.maintenance.tickInterval);

@@ -222,17 +222,11 @@ describe("AppSidebar agent chip", () => {
     expect(card?.querySelector(".sidebar-identity-card__name")?.textContent?.trim()).toBe(
       "Account",
     );
-    expect(card?.querySelector(".sidebar-identity-card__subtitle")?.textContent).toBe(
-      "Reconnecting…",
-    );
-    expect(
-      card?.querySelector(".sidebar-identity-card__subtitle")?.getAttribute("aria-hidden"),
-    ).toBe("true");
-    const connectionStatus = sidebar.querySelector(".sidebar-identity-card__status");
-    expect(connectionStatus?.getAttribute("role")).toBe("status");
+    expect(card?.querySelector(".sidebar-identity-card__subtitle")).toBeNull();
+    const connectionStatus = sidebar.querySelector(".sidebar-footer-bar__status");
     expect(connectionStatus?.getAttribute("aria-live")).toBe("polite");
-    expect(connectionStatus?.textContent).toBe("Reconnecting…");
-    expect(sidebar.querySelector(".sidebar-footer-bar__status")).toBeNull();
+    expect(connectionStatus?.textContent).toContain("Offline");
+    expect(connectionStatus?.textContent).toContain("Reconnecting…");
     expect(sidebar.querySelector(".sidebar-agent-card__subtitle")?.textContent).not.toContain(
       "Offline",
     );
@@ -247,7 +241,7 @@ describe("AppSidebar agent chip", () => {
     sidebar.offline = false;
     await sidebar.updateComplete;
     expect(sidebar.querySelector(".sidebar-identity-card__subtitle")).toBeNull();
-    expect(sidebar.querySelector(".sidebar-identity-card__status")?.textContent).toBe("");
+    expect(sidebar.querySelector(".sidebar-footer-bar__status")).toBeNull();
   });
 
   it("shows a working subtitle while the agent has an active run", async () => {

@@ -4253,6 +4253,7 @@ export const en: TranslationMap = {
   connection: {
     queuedCount: "{count} queued",
     reconnecting: "Reconnecting…",
+    restarting: "Restarting…",
     retryNow: "Retry now",
     actionsUnavailable: "Actions are unavailable while the Gateway reconnects.",
     sessionOperationCompletedPreviousConnection:
@@ -5704,6 +5705,10 @@ export const en: TranslationMap = {
       eyebrow: "Question",
       summaryLabel: "Question outcome",
       ownAnswerFor: "Your own answer for {header}",
+      storeRequestedBy: "Requested by {agent} · {session}",
+      storeEntry: "Stores {name} as {kind}",
+      storeReplacement: "Replaces {name} — last updated {updated}",
+      storeReplacementBy: "Replaces {name} — last updated {updated} by {updatedBy}",
       submitting: "Submitting…",
       submitFailed: "Could not submit: {error}",
       answered: "Answered",

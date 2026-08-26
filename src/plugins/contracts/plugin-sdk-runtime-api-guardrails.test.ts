@@ -13,6 +13,7 @@ function runtimeApiPluginFile(pluginId: string): string {
 }
 
 const UNGUARDED_RUNTIME_API_PLUGIN_IDS = [
+  "a2a",
   "acpx",
   "browser",
   "buzz",
