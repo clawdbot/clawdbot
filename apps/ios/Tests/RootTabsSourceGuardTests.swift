@@ -1090,8 +1090,13 @@ extension RootTabsSourceGuardTests {
         let messagesSource = try String(
             contentsOf: Self.watchInboxMessagesSourceURL(),
             encoding: .utf8)
+        let tombstoneSource = try String(
+            contentsOf: Self.watchInboxStoreSourceURL()
+                .deletingLastPathComponent()
+                .appendingPathComponent("WatchExecApprovalTerminalTombstone.swift"),
+            encoding: .utf8)
         #expect(messagesSource.contains("var sourceSentAtMs: Int64?"))
-        #expect(source.contains("var outcomeIsAuthoritative: Bool?"))
+        #expect(tombstoneSource.contains("var outcomeIsAuthoritative: Bool?"))
         #expect(source.contains("guard let recordSentAtMs = record.sourceSentAtMs else { return true }"))
         #expect(restore.contains("state.execApprovalTerminalTombstones ?? []"))
         #expect(restore.contains("self.isExecApprovalTerminal("))
