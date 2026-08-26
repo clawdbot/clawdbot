@@ -74,6 +74,7 @@
     "!dist/plugin-sdk/channel-test-helpers.d.ts",
     "!dist/plugin-sdk/chat-channel-ids.d.ts",
     "!dist/plugin-sdk/cli-backend.d.ts",
+    "!dist/plugin-sdk/claude-model-runtime.d.ts",
     "!dist/plugin-sdk/cli-runtime.d.ts",
     "!dist/plugin-sdk/codex-mcp-projection.d.ts",
     "!dist/plugin-sdk/codex-session-transcript-runtime.d.ts",
