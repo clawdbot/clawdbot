@@ -44,12 +44,13 @@ private struct ApprovalGatewayRequest: Sendable {
 }
 
 private actor ApprovalGatewayRequestLog {
-    private let initialRequests: [ApprovalFixtureRequest]
+    private var listedRequests: [ApprovalFixtureRequest]
     private var requests: [ApprovalGatewayRequest] = []
     private var nextSequence = 0
+    private var resolveRejection: String?
 
     init(initialRequests: [ApprovalFixtureRequest]) {
-        self.initialRequests = initialRequests
+        self.listedRequests = initialRequests
     }
 
     func append(_ request: ApprovalGatewayRequest) {
@@ -61,7 +62,18 @@ private actor ApprovalGatewayRequestLog {
     }
 
     func listResponse() -> String {
-        String(decoding: try! JSONEncoder().encode(self.initialRequests), as: UTF8.self)
+        String(decoding: try! JSONEncoder().encode(self.listedRequests), as: UTF8.self)
+    }
+
+    /// Simulates another client (the modal prompter) winning the resolution
+    /// race server-side: resolves reject and the authoritative list is empty.
+    func markResolvedElsewhere(reason: String = "APPROVAL_ALREADY_RESOLVED") {
+        self.resolveRejection = reason
+        self.listedRequests = []
+    }
+
+    func resolveRejectionReason() -> String? {
+        self.resolveRejection
     }
 
     func nextEventSequence() -> Int {
@@ -82,6 +94,14 @@ private final class ApprovalGatewayFixture: @unchecked Sendable {
             GatewayTestWebSocketTask(sendHook: { socket, message, sendIndex in
                 guard sendIndex > 0, let request = Self.decodeRequest(message) else { return }
                 await requestLog.append(request)
+                if request.method.hasSuffix("approval.resolve"),
+                   let reason = await requestLog.resolveRejectionReason()
+                {
+                    let response =
+                        #"{"type":"res","id":"\#(request.id)","ok":false,"error":{"message":"\#(reason)"}}"#
+                    socket.emitReceiveSuccess(.data(Data(response.utf8)))
+                    return
+                }
                 let payload = if request.method == "exec.approval.list" {
                     await requestLog.listResponse()
                 } else {
@@ -153,6 +173,25 @@ struct ExecApprovalQueueStoreTests {
         #expect(store.requests.last?.request.sessionKey == "work")
         #expect(store.requests.first?.allowedDecisions == [.allowOnce, .deny])
         #expect(await fixture.requestLog.requests(method: "exec.approval.list").count == 1)
+    }
+
+    @Test func `losing a resolution race re-syncs from the authoritative queue`() async throws {
+        let fixture = ApprovalGatewayFixture(initialRequests: [
+            ApprovalFixtureRequest(id: "contested"),
+        ])
+        let store = ExecApprovalQueueStore(gateway: fixture.gateway)
+        defer { store.stop() }
+
+        await store.refresh()
+        let contested = try #require(store.requests.first)
+
+        // The modal prompter (a second presentation surface on the same event
+        // stream) resolves first; the gateway rejects this store's attempt.
+        await fixture.requestLog.markResolvedElsewhere()
+        await store.resolve(request: contested, decision: .deny)
+
+        #expect(store.requests.isEmpty)
+        #expect(await fixture.requestLog.requests(method: "exec.approval.list").count == 2)
     }
 
     @Test func `requested and resolved events update the shared queue`() async throws {

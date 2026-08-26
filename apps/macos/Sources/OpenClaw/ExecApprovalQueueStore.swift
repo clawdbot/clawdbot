@@ -160,6 +160,10 @@ final class ExecApprovalQueueStore {
             self.removeRequest(id: request.id)
         } catch {
             self.logger.error("exec approval resolution failed \(error.localizedDescription, privacy: .public)")
+            // A losing race (the modal prompter or another client resolved first)
+            // surfaces here as a gateway rejection. Re-list instead of parsing
+            // error text so the card converges to the authoritative queue.
+            await self.refresh()
         }
     }
 
