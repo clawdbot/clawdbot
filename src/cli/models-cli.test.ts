@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   modelsStatusCommand: vi.fn().mockResolvedValue(undefined),
   modelsSetCommand: vi.fn().mockResolvedValue(undefined),
   modelsSetImageCommand: vi.fn().mockResolvedValue(undefined),
+  modelsRefreshCommand: vi.fn().mockResolvedValue(undefined),
   noopAsync: vi.fn(async () => undefined),
   modelsAuthAddCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthListCommand: vi.fn().mockResolvedValue(undefined),
@@ -34,6 +35,7 @@ const {
   modelsAuthPasteApiKeyCommand,
   modelsAuthPasteTokenCommand,
   modelsAuthSetupTokenCommand,
+  modelsRefreshCommand,
   modelsSetCommand,
   modelsSetImageCommand,
   modelsStatusCommand,
@@ -88,6 +90,9 @@ vi.mock("../commands/models/set.js", () => ({
 }));
 vi.mock("../commands/models/set-image.js", () => ({
   modelsSetImageCommand: mocks.modelsSetImageCommand,
+}));
+vi.mock("../commands/models/refresh.js", () => ({
+  modelsRefreshCommand: mocks.modelsRefreshCommand,
 }));
 
 describe("models cli", () => {
@@ -441,6 +446,11 @@ describe("models cli", () => {
       args: ["models", "--agent", "poe", "set-image", "openai/gpt-image-1"],
       command: modelsSetImageCommand,
     },
+    {
+      label: "refresh",
+      args: ["models", "--agent", "poe", "refresh"],
+      command: modelsRefreshCommand,
+    },
   ])("rejects parent --agent for models $label", async ({ args, command }) => {
     await expect(runModelsCommand(args)).rejects.toThrow("does not support --agent");
 
@@ -473,6 +483,7 @@ describe("models cli", () => {
   it.each([
     { label: "set", args: ["models", "--agent", "", "set", "anthropic/claude-sonnet-4-6"] },
     { label: "set-image", args: ["models", "--agent", "", "set-image", "openai/gpt-image-1"] },
+    { label: "refresh", args: ["models", "--agent", "", "refresh"] },
     { label: "aliases list", args: ["models", "--agent", "", "aliases", "list"] },
     { label: "scan", args: ["models", "--agent", "", "scan", "--no-probe", "--no-input"] },
   ])("rejects blank --agent for models $label", async ({ args }) => {
