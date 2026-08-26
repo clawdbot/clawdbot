@@ -34,7 +34,11 @@ import {
 import type { CronDeliveryTrace, CronRunTelemetry } from "../types.js";
 import { resolveCronChannelOutputPolicy } from "./channel-output-policy.js";
 import { resolveCronPayloadOutcome } from "./helpers.js";
-import { buildCronDeliveryTrace, loadCronDeliveryRuntime } from "./run-delivery-trace.js";
+import {
+  buildCronDeliveryTrace,
+  createCronMcpToolsAllowDiagnostics,
+  loadCronDeliveryRuntime,
+} from "./run-delivery-trace.js";
 import type { PreparedCronRunContext } from "./run-prepare.js";
 import {
   adoptCronRunSessionMetadata,
@@ -46,6 +50,7 @@ import {
   deriveSessionTotalTokens,
   hasNonzeroUsage,
   isCliProvider,
+  resolveEffectiveAgentRuntime,
 } from "./run.runtime.js";
 import type { RunCronAgentTurnResult } from "./run.types.js";
 import { cleanupCronRunSessionAfterRun } from "./session-cleanup.js";
@@ -104,6 +109,29 @@ export async function finalizeCronRun(params: {
     finalRunResult.meta?.agentMeta?.provider ??
     execution.fallbackProvider ??
     execution.liveSelection.provider;
+  const finalPreflightDiagnostics = mergeCronRunDiagnostics(
+    await createCronMcpToolsAllowDiagnostics({
+      cfg: prepared.cfgWithAgentDefaults,
+      jobId: prepared.input.job.id,
+      provider: providerUsed,
+      model: modelUsed,
+      agentId: prepared.agentId,
+      agentDir: prepared.agentDir,
+      workspaceDir: prepared.workspaceDir,
+      sessionKey: prepared.agentSessionKey,
+      agentPayload: prepared.agentPayload,
+      agentRuntime: resolveEffectiveAgentRuntime({
+        cfg: prepared.cfgWithAgentDefaults,
+        provider: providerUsed,
+        modelId: modelUsed,
+        agentId: prepared.agentId,
+        sessionKey: prepared.agentSessionKey,
+        sessionEntry: prepared.cronSession.sessionEntry,
+      }),
+      toolsAllowProvenance: prepared.input.job.toolsAllowProvenance,
+    }),
+    prepared.preflightDiagnostics,
+  );
   const runtimeContextTokens = resolvePositiveContextTokens(
     finalRunResult.meta?.agentMeta?.contextTokens,
   );
@@ -306,7 +334,7 @@ export async function finalizeCronRun(params: {
       status: "error",
       error: params.abortReason(),
       diagnostics: mergeCronRunDiagnostics(
-        prepared.preflightDiagnostics,
+        finalPreflightDiagnostics,
         createCronRunDiagnosticsFromAgentResult(finalRunResult, { finalStatus: "error" }),
         createCronRunDiagnosticsFromError("cron-setup", params.abortReason()),
       ),
@@ -332,7 +360,7 @@ export async function finalizeCronRun(params: {
       status: "error",
       error,
       diagnostics: mergeCronRunDiagnostics(
-        prepared.preflightDiagnostics,
+        finalPreflightDiagnostics,
         createCronRunDiagnosticsFromAgentResult(finalRunResult, { finalStatus: "error" }),
         createCronRunDiagnosticsFromError("agent-run", error),
       ),
@@ -361,7 +389,7 @@ export async function finalizeCronRun(params: {
   const agentDiagnostics = createCronRunDiagnosticsFromAgentResult(finalRunResult, {
     finalStatus: hasFatalErrorPayload ? "error" : "ok",
   });
-  const runDiagnostics = mergeCronRunDiagnostics(prepared.preflightDiagnostics, agentDiagnostics);
+  const runDiagnostics = mergeCronRunDiagnostics(finalPreflightDiagnostics, agentDiagnostics);
   const resolveRunOutcome = (result?: {
     delivered?: boolean;
     deliveryAttempted?: boolean;

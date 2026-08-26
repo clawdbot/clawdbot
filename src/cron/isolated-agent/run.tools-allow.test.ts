@@ -1,5 +1,6 @@
 // Tool allowlist tests cover tool availability for isolated cron runs.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { FailoverError } from "../../agents/failover-error.js";
 import "../../agents/test-helpers/fast-coding-tools.js";
 import {
   runInitialModelFallbackAttempt,
@@ -14,6 +15,7 @@ import {
   loadModelCatalogMock,
   loadRunCronIsolatedAgentTurn,
   resolveConfiguredModelRefMock,
+  resolveEffectiveAgentRuntimeMock,
   resetRunCronIsolatedAgentTurnHarness,
   resolveDeliveryTargetMock,
   runEmbeddedAgentMock,
@@ -22,6 +24,8 @@ import {
 
 const MISSING_WEB_SEARCH_PROVIDER_DIAGNOSTIC_MESSAGE =
   "web_search tool requested in toolsAllow but no web search provider is selected. Configure one with: openclaw configure --section web, or set tools.web.search.provider.";
+const MCP_SUPPRESSION_DIAGNOSTIC_MESSAGE =
+  "This automation's explicit toolsAllow omits every configured MCP selector, so no configured MCP tools will be exposed. Add bundle-mcp, group:plugins, a matching <server>__<tool> selector, or * to enable configured MCP tools.";
 
 const RUN_TOOLS_ALLOW_TIMEOUT_MS = 300_000;
 
@@ -279,6 +283,200 @@ describe("runCronIsolatedAgentTurn toolsAllow passthrough", () => {
       ]);
     },
   );
+
+  it(
+    "persists MCP suppression diagnostics through a successful run",
+    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
+    async () => {
+      const params = makeParamsWithToolsAllow(["read"]);
+      params.cfg = {
+        mcp: {
+          servers: {
+            notes: { transport: "stdio", command: "notes-mcp" },
+          },
+        },
+      } as never;
+
+      const result = await runCronIsolatedAgentTurn(params);
+
+      expect(result.status).toBe("ok");
+      expect(result.diagnostics?.summary).toBe(MCP_SUPPRESSION_DIAGNOSTIC_MESSAGE);
+      expect(result.diagnostics?.entries).toEqual([
+        {
+          ts: expect.any(Number),
+          source: "cron-preflight",
+          severity: "warn",
+          message: MCP_SUPPRESSION_DIAGNOSTIC_MESSAGE,
+        },
+      ]);
+    },
+  );
+
+  it(
+    "persists MCP suppression diagnostics when execution throws",
+    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
+    async () => {
+      runWithModelFallbackMock.mockRejectedValueOnce(new Error("LLM provider timeout"));
+      const params = makeParamsWithToolsAllow(["read"]);
+      params.cfg = {
+        mcp: {
+          servers: {
+            notes: { transport: "stdio", command: "notes-mcp" },
+          },
+        },
+      } as never;
+
+      const result = await runCronIsolatedAgentTurn(params);
+
+      expect(result.status).toBe("error");
+      expect(result.diagnostics?.entries.map((entry) => entry.message)).toEqual([
+        MCP_SUPPRESSION_DIAGNOSTIC_MESSAGE,
+        "LLM provider timeout",
+      ]);
+    },
+  );
+
+  it(
+    "uses the final failed runtime for MCP suppression diagnostics",
+    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
+    async () => {
+      resolveEffectiveAgentRuntimeMock.mockImplementation(({ provider }: { provider: string }) =>
+        provider === "anthropic" ? "codex" : "openclaw",
+      );
+      runWithModelFallbackMock.mockRejectedValueOnce(
+        new FailoverError("fallback exhausted", {
+          reason: "unknown",
+          provider: "anthropic",
+          model: "claude-sonnet-5",
+        }),
+      );
+      const params = makeParamsWithToolsAllow(["read"]);
+      params.cfg = {
+        mcp: {
+          servers: {
+            notes: {
+              transport: "stdio",
+              command: "notes-mcp",
+              codex: { agents: ["research"] },
+            },
+          },
+        },
+      } as never;
+
+      const result = await runCronIsolatedAgentTurn(params);
+
+      expect(result).toMatchObject({
+        status: "error",
+        provider: "anthropic",
+        model: "claude-sonnet-5",
+      });
+      expect(result.diagnostics?.entries.map((entry) => entry.message)).toEqual([
+        "fallback exhausted",
+      ]);
+    },
+  );
+
+  it(
+    "uses the final attempted runtime when terminal fallback throws an unclassified error",
+    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
+    async () => {
+      resolveEffectiveAgentRuntimeMock.mockImplementation(({ provider }: { provider: string }) =>
+        provider === "anthropic" ? "codex" : "openclaw",
+      );
+      runEmbeddedAgentMock
+        .mockRejectedValueOnce(new Error("primary failed"))
+        .mockRejectedValueOnce(new Error("terminal fallback failed"));
+      runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => {
+        await run(provider, model).catch(() => undefined);
+        return await run("anthropic", "claude-sonnet-5");
+      });
+      const params = makeParamsWithToolsAllow(["read"]);
+      params.cfg = {
+        mcp: {
+          servers: {
+            notes: {
+              transport: "stdio",
+              command: "notes-mcp",
+              codex: { agents: ["research"] },
+            },
+          },
+        },
+      } as never;
+
+      const result = await runCronIsolatedAgentTurn(params);
+
+      expect(result).toMatchObject({
+        status: "error",
+        provider: "anthropic",
+        model: "claude-sonnet-5",
+      });
+      expect(result.diagnostics?.entries.map((entry) => entry.message)).toEqual([
+        "terminal fallback failed",
+      ]);
+    },
+  );
+
+  it(
+    "retains both MCP and web search preflight diagnostics",
+    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
+    async () => {
+      const params = makeParamsWithToolsAllow(["read", "web_search"]);
+      params.cfg = {
+        mcp: {
+          servers: {
+            notes: { transport: "stdio", command: "notes-mcp" },
+          },
+        },
+      } as never;
+
+      const result = await runCronIsolatedAgentTurn(params);
+
+      expect(result.status).toBe("ok");
+      expect(result.diagnostics?.entries.map((entry) => entry.message)).toEqual([
+        MCP_SUPPRESSION_DIAGNOSTIC_MESSAGE,
+        MISSING_WEB_SEARCH_PROVIDER_DIAGNOSTIC_MESSAGE,
+      ]);
+    },
+  );
+
+  it.each([
+    {
+      name: "adds the warning after a Codex-to-OpenClaw fallback",
+      runtimeForProvider: (provider: string) => (provider === "openai" ? "codex" : "openclaw"),
+      expectedSummary: MCP_SUPPRESSION_DIAGNOSTIC_MESSAGE,
+    },
+    {
+      name: "removes the warning after an OpenClaw-to-Codex fallback",
+      runtimeForProvider: (provider: string) => (provider === "openai" ? "openclaw" : "codex"),
+      expectedSummary: undefined,
+    },
+  ])("$name", async ({ runtimeForProvider, expectedSummary }) => {
+    resolveEffectiveAgentRuntimeMock.mockImplementation(({ provider }: { provider: string }) =>
+      runtimeForProvider(provider),
+    );
+    runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => {
+      await run(provider, model);
+      const result = await run("anthropic", "claude-sonnet-5");
+      return { result, provider: "anthropic", model: "claude-sonnet-5", attempts: [] };
+    });
+    const params = makeParamsWithToolsAllow(["read"]);
+    params.cfg = {
+      mcp: {
+        servers: {
+          notes: {
+            transport: "stdio",
+            command: "notes-mcp",
+            codex: { agents: ["research"] },
+          },
+        },
+      },
+    } as never;
+
+    const result = await runCronIsolatedAgentTurn(params);
+
+    expect(result.status).toBe("ok");
+    expect(result.diagnostics?.summary).toBe(expectedSummary);
+  });
 
   it(
     "uses the prepared provider selected from a plugin-scoped web search key",

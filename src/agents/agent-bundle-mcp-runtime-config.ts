@@ -346,3 +346,22 @@ export function resolveStaticSessionMcpServerNames(params: {
   const { staticServers } = partitionMcpServersByConnectionScope(loaded.mcpServers);
   return Object.keys(staticServers).toSorted((left, right) => left.localeCompare(right));
 }
+
+/** Reads model-facing names for enabled static MCP servers without opening transports. */
+export function resolveStaticSessionMcpSafeServerNames(params: {
+  workspaceDir: string;
+  cfg?: OpenClawConfig;
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+  toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
+}): string[] {
+  const { loaded } = loadSessionMcpConfig({
+    ...params,
+    logDiagnostics: false,
+  });
+  const safeNames = assignSafeServerNames(Object.keys(loaded.mcpServers));
+  const { staticServers } = partitionMcpServersByConnectionScope(loaded.mcpServers);
+  return Object.keys(staticServers)
+    .map((serverName) => safeNames.get(serverName))
+    .filter((serverName): serverName is string => serverName !== undefined)
+    .toSorted((left, right) => left.localeCompare(right));
+}

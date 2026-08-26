@@ -1,4 +1,5 @@
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
+import { isFailoverError } from "../../agents/failover-error.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../browser-lifecycle-cleanup.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
@@ -32,10 +33,11 @@ import type {
   CronAgentExecutionStarted,
   CronStoredJob,
 } from "../types.js";
+import { createCronMcpToolsAllowDiagnostics } from "./run-delivery-trace.js";
 import { finalizeCronRun } from "./run-finalize.js";
 import { prepareCronRunContext } from "./run-prepare.js";
 import { CronSessionLifecycleClaimError, type MutableCronSession } from "./run-session-state.js";
-import { logWarn } from "./run.runtime.js";
+import { logWarn, resolveEffectiveAgentRuntime } from "./run.runtime.js";
 import type { RunCronAgentTurnResult } from "./run.types.js";
 import { cleanupCronRunSessionAfterRun } from "./session-cleanup.js";
 
@@ -292,6 +294,19 @@ export async function runCronIsolatedAgentTurn(params: {
     const error = isCronLaneTimeout ? abortReason() : normalizeCronRunErrorText(err);
     outcome = "error";
     outcomeError = error;
+    const failoverError = isFailoverError(err) ? err : undefined;
+    const failedProvider = failoverError?.provider?.trim();
+    const failedModel = failoverError?.model?.trim();
+    const attemptedProvider = prepared.context.cronSession.sessionEntry.modelProvider?.trim();
+    const attemptedModel = prepared.context.cronSession.sessionEntry.model?.trim();
+    const finalFailedSelection =
+      failedProvider && failedModel
+        ? { provider: failedProvider, model: failedModel }
+        : attemptedProvider && attemptedModel
+          ? { provider: attemptedProvider, model: attemptedModel }
+          : undefined;
+    const finalProvider = finalFailedSelection?.provider ?? prepared.context.liveSelection.provider;
+    const finalModel = finalFailedSelection?.model ?? prepared.context.liveSelection.model;
     return prepared.context.withRunSession({
       status: "error",
       error,
@@ -304,13 +319,33 @@ export async function runCronIsolatedAgentTurn(params: {
                 : ("rejected" as const),
           }
         : {}),
-      // Carry the already-resolved run model into the error/timeout row so
+      // Carry the final attempted run model into the error/timeout row so
       // Task-run history keeps provider/model attribution instead of looking like
       // an un-attributed cron timeout. finalizeCronRun does the same via
       // telemetry on the aborted path; this catch never reaches it.
-      provider: prepared.context.liveSelection.provider,
-      model: prepared.context.liveSelection.model,
+      provider: finalProvider,
+      model: finalModel,
       diagnostics: mergeCronRunDiagnostics(
+        await createCronMcpToolsAllowDiagnostics({
+          cfg: prepared.context.cfgWithAgentDefaults,
+          jobId: prepared.context.input.job.id,
+          provider: finalProvider,
+          model: finalModel,
+          agentId: prepared.context.agentId,
+          agentDir: prepared.context.agentDir,
+          workspaceDir: prepared.context.workspaceDir,
+          sessionKey: prepared.context.agentSessionKey,
+          agentPayload: prepared.context.agentPayload,
+          agentRuntime: resolveEffectiveAgentRuntime({
+            cfg: prepared.context.cfgWithAgentDefaults,
+            provider: finalProvider,
+            modelId: finalModel,
+            agentId: prepared.context.agentId,
+            sessionKey: prepared.context.agentSessionKey,
+            sessionEntry: prepared.context.cronSession.sessionEntry,
+          }),
+          toolsAllowProvenance: prepared.context.input.job.toolsAllowProvenance,
+        }),
         prepared.context.preflightDiagnostics,
         createCronRunDiagnosticsFromError(
           isCronLaneTimeout ? "cron-setup" : "agent-run",

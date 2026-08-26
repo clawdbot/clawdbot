@@ -37,7 +37,7 @@ import {
 import { resolveCronActiveRuntimeConfig, resolveCronAgentConfig } from "./run-config.js";
 import { buildCurrentConversationContextBlock } from "./run-current-context.js";
 import {
-  createCronToolsAllowPreflightDiagnostics,
+  createCronWebSearchPreflightDiagnostics,
   type ResolvedCronDeliveryTarget,
   resolveCronDeliveryContext,
 } from "./run-delivery-trace.js";
@@ -496,7 +496,7 @@ export async function prepareCronRunContext(params: {
       findModelInCatalog(thinkingSelection.catalog, provider, model)?.api ??
       configuredProvider?.models?.find((candidate) => candidate.id === model)?.api ??
       configuredProvider?.api;
-    const preflightDiagnostics = await createCronToolsAllowPreflightDiagnostics({
+    const preflightDiagnostics = await createCronWebSearchPreflightDiagnostics({
       cfg: cfgWithAgentDefaults,
       jobId: input.job.id,
       provider,

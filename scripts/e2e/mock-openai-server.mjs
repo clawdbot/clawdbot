@@ -744,6 +744,67 @@ function mcpCodeModeApiFileEvents(body, bodyText) {
   );
 }
 
+function cronMcpAuthorityEvents(body, bodyText) {
+  const allText = collectText(body).join("\n");
+  const exactSelector = allText.includes("OPENCLAW_E2E_CRON_MCP_EXACT_SELECTOR");
+  const nonCodexScope = allText.includes("OPENCLAW_E2E_CRON_MCP_NON_CODEX_SCOPE");
+  if (!exactSelector && !nonCodexScope) {
+    return null;
+  }
+  const toolOutput = collectFunctionCallOutputText(body);
+  if (!toolOutput) {
+    if (!hasDeclaredTool(bodyText, "exec")) {
+      return responseEvents("OPENCLAW_E2E_CRON_MCP_AUTHORITY_FAIL exec-not-declared");
+    }
+    return toolCallEvents("exec", {
+      language: "javascript",
+      code: exactSelector
+        ? [
+            'const api = await API.read("mcp/cronCleanupProbe.d.ts");',
+            "const cleanup = await MCP.cronCleanupProbe.cleanupProbe({});",
+            "return {",
+            '  marker: "OPENCLAW_E2E_CRON_MCP_EXACT_RESULT",',
+            '  hasCleanup: api.content.includes("function cleanupProbe"),',
+            '  hasSecondary: api.content.includes("function secondaryProbe"),',
+            "  cleanupText: cleanup.content?.[0]?.text,",
+            "};",
+          ].join("\n")
+        : [
+            'const api = await API.read("mcp/cronCleanupProbe.d.ts");',
+            "const cleanup = await MCP.cronCleanupProbe.cleanupProbe({});",
+            "const secondary = await MCP.cronCleanupProbe.secondaryProbe({});",
+            "return {",
+            '  marker: "OPENCLAW_E2E_CRON_MCP_NON_CODEX_RESULT",',
+            '  hasCleanup: api.content.includes("function cleanupProbe"),',
+            '  hasSecondary: api.content.includes("function secondaryProbe"),',
+            "  cleanupText: cleanup.content?.[0]?.text,",
+            "  secondaryText: secondary.content?.[0]?.text,",
+            "};",
+          ].join("\n"),
+    });
+  }
+  const hasCleanup = /"hasCleanup"\s*:\s*true/u.test(toolOutput);
+  const hasSecondary = /"hasSecondary"\s*:\s*true/u.test(toolOutput);
+  const cleanupRan = toolOutput.includes("cron-mcp-cleanup-ok");
+  const secondaryRan = toolOutput.includes("cron-mcp-secondary-ok");
+  if (exactSelector) {
+    return toolOutput.includes("OPENCLAW_E2E_CRON_MCP_EXACT_RESULT") &&
+      hasCleanup &&
+      !hasSecondary &&
+      cleanupRan &&
+      !secondaryRan
+      ? responseEvents("OPENCLAW_E2E_CRON_MCP_EXACT_SELECTOR")
+      : responseEvents("OPENCLAW_E2E_CRON_MCP_AUTHORITY_FAIL exact-selector");
+  }
+  return toolOutput.includes("OPENCLAW_E2E_CRON_MCP_NON_CODEX_RESULT") &&
+    hasCleanup &&
+    hasSecondary &&
+    cleanupRan &&
+    secondaryRan
+    ? responseEvents("OPENCLAW_E2E_CRON_MCP_NON_CODEX_SCOPE")
+    : responseEvents("OPENCLAW_E2E_CRON_MCP_AUTHORITY_FAIL non-codex-scope");
+}
+
 function mcpAppConformanceEvents(body, bodyText) {
   const allText = collectText(body).join("\n");
   if (!/mcp app conformance qa check/i.test(allText)) {
@@ -860,6 +921,11 @@ const server = http.createServer((req, res) => {
         const codeModeEvents = mcpCodeModeApiFileEvents(body, bodyText);
         if (codeModeEvents) {
           writeResponsesEvents(res, body.stream, codeModeEvents);
+          return;
+        }
+        const cronMcpEvents = cronMcpAuthorityEvents(body, bodyText);
+        if (cronMcpEvents) {
+          writeResponsesEvents(res, body.stream, cronMcpEvents);
           return;
         }
         const draftEvents = progressDraftEvents(body, bodyText);

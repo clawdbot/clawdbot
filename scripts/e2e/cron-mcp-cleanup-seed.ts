@@ -44,6 +44,9 @@ const server = new McpServer({ name: "cron-mcp-cleanup-probe", version: "1.0.0" 
 server.tool("cleanup_probe", "Cron MCP cleanup probe", async () => ({
   content: [{ type: "text", text: "cron-mcp-cleanup-ok" }],
 }));
+server.tool("secondary_probe", "Secondary cron MCP authority probe", async () => ({
+  content: [{ type: "text", text: "cron-mcp-secondary-ok" }],
+}));
 
 await server.connect(new StdioServerTransport());
 `,
@@ -86,6 +89,11 @@ async function main() {
           skipBootstrap: true,
           contextInjection: "never",
           skills: [],
+          models: {
+            "openai/gpt-5.6-luna": {
+              agentRuntime: { id: "openclaw" },
+            },
+          },
           subagents: {
             runTimeoutSeconds: 8,
           },
@@ -109,6 +117,7 @@ async function main() {
             command: "node",
             args: [serverPath],
             cwd: probeDir,
+            codex: { agents: ["research"] },
           },
         },
       },

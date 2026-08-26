@@ -223,6 +223,15 @@ unrestricted `*` policy; `automations edit --clear-tools` restores that explicit
 policy. Existing jobs that predate an explicit tool policy retain their current behavior
 until their tool policy is explicitly edited or the job is recreated.
 
+For direct API/config edits, an omitted `toolsAllow` keeps the legacy inherited surface,
+an explicit empty list (`[]`) denies all optional tools, and `["*"]` is unrestricted.
+A finite list only materializes the named tool families. To include configured MCP tools,
+allow `bundle-mcp`, `group:plugins`, a matching `<server>__<tool>` selector for an enabled
+static server, or `*`; a
+core-only list such as `["read", "exec"]` intentionally leaves the bundle MCP runtime off.
+OpenClaw records a warning in that run's diagnostics when a non-empty explicit list excludes
+configured MCP tools.
+
 `--model` sets the job's primary model; it does not replace a session `/model` override, so configured fallback chains still apply on top of it. An unresolved or disallowed model fails the run with an explicit validation error rather than silently falling back to the default. If a job has `--model` but no explicit or configured fallback list, OpenClaw passes an empty fallback override instead of silently appending the agent primary as a hidden retry target.
 
 Pick the model for the job's difficulty, not the agent's default. Routine

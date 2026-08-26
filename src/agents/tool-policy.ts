@@ -5,7 +5,12 @@
  */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { sanitizeServerName, TOOL_NAME_SEPARATOR } from "./agent-bundle-mcp-names.js";
+import {
+  buildSafeToolName,
+  sanitizeServerName,
+  TOOL_NAME_SEPARATOR,
+} from "./agent-bundle-mcp-names.js";
+import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
 import { IMPLICIT_ALLOW_ALL_FROM_ALSO_ALLOW } from "./sandbox-tool-policy.js";
 import {
   expandToolGroups,
@@ -288,6 +293,58 @@ function isDeclaredMcpAllowlistEntry(entry: string, prefixes: Set<string>): bool
     }
   }
   return false;
+}
+
+/** Returns whether an allowlist can reach one of the given model-facing MCP namespaces. */
+export function toolAllowlistIncludesMcpSelector(
+  toolsAllow: string[],
+  safeServerNames: Iterable<string>,
+): boolean {
+  const normalizedAllow = normalizeToolList(toolsAllow);
+  if (
+    normalizedAllow.some(
+      (entry) => entry === "*" || entry === "bundle-mcp" || entry === "group:plugins",
+    )
+  ) {
+    // Materialized MCP tools carry pluginId "bundle-mcp", so executable
+    // group:plugins expansion includes them alongside ordinary plugin tools.
+    return true;
+  }
+  const serverNames = Array.from(safeServerNames);
+  return normalizedAllow.some((entry) => {
+    const patterns = compileGlobPatterns({ raw: [entry], normalize: normalizeToolPolicyName });
+    // Bundle MCP construction requires a literal namespace separator; a
+    // separatorless glob cannot expose MCP tools because the runtime stays off.
+    let separatorIndex = entry.indexOf(TOOL_NAME_SEPARATOR);
+    while (separatorIndex !== -1) {
+      const suffix = entry.slice(separatorIndex + TOOL_NAME_SEPARATOR.length);
+      if (suffix) {
+        let toolNameProbe = suffix.replaceAll("*", "");
+        if (!/^[a-z]/i.test(toolNameProbe) && suffix.includes("*")) {
+          toolNameProbe = suffix.replace("*", "a").replaceAll("*", "");
+        }
+        if (
+          serverNames.some((serverName) => {
+            const probe = serverName + TOOL_NAME_SEPARATOR + toolNameProbe;
+            return (
+              buildSafeToolName({
+                serverName,
+                toolName: toolNameProbe,
+                reservedNames: new Set(),
+              }) === probe && matchesAnyGlobPattern(normalizeToolPolicyName(probe), patterns)
+            );
+          })
+        ) {
+          return true;
+        }
+      }
+      separatorIndex = entry.indexOf(
+        TOOL_NAME_SEPARATOR,
+        separatorIndex + TOOL_NAME_SEPARATOR.length,
+      );
+    }
+    return false;
+  });
 }
 
 /** Classifies allowlists as core, plugin-only, or unknown for diagnostics. */

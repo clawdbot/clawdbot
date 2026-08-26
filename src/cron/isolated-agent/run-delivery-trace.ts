@@ -1,5 +1,9 @@
-import { resolveStaticSessionMcpServerNames } from "../../agents/agent-bundle-mcp-runtime-config.js";
+import {
+  resolveStaticSessionMcpSafeServerNames,
+  resolveStaticSessionMcpServerNames,
+} from "../../agents/agent-bundle-mcp-runtime-config.js";
 import { resolveCodexMcpToolOverridesForAgent } from "../../agents/cli-runner/bundle-mcp-codex.js";
+import { toolAllowlistIncludesMcpSelector } from "../../agents/tool-policy.js";
 /** Delivery planning, prompt policy, and delivery trace construction for cron runs. */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
@@ -149,7 +153,7 @@ export function buildCronDeliveryTrace(params: {
   };
 }
 
-export async function createCronToolsAllowPreflightDiagnostics(params: {
+type CronToolsAllowDiagnosticsParams = {
   cfg: OpenClawConfig;
   jobId: string;
   provider: string;
@@ -162,31 +166,76 @@ export async function createCronToolsAllowPreflightDiagnostics(params: {
   agentPayload: Extract<CronJob["payload"], { kind: "agentTurn" }> | null;
   agentRuntime?: string;
   toolsAllowProvenance?: CronToolsAllowProvenance;
-}): Promise<CronRunDiagnostics | undefined> {
+};
+
+export async function createCronMcpToolsAllowDiagnostics(
+  params: CronToolsAllowDiagnosticsParams,
+): Promise<CronRunDiagnostics | undefined> {
   const toolsAllow = params.agentPayload?.toolsAllow;
-  if (params.agentPayload?.toolsAllowIsDefault === true) {
-    const hasEnabledStaticMcp =
-      resolveStaticSessionMcpServerNames({
+  try {
+    const mcpToolOverrides =
+      params.agentRuntime === "codex"
+        ? resolveCodexMcpToolOverridesForAgent(params.cfg, {
+            agentId: params.agentId,
+            toolOverrides: undefined,
+          })
+        : undefined;
+    if (params.agentPayload?.toolsAllowIsDefault === true) {
+      const hasEnabledStaticMcp =
+        resolveStaticSessionMcpServerNames({
+          workspaceDir: params.workspaceDir,
+          cfg: params.cfg,
+          toolOverrides: mcpToolOverrides,
+        }).length > 0;
+      if (
+        params.agentRuntime === "codex" &&
+        hasEnabledStaticMcp &&
+        params.toolsAllowProvenance?.source !== "final-executable-surface"
+      ) {
+        return createCronRunDiagnosticsFromError(
+          "cron-preflight",
+          `This automation's inherited tool cap predates final configured-MCP capture, so it continues with its stored finite tools and may omit MCP capabilities. Reauthorize in place with an exact explicit cap: openclaw automations edit ${params.jobId} --tools <tool,...>.`,
+          { severity: "warn" },
+        );
+      }
+      return undefined;
+    }
+
+    if (toolsAllow && toolsAllow.length > 0) {
+      const staticMcpServerNames = resolveStaticSessionMcpSafeServerNames({
         workspaceDir: params.workspaceDir,
         cfg: params.cfg,
-        toolOverrides: resolveCodexMcpToolOverridesForAgent(params.cfg, {
-          agentId: params.agentId,
-          toolOverrides: undefined,
-        }),
-      }).length > 0;
-    if (
-      params.agentRuntime === "codex" &&
-      hasEnabledStaticMcp &&
-      params.toolsAllowProvenance?.source !== "final-executable-surface"
-    ) {
-      return createCronRunDiagnosticsFromError(
-        "cron-preflight",
-        `This automation's inherited tool cap predates final configured-MCP capture, so it continues with its stored finite tools and may omit MCP capabilities. Reauthorize in place with an exact explicit cap: openclaw automations edit ${params.jobId} --tools <tool,...>.`,
-        { severity: "warn" },
-      );
+        toolOverrides: mcpToolOverrides,
+      });
+      if (
+        staticMcpServerNames.length > 0 &&
+        !toolAllowlistIncludesMcpSelector(toolsAllow, staticMcpServerNames)
+      ) {
+        return createCronRunDiagnosticsFromError(
+          "cron-preflight",
+          "This automation's explicit toolsAllow omits every configured MCP selector, so no configured MCP tools will be exposed. Add bundle-mcp, group:plugins, a matching <server>__<tool> selector, or * to enable configured MCP tools.",
+          { severity: "warn" },
+        );
+      }
     }
+
+    return undefined;
+  } catch (error) {
+    logWarn(
+      `[cron:${params.jobId}] Failed to inspect configured MCP state for toolsAllow diagnostics: ${String(error)}`,
+    );
     return undefined;
   }
+}
+
+export async function createCronWebSearchPreflightDiagnostics(
+  params: CronToolsAllowDiagnosticsParams,
+): Promise<CronRunDiagnostics | undefined> {
+  const toolsAllow = params.agentPayload?.toolsAllow;
+  if (params.agentPayload?.toolsAllowIsDefault === true) {
+    return undefined;
+  }
+
   if (!toolsAllowRequestsWebSearch(toolsAllow)) {
     return undefined;
   }
