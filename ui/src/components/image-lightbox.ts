@@ -34,7 +34,7 @@ function dataUrlMimeType(source: string): string | undefined {
 
 class OpenClawImageLightbox extends OpenClawLitElement {
   @property() src = "";
-  @property() override title = "";
+  @property({ attribute: false }) imageTitle = "";
   @query(".stage") private stage?: HTMLDivElement;
   @query(".image") private image?: HTMLImageElement;
   @queryAll(".action") private actions!: NodeListOf<HTMLElement>;
@@ -68,9 +68,30 @@ class OpenClawImageLightbox extends OpenClawLitElement {
       overflow: hidden;
     }
 
-    .header,
-    .actions {
+    .header {
       display: contents;
+    }
+
+    .actions {
+      position: fixed;
+      z-index: 1;
+      top: max(16px, calc(12px + var(--safe-area-top, 0px)));
+      right: max(16px, calc(12px + var(--safe-area-right, 0px)));
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .actions .action {
+      border-radius: 999px;
+      background-color: color-mix(in srgb, var(--text) 10%, transparent);
+      -webkit-backdrop-filter: blur(12px);
+      backdrop-filter: blur(12px);
+      transition: background-color 180ms ease;
+    }
+
+    .actions .action:hover {
+      background-color: color-mix(in srgb, var(--text) 16%, transparent);
     }
 
     .title {
@@ -95,7 +116,7 @@ class OpenClawImageLightbox extends OpenClawLitElement {
     }
 
     .action:hover {
-      background: rgba(255, 255, 255, 0.1);
+      background: color-mix(in srgb, var(--text) 10%, transparent);
     }
 
     .action:focus-visible {
@@ -103,19 +124,19 @@ class OpenClawImageLightbox extends OpenClawLitElement {
       outline-offset: 2px;
     }
 
-    .open-original,
-    .close {
-      position: fixed;
-      z-index: 1;
-      top: max(16px, calc(12px + var(--safe-area-top, 0px)));
+    .action:focus:not(:focus-visible) {
+      outline: none;
     }
 
     .open-original {
-      right: max(68px, calc(64px + var(--safe-area-right, 0px)));
+      min-height: 44px;
+    }
+
+    .open-original-icon {
+      display: none;
     }
 
     .close {
-      right: max(16px, calc(12px + var(--safe-area-right, 0px)));
       width: 44px;
       height: 44px;
       padding: 0;
@@ -178,7 +199,9 @@ class OpenClawImageLightbox extends OpenClawLitElement {
       min-height: 40px;
       padding: 0 10px;
       border: 0;
-      background: transparent;
+      background: color-mix(in srgb, var(--text) 10%, transparent);
+      -webkit-backdrop-filter: blur(12px);
+      backdrop-filter: blur(12px);
       font-size: 15px;
     }
 
@@ -205,8 +228,26 @@ class OpenClawImageLightbox extends OpenClawLitElement {
       }
 
       .stage {
-        padding: 0 calc(12px + var(--safe-area-right, 0px))
+        padding: calc(68px + var(--safe-area-top, 0px)) calc(12px + var(--safe-area-right, 0px))
           calc(64px + var(--safe-area-bottom, 0px)) calc(12px + var(--safe-area-left, 0px));
+      }
+
+      .open-original {
+        width: 44px;
+        padding: 0;
+      }
+
+      .open-original-label {
+        display: none;
+      }
+
+      .open-original-icon {
+        display: inline-flex;
+      }
+
+      .open-original-icon svg {
+        width: 17px;
+        height: 17px;
       }
 
       .zoom-control {
@@ -246,7 +287,7 @@ class OpenClawImageLightbox extends OpenClawLitElement {
   }
 
   override render() {
-    const title = this.title.trim() || t("chat.imageLightbox.untitled");
+    const title = this.imageTitle.trim() || t("chat.imageLightbox.untitled");
     const canZoom = this.imageReady && this.panzoom !== undefined;
     return html`
       <openclaw-modal-dialog
@@ -267,14 +308,18 @@ class OpenClawImageLightbox extends OpenClawLitElement {
                       target="_blank"
                       rel="noreferrer"
                     >
-                      ${t("chat.imageLightbox.openOriginal")}
+                      <span class="open-original-label">
+                        ${t("chat.imageLightbox.openOriginal")}
+                      </span>
+                      <span class="open-original-icon" aria-hidden="true">
+                        ${icons.externalLink}
+                      </span>
                     </a>
                   `
                 : nothing}
               <button
                 class="action close"
                 type="button"
-                autofocus
                 aria-label=${t("chat.imageLightbox.close")}
                 @click=${this.emitClose}
               >
@@ -282,7 +327,7 @@ class OpenClawImageLightbox extends OpenClawLitElement {
               </button>
             </div>
           </header>
-          <div class="stage" @dblclick=${this.handleDoubleClick}>
+          <div class="stage" @click=${this.handleStageClick} @dblclick=${this.handleDoubleClick}>
             <img
               class=${this.scale > 1 ? "image zoomed" : "image"}
               src=${this.src}
@@ -408,6 +453,12 @@ class OpenClawImageLightbox extends OpenClawLitElement {
       return;
     }
     this.panzoom?.zoomToPoint(DOUBLE_TAP_SCALE, event);
+  };
+
+  private handleStageClick = (event: MouseEvent) => {
+    if (event.target === event.currentTarget) {
+      this.emitClose();
+    }
   };
 
   private zoomIn = () => this.panzoom?.zoomIn();

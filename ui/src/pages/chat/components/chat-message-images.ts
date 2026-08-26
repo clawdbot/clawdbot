@@ -211,7 +211,10 @@ export function renderMessageImages(images: RenderableImageBlock[], opts?: Image
           type="button"
           class="chat-message-image-button"
           aria-label=${t("chat.imageLightbox.open", { title })}
-          @click=${() => openImage(img, previewUrl)}
+          @click=${(event: MouseEvent) => {
+            event.stopPropagation();
+            openImage(img, previewUrl);
+          }}
         >
           <img
             src=${previewUrl}

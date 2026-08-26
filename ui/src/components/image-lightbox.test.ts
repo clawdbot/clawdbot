@@ -28,7 +28,7 @@ async function renderLightbox() {
   render(
     html`<openclaw-image-lightbox
       src="data:image/png;base64,cG5n"
-      title="Generated lobster"
+      .imageTitle=${"Generated lobster"}
     ></openclaw-image-lightbox>`,
     container,
   );
@@ -84,11 +84,12 @@ describe("openclaw-image-lightbox", () => {
 
     expect(root?.querySelector<HTMLImageElement>("img")?.alt).toBe("Generated lobster");
     expect(root?.querySelector<HTMLImageElement>("img")?.src).toBe("data:image/png;base64,cG5n");
+    expect(modal.hasAttribute("title")).toBe(false);
     await vi.waitFor(() =>
       expect(root?.querySelector<HTMLAnchorElement>("a")?.href).toBe("blob:lightbox-original"),
     );
     expect(fetchImage).toHaveBeenCalledTimes(1);
-    expect(root?.querySelector<HTMLButtonElement>("button")?.hasAttribute("autofocus")).toBe(true);
+    expect(root?.querySelector<HTMLButtonElement>(".close")?.hasAttribute("autofocus")).toBe(false);
   });
 
   it("accepts parameters on safe raster MIME types", async () => {
@@ -98,7 +99,7 @@ describe("openclaw-image-lightbox", () => {
     render(
       html`<openclaw-image-lightbox
         src="data:image/png;charset=utf-8;base64,cG5n"
-        title="Generated lobster"
+        .imageTitle=${"Generated lobster"}
       ></openclaw-image-lightbox>`,
       container,
     );
@@ -131,7 +132,7 @@ describe("openclaw-image-lightbox", () => {
     render(
       html`<openclaw-image-lightbox
         src="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg'></svg>"
-        title="Untrusted SVG"
+        .imageTitle=${"Untrusted SVG"}
       ></openclaw-image-lightbox>`,
       container,
     );
@@ -153,7 +154,7 @@ describe("openclaw-image-lightbox", () => {
     render(
       html`<openclaw-image-lightbox
         src="blob:untrusted-svg"
-        title="Untrusted SVG"
+        .imageTitle=${"Untrusted SVG"}
       ></openclaw-image-lightbox>`,
       container,
     );
@@ -172,7 +173,7 @@ describe("openclaw-image-lightbox", () => {
     render(
       html`<openclaw-image-lightbox
         src="blob:safe-png"
-        title="Safe PNG"
+        .imageTitle=${"Safe PNG"}
       ></openclaw-image-lightbox>`,
       container,
     );
