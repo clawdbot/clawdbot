@@ -1,6 +1,10 @@
 // Parses channel-oriented plugin install specs from package inputs.
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
-import { isExactSemverVersion, parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
+import {
+  isExactSemverVersion,
+  parseRegistryNpmSpec,
+  resolveOpenClawReleaseCohortVersion,
+} from "../infra/npm-registry-spec.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
 
 type ChannelInstallSpecs = {
@@ -56,8 +60,11 @@ export function resolveNpmInstallSpecsForUpdateChannel(params: {
           `${policy} plugin resolution for ${target.name} requires an exact core version.`,
         );
       }
+      const installVersion = params.versionBoundToCore
+        ? resolveOpenClawReleaseCohortVersion(coreVersion)
+        : coreVersion;
       return {
-        installSpec: `${target.name}@${coreVersion}`,
+        installSpec: `${target.name}@${installVersion}`,
         recordSpec: params.spec,
       };
     }

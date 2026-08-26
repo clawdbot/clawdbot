@@ -244,7 +244,41 @@ describe("openai completions stream", () => {
     }
   });
 
-  it("keeps tool calls fail-closed through fetch wrapper when stream ends without [DONE] and without finish_reason", async () => {
+  it.each([
+    { name: "an empty response", delta: undefined, done: false, finishReason: undefined },
+    {
+      name: "a partial visible response",
+      delta: { content: "A partial answer" },
+      done: false,
+      finishReason: undefined,
+    },
+    {
+      name: "an unfinished native tool call",
+      delta: {
+        tool_calls: [
+          {
+            index: 0,
+            id: "call_loopback_nodone",
+            function: { name: "bash", arguments: '{"cmd":"echo no done"}' },
+          },
+        ],
+      },
+      done: false,
+      finishReason: undefined,
+    },
+    {
+      name: "a clean SSE terminal without finish_reason",
+      delta: { content: "A complete answer" },
+      done: true,
+      finishReason: undefined,
+    },
+    {
+      name: "an explicit finish_reason without an SSE terminal",
+      delta: { content: "A complete answer" },
+      done: false,
+      finishReason: "stop" as const,
+    },
+  ])("preserves an honest terminal outcome for $name", async ({ delta, done, finishReason }) => {
     const server = createServer((req, res) => {
       let body = "";
       req.setEncoding("utf8");
@@ -258,21 +292,12 @@ describe("openai completions stream", () => {
           "cache-control": "no-cache",
           connection: "keep-alive",
         });
-        // Emit delta.tool_calls chunk with no finish_reason
-        res.write(
-          `data: ${JSON.stringify(
-            makeCompletionsChunk({
-              tool_calls: [
-                {
-                  index: 0,
-                  id: "call_loopback_nodone",
-                  function: { name: "bash", arguments: '{"cmd":"echo no done"}' },
-                },
-              ],
-            }),
-          )}\n\n`,
-        );
-        // Close WITHOUT data: [DONE] — simulates connection drop / truncated stream
+        if (delta) {
+          res.write(`data: ${JSON.stringify(makeCompletionsChunk(delta, finishReason))}\n\n`);
+        }
+        if (done) {
+          res.write("data: [DONE]\n\n");
+        }
         res.end();
       });
     });
@@ -303,26 +328,23 @@ describe("openai completions stream", () => {
         { apiKey: "test-key" } as never,
       );
 
-      let doneReason: string | undefined;
-      const doneMessage: { content?: Array<{ type?: string }> } = {};
+      let terminalEvent: string | undefined;
       for await (const event of stream as AsyncIterable<{
         type: string;
-        reason?: string;
-        message?: { content?: Array<{ type?: string }> };
       }>) {
-        if (event.type === "done") {
-          doneReason = event.reason;
-          if (event.message) {
-            Object.assign(doneMessage, event.message);
-          }
+        if (event.type === "done" || event.type === "error") {
+          terminalEvent = event.type;
         }
       }
 
-      // EOF without [DONE] → sawStreamDONE stays false → fail-closed
-      expect(doneReason).toBe("stop");
-      const toolCallBlocks =
-        doneMessage.content?.filter((block) => block.type === "toolCall") ?? [];
-      expect(toolCallBlocks).toStrictEqual([]);
+      const result = await (await stream).result();
+      const cleanTerminal = done || Boolean(finishReason);
+      expect(terminalEvent).toBe(cleanTerminal ? "done" : "error");
+      expect(result.stopReason).toBe(cleanTerminal ? "stop" : "error");
+      if (!cleanTerminal) {
+        expect(result.errorMessage).toContain("Stream ended without finish_reason");
+      }
+      expect(result.content.filter((block) => block.type === "toolCall")).toStrictEqual([]);
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));

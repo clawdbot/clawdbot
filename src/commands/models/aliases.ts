@@ -3,7 +3,7 @@ import { formatCliCommand } from "../../cli/command-format.js";
 import { DEFAULT_MODEL_ALIASES } from "../../config/defaults.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import { normalizeAgentModelMapForConfig } from "../../config/model-input.js";
-import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { type RuntimeEnv, writeRuntimeJson, writeRuntimeStdout } from "../../runtime.js";
 import { normalizeAlias } from "./alias-name.js";
 import { loadModelsConfig } from "./load-config.js";
 import { ensureFlagCompatibility, resolveModelTarget, updateConfig } from "./shared.js";
@@ -32,7 +32,7 @@ export async function modelsAliasesListCommand(
   }
   if (opts.plain) {
     for (const [alias, target] of aliasEntries) {
-      runtime.log(`${alias} ${target}`);
+      writeRuntimeStdout(runtime, `${alias} ${target}`);
     }
     return;
   }

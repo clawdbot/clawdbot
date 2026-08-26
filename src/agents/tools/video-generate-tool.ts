@@ -53,6 +53,7 @@ import {
   buildMediaReferenceDetails,
   buildTaskRunDetails,
   createCapabilityProviderRuntimeDeps,
+  hasExplicitMediaModel,
   hasGenerationToolAvailability,
   loadMediaToolReferences,
   normalizeMediaReferenceInputs,
@@ -66,7 +67,6 @@ import {
 import {
   hasAuthForProvider,
   coerceToolModelConfig,
-  hasToolModelConfig,
   type ToolModelConfig,
 } from "./model-config.helpers.js";
 import type { AnyAgentTool, SandboxFsBridge, ToolFsPolicy } from "./tool-runtime.helpers.js";
@@ -210,6 +210,7 @@ function resolveVideoGenerationModelConfigForTool(params: {
   workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
+  modelOverride?: string;
 }): ToolModelConfig | null {
   return resolveCapabilityModelConfigForTool({
     cfg: params.cfg,
@@ -217,6 +218,7 @@ function resolveVideoGenerationModelConfigForTool(params: {
     agentDir: params.agentDir,
     authStore: params.authStore,
     modelConfig: params.cfg?.agents?.defaults?.mediaModels?.video,
+    modelOverride: params.modelOverride,
     providers: () => listRuntimeVideoGenerationProviders({ config: params.cfg }),
   });
 }
@@ -225,10 +227,6 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.videoGenerateToolTestApi")] = {
     resolveVideoGenerationModelConfigForTool,
   };
-}
-
-function hasExplicitVideoGenerationModelConfig(cfg?: OpenClawConfig): boolean {
-  return hasToolModelConfig(coerceToolModelConfig(cfg?.agents?.defaults?.mediaModels?.video));
 }
 
 function collectVideoGenerationModelProviderIds(params: {
@@ -346,14 +344,6 @@ function shouldExposeVideoReferenceAudioParams(params: {
   return false;
 }
 
-function resolveAction(args: Record<string, unknown>): "generate" | "list" | "status" {
-  return resolveGenerateAction({
-    args,
-    allowed: ["generate", "status", "list"],
-    defaultAction: "generate",
-  });
-}
-
 function normalizeResolution(raw: string | undefined): VideoGenerationResolution | undefined {
   const normalized = raw?.trim();
   if (!normalized) {
@@ -450,7 +440,7 @@ const defaultScheduleVideoGenerateBackgroundWork = createDefaultMediaGenerateBac
 async function loadReferenceAssets(params: {
   inputs: string[];
   expectedKind: "image" | "video" | "audio";
-  maxBytes?: number;
+  maxBytes: number;
   workspaceDir?: string;
   sandboxConfig: { root: string; bridge: SandboxFsBridge; workspaceOnly: boolean } | null;
   ssrfPolicy?: SsrFPolicy;
@@ -854,7 +844,7 @@ export function createVideoGenerateTool(options?: {
     parameters: createVideoGenerateToolSchema({ includeAudioReferences }),
     execute: async (_toolCallId, rawArgs, signal) => {
       const args = rawArgs as Record<string, unknown>;
-      const action = resolveAction(args);
+      const action = resolveGenerateAction(args);
 
       if (action === "list") {
         return createVideoGenerateListActionResult(cfg, {
@@ -871,16 +861,18 @@ export function createVideoGenerateTool(options?: {
         );
       }
 
+      const model = readToolStringParam(args, "model");
       const videoGenerationModelConfig = resolveVideoGenerationModelConfigForTool({
         cfg,
         workspaceDir: options?.workspaceDir,
         agentDir: options?.agentDir,
         authStore: options?.authProfileStore,
+        modelOverride: model,
       });
       if (!videoGenerationModelConfig) {
         throw new ToolInputError("No video-generation model configured.");
       }
-      const explicitModelConfig = hasExplicitVideoGenerationModelConfig(cfg);
+      const explicitModelConfig = hasExplicitMediaModel(cfg.agents?.defaults?.mediaModels?.video);
       const effectiveCfg =
         applyAgentDefaultModelConfig(cfg, "video", videoGenerationModelConfig) ?? cfg;
       const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
@@ -894,7 +886,6 @@ export function createVideoGenerateTool(options?: {
         return activeDuplicateGuardResult;
       }
 
-      const model = readToolStringParam(args, "model");
       const filename = readToolStringParam(args, "filename");
       const size = readToolStringParam(args, "size");
       const aspectRatio = normalizeAspectRatio(readToolStringParam(args, "aspectRatio"));
@@ -1006,6 +997,7 @@ export function createVideoGenerateTool(options?: {
       const loadedReferenceImages = await loadReferenceAssets({
         inputs: imageInputs,
         expectedKind: "image",
+        maxBytes: resolveGeneratedMediaMaxBytes(effectiveCfg, "image"),
         workspaceDir: options?.workspaceDir,
         sandboxConfig,
         ssrfPolicy: remoteMediaSsrfPolicy,
@@ -1022,6 +1014,7 @@ export function createVideoGenerateTool(options?: {
       const loadedReferenceVideos = await loadReferenceAssets({
         inputs: videoInputs,
         expectedKind: "video",
+        maxBytes: resolveGeneratedMediaMaxBytes(effectiveCfg, "video"),
         workspaceDir: options?.workspaceDir,
         sandboxConfig,
         ssrfPolicy: remoteMediaSsrfPolicy,
@@ -1037,6 +1030,7 @@ export function createVideoGenerateTool(options?: {
       const loadedReferenceAudios = await loadReferenceAssets({
         inputs: audioInputs,
         expectedKind: "audio",
+        maxBytes: resolveGeneratedMediaMaxBytes(effectiveCfg, "audio"),
         workspaceDir: options?.workspaceDir,
         sandboxConfig,
         ssrfPolicy: remoteMediaSsrfPolicy,

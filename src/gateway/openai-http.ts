@@ -1527,19 +1527,7 @@ export async function handleOpenAiHttpRequest(
         finishStreamWithError(terminalStreamError);
         return;
       }
-      // Runs without a producer-owned terminal retain the visible-error fallback.
-      const content = "Error: internal error";
-      writeAssistantContentChunk(res, {
-        runId,
-        model,
-        content,
-      });
-      finalUsage = {
-        prompt_tokens: 0,
-        completion_tokens: 0,
-        total_tokens: 0,
-      };
-      requestFinalize();
+      finishStreamWithError({ message: "internal error", type: "api_error" });
     } finally {
       releaseAgentRootWork?.();
       // The provider owns observed terminals; a second end would erase a failed session.

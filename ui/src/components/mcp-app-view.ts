@@ -369,6 +369,7 @@ export class McpAppView extends LitElement {
           payload.csp,
           payload.messageSupported === true,
           payload.updateModelContextSupported === true,
+          payload.messageSupported === true,
         ),
         { hostContext: hostContext(mount, this.height) },
       );

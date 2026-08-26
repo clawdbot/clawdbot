@@ -143,7 +143,11 @@ describe("AppSidebar session mutation feedback", () => {
       3,
       archivedRow.key,
       { pinned: true },
-      { agentId: "main", deferListRefresh: true },
+      {
+        agentId: "main",
+        expectedSessionId: `session:${archivedRow.key}`,
+        deferListRefresh: true,
+      },
     );
     expect(harness.patchMany).not.toHaveBeenCalled();
     expect(harness.refreshReplacement).toHaveBeenCalledOnce();

@@ -12,7 +12,7 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not installed at ${executablePath}. Run \`pnpm --dir ui exec playwright install chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
 });
 
-const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/continue-in-terminal");
+const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/header-session-menu");
 const basePath = "/nested/$&;=()+,![]{}'`/%25PATH%25";
 const agentId = "runner";
 const sessionKey = `agent:${agentId}:main-'"$&;|<>^()%![]{}\\\`-%PATH%`;
@@ -20,6 +20,10 @@ const sessionKey = `agent:${agentId}:main-'"$&;|<>^()%![]{}\\\`-%PATH%`;
 function sessionsListResponse() {
   return {
     count: 1,
+    owners: [
+      { type: "human" as const, id: "profile-ada", label: "Ada" },
+      { type: "human" as const, id: "profile-bob", label: "Bob" },
+    ],
     defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
     path: "",
     sessions: [
@@ -28,12 +32,31 @@ function sessionsListResponse() {
         key: sessionKey,
         kind: "direct",
         label: "Terminal continuation",
+        sessionId: "session-terminal-continuation",
+        owner: { actor: { type: "human", id: "profile-bob", label: "Bob" } },
         updatedAt: Date.now(),
       },
     ],
     ts: Date.now(),
   };
 }
+
+const sharedManagementActions = [
+  "Pin session",
+  "Mark as unread",
+  "Rename…",
+  "Assign to me",
+  "Assign to…",
+  "Set icon",
+  "Fork",
+  "Copy session ID",
+  "Move to group",
+  "Archive session",
+  "Delete…",
+] as const;
+const compactManagementActions = sharedManagementActions.filter(
+  (label) => label !== "Assign to me",
+);
 
 suite.define(() => {
   it("shows, copies, and retires a credential-free exact continuation command", async () => {
@@ -48,6 +71,12 @@ suite.define(() => {
       async ({ context, page }) => {
         const gateway = await installMockGateway(page, {
           basePath,
+          featureMethods: [
+            "chat.startup",
+            "sessions.assignOwner",
+            "sessions.groups.put",
+            "sessions.patch",
+          ],
           historyMessages: [
             {
               content: [{ type: "text", text: "Ready for terminal continuation." }],
@@ -56,6 +85,8 @@ suite.define(() => {
             },
           ],
           methodResponses: { "sessions.list": sessionsListResponse() },
+          operatorScopes: ["operator.read", "operator.write"],
+          presenceUsers: [{ self: true, id: "profile-ada", name: "Ada" }],
           sessionKey,
         });
         const pageUrl = new URL(suite.server.baseUrl);
@@ -73,6 +104,9 @@ suite.define(() => {
         await expect.poll(() => menuTrigger.getAttribute("aria-expanded")).toBe("false");
         await menuTrigger.press("Enter");
         const dropdown = menuTrigger.locator("xpath=ancestor::wa-dropdown");
+        for (const label of sharedManagementActions) {
+          await dropdown.getByText(label, { exact: true }).waitFor({ state: "visible" });
+        }
         const action = dropdown.getByText("Continue in terminal…", { exact: true });
         await action.waitFor({ state: "visible" });
         await page.screenshot({ path: path.join(artifactDir, "01-menu.png"), fullPage: true });
@@ -104,6 +138,55 @@ suite.define(() => {
         await expect
           .poll(() => gateway.getSocketCount(), { timeout: 15_000 })
           .toBeGreaterThan(socketCount);
+      },
+    );
+  });
+
+  it("keeps the canonical session actions reachable in the mobile header menu", async () => {
+    await mkdir(artifactDir, { recursive: true });
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { width: 390, height: 844 },
+      },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          basePath,
+          featureMethods: [
+            "chat.startup",
+            "sessions.assignOwner",
+            "sessions.groups.put",
+            "sessions.patch",
+          ],
+          historyMessages: [
+            {
+              content: [{ type: "text", text: "Mobile session menu proof." }],
+              role: "assistant",
+              timestamp: Date.now(),
+            },
+          ],
+          methodResponses: { "sessions.list": sessionsListResponse() },
+          operatorScopes: ["operator.read", "operator.write"],
+          presenceUsers: [{ self: true, id: "profile-ada", name: "Ada" }],
+          sessionKey,
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        await page.getByText("Mobile session menu proof.", { exact: true }).waitFor();
+
+        const menuTrigger = page.getByRole("button", {
+          name: "Actions for Terminal continuation",
+        });
+        await menuTrigger.press("Enter");
+        const dropdown = menuTrigger.locator("xpath=ancestor::wa-dropdown");
+        for (const label of compactManagementActions) {
+          await dropdown.getByText(label, { exact: true }).waitFor({ state: "visible" });
+        }
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(artifactDir, "03-mobile-menu.png"),
+        });
       },
     );
   });

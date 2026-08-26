@@ -10,6 +10,7 @@ import {
   findAmbiguousRuntimeInterpolations,
   infoPlistTranslationCandidates,
   selectInfoPlistTranslation,
+  serializeAppleCatalog,
   verifyAppleAppI18n,
 } from "../../scripts/apple-app-i18n.ts";
 import { NATIVE_I18N_LOCALES } from "../../scripts/native-i18n-locales.ts";
@@ -143,6 +144,49 @@ describe("Apple app i18n catalogs", () => {
         build,
       ),
     ).toThrow("Apple catalog apps/macos/Sources/OpenClaw/Resources/Localizable.xcstrings is stale");
+  });
+
+  it("serializes one complete localization key per line without losing nested metadata", () => {
+    const catalog = {
+      sourceLanguage: "en",
+      strings: {
+        Plain: {
+          localizations: {
+            en: { stringUnit: { state: "translated", value: "Plain" } },
+          },
+        },
+        "Rich %@": {
+          comment: "Translator context",
+          extractionState: "manual",
+          shouldTranslate: false,
+          localizations: {
+            en: {
+              substitutions: {
+                count: {
+                  variations: {
+                    plural: {
+                      one: { stringUnit: { state: "translated", value: "One %@" } },
+                      other: { stringUnit: { state: "new", value: "%@ items" } },
+                    },
+                  },
+                },
+              },
+              stringUnit: { state: "translated", value: "Rich %@" },
+            },
+          },
+        },
+      },
+      version: "1.0",
+    };
+
+    const serialized = serializeAppleCatalog(catalog);
+    const lines = serialized.trimEnd().split("\n");
+
+    expect(JSON.parse(serialized)).toEqual(catalog);
+    expect(lines).toHaveLength(Object.keys(catalog.strings).length + 6);
+    expect(lines[3]).toBe(`    "Plain": ${JSON.stringify(catalog.strings.Plain)},`);
+    expect(lines[4]).toBe(`    "Rich %@": ${JSON.stringify(catalog.strings["Rich %@"])}`);
+    expect(serialized.endsWith("\n")).toBe(true);
   });
 
   it("keeps macOS settings literals localized and runtime values verbatim", async () => {
@@ -297,7 +341,7 @@ describe("Apple app i18n catalogs", () => {
       "utf8",
     );
     const agentDetailComponents = await readFile(
-      "apps/ios/Sources/Design/AgentProTab+DetailComponents.swift",
+      "apps/ios/Sources/Design/AgentProDetailComponents.swift",
       "utf8",
     );
     const agentDreaming = await readFile(
@@ -347,22 +391,23 @@ describe("Apple app i18n catalogs", () => {
       "func metricTile(\n        icon: String,\n        title: OpenClawTextValue,\n        value: String,\n        detail: OpenClawTextValue",
     );
     expect(agentDetailComponents).toContain(
-      "func detailMetric(label: OpenClawTextValue, value: String)",
+      "func agentProDetailMetric(label: OpenClawTextValue, value: String)",
     );
     expect(agentDetailComponents).toContain("Text(verbatim: value)");
     expect(agentDetailComponents).toContain(
-      "func emptyDetailRow(\n        icon: String,\n        title: OpenClawTextValue,\n        detail: OpenClawTextValue)",
+      "func agentProEmptyDetailRow(\n    icon: String,\n    title: OpenClawTextValue,\n    detail: OpenClawTextValue)",
     );
     expect(agentDetailComponents).toContain("title.text");
     expect(agentDetailComponents).toContain("detail.text");
-    expect(agentDetailComponents).not.toContain("func detailMetric(label: String");
-    expect(agentDetailComponents).not.toContain("func emptyDetailRow(icon: String, title: String");
-    expect(agentDreaming).toContain(
-      "private func detailMetric(label: OpenClawTextValue, value: String)",
+    expect(agentDetailComponents).not.toContain("func agentProDetailMetric(label: String");
+    expect(agentDetailComponents).not.toContain(
+      "func agentProEmptyDetailRow(icon: String, title: String",
     );
-    expect(agentDreaming).toContain("label.text");
-    expect(agentDreaming).toContain("Text(verbatim: value)");
+    expect(agentDreaming).toContain("agentProDetailMetric(");
+    expect(agentDreaming).toContain("agentProEmptyDetailRow(");
     expect(agentDreaming).not.toContain("private func detailMetric(label: String");
+    expect(agentDreaming).not.toContain("private func detailMetric(");
+    expect(agentDreaming).not.toContain("private func emptyDetailRow(");
     expect(settingsActions).toContain(
       "func diagnosticCheckRow(\n        icon: String,\n        title: OpenClawTextValue,\n        detail: OpenClawTextValue,\n        value: OpenClawTextValue",
     );

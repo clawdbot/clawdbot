@@ -595,7 +595,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     const command = params.command ?? params.preparedPlan?.argv ?? ["echo", "ok"];
     let dispatchCommand = command;
     let dispatchRawCommand = params.rawCommand ?? params.preparedPlan?.commandText;
-    let dispatchCwd = params.cwd;
+    let dispatchCwd = params.cwd ?? params.preparedPlan?.cwd ?? undefined;
     let dispatchAgentId: string | undefined = params.agentId ?? "main";
     const forwardsDelayedApproval =
       params.approvalSource === "auto-review" ||
@@ -1417,7 +1417,12 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
           "off",
           { command: ["poccmd", "-n", "SAFE"], approved: true },
         );
-        expectCommandPinnedToCanonicalPath(runCommand, expected, ["-n", "SAFE"]);
+        expectCommandPinnedToCanonicalPath(
+          runCommand,
+          expected,
+          ["-n", "SAFE"],
+          fs.realpathSync(process.cwd()),
+        );
         expectInvokeOk(sendInvokeResult);
       });
     },
@@ -1447,7 +1452,12 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
               });
             },
           );
-          expectCommandPinnedToCanonicalPath(runCommand, expected, ["-n", "SAFE"]);
+          expectCommandPinnedToCanonicalPath(
+            runCommand,
+            expected,
+            ["-n", "SAFE"],
+            fs.realpathSync(process.cwd()),
+          );
           expectInvokeOk(sendInvokeResult);
         },
       );
@@ -2583,7 +2593,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
 
       expect(invoke.runCommand).toHaveBeenCalledWith(
         prepared.plan.argv,
-        undefined,
+        prepared.plan.cwd,
         undefined,
         undefined,
       );
@@ -3107,6 +3117,46 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       },
     );
   });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects durable trust when its approved directory is replaced before execution",
+    async () => {
+      const tempDir = createFixtureDir("openclaw-durable-cwd-drift-");
+      const movedDir = `${tempDir}-moved`;
+      const prepared = buildCwdApprovalPlan(["/bin/sh", "-c", "/bin/ls"], tempDir);
+      expect(prepared.ok).toBe(true);
+      requireApprovalPlan(prepared, "unreachable");
+      const commandPattern = createExactCommandPattern(prepared.plan.commandText);
+
+      await withTempApprovalsHome(
+        createApprovals("allowlist", "on-miss", "full", {
+          main: {
+            allowlist: [{ pattern: commandPattern, source: "allow-always" }],
+          },
+        }),
+        async () => {
+          const commitAuthorization: HandleSystemRunInvokeOptions["commitExecAuthorization"] =
+            async (params) => {
+              await commitExecAuthorizationLocked(params);
+              fs.renameSync(tempDir, movedDir);
+              fs.mkdirSync(tempDir);
+            };
+          const rerun = await runLocalSystemInvokeWithPolicy("allowlist", "on-miss", {
+            preparedPlan: prepared.plan,
+            cwd: prepared.plan.cwd ?? tempDir,
+            commitExecAuthorization: commitAuthorization,
+          });
+
+          expect(rerun.runCommand).not.toHaveBeenCalled();
+          expectInvokeErrorMessage(
+            rerun.sendInvokeResult,
+            "SYSTEM_RUN_DENIED: approval cwd changed before execution",
+            true,
+          );
+        },
+      );
+    },
+  );
 
   it("does not bind safe builtin policy to a redundant exact-command grant", async () => {
     if (process.platform === "win32") {

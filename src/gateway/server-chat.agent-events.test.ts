@@ -13,6 +13,7 @@ import { formatChannelProgressDraftLine } from "../channels/streaming.js";
 import {
   emitAgentEvent as emitRuntimeAgentEvent,
   emitAgentEventForOwner,
+  getAgentEventLifecycleGeneration,
   onAgentRuntimeEvent,
   resetAgentEventsForTest,
 } from "../infra/agent-events.js";
@@ -3573,6 +3574,49 @@ describe("agent event handler", () => {
     });
   });
 
+  it("tombstones cleared agent status and observer digest in lifecycle snapshots", async () => {
+    vi.mocked(loadGatewaySessionRow).mockReturnValue({
+      key: "session-finished",
+      kind: "direct",
+      updatedAt: 1_700,
+      status: "done",
+    });
+    const { broadcastToConnIds, sessionEventSubscribers, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-finished",
+    });
+    sessionEventSubscribers.subscribe("conn-session");
+    registerAgentRunContext("run-finished", {
+      sessionKey: "session-finished",
+      verboseLevel: "off",
+    });
+
+    emitAgentEvent(
+      handler,
+      "run-finished",
+      "lifecycle",
+      { phase: "end", endedAt: 1_700 },
+      { seq: 2, ts: 1_800 },
+    );
+
+    await waitForFast(() => {
+      expect(
+        broadcastToConnIds.mock.calls.filter(([event]) => event === "sessions.changed"),
+      ).toHaveLength(1);
+    });
+    const payload = requireRecord(
+      // oxlint-disable-next-line unicorn/prefer-structured-clone -- verify the gateway JSON wire shape
+      JSON.parse(
+        JSON.stringify(requireMockArg(broadcastToConnIds, 0, 1, "sessions changed payload")),
+      ),
+      "serialized sessions changed payload",
+    );
+    expectRecordFields(payload, { agentStatus: null, observerDigest: null });
+    expectRecordFields(requireRecord(payload.session, "nested session"), {
+      agentStatus: null,
+      observerDigest: null,
+    });
+  });
+
   it("omits goal state from unscoped global lifecycle snapshots", async () => {
     vi.mocked(loadGatewaySessionRow).mockReturnValue({
       key: "global",
@@ -4363,6 +4407,36 @@ describe("agent event handler", () => {
     expect(requireRecord(persistEvent.data, "persist lifecycle event data").phase).toBe("end");
   });
 
+  it("forwards restart recovery provenance to terminal persistence", () => {
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const { handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-recovery",
+    });
+    registerAgentRunContext("run-recovery", {
+      lifecycleGeneration,
+      mainSessionRestartRecovery: true,
+      sessionKey: "session-recovery",
+    });
+    const stop = onAgentRuntimeEvent(handler);
+
+    emitRuntimeAgentEvent({
+      runId: "run-recovery",
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
+    stop();
+
+    const persistParams = requireRecord(
+      requireMockArg(persistGatewaySessionLifecycleEventMock, 0, 0, "persist lifecycle params"),
+      "persist lifecycle params",
+    );
+    expect(requireRecord(persistParams.event, "persist lifecycle event")).toMatchObject({
+      lifecycleGeneration,
+      mainSessionRestartRecovery: true,
+      runId: "run-recovery",
+    });
+  });
+
   it.each([
     ["assistant", { text: "owned reply", delta: "owned reply", phase: "commentary" }],
     ["tool", { phase: "start", name: "read", toolCallId: "owned-tool" }],
@@ -4454,7 +4528,11 @@ describe("agent event handler", () => {
       expect(agentRunSeq.has(runId)).toBe(false);
       expect(persistGatewaySessionLifecycleEventMock).toHaveBeenCalledWith({
         agentId: "work",
-        event: received,
+        event: expect.objectContaining({
+          data,
+          lifecycleGeneration: received.lifecycleGeneration,
+          runId,
+        }),
         sessionKey: "agent:work:shared",
       });
       await waitForFast(() => {

@@ -70,11 +70,12 @@ Bare headings, paragraphs, links, buttons, inputs, selects, textareas, tables, a
 
 The Control UI posts an `openclaw:widget-theme` message with the active theme values when a widget loads and whenever the theme changes. Widgets therefore track every theme family, including Claw, Knot, Dash, and custom themes, without reloading. Outside the Control UI, including native apps and direct opens, widgets use the baked light or dark palette selected by `prefers-color-scheme`.
 
-Author widgets with three rules:
+Author widgets with four rules:
 
 1. Use the design variables for every color and background. Do not hardcode color values.
 2. Keep the page background transparent so the widget belongs to its host surface.
 3. Reserve `--accent-fill` for at most one primary action.
+4. Fit the iframe width at every viewport. Avoid fixed page or card widths; use fluid sizing and wrap or stack multi-column layouts when narrow. Use horizontal scrolling only when exact geometry must remain.
 
 **Export:** In web chat, open the widget card menu to copy the rendered widget to the clipboard or download it as a PNG. Older widget documents without the snapshot bridge fall back to an HTML file download.
 

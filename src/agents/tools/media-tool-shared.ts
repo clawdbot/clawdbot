@@ -334,9 +334,12 @@ export function resolveCapabilityModelConfigForTool(params: {
   agentDir?: string;
   authStore?: AuthProfileStore;
   modelConfig?: AgentModelConfig;
+  modelOverride?: string;
   providers: CapabilityProviderSource;
 }): ToolModelConfig | null {
-  const explicit = coerceToolModelConfig(params.modelConfig);
+  const configured = coerceToolModelConfig(params.modelConfig);
+  const modelOverride = normalizeOptionalString(params.modelOverride);
+  const explicit = modelOverride ? { ...configured, primary: modelOverride } : configured;
   if (hasToolModelConfig(explicit)) {
     return explicit;
   }
@@ -369,6 +372,10 @@ export function resolveCapabilityModelConfigForTool(params: {
         authStore: params.authStore,
       }),
   });
+}
+
+export function hasExplicitMediaModel(modelConfig?: AgentModelConfig): boolean {
+  return hasToolModelConfig(coerceToolModelConfig(modelConfig));
 }
 
 /**
@@ -436,36 +443,24 @@ export function hasGenerationToolAvailability(params: {
   );
 }
 
-function formatQuotedList(values: readonly string[]): string {
-  if (values.length === 1) {
-    return `"${values[0]}"`;
-  }
-  if (values.length === 2) {
-    return `"${values[0]}" or "${values[1]}"`;
-  }
-  return `${values
-    .slice(0, -1)
-    .map((value) => `"${value}"`)
-    .join(", ")}, or "${values[values.length - 1]}"`;
-}
-
 /**
  * Reads a constrained generation action and raises a tool-input error for invalid values.
  */
-export function resolveGenerateAction<TAction extends string>(params: {
-  args: Record<string, unknown>;
-  allowed: readonly TAction[];
-  defaultAction: TAction;
-}): TAction {
-  const raw = readToolStringParam(params.args, "action");
-  if (!raw) {
-    return params.defaultAction;
+export function resolveGenerateAction(
+  args: Record<string, unknown>,
+): "generate" | "status" | "list" {
+  const action = normalizeOptionalLowercaseString(readToolStringParam(args, "action"));
+  switch (action) {
+    case undefined:
+    case "generate":
+      return "generate";
+    case "status":
+      return "status";
+    case "list":
+      return "list";
+    default:
+      throw new ToolInputError('action must be "generate", "status", or "list"');
   }
-  const normalized = normalizeOptionalLowercaseString(raw);
-  if (normalized && (params.allowed as readonly string[]).includes(normalized)) {
-    return normalized as TAction;
-  }
-  throw new ToolInputError(`action must be ${formatQuotedList(params.allowed)}`);
 }
 
 /**
@@ -618,7 +613,7 @@ export async function loadMediaToolReferences<T>(params: {
   expectedKind: "image" | "video" | "audio";
   sandbox: SandboxedBridgeMediaPathConfig | null;
   workspaceDir?: string;
-  maxBytes?: number;
+  maxBytes: number;
   ssrfPolicy?: SsrFPolicy;
   timeoutMs?: number;
   signal?: AbortSignal;
@@ -663,10 +658,7 @@ export async function loadMediaToolReferences<T>(params: {
     if (reference.isDataUrl) {
       const { decodeDataUrl } = await import("./image-tool.helpers.js");
       params.signal?.throwIfAborted();
-      media = decodeDataUrl(
-        resolvedInput,
-        params.toolName === "image_generate" ? { maxBytes: params.maxBytes } : undefined,
-      );
+      media = decodeDataUrl(resolvedInput, { maxBytes: params.maxBytes });
     } else {
       const { loadWebMedia } = await import("../../media/web-media.js");
       params.signal?.throwIfAborted();
@@ -681,7 +673,7 @@ export async function loadMediaToolReferences<T>(params: {
           : undefined;
       try {
         media = await loadWebMedia(resolvedPath ?? resolvedInput, {
-          ...(params.toolName === "music_generate" ? {} : { maxBytes: params.maxBytes }),
+          maxBytes: params.maxBytes,
           ...(params.sandbox
             ? {
                 sandboxValidated: true,

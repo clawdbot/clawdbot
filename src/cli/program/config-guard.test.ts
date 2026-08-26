@@ -47,6 +47,7 @@ function makeSnapshot() {
 
 function makeRuntime() {
   return {
+    log: vi.fn(),
     error: vi.fn(),
     exit: vi.fn(),
   };
@@ -821,6 +822,73 @@ describe("ensureConfigReady", () => {
     expect(confirm).not.toHaveBeenCalled();
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
+
+  it.each([
+    {
+      name: "blocked JSON commands",
+      commandPath: ["onboard"],
+      argv: ["node", "openclaw", "onboard", "--json"],
+      exitCode: 1,
+      writesJson: true,
+    },
+    {
+      name: "protocol-owned stdout",
+      commandPath: ["mcp", "serve"],
+      argv: ["node", "openclaw", "mcp", "serve"],
+      exitCode: 1,
+      writesJson: false,
+    },
+    {
+      name: "allowed read-only JSON diagnostics",
+      commandPath: ["status"],
+      argv: ["node", "openclaw", "status", "--json"],
+      exitCode: undefined,
+      writesJson: false,
+    },
+    {
+      name: "blocked JSON gateway startup",
+      commandPath: ["gateway", "run"],
+      argv: ["node", "openclaw", "gateway", "run", "--json"],
+      exitCode: 78,
+      writesJson: true,
+    },
+  ])(
+    "preserves output ownership for $name",
+    async ({ commandPath, argv, exitCode, writesJson }) => {
+      setInvalidSnapshot();
+      const runtime = makeRuntime();
+      const originalArgv = process.argv;
+      process.argv = argv;
+      try {
+        await ensureConfigReady({
+          runtime,
+          commandPath,
+          suppressDoctorStdout: true,
+        });
+      } finally {
+        process.argv = originalArgv;
+      }
+
+      if (writesJson) {
+        expect(runtime.log).toHaveBeenCalledOnce();
+        expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toMatchObject({
+          ok: false,
+          error: {
+            type: "cli_error",
+            message: "OpenClaw config is invalid: /tmp/openclaw.json",
+          },
+          issues: [{ path: "channels.quietchat", message: "invalid" }],
+        });
+      } else {
+        expect(runtime.log).not.toHaveBeenCalled();
+      }
+      if (exitCode === undefined) {
+        expect(runtime.exit).not.toHaveBeenCalled();
+      } else {
+        expect(runtime.exit).toHaveBeenCalledWith(exitCode);
+      }
+    },
+  );
 
   it("keeps invalid Nix-managed config on the manual recovery path", async () => {
     setInvalidSnapshot();

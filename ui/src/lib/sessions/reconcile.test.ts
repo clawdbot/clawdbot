@@ -116,7 +116,7 @@ test("reconciling the same sessions.changed twice keeps result identity on the s
   expect(second.result).toBe(first.result);
 });
 
-test("sessions.changed deletes every null-tombstoned field, not a hand-kept list", () => {
+test("sessions.changed deletes every nested null tombstone, not a hand-kept list", () => {
   // The gateway tombstones more fields than the old per-field cascade knew
   // about; these five leaked literal null into rows typed optional-not-null.
   const result: SessionsListResult = {
@@ -130,6 +130,15 @@ test("sessions.changed deletes every null-tombstoned field, not a hand-kept list
         kind: "direct",
         updatedAt: 1,
         toolOverrides: { profile: "coding" },
+        agentStatus: { state: "needs_attention", message: "Reply requested" },
+        observerDigest: {
+          agentId: "main",
+          runId: "run-stale",
+          headline: "Waiting",
+          health: "needs_attention",
+          updatedAt: 1,
+          revision: 1,
+        },
         controlOwnerSessionKey: "agent:main:owner",
         restartRecoveryStatus: "pending",
         goal: "ship it",
@@ -140,18 +149,24 @@ test("sessions.changed deletes every null-tombstoned field, not a hand-kept list
   const reconciled = reconcileSessionChanged(result, {
     sessionKey: "agent:main:main",
     reason: "patch",
-    updatedAt: 2,
-    toolOverrides: null,
-    observerDigest: null,
-    controlOwnerSessionKey: null,
-    restartRecoveryStatus: null,
-    goal: null,
+    session: {
+      key: "agent:main:main",
+      kind: "direct",
+      updatedAt: 2,
+      toolOverrides: null,
+      agentStatus: null,
+      observerDigest: null,
+      controlOwnerSessionKey: null,
+      restartRecoveryStatus: null,
+      goal: null,
+    },
   } as never);
 
   expect(reconciled.applied).toBe(true);
   const row = reconciled.result?.sessions[0] as Record<string, unknown> | undefined;
   for (const field of [
     "toolOverrides",
+    "agentStatus",
     "observerDigest",
     "controlOwnerSessionKey",
     "restartRecoveryStatus",

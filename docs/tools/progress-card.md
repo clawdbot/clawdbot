@@ -90,6 +90,7 @@ The current chat shows exactly one live card:
 - At narrower widths the card appears in the collapsible surface inside the composer.
 
 The placements are mutually exclusive. Hover a session row in the sidebar or a session-reference link in chat to see the same card for that session. All card placements read the same Gateway-backed state and refresh after `progressCard.changed` notifications.
+Each placement shows the local time of the last progress update, including seconds.
 
 ## Pin the card to the dashboard
 

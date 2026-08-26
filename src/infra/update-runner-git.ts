@@ -9,6 +9,7 @@ import { resolveStableNodePath } from "./stable-node-path.js";
 import { DEV_BRANCH, type UpdateChannel } from "./update-channels.js";
 import {
   managerInstallArgs,
+  managerInstallIgnoreScriptsArgs,
   managerScriptArgs,
   resolveUpdateBuildManager,
 } from "./update-package-manager.js";
@@ -19,11 +20,9 @@ import {
 } from "./update-runner-doctor.js";
 import {
   findBlockingGitFailure,
-  mapManagerResolutionFailure,
   resolveBuildEnv,
   resolveInstallEnv,
-  resolveRetryInstallArgs,
-  shouldRetryWindowsInstallIgnoringScripts,
+  shouldInstallWithoutScriptsOnWindows,
 } from "./update-runner-git-commands.js";
 import { runGitDevPreflight } from "./update-runner-git-preflight.js";
 import { rebuildRolledBackGitRuntime } from "./update-runner-git-recovery.js";
@@ -399,7 +398,7 @@ export async function updateGitCheckout(params: {
     "require-preferred",
   );
   if (manager.kind === "missing-required") {
-    return await rollbackError(mapManagerResolutionFailure(manager.reason));
+    return await rollbackError(manager.reason);
   }
   try {
     const installEnv = resolveInstallEnv(manager.manager, manager.env);
@@ -413,8 +412,8 @@ export async function updateGitCheckout(params: {
         installEnv,
       ),
     );
-    if (installStep.exitCode !== 0 && shouldRetryWindowsInstallIgnoringScripts(manager.manager)) {
-      const retryArgv = resolveRetryInstallArgs(manager.manager);
+    if (installStep.exitCode !== 0 && shouldInstallWithoutScriptsOnWindows(manager.manager)) {
+      const retryArgv = managerInstallIgnoreScriptsArgs(manager.manager);
       if (retryArgv) {
         installStep = await runStep(
           step("deps install (ignore scripts)", retryArgv, gitRoot, installEnv),

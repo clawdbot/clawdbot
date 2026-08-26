@@ -2628,8 +2628,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       name: "internal agent error without a provider terminal",
       fail: true,
       providerTerminal: false,
-      expected: "Error: internal error",
-      protocolError: false,
+      expected: "internal error",
+      protocolError: true,
     },
     {
       name: "internal agent error with a provider terminal",
@@ -3143,16 +3143,16 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         const choices = errorChunks.flatMap(
           (chunk) => (chunk.choices as Array<Record<string, unknown>> | undefined) ?? [],
         );
-        const errorContentChoice = choices.find(
-          (choice) =>
-            (choice.delta as Record<string, unknown> | undefined)?.content ===
-            "Error: internal error",
-        );
-        expect(errorContentChoice?.finish_reason).toBeNull();
-        const stopChoices = choices.filter((choice) => choice.finish_reason === "stop");
-        expect(stopChoices).toHaveLength(1);
-        expect(stopChoices[0]?.delta).toEqual({});
-        expect(choices.at(-1)).toEqual(stopChoices[0]);
+        expect(errorChunks.filter((chunk) => "error" in chunk)).toEqual([
+          { error: { message: "internal error", type: "api_error" } },
+        ]);
+        expect(
+          choices.some((choice) =>
+            Boolean((choice.delta as Record<string, unknown> | undefined)?.content),
+          ),
+        ).toBe(false);
+        expect(choices.some((choice) => choice.finish_reason === "stop")).toBe(false);
+        expect(errorText).not.toContain("boom");
       }
     } finally {
       // shared server

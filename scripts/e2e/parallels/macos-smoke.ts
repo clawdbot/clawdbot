@@ -254,12 +254,6 @@ class MacosSmoke {
         : resolveSnapshot(this.options.vmName, this.options.snapshotHint);
       this.latestVersion = resolveLatestVersion(this.options.latestVersion);
       this.installVersion = this.options.installVersion || this.latestVersion;
-      this.hostIp = resolveHostIp(this.options.hostIp);
-      this.hostPort = await resolveHostPort(
-        this.options.hostPort,
-        this.options.hostPortExplicit,
-        defaultOptions().hostPort,
-      );
 
       say(`VM: ${this.options.vmName}`);
       say(`Snapshot hint: ${this.options.snapshotHint}`);
@@ -273,7 +267,13 @@ class MacosSmoke {
       );
       say(`Run logs: ${this.runDir}`);
 
-      if (await this.needsHostTgz()) {
+      if (this.needsHostTgz()) {
+        this.hostIp = resolveHostIp(this.options.hostIp);
+        this.hostPort = await resolveHostPort(
+          this.options.hostPort,
+          this.options.hostPortExplicit,
+          defaultOptions().hostPort,
+        );
         this.artifact = await packOpenClaw({
           destination: this.tgzDir,
           packageSpec: this.options.targetPackageSpec,
@@ -384,11 +384,10 @@ class MacosSmoke {
     return Boolean(spec && !/^(https?:|file:|\/|\.\/|\.\.\/|.*\.tgz$)/.test(spec));
   }
 
-  private async needsHostTgz(): Promise<boolean> {
-    if (!this.options.targetPackageSpec) {
-      return true;
-    }
-    return !this.targetInstallsDirectly();
+  private needsHostTgz(): boolean {
+    return this.options.targetPackageSpec
+      ? !this.targetInstallsDirectly()
+      : this.options.mode !== "upgrade";
   }
 
   private artifactLabel(): string {
@@ -653,7 +652,7 @@ exec node "$entry" ${argv}`,
     for (let attempt = 1; attempt <= 2; attempt++) {
       const result = run(
         "prlctl",
-        ["snapshot-switch", this.options.vmName, "--id", this.snapshot.id, "--skip-resume"],
+        ["snapshot-switch", this.options.vmName, "--id", this.snapshot.id],
         { check: false, quiet: true, timeoutMs: this.remainingPhaseTimeoutMs(360_000) },
       );
       this.log(result.stdout);

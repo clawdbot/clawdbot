@@ -292,7 +292,6 @@ export const icons = {
     <path d="M13 6h8" />
     <path d="M13 12h8" />
     <path d="M13 18h8" />`),
-
   ...toolIcons,
 } as const;
 

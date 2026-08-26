@@ -20,6 +20,7 @@ const gatewayMocks = vi.hoisted(() => ({
   onRoomDirectoryChanged: undefined as (() => void) | undefined,
   resolveAgentIdentity: vi.fn(),
   resolveAgentRoute: vi.fn(),
+  recoveryLookup: vi.fn(),
   startBuzzBus: vi.fn(),
 }));
 
@@ -121,6 +122,13 @@ function createMockBus(): BuzzBus {
   };
 }
 
+function resolveBusSince(callIndex: number): number {
+  const since = gatewayMocks.startBuzzBus.mock.calls[callIndex]?.[0].since as (
+    channelId: string,
+  ) => number;
+  return since(CHANNEL_ID);
+}
+
 describe("Buzz gateway lifecycle", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -133,6 +141,8 @@ describe("Buzz gateway lifecycle", () => {
     gatewayMocks.sendBuzzTextOneShot.mockResolvedValue("standalone-event-id");
     gatewayMocks.resolveAgentIdentity.mockReset().mockReturnValue(undefined);
     gatewayMocks.resolveAgentRoute.mockReset().mockReturnValue({ agentId: "main" });
+    const recoveryRooms = new Map<string, { seconds: number }>();
+    gatewayMocks.recoveryLookup.mockImplementation(async (key: string) => recoveryRooms.get(key));
     setBuzzRuntime({
       agent: {
         resolveAgentIdentity: gatewayMocks.resolveAgentIdentity,
@@ -145,6 +155,16 @@ describe("Buzz gateway lifecycle", () => {
           resolveMarkdownTableMode: () => "preserve",
           convertMarkdownTables: (text: string) => text,
         },
+      },
+      state: {
+        openKeyedStore: () => ({
+          lookup: gatewayMocks.recoveryLookup,
+          register: async (key: string, value: { seconds: number }) => {
+            recoveryRooms.set(key, value);
+          },
+          entries: async () => Array.from(recoveryRooms, ([key, value]) => ({ key, value })),
+          delete: async (key: string) => recoveryRooms.delete(key),
+        }),
       },
     } as never);
     gatewayMocks.startBuzzBus.mockImplementation(
@@ -183,6 +203,25 @@ describe("Buzz gateway lifecycle", () => {
     expect(invalidateDirectoryCache).toHaveBeenCalledOnce();
     gatewayMocks.onRoomDirectoryChanged?.();
     expect(invalidateDirectoryCache).toHaveBeenCalledTimes(2);
+
+    abortController.abort();
+    await expect(lifecycle).resolves.toBeUndefined();
+  });
+
+  it("reports unreadable recovery state without connecting or skipping room history", async () => {
+    gatewayMocks.recoveryLookup.mockRejectedValueOnce(new Error("room activation unreadable"));
+    const setStatus = vi.fn();
+    const { abortController, lifecycle } = startTestGateway({ setStatus });
+
+    await vi.waitFor(() =>
+      expect(setStatus).toHaveBeenCalledWith({
+        accountId: "default",
+        running: false,
+        lifecycle: "recovering",
+        lastError: "room activation unreadable",
+      }),
+    );
+    expect(gatewayMocks.startBuzzBus).not.toHaveBeenCalled();
 
     abortController.abort();
     await expect(lifecycle).resolves.toBeUndefined();
@@ -471,8 +510,8 @@ describe("Buzz gateway lifecycle", () => {
     await vi.waitFor(() => expect(gatewayMocks.startBuzzBus).toHaveBeenCalledTimes(2), {
       timeout: 3_000,
     });
-    const firstSince = gatewayMocks.startBuzzBus.mock.calls[0]?.[0].since as number;
-    const secondSince = gatewayMocks.startBuzzBus.mock.calls[1]?.[0].since as number;
+    const firstSince = resolveBusSince(0);
+    const secondSince = resolveBusSince(1);
     expect(secondSince).toBeLessThanOrEqual(firstSince - 24 * 60 * 60 + 2);
 
     abortController.abort();
@@ -526,7 +565,7 @@ describe("Buzz gateway lifecycle", () => {
       timeout: 3_000,
     });
     expect(invalidateDirectoryCache).toHaveBeenCalledTimes(2);
-    const secondSince = gatewayMocks.startBuzzBus.mock.calls[1]?.[0].since as number;
+    const secondSince = resolveBusSince(1);
     expect(secondSince).toBeGreaterThanOrEqual(reconnectStartedAt - 24 * 60 * 60);
     expect(secondSince).toBeLessThanOrEqual(Math.floor(Date.now() / 1000) - 24 * 60 * 60);
     expect(secondSince).toBeLessThan(createdAt);

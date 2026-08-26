@@ -85,6 +85,28 @@ describe("modelsAliasesListCommand", () => {
     expect(runtime.logs).toEqual(lines);
   });
 
+  it("writes populated plain aliases directly to stdout instead of captured logging", async () => {
+    mocks.loadModelsConfig.mockResolvedValue({
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-sonnet-4-6": { alias: "chat" },
+          },
+        },
+      },
+    });
+    const runtime = {
+      ...makeRuntime(),
+      writeStdout: vi.fn(),
+      writeJson: vi.fn(),
+    };
+
+    await modelsAliasesListCommand({ plain: true }, runtime);
+
+    expect(runtime.writeStdout).toHaveBeenCalledExactlyOnceWith("chat anthropic/claude-sonnet-4-6");
+    expect(runtime.logs).toEqual([]);
+  });
+
   it("preserves safely named prototype aliases in deterministic JSON output", async () => {
     mocks.loadModelsConfig.mockResolvedValue({
       agents: {

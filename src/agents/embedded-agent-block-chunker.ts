@@ -110,7 +110,27 @@ function findFenceCloseLineStart(buffer: string, fence: FenceSpan, offset = 0): 
     return -1;
   }
   const lastNewline = buffer.lastIndexOf("\n", relativeFenceEnd - 1);
-  return lastNewline >= 0 ? lastNewline + 1 : -1;
+  if (lastNewline < 0) {
+    return -1;
+  }
+  // Open spans also end at the buffer boundary; consuming their final content
+  // line as a closing marker would silently drop streamed code.
+  const closingMarker = buffer
+    .slice(lastNewline + 1, relativeFenceEnd)
+    .match(/^ {0,3}(`{3,}|~{3,})[ \t]*\r?$/)?.[1];
+  return closingMarker &&
+    closingMarker.charAt(0) === fence.marker.charAt(0) &&
+    closingMarker.length >= fence.marker.length
+    ? lastNewline + 1
+    : -1;
+}
+
+function resolveFenceReopenLine(fence: FenceSpan, maxChars: number): string | undefined {
+  const bareMarker = `${fence.indent}${fence.marker}`;
+  if (bareMarker.length * 2 + 3 > maxChars) {
+    return undefined;
+  }
+  return fence.openLine.length + bareMarker.length + 3 <= maxChars ? fence.openLine : bareMarker;
 }
 
 export class EmbeddedBlockChunker {
@@ -164,13 +184,36 @@ export class EmbeddedBlockChunker {
       return;
     }
 
-    const source = this.#buffer;
+    let source = this.#buffer;
     const fenceSpans = parseFenceSpans(source);
+    let removedFenceInfoLength = 0;
+    for (const fence of fenceSpans) {
+      fence.start -= removedFenceInfoLength;
+      fence.end -= removedFenceInfoLength;
+      const reopenFenceLine = resolveFenceReopenLine(fence, maxChars);
+      if (
+        !reopenFenceLine ||
+        reopenFenceLine === fence.openLine ||
+        fence.end - fence.start <= maxChars
+      ) {
+        continue;
+      }
+      // A language hint that cannot fit with its balanced fence must degrade
+      // as metadata; splitting the hint would leak it into visible code.
+      source =
+        source.slice(0, fence.start) +
+        reopenFenceLine +
+        source.slice(fence.start + fence.openLine.length);
+      const removedLength = fence.openLine.length - reopenFenceLine.length;
+      fence.openLine = reopenFenceLine;
+      fence.end -= removedLength;
+      removedFenceInfoLength += removedLength;
+    }
     let start = 0;
-    let reopenFence: FenceSpan | undefined;
+    let reopenFence: FenceSplit | undefined;
 
     while (start < source.length) {
-      const reopenPrefix = reopenFence ? `${reopenFence.openLine}\n` : "";
+      const reopenPrefix = reopenFence ? `${reopenFence.reopenFenceLine}\n` : "";
       const remainingLength = reopenPrefix.length + (source.length - start);
 
       if (!force && remainingLength < minChars) {
@@ -198,7 +241,13 @@ export class EmbeddedBlockChunker {
       const breakResult =
         force && remainingLength <= maxChars
           ? this.#pickSoftBreakIndex(view, fenceSpans, 1, start)
-          : this.#pickBreakIndex(view, fenceSpans, force ? 1 : undefined, start);
+          : this.#pickBreakIndex(
+              view,
+              fenceSpans,
+              force ? 1 : undefined,
+              start,
+              maxChars - reopenPrefix.length,
+            );
       if (breakResult.index <= 0) {
         if (force) {
           emit(`${reopenPrefix}${source.slice(start)}`);
@@ -222,7 +271,7 @@ export class EmbeddedBlockChunker {
       reopenFence = consumed.reopenFence;
 
       const nextLength =
-        (reopenFence ? `${reopenFence.openLine}\n`.length : 0) + (source.length - start);
+        (reopenFence ? `${reopenFence.reopenFenceLine}\n`.length : 0) + (source.length - start);
       if (nextLength < minChars && !force) {
         break;
       }
@@ -231,7 +280,7 @@ export class EmbeddedBlockChunker {
       }
     }
     this.#buffer = reopenFence
-      ? `${reopenFence.openLine}\n${source.slice(start)}`
+      ? `${reopenFence.reopenFenceLine}\n${source.slice(start)}`
       : stripLeadingNewlines(source.slice(start));
   }
 
@@ -241,7 +290,7 @@ export class EmbeddedBlockChunker {
     reopenPrefix: string;
     source: string;
     start: number;
-  }): { start: number; reopenFence?: FenceSpan } | null {
+  }): { start: number; reopenFence?: FenceSplit } | null {
     const { breakResult, emit, reopenPrefix, source, start } = params;
     const breakIdx = breakResult.index;
     if (breakIdx <= 0) {
@@ -257,15 +306,21 @@ export class EmbeddedBlockChunker {
     const fenceSplit = breakResult.fenceSplit;
     if (fenceSplit) {
       const closeFence = rawChunk.endsWith("\n")
-        ? `${fenceSplit.closeFenceLine}\n`
-        : `\n${fenceSplit.closeFenceLine}\n`;
+        ? fenceSplit.closeFenceLine
+        : `\n${fenceSplit.closeFenceLine}`;
       rawChunk = `${rawChunk}${closeFence}`;
     }
 
     emit(rawChunk);
 
     if (fenceSplit) {
-      return { start: absoluteBreakIdx, reopenFence: fenceSplit.fence };
+      const closeFenceStart = findFenceCloseLineStart(source, fenceSplit.fence);
+      if (absoluteBreakIdx === closeFenceStart) {
+        // The synthetic closer already owns this boundary; replaying the source
+        // closer after reopening would publish an empty fenced-code message.
+        return { start: skipLeadingNewlines(source, fenceSplit.fence.end) };
+      }
+      return { start: absoluteBreakIdx, reopenFence: fenceSplit };
     }
 
     const nextStart =
@@ -328,9 +383,10 @@ export class EmbeddedBlockChunker {
     fenceSpans: FenceSpan[],
     minCharsOverride?: number,
     offset = 0,
+    maxCharsOverride?: number,
   ): BreakResult {
     const minChars = Math.max(1, Math.floor(minCharsOverride ?? this.#chunking.minChars));
-    const maxChars = Math.max(minChars, Math.floor(this.#chunking.maxChars));
+    const maxChars = Math.max(1, Math.floor(maxCharsOverride ?? this.#chunking.maxChars));
     if (buffer.length < minChars) {
       return { index: -1 };
     }
@@ -392,24 +448,28 @@ export class EmbeddedBlockChunker {
       }
       const fence = findFenceSpanAt(fenceSpans, offset + forcedBreakIndex);
       if (fence) {
-        const closeFenceStart = findFenceCloseLineStart(buffer, fence, offset);
-        if (closeFenceStart >= minChars && closeFenceStart < forcedBreakIndex) {
-          return {
-            index: closeFenceStart,
-            fenceSplit: {
-              closeFenceLine: `${fence.indent}${fence.marker}`,
-              reopenFenceLine: fence.openLine,
-              fence,
-            },
-          };
+        const reopenFenceLine = resolveFenceReopenLine(fence, this.#chunking.maxChars);
+        if (!reopenFenceLine) {
+          return { index: forcedBreakIndex };
         }
+        // Synthetic fence wrappers consume the same transport budget as source
+        // text; reserving them here keeps every emitted payload deliverable.
+        const closeFenceLine = `${fence.indent}${fence.marker}`;
+        const fenceBreakIndex = sliceUtf16Safe(
+          buffer,
+          0,
+          Math.max(1, maxChars - closeFenceLine.length - 1),
+        ).length;
+        if (fenceBreakIndex <= 0) {
+          return { index: forcedBreakIndex };
+        }
+        const closeFenceStart = findFenceCloseLineStart(buffer, fence, offset);
         return {
-          index: forcedBreakIndex,
-          fenceSplit: {
-            closeFenceLine: `${fence.indent}${fence.marker}`,
-            reopenFenceLine: fence.openLine,
-            fence,
-          },
+          index:
+            closeFenceStart >= minChars && closeFenceStart <= fenceBreakIndex
+              ? closeFenceStart
+              : fenceBreakIndex,
+          fenceSplit: { closeFenceLine, reopenFenceLine, fence },
         };
       }
       return { index: forcedBreakIndex };

@@ -297,6 +297,18 @@ describe("SidebarSessionProjection child expansion", () => {
 
     expect(projection.isChildrenExpanded(parent.key)).toBe(false);
   });
+
+  it("forgets expansion when a session disappears before returning", () => {
+    const projection = new SidebarSessionProjection();
+    const parent = sessionRow("parent");
+    projection.project(projectionInput([parent]));
+    projection.toggleChildren(parent);
+
+    projection.project(projectionInput([]));
+    projection.project(projectionInput([parent]));
+
+    expect(projection.isChildrenExpanded(parent.key)).toBe(false);
+  });
 });
 
 describe("SidebarSessionProjection running subtitle hold", () => {

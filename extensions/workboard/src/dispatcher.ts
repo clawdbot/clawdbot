@@ -484,7 +484,6 @@ async function runWorkboardDispatch(
       if (runCwd && !workspaceAccess.unrestricted) {
         await assertRestrictedWorkboardTarget({
           root: runCwd,
-          // Claim may populate agentId; keep the sessionKey target identity.
           agentId: card.agentId,
           sessionKey,
           modelProvider: params.options?.provider,

@@ -105,11 +105,15 @@ classified from the sender, while a memory flush records the least-trusted
 class for the whole file; trusted lines in a downgraded file intentionally lose
 promotion eligibility so untrusted content cannot ride a trusted file hash.
 
-The current runtime does not propagate content origin within an owner turn.
-Assistant text derived from tool or web output therefore inherits the turn's
-sender class. A follow-up should carry content-origin metadata through tool-result
-assembly into assistant output and flush writes; that cross-cutting taint model
-is not part of this memory integration.
+Content origin also propagates within a turn. When a tool result declares
+network-sourced content (web fetches, browser reads, search results), the rest
+of that turn is marked tainted: every assistant message produced after that
+result carries the taint, and memory classification treats it as `untrusted`
+even inside an owner turn. The taint clears on the next user message. The
+remaining gap is declaration coverage: only tools that declare their results
+as network-sourced participate, so output from tools that do not — local file
+reads, for example — does not taint the turn, and assistant text derived from
+it keeps its normal turn-derived provenance (`agent` in an owner turn).
 
 ## The write path
 

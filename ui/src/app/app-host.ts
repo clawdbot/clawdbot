@@ -29,6 +29,7 @@ import type { BoardFace } from "../lib/board/settings.ts";
 import { invalidateChatMetadataStore } from "../lib/chat/chat-metadata-store.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
+import { invalidateModelCatalogCache } from "../lib/model-catalog-store.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../lib/plugin-activation.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import {
@@ -310,9 +311,6 @@ class OpenClawShell
     outboxScopeHost: StoredOutboxScopeHost,
   ): string {
     const sessionKey = this.activeSessionKey;
-    const row = context.sessions.state.result?.sessions.find(
-      (session) => session.key === sessionKey,
-    );
     // An agent's main chat is its identity, so use its roster label when available.
     const parsed = parseAgentSessionKey(sessionKey);
     const mainAgentId = isUiGlobalSessionKey(sessionKey)
@@ -320,10 +318,17 @@ class OpenClawShell
       : parsed?.rest === resolveUiConfiguredMainKey(outboxScopeHost)
         ? normalizeAgentId(parsed.agentId)
         : undefined;
-    const agent = context.agents.state.agentsList?.agents.find(
-      (candidate) => normalizeAgentId(candidate.id) === mainAgentId,
-    );
-    return agent ? normalizeAgentLabel(agent) : resolveSessionDisplayName(sessionKey, row);
+    const agent = mainAgentId
+      ? context.agents.state.agentsList?.agents.find(
+          (candidate) => normalizeAgentId(candidate.id) === mainAgentId,
+        )
+      : undefined;
+    return agent
+      ? normalizeAgentLabel(agent)
+      : resolveSessionDisplayName(
+          sessionKey,
+          context.sessions.state.result?.sessions.find((session) => session.key === sessionKey),
+        );
   }
 
   constructor() {
@@ -520,6 +525,7 @@ class OpenClawShell
       const client = this.context?.gateway?.snapshot.client;
       if (client) {
         invalidateChatMetadataStore(client);
+        invalidateModelCatalogCache(client);
       }
     }
     this.shellGateway.handleGatewayEvent(event);
@@ -636,17 +642,18 @@ class OpenClawShell
       return;
     }
     const outboxScopeHost = this.storedOutboxScopeHost(context);
-    let primaryContext = titleForRoute(routeId);
+    let primaryContext = routeId === "custodian" ? t("nav.askOpenClaw") : titleForRoute(routeId);
     if (isSessionRouteId(routeId) && this.activeSessionKey) {
       primaryContext = this.chatTitleContext(context, outboxScopeHost) || primaryContext;
-    } else if (routeId === "custodian") {
-      primaryContext = t("nav.askOpenClaw");
     }
+    const offline = context.gateway.snapshot.phase !== "connected";
     let title = formatDocumentTitle({
       context: primaryContext,
       attentionCount: context.overlays.snapshot.approvalQueue.length,
-      offline: context.gateway.snapshot.phase !== "connected",
-      queuedCount: this.outboxStoreRuntime?.summarizeStoredChatOutboxes(outboxScopeHost).total ?? 0,
+      offline,
+      ...(offline && {
+        queuedCount: this.outboxStoreRuntime?.summarizeStoredChatOutboxes(outboxScopeHost).total,
+      }),
     });
     const environment = context.config?.current.environment;
     if (environment) {
@@ -728,6 +735,7 @@ class OpenClawShell
       // cannot keep metadata alive across logical Gateway connections.
       if (snapshot.client) {
         invalidateChatMetadataStore(snapshot.client);
+        invalidateModelCatalogCache(snapshot.client);
       }
     }
     this.shellGateway.synchronizeGateway(snapshot);

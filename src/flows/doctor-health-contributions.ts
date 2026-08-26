@@ -2,7 +2,7 @@
 // exposing the same checks to structured lint and repair commands.
 import fs from "node:fs";
 import { isDeepStrictEqual } from "node:util";
-import { isGatewayHostServiceEnvironment } from "../infra/gateway-supervision.js";
+import { shouldManageGatewayService } from "../commands/doctor-service-repair-policy.js";
 import { scrubDoctorErrorMessage } from "./doctor-error-message.js";
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
 import {
@@ -302,12 +302,18 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
   }
 }
 
+async function hasUserScopedSystemdGatewayService(env: NodeJS.ProcessEnv): Promise<boolean> {
+  const { findInstalledSystemdGatewayScope } = await import("../daemon/systemd.js");
+  return (await findInstalledSystemdGatewayScope(env))?.scope === "user";
+}
+
 async function runSystemdLingerHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   if (
     ctx.options.nonInteractive === true ||
     process.platform !== "linux" ||
     resolveDoctorMode(ctx.cfg) !== "local" ||
-    !isGatewayHostServiceEnvironment(ctx.env ?? process.env)
+    !(await shouldManageGatewayService(ctx.env ?? process.env)) ||
+    !(await hasUserScopedSystemdGatewayService(ctx.env ?? process.env))
   ) {
     return;
   }
@@ -337,7 +343,8 @@ async function detectSystemdLingerFindings(
   if (
     process.platform !== "linux" ||
     resolveDoctorMode(ctx.cfg) !== "local" ||
-    !isGatewayHostServiceEnvironment(ctx.env ?? process.env)
+    !(await shouldManageGatewayService(ctx.env ?? process.env)) ||
+    !(await hasUserScopedSystemdGatewayService(ctx.env ?? process.env))
   ) {
     return [];
   }

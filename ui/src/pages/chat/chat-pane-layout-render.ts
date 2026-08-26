@@ -84,6 +84,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     );
     const chat = renderChat({
       ...chatProps,
+      historyState: catalog ? undefined : state,
       header: board.face === "dashboard" ? nothing : header,
     });
     // Keep this root stable across board face changes so the guarded board runtime

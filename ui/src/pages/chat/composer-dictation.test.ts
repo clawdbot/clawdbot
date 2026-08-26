@@ -399,6 +399,28 @@ describe("ComposerDictationController", () => {
     controller.dispose();
   });
 
+  it("reports whether finalization committed a transcript", async () => {
+    const withTranscript = createHarness();
+    await startHold(withTranscript.target);
+    emit({
+      transcriptionSessionId: "dictation-1",
+      type: "transcript",
+      text: "send these words",
+      final: true,
+    });
+    const committed = withTranscript.controller.finishActive();
+    await vi.advanceTimersByTimeAsync(1500);
+    await expect(committed).resolves.toBe(true);
+    withTranscript.controller.dispose();
+
+    const withoutTranscript = createHarness();
+    await startHold(withoutTranscript.target);
+    const empty = withoutTranscript.controller.finishActive();
+    await vi.advanceTimersByTimeAsync(10_000);
+    await expect(empty).resolves.toBe(false);
+    withoutTranscript.controller.dispose();
+  });
+
   it("ignores extra clicks while final text is draining", async () => {
     const { controller, onTap, target } = createHarness();
     await startHold(target);
@@ -598,9 +620,11 @@ describe("ComposerDictationController", () => {
     target.dispatchEvent(pointer("pointerdown"));
     await vi.advanceTimersByTimeAsync(250);
 
+    // Names the missing piece and where to fix it: this failure is a
+    // configuration gap the operator has to close, not something a retry clears.
     await waitForFast(() =>
       expect(onError).toHaveBeenCalledWith(
-        "No transcription provider is configured for dictation.",
+        "No transcription provider is configured for dictation. Choose one in Settings to dictate.",
       ),
     );
     expect(getUserMedia).not.toHaveBeenCalled();

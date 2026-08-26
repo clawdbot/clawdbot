@@ -143,7 +143,6 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
             guarded.status === "backlog" || guarded.status === "todo" || guarded.status === "ready"
               ? "running"
               : guarded.status,
-          agentId: guarded.agentId ?? ownerId,
           ...(options.adoptWorkspaceAccess && !guarded.metadata?.automation?.workspaceAccess
             ? { workspaceAccess: options.adoptWorkspaceAccess }
             : {}),

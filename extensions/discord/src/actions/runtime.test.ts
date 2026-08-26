@@ -2116,6 +2116,48 @@ describe("handleDiscordMessagingAction", () => {
     expect(voiceOptions.mediaReadFile).toBe(mediaReadFile);
   });
 
+  it.each([
+    {
+      action: "sticker" as const,
+      params: { to: "channel:123", stickerId: ["sticker-1"] },
+      sender: () => discordSendMocks.sendStickerDiscord,
+      label: "sendStickerDiscord",
+    },
+    {
+      action: "thread-reply" as const,
+      params: { threadId: "thread-123", message: "quiet thread update" },
+      sender: () => sendMessageDiscord,
+      label: "sendMessageDiscord",
+    },
+  ])(
+    "preserves delivery receipts, silent delivery, and default options for the $action message action",
+    async ({ action, params, sender, label }) => {
+      for (const silent of [true, false, undefined]) {
+        const send = sender();
+        send.mockClear();
+        const delivery = {
+          messageId: "discord-message-123",
+          channelId: "123",
+          receipt: { primaryPlatformMessageId: "discord-message-123" },
+        };
+        send.mockResolvedValueOnce(delivery);
+        const result = await handleDiscordMessageAction({
+          action,
+          params: { ...params, ...(silent === undefined ? {} : { silent }) },
+          cfg: DISCORD_TEST_CFG,
+        });
+
+        expect(result.details).toEqual({ ok: true, result: delivery });
+        const sendOptions = mockObjectArg(send, label, 0, 2);
+        if (silent === true) {
+          expect(sendOptions.silent).toBe(true);
+        } else {
+          expect(sendOptions).not.toHaveProperty("silent");
+        }
+      }
+    },
+  );
+
   it("preserves reader-free workspace authority for thread replies and ignores forged action data", async () => {
     const mediaAccess = {
       localRoots: ["/tmp/agent-workspace"],

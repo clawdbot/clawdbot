@@ -12,6 +12,7 @@ enum ShellExecutor {
         var timedOut: Bool
         var success: Bool
         var errorMessage: String?
+        var preflightError: String?
     }
 
     /// A background descendant may inherit stdout after its parent exits.
@@ -194,7 +195,8 @@ enum ShellExecutor {
             exitCode: status,
             timedOut: false,
             success: terminationStatus.isSuccess,
-            errorMessage: terminationStatus.isSuccess ? nil : "exit \(status)")
+            errorMessage: terminationStatus.isSuccess ? nil : "exit \(status)",
+            preflightError: nil)
     }
 
     private static func timedOutResult(captured: (stdout: String, stderr: String)) -> ShellResult {
@@ -204,12 +206,14 @@ enum ShellExecutor {
             exitCode: nil,
             timedOut: true,
             success: false,
-            errorMessage: "timeout")
+            errorMessage: "timeout",
+            preflightError: nil)
     }
 
     private static func failedResult(
         captured: (stdout: String, stderr: String) = ("", ""),
-        message: String) -> ShellResult
+        message: String,
+        preflightError: String? = nil) -> ShellResult
     {
         ShellResult(
             stdout: captured.stdout,
@@ -217,7 +221,8 @@ enum ShellExecutor {
             exitCode: nil,
             timedOut: false,
             success: false,
-            errorMessage: message)
+            errorMessage: message,
+            preflightError: preflightError)
     }
 
     private static func runSubprocess(
@@ -342,7 +347,8 @@ enum ShellExecutor {
         command: [String],
         cwd: String?,
         env: [String: String]?,
-        timeout: Double?) async -> ShellResult
+        timeout: Double?,
+        beforeSpawn: (@Sendable () -> String?)? = nil) async -> ShellResult
     {
         guard !command.isEmpty else {
             return self.failedResult(message: "empty command")
@@ -356,6 +362,11 @@ enum ShellExecutor {
         }
 
         let configuration = self.configuration(command: command, cwd: cwd, env: env)
+
+        if let message = beforeSpawn?() {
+            _ = output.readAndRemove()
+            return self.failedResult(message: message, preflightError: message)
+        }
 
         do {
             let outcome = if let timeout, timeout > 0 {

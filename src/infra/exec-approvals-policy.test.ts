@@ -8,7 +8,7 @@ import {
   makeMockExecutableResolution,
 } from "./exec-approvals-test-helpers.js";
 import type { ExecApprovalsFile } from "./exec-approvals.js";
-import { buildHashedArgPatternFromArgv } from "./exec-command-resolution.js";
+import { buildCwdBoundHashedArgPattern } from "./exec-command-resolution.js";
 
 vi.unmock("./exec-approvals.js");
 vi.unmock("./exec-approvals-effective.js");
@@ -377,7 +377,7 @@ describe("exec approvals policy helpers", () => {
     const allowlist = [
       {
         pattern: "/usr/bin/echo",
-        argPattern: buildHashedArgPatternFromArgv(["/usr/bin/echo", "ok"]),
+        argPattern: buildCwdBoundHashedArgPattern(["/usr/bin/echo", "ok"], "/tmp"),
         source: "allow-always" as const,
       },
     ];

@@ -1,5 +1,4 @@
 /** Detached task-ledger integration for cron runs. */
-import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import {
@@ -62,18 +61,6 @@ function requireCronAgentId(agentId: string | undefined): string {
 
 function resolveCurrentDefaultAgentId(state: CronServiceState): string | undefined {
   return state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId;
-}
-
-const activeCronTaskRunId = new AsyncLocalStorage<string>();
-
-/** Keeps the detached task id on the async execution that owns it. */
-export function withCronTaskRunId<T>(taskRunId: string | undefined, run: () => T): T {
-  const normalizedRunId = taskRunId?.trim();
-  return normalizedRunId ? activeCronTaskRunId.run(normalizedRunId, run) : run();
-}
-
-export function getActiveCronTaskRunId(): string | undefined {
-  return activeCronTaskRunId.getStore();
 }
 
 /** Carries exact admission into the first post-admission owner lifecycle phase. */
@@ -440,10 +427,14 @@ export function tryFinishCronTaskRun(
         status,
         endedAt: entry.ts,
         lastEventAt: entry.ts,
-        error: entry.error,
-        clearError: entry.error === undefined,
-        terminalSummary: entry.summary ?? null,
-        preserveTerminalSummary: true,
+        ...(status === "cancelled"
+          ? {}
+          : {
+              error: entry.error,
+              clearError: entry.error === undefined,
+              terminalSummary: entry.summary ?? null,
+              preserveTerminalSummary: true,
+            }),
         childSessionKey: entry.sessionKey ?? null,
         detail,
       });
@@ -451,7 +442,7 @@ export function tryFinishCronTaskRun(
     if (updated.length === 0) {
       const existing = findTaskByRunId(taskRunId);
       if (existing?.runtime === "cron" && existing.status === "cancelled") {
-        // Operator cancellation owns task status, but its finished event still owns history detail.
+        // Operator cancellation owns task status and reason; its finished event owns history detail.
         updated = finalize(taskRunId, "cancelled");
       } else if (
         existing?.runtime === "cron" &&

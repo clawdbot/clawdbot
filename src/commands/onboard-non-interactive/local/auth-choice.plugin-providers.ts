@@ -22,11 +22,6 @@ import type {
 } from "../../../plugins/types.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { createLazyRuntimeSurface } from "../../../shared/lazy-runtime.js";
-import {
-  CODEX_RUNTIME_PLUGIN_ID,
-  ensureCodexRuntimePluginForModelSelection,
-} from "../../codex-runtime-plugin-install.js";
-import { ensureCopilotRuntimePluginForModelSelection } from "../../copilot-runtime-plugin-install.js";
 import { createNonInteractiveLoggingPrompter } from "../../non-interactive-prompter.js";
 import {
   prepareAgentModelDefaults,
@@ -35,6 +30,10 @@ import {
 } from "../../onboard-agent-target.js";
 import { rejectOnboardingOption } from "../../onboard-options.js";
 import type { OnboardOptions } from "../../onboard-types.js";
+import {
+  CODEX_RUNTIME_PLUGIN_ID,
+  ensureModelSelectionRuntimePlugins,
+} from "../../runtime-plugin-install.js";
 
 const PROVIDER_PLUGIN_CHOICE_PREFIX = "provider-plugin:";
 
@@ -260,18 +259,18 @@ export async function applyNonInteractivePluginProviderChoice(params: {
   }
   // Model selection can imply a runtime plugin even when auth setup belonged to
   // a provider plugin; install those runtimes before persisting the config.
-  const nonInteractivePrompter = createNonInteractiveLoggingPrompter(
-    params.runtime,
-    (message) => `Non-interactive setup cannot prompt for plugin install: ${message}`,
-  );
-  const codexInstall = await ensureCodexRuntimePluginForModelSelection({
+  const runtimes = await ensureModelSelectionRuntimePlugins({
     cfg: result,
     model: selectedModel,
-    prompter: nonInteractivePrompter,
+    prompter: createNonInteractiveLoggingPrompter(params.runtime, (message) => message),
     runtime: params.runtime,
     workspaceDir,
+    output: "silent",
   });
-  if (codexInstall.installed) {
+  if (!runtimes.ok) {
+    return reject(runtimes.message);
+  }
+  if (runtimes.codexInstalled) {
     // Non-interactive onboarding never auto-applies migration; emit a hint so
     // the operator knows Codex CLI state is available to import deliberately.
     // Gated on installed (not freshlyInstalled) so repair runs against an
@@ -279,29 +278,22 @@ export async function applyNonInteractivePluginProviderChoice(params: {
     const { offerPostInstallMigrations } =
       await import("../../../wizard/setup.post-install-migration.js");
     await offerPostInstallMigrations({
-      config: codexInstall.cfg,
+      config: runtimes.cfg,
       runtime: params.runtime,
       installedPluginIds: [CODEX_RUNTIME_PLUGIN_ID],
       nonInteractive: true,
     });
   }
-  const copilotInstall = await ensureCopilotRuntimePluginForModelSelection({
-    cfg: codexInstall.cfg,
-    model: selectedModel,
-    prompter: nonInteractivePrompter,
-    runtime: params.runtime,
-    workspaceDir,
-  });
   const previousModel = providerConfig.agents?.defaults?.model;
   const previousAutoModel = enableResult.config.wizard?.localModelLeanAutoModel;
   const retainsAutoModelOwnership =
     previousAutoModel !== undefined &&
     previousAutoModel === resolveAgentModelPrimaryValue(previousModel) &&
-    previousAutoModel === copilotInstall.cfg.wizard?.localModelLeanAutoModel;
+    previousAutoModel === runtimes.cfg.wizard?.localModelLeanAutoModel;
 
   return projectProviderResult(
     applyAutoLocalModelLean({
-      config: copilotInstall.cfg,
+      config: runtimes.cfg,
       providerId: providerChoice.provider.id,
       modelRef: selectedModel,
       ...(retainsAutoModelOwnership ? { previousModelRef: previousAutoModel } : {}),

@@ -369,6 +369,12 @@ catalog, API-key auth, and dynamic model resolution.
     upstream response is not an OpenAI-compatible `{ data: [{ id, object }] }`
     shape.
 
+    When `ctx.providerIds` is present, it contains the normalized provider
+    identities selected for that catalog owner. Return `null` before resolving
+    credentials or making network requests when the hook serves none of them;
+    OpenClaw also filters returned identities to that scope. An absent scope
+    means the caller requested the full catalog.
+
     If the upstream provider uses different control tokens than OpenClaw, add a
     small bidirectional text transform instead of replacing the stream path:
 

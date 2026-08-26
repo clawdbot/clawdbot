@@ -229,30 +229,44 @@ describe("SQLite backup commands", () => {
     ).rejects.toThrow(missingSnapshotMessage);
   });
 
-  it("creates a snapshot for a normalized per-agent database", async () => {
-    const tempDir = tempDirs.make("openclaw-backup-sqlite-");
-    const stateDir = path.join(tempDir, "state");
-    const repositoryPath = path.join(tempDir, "snapshots");
-    process.env.OPENCLAW_STATE_DIR = stateDir;
-    const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "ops-team" });
-    await fs.mkdir(path.dirname(databasePath), { recursive: true });
-    createAgentDatabase(databasePath, "ops-team");
-    const runtime = createRuntimeCapture();
+  it.each([
+    { label: "default", customAgentDir: false },
+    { label: "configured external", customAgentDir: true },
+  ])(
+    "creates a snapshot for a normalized $label per-agent database",
+    async ({ customAgentDir }) => {
+      const tempDir = tempDirs.make("openclaw-backup-sqlite-");
+      const stateDir = path.join(tempDir, "state");
+      const repositoryPath = path.join(tempDir, "snapshots");
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+      const agentDir = customAgentDir ? path.join(tempDir, "external-agent") : undefined;
+      if (agentDir) {
+        configMocks.getRuntimeConfig.mockReturnValue({
+          agents: { entries: { "ops-team": { agentDir } } },
+        });
+      }
+      const databasePath = agentDir
+        ? path.join(agentDir, "openclaw-agent.sqlite")
+        : resolveOpenClawAgentSqlitePath({ agentId: "ops-team" });
+      await fs.mkdir(path.dirname(databasePath), { recursive: true });
+      createAgentDatabase(databasePath, "ops-team");
+      const runtime = createRuntimeCapture();
 
-    const created = await backupSqliteCreateCommand(runtime, {
-      agent: "Ops Team",
-      repository: repositoryPath,
-    });
+      const created = await backupSqliteCreateCommand(runtime, {
+        agent: "Ops Team",
+        repository: repositoryPath,
+      });
 
-    expect(created.manifest.database).toEqual({
-      role: "agent",
-      agentId: "ops-team",
-      basename: "openclaw-agent.sqlite",
-      userVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
-    });
-    expect(runtime.logs).toEqual([expect.stringContaining("Database: agent:ops-team")]);
-    expect(runtime.errors).toEqual([]);
-  });
+      expect(created.manifest.database).toEqual({
+        role: "agent",
+        agentId: "ops-team",
+        basename: "openclaw-agent.sqlite",
+        userVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
+      });
+      expect(runtime.logs).toEqual([expect.stringContaining("Database: agent:ops-team")]);
+      expect(runtime.errors).toEqual([]);
+    },
+  );
 
   it("requires exactly one named OpenClaw database source", async () => {
     const runtime = createRuntimeCapture();

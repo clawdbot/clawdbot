@@ -1,5 +1,4 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { GatewaySessionRow } from "../../api/types.ts";
 import {
   loadChatMetadata,
   peekChatMetadata,
@@ -8,11 +7,12 @@ import {
 } from "../../lib/chat/chat-metadata-store.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { loadModelAuthStatus } from "../../lib/model-auth.ts";
+import { loadModels } from "../../lib/model-catalog-store.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { refreshChatAvatar, resolveAgentIdForSession } from "./chat-avatar.ts";
 import { applyRemoteSlashCommandsResult, refreshSlashCommands } from "./chat-commands.ts";
-import { loadChatHistory } from "./chat-history.ts";
+import { loadChatHistory, type ChatHistoryResult } from "./chat-history.ts";
 import { flushChatQueueForEvent } from "./chat-send-actions.ts";
 import {
   flushChatQueueAfterIdleSessionReconciliation,
@@ -20,7 +20,6 @@ import {
 } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
-import { loadModels } from "./models.ts";
 import {
   reconcileChatRunFromCurrentSessionRow,
   reconcileChatRunFromSessionRow,
@@ -29,6 +28,7 @@ import { scheduleChatScroll } from "./scroll.ts";
 
 type ChatRefreshOptions = {
   deferBranches?: boolean;
+  historyLoad?: Promise<ChatHistoryResult | undefined>;
   scheduleScroll?: boolean;
   awaitHistory?: boolean;
   startup?: boolean;
@@ -228,10 +228,12 @@ async function refreshChat(
   const refreshedAgentId = resolveAgentIdForSession(host);
   const requestUpdate = () => host.requestUpdate?.();
   const previousSessionsResult = host.sessionsResult;
-  const historyLoad = loadChatHistory(host, {
-    deferBranches: opts?.deferBranches === true,
-    startup: opts?.startup === true,
-  });
+  const historyLoad =
+    opts?.historyLoad ??
+    loadChatHistory(host, {
+      deferBranches: opts?.deferBranches === true,
+      startup: opts?.startup === true,
+    });
   const historyRefresh = historyLoad.finally(() => {
     if (opts?.scheduleScroll !== false) {
       scheduleChatScroll(host);
@@ -255,12 +257,12 @@ async function refreshChat(
     host.sessionsResult = host.sessions.state.result;
     host.sessionsResultAgentId = host.sessions.state.agentId;
     const sessionsResult = host.sessions.state.result;
-    const rosterRow =
-      sessionsResult?.sessions.find(
-        (row) =>
-          areUiSessionKeysEquivalent(row.key, history.sessionInfo?.key) ||
-          areUiSessionKeysEquivalent(row.key, refreshedSessionKey),
-      ) ?? history.sessionInfo;
+    const sessionInfo = sessionsResult?.sessions.find(
+      (row) =>
+        areUiSessionKeysEquivalent(row.key, history.sessionInfo?.key) ||
+        areUiSessionKeysEquivalent(row.key, refreshedSessionKey),
+    );
+    const rosterRow = sessionInfo ?? history.sessionInfo;
     if (areUiSessionKeysEquivalent(rosterRow.key, refreshedSessionKey)) {
       host.selectedChatSessionArchived = rosterRow.archived === true;
       host.selectedChatSessionIncognito = rosterRow.incognito === true;
@@ -278,11 +280,6 @@ async function refreshChat(
       // timestamp may still describe its prior terminal state during remount.
       return;
     }
-    const sessionInfo = sessionsResult?.sessions.find(
-      (row: GatewaySessionRow) =>
-        areUiSessionKeysEquivalent(row.key, history.sessionInfo?.key) ||
-        row.key === refreshedSessionKey,
-    );
     if (!sessionInfo) {
       return;
     }

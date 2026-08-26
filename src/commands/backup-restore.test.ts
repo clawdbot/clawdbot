@@ -177,6 +177,15 @@ describe("backupRestoreCommand", () => {
             expect(await listArchiveLeafEntries(backup.archivePath)).not.toContainEqual(
               expect.stringContaining("/plugin-skills/"),
             );
+            const manifest = JSON.parse(
+              await fs.readFile(path.join(targetPath, backup.archiveRoot, "manifest.json"), "utf8"),
+            ) as { skipped: Array<{ sourcePath: string; reason: string }> };
+            expect(manifest.skipped).toContainEqual(
+              expect.objectContaining({
+                sourcePath: state.statePath("plugin-skills"),
+                reason: "regenerable",
+              }),
+            );
           }
 
           expect(await listFilesystemLeafEntries(targetPath)).toEqual(
@@ -200,6 +209,120 @@ describe("backupRestoreCommand", () => {
         } finally {
           closeOpenClawStateDatabase();
         }
+      },
+    );
+  });
+
+  it("omits agent-scoped temporary trees and preserves safe relative links across restore", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-restore-agent-temporary-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const outputDir = state.path("backups");
+        const targetPath = state.path("restored");
+        const agentRoot = state.statePath("agents", "main", "agent");
+        const runtimeHome = path.join(agentRoot, "codex-home");
+        const runtimeTempRoot = path.join(runtimeHome, "tmp");
+        const marketplaceTempRoot = path.join(runtimeHome, ".tmp");
+        const helperDir = path.join(runtimeTempRoot, "arg0", "codex-arg0-fixture");
+        const marketplaceDir = path.join(marketplaceTempRoot, "bundled-marketplaces", "managed");
+        const agentTempRoot = path.join(agentRoot, "tmp");
+        const durableDir = path.join(runtimeHome, "sessions");
+        const externalRuntime = state.path("external-runtime");
+        const externalExecutable = path.join(externalRuntime, "executable");
+        const externalBundle = path.join(externalRuntime, "desktop-bundle");
+        await Promise.all(
+          [
+            outputDir,
+            helperDir,
+            marketplaceDir,
+            path.join(agentTempRoot, "resources"),
+            durableDir,
+            externalBundle,
+          ].map((directory) => fs.mkdir(directory, { recursive: true })),
+        );
+        await fs.writeFile(externalExecutable, "must never enter the backup\n", "utf8");
+        await fs.symlink(externalExecutable, path.join(helperDir, "apply_patch"));
+        await fs.symlink(externalBundle, path.join(marketplaceDir, "bundled-plugin"), "dir");
+        await fs.writeFile(path.join(agentTempRoot, "resources", "scratch.sqlite"), "not sqlite\n");
+        await fs.writeFile(path.join(durableDir, "session.json"), "durable session\n");
+        await fs.symlink("session.json", path.join(durableDir, "latest-session"));
+
+        const backup = await createBackupArchive({
+          output: outputDir,
+          includeWorkspace: false,
+          nowMs: Date.UTC(2026, 7, 12, 13, 0, 0),
+        });
+
+        const omittedRoots = [runtimeTempRoot, marketplaceTempRoot, agentTempRoot].toSorted(
+          (left, right) => left.localeCompare(right),
+        );
+        const expectedOmissions = omittedRoots.map((sourcePath) => ({
+          kind: "agent temporary files",
+          sourcePath,
+          reason: "regenerable",
+        }));
+        expect(backup.skipped.filter((entry) => entry.kind === "agent temporary files")).toEqual(
+          expectedOmissions.map((entry) => expect.objectContaining(entry)),
+        );
+        expect(backup.skippedVolatileCount).toBe(0);
+
+        const archiveEntries = await listArchiveLeafEntries(backup.archivePath);
+        expect(archiveEntries.some((entry) => entry.includes("external-runtime"))).toBe(false);
+        expect(archiveEntries.some((entry) => entry.endsWith("/sessions/session.json"))).toBe(true);
+
+        const restored = await backupRestoreCommand(createRuntime(), {
+          archive: backup.archivePath,
+          target: targetPath,
+        });
+        expect(restored.symlinkCount).toBe(1);
+        const manifest = JSON.parse(
+          await fs.readFile(path.join(targetPath, backup.archiveRoot, "manifest.json"), "utf8"),
+        ) as { skipped: Array<{ kind: string; sourcePath: string; reason: string }> };
+        expect(manifest.skipped.filter((entry) => entry.kind === "agent temporary files")).toEqual(
+          expectedOmissions,
+        );
+
+        const stateAsset = backup.assets.find((asset) => asset.kind === "state");
+        expect(stateAsset).toBeDefined();
+        const restoredAgentRoot = path.join(
+          targetPath,
+          stateAsset?.archivePath ?? "",
+          "agents",
+          "main",
+          "agent",
+        );
+        for (const omittedRoot of omittedRoots) {
+          const relativeRoot = path.relative(agentRoot, omittedRoot);
+          const archiveRelativeRoot = relativeRoot.split(path.sep).join("/");
+          expect(
+            archiveEntries.some((entry) => entry.includes(`/agent/${archiveRelativeRoot}/`)),
+          ).toBe(false);
+          await expect(fs.lstat(path.join(restoredAgentRoot, relativeRoot))).rejects.toMatchObject({
+            code: "ENOENT",
+          });
+        }
+        await expect(
+          fs.readFile(
+            path.join(restoredAgentRoot, "codex-home", "sessions", "session.json"),
+            "utf8",
+          ),
+        ).resolves.toBe("durable session\n");
+        await expect(
+          fs.readlink(path.join(restoredAgentRoot, "codex-home", "sessions", "latest-session")),
+        ).resolves.toBe("session.json");
+        expect(
+          (await listFilesystemLeafEntries(targetPath)).some((entry) =>
+            entry.includes("external-runtime"),
+          ),
+        ).toBe(false);
       },
     );
   });
@@ -231,6 +354,52 @@ describe("backupRestoreCommand", () => {
         await expect(fs.readFile(path.join(nonEmptyTarget, "keep.txt"), "utf8")).resolves.toBe(
           "keep\n",
         );
+      },
+    );
+  });
+
+  it("rejects a staging target inside a configured external live agent directory", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-restore-external-agent-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const agentDir = state.path("external-agent");
+        const targetPath = path.join(agentDir, "restore-target");
+        await fs.mkdir(agentDir, { recursive: true });
+        await state.writeConfig({ agents: { entries: { main: { agentDir } } } });
+
+        await expect(
+          backupRestoreCommand(createRuntime(), {
+            archive: state.path("missing-backup.tar.gz"),
+            target: targetPath,
+          }),
+        ).rejects.toThrow(/outside the live OpenClaw agent directory/iu);
+        await expect(fs.lstat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+      },
+    );
+  });
+
+  it("keeps restore available when the live config is malformed", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-restore-invalid-config-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const archivePath = state.path("backup.tar.gz");
+        const targetPath = state.path("restore-target");
+        const archiveRoot = "2026-08-12T00-00-00.000Z-openclaw-backup";
+        const payloadPath = buildBackupArchivePath(archiveRoot, "/tmp/openclaw.json");
+        await writeArchive({ archivePath, archiveRoot, payloadPath });
+        await fs.writeFile(state.configPath, '{"agents":{"entries":', "utf8");
+
+        await expect(
+          backupRestoreCommand(createRuntime(), { archive: archivePath, target: targetPath }),
+        ).resolves.toMatchObject({ targetPath });
       },
     );
   });
@@ -274,9 +443,25 @@ describe("backupRestoreCommand", () => {
       linkpath: "../../outside-restore",
       error: /symbolic link target is outside the declared archive root/iu,
     },
+    {
+      label: "backslash-containing",
+      linkpath: "nested\\outside-restore",
+      error: /symbolic link target must use forward slashes/iu,
+    },
+    {
+      label: "declared-asset-escaping",
+      linkpath: "../outside-declared-assets",
+      error: /symbolic link is outside the declared backup assets/iu,
+      insideDeclaredAsset: true,
+    },
+    {
+      label: "undeclared-entry",
+      linkpath: ".",
+      error: /symbolic link is outside the declared backup assets/iu,
+    },
   ])(
     "rejects $label symlink targets before touching the restore target",
-    async ({ linkpath, error }) => {
+    async ({ linkpath, error, insideDeclaredAsset }) => {
       await withOpenClawTestState(
         {
           layout: "state-only",
@@ -288,13 +473,32 @@ describe("backupRestoreCommand", () => {
           const targetPath = state.path("restore-target");
           const archiveRoot = "2026-08-12T00-00-00.000Z-openclaw-backup";
           const payloadPath = buildBackupArchivePath(archiveRoot, "/tmp/openclaw.json");
+          const declaredAssetRoot = path.posix.dirname(payloadPath);
           await writeArchive({
             archivePath,
             archiveRoot,
             payloadPath,
+            ...(insideDeclaredAsset
+              ? {
+                  manifest: `${JSON.stringify({
+                    schemaVersion: 1,
+                    createdAt: "2026-08-12T00:00:00.000Z",
+                    archiveRoot,
+                    assets: [
+                      {
+                        kind: "config",
+                        sourcePath: "/tmp",
+                        archivePath: declaredAssetRoot,
+                      },
+                    ],
+                  })}\n`,
+                }
+              : {}),
             extraEntries: [
               encodeTarEntry({
-                path: `${archiveRoot}/payload/absolute-link`,
+                path: insideDeclaredAsset
+                  ? `${declaredAssetRoot}/unsafe-link`
+                  : `${archiveRoot}/payload/absolute-link`,
                 type: "SymbolicLink",
                 linkpath,
               }),

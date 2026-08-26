@@ -1,11 +1,13 @@
 // Coverage for building compaction runtime context from active runner state.
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
+import * as manifestModelIdNormalization from "../../plugins/manifest-model-id-normalization.js";
 import { addSession, deleteSession } from "../bash-process-registry.js";
 import { createProcessSessionFixture } from "../bash-process-registry.test-helpers.js";
+import * as providerModelNormalizationRuntime from "../provider-model-normalization.runtime.js";
 import {
   buildEmbeddedCompactionRuntimeContext,
   resolveCompactionContextTokenBudget,
@@ -62,6 +64,23 @@ describe("resolveEmbeddedCompactionThinkingLevel", () => {
         },
         provider: "demo",
         modelId: "demo-model",
+      }),
+    ).toBe("high");
+  });
+
+  it("revalidates the compaction default against provider-denied thinking levels", () => {
+    expect(
+      resolveEmbeddedCompactionThinkingLevel({
+        provider: "custom",
+        modelId: "reasoning-model",
+        catalog: [
+          {
+            provider: "custom",
+            id: "reasoning-model",
+            reasoning: true,
+            thinkingLevelMap: { minimal: null, low: null, medium: null },
+          },
+        ],
       }),
     ).toBe("high");
   });
@@ -218,6 +237,55 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     // Auth profile preserved because provider didn't change
     expect(result.authProfileId).toBe("openai:p1");
   });
+
+  it.each([
+    { name: "without configured aliases", models: undefined },
+    {
+      name: "with an unrelated configured alias",
+      models: { "openai/gpt-5.4-mini": { alias: "fast" } },
+    },
+  ])(
+    "resolves literal compaction overrides without discovering provider plugins $name",
+    ({ models }) => {
+      const manifestNormalization = vi
+        .spyOn(manifestModelIdNormalization, "normalizeProviderModelIdWithManifest")
+        .mockImplementation(() => {
+          throw new Error("literal compaction overrides must not discover plugin manifests");
+        });
+      const runtimeNormalization = vi
+        .spyOn(providerModelNormalizationRuntime, "normalizeProviderModelIdWithRuntime")
+        .mockImplementation(() => {
+          throw new Error("literal compaction overrides must not activate provider plugins");
+        });
+
+      try {
+        const result = buildEmbeddedCompactionRuntimeContext({
+          workspaceDir: "/tmp/workspace",
+          agentDir: "/tmp/agent",
+          config: {
+            agents: {
+              defaults: {
+                ...(models ? { models } : {}),
+                compaction: { model: "gpt-4o" },
+              },
+            },
+          } as OpenClawConfig,
+          provider: "openai",
+          modelId: "gpt-3.5-turbo",
+          authProfileId: "openai:p1",
+        });
+
+        expect(result.provider).toBe("openai");
+        expect(result.model).toBe("gpt-4o");
+        expect(result.authProfileId).toBe("openai:p1");
+        expect(manifestNormalization).not.toHaveBeenCalled();
+        expect(runtimeNormalization).not.toHaveBeenCalled();
+      } finally {
+        runtimeNormalization.mockRestore();
+        manifestNormalization.mockRestore();
+      }
+    },
+  );
 
   it("uses session model when no compaction.model override configured", () => {
     const result = buildEmbeddedCompactionRuntimeContext({
@@ -623,7 +691,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.authProfileId).toBeUndefined();
   });
 
-  it("resolves compaction.model alias to canonical model ref on same provider (#90340)", () => {
+  it("resolves a mixed-case compaction model alias with a trailing profile on its provider", () => {
     const result = resolveEmbeddedCompactionTarget({
       config: {
         agents: {
@@ -634,7 +702,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
                 params: { thinking: "high" },
               },
             },
-            compaction: { model: "gpt54mini" },
+            compaction: { model: "GPT54MINI@work" },
           },
         },
       } as unknown as OpenClawConfig,
@@ -675,7 +743,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.authProfileId).toBeUndefined();
   });
 
-  it("falls back to literal model when alias does not match", () => {
+  it("preserves the full literal model and profile when no configured alias matches", () => {
     const result = resolveEmbeddedCompactionTarget({
       config: {
         agents: {
@@ -685,7 +753,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
                 alias: "gpt54mini",
               },
             },
-            compaction: { model: "nonexistent-alias" },
+            compaction: { model: "nonexistent-alias@work" },
           },
         },
       } as unknown as OpenClawConfig,
@@ -696,7 +764,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       defaultModel: "gpt-5.5",
     });
     expect(result.provider).toBe("openai");
-    expect(result.model).toBe("nonexistent-alias");
+    expect(result.model).toBe("nonexistent-alias@work");
     expect(result.authProfileId).toBe("openai:default");
   });
 

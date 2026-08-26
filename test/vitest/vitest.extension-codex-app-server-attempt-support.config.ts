@@ -9,7 +9,7 @@ function createExtensionCodexAppServerAttemptSupportVitestConfig(
       "extensions/codex/src/app-server/attempt-context.test.ts",
       "extensions/codex/src/app-server/attempt-notifications.test.ts",
       "extensions/codex/src/app-server/attempt-results.test.ts",
-      "extensions/codex/src/app-server/attempt-startup.test.ts",
+      "extensions/codex/src/app-server/attempt-startup*.test.ts",
       "extensions/codex/src/app-server/attempt-timeouts.test.ts",
       "extensions/codex/src/app-server/attempt-turn-watches.test.ts",
     ],
