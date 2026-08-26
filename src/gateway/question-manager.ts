@@ -14,7 +14,7 @@ import type {
   QuestionWaitAnswerResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import {
-  captureGatewayRootWorkAdmissionContinuationScope,
+  retainGatewayRootWorkAdmissionContinuationScope,
   type GatewayRootWorkAdmissionContinuationScope,
 } from "../process/gateway-work-admission.js";
 
@@ -128,7 +128,7 @@ export class QuestionManager {
       cleanupTimer: null,
       waiters: new Set(),
       onResolved: params.onResolved,
-      admissionContinuation: captureGatewayRootWorkAdmissionContinuationScope(),
+      admissionContinuation: retainGatewayRootWorkAdmissionContinuationScope(),
     };
     this.entries.set(record.id, entry);
     unrefTimer(entry.expiryTimer);

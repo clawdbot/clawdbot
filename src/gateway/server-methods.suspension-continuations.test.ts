@@ -166,31 +166,28 @@ describe("draining Gateway completion ownership", () => {
     const manager = new QuestionManager();
     const client = createClient("operator");
     const context = createContext({ questionManager: manager });
-    const ownerReady = deferred();
     const root = tryBeginGatewayRootWorkAdmission();
     if (!root) {
       throw new Error("expected admitted question owner");
     }
-    const owner = root
-      .run(async () => {
-        manager.request({
-          id: "question-owned",
-          questions: [
-            {
-              questionId: "choice",
-              header: "Choice",
-              question: "Continue?",
-              options: [],
-              isOther: true,
-            },
-          ],
-          timeoutMs: 60_000,
-        });
-        ownerReady.resolve();
-        return await manager.waitAnswer("question-owned");
-      })
-      .finally(root.release);
-    await ownerReady.promise;
+    await root.run(async () => {
+      manager.request({
+        id: "question-owned",
+        questions: [
+          {
+            questionId: "choice",
+            header: "Choice",
+            question: "Continue?",
+            options: [],
+            isOther: true,
+          },
+        ],
+        timeoutMs: 60_000,
+      });
+    });
+    root.release();
+    // question.request returns before question.waitAnswer begins. The pending
+    // question itself retains the exact admitted root across that RPC boundary.
     expect(getActiveGatewayRootWorkCount()).toBe(1);
     const suspension = tryBeginGatewaySuspendAdmission(() => {});
     expect(suspension?.drain()).toBe(true);
@@ -233,7 +230,7 @@ describe("draining Gateway completion ownership", () => {
       status: "answered",
       answers: { answers: { choice: ["yes"] } },
     });
-    await expect(owner).resolves.toMatchObject({ status: "answered" });
+    expect(manager.get("question-owned")).toMatchObject({ status: "answered" });
     expect(getActiveGatewayRootWorkCount()).toBe(0);
     expect(suspension?.release()).toBe(true);
     manager.reset();
