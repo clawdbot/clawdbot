@@ -220,6 +220,22 @@
         "idx_workspace_attestations_attested"
       ],
       "note": "Merged into workspace_setup_state (nullable attested_at_ms/attestation_updated_at_ms) in state schema 13."
+    },
+    {
+      "database": "state",
+      "status": "completed",
+      "targetVersion": 13,
+      "table": "auth_profile_stores",
+      "indexes": [],
+      "note": "Shared auth store folded into config_machine_state key authProfiles.store (secret prefix redaction) in state schema 13."
+    },
+    {
+      "database": "state",
+      "status": "completed",
+      "targetVersion": 13,
+      "table": "auth_profile_state",
+      "indexes": [],
+      "note": "Shared auth runtime state folded into config_machine_state key authProfiles.state in state schema 13; the agent-DB table of the same name is unaffected."
     }
   ]
 }

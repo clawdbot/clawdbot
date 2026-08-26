@@ -394,7 +394,8 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
     (tableHasColumn(db, "cron_jobs", "schedule_kind") ||
       tableHasColumn(db, "subagent_runs", "task") ||
       tableExists(db, "workspace_attestations") ||
-      tableExists(db, "installed_plugin_index"))
+      tableExists(db, "installed_plugin_index") ||
+      tableExists(db, "auth_profile_stores"))
   ) {
     migrations.push({ kind: "state-consolidation-v13", path: pathname });
   }

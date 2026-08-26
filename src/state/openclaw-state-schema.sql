@@ -1,14 +1,4 @@
-CREATE TABLE IF NOT EXISTS auth_profile_stores (
-  store_key TEXT NOT NULL PRIMARY KEY,
-  store_json TEXT NOT NULL,
-  updated_at INTEGER NOT NULL
-) STRICT;
 
-CREATE TABLE IF NOT EXISTS auth_profile_state (
-  store_key TEXT NOT NULL PRIMARY KEY,
-  state_json TEXT NOT NULL,
-  updated_at INTEGER NOT NULL
-) STRICT;
 
 CREATE TABLE IF NOT EXISTS mcp_oauth_stores (
   store_key TEXT NOT NULL PRIMARY KEY,

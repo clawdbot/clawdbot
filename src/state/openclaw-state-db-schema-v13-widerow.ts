@@ -171,6 +171,22 @@ export function migrateJsonCanonicalWideRowsV13(
        WHERE workspace_key NOT IN (SELECT workspace_key FROM workspace_setup_state);
     `);
   }
+  for (const [tableName, jsonColumn, stateKey] of [
+    ["auth_profile_stores", "store_json", "authProfiles.store"],
+    ["auth_profile_state", "state_json", "authProfiles.state"],
+  ] as const) {
+    if (!tableExists(db, tableName)) {
+      continue;
+    }
+    // Shared-state singletons keyed 'shared'; the agent-DB twins are untouched.
+    db.prepare(
+      `INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
+       SELECT ?, ${jsonColumn}, updated_at FROM ${tableName} WHERE store_key = 'shared'
+       ON CONFLICT(state_key) DO NOTHING`,
+    ).run(stateKey);
+    db.exec(`DROP TABLE ${tableName};`);
+    migrated = true;
+  }
   if (tableExists(db, "installed_plugin_index")) {
     // Fold the singleton index row (revision lived in updated_at_ms) into the KV.
     // workspace_dir was a same-version additive column; pre-addition rows lack it.

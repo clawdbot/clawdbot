@@ -145,18 +145,6 @@ export interface AuditIdentityKeys {
   key_id: string;
 }
 
-export interface AuthProfileState {
-  state_json: string;
-  store_key: string;
-  updated_at: number;
-}
-
-export interface AuthProfileStores {
-  store_json: string;
-  store_key: string;
-  updated_at: number;
-}
-
 export interface BackupRuns {
   archive_path: string;
   created_at: number;
@@ -1520,8 +1508,6 @@ export interface DB {
   apns_registrations: ApnsRegistrations;
   audit_events: AuditEvents;
   audit_identity_keys: AuditIdentityKeys;
-  auth_profile_state: AuthProfileState;
-  auth_profile_stores: AuthProfileStores;
   backup_runs: BackupRuns;
   capture_blobs: CaptureBlobs;
   capture_events: CaptureEvents;
