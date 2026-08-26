@@ -273,6 +273,23 @@ describe("skills proposal gateway handlers", () => {
     });
   });
 
+  it.each(["pin", "unpin", "restore"])(
+    "returns an explicit retirement error for the registered curator %s method",
+    async (action) => {
+      await expect(
+        callHandler(`skills.curator.${action}`, { skill: "daily-brief" }),
+      ).resolves.toEqual(
+        expect.objectContaining({
+          ok: false,
+          error: expect.objectContaining({
+            code: "INVALID_REQUEST",
+            message: expect.stringContaining("Skill lifecycle curation is retired"),
+          }),
+        }),
+      );
+    },
+  );
+
   it("marks manually created create targets stale before list and inspect responses", async () => {
     const create = await callHandler("skills.proposals.create", {
       name: "Manual Gateway Skill",

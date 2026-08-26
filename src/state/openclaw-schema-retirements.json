@@ -55,6 +55,22 @@
       "table": "model_capability_cache",
       "indexes": ["idx_model_capability_cache_provider_updated"],
       "note": "Never had a shipped writer; retired in state schema 10."
+    },
+    {
+      "database": "state",
+      "status": "completed",
+      "targetVersion": 11,
+      "table": "skill_lifecycle",
+      "indexes": ["idx_skill_lifecycle_key", "idx_skill_lifecycle_state"],
+      "note": "Legacy age-based skill curation was replaced by weekly collection review."
+    },
+    {
+      "database": "state",
+      "status": "completed",
+      "targetVersion": 11,
+      "table": "skill_workshop_proposal_origin_runs",
+      "indexes": [],
+      "note": "Proposal origin runs were a never-read projection of authoritative record_json."
     }
   ]
 }

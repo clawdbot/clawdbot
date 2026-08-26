@@ -568,7 +568,7 @@ struct PortGuardianRecordStoreTests {
         let fixture = try Self.fixture()
         defer { fixture.cleanup() }
 
-        for version in [4, 5, 6, 7, 8, 9, 10] {
+        for version in [4, 5, 6, 7, 8, 9, 10, 11] {
             let databaseURL = fixture.root.appendingPathComponent("supported-v\(version).sqlite")
             try Self.seedVersionedPortGuardianDatabase(databaseURL, schemaVersion: version)
             let store = try PortGuardianRecordStore(databaseURL: databaseURL)
@@ -580,7 +580,7 @@ struct PortGuardianRecordStoreTests {
             #expect(try store.records() == [record])
         }
 
-        for version in [11, 99] {
+        for version in [12, 99] {
             let databaseURL = fixture.root.appendingPathComponent("newer-v\(version).sqlite")
             try Self.seedVersionedPortGuardianDatabase(databaseURL, schemaVersion: version)
             #expect(throws: PortGuardianStoreError.self) {

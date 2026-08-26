@@ -60,6 +60,7 @@ import {
   assertOpenClawStateDatabaseV7ForMigration,
   assertOpenClawStateDatabaseV8ForMigration,
   assertOpenClawStateDatabaseV9ForMigration,
+  assertOpenClawStateDatabaseV10ForMigration,
   assertSupportedSchemaVersion,
   markCurrentStateSchemaVersion,
   resolveDatabasePath,
@@ -78,14 +79,13 @@ import {
   detectOpenClawStateDatabaseSchemaMigrationsFromDatabase,
   dropLegacyStateTables,
   migrateAgentDatabaseRelativePaths as migrateAgentPaths,
-  migrateRetiredCommitmentsSchema,
-  migrateRetiredDeadStateTablesV10,
   migrateWorkerPlacementExecutionModeSchema,
   repairAgentDatabasesCompositePrimaryKey,
   repairLegacyGatewayRestartHandoffsForStrictMigration,
 } from "./openclaw-state-db-schema-repair.js";
 import * as sessionWatchMigration from "./openclaw-state-db-session-watch-migration.js";
 import { withOpenClawStateStartupCheckpointConnection } from "./openclaw-state-db-startup-checkpoint.js";
+import { runRetiredStateTableMigrations } from "./openclaw-state-db-table-retirements.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import { describeAgentPathMigration, warnAgentPathMigration } from "./openclaw-state-db.paths.js";
 import {
@@ -107,6 +107,7 @@ const STATE_MIGRATION_ASSERTIONS = new Map<
   [7, assertOpenClawStateDatabaseV7ForMigration],
   [8, assertOpenClawStateDatabaseV8ForMigration],
   [9, assertOpenClawStateDatabaseV9ForMigration],
+  [10, assertOpenClawStateDatabaseV10ForMigration],
 ]);
 
 export {
@@ -206,12 +207,7 @@ function repairOpenClawStateDatabaseSchemaWithWriteAccess(
           assertSqliteIntegrity(db, pathname);
         }
         dropLegacyStateTables(db);
-        if (migrateRetiredCommitmentsSchema(db, previousVersion)) {
-          applied.push("Retired shared state commitments table and indexes");
-        }
-        if (migrateRetiredDeadStateTablesV10(db, previousVersion)) {
-          applied.push("Retired six dead shared-state tables (v10)");
-        }
+        applied.push(...runRetiredStateTableMigrations(db, previousVersion));
         if (migrateWorkerPlacementExecutionModeSchema(db, previousVersion)) {
           applied.push("Migrated cloud worker placements to execution modes");
         }
@@ -416,8 +412,7 @@ function ensureSchema(
           STATE_MIGRATION_ASSERTIONS.get(previousVersion)?.(db, { pathname });
         }
         dropLegacyStateTables(db);
-        migrateRetiredCommitmentsSchema(db, previousVersion);
-        migrateRetiredDeadStateTablesV10(db, previousVersion);
+        runRetiredStateTableMigrations(db, previousVersion);
         migrateWorkerPlacementExecutionModeSchema(db, previousVersion);
         const pathMigration: AgentPathSummary = migrateAgentPaths(db, previousVersion, pathname);
         ensureAdditiveStateColumns(db);

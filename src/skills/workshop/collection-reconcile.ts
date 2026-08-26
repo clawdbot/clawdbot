@@ -57,7 +57,7 @@ import {
   stageSkillCollectionDrop,
 } from "./collection-rollback.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
-import { clearCuratedSkillLifecycle } from "./curator.js";
+import { clearSkillUsageForRemovedSkills } from "./curator.js";
 import { stripProposalFrontmatterForSkill } from "./frontmatter.js";
 import {
   listWorkshopOwnedSkillDirs,
@@ -184,10 +184,6 @@ export async function reconcileSkillCollection(params: {
           }
           backupId = backup.manifest.id;
         }
-        clearCuratedSkillLifecycle(
-          current.map((skill) => skill.filePath),
-          params.env ? { env: params.env } : {},
-        );
         const result: SkillCollectionReconcileResult = { backupId, ...outcome };
         recordSkillCollectionReviewHistory(
           workspaceDir,
@@ -309,10 +305,12 @@ export async function reconcileSkillCollection(params: {
         }
         bumpSkillsSnapshotVersion({ reason: "workshop" });
         await discardStagedSkillCollectionDrops(workspaceDir, droppedSkills);
-        clearCuratedSkillLifecycle(
-          current.map((skill) => skill.filePath),
-          params.env ? { env: params.env } : {},
-        );
+        if (droppedSkills.length > 0) {
+          clearSkillUsageForRemovedSkills(
+            droppedSkills.map(({ name }) => currentByName.get(name)!.filePath),
+            params.env ? { env: params.env } : {},
+          );
+        }
         // Finalize the filesystem before recording ownership. Promotion failures
         // leave newly written skills visible but read-only.
         for (const mutation of prepared) {

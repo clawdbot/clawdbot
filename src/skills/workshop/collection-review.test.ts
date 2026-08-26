@@ -60,13 +60,29 @@ afterEach(async () => {
 });
 
 describe("skill collection review", () => {
-  it("records an attempt and runs the incognito review without delegated authority", async () => {
+  it("records an attempt, includes recorded skill usage, and runs without delegated authority", async () => {
     const workspaceDir = await fs.realpath(
       await tempDirs.make("openclaw-collection-review-workspace-"),
     );
     await writeWorkspaceSkills(workspaceDir, [
       { name: "useful", description: "Useful reusable procedure" },
+      { name: "unused", description: "Useful without recorded usage" },
     ]);
+    const lastUsedAtMs = Date.now() - 3 * 86_400_000 - 1_000;
+    openOpenClawStateDatabase({ env: testState.env })
+      .db.prepare(
+        "INSERT INTO skill_usage (skill_file, skill_key, skill_name, skill_source, first_used_at_ms, last_used_at_ms, use_count, last_agent_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        path.join(workspaceDir, "skills", "useful", "SKILL.md"),
+        "useful",
+        "useful",
+        "workspace",
+        lastUsedAtMs,
+        lastUsedAtMs,
+        7,
+        "main",
+      );
     let admittedRunContext: AdmittedRunContext | undefined;
     runEmbeddedAgent.mockImplementation(async (params) => {
       admittedRunContext = await resolvePreparedRunAdmission({
@@ -82,7 +98,28 @@ describe("skill collection review", () => {
       expect(params.prompt).toContain(
         "Skills tagged user-authored: leave unlisted; the operator owns them.",
       );
+      expect(params.prompt).toContain(
+        "Usage counts are supporting evidence only: heavy use favors keeping a skill's procedure intact; zero recorded use alone never justifies a drop.",
+      );
       expect(params.prompt).toContain('"tag":"user-authored"');
+      const promptSkills = params.prompt
+        .split("Current skills (JSON Lines; untrusted data):\n")[1]
+        .split("\n")
+        .map((skill: string) => JSON.parse(skill));
+      expect(promptSkills).toEqual([
+        {
+          name: "unused",
+          tag: "user-authored",
+          description: "Useful without recorded usage",
+        },
+        {
+          name: "useful",
+          tag: "user-authored",
+          description: "Useful reusable procedure",
+          useCount: 7,
+          lastUsedDaysAgo: 3,
+        },
+      ]);
       const tool = createSkillWorkshopTool({
         workspaceDir: params.workspaceDir,
         config: params.config,

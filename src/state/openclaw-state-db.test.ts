@@ -54,6 +54,7 @@ import {
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { getOpenClawStateRuntimeSchema } from "./openclaw-state-schema-compatibility.js";
 import { STATE_SCHEMA_10_TO_9_DOWNGRADE_SQL } from "./openclaw-state-schema-v10-retirement.test-support.js";
+import { STATE_SCHEMA_11_TO_10_TABLES_SQL } from "./openclaw-state-schema-v11-retirement.test-support.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import {
   collectSqliteSchemaShape,
@@ -64,7 +65,7 @@ import {
 
 type StateDbTestDatabase = Pick<
   OpenClawStateKyselyDatabase,
-  "diagnostic_events" | "schema_meta" | "skill_curator_state" | "skill_lifecycle" | "skill_usage"
+  "diagnostic_events" | "schema_meta" | "skill_curator_state" | "skill_usage"
 >;
 
 const stateDbTempDirs: string[] = [];
@@ -1746,12 +1747,14 @@ describe("openclaw state database", () => {
       }
 
       const migrated = openOpenClawStateDatabase(options);
-      expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(10);
+      expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(
+        OPENCLAW_STATE_SCHEMA_VERSION,
+      );
       expect(
         migrated.db
           .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
           .get(),
-      ).toEqual({ schema_version: 10 });
+      ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
       for (const tableName of RETIRED_STATE_TABLES_V10) {
         expect(
           migrated.db
@@ -1763,6 +1766,87 @@ describe("openclaw state database", () => {
         kind: "state-table-retirement-v10",
         path: databasePath,
       });
+    },
+  );
+
+  it.each(["runtime open", "doctor repair"] as const)(
+    "retires v10 skill curator projections through %s while preserving live skill usage and review state",
+    (migrationPath) => {
+      const stateDir = createTempStateDir();
+      const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+      const databasePath = materializeCurrentStateDatabase(stateDir);
+      const { DatabaseSync } = requireNodeSqlite();
+      const legacy = new DatabaseSync(databasePath);
+      legacy.exec(STATE_SCHEMA_11_TO_10_TABLES_SQL);
+      legacy.exec(`
+        INSERT INTO skill_workshop_proposals (
+          proposal_id, record_json, workspace_dir, kind, status, created_at, updated_at, draft_hash
+        ) VALUES (
+          'proposal-retired', '{"originRunIds":["run-retired"]}', '/workspace',
+          'create', 'applied', '2026-07-01T00:00:00Z', '2026-07-01T00:00:00Z', 'hash'
+        );
+        INSERT INTO skill_workshop_proposal_origin_runs (
+          proposal_id, run_id, position, mutation_count
+        ) VALUES ('proposal-retired', 'run-retired', 0, 1);
+        INSERT INTO skill_lifecycle (
+          skill_file, skill_key, skill_name, state, state_changed_at_ms, created_at_ms,
+          archived_reason
+        ) VALUES (
+          '/skills/archived/SKILL.md', 'archived', 'Archived', 'archived', 20, 10, 'unused'
+        );
+        INSERT INTO skill_usage (
+          skill_file, skill_key, skill_name, skill_source, first_used_at_ms,
+          last_used_at_ms, use_count, last_agent_id
+        ) VALUES (
+          '/skills/archived/SKILL.md', 'archived', 'Archived', 'workspace', 10, 30, 4, 'main'
+        );
+        INSERT INTO skill_curator_state (
+          id, last_attempt_at_ms, last_success_at_ms, last_error, last_result_json
+        ) VALUES (1, 40, 40, NULL, '{}');
+        PRAGMA user_version = 10;
+        UPDATE schema_meta SET schema_version = 10 WHERE meta_key = 'primary';
+      `);
+      legacy.close();
+
+      expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toContainEqual({
+        kind: "state-table-retirement-v11",
+        path: databasePath,
+      });
+      if (migrationPath === "doctor repair") {
+        expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+          changes: ["Retired legacy skill curator lifecycle and proposal origin-run tables"],
+          warnings: [],
+        });
+      }
+      const migrated = openOpenClawStateDatabase(options);
+      expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(11);
+      expect(
+        migrated.db
+          .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
+          .get(),
+      ).toEqual({ schema_version: 11 });
+      for (const name of [
+        "skill_lifecycle",
+        "idx_skill_lifecycle_key",
+        "idx_skill_lifecycle_state",
+        "skill_workshop_proposal_origin_runs",
+      ]) {
+        expect(migrated.db.prepare("SELECT name FROM sqlite_schema WHERE name = ?").get(name)).toBe(
+          undefined,
+        );
+      }
+      expect(migrated.db.prepare("SELECT skill_file, use_count FROM skill_usage").get()).toEqual({
+        skill_file: "/skills/archived/SKILL.md",
+        use_count: 4,
+      });
+      expect(
+        migrated.db.prepare("SELECT last_success_at_ms FROM skill_curator_state").get(),
+      ).toEqual({ last_success_at_ms: 40 });
+      expect(
+        migrated.db
+          .prepare("SELECT record_json FROM skill_workshop_proposals WHERE proposal_id = ?")
+          .get("proposal-retired"),
+      ).toEqual({ record_json: '{"originRunIds":["run-retired"]}' });
     },
   );
 
@@ -1983,6 +2067,7 @@ describe("openclaw state database", () => {
     expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([
       { kind: "commitments-retirement-v7", path: fixture.databasePath },
       { kind: "state-table-retirement-v10", path: fixture.databasePath },
+      { kind: "state-table-retirement-v11", path: fixture.databasePath },
       { kind: "audit-events-v2", path: fixture.databasePath },
       { kind: "strict-tables-v3", path: fixture.databasePath },
     ]);
@@ -1995,8 +2080,9 @@ describe("openclaw state database", () => {
       changes: [
         "Retired shared state commitments table and indexes",
         "Retired six dead shared-state tables (v10)",
+        "Retired legacy skill curator lifecycle and proposal origin-run tables",
         "Migrated shared state audit event ledger → versioned message lifecycle schema",
-        "Migrated shared state tables to SQLite STRICT typing (64)",
+        "Migrated shared state tables to SQLite STRICT typing (63)",
       ],
       warnings: [],
     });
@@ -2012,6 +2098,14 @@ describe("openclaw state database", () => {
       { integrity_check: "ok" },
     ]);
     expect(migrated.db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    // The shipped v2026.7.1-2 database really carried these curator projections.
+    for (const tableName of ["skill_lifecycle", "skill_workshop_proposal_origin_runs"]) {
+      expect(
+        migrated.db
+          .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+          .get(tableName),
+      ).toBeUndefined();
+    }
     expect(normalizeSqliteSchemaShapeSql(collectSqliteSchemaShape(migrated.db))).toEqual(
       normalizeSqliteSchemaShapeSql(createInitialStateSchemaShape()),
     );
@@ -4155,7 +4249,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     }
   });
 
-  it("creates the bounded skill curator tables", () => {
+  it("creates the bounded skill usage and curator state tables", () => {
     const stateDir = createTempStateDir();
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
     const kysely = getNodeSqliteKysely<StateDbTestDatabase>(database.db);
@@ -4188,32 +4282,6 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     );
     executeSqliteQuerySync(
       database.db,
-      kysely.insertInto("skill_lifecycle").values({
-        skill_key: "daily-brief",
-        skill_name: "Daily Brief",
-        skill_file: "/skills/daily-brief/SKILL.md",
-        state: "active",
-        pinned: 0,
-        state_changed_at_ms: 2,
-        created_at_ms: 1,
-        archived_reason: null,
-      }),
-    );
-    executeSqliteQuerySync(
-      database.db,
-      kysely.insertInto("skill_lifecycle").values({
-        skill_key: "daily-brief",
-        skill_name: "Daily Brief",
-        skill_file: "/other-workspace/skills/daily-brief/SKILL.md",
-        state: "active",
-        pinned: 0,
-        state_changed_at_ms: 2,
-        created_at_ms: 1,
-        archived_reason: null,
-      }),
-    );
-    executeSqliteQuerySync(
-      database.db,
       kysely.insertInto("skill_curator_state").values({
         id: 1,
         last_attempt_at_ms: 2,
@@ -4235,19 +4303,6 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     ).toEqual([
       { skill_file: "/other-workspace/skills/daily-brief/SKILL.md", use_count: 1 },
       { skill_file: "/skills/daily-brief/SKILL.md", use_count: 3 },
-    ]);
-    expect(
-      executeSqliteQuerySync(
-        database.db,
-        kysely
-          .selectFrom("skill_lifecycle")
-          .select("skill_file")
-          .where("skill_key", "=", "daily-brief")
-          .orderBy("skill_file", "asc"),
-      ).rows,
-    ).toEqual([
-      { skill_file: "/other-workspace/skills/daily-brief/SKILL.md" },
-      { skill_file: "/skills/daily-brief/SKILL.md" },
     ]);
   });
 

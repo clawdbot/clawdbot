@@ -63,7 +63,6 @@ beforeEach(async () => {
   const database = openOpenClawStateDatabase({ env: testEnv });
   database.db.exec(`
     DELETE FROM skill_workshop_proposal_events;
-    DELETE FROM skill_workshop_proposal_origin_runs;
     DELETE FROM skill_workshop_proposal_rollbacks;
     DELETE FROM skill_workshop_proposals;
   `);

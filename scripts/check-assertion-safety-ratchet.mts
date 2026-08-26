@@ -56,55 +56,22 @@ function scriptKindForPath(filePath: string) {
 }
 
 function collectSafetyCommentLines(sourceFile: ts.SourceFile, source: string) {
-  const scanner = ts.createScanner(
-    ts.ScriptTarget.Latest,
-    false,
-    sourceFile.languageVariant,
-    source,
-  );
+  // Line text, not token scanning: a raw scanner desyncs on the `}` that ends a
+  // template substitution and then misses every later comment in the file.
   const sameLine = new Set<number>();
   const standalone = new Set<number>();
-  // Raw scanning misreads the `}` ending a template substitution as a block
-  // close, so every comment after the file's first substitution went unseen;
-  // track substitution brace depth and rescan the way the parser does.
-  const templateBraceDepths: number[] = [];
-  for (let token = scanner.scan(); token !== ts.SyntaxKind.EndOfFileToken; token = scanner.scan()) {
-    if (token === ts.SyntaxKind.TemplateHead) {
-      templateBraceDepths.push(0);
-      continue;
+  sourceFile.getLineStarts().forEach((lineStart, line) => {
+    const lineEnd = source.indexOf("\n", lineStart);
+    const text = source.slice(lineStart, lineEnd === -1 ? source.length : lineEnd);
+    const commentStart = text.indexOf("//");
+    if (commentStart === -1 || !/^\/\/\s*SAFETY:\s*\S/u.test(text.slice(commentStart).trim())) {
+      return;
     }
-    const braceDepth = templateBraceDepths.at(-1);
-    if (braceDepth !== undefined) {
-      if (token === ts.SyntaxKind.OpenBraceToken) {
-        templateBraceDepths[templateBraceDepths.length - 1] = braceDepth + 1;
-        continue;
-      }
-      if (token === ts.SyntaxKind.CloseBraceToken) {
-        if (braceDepth > 0) {
-          templateBraceDepths[templateBraceDepths.length - 1] = braceDepth - 1;
-          continue;
-        }
-        if (scanner.reScanTemplateToken(false) !== ts.SyntaxKind.TemplateMiddle) {
-          templateBraceDepths.pop();
-        }
-        continue;
-      }
-    }
-    if (token !== ts.SyntaxKind.SingleLineCommentTrivia) {
-      continue;
-    }
-    const comment = source.slice(scanner.getTokenPos(), scanner.getTextPos()).trim();
-    if (!/^\/\/\s*SAFETY:\s*\S/u.test(comment)) {
-      continue;
-    }
-    const position = scanner.getTokenPos();
-    const line = sourceFile.getLineAndCharacterOfPosition(position).line;
     sameLine.add(line);
-    const lineStart = sourceFile.getPositionOfLineAndCharacter(line, 0);
-    if (source.slice(lineStart, position).trim() === "") {
+    if (text.slice(0, commentStart).trim() === "") {
       standalone.add(line);
     }
-  }
+  });
   return { sameLine, standalone };
 }
 

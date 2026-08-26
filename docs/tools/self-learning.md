@@ -211,12 +211,15 @@ with model fallbacks disabled. Provider pricing and data-handling terms apply to
 the additional run.
 
 Weekly collection review also uses the configured agent model. It receives the
-names, descriptions, and ownership state of eligible workspace skills, then reads each
-skill it intends to change before one atomic call listing only changes. Disabled and
-agent-filtered skills stay untouched. Shared workspaces use the union of each
-agent's allowed skills only when provider, model, and resolved auth identity
-match. Reconciliation must leave every sharing agent at least one visible skill.
-It has no message tool or general agent tools. Skill bodies are treated as
+names, descriptions, ownership state, and available usage counts and last-used
+recency of eligible workspace skills, then reads each skill it intends to change
+before one atomic call listing only changes. Usage is supporting evidence: heavy
+use favors preserving a skill's procedure, while no recorded use alone never
+justifies dropping it. Disabled and agent-filtered skills stay untouched. Shared
+workspaces use the union of each agent's allowed skills only when provider,
+model, and resolved auth identity match. Reconciliation must leave every
+sharing agent at least one visible skill. It has no message tool or general
+agent tools. Skill bodies are treated as
 untrusted evidence, not as instructions. A persisted per-workspace attempt time
 prevents Gateway restarts from repeating a failed or successful review within 7 days. The
 foreground agent can restore the one retained collection backup when asked to
@@ -299,7 +302,9 @@ Check the following:
 An eligible experience review can still abstain. No proposal is the expected
 result when the evidence does not clear the reusable-procedure bar.
 Use `openclaw skills curator status` to inspect the last collection and
-experience review outcomes.
+experience review outcomes alongside live skill usage. Age-based curation is
+retired; the `curator pin`, `unpin`, and `restore` commands return an error
+explaining that weekly collection review manages the skill collection.
 
 ### Doctor reports that Workshop is hidden
 
