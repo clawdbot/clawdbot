@@ -314,6 +314,11 @@ function addImageGenerationOptions(command: Command): Command {
     .option("--json", "Output JSON", false);
 }
 
+function readStringOption(opts: Record<string, unknown>, key: string): string | undefined {
+  const value = opts[key];
+  return typeof value === "string" ? value : undefined;
+}
+
 function resolveImageGenerationOptions(opts: Record<string, unknown>, command: Command) {
   return {
     agent: resolveCapabilityAgentOption(command, opts.agent),
@@ -322,14 +327,14 @@ function resolveImageGenerationOptions(opts: Record<string, unknown>, command: C
     size: opts.size as string | undefined,
     aspectRatio: opts.aspectRatio as string | undefined,
     resolution: opts.resolution as "1K" | "2K" | "4K" | undefined,
-    outputFormat: normalizeImageOutputFormat(opts.outputFormat as string | undefined),
-    background: normalizeImageBackground(opts.background as string | undefined),
+    outputFormat: normalizeImageOutputFormat(readStringOption(opts, "outputFormat")),
+    background: normalizeImageBackground(readStringOption(opts, "background")),
     openaiBackground: normalizeImageBackground(
       opts.openaiBackground as string | undefined,
       "--openai-background",
     ),
-    openaiModeration: normalizeOpenAIModeration(opts.openaiModeration as string | undefined),
-    quality: normalizeImageQuality(opts.quality as string | undefined),
+    openaiModeration: normalizeOpenAIModeration(readStringOption(opts, "openaiModeration")),
+    quality: normalizeImageQuality(readStringOption(opts, "quality")),
     timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs as string | number | undefined),
     output: opts.output as string | undefined,
   };

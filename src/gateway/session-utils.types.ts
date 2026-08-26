@@ -124,6 +124,7 @@ export type GatewaySessionRow = {
   pinnedAt?: number;
   unread?: boolean;
   lastReadAt?: number;
+  markedUnreadAt?: number;
   agentStatus?: SessionEntry["agentStatus"];
   observerDigest?: Pick<
     SessionObserverDigest,

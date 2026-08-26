@@ -523,6 +523,7 @@ suite.define(() => {
       );
       expect(talkRequests.map((entry) => entry.method)).toEqual([
         "talk.catalog",
+        "talk.catalog",
         "talk.client.create",
       ]);
       console.info(
@@ -664,6 +665,7 @@ suite.define(() => {
         entry.method.startsWith("talk."),
       );
       expect(talkRequests.map((entry) => entry.method)).toEqual([
+        "talk.catalog",
         "talk.catalog",
         "talk.client.create",
       ]);

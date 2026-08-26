@@ -12,6 +12,7 @@ import "../components/app-sidebar.ts";
 import "./app-host.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext } from "./context.ts";
+import { loadSettings } from "./settings.ts";
 
 type ShellRenderState = {
   runtime: ApplicationRuntime;
@@ -112,7 +113,7 @@ describe("OpenClaw shell dock suppression", () => {
         },
         runUpdate: vi.fn(),
       },
-      theme: { mode: "dark" },
+      theme: { mode: "dark", settings: loadSettings() },
       preload: vi.fn(),
     } as unknown as ApplicationContext;
     const shell = document.createElement("openclaw-app-shell") as unknown as ShellRenderState;

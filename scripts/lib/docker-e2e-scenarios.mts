@@ -16,6 +16,7 @@ export type DockerE2eLane = {
   name: string;
   needsLiveImage?: boolean;
   noOutputTimeoutMs?: number;
+  prepublishPluginPackages?: string[];
   resources: string[];
   retries: number;
   retryPatterns: RegExp[];
@@ -106,6 +107,7 @@ function lane(name: string, command: string, options: LaneOptions = {}): DockerE
     noOutputTimeoutMs: options.noOutputTimeoutMs,
     name,
     needsLiveImage: options.needsLiveImage,
+    prepublishPluginPackages: options.prepublishPluginPackages,
     retryPatterns: options.retryPatterns ?? [],
     retries: options.retries ?? 0,
     resources: options.resources ?? [],
@@ -442,6 +444,7 @@ export const mainLanes: DockerE2eLane[] = [
     weight: 2,
   }),
   npmLane("codex-on-demand", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:codex-on-demand", {
+    prepublishPluginPackages: ["@openclaw/codex"],
     resources: ["service"],
     stateScenario: "empty",
     weight: 3,
@@ -528,6 +531,11 @@ export const mainLanes: DockerE2eLane[] = [
       timeoutMs: 20 * 60 * 1000,
       weight: 3,
     },
+  ),
+  serviceLane(
+    "gateway-concurrency",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 bash scripts/e2e/gateway-concurrency-docker.sh",
+    { timeoutMs: 10 * 60 * 1000, weight: 3 },
   ),
   serviceLane("gateway-network", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:gateway-network"),
   serviceLane("browser-cdp-snapshot", "pnpm test:docker:browser-cdp-snapshot", {

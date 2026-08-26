@@ -565,16 +565,26 @@ describe("createAgent", () => {
     expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
   });
 
-  it("respects skipBootstrap from the current config", async () => {
+  it.each([
+    { label: "configured", configured: true, override: undefined, ensureBootstrapFiles: false },
+    { label: "explicitly enabled", configured: false, override: true, ensureBootstrapFiles: false },
+    { label: "explicitly disabled", configured: true, override: false, ensureBootstrapFiles: true },
+  ])("respects $label bootstrap skipping for workspace and identity", async (policy) => {
     mocks.config = {
-      agents: { defaults: { skipBootstrap: true }, list: [{ id: "main" }] },
+      agents: { defaults: { skipBootstrap: policy.configured }, list: [{ id: "main" }] },
     };
+    mocks.ensureAgentWorkspace.mockResolvedValue({ dir: "/tmp/work", bootstrapPending: false });
 
-    await createAgent({ name: "researcher", workspace: "/tmp/work" });
+    await createAgent({
+      name: "researcher",
+      workspace: "/tmp/work",
+      ...(policy.override === undefined ? {} : { skipBootstrap: policy.override }),
+    });
 
     expect(mocks.ensureAgentWorkspace).toHaveBeenCalledWith(
-      expect.objectContaining({ ensureBootstrapFiles: false }),
+      expect.objectContaining({ ensureBootstrapFiles: policy.ensureBootstrapFiles }),
     );
+    expect(mocks.rootWrite).toHaveBeenCalledTimes(policy.ensureBootstrapFiles ? 1 : 0);
   });
 
   it("persists the authoritative workspace returned by setup", async () => {

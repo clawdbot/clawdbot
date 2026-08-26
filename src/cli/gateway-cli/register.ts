@@ -24,6 +24,7 @@ import { formatCliJsonFailure, rethrowExpectedCliError } from "../failure-output
 import { parseGatewayPortOption } from "../gateway-port-option.js";
 import { addGatewayClientOptions, callGatewayFromCliWithTransport } from "../gateway-rpc.js";
 import { formatHelpExamples } from "../help-format.js";
+import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
 import { setCommandJsonMode } from "../program/json-mode.js";
 import type { GatewayDiscoverOpts } from "./discover.js";
 import { isGatewayMachineOutput } from "./output-mode.js";
@@ -165,24 +166,15 @@ function parseDaysOption(raw: unknown, fallback = 30): number {
   if (typeof raw === "number" && Number.isFinite(raw)) {
     return Math.max(1, Math.floor(raw));
   }
-  if (typeof raw === "string" && raw.trim() !== "") {
+  if (typeof raw === "string") {
     const parsed = parseStrictPositiveInteger(raw);
     if (parsed !== undefined) {
       return parsed;
     }
-  }
-  return fallback;
-}
-
-function parseGatewayRpcTimeoutOption(raw: unknown, fallback = 10_000): number {
-  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
-    return Math.floor(raw);
-  }
-  if (typeof raw === "string" && raw.trim() !== "") {
-    const parsed = parseStrictPositiveInteger(raw);
-    if (parsed !== undefined) {
-      return parsed;
-    }
+    // A present-but-unparseable value (including an explicit empty one) is
+    // operator error; the main RPC path rejects malformed --timeout the same
+    // way instead of silently defaulting.
+    throw new Error(`Invalid --days. Use a positive integer, e.g. --days 30. Received: "${raw}".`);
   }
   return fallback;
 }
@@ -699,7 +691,9 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
                 error,
                 config: rpcOpts.config ?? (await readNonObservingHealthConfig()),
                 runtime: defaultRuntime,
-                timeoutMs: parseGatewayRpcTimeoutOption(rpcOpts.timeout),
+                timeoutMs: parseTimeoutMsWithFallback(rpcOpts.timeout, 10_000, {
+                  invalidType: "error",
+                }),
                 token: rpcOpts.token,
                 password: rpcOpts.password,
                 localPortOverride: rpcOpts.localPortOverride,

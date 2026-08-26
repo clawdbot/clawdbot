@@ -223,16 +223,11 @@ async function activateSetupInferenceUnredacted(
         runtime: params.runtime,
         workspaceDir: tempDir,
       });
-      if (!ensured.installed) {
+      if (!ensured.ok) {
         return {
           ok: false,
           status: ensured.status === "timed_out" ? "timeout" : "unavailable",
-          error:
-            ensured.status === "timed_out"
-              ? "Codex runtime plugin installation timed out. Try again."
-              : ensured.reason
-                ? `Could not enable the Codex runtime plugin: ${ensured.reason}.`
-                : "Could not install the Codex runtime plugin. Try again once the plugin is available.",
+          error: ensured.message,
         };
       }
       codexRegistryNeedsReload = true;

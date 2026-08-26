@@ -100,6 +100,7 @@ describe("prepared model catalog builder", () => {
           name: "Alpha",
           provider: "alpha",
           contextWindow: 64_000,
+          thinkingLevelMap: { off: null, max: "max" },
           input: ["text", "image"],
         },
       ],
@@ -109,6 +110,7 @@ describe("prepared model catalog builder", () => {
       "alpha/a",
       "beta/z",
     ]);
+    expect(snapshot.entries[0]?.thinkingLevelMap).toEqual({ off: null, max: "max" });
     expect(snapshot.routeVariants).toEqual(snapshot.entries);
   });
 
@@ -164,6 +166,7 @@ describe("prepared model catalog builder", () => {
                   { id: "1m", label: "1M", contextWindow: 1_000_000 },
                 ],
                 contextWindowDefault: "1m",
+                thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
               },
             ],
           },
@@ -186,6 +189,7 @@ describe("prepared model catalog builder", () => {
         { id: "1m", label: "1M", contextWindow: 1_000_000 },
       ],
       contextWindowDefault: "1m",
+      thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
     });
   });
 
@@ -524,6 +528,7 @@ describe("prepared model catalog builder", () => {
                 contextWindow: 32_000,
                 maxTokens: 4_096,
                 reasoning: true,
+                thinkingLevelMap: { off: null, xhigh: "xhigh" },
                 input: ["text", "image"],
                 cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
               },
@@ -551,6 +556,7 @@ describe("prepared model catalog builder", () => {
       api: "openai-completions",
       contextWindow: 32_000,
       reasoning: true,
+      thinkingLevelMap: { off: null, xhigh: "xhigh" },
       input: ["text", "image"],
     });
     expect(snapshot.routeVariants).toHaveLength(2);
@@ -564,6 +570,7 @@ describe("prepared model catalog builder", () => {
         provider: "custom",
         api: "openai-completions",
         baseUrl: "https://route-b.example.test/v1",
+        thinkingLevelMap: { xhigh: "xhigh", max: "max" },
         compat: { supportsTools: false },
       },
     ]);
@@ -597,6 +604,7 @@ describe("prepared model catalog builder", () => {
           provider: "custom",
           api: "openai-responses",
           baseUrl: "https://route-a.example.test/v1",
+          thinkingLevelMap: { xhigh: null, max: null },
           compat: { supportsTools: true },
         },
       ],
@@ -608,6 +616,7 @@ describe("prepared model catalog builder", () => {
     ).toMatchObject({
       api: "openai-responses",
       baseUrl: "https://route-a.example.test/v1",
+      thinkingLevelMap: { xhigh: null, max: null },
       compat: { supportsTools: true },
     });
   });

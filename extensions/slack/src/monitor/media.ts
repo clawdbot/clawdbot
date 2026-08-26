@@ -334,6 +334,7 @@ export async function resolveSlackMedia(params: {
   totalTimeoutMs?: number;
   abortSignal?: AbortSignal;
   preloadedMedia?: ReadonlyMap<SlackFile, SlackMediaResult>;
+  resolvedFiles?: Set<SlackFile>;
 }): Promise<SlackMediaResult[] | null> {
   const govSlack = isGovSlackClient(params.client);
   const files = params.files ?? [];
@@ -393,7 +394,12 @@ export async function resolveSlackMedia(params: {
     errorMode: "stop",
     throwOnError: true,
   });
-  const resolved = results.filter((result): result is SlackMediaResult => result !== null);
+  const resolved = results.filter((result, index): result is SlackMediaResult => {
+    if (result) {
+      params.resolvedFiles?.add(limitedFiles[index]!);
+    }
+    return result !== null;
+  });
 
   return resolved.length > 0 ? resolved : null;
 }
@@ -442,12 +448,17 @@ export async function resolveSlackAttachmentContent(params: {
     .slice(0, MAX_SLACK_MEDIA_FILES)
     .map((file) => {
       const fileId = normalizeOptionalString(file.id);
-      if (
-        !fileId ||
-        params.preloadedMedia?.has(file) ||
-        file.url_private_download ||
-        file.url_private
-      ) {
+      const preloaded =
+        fileId &&
+        candidates.find(
+          (candidate) =>
+            normalizeOptionalString(candidate.id) === fileId &&
+            params.preloadedMedia?.has(candidate),
+        );
+      if (preloaded) {
+        return preloaded;
+      }
+      if (!fileId || file.url_private_download || file.url_private) {
         return file;
       }
       const downloadable = candidates.find(
@@ -460,9 +471,11 @@ export async function resolveSlackAttachmentContent(params: {
   const pendingFiles = new Map<SlackFile | string, SlackFile>(
     allFiles.map((file) => [normalizeOptionalString(file.id) ?? file, file]),
   );
+  const resolvedFiles = new Set<SlackFile>();
   const resolveFiles = (files?: SlackFile[]) =>
     resolveSlackMedia({
       ...params,
+      resolvedFiles,
       files: files?.flatMap((file) => {
         const key = normalizeOptionalString(file.id) ?? file;
         const selected = pendingFiles.get(key);
@@ -520,6 +533,7 @@ export async function resolveSlackAttachmentContent(params: {
   }
 
   const allMedia = [...((await directMediaPromise) ?? []), ...attachmentMedia];
+  const unavailableFiles = allFiles.filter((file) => !resolvedFiles.has(file));
   const combinedText = textBlocks.join("\n\n");
   if (
     !combinedText &&
@@ -533,6 +547,6 @@ export async function resolveSlackAttachmentContent(params: {
     text: combinedText,
     media: allMedia,
     unavailableImageCount,
-    ...(allFiles.length > 0 ? { files: allFiles } : {}),
+    ...(unavailableFiles.length > 0 ? { files: unavailableFiles } : {}),
   };
 }

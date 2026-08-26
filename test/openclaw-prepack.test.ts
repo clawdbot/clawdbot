@@ -224,6 +224,7 @@ describe("collectSourcePackWorkspaceDependencyErrors", () => {
         scripts: {
           prepack: "node scripts/package-manifest.mjs prepare",
           postpack: "node scripts/package-manifest.mjs restore",
+          "crabbox:run": "node scripts/crabbox-wrapper.mjs run",
         },
         devDependencies: {
           "@openclaw/session-url-contract": "workspace:*",
@@ -258,8 +259,9 @@ describe("collectSourcePackWorkspaceDependencyErrors", () => {
 
     const packedPackageJson = JSON.parse(
       readFileSync(path.join(extractDir, "package", "package.json"), "utf8"),
-    ) as { devDependencies?: Record<string, string> };
+    ) as { devDependencies?: Record<string, string>; scripts?: Record<string, string> };
     expect(packedPackageJson.devDependencies).toEqual({ vitest: "4.1.10" });
+    expect(packedPackageJson.scripts?.["crabbox:run"]).toBe("node dist/crabbox-wrapper.js run");
     expect(readFileSync(path.join(rootDir, "package.json"), "utf8")).toBe(originalPackageJson);
     expect(
       existsSync(

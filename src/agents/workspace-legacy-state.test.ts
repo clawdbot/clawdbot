@@ -10,7 +10,7 @@ import {
   resolveLegacyWorkspaceSourcePaths,
 } from "./workspace-legacy-state.js";
 import { resetLegacyWorkspaceStateCheckForTest } from "./workspace-legacy-state.test-support.js";
-import { resolveWorkspaceStateIdentity } from "./workspace-state-store.js";
+import { resolveWorkspaceStateIdentity } from "./workspace-state-identity.js";
 
 describe("legacy workspace reset cleanup", () => {
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) => afterEach(cleanup));

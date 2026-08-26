@@ -399,7 +399,7 @@ suite.define(() => {
     }
   });
 
-  it("deletes a profile and its project defaults only after confirmation", async () => {
+  it("preserves provider-owned editors and deletes profiles plus their project defaults", async () => {
     const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
     const page = await context.newPage();
     const pending = configuredCloudWorkerProfile();
@@ -416,9 +416,28 @@ suite.define(() => {
       },
     };
     const gateway = await installMockGateway(page, {
-      featureMethods: ["config.patch", "environments.list"],
+      featureMethods: ["config.patch", "config.schema", "environments.list"],
       methodResponses: {
         "config.get": configResponse(initialConfig, "cloud-workers-delete-1"),
+        "config.schema": {
+          version: "e2e",
+          generatedAt: "2026-08-25T00:00:00.000Z",
+          uiHints: {},
+          schema: {
+            type: "object",
+            properties: {
+              cloudWorkers: {
+                type: "object",
+                properties: {
+                  profiles: {
+                    type: "object",
+                    additionalProperties: { type: "object" },
+                  },
+                },
+              },
+            },
+          },
+        },
         "config.patch": {
           ok: true,
           hash: "cloud-workers-delete-2",
@@ -435,6 +454,57 @@ suite.define(() => {
       const pendingRow = page.locator(".settings-row").filter({
         has: page.locator("code", { hasText: /^pending$/ }),
       });
+      await pendingRow.getByRole("button", { name: "Edit" }).click();
+      const editor = page.locator(".settings-section", {
+        has: page.getByRole("heading", { name: "Edit profile", exact: true }),
+      });
+      await expect.poll(() => page.getByLabel("Crabbox backend").inputValue()).toBe("aws");
+
+      const replacement = {
+        provider: "static-ssh",
+        install: "bundle",
+        settings: {
+          host: "worker.example.test",
+          user: "openclaw",
+          keyRef: { source: "env", provider: "default", id: "QA_PRIVATE_KEY" },
+        },
+      };
+      const replacedConfig = {
+        cloudWorkers: {
+          profiles: { pending: replacement, retained },
+          projectProfiles: initialConfig.cloudWorkers.projectProfiles,
+        },
+      };
+      const configGetCount = (await gateway.getRequests("config.get")).length;
+      await gateway.setMethodResponse(
+        "config.get",
+        configResponse(replacedConfig, "cloud-workers-provider-replaced"),
+      );
+      await gateway.emitGatewayEvent("config.changed", {
+        path: "/tmp/openclaw.json",
+        hash: "cloud-workers-provider-replaced",
+        ts: Date.now(),
+      });
+      await gateway.waitForRequest("config.get", { after: configGetCount });
+      await pendingRow.getByText("Provider: static-ssh", { exact: true }).waitFor();
+      const saveButton = editor.getByRole("button", { name: "Save" });
+      await expect.poll(() => saveButton.isEnabled()).toBe(true);
+      await saveButton.click();
+      await expect
+        .poll(() => editor.getByRole("alert").textContent())
+        .toBe("This profile changed or was removed. Reload the page and try again.");
+      expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+      await editor.getByRole("button", { name: "Cancel" }).click();
+
+      await pendingRow.getByRole("button", { name: "Edit" }).click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/advanced");
+      await expect.poll(() => new URL(page.url()).searchParams.get("section")).toBe("cloudWorkers");
+      await gateway.waitForRequest("config.schema");
+      await page.locator(".page-title").getByText("Advanced", { exact: true }).waitFor();
+      expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+      await page.goBack();
+      await pendingRow.getByText("Provider: static-ssh", { exact: true }).waitFor();
+
       await pendingRow.getByRole("button", { name: "Delete" }).click();
       const confirmation = await waitForConfirmModal(page);
       await expect.poll(() => confirmation.textContent()).toContain("Delete profile pending?");

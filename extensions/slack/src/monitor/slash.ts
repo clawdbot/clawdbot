@@ -732,6 +732,7 @@ export async function registerSlackMonitorSlashCommands(params: {
         resolveChunkMode,
         resolveConversationLabel,
         resolveMarkdownTableMode,
+        sanitizeSlackMonitorReplyPayload,
       } = await loadSlashDispatchRuntime();
 
       const route =
@@ -855,14 +856,7 @@ export async function registerSlackMonitorSlashCommands(params: {
         },
         ctxPayload,
         dispatchReplyFromConfig: ctx.dispatchReplyFromConfig,
-        replyPipeline: {
-          transformReplyPayload: (payload) => {
-            if (payload.isReasoning === true) {
-              return null;
-            }
-            return payload;
-          },
-        },
+        replyPipeline: { transformReplyPayload: sanitizeSlackMonitorReplyPayload },
         dispatcherOptions: {
           // /login must expose its device code before the auth flow can finish. Other block
           // streams stay batched so the response_url planner can honor Slack's five-call cap.

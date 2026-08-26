@@ -216,6 +216,229 @@ h1 {
   font-size: 13px;
 }
 
+.welcome-screen {
+  margin-top: 26px;
+}
+
+.feature-list {
+  display: grid;
+  gap: 17px;
+  padding: 20px;
+  border: 1px solid #303440;
+  border-radius: 16px;
+  background: rgb(14 16 21 / 45%);
+}
+
+.feature-row {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+}
+
+.feature-icon,
+.connection-icon {
+  display: grid;
+  flex: none;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 10px;
+  color: #ff8b8b;
+  font-size: 18px;
+  background: rgb(255 92 92 / 10%);
+}
+
+.feature-row > div,
+.connection-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.feature-row strong,
+.connection-copy strong {
+  color: #f6f7fb;
+  font-size: 13px;
+  font-weight: 680;
+}
+
+.feature-row > div > span,
+.connection-copy > span {
+  color: #aeb2c0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.welcome-notice {
+  margin: 16px 0 20px;
+  color: #858a9a;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.welcome-continue {
+  min-width: 140px;
+}
+
+.connection-choices {
+  display: grid;
+  gap: 10px;
+  margin-top: 26px;
+}
+
+button.connection-card {
+  display: flex;
+  gap: 13px;
+  align-items: center;
+  width: 100%;
+  min-height: 76px;
+  padding: 14px;
+  border-color: #323641;
+  text-align: left;
+  background: rgb(14 16 21 / 48%);
+}
+
+button.connection-card.selected {
+  border-color: rgb(255 92 92 / 72%);
+  background: rgb(255 92 92 / 7%);
+}
+
+.connection-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.connection-badge {
+  flex: none;
+  padding: 5px 8px;
+  border-radius: 999px;
+  color: #ffadad;
+  font-size: 10px;
+  background: rgb(255 92 92 / 13%);
+}
+
+.remote-details {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid #303440;
+  border-radius: 13px;
+  background: rgb(14 16 21 / 45%);
+}
+
+.remote-heading {
+  display: grid;
+  gap: 4px;
+}
+
+.remote-heading strong {
+  font-size: 13px;
+}
+
+.remote-heading > span {
+  color: #aeb2c0;
+  font-size: 11px;
+}
+
+.transport-picker {
+  display: flex;
+  padding: 3px;
+  border: 1px solid #303440;
+  border-radius: 10px;
+  background: #11141a;
+}
+
+button.transport-option {
+  flex: 1;
+  min-height: 34px;
+  border-color: transparent;
+  border-radius: 7px;
+  color: #aeb2c0;
+  font-size: 11px;
+  background: transparent;
+}
+
+button.transport-option.selected {
+  color: #f6f7fb;
+  background: #292d38;
+}
+
+.remote-field {
+  display: grid;
+  gap: 8px;
+}
+
+.remote-field label {
+  color: #aeb2c0;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.remote-field input {
+  width: 100%;
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1px solid #353947;
+  border-radius: 9px;
+  color: #f6f7fb;
+  font: inherit;
+  font-size: 12px;
+  background: #11141a;
+}
+
+.remote-field input:focus-visible,
+button:focus-visible {
+  outline: 2px solid #ff8b8b;
+  outline-offset: 2px;
+}
+
+.remote-field input[aria-invalid="true"] {
+  border-color: #ff7c5c;
+}
+
+.remote-auth summary {
+  color: #aeb2c0;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.remote-auth[open] > .remote-field {
+  margin-top: 12px;
+}
+
+.remote-feedback {
+  margin: 0;
+  color: #aeb2c0;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.remote-feedback.error {
+  color: #ff9b82;
+}
+
+button.remote-connect {
+  min-height: 40px;
+}
+
+.setup-navigation {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 8px;
+}
+
+button.button-subtle {
+  padding: 0 12px;
+  border-color: transparent;
+  color: #aeb2c0;
+  background: transparent;
+}
+
+.setup-progress {
+  color: #858a9a;
+  font-size: 11px;
+}
+
 .spinner {
   width: 17px;
   height: 17px;
@@ -467,6 +690,15 @@ footer {
 
   .control-row {
     flex-direction: column;
+  }
+
+  .feature-list,
+  .remote-details {
+    padding: 14px;
+  }
+
+  .connection-badge {
+    display: none;
   }
 
   .update-row {

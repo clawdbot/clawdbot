@@ -205,6 +205,37 @@ outcome-affecting. Wildcard/open policy and explicit attribution-only adapters
 remain `attribution-only`; mixed or missing evidence is `unknown`. Identity and
 the corresponding decision share the existing audit-writer FIFO.
 
+An admitted session-tool access denial queues a private `session` decision
+through that same FIFO. The access owner supplies the reason, policy inputs,
+and missing evidence; the audit writer replaces the target session reference
+with an installation-local HMAC before persistence. The raw session key is not
+retained. A policy denial that changed the outcome is `enforced`, while an
+ownership lookup that cannot supply `session.owner` evidence remains `unknown`.
+Public inspection intentionally renders generic facts as an unverified
+`decision.record`; it does not expose their private reason or target display.
+Calls without the exact admitted execution and its active receipt authority
+create no selector or fact.
+
+Run-bound session tools also queue their owner-returned result after the final
+await and authority recheck. Create, fork, send, patch, reset, archive, restore,
+and delete facts distinguish committed or scheduled work from typed lifecycle
+conflicts and definitive no-ops. These mechanics are `attribution-only`; the
+public generic display remains unverified rather than presenting their private
+reason or target as trusted evidence.
+
+Direct session-sharing methods and `/dock-*` commands do not admit model runs,
+so they do not synthesize run selectors. Sharing events preserve a verified
+profile actor when one exists; an expected but unresolved profile is reported
+as unknown, while omitted principal evidence is unattributed. Neither state is
+reconstructed from operator scope, a shared token, session routing, or room
+metadata. Member listings use the same distinction: `addedBy` contains only a
+real principal id, `addedByState: "unknown"` reports explicit principal-less
+evidence, and omission means no actor evidence was supplied. Internal storage
+markers are never returned by the Gateway. Beta-only `local-operator` and
+`operator.admin` member-attribution values are discarded as absent evidence;
+they are not migrated or presented as principals. Docking retains its normal
+visible command result and session-route update without run-audit attribution.
+
 For an admitted run with message auditing enabled, run inspection also adapts
 the outbound message lifecycle. It deterministically merges the lazy progress
 owner with terminal ledger rows and reports `queued`, `platform-started`,

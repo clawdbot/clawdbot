@@ -1,5 +1,4 @@
 import { html, nothing, type TemplateResult } from "lit";
-import type { ProgressCard } from "../../../../packages/gateway-protocol/src/schema/progress-card.js";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
 import { desktopFocusPath } from "../../components/desktop/desktop-focus-window.ts";
@@ -40,8 +39,6 @@ type SidebarPanelDefinitionParams = {
   startedAt: number | undefined;
   lastReadAt: number | undefined;
   pullRequests: ControlUiSessionPullRequest[];
-  progressCard: ProgressCard | null;
-  onDismissProgressCard?: (card: ProgressCard) => void;
   companion: ChatSessionCompanionThread;
   onCompanionSubmit: (question: string) => void;
   onCompanionDraftChange: (draft: string) => void;
@@ -125,8 +122,6 @@ export function sidebarPanelDefinitions(
         .activeRunId=${params.activeRunId}
         .startedAt=${params.startedAt}
         .lastReadAt=${params.lastReadAt}
-        .progressCard=${params.progressCard}
-        .onDismissProgressCard=${params.onDismissProgressCard}
         .pullRequests=${params.pullRequests}
         .companion=${params.companion}
         .connected=${state?.connected === true}
@@ -156,9 +151,14 @@ export function sidebarPanelDefinitions(
         .onStateChange=${params.discussion.onStateChange}
       ></openclaw-session-discussion>`
     : null;
+  const attachmentContent = state?.attachmentSidebarContent ?? null;
   const detailContent =
     state?.sidebarContent ??
     (state && params?.detailOpen ? resolveSessionDiffSidebarContent(state) : null);
+  const workspaceContent =
+    attachmentContent && params
+      ? params.renderDetail(attachmentContent)
+      : (params?.workspace ?? null);
   return [
     definePanel(
       "detail",
@@ -171,7 +171,7 @@ export function sidebarPanelDefinitions(
       shortcut: formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.terminalPanel),
     }),
     definePanel("browser", "browser", icons.globe, browser, { available: browserAvailable }),
-    definePanel("workspace", "files", icons.fileText, params?.workspace ?? null, {
+    definePanel("workspace", "files", icons.fileText, workspaceContent, {
       shortcut: formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.workspaceFiles),
     }),
     definePanel(

@@ -301,7 +301,10 @@ export type CronPayload =
   | (CronScriptPayload & CronPayloadToolAllow)
   // System-owned heartbeat monitor: execution requests an interval heartbeat
   // wake. Gateway-converged only; not accepted from client create/patch APIs.
-  | ({ kind: "heartbeat" } & CronPayloadToolAllow);
+  | ({ kind: "heartbeat" } & CronPayloadToolAllow)
+  // System-owned skill collection review: execution invokes the workshop
+  // runner. Gateway-converged only; not accepted from client create/patch APIs.
+  | ({ kind: "skillCollectionReview" } & CronPayloadToolAllow);
 
 /** Partial payload update shape used by cron patch/edit flows. */
 export type CronPayloadPatch =
@@ -311,7 +314,14 @@ export type CronPayloadPatch =
   | (CronScriptPayloadPatch & CronPayloadToolAllowPatch)
   // Representable so the service can reject it with a typed boundary error;
   // transports and tools never accept it.
-  | ({ kind: "heartbeat" } & CronPayloadToolAllowPatch);
+  | ({ kind: "heartbeat" } & CronPayloadToolAllowPatch)
+  | ({ kind: "skillCollectionReview" } & CronPayloadToolAllowPatch);
+
+export function isSystemOwnedCronPayloadKind(
+  kind: unknown,
+): kind is "heartbeat" | "skillCollectionReview" {
+  return typeof kind === "string" && (kind === "heartbeat" || kind === "skillCollectionReview");
+}
 
 type CronPayloadToolAllow = {
   /** Restricts agentTurn execution, or the trigger runtime for other payload kinds. */

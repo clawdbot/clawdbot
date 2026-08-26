@@ -116,6 +116,9 @@ export const toolIcons = {
   ),
   volume2: strokeIcon(svg` <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
     <path d="M15.54 8.46a5 5 0 0 1 0 7.07M19.07 4.93a10 10 0 0 1 0 14.14" />`),
+  volumeX: strokeIcon(svg` <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+    <path d="m22 9-6 6" />
+    <path d="m16 9 6 6" />`),
   bookmark: strokeIcon(svg`<path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z" />`),
   plus: strokeIcon(svg`<path d="M5 12h14M12 5v14" />`),
   gitBranch: strokeIcon(svg` <circle cx="6" cy="5" r="2" />

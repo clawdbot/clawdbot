@@ -102,8 +102,9 @@ suite.define(() => {
       const localOption = composer.locator('[data-chat-model-option="lmstudio/qwen3-8b"]');
       const openAiOption = composer.locator('[data-chat-model-option="openai/gpt-5.5"]');
       await expect
-        .poll(async () => (await localOption.textContent())?.replace(/\s+/g, " ").trim())
-        .toContain("32.8k · Chat only");
+        .poll(() => localOption.locator(".chat-controls__model-option-meta").textContent())
+        .toBe("32.8k");
+      await expect.poll(() => localOption.getAttribute("aria-label")).toContain("cannot use tools");
       await expect
         .poll(async () => (await openAiOption.textContent())?.includes("Chat only"))
         .toBe(false);

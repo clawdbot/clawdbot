@@ -28,6 +28,7 @@ import { buildChatItems } from "./chat-thread-build.ts";
 import { getChatSessionProjection, reduceChatSessionProjection } from "./history-merge.ts";
 import { scheduleControlUiAfterPaint } from "./performance.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
+import { activatePanel, openSlot } from "./sidebar-layout.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 
 beforeEach(() => {
@@ -1395,6 +1396,52 @@ describe("ChatStateController render lifecycle", () => {
     } as unknown as ApplicationContext;
   }
 
+  it("owns attachment views in Files without replacing Detail content", () => {
+    const state = createPageState(
+      createPageContext(),
+      { invalidate: vi.fn(), afterCommit: () => () => {} },
+      {
+        getBoundingClientRect: () => new DOMRect(0, 0, 1_440, 0),
+        querySelector: () => null,
+      },
+    );
+    const detailContent = {
+      kind: "markdown" as const,
+      content: "Existing review",
+      rawText: "Existing review",
+    };
+    state.sidebarContent = detailContent;
+    state.sidebarLayout = openSlot(state.sidebarLayout, "detail");
+
+    state.handleOpenSidebar({
+      kind: "attachment",
+      attachmentKind: "document",
+      title: "report.pdf",
+      src: "/media/report.pdf",
+    });
+
+    expect(
+      state.sidebarLayout.columns.flatMap((column) => column.panels.map((panel) => panel.slot)),
+    ).toEqual(["detail", "workspace"]);
+    expect(state.attachmentSidebarContent?.kind).toBe("attachment");
+    expect(state.sidebarContent).toBe(detailContent);
+
+    state.sidebarLayout = activatePanel(state.sidebarLayout, "detail");
+    state.handleCloseSidebar("detail");
+
+    expect(
+      state.sidebarLayout.columns.flatMap((column) => column.panels.map((panel) => panel.slot)),
+    ).toEqual(["workspace"]);
+    expect(state.attachmentSidebarContent?.kind).toBe("attachment");
+    expect(state.sidebarContent).toBe(detailContent);
+
+    state.handleCloseSidebar("workspace");
+
+    expect(state.sidebarLayout.columns.flatMap((column) => column.panels)).toHaveLength(0);
+    expect(state.attachmentSidebarContent).toBeNull();
+    expect(state.sidebarContent).toBe(detailContent);
+  });
+
   it("keeps the active observer digest when another run streams in the same session", () => {
     const projectedDigest = {
       sessionKey: "agent:main:current",
@@ -2406,41 +2453,51 @@ describe("refreshChatMetadata", () => {
     } as unknown as ChatPageHost;
   }
 
-  it("refreshes session metadata after full model discovery completes", async () => {
-    const refreshSessions = vi.fn().mockResolvedValue(undefined);
-    const request = vi.fn(async (method: string, params?: unknown) => {
-      expect(method).toBe("models.list");
-      expect(params).toEqual({ view: "configured", agentId: "work", refresh: true });
-      return {
-        models: [
-          {
-            id: "reasoner",
-            name: "Reasoner",
-            provider: "dynamic-router",
-            reasoning: true,
-          },
-        ],
-      };
-    });
-    const state = createMetadataState(request, {
-      sessions: { refresh: refreshSessions } as never,
-    });
+  it.each([
+    {
+      label: "warm",
+      existingModels: [{ id: "cached-model", name: "Cached Model", provider: "openai" }],
+    },
+    { label: "cold", existingModels: [] },
+  ])(
+    "refreshes $label session metadata after full model discovery completes",
+    async ({ existingModels }) => {
+      const refreshSessions = vi.fn().mockResolvedValue(undefined);
+      const discovery = createDeferred<{
+        models: Array<{ id: string; name: string; provider: string; reasoning: boolean }>;
+      }>();
+      const request = vi.fn((method: string, params?: unknown) => {
+        expect(method).toBe("models.list");
+        expect(params).toEqual({ view: "configured", agentId: "work", refresh: true });
+        return discovery.promise;
+      });
+      const state = createMetadataState(request, {
+        chatModelCatalog: existingModels,
+        sessions: { refresh: refreshSessions } as never,
+      });
 
-    await refreshChatModelCatalogOnDemand(state);
+      const refresh = refreshChatModelCatalogOnDemand(state);
+      expect(state.chatModelCatalog).toEqual(existingModels);
+      expect(state.chatModelsLoading).toBe(existingModels.length === 0);
+      discovery.resolve({
+        models: [{ id: "reasoner", name: "Reasoner", provider: "dynamic-router", reasoning: true }],
+      });
+      await refresh;
 
-    expect(state.chatModelCatalog).toEqual([
-      {
-        id: "reasoner",
-        name: "Reasoner",
-        provider: "dynamic-router",
-        reasoning: true,
-      },
-    ]);
-    expect(refreshSessions).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "work", force: true }),
-    );
-    expect(state.chatModelCatalogError).toBeNull();
-  });
+      expect(state.chatModelCatalog).toEqual([
+        {
+          id: "reasoner",
+          name: "Reasoner",
+          provider: "dynamic-router",
+          reasoning: true,
+        },
+      ]);
+      expect(refreshSessions).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: "work", force: true }),
+      );
+      expect(state.chatModelCatalogError).toBeNull();
+    },
+  );
 
   it("applies agent-scoped metadata after a same-agent session switch", async () => {
     let resolveMetadata:

@@ -71,7 +71,7 @@ export const skillCollectionPlanSchema = Type.Optional(
       {
         action: stringEnum(["write", "drop"] as const),
         name: Type.String(),
-        description: Type.Optional(Type.String({ maxLength: 160 })),
+        description: Type.Optional(Type.String()),
         content: Type.Optional(Type.String()),
         reason: Type.Optional(Type.String()),
       },
@@ -112,6 +112,7 @@ export async function executeSkillCollectionReconcile(params: {
       agentIds: params.context?.agentIds,
       approvedSkillNamesByAgent: params.context?.approvedSkillNamesByAgent,
       env: params.env,
+      ...(params.context?.assertCurrent ? { assertCurrent: params.context.assertCurrent } : {}),
     });
     if (params.context) {
       params.context.result = result;

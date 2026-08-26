@@ -30,7 +30,10 @@ import {
   loadBundledProviderStaticCatalogContextModels,
 } from "./embedded-agent-runner/model.static-catalog.js";
 import { createStaticModelIdMatcher } from "./embedded-agent-runner/model.static-id.js";
-import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
+import {
+  buildConfiguredModelCatalog,
+  parseConfiguredModelVisibilityEntries,
+} from "./model-selection-shared.js";
 import { ensureOpenClawModelsJson, planOpenClawModelsJsonSource } from "./models-config.js";
 import { prepareImplicitProviderStaticCatalog } from "./models-config.providers.implicit.js";
 import {
@@ -131,6 +134,10 @@ function prepareAgentFacts(
           catalogMode === "live",
           configuredModelRefs,
         ),
+        ...parseConfiguredModelVisibilityEntries({
+          cfg: input.config,
+          agentId: input.agentId,
+        }).providerWildcards,
         ...additionalProviderIds.map(normalizeProviderId).filter(Boolean),
       ]),
     ].toSorted((left, right) => left.localeCompare(right)),
@@ -236,6 +243,9 @@ export async function prepareWorkspaceBuildGroup(
     const configuredProviderIds = [
       ...new Set([
         ...collectPreparedModelRuntimeProviderIds(input.config, {}, false),
+        ...inputs.flatMap(({ config, agentId }) => [
+          ...parseConfiguredModelVisibilityEntries({ cfg: config, agentId }).providerWildcards,
+        ]),
         ...(options.providerDiscoveryProviderIds ?? []).map(normalizeProviderId).filter(Boolean),
       ]),
     ].toSorted((left, right) => left.localeCompare(right));
@@ -282,7 +292,7 @@ export async function prepareWorkspaceBuildGroup(
                 registryDiagnostics: pluginMetadataSnapshot.registryDiagnostics,
                 ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
               }),
-              options.providerDiscoveryProviderIds,
+              configuredProviderIds,
             ),
       ...(catalogMode === "static"
         ? {
@@ -602,6 +612,7 @@ export async function prepareAgentCatalogSource(
     );
   const options = {
     pluginMetadataSnapshot: pluginGeneration.pluginMetadataSnapshot,
+    providerDiscoveryProviderIds: sourceOptions.providerDiscoveryProviderIds ?? providerIds,
     ...(pluginGeneration.preparedStaticProviderCatalog
       ? { preparedStaticProviderCatalog: pluginGeneration.preparedStaticProviderCatalog }
       : {}),
@@ -610,13 +621,9 @@ export async function prepareAgentCatalogSource(
     ...(catalogMode === "static"
       ? {
           providerDiscoveryEntriesOnly: true as const,
-          providerDiscoveryProviderIds: sourceOptions.providerDiscoveryProviderIds ?? providerIds,
         }
       : {
           providerDiscoveryTimeoutMs: MODEL_RUNTIME_PROVIDER_DISCOVERY_TIMEOUT_MS,
-          ...(sourceOptions.providerDiscoveryProviderIds
-            ? { providerDiscoveryProviderIds: sourceOptions.providerDiscoveryProviderIds }
-            : {}),
         }),
   };
   if (!persist) {

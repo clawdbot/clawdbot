@@ -20,7 +20,7 @@ import {
 } from "./config-reload-recovery.js";
 import type { GatewayReloadPlan } from "./config-reload.js";
 import { commitHooksConfigReload, resolveHooksConfig } from "./hooks.js";
-import { buildGatewayCronService } from "./server-cron.js";
+import { buildGatewayCronService, type GatewayCronExitWatcherHandoff } from "./server-cron.js";
 import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./server-lanes.js";
 import { createGatewayActiveWorkTracker } from "./server-reload-active-work.js";
 import {
@@ -44,6 +44,7 @@ import {
   collectChannelOperationFailures,
   disposeMcpRuntimesWithTimeout,
   resetPreparedModelRuntimeStateForHotReload,
+  revokeActiveSkillReviewsBeforeConfigPublication,
 } from "./server-reload-utils.js";
 import { startGatewayCronWithLogging } from "./server-runtime-services.js";
 import { resolveHookClientIpConfig } from "./server/hook-client-ip-config.js";
@@ -114,6 +115,9 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
     nextState.hookClientIpConfig = resolveHookClientIpConfig(nextConfig);
 
+    let cronExitWatcherHandoff:
+      | { previous: GatewayCronExitWatcherHandoff; next: GatewayCronExitWatcherHandoff }
+      | undefined;
     if (plan.restartCron) {
       nextState.cronState = buildGatewayCronService({
         cfg: nextConfig,
@@ -126,6 +130,19 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           ? { resolveGatewayContext: params.resolveGatewayContext }
           : {}),
       });
+      if (
+        state.cronState.cronEnabled &&
+        nextState.cronState.cronEnabled &&
+        state.cronState.storePath === nextState.cronState.storePath
+      ) {
+        const [previous, next] = await Promise.all([
+          state.cronState.prepareExitWatcherHandoff?.(),
+          nextState.cronState.prepareExitWatcherHandoff?.(),
+        ]);
+        if (previous && next) {
+          cronExitWatcherHandoff = { previous, next };
+        }
+      }
     }
 
     resetDirectoryCache();
@@ -176,10 +193,11 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       const commit = async () => {
         if (plan.restartHeartbeat) {
           nextState.heartbeatRunner.updateConfig(nextConfig);
-          // Heartbeat cadence lives in system-owned cron monitor jobs;
-          // reconverge them against the new config in the background.
+        }
+        revokeActiveSkillReviewsBeforeConfigPublication(nextConfig);
+        if (plan.restartHeartbeat || plan.reconcileSkillReviewJobs) {
           void nextState.cronState.reconcileHeartbeatJobs(nextConfig).catch((error: unknown) => {
-            params.logReload.warn(`heartbeat monitor reconvergence failed: ${String(error)}`);
+            params.logReload.warn(`cron monitor reconvergence failed: ${String(error)}`);
           });
         }
         // Config, plugin hooks, and prepared stores publish as one generation. Synchronously
@@ -201,7 +219,10 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         if (plan.restartCron) {
           params.cronReconciliation.invalidate();
           params.onCronRestart?.();
-          if (state.cronState.cron.stopAndDrain) {
+          if (cronExitWatcherHandoff) {
+            await cronExitWatcherHandoff.next.adopt(cronExitWatcherHandoff.previous.current());
+            await cronExitWatcherHandoff.previous.stopOwner();
+          } else if (state.cronState.cron.stopAndDrain) {
             await state.cronState.cron.stopAndDrain();
           } else {
             state.cronState.cron.stop();
@@ -443,9 +464,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
                 `stopping ${channel} account ${accountId} before plugin reload`,
               );
               await params.stopChannel(channel, accountId, { manual: false });
-              if (isPluginReloadAborted()) {
-                pluginReloadAborted = true;
-              }
+              pluginReloadAborted = isPluginReloadAborted();
             } catch (err) {
               accountStopFailures.push(`${channel}[${accountId}]`);
               params.logChannels.error(
@@ -467,9 +486,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             params.logChannels.info(`stopping ${channel} channel before plugin reload`);
             channelsStoppedBeforePluginReload.add(channel);
             await params.stopChannel(channel, undefined, { manual: false });
-            if (isPluginReloadAborted()) {
-              pluginReloadAborted = true;
-            }
+            pluginReloadAborted = isPluginReloadAborted();
           },
           onFailure: (channel, err) => {
             params.logChannels.error(

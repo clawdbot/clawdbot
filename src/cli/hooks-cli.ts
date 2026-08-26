@@ -30,6 +30,7 @@ import { summarizeStringEntries } from "../shared/string-sample.js";
 import { resolveOptionFromCommand } from "./cli-utils.js";
 import { formatCliCommand } from "./command-format.js";
 import { ExpectedCliError, rethrowExpectedCliError } from "./failure-output.js";
+import { canFallbackToImplicitLocalGateway } from "./gateway-rpc.js";
 import {
   formatHookInfo,
   formatHookMissingSummary,
@@ -110,8 +111,8 @@ function buildHooksReport(config: OpenClawConfig, target: HooksReportTarget): Ho
 async function loadHooksReport(agentId?: string): Promise<HookStatusReport> {
   const config = getRuntimeConfig({ skipPluginValidation: true });
   const target = resolveHooksReportTarget(config, agentId);
+  const { callGateway } = await import("../gateway/call.js");
   try {
-    const { callGateway } = await import("../gateway/call.js");
     return await callGateway<HookStatusReport>({
       config,
       method: "hooks.status",
@@ -122,18 +123,16 @@ async function loadHooksReport(agentId?: string): Promise<HookStatusReport> {
     });
   } catch (error) {
     if (
-      error instanceof Error &&
-      error.name === "GatewayClientRequestError" &&
-      !(
-        (error as Error & { gatewayCode?: unknown }).gatewayCode === "INVALID_REQUEST" &&
-        /^(?:unknown method: hooks\.status|invalid hooks\.status params(?::|$))/iu.test(
-          error.message,
-        )
-      )
+      !(await canFallbackToImplicitLocalGateway({
+        config,
+        error,
+        legacyMethod: "hooks.status",
+        legacyAgentId: true,
+      }))
     ) {
       throw error;
     }
-    // Unavailable and older Gateways retain the selected owner for local read-only discovery.
+    // Only implicit local Gateways may use offline or older-Gateway discovery.
     return buildHooksReport(config, target);
   }
 }
@@ -185,30 +184,6 @@ function resolveHookForToggle(
   return hook;
 }
 
-function buildConfigWithHookEnabled(params: {
-  config: OpenClawConfig;
-  hookName: string;
-  enabled: boolean;
-  ensureHooksEnabled?: boolean;
-}): OpenClawConfig {
-  const entries = { ...params.config.hooks?.internal?.entries };
-  entries[params.hookName] = { ...entries[params.hookName], enabled: params.enabled };
-
-  const internal = {
-    ...params.config.hooks?.internal,
-    ...(params.ensureHooksEnabled ? { enabled: true } : {}),
-    entries,
-  };
-
-  return {
-    ...params.config,
-    hooks: {
-      ...params.config.hooks,
-      internal,
-    },
-  };
-}
-
 function writeHooksOutput(value: string, json: boolean | undefined): void {
   if (json) {
     defaultRuntime.writeStdout(value);
@@ -237,50 +212,39 @@ async function runOneShotHooksCliAction(
   // runCli finishes shared teardown and drains both output streams.
   requestExitAfterOneShotOutput(defaultRuntime, exitCode);
 }
-async function enableHook(hookName: string, agentId?: string): Promise<void> {
+async function setHookEnabled(hookName: string, enabled: boolean, agentId?: string): Promise<void> {
   const snapshot = await readConfigFileSnapshot();
   const config = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
   const hook = resolveHookForToggle(
     buildHooksReport(config, resolveHooksReportTarget(config, agentId)),
     hookName,
-    { requireEligible: true },
+    { requireEligible: enabled },
   );
-  const nextConfig = buildConfigWithHookEnabled({
-    config,
-    hookName: hook.hookKey,
-    enabled: true,
-    ensureHooksEnabled: true,
-  });
+  const entries = { ...config.hooks?.internal?.entries };
+  entries[hook.hookKey] = { ...entries[hook.hookKey], enabled };
+  const nextConfig: OpenClawConfig = {
+    ...config,
+    hooks: {
+      ...config.hooks,
+      internal: {
+        ...config.hooks?.internal,
+        ...(enabled ? { enabled: true } : {}),
+        entries,
+      },
+    },
+  };
 
   await replaceConfigFile({
     nextConfig,
     ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
   });
-  defaultRuntime.log(
-    `${theme.success("✓")} Enabled hook: ${hook.emoji ? `${hook.emoji} ${theme.command(hook.name)}` : decorativePrefix("🔗", theme.command(hook.name))}`,
-  );
-}
-
-async function disableHook(hookName: string, agentId?: string): Promise<void> {
-  const snapshot = await readConfigFileSnapshot();
-  const config = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
-  const hook = resolveHookForToggle(
-    buildHooksReport(config, resolveHooksReportTarget(config, agentId)),
-    hookName,
-  );
-  const nextConfig = buildConfigWithHookEnabled({
-    config,
-    hookName: hook.hookKey,
-    enabled: false,
-  });
-
-  await replaceConfigFile({
-    nextConfig,
-    ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
-  });
-  defaultRuntime.log(
-    `${theme.warn(decorativePrefix("⏸", "Disabled hook:"))} ${hook.emoji ? `${hook.emoji} ${theme.command(hook.name)}` : decorativePrefix("🔗", theme.command(hook.name))}`,
-  );
+  const prefix = enabled
+    ? `${theme.success("✓")} Enabled hook:`
+    : theme.warn(decorativePrefix("⏸", "Disabled hook:"));
+  const name = hook.emoji
+    ? `${hook.emoji} ${theme.command(hook.name)}`
+    : decorativePrefix("🔗", theme.command(hook.name));
+  defaultRuntime.log(`${prefix} ${name}`);
 }
 
 export function registerHooksCli(program: Command): void {
@@ -360,7 +324,7 @@ export function registerHooksCli(program: Command): void {
     .option("--agent <id>", "Agent id whose workspace to inspect")
     .action(async (name, _opts: { agent?: string }, command: Command) =>
       runOneShotHooksCliAction(async () => {
-        await enableHook(name, resolveHooksAgentOption(command));
+        await setHookEnabled(name, true, resolveHooksAgentOption(command));
       }),
     );
 
@@ -370,7 +334,7 @@ export function registerHooksCli(program: Command): void {
     .option("--agent <id>", "Agent id whose workspace to inspect")
     .action(async (name, _opts: { agent?: string }, command: Command) =>
       runOneShotHooksCliAction(async () => {
-        await disableHook(name, resolveHooksAgentOption(command));
+        await setHookEnabled(name, false, resolveHooksAgentOption(command));
       }),
     );
 

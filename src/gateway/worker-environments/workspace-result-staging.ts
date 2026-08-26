@@ -45,7 +45,16 @@ const workspaceLog = createSubsystemLogger("gateway/worker-workspace");
 const DISABLED_GIT_HOOKS_PATH = os.devNull;
 
 function gitCommand(cwd: string, args: string[]): string[] {
-  return ["git", "-c", `core.hooksPath=${DISABLED_GIT_HOOKS_PATH}`, "-C", cwd, ...args];
+  return [
+    "git",
+    "-c",
+    `core.hooksPath=${DISABLED_GIT_HOOKS_PATH}`,
+    "-c",
+    "core.fsmonitor=false",
+    "-C",
+    cwd,
+    ...args,
+  ];
 }
 
 export function workerWorkspaceTransferPaths(

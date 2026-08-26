@@ -1,4 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { EmbeddedRunTrigger } from "../../agents/embedded-agent-runner/run/params.js";
+import {
+  getPreparedModelRuntimePluginGeneration,
+  withPreparedModelRuntimePluginGenerationScope,
+} from "../../agents/prepared-model-runtime-generation-scope.js";
+import type { PreparedModelRuntimePluginGeneration } from "../../agents/prepared-model-runtime.types.js";
 import { buildSkillExperienceReviewPrompt } from "./experience-review-prompt.js";
 import {
   createSkillExperienceReviewScheduler,
@@ -15,7 +21,7 @@ function completedRun(
     sessionKey?: string;
     runId?: string;
     mode?: "off" | "propose" | "auto";
-    trigger?: string;
+    trigger?: EmbeddedRunTrigger;
     skillWorkshopAvailable?: boolean;
   } = {},
 ): SkillExperienceReviewParams {
@@ -40,11 +46,18 @@ function completedRun(
       workspaceDir: "/workspace",
       modelProviderId: "openai",
       modelId: "gpt-test",
-      reasoningLevel: "on",
       authProfileId: "openai:work",
       modelIterations: options.modelIterations,
       skillWorkshopAvailable: options.skillWorkshopAvailable ?? true,
-      trigger: options.trigger ?? "user",
+      foregroundPromptContext: {
+        agentId: "main",
+        agentDir: "/agent",
+        workspaceDir: "/workspace",
+        cwd: "/workspace",
+        sandboxSessionKey: options.sessionKey ?? "agent:main:main",
+        trigger: options.trigger ?? "user",
+        reasoningLevel: "on",
+      },
     },
     config: { skills: { workshop: { autonomous: { mode: options.mode ?? "propose" } } } },
   };
@@ -60,6 +73,42 @@ async function flushMicrotasks(): Promise<void> {
 afterEach(() => vi.useRealTimers());
 
 describe("skill experience review scheduler", () => {
+  it("runs detached review work outside the foreground prepared generation", async () => {
+    const generation: PreparedModelRuntimePluginGeneration = {
+      configuredCatalogEntries: [],
+      inlineProviderModels: [],
+      pluginMetadataSnapshot: {} as never,
+    };
+    const observedGenerations: Array<PreparedModelRuntimePluginGeneration | undefined> = [];
+    let finishReview: (() => void) | undefined;
+    const reviewFinished = new Promise<void>((resolve) => {
+      finishReview = resolve;
+    });
+    const scheduler = createSkillExperienceReviewScheduler({
+      isSystemActive: () => {
+        observedGenerations.push(getPreparedModelRuntimePluginGeneration());
+        return false;
+      },
+      prepareReview: async (candidate) => {
+        observedGenerations.push(getPreparedModelRuntimePluginGeneration());
+        return candidate;
+      },
+      runReview: async () => {
+        observedGenerations.push(getPreparedModelRuntimePluginGeneration());
+        finishReview?.();
+      },
+      setTimer: (callback) => setTimeout(callback, 0),
+    });
+
+    withPreparedModelRuntimePluginGenerationScope(generation, () => {
+      scheduler.schedule(completedRun());
+    });
+    await reviewFinished;
+
+    expect(observedGenerations).toEqual([undefined, undefined, undefined]);
+    scheduler.clear();
+  });
+
   it("runs one deep turn after the idle window", async () => {
     vi.useFakeTimers();
     const runReview = vi.fn().mockResolvedValue(undefined);
@@ -76,7 +125,7 @@ describe("skill experience review scheduler", () => {
         ctx: expect.objectContaining({
           sessionId: "session-1",
           sessionKey: "agent:main:main",
-          reasoningLevel: "on",
+          foregroundPromptContext: expect.objectContaining({ reasoningLevel: "on" }),
         }),
       }),
     );
@@ -187,8 +236,8 @@ describe("skill experience review scheduler", () => {
 
   it("rechecks group policy while preserving main-session sandbox identity", async () => {
     const groupParams = completedRun({ sessionKey: "agent:main:whatsapp:group:safe-room" });
-    groupParams.ctx.messageProvider = "whatsapp";
-    groupParams.ctx.groupId = "safe-room";
+    groupParams.ctx.foregroundPromptContext.messageProvider = "whatsapp";
+    groupParams.ctx.foregroundPromptContext.groupId = "safe-room";
     await expect(
       prepareSkillExperienceReviewCandidate(
         { ctx: groupParams.ctx, config: groupParams.config },
@@ -277,7 +326,7 @@ describe("skill experience review scheduler", () => {
     vi.useFakeTimers();
     const memberRoleIds = Array.from({ length: 150 }, (_, index) => `role-${index}`);
     const params = completedRun();
-    params.ctx.memberRoleIds = memberRoleIds;
+    params.ctx.foregroundPromptContext.memberRoleIds = memberRoleIds;
     const prepareReview = vi.fn(async (candidate) => candidate);
     const runReview = vi.fn().mockResolvedValue(undefined);
     const scheduler = createSkillExperienceReviewScheduler({
@@ -289,8 +338,12 @@ describe("skill experience review scheduler", () => {
     scheduler.schedule(params);
     await vi.advanceTimersByTimeAsync(30_000);
 
-    expect(prepareReview.mock.calls[0]?.[0].ctx.memberRoleIds).toEqual(memberRoleIds);
-    expect(runReview.mock.calls[0]?.[0].ctx.memberRoleIds).toEqual(memberRoleIds);
+    expect(prepareReview.mock.calls[0]?.[0].ctx.foregroundPromptContext.memberRoleIds).toEqual(
+      memberRoleIds,
+    );
+    expect(runReview.mock.calls[0]?.[0].ctx.foregroundPromptContext.memberRoleIds).toEqual(
+      memberRoleIds,
+    );
     scheduler.clear();
   });
 

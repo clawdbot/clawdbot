@@ -358,6 +358,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
           limitBytes: MAX_BUFFERED_BYTES,
         });
         close(1008, connectionKind === "worker" ? "slow-consumer" : "slow consumer");
+        socket.terminate();
         return { kind: "unavailable" } as const;
       }
       let encoded: string;
@@ -388,14 +389,14 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
 
     socket.once("error", (err) => {
       if (isWsPayloadLimitError(err)) {
-        const workerPayload = connectionKind === "worker";
         logRejectedLargePayload({
           surface: client ? "gateway.ws.frame" : "gateway.ws.preauth",
-          limitBytes: workerPayload
-            ? WORKER_PROTOCOL_MAX_PAYLOAD_BYTES
-            : client
-              ? MAX_PAYLOAD_BYTES
-              : MAX_PREAUTH_PAYLOAD_BYTES,
+          limitBytes:
+            connectionKind === "worker"
+              ? WORKER_PROTOCOL_MAX_PAYLOAD_BYTES
+              : client
+                ? MAX_PAYLOAD_BYTES
+                : MAX_PREAUTH_PAYLOAD_BYTES,
           reason: client ? "ws_frame_limit" : "preauth_frame_limit",
         });
       }
@@ -455,10 +456,9 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         ...closeMeta,
       };
       if (!client) {
-        const isExpectedStartupRetryClose = closeCause === GATEWAY_STARTUP_PENDING_CLOSE_CAUSE;
         const logFn =
           isNoisySwiftPmHelperClose(requestUserAgent, remoteAddr) ||
-          isExpectedStartupRetryClose ||
+          closeCause === GATEWAY_STARTUP_PENDING_CLOSE_CAUSE ||
           isExpectedLocalAppStartupAbort(code)
             ? logWsControl.debug
             : logWsControl.warn;

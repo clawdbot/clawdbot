@@ -3,41 +3,23 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
 import { openTaskDetailId } from "./components/chat-detail-slot.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
-import {
-  SIDEBAR_NARROW_BREAKPOINT_PX,
-  closeSlot,
-  isSidebarSlotVisible,
-  openSlot,
-  type SidebarSlotId,
-} from "./sidebar-layout.ts";
+import { closeSlot, isSidebarSlotVisible, openSlot, type SidebarSlotId } from "./sidebar-layout.ts";
 
 type ChatPaneSidebarLayout = Parameters<typeof isSidebarSlotVisible>[0];
 type ChatPaneGatewaySnapshot = Parameters<typeof isDesktopPanelAvailable>[0];
 
-export type ChatProgressCardPlacement = "composer" | "dock" | "rail";
-
-/* Narrowest gutter that still holds a readable card: the dock keeps a 12px gap
- * from the composer and clears the transcript scrollbar strip on the far side,
- * so this leaves it ~250px of its own. */
-const PROGRESS_CARD_DOCK_MIN_GUTTER_PX = 280;
-
-/** Picks the single live progress-card placement for one chat pane. */
-function chatProgressCardPlacement(params: {
-  companionRailVisible: boolean;
-  composerGutter: number;
-}): ChatProgressCardPlacement {
-  if (params.companionRailVisible) {
-    return "rail";
+export function releaseAttachmentWorkspaceOwner(state: ChatPageHost, slot: SidebarSlotId): void {
+  // Attachment views temporarily own Files content. Release that owner
+  // with the slot so reopening Files restores the session workspace.
+  if (slot === "workspace") {
+    state.attachmentSidebarContent = null;
   }
-  return params.composerGutter >= PROGRESS_CARD_DOCK_MIN_GUTTER_PX ? "dock" : "composer";
 }
 
 /** Builds the two rail models and their shared sidebar slot controls. */
 export function createChatPaneRails(params: {
   state: ChatPageHost;
   sidebarLayout: ChatPaneSidebarLayout;
-  paneWidth: number;
-  composerGutter: number;
   presentationId: string;
   presented: boolean;
   gatewaySnapshot: ChatPaneGatewaySnapshot;
@@ -56,13 +38,14 @@ export function createChatPaneRails(params: {
     if (slot === "companion") {
       params.setObserverVisibility(false);
     }
+    releaseAttachmentWorkspaceOwner(state, slot);
     state.updateSidebarLayout(closeSlot(state.sidebarLayout, slot));
   };
   const togglePanelSlot = (slot: SidebarSlotId) =>
     hasPanelSlot(slot) ? closePanelSlot(slot) : openPanelSlot(slot);
   const sessionWorkspaceBase = createSessionWorkspaceProps(state, {
     draftScope: params.presentationId,
-    expanded: hasPanelSlot("workspace"),
+    expanded: isSidebarSlotVisible(sidebarLayout, "workspace"),
     narrowLayout: false,
     presented: params.presented,
   });
@@ -89,17 +72,10 @@ export function createChatPaneRails(params: {
     narrowLayout: false,
     onToggleCollapsed: () => togglePanelSlot("tasks"),
   };
-  const progressCardPlacement = chatProgressCardPlacement({
-    companionRailVisible:
-      params.paneWidth >= SIDEBAR_NARROW_BREAKPOINT_PX &&
-      isSidebarSlotVisible(sidebarLayout, "companion"),
-    composerGutter: params.composerGutter,
-  });
   return {
     backgroundTasks,
     closePanelSlot,
     openPanelSlot,
-    progressCardPlacement,
     sessionWorkspace,
   };
 }

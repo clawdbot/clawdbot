@@ -1,6 +1,7 @@
 /** Dispatches isolated cron output to direct delivery, mirrors, and follow-up queues. */
 import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import { resolveControlUiSessionUrl } from "../../config/control-ui-link-base.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/inbound.runtime.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type {
@@ -55,7 +56,10 @@ import type {
   DispatchCronDeliveryState,
   SuccessfulCronDeliveryTarget,
 } from "./delivery-dispatch-types.js";
-import { normalizeDirectCronDeliveryPayloads } from "./delivery-payload-normalization.js";
+import {
+  appendCronRunInspectionLink,
+  normalizeDirectCronDeliveryPayloads,
+} from "./delivery-payload-normalization.js";
 import { pickSummaryFromOutput } from "./helpers.js";
 import type { RunCronAgentTurnResult } from "./run.types.js";
 import {
@@ -278,6 +282,14 @@ export async function dispatchCronDelivery(
       if (payloadsForDelivery.length === 0) {
         return await finishSilentReplyDelivery();
       }
+      const linkedPayloadsForDelivery = appendCronRunInspectionLink(
+        payloadsForDelivery,
+        resolveControlUiSessionUrl(params.cfgWithAgentDefaults, {
+          sessionKey: params.runSessionKey,
+          fallbackAgentId: params.agentId,
+          exactKey: true,
+        }),
+      );
       deliveryAttempted = true;
       const { sessionKey: deliverySessionKey, route: directCronOutboundRoute } =
         await resolveDirectCronDeliverySessionKey({
@@ -350,7 +362,7 @@ export async function dispatchCronDelivery(
           to: delivery.to,
           accountId: delivery.accountId,
           threadId: delivery.threadId,
-          payloads: payloadsForDelivery,
+          payloads: linkedPayloadsForDelivery,
           session: deliverySession,
           identity,
           bestEffort: params.deliveryBestEffort,
@@ -474,7 +486,7 @@ export async function dispatchCronDelivery(
       const deliveryAwarenessText = resolveCronAwarenessText({
         outputText,
         synthesizedText,
-        deliveryPayloads: payloadsForDelivery,
+        deliveryPayloads: linkedPayloadsForDelivery,
         outboundPayloads: attemptedPayloadsForMirror,
       });
       const shouldQueueAwarenessForDelivery = shouldQueueCronAwareness({
@@ -506,7 +518,7 @@ export async function dispatchCronDelivery(
             ? projectDeliveredDirectCronPayloadsForMirror(attemptedPayloadsForMirror)
             : projectOutboundPayloadPlanForMirror(
                 createOutboundPayloadPlan(
-                  buildDirectCronTranscriptMirrorPayloads(payloadsForDelivery),
+                  buildDirectCronTranscriptMirrorPayloads(linkedPayloadsForDelivery),
                   {
                     cfg: params.cfgWithAgentDefaults,
                     sessionKey: deliverySessionKey,
