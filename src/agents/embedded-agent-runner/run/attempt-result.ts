@@ -115,9 +115,10 @@ type CompleteEmbeddedAttemptResultInput = {
 function resolveSettledTurnFinalizationContext(params: {
   assistantTexts: readonly string[];
   messagesSnapshot: EmbeddedRunAttemptResult["messagesSnapshot"];
-  terminalKind: string;
+  terminal: EmbeddedRunAttemptResult["terminal"];
 }): EmbeddedRunAttemptResult["settledTurnFinalizationContext"] {
-  if (params.terminalKind !== "failed") {
+  // A later provider failure does not make an observed compaction/tool timeout safe to retry.
+  if (params.terminal.kind !== "failed" || params.terminal.timeoutObservation) {
     return undefined;
   }
   // A turn that already produced visible text has nothing to finalize, and a
@@ -424,7 +425,7 @@ export function completeEmbeddedAttemptResult(
   const settledTurnFinalizationContext = resolveSettledTurnFinalizationContext({
     assistantTexts,
     messagesSnapshot: state.messagesSnapshot,
-    terminalKind: state.terminal.kind,
+    terminal: state.terminal,
   });
   const result: EmbeddedRunAttemptWithReceiptEvidence = {
     ...state,

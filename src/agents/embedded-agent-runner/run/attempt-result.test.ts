@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { completeEmbeddedAttemptResult, createMcpAttemptCarryover } from "./attempt-result.js";
 import { buildTraceToolSummary, normalizeEmbeddedRunAttemptResult } from "./run-attempt-result.js";
+import type { EmbeddedRunAttemptResult } from "./types.js";
 
 function completeResult(params?: {
+  terminal?: EmbeddedRunAttemptResult["terminal"];
+  messagesSnapshot?: EmbeddedRunAttemptResult["messagesSnapshot"];
   successfulNestedToolNames?: string[];
   latestMcpAppChannelView?: { viewId: string };
   clientToolCallSlots?: Array<{
@@ -62,9 +65,9 @@ function completeResult(params?: {
       toolMetas: params?.toolMetas ?? [],
     } as never,
     state: {
-      terminal: { kind: "ok" },
+      terminal: params?.terminal ?? { kind: "ok" },
       sessionIdUsed: "session-1",
-      messagesSnapshot: [],
+      messagesSnapshot: params?.messagesSnapshot ?? [],
       successfulNestedToolNames: params?.successfulNestedToolNames,
       yieldDetected: params?.yieldDetected ?? false,
       yieldAcknowledgment: params?.yieldAcknowledgment,
@@ -86,6 +89,32 @@ function completeResult(params?: {
 }
 
 describe("attempt result projection", () => {
+  it.each(["compaction", "tool_execution"] as const)(
+    "does not authorize settled-turn finalization after a %s timeout observation",
+    (timeoutObservation) => {
+      const result = completeResult({
+        terminal: {
+          kind: "failed",
+          source: "prompt",
+          error: new Error("provider request failed after a timeout"),
+          timeoutObservation,
+        },
+        messagesSnapshot: [
+          {
+            role: "toolResult",
+            toolCallId: "call-read",
+            toolName: "read",
+            isError: false,
+            timestamp: 1,
+            content: [{ type: "text", text: "file contents" }],
+          },
+        ],
+      });
+
+      expect(result.settledTurnFinalizationContext).toBeUndefined();
+    },
+  );
+
   it("carries the explicit yield acknowledgment separately from continuation context", () => {
     expect(
       completeResult({
