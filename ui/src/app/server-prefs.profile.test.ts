@@ -35,10 +35,12 @@ afterEach(() => {
 
 describe("profile-bound appearance preferences", () => {
   it("stores every Control UI theme name the profile wire contract knows", () => {
-    // Record<ThemeName, true> turns a theme added to the UI but missing from
-    // UI_APPEARANCE_THEME_VALUES into a compile error here, and the loop turns
-    // it into a runtime failure — a mismatch silently drops profile themes.
-    const everyTheme: Record<ThemeName, true> = {
+    // Record<ThemeName, boolean> turns a theme added to the UI but missing from
+    // this table into a compile error, and the loop turns a wire-contract
+    // mismatch into a runtime failure — a mismatch silently drops profile
+    // themes. "custom" is the deliberate exception: its palette is
+    // browser-local, so the selection must never follow the profile.
+    const profileStorable: Record<ThemeName, boolean> = {
       claw: true,
       knot: true,
       dash: true,
@@ -46,13 +48,34 @@ describe("profile-bound appearance preferences", () => {
       tide: true,
       beacon: true,
       phosphor: true,
-      custom: true,
+      custom: false,
     };
-    for (const theme of Object.keys(everyTheme)) {
+    for (const [theme, storable] of Object.entries(profileStorable)) {
       expect(normalizeUiAppearancePreference(UI_APPEARANCE_PREFERENCE_KEYS.theme, theme)).toBe(
-        theme,
+        storable ? theme : undefined,
       );
     }
+  });
+
+  it("keeps a profile-bound custom theme selection in this browser only", async () => {
+    const request = vi.fn(async () => ({ status: "ok" as const }));
+    const writer = createServerPrefsWriter(request, scope, true, { ok: true }, false);
+    const afterCommit = vi.fn();
+
+    pushServerUiPrefs(
+      writer,
+      { theme: "custom", accent: "#123456" },
+      { profileId, canWrite: true, afterCommit },
+    );
+
+    // The accent still syncs; the custom theme is retained browser-local and
+    // never reaches users.prefs.set.
+    await waitForFast(() =>
+      expect(request).toHaveBeenCalledExactlyOnceWith("users.prefs.set", {
+        entries: { "ui.accent": "#123456" },
+      }),
+    );
+    expect(afterCommit).toHaveBeenCalledWith({ needsRefresh: false, retainedLocal: true });
   });
 
   it("overlays profile appearance values without changing anonymous snapshot resolution", () => {

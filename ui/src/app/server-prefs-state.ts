@@ -15,7 +15,13 @@ import type { ThemeMode, ThemeName } from "./theme.ts";
 
 // Derived from the wire contract so a theme the profile store rejects can never
 // be offered here; new Set<ThemeName> makes an unknown protocol name a type error.
-const THEMES: ReadonlySet<ThemeName> = new Set<ThemeName>(UI_APPEARANCE_THEME_VALUES);
+// "custom" is config-syncable (honored only by browsers with an imported
+// palette) but intentionally not profile-storable, so it is appended here
+// rather than added to the wire contract.
+const THEMES: ReadonlySet<ThemeName> = new Set<ThemeName>([
+  ...UI_APPEARANCE_THEME_VALUES,
+  "custom",
+]);
 
 export function isAppearancePref(key: string): key is "theme" | "themeMode" | "accent" {
   return key === "theme" || key === "themeMode" || key === "accent";
