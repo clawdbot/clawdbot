@@ -1,6 +1,6 @@
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createAuditEventWriter } from "./audit-event-writer.js";
@@ -59,6 +59,46 @@ afterEach(() => {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("private execution decision work", () => {
+  it.each(["raw ref", "complete envelope"] as const)(
+    "rejects an oversized %s before the FIFO clone boundary",
+    async (oversizedPart) => {
+      const stateDir = tempDirs.make("openclaw-audit-private-decision-bounds-");
+      const errors: string[] = [];
+      const writer = createAuditEventWriter({ stateDir, onError: (error) => errors.push(error) });
+      const token = createExecutionIdentityAdmissionToken("bounded-private-decision-run", {
+        contextId: "bounded-private-decision-context",
+        executionId: "bounded-private-decision-execution",
+        now: 1_000,
+      });
+      const work = decisionWork({
+        token,
+        receiptId: "bounded-private-decision",
+        rawResource: oversizedPart === "raw ref" ? "r".repeat(4_097) : "resource",
+        rawTarget: "target",
+      });
+      if (oversizedPart === "complete envelope") {
+        const refs = Array.from({ length: 16 }, (_, index) => `${index}:`.padEnd(256, "p"));
+        work.receipt.enforcement.policyRefs = refs;
+        work.receipt.enforcement.grantRefs = refs;
+        work.receipt.enforcement.contextFieldsUsed = refs;
+        work.receipt.missingEvidence = refs;
+        work.receipt.remediation = Array.from({ length: 8 }, (_, index) => ({
+          code: `repair-${index}`,
+          text: "r".repeat(512),
+        }));
+      }
+
+      await writer.ready;
+      const clone = vi.spyOn(globalThis, "structuredClone");
+      expect(writer.recordExecutionDecisionWork(work)).toBe(false);
+      expect(clone).not.toHaveBeenCalled();
+      clone.mockRestore();
+      await writer.stop();
+
+      expect(errors).toEqual(["audit execution decision receipt could not be queued"]);
+    },
+  );
+
   it("projects private refs inside the admission FIFO without retaining raw owners", async () => {
     const stateDir = tempDirs.make("openclaw-audit-private-decision-");
     const database = { env: { OPENCLAW_STATE_DIR: stateDir } };

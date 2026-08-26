@@ -106,8 +106,8 @@ function buildReceipt(params: {
   };
 }
 
-/** Revalidate the closed queue payload before key or database access. */
-function parseExecutionDecisionWork(value: unknown): ExecutionDecisionWork {
+/** Revalidate closed work before queue cloning, key access, or database access. */
+export function parseExecutionDecisionWork(value: unknown): ExecutionDecisionWork {
   if (
     !isClosedPayloadRecord(value) ||
     !hasOnlyKeys(value, ["workVersion", "token", "receipt", "refs"]) ||

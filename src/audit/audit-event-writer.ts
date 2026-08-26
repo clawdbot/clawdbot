@@ -15,6 +15,7 @@ import {
   recordExecutionDecisionFact,
 } from "./execution-decision-facts.js";
 import {
+  parseExecutionDecisionWork,
   processExecutionDecisionWork,
   type ExecutionDecisionWork,
 } from "./execution-decision-work.js";
@@ -291,8 +292,12 @@ export function createAuditEventWriter(
       return false;
     }
     try {
+      const boundedMessage =
+        message.type === "record-execution-decision-work"
+          ? { ...message, work: parseExecutionDecisionWork(message.work) }
+          : message;
       // Preserve the former Worker boundary's clone and prototype-stripping contract.
-      queue.push(structuredClone(message));
+      queue.push(structuredClone(boundedMessage));
       schedule();
       return true;
     } catch (error) {
