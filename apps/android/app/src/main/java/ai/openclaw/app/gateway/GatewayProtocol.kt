@@ -91,6 +91,8 @@ data class Question(
   val multiSelect: Boolean? = null,
   val isOther: Boolean? = null,
   val isSecret: Boolean? = null,
+  val secretStore: QuestionSecretStore? = null,
+  val secretStoreExisting: QuestionSecretStoreExisting? = null,
 )
 
 @Serializable
@@ -342,6 +344,20 @@ data class GatewayEventFrameStateVersion(
 data class GatewayNodeInvokeResultParamsError(
   val code: String? = null,
   val message: String? = null,
+)
+
+@Serializable
+data class QuestionSecretStore(
+  val name: String,
+  val kind: String,
+  val allowedHosts: List<String>? = null,
+  val reason: String? = null,
+)
+
+@Serializable
+data class QuestionSecretStoreExisting(
+  val updatedAtMs: Long,
+  val updatedBy: String? = null,
 )
 
 @Serializable

@@ -18362,6 +18362,50 @@ public struct QuestionOption: Codable, Sendable {
     }
 }
 
+public struct QuestionSecretStoreBinding: Codable, Sendable {
+    public let name: String
+    public let kind: AnyCodable
+    public let allowedhosts: [String]?
+    public let reason: String?
+
+    public init(
+        name: String,
+        kind: AnyCodable,
+        allowedhosts: [String]? = nil,
+        reason: String? = nil)
+    {
+        self.name = name
+        self.kind = kind
+        self.allowedhosts = allowedhosts
+        self.reason = reason
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case kind
+        case allowedhosts = "allowedHosts"
+        case reason
+    }
+}
+
+public struct QuestionSecretStoreExisting: Codable, Sendable {
+    public let updatedatms: Int
+    public let updatedby: String?
+
+    public init(
+        updatedatms: Int,
+        updatedby: String? = nil)
+    {
+        self.updatedatms = updatedatms
+        self.updatedby = updatedby
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case updatedatms = "updatedAtMs"
+        case updatedby = "updatedBy"
+    }
+}
+
 public struct Question: Codable, Sendable {
     public let questionid: String
     public let header: String
@@ -18370,6 +18414,8 @@ public struct Question: Codable, Sendable {
     public let multiselect: Bool?
     public let isother: Bool?
     public let issecret: Bool?
+    public let secretstore: QuestionSecretStoreBinding?
+    public let secretstoreexisting: QuestionSecretStoreExisting?
 
     public init(
         questionid: String,
@@ -18378,7 +18424,9 @@ public struct Question: Codable, Sendable {
         options: [QuestionOption],
         multiselect: Bool? = nil,
         isother: Bool? = nil,
-        issecret: Bool? = nil)
+        issecret: Bool? = nil,
+        secretstore: QuestionSecretStoreBinding? = nil,
+        secretstoreexisting: QuestionSecretStoreExisting? = nil)
     {
         self.questionid = questionid
         self.header = header
@@ -18387,6 +18435,8 @@ public struct Question: Codable, Sendable {
         self.multiselect = multiselect
         self.isother = isother
         self.issecret = issecret
+        self.secretstore = secretstore
+        self.secretstoreexisting = secretstoreexisting
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -18397,6 +18447,8 @@ public struct Question: Codable, Sendable {
         case multiselect = "multiSelect"
         case isother = "isOther"
         case issecret = "isSecret"
+        case secretstore = "secretStore"
+        case secretstoreexisting = "secretStoreExisting"
     }
 }
 
@@ -18408,6 +18460,7 @@ public struct QuestionRequestQuestion: Codable, Sendable {
     public let multiselect: Bool?
     public let isother: Bool?
     public let issecret: Bool?
+    public let secretstore: QuestionSecretStoreBinding?
 
     public init(
         questionid: String,
@@ -18416,7 +18469,8 @@ public struct QuestionRequestQuestion: Codable, Sendable {
         options: [QuestionOption],
         multiselect: Bool? = nil,
         isother: Bool? = nil,
-        issecret: Bool? = nil)
+        issecret: Bool? = nil,
+        secretstore: QuestionSecretStoreBinding? = nil)
     {
         self.questionid = questionid
         self.header = header
@@ -18425,6 +18479,7 @@ public struct QuestionRequestQuestion: Codable, Sendable {
         self.multiselect = multiselect
         self.isother = isother
         self.issecret = issecret
+        self.secretstore = secretstore
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -18435,6 +18490,7 @@ public struct QuestionRequestQuestion: Codable, Sendable {
         case multiselect = "multiSelect"
         case isother = "isOther"
         case issecret = "isSecret"
+        case secretstore = "secretStore"
     }
 }
 
@@ -19837,7 +19893,6 @@ public struct ChatHistoryDeltaResult: Codable, Sendable {
     public let deltacursor: String
     public let sessioninfo: AnyCodable
     public let agentslist: AnyCodable?
-    public let inflightrun: AnyCodable?
     public let metadata: AnyCodable?
 
     public init(
@@ -19846,7 +19901,6 @@ public struct ChatHistoryDeltaResult: Codable, Sendable {
         deltacursor: String,
         sessioninfo: AnyCodable,
         agentslist: AnyCodable? = nil,
-        inflightrun: AnyCodable? = nil,
         metadata: AnyCodable? = nil)
     {
         self.kind = kind
@@ -19854,7 +19908,6 @@ public struct ChatHistoryDeltaResult: Codable, Sendable {
         self.deltacursor = deltacursor
         self.sessioninfo = sessioninfo
         self.agentslist = agentslist
-        self.inflightrun = inflightrun
         self.metadata = metadata
     }
 
@@ -19864,7 +19917,6 @@ public struct ChatHistoryDeltaResult: Codable, Sendable {
         case deltacursor = "deltaCursor"
         case sessioninfo = "sessionInfo"
         case agentslist = "agentsList"
-        case inflightrun = "inFlightRun"
         case metadata
     }
 }
