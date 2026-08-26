@@ -171,13 +171,16 @@ Shared infrastructure underneath (this is where the simplification lands):
 - **`net` = CSP.** Network reach uses the already-shipped per-widget CSP
   declaration (`connect-src` origins) — the self-updating weather widget
   fetches its API directly from the sandbox, no gateway involvement.
-- **Grants.** A widget declaring nothing renders immediately (sandboxed,
-  `default-src 'none'`, prompt sends individually confirmed) — same trust as
-  today's inline chat widgets. Declared tools/origins put the widget in
-  `pending` on the board: a placeholder card lists them human-readably with
-  one-tap **Allow**/**Reject**. Grants are per widget name; for `html` widgets
-  they are byte-frozen (sha256), and changed bytes keep the grant only if the
-  declaration shrank. Wrapper-authored board widgets forward user-clicked
+- **Grants.** HTML and registered widgets declaring nothing render immediately
+  (sandboxed, `default-src 'none'`, prompt sends individually confirmed).
+  Declared capabilities and interactive MCP Apps follow an explicit
+  [session permission mode](/gateway/permission-modes): **Full access** grants;
+  **Workspace** uses an AI reviewer and rejects anything it does not allow;
+  **Guarded** shows **Allow**/**Reject**; **Read only** rejects. Without an
+  explicit session mode, the equivalent configured exec approval policy applies.
+  Grants are per widget name; for `html` widgets they are byte-frozen (sha256),
+  and changed bytes keep the grant only if the declaration shrank. Wrapper-authored board
+  widgets forward user-clicked
   `http`/`https` new-tab links to the Control UI host; this ordinary navigation
   needs no grant and never grants iframe popup permissions.
 - **Authoring shim.** The document wrapper injects `window.openclaw.prompt`,

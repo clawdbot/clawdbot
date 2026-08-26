@@ -23,6 +23,8 @@ import {
   validateBoardWidgetGrantParams,
   validateBoardWidgetPutParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveAgentConfig, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveExecDefaults } from "../../agents/exec-defaults.js";
 import {
   boardWidgetHasGrantedTool,
   normalizeBoardWidgetDeclared,
@@ -32,6 +34,10 @@ import { appendBoardEventNotice, BoardEventPayloadError } from "../../boards/boa
 import type { BoardStore } from "../../boards/board-store.js";
 import { readCanvasDocumentHtmlSource } from "../../canvas/documents.js";
 import { buildWidgetDocument } from "../../canvas/wrap.js";
+import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.entry.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { loadExecApprovalsReadOnly } from "../../infra/exec-approvals.js";
+import { resolveExecAutoReviewDecision } from "../../infra/exec-auto-review.js";
 import {
   resolveBoardWidgetContentKind,
   resolveBoardWidgetContentKindByPluginKind,
@@ -139,6 +145,40 @@ function assertCapabilityParamsSize(
       `board widget ${capability} params exceed 8192 UTF-8 bytes`,
     );
   }
+}
+
+async function resolveBoardWidgetApproval(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  name: string;
+  declared: NonNullable<BoardWidgetMaterializedPutParams["declared"]>;
+}): Promise<"granted" | "rejected" | undefined> {
+  const { cfg, sessionKey, name, declared } = params;
+  const agentId = resolveSessionAgentId({ sessionKey, config: cfg });
+  const mode = resolveExecDefaults({
+    cfg,
+    agentId,
+    sessionKey,
+    sessionEntry: loadSessionEntryReadOnly({ sessionKey, agentId }),
+    execApprovals: loadExecApprovalsReadOnly(),
+  }).mode;
+  if (mode === "ask") {
+    return undefined;
+  }
+  if (mode !== "auto") {
+    return mode === "full" ? "granted" : "rejected";
+  }
+  const { createModelExecAutoReviewer } = await import("../../agents/exec-auto-reviewer.js");
+  const review = await resolveExecAutoReviewDecision(
+    createModelExecAutoReviewer({
+      cfg,
+      agentId,
+      reviewer:
+        resolveAgentConfig(cfg, agentId)?.tools?.exec?.reviewer ?? cfg.tools?.exec?.reviewer,
+    }),
+    { kind: "board-widget", name, declared, agent: { id: agentId, sessionKey } },
+  );
+  return review.decision === "allow-once" && review.risk === "low" ? "granted" : "rejected";
 }
 
 export function createBoardHandlers(
@@ -398,7 +438,30 @@ export function createBoardHandlers(
           content: materializedContent,
           ...(declared ? { declared } : {}),
         };
-        const snapshot = store.putWidget(boardParams);
+        let snapshot = store.putWidget(boardParams);
+        const widget = snapshot.widgets.find(
+          (candidate) => candidate.name === snapshot.resolvedWidgetName,
+        );
+        if (widget?.grantState === "pending") {
+          const decision = await resolveBoardWidgetApproval({
+            cfg: context.getRuntimeConfig(),
+            sessionKey: snapshot.sessionKey,
+            name: snapshot.resolvedWidgetName,
+            declared: declared ?? {},
+          });
+          if (decision) {
+            snapshot = {
+              ...store.grant(
+                snapshot.sessionKey,
+                snapshot.resolvedWidgetName,
+                decision,
+                widget.revision,
+                widget.instanceId,
+              ),
+              resolvedWidgetName: snapshot.resolvedWidgetName,
+            };
+          }
+        }
         context.broadcast("board.changed", {
           sessionKey: snapshot.sessionKey,
           revision: snapshot.revision,

@@ -821,7 +821,7 @@ describe("show_widget", () => {
 
     expect(inlineHtml).toContain("connect-src 'none'");
     expect(pinned).toMatchObject({
-      grantState: "pending",
+      grantState: "granted",
       declared: {
         netOrigins: ["https://api.open-meteo.com"],
         tools: ["health", "prompt"],

@@ -5,14 +5,28 @@ import { resetBoardEventNoticeStateForTest } from "../../boards/board-notices.js
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
 import { resolveCoreOperatorGatewayMethodScope } from "../methods/core-descriptors.js";
 import {
+  boardWidgetContentPermissionCases,
   createBoardHarness as createHarness,
   createMcpAppDependencies,
 } from "./board.test-support.js";
+
+const reviewWidgetApproval = vi.hoisted(() => vi.fn());
+const readSessionEntry = vi.hoisted(() => vi.fn());
+
+vi.mock("../../agents/exec-auto-reviewer.js", () => ({
+  createModelExecAutoReviewer: vi.fn(() => reviewWidgetApproval),
+}));
+vi.mock("../../config/sessions/session-accessor.entry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/session-accessor.entry.js")>()),
+  loadSessionEntryReadOnly: readSessionEntry,
+}));
 
 describe("board gateway methods", () => {
   beforeEach(() => {
     resetBoardEventNoticeStateForTest();
     resetSystemEventsForTest();
+    reviewWidgetApproval.mockReset();
+    readSessionEntry.mockReset();
   });
 
   it("registers every contract method with its required scope", () => {
@@ -290,6 +304,94 @@ describe("board gateway methods", () => {
     });
   });
 
+  it.each(boardWidgetContentPermissionCases)(
+    "routes $contentKind through session $permissionMode / effective $mode ($grantState)",
+    async (testCase) => {
+      const { contentKind, grantState } = testCase;
+      const permissionMode = "permissionMode" in testCase ? testCase.permissionMode : undefined;
+      const mode = "mode" in testCase ? testCase.mode : undefined;
+      const reviewDecision = "reviewDecision" in testCase ? testCase.reviewDecision : undefined;
+      const reviewRisk = "reviewRisk" in testCase ? testCase.reviewRisk : undefined;
+      const reviewFailure = "reviewFailure" in testCase && testCase.reviewFailure;
+      if (permissionMode) {
+        readSessionEntry.mockReturnValue({ permissionMode });
+      }
+      if (reviewDecision) {
+        reviewWidgetApproval.mockResolvedValue({
+          decision: reviewDecision,
+          risk: reviewRisk ?? (reviewDecision === "allow-once" ? "low" : "high"),
+          rationale: "widget capability review",
+        });
+      } else if (reviewFailure) {
+        reviewWidgetApproval.mockRejectedValue(new Error("reviewer unavailable"));
+      }
+      const { invoke, broadcast, store, mcpApp } = createHarness(undefined, undefined, undefined, {
+        getRuntimeConfig: () => ({
+          agents: { list: [{ id: "main" }] },
+          ...(mode ? { tools: { exec: { mode } } } : {}),
+        }),
+      });
+
+      const put = await invoke("board.widget.put", {
+        sessionKey: "agent:main:session",
+        name: "weather",
+        content:
+          contentKind === "html"
+            ? { kind: "html", html: "<p>weather</p>" }
+            : { kind: "mcp-app", viewId: "mcp-app-source" },
+        declared: { netOrigins: ["https://api.example.com"], tools: ["health"] },
+      });
+
+      expect(put).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          resolvedWidgetName: "weather",
+          widgets: [expect.objectContaining({ name: "weather", grantState })],
+        }),
+      );
+      const stored =
+        contentKind === "html"
+          ? store.readWidgetHtml("agent:main:session", "weather")
+          : store.readWidgetMcpApp("agent:main:session", "weather");
+      expect(stored?.grantState).toBe(grantState);
+      const reviewed = permissionMode === "workspace" || mode === "auto";
+      expect(reviewWidgetApproval).toHaveBeenCalledTimes(reviewed ? 1 : 0);
+      if (reviewed) {
+        expect(reviewWidgetApproval).toHaveBeenCalledWith({
+          kind: "board-widget",
+          name: "weather",
+          declared:
+            contentKind === "html"
+              ? { netOrigins: ["https://api.example.com"], tools: ["health"] }
+              : { tools: ["server.refresh", "server.search"] },
+          agent: { id: "main", sessionKey: "agent:main:session" },
+        });
+      }
+
+      const response = await invoke("board.get", { sessionKey: "agent:main:session" });
+      const snapshot = response.mock.calls[0]?.[1] as BoardSnapshot | undefined;
+      const widget = snapshot?.widgets[0];
+      expect(Boolean(widget?.frameUrl)).toBe(contentKind === "html" && grantState === "granted");
+      if (contentKind === "mcp-app") {
+        await invoke("board.widget.appView", {
+          sessionKey: "agent:main:session",
+          name: "weather",
+          revision: widget?.revision,
+          instanceId: widget?.instanceId,
+        });
+        expect(mcpApp.mintFromTranscript).toHaveBeenLastCalledWith(
+          expect.objectContaining({ readOnly: grantState !== "granted" }),
+        );
+      }
+      expect(broadcast).toHaveBeenCalledOnce();
+      expect(broadcast).toHaveBeenCalledWith("board.changed", {
+        sessionKey: "agent:main:session",
+        revision: grantState === "pending" ? 1 : 2,
+        widget: "weather",
+      });
+    },
+  );
+
   it("admits only a live MCP App view and persists its server-derived descriptor", async () => {
     const { invoke, mcpApp, store } = createHarness();
     const response = await invoke("board.widget.put", {
@@ -324,6 +426,48 @@ describe("board gateway methods", () => {
       interactive: true,
     });
   });
+
+  it.each([
+    { permissionMode: "full", grantState: "granted" },
+    { permissionMode: "workspace", grantState: "granted" },
+    { permissionMode: "guarded", grantState: "pending" },
+    { permissionMode: "read-only", grantState: "rejected" },
+  ] as const)(
+    "routes zero-tool interactive MCP Apps through $permissionMode ($grantState)",
+    async ({ permissionMode, grantState }) => {
+      readSessionEntry.mockReturnValue({ permissionMode });
+      reviewWidgetApproval.mockResolvedValue({
+        decision: "allow-once",
+        risk: "low",
+        rationale: "no tool capabilities",
+      });
+      const mcpApp = createMcpAppDependencies();
+      vi.mocked(mcpApp.resolveAllowedToolNames).mockResolvedValue([]);
+      const { invoke, store } = createHarness(undefined, mcpApp);
+
+      const response = await invoke("board.widget.put", {
+        sessionKey: "agent:main:main",
+        name: "message-app",
+        content: { kind: "mcp-app", viewId: "mcp-app-source" },
+      });
+
+      expect(response.mock.calls[0]?.[1]).toMatchObject({
+        widgets: [{ name: "message-app", grantState }],
+      });
+      expect(store.readWidgetMcpApp("agent:main:main", "message-app")).toMatchObject({
+        grantState,
+        interactive: true,
+        declaredTools: [],
+      });
+      if (permissionMode === "workspace") {
+        expect(reviewWidgetApproval).toHaveBeenCalledWith(
+          expect.objectContaining({ kind: "board-widget", declared: {} }),
+        );
+      } else {
+        expect(reviewWidgetApproval).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("never upgrades a restart-reconstructed read-only source", async () => {
     const mcpApp = createMcpAppDependencies();
