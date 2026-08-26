@@ -36,7 +36,6 @@ import {
 } from "./openai-responses-replay-internal.js";
 import {
   getCompat,
-  isOpenAICodexResponsesModel,
   resolveOpenAIStrictToolFlagWithDiagnostics,
   usesNativeOpenAICodexResponsesBackend,
 } from "./openai-transport-params.js";
@@ -179,18 +178,26 @@ export function sanitizeOpenAICodexResponsesParams<T extends Record<string, unkn
   return params;
 }
 
-function buildOpenAICodexResponsesInstructions(context: Context): string | undefined {
+function buildOpenAIResponsesInstructionsText(context: Context): string | undefined {
   if (!context.systemPrompt) {
     return undefined;
   }
   return sanitizeTransportPayloadText(stripSystemPromptCacheBoundary(context.systemPrompt));
 }
 
-function resolveOpenAICodexResponsesInstructions(
-  model: Model,
-  context: Context,
-): string | undefined {
-  const instructions = buildOpenAICodexResponsesInstructions(context);
+// Every Responses-API request carries the system prompt via `instructions`,
+// never as an `input` message: `input` is what HTTP continuation
+// (openai-responses-continuation.ts) compares byte-for-byte against the
+// cached previous request to decide whether it can reuse
+// previous_response_id. The embedded runner rebuilds the system prompt fresh
+// on every attempt from live runtime state (active background processes,
+// watched sessions, active-memory context) -- if that text sat inside
+// `input`, ordinary state churn between two turns would make the comparison
+// fail and permanently defeat continuation. `instructions` sits outside the
+// compared `input` array, so it can vary freely per turn with no effect on
+// continuation eligibility.
+function resolveOpenAIResponsesInstructions(model: Model, context: Context): string | undefined {
+  const instructions = buildOpenAIResponsesInstructionsText(context);
   if (instructions && instructions.trim().length > 0) {
     return instructions;
   }
@@ -199,14 +206,32 @@ function resolveOpenAICodexResponsesInstructions(
     : undefined;
 }
 
-function ensureOpenAICodexResponsesInput(messages: ResponseInput, context: Context): void {
+// xAI's server-side `/responses/compact` endpoint (see
+// postOpenAIResponsesCompaction in openai-responses-client.ts) predates and
+// does not accept `instructions`: per
+// https://docs.x.ai/developers/advanced-api-usage/context-compaction the
+// system prompt must be the first `input` message, unlike the main streaming
+// endpoint. Build that message on demand so the compact request body can
+// re-embed the same text the streaming path now carries via `instructions`.
+export function buildOpenAIResponsesCompactSystemMessage(model: Model, instructions: string) {
+  const compat = getCompat(model as OpenAIModeModel);
+  const supportsDeveloperRole =
+    typeof compat.supportsDeveloperRole === "boolean" ? compat.supportsDeveloperRole : undefined;
+  const role = model.reasoning && supportsDeveloperRole !== false ? "developer" : "system";
+  return buildResponsesInputMessage(role, [{ type: "input_text", text: instructions }]);
+}
+
+// The Responses API rejects an empty `input` array; when the only content
+// for this turn was the system prompt (now carried by `instructions`
+// instead), inject a placeholder input item so the request stays valid.
+function ensureOpenAIResponsesNonEmptyInput(messages: ResponseInput, context: Context): void {
   if (messages.length > 0 || !context.systemPrompt) {
     return;
   }
-  const text = buildOpenAICodexResponsesInstructions(context);
+  const text = buildOpenAIResponsesInstructionsText(context);
   if (!text) {
     throw new Error(
-      "OpenAI Codex Responses requires non-empty input when only systemPrompt is provided.",
+      "OpenAI Responses requires non-empty input when only systemPrompt is provided.",
     );
   }
   messages.push(
@@ -239,7 +264,6 @@ function convertOpenAIResponsesMessagesForRequest(
   options: OpenAIResponsesOptions | undefined,
   replayMode: OpenAIResponsesReplayMode,
 ): ResponseInput {
-  const isCodexResponses = isOpenAICodexResponsesModel(model);
   const isNativeCodexResponses = usesNativeOpenAICodexResponsesBackend(model);
   const compat = getCompat(model as OpenAIModeModel);
   const supportsDeveloperRole =
@@ -252,7 +276,7 @@ function convertOpenAIResponsesMessagesForRequest(
   const replayResponsesItemIds =
     !isNativeCodexResponses && (options?.replayResponsesItemIds ?? policyAllowsReplayIds);
   return convertResponsesMessages(model, context, OPENAI_RESPONSES_TOOL_CALL_PROVIDERS, {
-    includeSystemPrompt: !isCodexResponses,
+    includeSystemPrompt: false,
     supportsDeveloperRole,
     replayReasoningItems: true,
     replayResponsesItemIds,
@@ -269,25 +293,21 @@ export function buildOpenAIResponsesParams(
   metadata?: Record<string, string>,
   replayMode: OpenAIResponsesReplayMode = "checkpoint",
 ) {
-  const isCodexResponses = isOpenAICodexResponsesModel(model);
   const payloadPolicy = resolveOpenAIResponsesPayloadPolicy(model, {
     storeMode: "disable",
   });
   const messages = convertOpenAIResponsesMessagesForRequest(model, context, options, replayMode);
-  if (isCodexResponses) {
-    ensureOpenAICodexResponsesInput(messages, context);
-  }
+  ensureOpenAIResponsesNonEmptyInput(messages, context);
   const cacheRetention = resolveCacheRetention(options?.cacheRetention);
   const promptCacheKey = resolvePromptCacheKey(options, cacheRetention);
+  const instructions = resolveOpenAIResponsesInstructions(model, context);
   const params: OpenAIResponsesRequestParams = {
     model: model.id,
     input: messages,
     stream: true,
     prompt_cache_key: promptCacheKey,
     prompt_cache_retention: getPromptCacheRetention(model.baseUrl, cacheRetention),
-    ...(isCodexResponses
-      ? { instructions: resolveOpenAICodexResponsesInstructions(model, context) }
-      : {}),
+    ...(instructions ? { instructions } : {}),
     ...(metadata ? { metadata } : {}),
   };
   const effectiveMaxTokens = options?.maxTokens || model.maxTokens;

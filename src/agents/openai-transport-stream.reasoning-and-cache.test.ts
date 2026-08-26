@@ -229,7 +229,7 @@ describe("openai transport stream", () => {
     expect(params).not.toHaveProperty("store");
   });
 
-  it("uses system role for xAI default-route responses providers without relying on baseUrl host sniffing", () => {
+  it("carries the system prompt via top-level instructions for xAI default-route responses providers", () => {
     const params = buildOpenAIResponsesParams(
       makeResponsesModel({
         id: "grok-4.1-fast",
@@ -239,8 +239,8 @@ describe("openai transport stream", () => {
       }),
       emptyContext(),
       undefined,
-    ) as { input?: Array<{ role?: string }> };
+    ) as { instructions?: string };
 
-    expect(params.input?.[0]?.role).toBe("system");
+    expect(params.instructions).toBe("system");
   });
 });

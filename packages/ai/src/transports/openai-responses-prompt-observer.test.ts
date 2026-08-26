@@ -280,28 +280,34 @@ afterEach(() => {
 });
 
 describe("OpenAI Responses provider prompt observer", () => {
-  it.each([
-    { reasoning: true, promptSource: "input.developer" },
-    { reasoning: false, promptSource: "input.system" },
-  ] as const)("observes the final $promptSource prompt", async ({ reasoning, promptSource }) => {
-    const prompt = `PRIVATE-${promptSource}-PROMPT`;
-    const run = await runObservedRequest({
-      context: createContext(prompt),
-      model: createModel({ reasoning }),
-    });
+  // Every non-Codex Responses request now carries the system prompt via
+  // `instructions`, not an `input.developer`/`input.system` message -- see
+  // resolveOpenAIResponsesInstructions in openai-responses-params-internal.ts.
+  // The reasoning flag no longer changes promptSource (it used to select
+  // between the developer/system input roles); both cases stay in the table
+  // to confirm reasoning=true/false doesn't regress instructions delivery.
+  it.each([{ reasoning: true }, { reasoning: false }] as const)(
+    "observes the final instructions prompt (reasoning=$reasoning)",
+    async ({ reasoning }) => {
+      const prompt = `PRIVATE-reasoning-${reasoning}-PROMPT`;
+      const run = await runObservedRequest({
+        context: createContext(prompt),
+        model: createModel({ reasoning }),
+      });
 
-    expect(run.observations).toEqual([
-      {
-        egress: "responses-sdk",
-        payloadVariant: "initial",
-        promptSource,
-        expectedChars: prompt.length,
-        observedChars: prompt.length,
-        matchesAssembledPrompt: true,
-      },
-    ]);
-    expect(JSON.stringify(run.observations)).not.toContain(prompt);
-  });
+      expect(run.observations).toEqual([
+        {
+          egress: "responses-sdk",
+          payloadVariant: "initial",
+          promptSource: "instructions",
+          expectedChars: prompt.length,
+          observedChars: prompt.length,
+          matchesAssembledPrompt: true,
+        },
+      ]);
+      expect(JSON.stringify(run.observations)).not.toContain(prompt);
+    },
+  );
 
   it("observes Azure Responses egress", async () => {
     const prompt = "PRIVATE-AZURE-PROMPT";
@@ -320,7 +326,7 @@ describe("OpenAI Responses provider prompt observer", () => {
     expect(run.observations[0]).toMatchObject({
       egress: "responses-sdk",
       payloadVariant: "initial",
-      promptSource: "input.developer",
+      promptSource: "instructions",
       matchesAssembledPrompt: true,
     });
   });
@@ -683,9 +689,7 @@ describe("OpenAI Responses provider prompt observer", () => {
     if (!request) {
       throw new Error("missing captured request");
     }
-    expect((request.input as Array<Record<string, unknown>>)[0]).toMatchObject({
-      content: [{ type: "input_text", text: normalizedPrompt }],
-    });
+    expect(request.instructions).toBe(normalizedPrompt);
   });
 
   it("reports missing and same-length mutated prompts without retaining content", async () => {

@@ -10,7 +10,7 @@ import {
 import { testing } from "./openai-transport-stream.test-support.js";
 
 describe("openai transport stream", () => {
-  it("uses system role instead of developer for responses providers that disable developer role", () => {
+  it("carries the system prompt via top-level instructions for xAI responses providers", () => {
     const params = buildOpenAIResponsesParams(
       makeResponsesModel({
         id: "grok-4.1-fast",
@@ -24,12 +24,12 @@ describe("openai transport stream", () => {
         tools: [],
       } as never,
       undefined,
-    ) as { input?: Array<{ role?: string }> };
+    ) as { instructions?: string };
 
-    expect(params.input?.[0]?.role).toBe("system");
+    expect(params.instructions).toBe("system");
   });
 
-  it("adds explicit message item types for Responses system and user input items", () => {
+  it("adds explicit message item types for Responses user input items, carrying the system prompt via instructions", () => {
     const params = buildOpenAIResponsesParams(
       createAzureResponsesModel(),
       {
@@ -38,14 +38,13 @@ describe("openai transport stream", () => {
         tools: [],
       } as never,
       undefined,
-    ) as { input?: Array<{ type?: string; role?: string; content?: unknown }> };
+    ) as {
+      instructions?: string;
+      input?: Array<{ type?: string; role?: string; content?: unknown }>;
+    };
 
+    expect(params.instructions).toBe("system");
     expect(params.input?.[0]).toMatchObject({
-      type: "message",
-      role: "system",
-      content: [{ type: "input_text", text: "system" }],
-    });
-    expect(params.input?.[1]).toMatchObject({
       type: "message",
       role: "user",
       content: [{ type: "input_text", text: "hello" }],
@@ -143,7 +142,7 @@ describe("openai transport stream", () => {
     expect(params.include).toEqual(["reasoning.encrypted_content"]);
   });
 
-  it("keeps developer role for native OpenAI reasoning responses models", () => {
+  it("carries the system prompt via top-level instructions for native OpenAI reasoning responses models", () => {
     const params = buildOpenAIResponsesParams(
       makeResponsesModel({
         id: "gpt-5.4",
@@ -155,9 +154,9 @@ describe("openai transport stream", () => {
         tools: [],
       } as never,
       undefined,
-    ) as { input?: Array<{ role?: string }> };
+    ) as { instructions?: string };
 
-    expect(params.input?.[0]?.role).toBe("developer");
+    expect(params.instructions).toBe("system");
   });
 
   it("serializes Responses input messages with explicit message type and content parts", () => {
@@ -174,14 +173,10 @@ describe("openai transport stream", () => {
         tools: [],
       } as never,
       undefined,
-    ) as { input?: unknown };
+    ) as { instructions?: string; input?: unknown };
 
+    expect(params.instructions).toBe("system");
     expect(params.input).toEqual([
-      {
-        type: "message",
-        role: "system",
-        content: [{ type: "input_text", text: "system" }],
-      },
       {
         type: "message",
         role: "user",
