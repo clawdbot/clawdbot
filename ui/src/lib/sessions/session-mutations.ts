@@ -16,7 +16,6 @@ import {
   type SessionCreateParams,
 } from "./create.ts";
 import type { SessionPatch, SessionPatchOptions } from "./patch.ts";
-import { requestSessionRecovery } from "./recover.ts";
 import { createSessionArchiveVisibility } from "./session-archive-visibility.ts";
 import type {
   SessionConnectionOwner,
@@ -232,27 +231,6 @@ export function createSessionMutations(host: SessionMutationsHost) {
 
   const create = async (params: SessionCreateParams = {}) =>
     (await createResult(params))?.key ?? null;
-
-  const recover = async (params: { key: string; agentId?: string }) => {
-    const scope = host.connection.capture();
-    if (!scope) {
-      return null;
-    }
-    try {
-      const result = await requestSessionRecovery(scope.client, params);
-      if (!host.connection.isCurrent(scope)) {
-        return null;
-      }
-      host.notifyCreated(result.key);
-      await host.refreshReplacement(params.agentId);
-      return host.connection.isCurrent(scope) ? result : null;
-    } catch (error) {
-      if (host.connection.isCurrent(scope)) {
-        host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
-      }
-      return null;
-    }
-  };
 
   const patch = async (
     key: string,
@@ -648,7 +626,6 @@ export function createSessionMutations(host: SessionMutationsHost) {
   return {
     create,
     createResult,
-    recover,
     delete: remove,
     deleteMany: removeMany,
     patch,

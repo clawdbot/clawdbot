@@ -18,8 +18,12 @@ describe("session model override lifecycle", () => {
         if (method === "sessions.patch") {
           return ++patchCount === 1 ? { ok: true, key, entry: {} } : pending.promise;
         }
-        if (method === "sessions.delete") return { deleted: true };
-        if (method === "sessions.list") return sessionsResult([], 2);
+        if (method === "sessions.delete") {
+          return { deleted: true };
+        }
+        if (method === "sessions.list") {
+          return sessionsResult([], 2);
+        }
         throw new Error(`Unexpected request: ${method}`);
       });
       const { gateway } = createGatewayHarness({ request } as unknown as GatewayBrowserClient);

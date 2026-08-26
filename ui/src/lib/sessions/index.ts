@@ -1,6 +1,7 @@
 import type { SessionCatalogPullRequestSummary } from "../../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import { GatewayRequestError, type GatewayEventFrame } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import { formatUiError } from "../format-error.ts";
 import { createGatewayConnectionLifecycle } from "../gateway-connection-lifecycle.ts";
 import { scopedAgentListParamsForSession } from "./navigation.ts";
 import {
@@ -177,6 +178,12 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     retryDelayMs: sessionRetryDelayMs,
   });
 
+  const notifyCreated = (key: string) => {
+    for (const listener of createdListeners) {
+      listener(key);
+    }
+  };
+
   const mutations = createSessionMutations({
     connection,
     readState: () => state,
@@ -184,11 +191,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     refreshReplacement: (agentId) => roster.refreshReplacement(agentId),
     publishedRow: (key) => roster.publishedRow(key),
     redecorateLists: () => roster.redecorateLists(),
-    notifyCreated(key) {
-      for (const listener of createdListeners) {
-        listener(key);
-      }
-    },
+    notifyCreated,
     retirePullRequestSummary,
   });
 
@@ -196,6 +199,8 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     connection,
     agentId: () => state.agentId,
     refreshReplacement: (agentId) => roster.refreshReplacement(agentId),
+    notifyCreated,
+    reportError: (error) => publish({ ...state, error: formatUiError(error) }, "operation"),
   });
 
   const pullRequestSummary = (key: string) => pullRequestSummaries.get(key.trim());
@@ -527,7 +532,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     refreshReplacement: roster.refreshReplacement,
     createResult: mutations.createResult,
     create: mutations.create,
-    recover: mutations.recover,
+    recover: operations.recover,
     patch: mutations.patch,
     archiveVisibility: mutations.archiveVisibility,
     setArchiveVisibility: mutations.setArchiveVisibility,
