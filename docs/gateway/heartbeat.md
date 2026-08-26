@@ -8,10 +8,13 @@ sidebarTitle: "Heartbeat"
 ---
 
 <Note>
-**Heartbeat vs automations?** See [Automation](/automation) for guidance on when to use each.
+**Heartbeat is an automation.** See [Automation](/automation) for guidance on
+choosing the system-owned monitor or an independently scheduled job.
 </Note>
 
-Heartbeat runs **periodic agent turns** in the main session so the model can surface anything that needs attention without spamming you.
+Heartbeat is a system-owned automation that runs **periodic agent turns** in the
+main session so the model can surface anything that needs attention without
+spamming you.
 
 Heartbeat is a scheduled main-session turn - it does **not** create [background task](/automation/tasks) records. Task records are for detached work (ACP runs, subagents, isolated automation jobs).
 
@@ -71,7 +74,7 @@ Example config:
 - Delivery target: `owner`. OpenClaw uses the first concrete `commands.ownerAllowFrom` entry, then channel `allowFrom`, and never sends this route to a group. Without a resolvable owner DM, ambient polls skip with `reason=no-route`. Set `target: "last"` to follow the most recent conversation, including groups, or `target: "none"` for internal-only runs.
 - Prompt body (configurable via `agents.defaults.heartbeat.prompt`): `Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply NO_REPLY.`
 - Timeout: unset heartbeat turns use `agents.defaults.timeoutSeconds` when set. Otherwise, they use the heartbeat cadence capped at 600 seconds. Set `agents.defaults.heartbeat.timeoutSeconds` or per-agent `agents.entries.*.heartbeat.timeoutSeconds` for longer heartbeat work.
-- The heartbeat prompt is sent **verbatim** as the user message. The system prompt includes a "Heartbeats" section only for heartbeat-triggered turns; ordinary user and automation turns do not receive that guidance.
+- The heartbeat prompt is sent **verbatim** as the scheduled user message. Heartbeat runs use the same system prompt as ordinary agent turns; there is no heartbeat-specific system-prompt section.
 - When recurring heartbeats are disabled with `0m`, the monitor automation job stays but is disabled, and its scratch is retained for when you re-enable the cadence. Targeted event-driven wakes remain available.
 - When automations are disabled entirely, scheduled heartbeats do not run even if heartbeat cadence remains enabled.
 - Active hours (`heartbeat.activeHours`) are checked in the configured timezone. Outside the window, heartbeats are skipped until the next tick inside the window.

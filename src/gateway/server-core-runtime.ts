@@ -292,6 +292,7 @@ export async function startGatewayCoreRuntime(input: {
       ...createGatewayAuxHandlers({
         log,
         chatAbortControllers,
+        hasRunAbortMarker: (runId) => chatRunState.hasAbortMarker(runId),
         activateRuntimeSecrets,
         sharedGatewaySessionGenerationState,
         resolveSharedGatewaySessionGenerationForConfig,

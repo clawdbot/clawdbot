@@ -505,10 +505,10 @@ export const streamOpenAICompletions: StreamFunction<
         }
 
         if (choice.finish_reason) {
-          const finishReasonResult = mapOpenAIStopReason(choice.finish_reason);
-          output.stopReason = finishReasonResult.stopReason;
-          if (finishReasonResult.errorMessage) {
-            output.errorMessage = finishReasonResult.errorMessage;
+          const reason = mapOpenAIStopReason(choice.finish_reason, { allowSingularToolCall: true });
+          output.stopReason = reason.stopReason;
+          if (reason.errorMessage) {
+            output.errorMessage = reason.errorMessage;
           }
           hasFinishReason = true;
         }

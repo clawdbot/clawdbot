@@ -517,6 +517,7 @@ function openAiOAuthCredential(token: string, lifetimeMs = 3_600_000) {
 
 function mockCodexRuntimeInstall(installRecord?: PluginInstallRecord) {
   return vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
+    ok: true as const,
     cfg: installRecord
       ? {
           ...cfg,
@@ -527,8 +528,6 @@ function mockCodexRuntimeInstall(installRecord?: PluginInstallRecord) {
         }
       : cfg,
     required: true,
-    installed: true,
-    status: "installed" as const,
   })) as never;
 }
 
@@ -4172,6 +4171,7 @@ describe("activateSetupInference", () => {
     const ensureCodex = vi.fn(async (params: { cfg: OpenClawConfig }) => {
       events.push("install-plugin");
       return {
+        ok: true as const,
         cfg: {
           ...params.cfg,
           plugins: {
@@ -4194,8 +4194,6 @@ describe("activateSetupInference", () => {
           },
         },
         required: true,
-        installed: true,
-        status: "installed" as const,
       };
     });
     const runEmbeddedAgent = vi.fn(async (params: SuccessfulRunParams) => {
@@ -4477,6 +4475,7 @@ describe("activateSetupInference", () => {
     const initialConfig: OpenClawConfig = {};
     const configHarness = createConfigTransformHarness(initialConfig);
     const ensureCodex = vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
+      ok: true as const,
       cfg: {
         ...cfg,
         plugins: {
@@ -4488,8 +4487,6 @@ describe("activateSetupInference", () => {
         },
       },
       required: true,
-      installed: true,
-      status: "installed" as const,
     }));
     const refreshPluginRegistryAfterConfigMutation = vi.fn(
       async (params: { logger?: { warn?: (message: string) => void } }) => {
@@ -4685,6 +4682,7 @@ describe("activateSetupInference", () => {
       plugins: { installs: canonicalRecords },
     } satisfies OpenClawConfig;
     const ensureCodex = vi.fn(async (params: { cfg: OpenClawConfig }) => ({
+      ok: true as const,
       cfg: {
         ...params.cfg,
         plugins: {
@@ -4693,8 +4691,6 @@ describe("activateSetupInference", () => {
         },
       },
       required: true,
-      installed: true,
-      status: "installed" as const,
     }));
     let persistedConfig: OpenClawConfig = sourceConfig;
     let installIndex: Record<string, PluginInstallRecord> = structuredClone(canonicalRecords);
@@ -4764,10 +4760,9 @@ describe("activateSetupInference", () => {
     const result = await activateCodexSetup({
       deps: {
         ensureCodexRuntimePlugin: vi.fn(async () => ({
-          cfg: {},
-          required: true,
-          installed: false,
+          ok: false as const,
           status: "failed" as const,
+          message: "Codex runtime is required but unavailable.",
         })) as never,
         runEmbeddedAgent: runEmbeddedAgent as never,
         transformConfigWithPendingPluginInstalls: transformConfig as never,
@@ -5035,10 +5030,9 @@ describe("activateSetupInference", () => {
       const cachedRecord = installedRecordCache ?? metadataCache ?? discoveryCache;
       if (cachedRecord) {
         return {
+          ok: true as const,
           cfg,
           required: true,
-          installed: true,
-          status: "installed" as const,
         };
       }
       const record = installRecords[createdRecords.length];
@@ -5050,6 +5044,7 @@ describe("activateSetupInference", () => {
       metadataCache = record;
       discoveryCache = record;
       return {
+        ok: true as const,
         cfg: {
           ...cfg,
           plugins: {
@@ -5058,8 +5053,6 @@ describe("activateSetupInference", () => {
           },
         },
         required: true,
-        installed: true,
-        status: "installed" as const,
       };
     });
     const runEmbeddedAgent = vi

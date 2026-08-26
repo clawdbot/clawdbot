@@ -38,6 +38,7 @@ import {
   seedMainSessionStore,
   withTempTelegramHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
+import { isRetryableHeartbeatSkipReason } from "./heartbeat-wake.js";
 import {
   enqueueSystemEvent,
   peekSystemEventEntries,
@@ -176,7 +177,10 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     return call;
   }
 
-  function setAgentTurnStatus(options: object | undefined, status: "ok" | "failed" | "superseded") {
+  function setAgentTurnStatus(
+    options: object | undefined,
+    status: "ok" | "failed" | "superseded" | "cancelled",
+  ) {
     const runState = resolveReplyOperationRunState(options);
     if (!runState) {
       throw new Error("Expected heartbeat reply operation run state");
@@ -332,37 +336,43 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     });
   });
 
-  it("retains heartbeat work and scratch when a visible turn supersedes the run", async () => {
+  it.each([
+    { turnStatus: "superseded" as const, reason: "preempted" },
+    { turnStatus: "cancelled" as const, reason: "agent-runner-cancelled" },
+  ])("retains heartbeat work and scratch after $turnStatus", async ({ turnStatus, reason }) => {
     await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const cfg = createConfig({ tmpDir, storePath });
       const jobId = await seedHeartbeatScratchForTest({ content: "old scratch" });
-      const sessionKey = await seedTelegramSession(storePath, cfg);
+      const previousHeartbeat = {
+        lastHeartbeatText: "Previous successful heartbeat.",
+        lastHeartbeatSentAt: 123,
+      };
+      const sessionKey = await seedTelegramSession(storePath, cfg, previousHeartbeat);
       enqueueSystemEvent("exec finished: backup completed", { sessionKey });
       const inspectedEvents = peekSystemEventEntries(sessionKey);
       replySpy.mockImplementationOnce(async (_ctx, options) => {
-        setAgentTurnStatus(options, "superseded");
+        setAgentTurnStatus(options, turnStatus);
         return createHeartbeatToolResponsePayload({
           outcome: "progress",
           notify: true,
           summary: "Backup completed.",
-          notificationText: "Backup completed successfully.",
           scratch: "new private scratch",
         });
       });
       const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
 
-      const result = await runHeartbeat(cfg, replySpy, sendTelegram, {
-        source: "exec-event",
-        intent: "event",
-        reason: "exec-event",
-      });
+      const execWake = { source: "exec-event", intent: "event", reason: "exec-event" } as const;
+      const result = await runHeartbeat(cfg, replySpy, sendTelegram, execWake);
 
-      expect(result).toEqual({ status: "skipped", reason: "preempted" });
+      expect(result).toEqual({ status: "skipped", reason });
       expect(sendTelegram).not.toHaveBeenCalled();
       expect(peekSystemEventEntries(sessionKey)).toEqual(inspectedEvents);
       expect(readCronJobScratchState(resolveCronJobsStorePath(), jobId).scratch?.content).toBe(
         "old scratch",
       );
+      expect(readSessionStoreForTest(storePath)[sessionKey]).toMatchObject(previousHeartbeat);
+      expect(getLastHeartbeatEvent()).toMatchObject({ status: "skipped", reason });
+      expect(isRetryableHeartbeatSkipReason(reason)).toBe(turnStatus === "superseded");
     });
   });
 

@@ -692,20 +692,16 @@ export class ChatPage extends OpenClawLightDomElement {
   override render() {
     const indicator = this.dropIndicator;
     const layout = this.layout ?? this.classicLayout();
-    const renderedPaneOwners = layout.columns.flatMap((column) =>
-      column.panes.map((pane) => ({ columnId: column.id, pane })),
-    );
-    const retainedSessions = this.retainedSessions.retain(
-      renderedPaneOwners.map(({ pane }) => pane),
-    );
-    const nextPaneKeys = new Set(
-      renderedPaneOwners.flatMap(({ columnId, pane }) => {
-        const ownerKey = JSON.stringify([columnId, pane.id]);
-        return (retainedSessions.get(pane.id) ?? []).map((sessionKey) =>
-          JSON.stringify([ownerKey, sessionKey]),
-        );
-      }),
-    );
+    const retainedSessions = this.retainedSessions.retain(panesOf(layout));
+    const nextPaneKeys = new Set<string>();
+    for (const column of layout.columns) {
+      for (const pane of column.panes) {
+        const ownerKey = JSON.stringify([column.id, pane.id]);
+        for (const sessionKey of retainedSessions.get(pane.id) ?? []) {
+          nextPaneKeys.add(JSON.stringify([ownerKey, sessionKey]));
+        }
+      }
+    }
     const renderValue = () => html`
       <div class="chat-split-view__drop-container">
         ${this.renderSplitLayout(layout, Boolean(this.layout), retainedSessions)}

@@ -174,9 +174,9 @@ export class SidebarSessionProjection {
     };
     this.previousCollapsedSections = new Set(input.collapsedSections);
 
-    const retainedKeys = new Set<string>();
+    const staleKeys = new Set([...this.childModes.keys(), ...this.heldSubtitles.keys()]);
     const observeTree = (session: SidebarRecentSession) => {
-      retainedKeys.add(session.key);
+      staleKeys.delete(session.key);
       if (session.containsActiveDescendant && !this.childModes.has(session.key)) {
         this.childModes.set(session.key, "expanded");
       }
@@ -186,15 +186,9 @@ export class SidebarSessionProjection {
       }
     };
     input.rows.forEach(observeTree);
-    for (const key of this.childModes.keys()) {
-      if (!retainedKeys.has(key)) {
-        this.childModes.delete(key);
-      }
-    }
-    for (const key of this.heldSubtitles.keys()) {
-      if (!retainedKeys.has(key)) {
-        this.heldSubtitles.delete(key);
-      }
+    for (const key of staleKeys) {
+      this.childModes.delete(key);
+      this.heldSubtitles.delete(key);
     }
 
     const { grouping, knownGroups, selfOwnerId, sectionOrder, catalogIds } = input;

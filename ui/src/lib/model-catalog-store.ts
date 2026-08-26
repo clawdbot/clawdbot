@@ -1,6 +1,7 @@
 // Control UI model metadata boundary.
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ModelCatalogEntry } from "../api/types.ts";
+import { peekChatMetadata, revalidateChatMetadata } from "./chat/chat-metadata-store.ts";
 
 const MODEL_CATALOG_CACHE_TTL_MS = 60_000;
 // A picker open is an operator signal to revalidate, but full provider discovery can be slow.
@@ -103,6 +104,11 @@ export async function loadModels(
           // An exact catalog supersedes the prepared projection. Reusing it for
           // automatic reads prevents route re-entry from restoring stale data.
           cache.set(preparedCacheKey, entry);
+          if (peekChatMetadata(client, agentId)) {
+            // Metadata owns the per-agent projection; refresh its shared
+            // snapshot after explicit discovery instead of copying catalog rows.
+            void revalidateChatMetadata(client, agentId).catch(() => undefined);
+          }
         }
       }
       return result.models;

@@ -4379,7 +4379,7 @@ describe("runCodexAppServerAttempt", () => {
     };
     const collaborationInstructions =
       turnStartParams.collaborationMode?.settings?.developer_instructions ?? "";
-    expect(collaborationInstructions).toContain("This is an OpenClaw heartbeat turn");
+    expect(collaborationInstructions).not.toContain("This is an OpenClaw heartbeat turn");
     expect(collaborationInstructions).not.toContain("HEARTBEAT.md exists");
     expect(collaborationInstructions).not.toContain(heartbeatPath);
     const legacyContent = contents.trim();

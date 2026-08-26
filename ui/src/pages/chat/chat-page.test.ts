@@ -187,6 +187,7 @@ function setViewerPresenceContext(page: ChatPage) {
       lastErrorCode: null,
     },
     connection: { gatewayUrl: "ws://example.test", token: "", bootstrapToken: "", password: "" },
+    connectionRevision: 0,
     eventLog: [],
     connect: vi.fn(),
     setSessionKey: vi.fn(),

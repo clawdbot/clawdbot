@@ -263,7 +263,7 @@ suite.define(() => {
       await expect
         .poll(() => page.getByRole("button", { name: "Start session" }).isEnabled())
         .toBe(true);
-      expect(await page.locator(".chat-send-btn").count()).toBe(1);
+      expect(await page.locator(".new-session-page__start-submit").count()).toBe(1);
     } finally {
       await context.close();
     }

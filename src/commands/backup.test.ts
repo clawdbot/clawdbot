@@ -41,6 +41,7 @@ type CapturedBackupManifest = {
     configPath: string;
     oauthDir: string;
     workspaceDirs: string[];
+    agentRoots: Array<{ agentId: string; sourcePath: string }>;
   };
   assets: Array<Pick<BackupAsset, "kind" | "sourcePath" | "archivePath">>;
   skipped: Array<{ kind: string; sourcePath: string; reason: string; coveredBy?: string }>;
@@ -310,6 +311,7 @@ describe("backup commands", () => {
         configPath,
         oauthDir: path.join(stateDir, "credentials"),
         workspaceDirs: [externalWorkspace],
+        agentRoots: [],
       });
       expect(manifest.assets).toEqual(
         result.assets.map((asset) => ({
@@ -364,7 +366,12 @@ describe("backup commands", () => {
       const runtime = createBackupTestRuntime();
       await mockStateOnlyBackupPlan(stateDir);
       tarCreateMock.mockImplementationOnce(
-        (options: { filter?: (entryPath: string) => boolean }, entryPaths: string[]) =>
+        (
+          options: {
+            filter?: (entryPath: string, entryStat: { isDirectory: () => boolean }) => boolean;
+          },
+          entryPaths: string[],
+        ) =>
           createMockTarStream({
             beforeRead: () => {
               const manifestPath = entryPaths[0];
@@ -372,9 +379,13 @@ describe("backup commands", () => {
               if (!manifestPath || !stateRoot) {
                 throw new Error("backup test expected manifest and state entries");
               }
-              expect(options.filter?.(manifestPath)).toBe(true);
+              const fileStat = { isDirectory: () => false };
+              expect(options.filter?.(manifestPath, fileStat)).toBe(true);
               expect(
-                options.filter?.(path.join(stateRoot, "agents", "main", "sessions", "s.jsonl")),
+                options.filter?.(
+                  path.join(stateRoot, "agents", "main", "sessions", "s.jsonl"),
+                  fileStat,
+                ),
               ).toBe(false);
             },
           }),

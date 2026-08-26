@@ -113,7 +113,7 @@ describe("user profiles", () => {
     expect(
       openOpenClawStateDatabase(options).db.prepare("PRAGMA user_version").get()?.user_version,
     ).toBe(versionBefore);
-    expect(OPENCLAW_STATE_SCHEMA_VERSION).toBe(9);
+    expect(OPENCLAW_STATE_SCHEMA_VERSION).toBe(10);
     expect(second).toEqual(first);
     expect(ensureProfileForEmail("ADA@example.com", options)).toEqual(first);
     expect(listProfiles(options)).toEqual([

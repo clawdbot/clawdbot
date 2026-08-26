@@ -6,7 +6,7 @@ import {
 
 describe("native state schema version guard", () => {
   it("keeps the checked-in Swift and TypeScript contracts aligned", () => {
-    expect(checkNativeStateSchemaVersion()).toBe(9);
+    expect(checkNativeStateSchemaVersion()).toBe(10);
   });
 
   it("fails when a deliberate Swift fixture drifts behind TypeScript", () => {

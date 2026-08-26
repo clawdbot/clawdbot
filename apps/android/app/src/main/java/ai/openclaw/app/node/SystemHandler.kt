@@ -13,8 +13,6 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 
@@ -163,7 +161,7 @@ class SystemHandler private constructor(
   }
 
   private fun parseNotifyRequest(paramsJson: String?): SystemNotifyRequest? {
-    val params = parseParamsObject(paramsJson) ?: return null
+    val params = parseJsonParamsObject(paramsJson) ?: return null
     // title/body are required by the gateway contract; optional fields only
     // influence Android channel/silence behavior.
     val rawTitle =
@@ -182,15 +180,6 @@ class SystemHandler private constructor(
       sound = sound?.trim()?.ifEmpty { null },
       priority = priority?.trim()?.ifEmpty { null },
     )
-  }
-
-  private fun parseParamsObject(paramsJson: String?): JsonObject? {
-    if (paramsJson.isNullOrBlank()) return null
-    return try {
-      Json.parseToJsonElement(paramsJson).asObjectOrNull()
-    } catch (_: Throwable) {
-      null
-    }
   }
 
   companion object {

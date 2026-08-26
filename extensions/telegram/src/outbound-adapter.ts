@@ -10,6 +10,7 @@ import {
   createAttachedChannelResultAdapter,
   type ChannelOutboundAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
 import {
   resolveSendableOutboundReplyParts,
@@ -333,7 +334,9 @@ export async function sendTelegramPayloadMessages(params: {
     presentation: payload.presentation,
     interactive: payload.interactive,
   });
-  const replyToMessageId = params.baseOpts.replyToMessageId;
+  const replyToMessageId = parseStrictPositiveInteger(
+    telegramData?.reaction?.replyToId ?? params.baseOpts.replyToMessageId,
+  );
   const promptContextSource = resolveTelegramPromptContextSource(params.payload);
   const projectionCursor = promptContextSource
     ? createTelegramPromptContextProjectionCursor(promptContextSource)

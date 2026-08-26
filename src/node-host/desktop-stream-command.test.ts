@@ -256,7 +256,9 @@ describe("node desktop stream command", () => {
       }
       expect(stream.accessHeaders).toEqual(["desktop-client-id", "desktop-client-secret"]);
       if (kind === "public") {
-        expect(emitStatus).toHaveBeenCalledWith("desktop stream attached\n");
+        await vi.waitFor(() =>
+          expect(emitStatus).toHaveBeenCalledWith("desktop stream attached\n"),
+        );
       }
 
       controller.abort();

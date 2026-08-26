@@ -231,6 +231,8 @@ export const en: TranslationMap = {
   },
   sessionProgressCard: {
     title: "Progress",
+    composerTitle: "Task progress",
+    shortCount: "{completed} of {total}",
     noteLabel: "Progress note",
     dismiss: "Dismiss progress card",
     dismissFailed: "Could not dismiss the progress card. Try again.",
@@ -240,6 +242,7 @@ export const en: TranslationMap = {
     widgetUnavailable: "Session progress is unavailable.",
     widgetAccessDenied: "Select a session you can access or change sharing for this session.",
     countLabel: "{completed} of {total} completed",
+    lastActivity: "Last activity: {time}",
     stepLabel: "{step}, {status}",
     status: {
       completed: "completed",
@@ -950,6 +953,8 @@ export const en: TranslationMap = {
     draftDescription: "Keep this session to yourself until you publish it",
     composerOptionsSelected: "Add attachments or session options ({count} selected)",
     messagePlaceholder: "What should this session work on?",
+    dictate: "Hold to dictate",
+    dictationHoldToSpeak: "Hold the microphone to dictate, then release to insert what you said.",
     readingAttachment: "Reading attachment",
     start: "Start session",
     startInTerminal: "Start in terminal",
@@ -2002,6 +2007,7 @@ export const en: TranslationMap = {
     agentPending: "{count} pending approvals",
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
+    alwaysAllowHere: "Always allow here",
     allowAlwaysUnavailable: "Allow Always is unavailable for this command.",
     reviewOnly: "Review only. Sign in with approval access to record a decision.",
     deny: "Deny",
@@ -2578,7 +2584,7 @@ export const en: TranslationMap = {
     intro: "Run agent sessions on ephemeral cloud machines instead of this gateway.",
     documentation: "Cloud worker documentation",
     sectionTitle: "Profiles",
-    sectionDescription: "Each profile defines how Crabbox provisions and retires a worker.",
+    sectionDescription: "Each profile defines how its provider provisions and retires a worker.",
     empty: "No cloud worker profiles are configured.",
     addProfile: "Add profile",
     editProfile: "Edit profile",
@@ -3424,6 +3430,7 @@ export const en: TranslationMap = {
       title: "Swarm",
       description: "Let Code Mode orchestrate groups of subagents in parallel.",
       defaultPhase: "Unphased",
+      progress: "{complete} of {total}",
     },
     toolSearch: {
       title: "Tool Search",
@@ -4317,6 +4324,7 @@ export const en: TranslationMap = {
     failed: "Failed",
     overdue: "Overdue",
     dismissItem: "Dismiss {item}",
+    dismissShown: "Dismiss shown",
     emptyTitle: "Nothing waiting",
     emptyBody: "New requests and alerts land here.",
     issues: "Inbox",
@@ -5189,6 +5197,7 @@ export const en: TranslationMap = {
       stoppingCurrentRun: "Stopping current run...",
       chatHistoryCleared: "Chat history cleared.",
       exportingThread: "Exporting session...",
+      emptyExport: "There are no messages to export yet.",
       unknownCommand: "Unknown command: `{command}`",
       options: "Options: {options}.",
       sessionUnavailable: "Session capability is unavailable",
@@ -5493,6 +5502,8 @@ export const en: TranslationMap = {
       titleMany: "{count} cloud workspace conflicts",
       description:
         "OpenClaw kept your local versions and applied the other cloud changes. Inspect the staged result or take its version for a conflicted path.",
+      summary: "Local versions kept; inspect or take the cloud version.",
+      showCommands: "Show commands",
       morePaths: "+{count} more paths",
       stagedResult: "Staged cloud result",
       copyStagedResult: "Copy staged result ref",
@@ -5766,6 +5777,8 @@ export const en: TranslationMap = {
       searchModels: "Search models",
       noMatchingModels: "No models match your search",
       sessionOverride: "Session override",
+      resetToDefault: "Reset to default ({model})",
+      useDefault: "Use default",
       defaultWithModel: "Default ({model})",
       defaultWithLevel: "Default ({level})",
       fastHelp: "Fast responses finish sooner and can use more of your usage limits.",
@@ -5777,7 +5790,6 @@ export const en: TranslationMap = {
       chatOnlyHelp:
         "This model can chat, but it cannot use tools. Choose another model for files, commands, web, or media tasks.",
       loadingModels: "Loading models…",
-      refreshingModels: "Refreshing models…",
       modelsUnavailable: "Models unavailable",
       noModelsAvailable: "No models available",
       emptyModelsAction: "Manage models",
@@ -6055,6 +6067,7 @@ export const en: TranslationMap = {
       microphonePermissionBlocked:
         "Microphone access is blocked. Allow it in browser site settings to list inputs.",
       holdToRecordSetting: "Hold microphone button to dictate",
+      holdToDictate: "Hold to dictate",
       holdToRecordSettingDescription:
         "Hold the composer microphone button, speak, then release to insert text without sending.",
       dictationAudioUnsupported: "The Gateway returned an unsupported dictation audio format.",
@@ -6065,9 +6078,11 @@ export const en: TranslationMap = {
       dictationFinalizing: "Finishing dictation…",
       dictationFinalizationTimedOut:
         "Dictation stopped before the last partial transcript could be finalized.",
-      dictationProviderUnavailable: "No transcription provider is configured for dictation.",
+      dictationProviderUnavailable:
+        "No transcription provider is configured for dictation. Choose one in Settings to dictate.",
       dictationRecording: "Recording {elapsed}",
       dictationReleaseToInsert: "Release to insert dictation",
+      dictationStop: "Stop dictation",
       realtimeTalkCancellationRejected: "Realtime output cancellation was not accepted.",
       realtimeTalkMissingTurnIdentity: "Realtime output is missing its turn identity.",
       realtimeTalkRequiresMicrophone: "Realtime voice input requires browser microphone access.",

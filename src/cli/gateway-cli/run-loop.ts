@@ -600,46 +600,8 @@ export async function runGatewayLoop(params: {
               const {
                 abortEmbeddedAgentRun,
                 createGatewayActiveWorkSnapshot,
-                getRuntimeConfig,
-                listActiveEmbeddedRunSessionIds,
-                listActiveEmbeddedRunSessionKeys,
-                markRestartAbortedMainSessions,
                 waitForGatewayActiveWork,
               } = await loadGatewayLifecycleRuntimeModule();
-              let activeRestartSessionKeysAtDrainStart = new Set<string>();
-              let activeRestartSessionIdsAtDrainStart = new Set<string>();
-              let hasMarkedActiveMainSessionsForRestart = false;
-              const markActiveMainSessionsForRestart = async (reason: string) => {
-                // A second successful mark races recovery claims; failed or empty
-                // attempts must remain retryable at the forced-restart boundary.
-                if (hasMarkedActiveMainSessionsForRestart) {
-                  return;
-                }
-                const sessionKeys = new Set<string>([
-                  ...activeRestartSessionKeysAtDrainStart,
-                  ...listActiveEmbeddedRunSessionKeys(),
-                ]);
-                const sessionIds = new Set<string>([
-                  ...activeRestartSessionIdsAtDrainStart,
-                  ...listActiveEmbeddedRunSessionIds(),
-                ]);
-                if (sessionKeys.size === 0 && sessionIds.size === 0) {
-                  return;
-                }
-                try {
-                  const result = await markRestartAbortedMainSessions({
-                    cfg: getRuntimeConfig(),
-                    sessionKeys,
-                    sessionIds,
-                    reason,
-                  });
-                  hasMarkedActiveMainSessionsForRestart = result.marked > 0;
-                } catch (err) {
-                  gatewayLog.warn(
-                    `failed to mark interrupted main sessions for restart recovery: ${String(err)}`,
-                  );
-                }
-              };
               const formatBlockers = (
                 snapshot: ReturnType<typeof createGatewayActiveWorkSnapshot>,
               ) => snapshot.blockers.map((blocker) => blocker.message).join("; ");
@@ -650,13 +612,7 @@ export async function runGatewayLoop(params: {
               const initialSnapshot = createGatewayActiveWorkSnapshot();
               activeWorkAtDrainStart = initialSnapshot.counts.totalActive;
               activeRunsAtDrainStart = initialSnapshot.counts.embeddedRuns;
-              activeRestartSessionKeysAtDrainStart = new Set(listActiveEmbeddedRunSessionKeys());
-              activeRestartSessionIdsAtDrainStart = new Set(listActiveEmbeddedRunSessionIds());
-
-              // Best-effort abort for compacting runs so transcript settlement does
-              // not remain pending across restart boundaries.
               if (activeRunsAtDrainStart > 0) {
-                await markActiveMainSessionsForRestart("gateway restart drain");
                 abortEmbeddedAgentRun(undefined, { mode: "compacting", reason: "restart" });
               }
 
@@ -667,10 +623,6 @@ export async function runGatewayLoop(params: {
               }
               if (restartIntent?.force) {
                 gatewayLog.warn("forced restart requested; skipping active work drain");
-                await markActiveMainSessionsForRestart(
-                  restartIntent.reason ?? "forced gateway restart",
-                );
-                abortEmbeddedAgentRun(undefined, { mode: "all", reason: "restart" });
                 return;
               }
 
@@ -703,8 +655,6 @@ export async function runGatewayLoop(params: {
               gatewayLog.warn(
                 `active-work drain timeout reached; proceeding with restart: ${formatBlockers(drain.snapshot)}`,
               );
-              await markActiveMainSessionsForRestart("gateway restart drain timeout");
-              abortEmbeddedAgentRun(undefined, { mode: "all", reason: "restart" });
             },
             () => [
               ["activeWork", activeWorkAtDrainStart],
@@ -1035,7 +985,7 @@ export async function runGatewayLoop(params: {
         waitForActiveCronJobs,
         waitForActiveCronTaskRuns,
       } = await loadGatewayLifecycleRuntimeModule();
-      // Rotate ownership before reset pumps preserved queue entries.
+      // Rotation aborts rootless stale owners before reset pumps preserved queues.
       rotateAgentEventLifecycleGeneration();
       advanceCronActiveJobGeneration();
       abortActiveCronTaskRuns("Gateway restarting.");

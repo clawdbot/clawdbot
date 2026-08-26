@@ -108,7 +108,7 @@ export const sshSandboxBackendManager: SandboxBackendManager = {
       target: cfg.ssh.target,
     });
     try {
-      await runSshSandboxCommand({
+      const result = await runSshSandboxCommand({
         session,
         remoteCommand: buildRemoteCommand([
           "/bin/sh",
@@ -119,6 +119,10 @@ export const sshSandboxBackendManager: SandboxBackendManager = {
         ]),
         allowFailure: true,
       });
+      if (result.code !== 0) {
+        const detail = result.stderr.toString("utf8").trim() || `exit ${result.code}`;
+        throw new Error(`Failed to remove SSH sandbox runtime ${entry.containerName}: ${detail}`);
+      }
     } finally {
       await disposeSshSandboxSession(session);
     }

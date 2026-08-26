@@ -2130,17 +2130,24 @@ describe("handleDiscordMessagingAction", () => {
       label: "sendMessageDiscord",
     },
   ])(
-    "preserves silent delivery and default options for the $action message action",
+    "preserves delivery receipts, silent delivery, and default options for the $action message action",
     async ({ action, params, sender, label }) => {
       for (const silent of [true, false, undefined]) {
         const send = sender();
         send.mockClear();
-        await handleDiscordMessageAction({
+        const delivery = {
+          messageId: "discord-message-123",
+          channelId: "123",
+          receipt: { primaryPlatformMessageId: "discord-message-123" },
+        };
+        send.mockResolvedValueOnce(delivery);
+        const result = await handleDiscordMessageAction({
           action,
           params: { ...params, ...(silent === undefined ? {} : { silent }) },
           cfg: DISCORD_TEST_CFG,
         });
 
+        expect(result.details).toEqual({ ok: true, result: delivery });
         const sendOptions = mockObjectArg(send, label, 0, 2);
         if (silent === true) {
           expect(sendOptions.silent).toBe(true);

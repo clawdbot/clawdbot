@@ -3335,7 +3335,7 @@ private fun rememberPermissionState(
     applyToViewModel = {
       viewModel.setCameraEnabled(cameraGranted)
       viewModel.setLocationMode(requestedLocationMode)
-      viewModel.setNotificationForwardingEnabled(notificationListenerGranted)
+      viewModel.setNotificationForwardingEnabled(notificationListenerGranted && viewModel.notificationForwardingEnabled.value)
     },
   )
 }

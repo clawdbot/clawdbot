@@ -2406,41 +2406,51 @@ describe("refreshChatMetadata", () => {
     } as unknown as ChatPageHost;
   }
 
-  it("refreshes session metadata after full model discovery completes", async () => {
-    const refreshSessions = vi.fn().mockResolvedValue(undefined);
-    const request = vi.fn(async (method: string, params?: unknown) => {
-      expect(method).toBe("models.list");
-      expect(params).toEqual({ view: "configured", agentId: "work", refresh: true });
-      return {
-        models: [
-          {
-            id: "reasoner",
-            name: "Reasoner",
-            provider: "dynamic-router",
-            reasoning: true,
-          },
-        ],
-      };
-    });
-    const state = createMetadataState(request, {
-      sessions: { refresh: refreshSessions } as never,
-    });
+  it.each([
+    {
+      label: "warm",
+      existingModels: [{ id: "cached-model", name: "Cached Model", provider: "openai" }],
+    },
+    { label: "cold", existingModels: [] },
+  ])(
+    "refreshes $label session metadata after full model discovery completes",
+    async ({ existingModels }) => {
+      const refreshSessions = vi.fn().mockResolvedValue(undefined);
+      const discovery = createDeferred<{
+        models: Array<{ id: string; name: string; provider: string; reasoning: boolean }>;
+      }>();
+      const request = vi.fn((method: string, params?: unknown) => {
+        expect(method).toBe("models.list");
+        expect(params).toEqual({ view: "configured", agentId: "work", refresh: true });
+        return discovery.promise;
+      });
+      const state = createMetadataState(request, {
+        chatModelCatalog: existingModels,
+        sessions: { refresh: refreshSessions } as never,
+      });
 
-    await refreshChatModelCatalogOnDemand(state);
+      const refresh = refreshChatModelCatalogOnDemand(state);
+      expect(state.chatModelCatalog).toEqual(existingModels);
+      expect(state.chatModelsLoading).toBe(existingModels.length === 0);
+      discovery.resolve({
+        models: [{ id: "reasoner", name: "Reasoner", provider: "dynamic-router", reasoning: true }],
+      });
+      await refresh;
 
-    expect(state.chatModelCatalog).toEqual([
-      {
-        id: "reasoner",
-        name: "Reasoner",
-        provider: "dynamic-router",
-        reasoning: true,
-      },
-    ]);
-    expect(refreshSessions).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "work", force: true }),
-    );
-    expect(state.chatModelCatalogError).toBeNull();
-  });
+      expect(state.chatModelCatalog).toEqual([
+        {
+          id: "reasoner",
+          name: "Reasoner",
+          provider: "dynamic-router",
+          reasoning: true,
+        },
+      ]);
+      expect(refreshSessions).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: "work", force: true }),
+      );
+      expect(state.chatModelCatalogError).toBeNull();
+    },
+  );
 
   it("applies agent-scoped metadata after a same-agent session switch", async () => {
     let resolveMetadata:

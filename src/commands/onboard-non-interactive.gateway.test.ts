@@ -139,6 +139,57 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     vi.clearAllMocks();
   });
 
+  it.each([false, true])(
+    "rejects invalid existing config without writes while honoring JSON output (json: %s)",
+    async (json) => {
+      await withStateDir("state-invalid-config-", async (stateDir) => {
+        const snapshot = await readConfigFileSnapshotMock();
+        readConfigFileSnapshotMock.mockResolvedValueOnce({
+          ...snapshot,
+          exists: true,
+          valid: false,
+          issues: [{ path: "gateway.port", message: "invalid" }],
+        });
+        const output = vi.fn();
+        const error = vi.fn();
+        const captureRuntime: RuntimeEnv = {
+          log: output,
+          error,
+          exit: (code) => {
+            throw new Error(`exit:${code}`);
+          },
+        };
+        const message = "Config invalid. Run `openclaw doctor` to repair it, then re-run setup.";
+
+        await expect(
+          runNonInteractiveSetup(
+            {
+              ...createOnboardLocalDaemonOptions(stateDir),
+              installDaemon: false,
+              skipHealth: true,
+              json,
+            },
+            captureRuntime,
+          ),
+        ).rejects.toThrow("exit:1");
+
+        expect(error).toHaveBeenCalledWith(message);
+        if (json) {
+          expect(output).toHaveBeenCalledOnce();
+          expect(JSON.parse(String(output.mock.calls[0]?.[0]))).toEqual({
+            ok: false,
+            phase: "options",
+            message,
+          });
+        } else {
+          expect(output).not.toHaveBeenCalled();
+        }
+        expect(capturedReplaceConfigFileCalls).toHaveLength(0);
+        expect(ensureWorkspaceAndSessionsMock).not.toHaveBeenCalled();
+      });
+    },
+  );
+
   it("rejects concurrent onboarding runs sharing one state directory", async () => {
     await withStateDir("state-concurrent-onboard-", async (stateDir) => {
       let workspaceSetupCalls = 0;

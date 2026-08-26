@@ -583,7 +583,7 @@ Sandbox scope can be per-agent (default), per-session, or shared; each scope get
 For full configuration, images, security notes, and multi-agent profiles:
 
 - [Sandboxing](/gateway/sandboxing) -- complete sandbox reference
-- [OpenShell](/gateway/openshell) -- interactive shell access to sandbox containers
+- [OpenShell](/gateway/openshell) -- OpenShell-managed local or remote sandbox backend
 - [Multi-Agent Sandbox and Tools](/tools/multi-agent-sandbox-tools) -- per-agent overrides
 
 ### Quick enable

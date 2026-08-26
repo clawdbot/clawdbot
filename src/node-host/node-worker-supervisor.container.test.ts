@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import type { WorkerConnectionEndpoint } from "../worker/worker-connection-endpoint.js";
+import { NodeWorkerContainerLifecycle } from "./node-worker-container-lifecycle.js";
 import { NodeWorkerLaunchStore } from "./node-worker-launch-store.js";
 import { requireNodeWorkerProcessIdentity } from "./node-worker-process-identity.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
@@ -836,6 +837,73 @@ describe("node worker supervisor container isolation", () => {
       if (fs.existsSync(failureMarker)) {
         fs.unlinkSync(failureMarker);
       }
+      await fixture.supervisor.close();
+    }
+  });
+
+  it("waits for healthy container shutdown before reporting a sibling removal failure", async () => {
+    const fixture = containerFixture({ capacity: 2 });
+    const first = testWorkerLaunchInput(fixture.workspaceDir, "container-close-failed", "wait");
+    const sibling = testWorkerLaunchInput(fixture.workspaceDir, "container-close-sibling", "wait");
+    const removalMarker = path.join(fixture.engineRoot, "hold-removal");
+    const store = new NodeWorkerLaunchStore({ env: fixture.env });
+    const removalFailure = new Error("injected first container removal failure");
+    const originalRemove = Reflect.get(
+      NodeWorkerContainerLifecycle.prototype,
+      "remove",
+    ) as NodeWorkerContainerLifecycle["remove"];
+    const remove = vi
+      .spyOn(NodeWorkerContainerLifecycle.prototype, "remove")
+      .mockImplementation(async function (this: NodeWorkerContainerLifecycle, container, owner) {
+        if (owner.launchId === first.launchId) {
+          throw removalFailure;
+        }
+        await originalRemove.call(this, container, owner);
+      });
+
+    try {
+      const failedWorker = await fixture.supervisor.launch(first, endpoint);
+      const siblingWorker = await fixture.supervisor.launch(sibling, endpoint);
+      await vi.waitFor(
+        () => expect(fixture.events().filter((event) => event.argv[0] === "start")).toHaveLength(2),
+        { timeout: 5_000 },
+      );
+      fs.writeFileSync(removalMarker, "hold");
+
+      const closing = fixture.supervisor.close();
+      const settled = vi.fn();
+      void closing.then(settled, settled);
+      await vi.waitFor(
+        () =>
+          expect(
+            fixture
+              .events()
+              .some(
+                (event) =>
+                  event.argv[0] === "rm" &&
+                  event.argv.at(-1) === siblingWorker.container!.containerId,
+              ),
+          ).toBe(true),
+        { timeout: 5_000 },
+      );
+
+      expect(settled).not.toHaveBeenCalled();
+      expect(fixture.exists(siblingWorker.container!.containerId)).toBe(true);
+
+      fs.unlinkSync(removalMarker);
+      await expect(closing).rejects.toBe(removalFailure);
+      expect(fixture.exists(siblingWorker.container!.containerId)).toBe(false);
+      expect(store.get(sibling.launchId)).toMatchObject({ state: "interrupted" });
+      expect(fixture.exists(failedWorker.container!.containerId)).toBe(true);
+      expect(store.get(first.launchId)).toMatchObject({
+        state: "running",
+        container: failedWorker.container,
+      });
+    } finally {
+      if (fs.existsSync(removalMarker)) {
+        fs.unlinkSync(removalMarker);
+      }
+      remove.mockRestore();
       await fixture.supervisor.close();
     }
   });

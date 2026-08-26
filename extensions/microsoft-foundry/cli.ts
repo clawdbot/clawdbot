@@ -52,6 +52,7 @@ export function execAz(args: string[]): string {
         encoding: "utf-8",
         timeout: 30_000,
         shell: process.platform === "win32",
+        killSignal: "SIGKILL",
       }),
     ) ?? ""
   );

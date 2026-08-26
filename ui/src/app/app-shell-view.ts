@@ -50,7 +50,6 @@ import { readGatewayOperatorAccess } from "./operator-access.ts";
 import {
   NAV_WIDTH_MAX,
   NAV_WIDTH_MIN,
-  loadSettings,
   normalizeCatalogOpenTarget,
   normalizeChatSendShortcut,
 } from "./settings.ts";
@@ -213,7 +212,6 @@ export function renderApplicationShell(host: ShellViewHost) {
   const outboxScopeHost = host.storedOutboxScopeHost(context);
   const outboxStoreRuntime = host.outboxStoreRuntime;
   const storedOutboxes = outboxStoreRuntime?.summarizeStoredChatOutboxes(outboxScopeHost) ?? null;
-  const storedDraftScopeKeys = outboxStoreRuntime?.listStoredDraftScopes(outboxScopeHost) ?? null;
   const outboxAttentionCountForSession = outboxStoreRuntime
     ? (sessionKey: string) => {
         const scope = outboxStoreRuntime.resolveStoredChatOutboxScope(outboxScopeHost, sessionKey);
@@ -225,7 +223,8 @@ export function renderApplicationShell(host: ShellViewHost) {
     ? (sessionKey: string) => {
         const scope = outboxStoreRuntime.resolveStoredChatOutboxScope(outboxScopeHost, sessionKey);
         return (
-          storedDraftScopeKeys?.has(outboxStoreRuntime.storedChatOutboxScopeKey(scope)) === true
+          storedOutboxes?.draftScopes.has(outboxStoreRuntime.storedChatOutboxScopeKey(scope)) ===
+          true
         );
       }
     : EMPTY_SESSION_HAS_DRAFT;
@@ -327,8 +326,7 @@ export function renderApplicationShell(host: ShellViewHost) {
       host.openNewSession(agentId, target);
     }
   };
-  // One storage read per render; theme.refresh() re-renders on pref changes.
-  const uiSettings = loadSettings();
+  const uiSettings = context.theme.settings;
   // The new-session draft shares the chat layout: full-height pane that owns
   // its scrolling and pins the composer dock to the bottom.
   const chatLikeRoute = sessionRoute || activeRoute === "new-session";

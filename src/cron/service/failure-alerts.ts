@@ -12,7 +12,6 @@ import { resolveTargetPrefixedChannel } from "../../infra/outbound/channel-targe
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-plan.js";
 import { cronFailureDetailLines } from "../failure-notification-text.js";
-import { resolveCronDeliverySessionKey } from "../session-target.js";
 import type {
   CronFailureNotificationDelivery,
   CronFailureNotificationDetail,
@@ -20,7 +19,7 @@ import type {
   CronMessageChannel,
 } from "../types.js";
 import type { CronServiceState, DeferredCronNotifications } from "./state.js";
-import { enqueueCronSystemEvent, requestCronHeartbeat } from "./wake.js";
+import { enqueueCronNotification } from "./wake.js";
 
 const DEFAULT_FAILURE_ALERT_AFTER = 2;
 const DEFAULT_FAILURE_ALERT_COOLDOWN_MS = 60 * 60_000; // 1 hour
@@ -192,19 +191,6 @@ export function resolveFailureAlert(
   };
 }
 
-function enqueueFailureAlertFallback(state: CronServiceState, job: CronJob, text: string): void {
-  const sessionKey = resolveCronDeliverySessionKey(job);
-  enqueueCronSystemEvent(state, text, { agentId: job.agentId, sessionKey });
-  if (job.wakeMode === "now" || sessionKey) {
-    requestCronHeartbeat(state, {
-      intent: "immediate",
-      reason: `cron:${job.id}:failure-alert`,
-      agentId: job.agentId,
-      sessionKey,
-    });
-  }
-}
-
 function markFailureNotificationRequested(job: CronJob): void {
   job.state.lastFailureNotificationDelivered = undefined;
   job.state.lastFailureNotificationDeliveryStatus = "unknown";
@@ -220,7 +206,13 @@ function transportFailureAlert(
     route: ResolvedFailureAlert;
   },
 ): void {
-  const fallback = () => enqueueFailureAlertFallback(state, params.job, params.payload.text ?? "");
+  let pendingFallback = true;
+  const fallback = (reachedRecipient = false) => {
+    if (pendingFallback && !reachedRecipient) {
+      enqueueCronNotification(state, params.job, params.payload.text ?? "", "failure-alert");
+    }
+    pendingFallback = false;
+  };
   if (!state.deps.sendCronFailureAlert) {
     fallback();
     return;
@@ -236,6 +228,7 @@ function transportFailureAlert(
       accountId: params.route.accountId,
       threadId: params.route.threadId,
       ...(params.route.alternateRoute ? { inheritSessionThread: false as const } : {}),
+      onDeliveryAttempt: fallback,
     })
     .catch((err: unknown) => {
       state.deps.log.warn(

@@ -72,6 +72,7 @@ import { resolveClawHubRiskAcknowledgementCliOptions } from "./clawhub-risk-ackn
 import { resolveOptionFromCommand, runCommandWithRuntime } from "./cli-utils.js";
 import { inheritOptionFromParent } from "./command-options.js";
 import { formatCliJsonFailure } from "./failure-output.js";
+import { canFallbackToImplicitLocalGateway } from "./gateway-rpc.js";
 import { resolveInstallPolicyWarningAcknowledgementCliOptions } from "./install-policy-warning-acknowledgement.js";
 import { parseStrictPositiveIntOption } from "./program/helpers.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
@@ -144,6 +145,22 @@ const GATEWAY_SKILLS_OFFLINE_LOCK_TIMEOUT_MS = 250;
 // Apply can await evaluator, proposal-change, and skill-change hook phases.
 const GATEWAY_SKILLS_APPLY_TIMEOUT_MS = 1_850_000;
 
+async function callSkillsGateway<T>(params: {
+  config: ResolvedSkillsWorkspace["config"];
+  method: string;
+  params: Record<string, unknown>;
+  timeoutMs?: number;
+  requiredMethods?: string[];
+}): Promise<T> {
+  const { callGateway } = await import("../gateway/call.js");
+  return await callGateway<T>({
+    timeoutMs: GATEWAY_SKILLS_STATUS_TIMEOUT_MS,
+    clientName: GATEWAY_CLIENT_NAMES.CLI,
+    mode: GATEWAY_CLIENT_MODES.CLI,
+    ...params,
+  });
+}
+
 function normalizeExplicitAgentId(agentId?: string): string | undefined {
   const normalizedAgentId = agentId?.trim();
   if (agentId !== undefined && !normalizedAgentId) {
@@ -183,37 +200,33 @@ function resolveAgentOption(
   return resolveOptionFromCommand<string>(command, "agent") ?? opts?.agent;
 }
 
-async function loadGatewaySkillsStatusReport(
-  resolved: ResolvedSkillsWorkspace,
-): Promise<SkillStatusReport | null> {
-  try {
-    const { callGateway } = await import("../gateway/call.js");
-    return await callGateway<SkillStatusReport>({
-      config: resolved.config,
-      method: "skills.status",
-      params: { agentId: resolved.agentId },
-      timeoutMs: GATEWAY_SKILLS_STATUS_TIMEOUT_MS,
-      clientName: GATEWAY_CLIENT_NAMES.CLI,
-      mode: GATEWAY_CLIENT_MODES.CLI,
-    });
-  } catch {
-    return null;
-  }
-}
-
 async function loadSkillsStatusReport(
   options?: ResolveSkillsWorkspaceOptions,
 ): Promise<SkillStatusReport> {
   const resolved = resolveSkillsWorkspace({ ...options, skipPluginValidation: true });
-  const gatewayReport = await loadGatewaySkillsStatusReport(resolved);
-  if (gatewayReport) {
-    return gatewayReport;
+  try {
+    return await callSkillsGateway<SkillStatusReport>({
+      config: resolved.config,
+      method: "skills.status",
+      params: { agentId: resolved.agentId },
+    });
+  } catch (error) {
+    if (
+      !(await canFallbackToImplicitLocalGateway({
+        config: resolved.config,
+        error,
+        legacyMethod: "skills.status",
+        legacyAgentId: true,
+      }))
+    ) {
+      throw error;
+    }
+    const { buildWorkspaceSkillStatus } = await import("../skills/discovery/status.js");
+    return buildWorkspaceSkillStatus(resolved.workspaceDir, {
+      config: resolved.config,
+      agentId: resolved.agentId,
+    });
   }
-  const { buildWorkspaceSkillStatus } = await import("../skills/discovery/status.js");
-  return buildWorkspaceSkillStatus(resolved.workspaceDir, {
-    config: resolved.config,
-    agentId: resolved.agentId,
-  });
 }
 
 async function runSkillsAction(
@@ -407,104 +420,89 @@ function formatSkillCuratorStatus(status: SkillCuratorStatus): string {
   return `${lines.join("\n")}\n`;
 }
 
-async function loadGatewaySkillCuratorStatus(
+async function withOfflineGatewayLock<T>(
   config: ReturnType<typeof getRuntimeConfig>,
-): Promise<SkillCuratorStatus | null> {
+  gatewayError: unknown,
+  action: () => T | Promise<T>,
+): Promise<T> {
+  const { acquireGatewayLock } = await import("../infra/gateway-lock.js");
+  const lock = await acquireGatewayLock({
+    allowInTests: true,
+    port: resolveGatewayPort(config, process.env),
+    role: "skill-workshop-apply",
+    timeoutMs: GATEWAY_SKILLS_OFFLINE_LOCK_TIMEOUT_MS,
+  }).catch(() => undefined);
+  if (!lock) {
+    throw gatewayError;
+  }
+  // Missing credentials cannot prove a Gateway is absent; only its ownership lock can.
   try {
-    const { callGateway } = await import("../gateway/call.js");
-    return await callGateway<SkillCuratorStatus>({
-      config,
-      method: "skills.curator.status",
-      params: {},
-      timeoutMs: GATEWAY_SKILLS_STATUS_TIMEOUT_MS,
-      clientName: GATEWAY_CLIENT_NAMES.CLI,
-      mode: GATEWAY_CLIENT_MODES.CLI,
-    });
-  } catch (err) {
-    if (config.gateway?.mode === "remote") {
-      throw err;
-    }
-    return null;
+    return await action();
+  } finally {
+    await lock.release();
   }
 }
 
-async function loadSkillCuratorStatus(): Promise<SkillCuratorStatus> {
+async function callSkillCurator<T>(
+  method: "status" | "pin" | "restore" | "unpin",
+  params: { skill?: string },
+  loadLocal: () => T,
+): Promise<T> {
   const config = getRuntimeConfig();
-  return (await loadGatewaySkillCuratorStatus(config)) ?? getSkillCuratorStatus();
+  try {
+    return await callSkillsGateway<T>({
+      config,
+      method: `skills.curator.${method}`,
+      params,
+    });
+  } catch (error) {
+    if (
+      !(await canFallbackToImplicitLocalGateway({
+        config,
+        error,
+        ...(method === "status" ? { legacyMethod: "skills.curator.status" } : {}),
+      }))
+    ) {
+      throw error;
+    }
+    return method === "status"
+      ? loadLocal()
+      : await withOfflineGatewayLock(config, error, loadLocal);
+  }
 }
 
 async function runSkillCuratorMutation(method: "pin" | "restore" | "unpin", skill: string) {
-  const config = getRuntimeConfig();
-  try {
-    const { callGateway } = await import("../gateway/call.js");
-    return await callGateway<SkillCuratorStatus["skills"][number]>({
-      config,
-      method: `skills.curator.${method}`,
-      params: { skill },
-      timeoutMs: GATEWAY_SKILLS_STATUS_TIMEOUT_MS,
-      clientName: GATEWAY_CLIENT_NAMES.CLI,
-      mode: GATEWAY_CLIENT_MODES.CLI,
-    });
-  } catch (err) {
-    if (config.gateway?.mode === "remote") {
-      throw err;
+  return await callSkillCurator(method, { skill }, () => {
+    if (method === "pin") {
+      return pinCuratedSkill(skill);
     }
-  }
-  if (method === "pin") {
-    return pinCuratedSkill(skill);
-  }
-  if (method === "unpin") {
-    return unpinCuratedSkill(skill);
-  }
-  return restoreCuratedSkill(skill);
+    if (method === "unpin") {
+      return unpinCuratedSkill(skill);
+    }
+    return restoreCuratedSkill(skill);
+  });
 }
 
 async function runSkillProposalApply(
   resolved: ResolvedSkillsWorkspace,
   proposalId: string,
 ): Promise<SkillProposalApplyResult> {
-  const { callGateway, isGatewayCredentialsRequiredError, isGatewayTransportError } =
-    await import("../gateway/call.js");
   let proposal: SkillProposalReadResult;
   try {
     // Decide offline fallback before dispatching the non-idempotent mutation.
     // Once a Gateway answers, apply failures must never be replayed locally.
-    proposal = await callGateway<SkillProposalReadResult>({
+    proposal = await callSkillsGateway<SkillProposalReadResult>({
       config: resolved.config,
       method: "skills.proposals.inspect",
       params: { agentId: resolved.agentId, proposalId },
-      timeoutMs: GATEWAY_SKILLS_STATUS_TIMEOUT_MS,
-      clientName: GATEWAY_CLIENT_NAMES.CLI,
-      mode: GATEWAY_CLIENT_MODES.CLI,
       requiredMethods: ["skills.proposals.apply"],
     });
   } catch (err) {
-    const isOfflineCandidate =
-      isGatewayCredentialsRequiredError(err) ||
-      (isGatewayTransportError(err) && err.kind === "closed" && err.code === 1006);
-    if (resolved.config.gateway?.mode === "remote" || !isOfflineCandidate) {
+    if (!(await canFallbackToImplicitLocalGateway({ config: resolved.config, error: err }))) {
       throw err;
     }
 
-    // Hold the canonical Gateway ownership locks across local mutation. This
-    // makes offline apply atomic with Gateway startup, so a new process cannot
-    // inherit a stale process-local skill snapshot.
-    const { acquireGatewayLock } = await import("../infra/gateway-lock.js");
-    let lock: Awaited<ReturnType<typeof acquireGatewayLock>>;
-    try {
-      lock = await acquireGatewayLock({
-        allowInTests: true,
-        port: resolveGatewayPort(resolved.config, process.env),
-        role: "skill-workshop-apply",
-        timeoutMs: GATEWAY_SKILLS_OFFLINE_LOCK_TIMEOUT_MS,
-      });
-    } catch {
-      throw err;
-    }
-    if (!lock) {
-      throw err;
-    }
-    try {
+    return await withOfflineGatewayLock(resolved.config, err, async () => {
       const reviewedProposal = await inspectSkillProposal(proposalId, {
         agentId: resolved.agentId,
         workspaceDir: resolved.workspaceDir,
@@ -520,12 +518,10 @@ async function runSkillProposalApply(
         proposalId,
         expectedRevisionHash: reviewedProposal.revisionHash,
       });
-    } finally {
-      await lock.release();
-    }
+    });
   }
 
-  return await callGateway<SkillProposalApplyResult>({
+  return await callSkillsGateway<SkillProposalApplyResult>({
     config: resolved.config,
     method: "skills.proposals.apply",
     params: {
@@ -534,8 +530,6 @@ async function runSkillProposalApply(
       expectedRevisionHash: proposal.revisionHash,
     },
     timeoutMs: GATEWAY_SKILLS_APPLY_TIMEOUT_MS,
-    clientName: GATEWAY_CLIENT_NAMES.CLI,
-    mode: GATEWAY_CLIENT_MODES.CLI,
   });
 }
 
@@ -544,16 +538,12 @@ async function runSkillProposalEvaluate(
   proposalId: string,
   correlationId?: string,
 ): Promise<SkillProposalEvaluateResult> {
-  const { callGateway } = await import("../gateway/call.js");
-  const proposal = await callGateway<SkillProposalReadResult>({
+  const proposal = await callSkillsGateway<SkillProposalReadResult>({
     config: resolved.config,
     method: "skills.proposals.inspect",
     params: { agentId: resolved.agentId, proposalId },
-    timeoutMs: GATEWAY_SKILLS_STATUS_TIMEOUT_MS,
-    clientName: GATEWAY_CLIENT_NAMES.CLI,
-    mode: GATEWAY_CLIENT_MODES.CLI,
   });
-  return await callGateway<SkillProposalEvaluateResult>({
+  return await callSkillsGateway<SkillProposalEvaluateResult>({
     config: resolved.config,
     method: "skills.proposals.evaluate",
     params: {
@@ -563,8 +553,6 @@ async function runSkillProposalEvaluate(
       ...(correlationId ? { correlationId } : {}),
     },
     timeoutMs: GATEWAY_SKILLS_EVALUATION_TIMEOUT_MS,
-    clientName: GATEWAY_CLIENT_NAMES.CLI,
-    mode: GATEWAY_CLIENT_MODES.CLI,
   });
 }
 
@@ -985,7 +973,7 @@ export function registerSkillsCli(program: Command) {
 
   const showCuratorStatus = async (opts: { json?: boolean }, command: Command) => {
     await runCommandWithRuntime(defaultRuntime, async () => {
-      const status = await loadSkillCuratorStatus();
+      const status = await callSkillCurator("status", {}, getSkillCuratorStatus);
       if (hasJsonOutput(opts) || inheritOptionFromParent<boolean>(command, "json")) {
         defaultRuntime.writeJson(status);
         return;

@@ -86,10 +86,19 @@ and verification. Claimed or ClawHub-scanned skills use `@owner/<slug>`.
 ./path` copies a local skill directory. By default, `install`,
 `update`, and `verify` target the active workspace `skills/` directory; with
 `--global`, they target the shared managed skills directory. `list`/`info`/`check`
-still inspect the local skills visible to the current workspace and config.
-Workspace-backed commands resolve the target workspace from `--agent <id>`,
-then the current working directory when it is inside a configured agent
-workspace, then the default agent.
+and bare `openclaw skills` request the selected Gateway's authoritative skill
+inventory. A configured remote Gateway or an explicit `OPENCLAW_GATEWAY_URL`
+never falls back to client-local skills: missing URLs, connection failures, and
+authentication errors remain visible. Only an implicitly selected local Gateway
+can fall back to local inventory when it is unavailable. Workspace-backed
+commands resolve the target workspace from `--agent <id>`, then the current
+working directory when it is inside a configured agent workspace, then the
+default agent.
+
+Curator `status`, `pin`, `unpin`, and `restore`, plus Workshop `apply`, preserve
+the same target boundary. They never read or mutate client-local state after an
+explicitly selected Gateway fails; intentional offline behavior remains
+available only for an implicitly selected local Gateway.
 
 Git and local directory installs expect `SKILL.md` at the source root. The
 install slug comes from `SKILL.md` frontmatter `name` when it is valid, then

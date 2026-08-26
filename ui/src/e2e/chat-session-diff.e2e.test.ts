@@ -28,16 +28,6 @@ let server: ControlUiE2eServer;
 let browser: Browser;
 const openContexts = new Set<BrowserContext>();
 
-async function panelActionIds(page: import("playwright").Page): Promise<string[]> {
-  return page.locator("openclaw-chat-header-session-menu").evaluate((element) =>
-    (
-      element as HTMLElement & {
-        panelActions: Array<{ id: string }>;
-      }
-    ).panelActions.map((action) => action.id),
-  );
-}
-
 async function newBrowserContext(): Promise<BrowserContext> {
   const context = await browser.newContext({
     colorScheme: "light",
@@ -374,9 +364,7 @@ describeControlUiE2e("session diff panel", () => {
         return watchedKey;
       })
       .not.toBe("");
-    await expect
-      .poll(async () => (await gateway.getRequests("sessions.files.list")).length)
-      .toBe(1);
+    expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
     await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
       sessions: {
         [watchedKey]: {
@@ -400,37 +388,36 @@ describeControlUiE2e("session diff panel", () => {
       .click();
 
     await waitForSessionDiff(page);
+    expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
   });
 
-  it("keeps Review empty without requesting a diff for a non-git session", async () => {
+  it("lets Review report a non-git session without listing workspace files", async () => {
     const context = await newBrowserContext();
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", "sessions.diff"],
       methodResponses: {
-        "sessions.files.list": {
+        "sessions.diff": {
           sessionKey: "main",
           root: "/tmp/plain-workspace",
-          gitCheckout: false,
           files: [],
-          browser: { path: "", entries: [] },
+          additions: 0,
+          deletions: 0,
+          unavailableReason: "not_git",
         },
       },
     });
     await page.goto(`${server.baseUrl}chat`);
-    await expect
-      .poll(async () => (await gateway.getRequests("sessions.files.list")).length)
-      .toBe(1);
+    expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
+    expect(await gateway.getRequests("sessions.diff")).toHaveLength(0);
 
-    await openChatSidePanelType(page, "Files");
     await openChatSidePanelType(page, "Review");
 
     await expect
-      .poll(() =>
-        page.getByText("Open a change, file, image, or tool result to review it here.").count(),
-      )
-      .toBe(1);
-    expect(await gateway.getRequests("sessions.diff")).toHaveLength(0);
+      .poll(() => page.locator(".session-diff .session-diff__note").textContent())
+      .toContain("not a git checkout");
+    expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
+    expect(await gateway.getRequests("sessions.diff")).toHaveLength(1);
   });
 
   it("opens the diff sidebar with per-file patches and gap markers", async () => {
@@ -655,19 +642,12 @@ describeControlUiE2e("session diff panel", () => {
     await expect.poll(() => panel.locator(".session-diff__gap-controls").count()).toBe(0);
   });
 
-  it("hides the diff toggle until the workspace becomes a git checkout", async () => {
+  it("refreshes an open Review after checkout creation without listing workspace files", async () => {
     const context = await newBrowserContext();
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", "sessions.diff"],
       methodResponses: {
-        "sessions.files.list": {
-          sessionKey: "main",
-          root: "/tmp/plain-workspace",
-          gitCheckout: false,
-          files: [],
-          browser: { path: "", entries: [] },
-        },
         "sessions.diff": {
           sessionKey: "main",
           files: [],
@@ -678,26 +658,37 @@ describeControlUiE2e("session diff panel", () => {
       },
     });
     await page.goto(`${server.baseUrl}chat`);
+    expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
+    await activateChatHeaderPanelAction(page, "Show session changes");
     await expect
-      .poll(async () => (await gateway.getRequests("sessions.files.list")).length)
-      .toBe(1);
+      .poll(() => page.locator(".session-diff .session-diff__note").textContent())
+      .toContain("not a git checkout");
+    expect(await gateway.getRequests("sessions.diff")).toHaveLength(1);
 
-    await expect.poll(() => panelActionIds(page)).not.toContain("changes");
-    await expect.poll(() => page.locator(".session-diff").count()).toBe(0);
-
-    await gateway.setMethodResponse("sessions.files.list", {
+    await gateway.setMethodResponse("sessions.diff", {
       sessionKey: "main",
-      root: "/tmp/plain-workspace",
-      gitCheckout: true,
-      files: [],
-      browser: { path: "", entries: [] },
+      root: "/tmp/checkout",
+      branch: "feature/panel",
+      baseRef: "main",
+      files: [
+        {
+          path: "notes.md",
+          status: "added",
+          additions: 2,
+          deletions: 0,
+          untracked: true,
+          patch: NOTES_PATCH,
+        },
+      ],
+      additions: 2,
+      deletions: 0,
     });
     await gateway.emitChatFinal({ runId: "git-init-run", text: "Initialized repository." });
+    await expect.poll(async () => (await gateway.getRequests("sessions.diff")).length).toBe(2);
     await expect
-      .poll(async () => (await gateway.getRequests("sessions.files.list")).length)
-      .toBe(2);
-
-    await expect.poll(() => panelActionIds(page)).toContain("changes");
+      .poll(() => page.locator(".session-diff__filename").allTextContents())
+      .toEqual(["notes.md"]);
+    expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
   });
 
   it("keeps the panel fallback for gateways that omit checkout capability", async () => {

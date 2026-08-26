@@ -25,16 +25,6 @@ const IOS_SOURCE_PREFIXES = [
   SHARED_CHAT_UI_SOURCE_PREFIX,
   "apps/shared/OpenClawKit/Sources/OpenClawKit/",
 ] as const;
-const APPLE_CATALOG_KINDS = new Set([
-  "conditional-branch",
-  "ui-call",
-  "ui-call-multiline",
-  "ui-localized-call",
-  "ui-localized-call-multiline",
-  "ui-modifier",
-  "ui-named-argument",
-  "ui-named-argument-multiline",
-]);
 const IOS_CATALOG_EXCLUSIONS = new Set([
   // Product names and preview-only single-character fixtures are intentionally verbatim.
   "OpenClaw",
@@ -216,18 +206,12 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
   "apps/ios/Sources/Design/AgentProNodesDestination.swift": [
     "private func nodeDetailRow(\n        _ title: OpenClawTextValue,\n        copyLabel: LocalizedStringKey",
     "private func nodeListCard(title: OpenClawTextValue, values: [String])",
-    "private func detailMetric(label: OpenClawTextValue, value: String)",
-    "title: OpenClawTextValue,\n        detail: OpenClawTextValue",
   ],
-  "apps/ios/Sources/Design/AgentProDreamingDestination.swift": [
-    "private func detailMetric(label: OpenClawTextValue, value: String)",
+  "apps/ios/Sources/Design/AgentProDetailComponents.swift": [
+    "func agentProDetailMetric(label: OpenClawTextValue, value: String)",
     "label.text",
     "Text(verbatim: value)",
-  ],
-  "apps/ios/Sources/Design/AgentProTab+DetailComponents.swift": [
-    "func detailMetric(label: OpenClawTextValue, value: String)",
-    "Text(verbatim: value)",
-    "func emptyDetailRow(\n        icon: String,\n        title: OpenClawTextValue,\n        detail: OpenClawTextValue)",
+    "func agentProEmptyDetailRow(\n    icon: String,\n    title: OpenClawTextValue,\n    detail: OpenClawTextValue)",
     "title.text",
     "detail.text",
   ],
@@ -580,13 +564,17 @@ async function readOptionalFile(filePath: string): Promise<string | null> {
   }
 }
 
+function isAppleCatalogKind(kind: string): boolean {
+  return kind === "conditional-branch" || kind.startsWith("ui-");
+}
+
 function isIosCatalogEntry(entry: NativeSourceEntry): boolean {
   return (
     entry.surface === "apple" &&
     entry.sites.some(
       (site) =>
         IOS_SOURCE_PREFIXES.some((prefix) => site.path.startsWith(prefix)) &&
-        APPLE_CATALOG_KINDS.has(site.kind),
+        isAppleCatalogKind(site.kind),
     ) &&
     (!entry.source.includes("\\(") || isInflectedCountSource(entry.source)) &&
     !IOS_CATALOG_EXCLUSIONS.has(entry.source)
@@ -599,7 +587,7 @@ function isMacosCatalogEntry(entry: NativeSourceEntry): boolean {
     entry.sites.some(
       (site) =>
         MACOS_SOURCE_PREFIXES.some((prefix) => site.path.startsWith(prefix)) &&
-        APPLE_CATALOG_KINDS.has(site.kind),
+        isAppleCatalogKind(site.kind),
     ) &&
     !entry.source.includes("\\(") &&
     !MACOS_CATALOG_EXCLUSIONS.has(entry.source)

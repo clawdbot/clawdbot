@@ -13,10 +13,9 @@ import type {
   SnapshotSummary,
 } from "../snapshot/snapshot-provider.js";
 import { recordBackupRunOutcome } from "../state/backup-run-records.js";
-import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { shortenHomePath } from "../utils.js";
-import { resolveRequiredBackupPath } from "./backup-shared.js";
+import { resolveBackupAgentRoot, resolveRequiredBackupPath } from "./backup-shared.js";
 
 type BackupSqliteCreateOptions = {
   global?: boolean;
@@ -186,12 +185,11 @@ async function resolveSnapshotDatabase(
       identity: { role: "global" },
     };
   }
-  const agentId = resolveConfiguredAgentId(
-    getRuntimeConfig({ skipPluginValidation: true }),
-    normalizeAgentId(rawAgentId),
-  );
+  const config = getRuntimeConfig({ skipPluginValidation: true });
+  const agentId = resolveConfiguredAgentId(config, normalizeAgentId(rawAgentId));
+  const agentRoot = await resolveBackupAgentRoot(config, agentId);
   return {
-    path: await fs.realpath(resolveOpenClawAgentSqlitePath({ agentId })),
+    path: await fs.realpath(agentRoot.databasePath),
     identity: { role: "agent", agentId },
   };
 }

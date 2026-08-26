@@ -18,6 +18,7 @@ import {
 import { isChatModelUnavailable } from "../../lib/chat/model-select-state.ts";
 import { normalizeThinkingOptionValue } from "../../lib/chat/thinking.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { loadModels } from "../../lib/model-catalog-store.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import {
   renderChatModelControls,
@@ -283,11 +284,11 @@ export class NewSessionModelControl {
     };
     const cached = peekChatMetadata(client, agentId);
     if (Array.isArray(cached?.models)) {
-      this.publishMetadataCatalog(cached.models, "refreshing");
+      this.publishMetadataCatalog(cached.models, "ready");
     } else {
       this.updateMetadataState({
         ...this.metadataState,
-        status: this.metadataState.hasSnapshot ? "refreshing" : "loading",
+        status: this.metadataState.hasSnapshot ? "ready" : "loading",
       });
     }
 
@@ -327,10 +328,26 @@ export class NewSessionModelControl {
     );
   }
 
-  private retryPickerCatalogs() {
+  private retryPickerCatalogs(refreshReadyMetadata = false) {
     const metadataClient = this.metadataClient;
     if (this.metadataState.status === "error" && metadataClient && this.agentId) {
       this.startMetadataRequest(metadataClient, this.agentId);
+    } else if (
+      refreshReadyMetadata &&
+      this.metadataState.status === "ready" &&
+      metadataClient &&
+      this.agentId
+    ) {
+      const agentId = this.agentId;
+      void loadModels(metadataClient, {
+        agentId,
+        refreshIfDue: true,
+        rejectOnFailure: true,
+      }).catch(() => {
+        if (this.metadataClient === metadataClient && this.agentId === agentId) {
+          this.updateMetadataState({ ...this.metadataState, status: "error" });
+        }
+      });
     }
     const targetDiscovery = this.catalogTargetDiscovery;
     if (
@@ -446,10 +463,7 @@ export class NewSessionModelControl {
     const cached = peekChatMetadata(client, normalizedAgentId);
     if (activeRequestMatches) {
       if (cached) {
-        this.publishMetadataCatalog(
-          Array.isArray(cached.models) ? cached.models : [],
-          "refreshing",
-        );
+        this.publishMetadataCatalog(Array.isArray(cached.models) ? cached.models : [], "ready");
       } else {
         this.notify();
       }
@@ -693,7 +707,7 @@ export class NewSessionModelControl {
         this.notify();
       },
       onModelSetup: () => options.context?.navigate("model-setup"),
-      onModelPickerOpen: () => this.retryPickerCatalogs(),
+      onModelPickerOpen: () => this.retryPickerCatalogs(true),
       onRequestUpdate: this.notify,
     });
   }

@@ -236,6 +236,19 @@ describe("runCodexAppServerAttempt steering", () => {
         },
       },
     });
+    await notify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "agentMessage",
+          id: "pre-steer-answer",
+          phase: "final_answer",
+          text: "PRE-STEER-ANSWER",
+        },
+      },
+    });
 
     await vi.waitFor(() => {
       expect(
@@ -302,7 +315,7 @@ describe("runCodexAppServerAttempt steering", () => {
       const message = (event as { message?: { role?: string } }).message;
       return message?.role ? [message.role] : [];
     });
-    expect(roles).toEqual(["user", "assistant", "user", "assistant"]);
+    expect(roles).toEqual(["user", "assistant", "assistant", "user", "assistant"]);
   });
 
   it("forwards queued text and images to the active app-server turn", async () => {

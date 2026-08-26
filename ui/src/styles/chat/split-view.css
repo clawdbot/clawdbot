@@ -111,7 +111,6 @@ openclaw-chat-pane {
 .chat-split-view__drop-indicator {
   position: absolute;
   z-index: 20;
-  box-sizing: border-box;
   pointer-events: none;
   border: 1px solid color-mix(in srgb, var(--accent) 65%, transparent);
   border-radius: var(--radius-sm);

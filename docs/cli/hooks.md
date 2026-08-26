@@ -23,6 +23,13 @@ Bare `openclaw hooks` and `openclaw hooks --json` use the same list operation as
 `openclaw hooks list`. The command discovers hooks from workspace, managed,
 extra, and bundled directories.
 
+Hook reports (`hooks`, `list`, `info`, and `check`) first request the selected
+Gateway's inventory. Configured remote Gateways and explicit
+`OPENCLAW_GATEWAY_URL` targets are authoritative: missing URLs, connection or
+authentication failures, and unsupported methods fail instead of showing
+client-local hooks. An implicitly selected local Gateway may fall back to local
+discovery when it is offline or does not support the current hook-report method.
+
 - `--eligible`: only hooks whose requirements are met.
 - `--agent <id>`: inspect hooks for that agent's workspace. Required when multiple agents are configured without an implicit owner.
 - `--json`: structured output.
@@ -126,7 +133,7 @@ grep '"action":"new"' ~/.openclaw/logs/commands.log | jq .   # filter by action
 
 - `hooks list --json`, `info --json`, and `check --json` write structured JSON directly to stdout.
 - Failed hook reports use the standard [CLI JSON failure envelope](/cli#json-failures); missing hook info also includes the requested `hook` name.
-- `hooks list`, `info`, and `check` pass `--agent` to a running Gateway and preserve it when falling back to local read-only discovery against an older or unavailable Gateway.
+- `hooks list`, `info`, and `check` pass `--agent` to a running Gateway and preserve it when an implicit local Gateway requires older-version or offline read-only discovery.
 
 ## Related
 

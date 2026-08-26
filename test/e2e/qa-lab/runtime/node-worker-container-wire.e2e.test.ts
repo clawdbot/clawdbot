@@ -49,6 +49,12 @@ type ControlUiProof = {
   browser: Browser;
   context: BrowserContext;
   page: Page;
+  fullAccessPatch: {
+    arm(): void;
+    held: Promise<void>;
+    prematureChatSend: Promise<"premature-chat-send">;
+    release(): void;
+  };
 };
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -131,7 +137,57 @@ async function startControlUiProof(gateway: WireGateway): Promise<ControlUiProof
     },
     { gatewayUrl: gateway.wsUrl, token: gateway.token },
   );
-  return { artifactDir, browser, context, page: await context.newPage() };
+  let patchArmed = false;
+  let releaseHeldPatch: (() => void) | undefined;
+  let notifyPatchHeld: () => void;
+  let notifyPrematureChatSend: () => void;
+  const patchHeld = new Promise<void>((resolve) => {
+    notifyPatchHeld = resolve;
+  });
+  const prematureChatSend = new Promise<"premature-chat-send">((resolve) => {
+    notifyPrematureChatSend = () => resolve("premature-chat-send");
+  });
+  await context.routeWebSocket(gateway.wsUrl, (socket) => {
+    const upstream = socket.connectToServer();
+    socket.onMessage((message) => {
+      const request = JSON.parse(message.toString()) as {
+        method?: string;
+        params?: { key?: string; permissionMode?: string };
+      };
+      if (
+        patchArmed &&
+        request.method === "sessions.patch" &&
+        request.params?.key === SESSION_KEY &&
+        request.params.permissionMode === "full"
+      ) {
+        patchArmed = false;
+        releaseHeldPatch = () => {
+          releaseHeldPatch = undefined;
+          upstream.send(message);
+        };
+        notifyPatchHeld();
+        return;
+      }
+      if (releaseHeldPatch && request.method === "chat.send") {
+        notifyPrematureChatSend();
+      }
+      upstream.send(message);
+    });
+  });
+  return {
+    artifactDir,
+    browser,
+    context,
+    page: await context.newPage(),
+    fullAccessPatch: {
+      arm: () => {
+        patchArmed = true;
+      },
+      held: patchHeld,
+      prematureChatSend,
+      release: () => releaseHeldPatch?.(),
+    },
+  };
 }
 
 async function captureControlUiProof(proof: ControlUiProof, name: string): Promise<void> {
@@ -262,13 +318,24 @@ describe.runIf(CONTAINER_WIRE_ENABLED)("node worker real Docker wire", () => {
           await controlUiProof.page.goto(`${gateway.baseUrl}${sessionPath}`);
           const permission = controlUiProof.page.locator('[data-chat-permission-select="true"]');
           await permission.waitFor({ state: "visible", timeout: 60_000 });
+          await controlUiProof.page.locator(".agent-chat__composer-combobox textarea").fill(PROMPT);
+          controlUiProof.fullAccessPatch.arm();
           await permission.click();
           await controlUiProof.page.locator('[data-chat-permission-option="full"]').click();
+          await controlUiProof.fullAccessPatch.held;
+          await controlUiProof.page.getByRole("button", { name: "Send message" }).click();
+          const sendOrdering = await Promise.race([
+            controlUiProof.fullAccessPatch.prematureChatSend,
+            controlUiProof.page
+              .locator(".chat-queue")
+              .getByText("Applying chat settings")
+              .waitFor({ state: "visible", timeout: 30_000 })
+              .then(() => "queued-behind-settings" as const),
+          ]);
+          expect(sendOrdering).toBe("queued-behind-settings");
+          controlUiProof.fullAccessPatch.release();
           await expect.poll(() => permission.getAttribute("data-chat-select-value")).toBe("full");
           await captureControlUiProof(controlUiProof, "03-full-access-selected");
-
-          await controlUiProof.page.locator(".agent-chat__composer-combobox textarea").fill(PROMPT);
-          await controlUiProof.page.getByRole("button", { name: "Send message" }).click();
           const activeOperator = operator;
           await vi.waitFor(
             async () => {
@@ -383,6 +450,7 @@ describe.runIf(CONTAINER_WIRE_ENABLED)("node worker real Docker wire", () => {
         ).resolves.toBe("");
       } finally {
         if (controlUiProof) {
+          controlUiProof.fullAccessPatch.release();
           await controlUiProof.context.close();
           await controlUiProof.browser.close();
           console.info(

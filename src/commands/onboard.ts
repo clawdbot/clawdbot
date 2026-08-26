@@ -644,8 +644,7 @@ export async function setupWizardCommand(
   if (!normalizedOpts.nonInteractive && !hasInteractiveOnboardingTty()) {
     // Reset is destructive, so prove the selected interactive surface can run
     // before reading or moving any operator state.
-    runtime.error(t("wizard.guided.ttyRequired"));
-    runtime.exit(1);
+    rejectOption(normalizedOpts, runtime, t("wizard.guided.ttyRequired"));
     return;
   }
 

@@ -170,7 +170,7 @@ function resolveCatalogTriggerStatus(
   if (state.status === "error") {
     return optionCount === 0 ? t("chat.modelControls.modelsUnavailable") : undefined;
   }
-  if (!state.hasSnapshot && ["idle", "loading", "refreshing"].includes(state.status)) {
+  if (!state.hasSnapshot && ["idle", "loading"].includes(state.status)) {
     return t("chat.modelControls.loadingModels");
   }
   if (state.hasSnapshot && optionCount === 0) {
@@ -354,8 +354,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     status: props.modelsLoading ? ("loading" as const) : ("ready" as const),
   };
   const catalogLoadingWithoutSnapshot =
-    !managedCatalog.hasSnapshot &&
-    ["idle", "loading", "refreshing"].includes(managedCatalog.status);
+    !managedCatalog.hasSnapshot && ["idle", "loading"].includes(managedCatalog.status);
   const catalogTriggerStatus = resolveCatalogTriggerStatus(managedCatalog, modelOptions.length);
   const busy =
     props.loading || props.sending || Boolean(props.activeRunId) || props.stream !== null;
@@ -386,6 +385,16 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     commonDisabled ||
     effortMutationDisabled ||
     (thinking.options.length === 0 && (!showFastMode || fastMode.disabled));
+  const effortLabel = thinking.selection.displayLabel.replace(/^Inherited:\s*/u, "");
+  const showReasoning = thinking.options.length > 0;
+  const mobileSecondary =
+    showReasoning || (showFastMode && fastMode.supported)
+      ? {
+          disabled: effortDisabled,
+          label: showReasoning ? t("chat.modelControls.effort") : t("chat.modelControls.fastMode"),
+          value: showReasoning ? effortLabel : fastMode.label,
+        }
+      : undefined;
   return html`
     <div class="chat-controls__session chat-controls__model chat-controls__model-settings">
       ${renderChatModelPicker({
@@ -403,6 +412,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
             : undefined,
         disabled: modelDisabled,
         disabledReason: props.modelMutationDisabledReason,
+        mobileSecondary,
         modelCatalogState: managedCatalog,
         modelSelectionLocked: props.modelSelectionLocked === true,
         modelOptions,

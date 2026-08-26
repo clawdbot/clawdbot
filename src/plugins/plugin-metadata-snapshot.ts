@@ -19,7 +19,10 @@ import {
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
 import { buildPluginMetadataProviderFacts } from "./plugin-metadata-provider-facts.js";
-import { registerPluginMetadataSnapshotReaders } from "./plugin-metadata-snapshot.runtime.js";
+import {
+  adoptCurrentPluginMetadataSnapshotIfAbsentRuntime,
+  registerPluginMetadataSnapshotReaders,
+} from "./plugin-metadata-snapshot.runtime.js";
 import type {
   LoadPluginMetadataSnapshotParams,
   PluginMetadataSnapshot,
@@ -377,7 +380,19 @@ export function resolvePluginMetadataSnapshot(
         : {}),
     });
     if (!current) {
-      return loadPluginMetadataSnapshot(params);
+      const snapshot = loadPluginMetadataSnapshot(params);
+      // Scoped or caller-owned discovery must never become process-wide metadata.
+      if (
+        params.index === undefined &&
+        params.workspaceDir === undefined &&
+        params.pluginIds === undefined &&
+        params.pluginIdScope === undefined &&
+        snapshot.workspaceDir === undefined &&
+        snapshot.pluginIds === undefined
+      ) {
+        adoptCurrentPluginMetadataSnapshotIfAbsentRuntime(snapshot, params);
+      }
+      return snapshot;
     }
     if (!params.index || isCurrentPluginMetadataSnapshotRuntimeGeneration(current)) {
       return current;

@@ -192,7 +192,7 @@ function renderReactions(payload: unknown, opts: FormatOpts): string[] | null {
     return null;
   }
 
-  const rows = reactions.slice(0, 50).map((r) => {
+  const rows = reactions.slice(0, opts.displayLimit ?? 50).map((r) => {
     const entry = r as Record<string, unknown>;
     const emojiObj = entry.emoji as Record<string, unknown> | undefined;
     const emoji =

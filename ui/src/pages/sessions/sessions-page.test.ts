@@ -581,6 +581,60 @@ describe("sessions page lifecycle", () => {
     expect(page.selectedKeys).toEqual(new Set());
   });
 
+  it.each([
+    {
+      scenario: "the selected row is replaced by an archived generation",
+      originalArchived: false,
+      replacement: { sessionId: "replacement-session", archived: true },
+    },
+    {
+      scenario: "the selected row disappears from the roster",
+      originalArchived: false,
+      replacement: null,
+    },
+    {
+      scenario: "an archived selection is replaced by an active generation",
+      originalArchived: true,
+      replacement: { sessionId: "replacement-session", archived: false },
+    },
+  ])(
+    "preserves confirmed deletion identity when $scenario",
+    async ({ originalArchived, replacement }) => {
+      const key = "agent:main:confirmed";
+      const confirmation = deferred<boolean>();
+      vi.mocked(showConfirmDialog).mockReturnValueOnce(confirmation.promise);
+      const sessions = createSessions({
+        deleteMany: vi.fn(async () => ({ deleted: [], errors: [], preservedWorktrees: [] })),
+      });
+      const page = await createPage(
+        createContext(createGateway({} as GatewayBrowserClient).gateway, sessions),
+      );
+      page.result = {
+        count: 1,
+        sessions: [{ key, sessionId: "confirmed-session", archived: originalArchived }],
+      } as SessionsListResult;
+      page.selectedKeys = new Set([key]);
+
+      const deleting = page.deleteSelected();
+      expect(showConfirmDialog).toHaveBeenCalledOnce();
+      page.result = {
+        count: replacement ? 1 : 0,
+        sessions: replacement ? [{ key, ...replacement }] : [],
+      } as SessionsListResult;
+      confirmation.resolve(true);
+      await deleting;
+
+      expect(sessions.deleteMany).toHaveBeenCalledWith([
+        {
+          key,
+          agentId: undefined,
+          expectedSessionId: "confirmed-session",
+          ...(originalArchived ? { archivedOnly: true } : {}),
+        },
+      ]);
+    },
+  );
+
   it("adopts a managed snapshot that arrives under the bulk-delete lock after its tail refresh", async () => {
     const deleted = deferred<{
       deleted: string[];

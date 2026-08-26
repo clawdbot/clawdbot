@@ -161,6 +161,8 @@ vi.mock("../infra/heartbeat-runner.js", () => ({
   resolveHeartbeatSchedulerSeed: () => "test-seed",
 }));
 
+vi.mock("../infra/heartbeat-runner-run.js", () => ({ runHeartbeatOnce }));
+
 vi.mock("../infra/restart-coordinator.js", async () => {
   const actual = await vi.importActual<typeof import("../infra/restart-coordinator.js")>(
     "../infra/restart-coordinator.js",
@@ -902,6 +904,79 @@ describe("buildGatewayCronService", () => {
       state.cron.stop();
     }
   });
+
+  it.each(["update", "updateWithPrecondition", "add"] as const)(
+    "honors an explicit %s disable while terminal persistence is settling",
+    async (mutation) => {
+      const commandExit = createDeferred<RunExit>();
+      const completionPersistCommitted = createDeferred();
+      const allowCompletionPersist = createDeferred();
+      const cancel = vi.fn();
+      const cancelScope = vi.fn();
+      const spawn = vi.fn(async () => ({
+        runId: "run-on-exit-explicit-disable",
+        startedAtMs: Date.now(),
+        cancel,
+        wait: () => commandExit.promise,
+      }));
+      getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope });
+      const state = loadCronService(
+        createCronConfig(`server-cron-on-exit-explicit-disable-${mutation}`),
+      );
+      const originalUpdateWithPrecondition = state.cron.updateWithPrecondition.bind(state.cron);
+      let gateTerminalCompletion = true;
+      vi.spyOn(state.cron, "updateWithPrecondition").mockImplementation(async (...args) => {
+        if (!gateTerminalCompletion) {
+          return await originalUpdateWithPrecondition(...args);
+        }
+        gateTerminalCompletion = false;
+        const result = await originalUpdateWithPrecondition(...args);
+        completionPersistCommitted.resolve();
+        await allowCompletionPersist.promise;
+        return result;
+      });
+      const run = vi.spyOn(state.cron, "run");
+
+      try {
+        const input = {
+          name: "watch and honor explicit disable",
+          declarationKey: "agent:main:watch-and-honor-explicit-disable",
+          enabled: true,
+          schedule: { kind: "on-exit" as const, command: "true" },
+          payload: { kind: "systemEvent" as const, text: "must not fire" },
+          sessionTarget: "main" as const,
+          wakeMode: "now" as const,
+        };
+        const job = await state.cron.add(input);
+        await state.reconcileExitWatchers();
+        await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
+
+        commandExit.resolve(runExit());
+        await completionPersistCommitted.promise;
+
+        if (mutation === "updateWithPrecondition") {
+          await state.cron.updateWithPrecondition(job.id, { enabled: false }, () => {});
+        } else if (mutation === "add") {
+          await state.cron.add({ ...input, enabled: false }, { enabledExplicit: true });
+        } else {
+          await state.cron.update(job.id, { enabled: false });
+        }
+        expect(cancel).toHaveBeenCalledWith("manual-cancel");
+        expect(cancelScope).toHaveBeenCalledWith(`cron-exit:${job.id}`, "manual-cancel");
+        allowCompletionPersist.resolve();
+
+        await vi.waitFor(async () => {
+          const handoff = await state.prepareExitWatcherHandoff?.();
+          expect(handoff?.current().activeJobIds()).toEqual([]);
+        });
+        expect(run).not.toHaveBeenCalled();
+      } finally {
+        allowCompletionPersist.resolve();
+        commandExit.resolve(runExit());
+        await state.cron.stopAndDrain?.();
+      }
+    },
+  );
 
   it("aborts and drains active cron runs during shutdown", async () => {
     const controller = new AbortController();
@@ -2498,7 +2573,6 @@ describe("buildGatewayCronService", () => {
         sessionKey: "discord:channel:ops",
         heartbeat: { target: "last" },
         scheduledEveryMs: 15 * 60_000,
-        scheduledAnchorMs: 42_000,
       });
 
       expect(requestHeartbeatMock).toHaveBeenCalledWith({
@@ -2509,7 +2583,6 @@ describe("buildGatewayCronService", () => {
         sessionKey: "agent:main:discord:channel:ops",
         heartbeat: { target: "last", to: undefined, accountId: undefined },
         scheduledEveryMs: 15 * 60_000,
-        scheduledAnchorMs: 42_000,
       });
     } finally {
       state.cron.stop();

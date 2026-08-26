@@ -835,6 +835,12 @@ function runNpmTelegramInputValidation(overrides: Record<string, string>) {
       PACKAGE_SPEC: "openclaw@beta",
       PACKAGE_VERSION: "",
       PATH: process.env.PATH,
+      PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_DIGEST: "",
+      PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_ID: "",
+      PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_NAME: "",
+      PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ATTEMPT: "",
+      PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ID: "",
+      PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256: "",
       PROVIDER_MODE: "mock-openai",
       ...overrides,
     },
@@ -2676,6 +2682,45 @@ describe("package acceptance workflow", () => {
     expect(packageTelegram.with?.package_source_sha).toBe(
       "${{ needs.resolve_package.outputs.package_source_sha }}",
     );
+    const registryInputs = {
+      prepublish_plugin_registry_artifact_name:
+        "${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactName || '' }}",
+      prepublish_plugin_registry_artifact_id:
+        "${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactId || '' }}",
+      prepublish_plugin_registry_artifact_digest:
+        "${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactDigest || '' }}",
+      prepublish_plugin_registry_artifact_run_id:
+        "${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactRunId || '' }}",
+      prepublish_plugin_registry_artifact_run_attempt:
+        "${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactRunAttempt || '' }}",
+      prepublish_plugin_registry_manifest_sha256:
+        "${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryManifestSha256 || '' }}",
+    };
+    expect(packageTelegram.with).toMatchObject(registryInputs);
+    const registryInputSchema = Object.fromEntries(
+      Object.keys(registryInputs).map((name) => [
+        name,
+        expect.objectContaining({ default: "", required: false, type: "string" }),
+      ]),
+    );
+    const npmTelegramInputs = readWorkflow(NPM_TELEGRAM_WORKFLOW).on;
+    expect(npmTelegramInputs?.workflow_call?.inputs).toMatchObject(registryInputSchema);
+    expect(npmTelegramInputs?.workflow_dispatch?.inputs).toMatchObject(registryInputSchema);
+    expect(npmTelegramWorkflow).toContain(
+      "Artifact-backed Telegram E2E requires the complete prerelease plugin registry tuple.",
+    );
+    expect(npmTelegramWorkflow).toContain(
+      "Prerelease plugin registry inputs require an artifact-backed OpenClaw package.",
+    );
+    expect(npmTelegramWorkflow).toContain(
+      'expected_registry_name="docker-e2e-prepublish-plugin-registry-${PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ID}-${PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ATTEMPT}"',
+    );
+    expect(npmTelegramWorkflow).not.toContain(
+      "Prerelease plugin registry and package artifacts must come from the same workflow run attempt.",
+    );
+    expect(npmTelegramWorkflow).toContain('verify-upload "Prerelease plugin registry"');
+    expect(npmTelegramWorkflow).toContain("Download prerelease plugin registry artifact");
+    expect(npmTelegramWorkflow).toContain("--required-packages-json '[\"@openclaw/codex\"]'");
     expect(packageTelegram.secrets).toEqual({
       OPENAI_API_KEY: "${{ secrets.OPENAI_API_KEY }}",
       OPENCLAW_QA_CONVEX_SECRET_CI: "${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}",
@@ -5801,6 +5846,61 @@ describe("package artifact reuse", () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(
       "Artifact-backed Telegram E2E requires all artifact identity fields or none.",
+    );
+  });
+
+  it("accepts direct package artifacts and validates an optional registry tuple", () => {
+    const packageTuple = {
+      PACKAGE_ARTIFACT_DIGEST: "a".repeat(64),
+      PACKAGE_ARTIFACT_ID: "123",
+      PACKAGE_ARTIFACT_NAME: "package-under-test",
+      PACKAGE_ARTIFACT_RUN_ATTEMPT: "2",
+      PACKAGE_ARTIFACT_RUN_ID: "456",
+      PACKAGE_FILE_NAME: "openclaw-2026.8.1.tgz",
+      PACKAGE_SHA256: "b".repeat(64),
+      PACKAGE_SOURCE_SHA: "c".repeat(40),
+      PACKAGE_VERSION: "2026.8.1",
+    };
+    const registryTuple = {
+      PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_DIGEST: "d".repeat(64),
+      PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_ID: "789",
+      PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_NAME: "docker-e2e-prepublish-plugin-registry-123-1",
+      PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ATTEMPT: "1",
+      PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ID: "123",
+      PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256: "e".repeat(64),
+    };
+
+    expect(runNpmTelegramInputValidation(packageTuple).status).toBe(0);
+    expect(runNpmTelegramInputValidation({ ...packageTuple, ...registryTuple }).status).toBe(0);
+
+    const partial = runNpmTelegramInputValidation({
+      ...packageTuple,
+      PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_ID: "789",
+    });
+    expect(partial.status).toBe(1);
+    expect(partial.stderr).toContain(
+      "Artifact-backed Telegram E2E requires the complete prerelease plugin registry tuple.",
+    );
+
+    const wrongName = runNpmTelegramInputValidation({
+      ...packageTuple,
+      ...registryTuple,
+      PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_NAME: "wrong-name",
+    });
+    expect(wrongName.status).toBe(1);
+    expect(wrongName.stderr).toContain(
+      "Prerelease plugin registry artifact name does not match its producer run.",
+    );
+  });
+
+  it("rejects prerelease plugin registry inputs without a package artifact", () => {
+    const result = runNpmTelegramInputValidation({
+      PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_ID: "789",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "Prerelease plugin registry inputs require an artifact-backed OpenClaw package.",
     );
   });
 

@@ -81,10 +81,6 @@ suite.define(() => {
         );
         await captureUpdateProof(page, artifactDir, "disabled-update.png");
 
-        const actionBounds = await action.boundingBox();
-        if (!actionBounds) {
-          throw new Error("disabled update action is not visible");
-        }
         const tooltip = updateIssue.locator("openclaw-tooltip wa-tooltip");
         await tooltip.evaluate((element) => {
           element.addEventListener(
@@ -93,10 +89,7 @@ suite.define(() => {
             { once: true },
           );
         });
-        await page.touchscreen.tap(
-          actionBounds.x + actionBounds.width / 2,
-          actionBounds.y + actionBounds.height / 2,
-        );
+        await updateIssue.locator(".sidebar-update-card__actions").tap();
         await expect.poll(() => tooltip.getAttribute("data-e2e-after-show")).not.toBeNull();
         expect(await tooltip.textContent()).toContain("Administrator access is required");
         expect(await gateway.getRequests("update.run")).toHaveLength(0);

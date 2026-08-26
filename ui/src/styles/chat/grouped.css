@@ -654,7 +654,6 @@ img.chat-avatar.chat-avatar--logo {
   transition: border-color var(--duration-fast) ease-out;
   width: auto;
   max-width: 100%;
-  box-sizing: border-box;
   min-width: 0;
   overflow-wrap: break-word;
 }

@@ -6,7 +6,7 @@ import {
   type WorkerProfile,
   type WorkerProvider,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { runCommandWithTimeout, type SpawnResult } from "openclaw/plugin-sdk/process-runtime";
+import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
@@ -24,6 +24,7 @@ import {
   createCrabboxWorkerDesktopEndpoint,
   createCrabboxWorkerDesktopSetup,
 } from "./crabbox-worker-desktop-setup.js";
+import { withCrabboxWorkerEnvProfile } from "./crabbox-worker-env-profile.js";
 import { createCrabboxHeartbeatManager } from "./crabbox-worker-heartbeat.js";
 import { parseInspectJson, type ParsedInspect } from "./crabbox-worker-inspect.js";
 import { createCrabboxMachineOptionsResolver } from "./crabbox-worker-machine-options.js";
@@ -216,7 +217,8 @@ const isUnusableProvisionState = (state: string) =>
 
 function crabboxLeaseRunArgs(
   context: LeaseCommandContext,
-  forwardedEnv?: Record<string, string>,
+  forwardedEnvNames: readonly string[] = [],
+  envProfilePath?: string,
 ): string[] {
   return [
     "run",
@@ -231,7 +233,8 @@ function crabboxLeaseRunArgs(
     // Workspace transfer is owned by the worker tunnel; lease scripts must not
     // rsync the gateway checkout into the box just to execute setup or diagnostics.
     "--no-sync",
-    ...Object.keys(forwardedEnv ?? {}).flatMap((name) => ["--allow-env", name]),
+    ...forwardedEnvNames.flatMap((name) => ["--allow-env", name]),
+    ...(envProfilePath ? ["--env-from-profile", envProfilePath] : []),
     "--script-stdin",
   ];
 }
@@ -300,44 +303,37 @@ async function waitForProvisionReady(
 // Setup runs on every provision attempt (including replay adoption), so commands
 // must be idempotent. A failed setup stops the lease before surfacing the error;
 // otherwise the caller cannot release a box it never learned about.
-async function runProvisionSetup(
+async function runProvisionSetupAndWaitReady(
   params: ProvisionInspectContext & {
     setup: string;
     timeoutMs?: number;
     forwardedEnv?: Record<string, string>;
-    env?: NodeJS.ProcessEnv;
-  },
-): Promise<void> {
-  let result: SpawnResult;
-  try {
-    result = await runCrabboxCommand({
-      action: "setup",
-      args: crabboxLeaseRunArgs({ ...params, id: params.inspect.id }, params.forwardedEnv),
-      binary: params.binary,
-      env: params.env ?? params.forwardedEnv,
-      input: params.setup,
-      runCommand: params.runCommand,
-      timeoutMs: remainingProvisionTimeout(
-        params.deadline,
-        params.timeoutMs ?? CRABBOX_SETUP_TIMEOUT_MS,
-      ),
-    });
-  } catch (error) {
-    return await failProvisionAfterCleanup({ ...params, id: params.inspect.id }, error);
-  }
-  if (result.termination === "exit" && result.code === 0) {
-    return;
-  }
-  const error = permanentCrabboxCommandError("setup", result);
-  return await failProvisionAfterCleanup({ ...params, id: params.inspect.id }, error);
-}
-
-async function runProvisionSetupAndWaitReady(
-  params: Parameters<typeof runProvisionSetup>[0] & {
     sleep: (milliseconds: number) => Promise<void>;
   },
 ): Promise<ParsedInspect> {
-  await runProvisionSetup(params);
+  try {
+    const result = await withCrabboxWorkerEnvProfile(
+      params.forwardedEnv,
+      (names, profilePath, childEnv) =>
+        runCrabboxCommand({
+          action: "setup",
+          args: crabboxLeaseRunArgs({ ...params, id: params.inspect.id }, names, profilePath),
+          binary: params.binary,
+          env: childEnv,
+          input: params.setup,
+          runCommand: params.runCommand,
+          timeoutMs: remainingProvisionTimeout(
+            params.deadline,
+            params.timeoutMs ?? CRABBOX_SETUP_TIMEOUT_MS,
+          ),
+        }),
+    );
+    if (result.termination !== "exit" || result.code !== 0) {
+      throw permanentCrabboxCommandError("setup", result);
+    }
+  } catch (error) {
+    return await failProvisionAfterCleanup({ ...params, id: params.inspect.id }, error);
+  }
   // Setup may restart SSH or change its endpoint. Re-read the authoritative lease before
   // returning any endpoint or security attestation to core bootstrap.
   return await waitForProvisionReady({ ...params, refresh: true });
@@ -617,7 +613,6 @@ export function createCrabboxWorkerProvider(
           ...inspectedParams,
           setup: parsed.setup,
           forwardedEnv,
-          env: { ...forwardedEnv, CRABBOX_ENV_ALLOW: parsed.setupEnv?.join(",") || "," },
           sleep,
         });
       }

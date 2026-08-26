@@ -36,6 +36,15 @@ import {
 } from "./openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
+const RETIRED_DEAD_STATE_TABLES_V10 = [
+  "agent_model_catalogs",
+  "android_notification_recent_packages",
+  "command_log_entries",
+  "diagnostic_stability_bundles",
+  "media_blobs",
+  "model_capability_cache",
+] as const;
+
 export function dropLegacyStateTables(db: DatabaseSync): void {
   // Unreleased transient history; drop, do not migrate.
   const transientHistoryTable = ["database", "verifications"].join("_");
@@ -364,6 +373,25 @@ export function migrateRetiredCommitmentsSchema(
   }
 }
 
+export function migrateRetiredDeadStateTablesV10(
+  db: DatabaseSync,
+  previousVersion: number,
+): boolean {
+  if (previousVersion >= 10) {
+    return false;
+  }
+  // These tables shipped without writers except for rebuildable model-catalog
+  // cache rows, so unlike commitments they need no shape or dependency proof.
+  let dropped = false;
+  for (const tableName of RETIRED_DEAD_STATE_TABLES_V10) {
+    if (tableExists(db, tableName)) {
+      db.exec(`DROP TABLE IF EXISTS ${tableName};`);
+      dropped = true;
+    }
+  }
+  return dropped;
+}
+
 export function migrateWorkerPlacementExecutionModeSchema(
   db: DatabaseSync,
   previousVersion: number,
@@ -630,43 +658,6 @@ export function repairLegacyGatewayRestartHandoffsForStrictMigration(db: Databas
   `);
 }
 
-export function markCurrentStateSchemaVersion(
-  db: DatabaseSync,
-  options: { createMetadataIfMissing?: boolean } = {},
-): void {
-  // Pre-v2 databases can legitimately predate the audit table. Leave their
-  // version untouched so normal open can create the complete v2 schema first.
-  if (!tableExists(db, "audit_events")) {
-    return;
-  }
-  db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};`);
-  if (
-    tableExists(db, "schema_meta") &&
-    ["meta_key", "schema_version", "updated_at"].every((column) =>
-      tableHasColumn(db, "schema_meta", column),
-    )
-  ) {
-    const now = Date.now();
-    if (options.createMetadataIfMissing) {
-      // Recognized pre-metadata schemas may acquire the global owner row during
-      // doctor migration. Conflicting existing ownership is preserved so the
-      // final maintenance assertion rejects and rolls back the repair.
-      db.prepare(
-        `INSERT INTO schema_meta (
-           meta_key, role, schema_version, agent_id, app_version, created_at, updated_at
-         ) VALUES ('primary', 'global', ?, NULL, NULL, ?, ?)
-         ON CONFLICT(meta_key) DO UPDATE SET
-           schema_version = excluded.schema_version,
-           updated_at = excluded.updated_at`,
-      ).run(OPENCLAW_STATE_SCHEMA_VERSION, now, now);
-      return;
-    }
-    db.prepare(
-      "UPDATE schema_meta SET schema_version = ?, updated_at = ? WHERE meta_key = 'primary'",
-    ).run(OPENCLAW_STATE_SCHEMA_VERSION, now);
-  }
-}
-
 export function assertCanonicalStateSchemaShape(db: DatabaseSync, pathname: string): void {
   operatorApprovalMigration.assertCanonicalOperatorApprovalKinds(db, pathname);
   if (!hasCanonicalAgentDatabasesPrimaryKey(db)) {
@@ -728,6 +719,12 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
   }
   if (userVersion === 8 && tableExists(db, "agent_databases")) {
     migrations.push({ kind: "agent-databases-relative-paths-v9", path: pathname });
+  }
+  if (
+    userVersion < 10 &&
+    RETIRED_DEAD_STATE_TABLES_V10.some((tableName) => tableExists(db, tableName))
+  ) {
+    migrations.push({ kind: "state-table-retirement-v10", path: pathname });
   }
   if (!hasCanonicalAgentDatabasesPrimaryKey(db)) {
     migrations.push({ kind: "agent-databases-composite-primary-key", path: pathname });

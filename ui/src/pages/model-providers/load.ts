@@ -86,17 +86,16 @@ export async function loadModelProvidersData(
         .then((result) => ({ ok: true as const, result: result ?? null }))
         .catch((error: unknown) => ({ ok: false as const, error }))
     : Promise.resolve({ ok: true as const, result: null });
-  const modelsLoad = opts?.refresh
-    ? catalogRefresh.then((catalogResult) =>
-        loadModels(client, {
-          agentId: opts.agentId,
-          ...(catalogResult.ok ? { refresh: true } : { preparedOnly: true }),
-        }),
-      )
-    : loadModels(client, {
-        agentId: opts.agentId,
-        preparedOnly: true,
-      }).catch(() => null);
+  const modelsLoad = catalogRefresh.then((catalogResult) =>
+    loadModels(client, {
+      agentId: opts.agentId,
+      ...(opts.refresh && catalogResult.ok ? { refresh: true } : { preparedOnly: true }),
+      rejectOnFailure: true,
+    }).then(
+      (result) => ({ ok: true as const, result }),
+      (error: unknown) => ({ ok: false as const, error }),
+    ),
+  );
   const [authStatus, models, catalogResult, config, providerUsageFetch, costByProvider] =
     await Promise.all([
       loadModelAuthStatus(client, opts).then(
@@ -121,9 +120,13 @@ export async function loadModelProvidersData(
   return {
     authStatus:
       authStatus.ok && Array.isArray(authStatus.result?.providers) ? authStatus.result : null,
-    models,
+    models: models.ok ? models.result : null,
     providerOutcomes: catalogResult.ok ? (catalogResult.result?.providerOutcomes ?? []) : [],
-    catalogError: catalogResult.ok ? null : errorMessage(catalogResult.error),
+    catalogError: !catalogResult.ok
+      ? errorMessage(catalogResult.error)
+      : !models.ok
+        ? errorMessage(models.error)
+        : null,
     config,
     providerUsage: providerUsageFetch,
     costByProvider,
