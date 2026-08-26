@@ -7,6 +7,7 @@ import {
   BROWSER_TAB_REFERENCE_HELP,
   callBrowserRequest,
   parseBrowserPositiveIntegerOption,
+  withBrowserActionTimeoutSlack,
   type BrowserParentOpts,
 } from "../browser-cli-shared.js";
 import {
@@ -15,7 +16,7 @@ import {
   resolveExistingUploadPaths,
   shortenHomePath,
 } from "../core-api.js";
-import { resolveBrowserActionContext, withBrowserActionTimeoutSlack } from "./shared.js";
+import { resolveBrowserActionContext } from "./shared.js";
 
 const DEFAULT_BROWSER_HOOK_TIMEOUT_MS = 120000;
 

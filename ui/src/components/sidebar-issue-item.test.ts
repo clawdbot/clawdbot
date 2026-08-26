@@ -9,6 +9,7 @@ const item: SidebarAttentionItem = {
   type: "attention",
   category: "automations",
   dismissal: null,
+  requiresAction: true,
   kind: "cronFailed",
   severity: "error",
   icon: "clock",

@@ -9,7 +9,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { updatePairedNodeSessionHost } from "../../infra/device-pairing-node-facts.js";
-import { projectNodePairing } from "../../infra/device-pairing-node.js";
+import { listNodePairing, projectNodePairing } from "../../infra/device-pairing-node.js";
 import { listDevicePairing, resolveNodePairingState } from "../../infra/device-pairing.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
@@ -455,9 +455,17 @@ export const nodeReadHandlers: GatewayRequestHandlers = {
         ? currentSession.pairingGeneration
         : undefined;
     if (!connId || !pairingGeneration) {
+      // A registered session without a pairing generation usually means the
+      // node's capability surface is still awaiting operator approval; name
+      // that state and the exact approve command instead of a generic retry.
+      const pendingSurface = nodeId
+        ? (await listNodePairing()).pending.find((entry) => entry.nodeId === nodeId)
+        : undefined;
       respondRunnerInventoryRetry(
         respond,
-        "node runner inventory publication is not current; retry after pairing completes",
+        pendingSurface
+          ? `node capability surface is awaiting operator approval; run \`openclaw nodes approve ${pendingSurface.requestId}\` (see \`openclaw nodes pending\`), then this node retries automatically`
+          : "node runner inventory publication is not current; retry after pairing completes",
       );
       return;
     }

@@ -7,7 +7,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { handleChatGatewayEvent, type ChatEventPayload } from "./chat-gateway.ts";
-import { loadChatHistory, type ChatState } from "./chat-history.ts";
+import { getChatHistoryLoadState, loadChatHistory, type ChatState } from "./chat-history.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
 import { getChatSessionProjection, setChatSessionProjection } from "./history-merge.ts";
 import { cacheChatSessionSnapshot, readChatMessagesFromCache } from "./session-message-cache.ts";
@@ -2932,8 +2932,13 @@ describe("loadChatHistory retry handling", () => {
       limit: 100,
     });
     expect(request).toHaveBeenCalledTimes(1);
-    expect(state.lastError).toContain("unknown method: chat.startup");
-    expect(state.chatError).toContain("unknown method: chat.startup");
+    expect(getChatHistoryLoadState(state)).toMatchObject({
+      phase: "failed",
+      message: expect.stringContaining("unknown method: chat.startup"),
+      retryable: false,
+    });
+    expect(state.lastError).toBeNull();
+    expect(state.chatError).toBeNull();
   });
 
   it("retries retryable startup unavailability before showing history", async () => {
@@ -3673,9 +3678,14 @@ describe("loadChatHistory retry handling", () => {
     expect(state.chatMessages).toStrictEqual([]);
     expect(state.chatThinkingLevel).toBeNull();
     expect(state.chatVerboseLevel).toBeNull();
-    expect(state.lastError).toBe(
-      "This connection is missing operator.read, so existing chat history cannot be loaded yet.",
-    );
+    expect(getChatHistoryLoadState(state)).toMatchObject({
+      phase: "failed",
+      message:
+        "This connection is missing operator.read, so existing chat history cannot be loaded yet.",
+      retryable: false,
+    });
+    expect(state.lastError).toBeNull();
+    expect(state.chatError).toBeNull();
     expect(state.chatLoading).toBe(false);
   });
 
@@ -3887,14 +3897,13 @@ describe("loadChatHistory retry handling", () => {
     state.connectionEpoch = 2;
     state.connected = true;
     state.connectionEpoch = 3;
-    // The connection owner has already prepared the new epoch. The stale
-    // finalizer must not clear its loading state.
     state.chatLoading = true;
     staleRequest.reject(new Error("stale history failure"));
     await staleLoad;
 
     expect(state.lastError).toBeNull();
     expect(state.chatError).toBeNull();
+    expect(getChatHistoryLoadState(state)).toMatchObject({ phase: "pending-connection" });
     expect(state.chatLoading).toBe(true);
   });
 

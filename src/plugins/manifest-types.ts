@@ -28,6 +28,7 @@ export type PluginBundleFormat = "agent" | "codex" | "claude" | "cursor";
  * on these instead of matching freeform diagnostic message text.
  */
 export type PluginDiagnosticCode =
+  | "backup-resource-declaration-invalid"
   | "channel-setup-failure"
   | "dashboard-declaration-invalid"
   | "plugin-verification"
@@ -335,9 +336,18 @@ export type PluginManifestCatalog = {
   order?: number;
 };
 
+/** Declarative backup ownership rooted at host-managed state or each configured agent. */
+export type PluginManifestBackupResource = {
+  disposition: "include" | "regenerable";
+  scope: "state" | "agent";
+  relativePath: string;
+};
+
 export type PluginManifest = {
   id: string;
   configSchema: JsonSchemaObject;
+  /** Static backup inclusion/exclusion declarations; resolved without loading plugin runtime. */
+  backupResources?: PluginManifestBackupResource[];
   /** Plugin ids that must also be installed for this plugin to have effect. */
   requiresPlugins?: string[];
   enabledByDefault?: boolean;

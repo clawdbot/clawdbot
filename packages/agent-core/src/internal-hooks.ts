@@ -19,7 +19,7 @@ type InternalReadyToolCall = { toolCallId: string; args: unknown };
 export type InternalToolBatchLifecycle = {
   /** Commit admitted calls whose tool implementations are about to start. May throw before launch. */
   commitReadyCalls: (calls: readonly InternalReadyToolCall[]) => void;
-  /** Release admission state for admitted prepared calls suppressed by steering. */
+  /** Release admission state for admitted prepared calls that will not launch. */
   releaseSkippedCalls: (toolCallIds: readonly string[]) => void;
 };
 

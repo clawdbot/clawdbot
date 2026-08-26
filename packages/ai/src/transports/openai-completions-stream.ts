@@ -124,7 +124,7 @@ export async function processCompletionsStream(
   const toolCallBlockIndices = new WeakMap<ToolCallBlock, number>();
   let explicitVisibleTextBlocks: Set<TextBlock> | undefined;
   const normalizeToolCallDeltas = createOpenAICompletionsToolCallDeltaNormalizer();
-  let sawStopFinishReason = false;
+  let finishReason: string | undefined;
   let sawNativeToolCallDelta = false;
   const blockIndex = () => output.content.length - 1;
   const measureUtf8Bytes = (text: string) => Buffer.byteLength(text, "utf8");
@@ -442,9 +442,7 @@ export async function processCompletionsStream(
         allowSingularToolCall: true,
       });
       output.stopReason = finishReasonResult.stopReason;
-      if (finishReasonResult.stopReason === "stop") {
-        sawStopFinishReason = true;
-      }
+      finishReason = finishReasonResult.stopReason;
       if (finishReasonResult.errorMessage) {
         output.errorMessage = finishReasonResult.errorMessage;
       }
@@ -567,22 +565,18 @@ export async function processCompletionsStream(
     emitReasoningUsageActivity(hasReasoningUsageActivity);
     await cooperativeScheduler.afterEvent();
   }
+  if (!finishReason && options?.sawStreamDONE?.() === false) {
+    throw new Error("Stream ended without finish_reason");
+  }
   flushReasoningTagTextPartitioner();
   flushDeepSeekToolCallRecovererAtEnd();
   flushDeepSeekTextFilterAtEnd();
   currentBlock = null;
   flushPendingPostToolCallDeltas();
-  // Promote complete silent tool-call-only responses when the stream finished
-  // cleanly (reached post-loop). Two paths:
-  //   sawStopFinishReason: explicit provider terminal (legacy DSML / #88791)
-  //   sawNativeToolCallDelta + sawStreamDONE: structured delta.tool_calls with
-  //     a clean SSE [DONE] terminal but no finish_reason (e.g. Evolink
-  //     DeepSeek V4). [DONE] tracking distinguishes clean termination from
-  //     connection drops (EOF without [DONE] remains fail-closed).
-  // Truncated streams throw before reaching this code.
+  // Only an explicit stop or observed SSE terminal may authorize silent tool calls.
   finalizeOpenAICompletionsToolCalls(output, {
     allowSilentToolCallPromotion:
-      sawStopFinishReason || (sawNativeToolCallDelta && (options?.sawStreamDONE?.() ?? false)),
+      finishReason === "stop" || (sawNativeToolCallDelta && (options?.sawStreamDONE?.() ?? false)),
     onConfirmedToolCall(block, contentIndex) {
       if (block.type !== "toolCall") {
         return;

@@ -412,7 +412,7 @@ describe("cron task run terminal records", () => {
     );
   });
 
-  it("keeps operator cancellation while attaching terminal run history", async () => {
+  it("keeps operator cancellation reason when required delivery is interrupted", async () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-cron-cancelled-task-" },
       async () => {
@@ -448,8 +448,7 @@ describe("cron task run terminal records", () => {
           runtime: "cron",
           status: "cancelled",
           endedAt: startedAt + 50,
-          error: "cancelled by operator",
-          terminalSummary: "Cancelled by operator.",
+          error: "Cancelled by operator.",
         });
 
         tryFinishCronTaskRun(state, {
@@ -460,6 +459,11 @@ describe("cron task run terminal records", () => {
             action: "finished",
             job,
             status: "ok",
+            completionStatus: "failed",
+            summary: "payload complete",
+            delivered: false,
+            deliveryStatus: "not-delivered",
+            deliveryError: "cron webhook delivery cancelled: Cancelled by operator.",
             runAtMs: startedAt,
             durationMs: 100,
           },
@@ -472,9 +476,14 @@ describe("cron task run terminal records", () => {
         expect(row).toMatchObject({
           status: "cancelled",
           endedAt: startedAt + 100,
-          detail: { kind: "cron-run", status: "ok", durationMs: 100 },
+          error: "Cancelled by operator.",
+          detail: {
+            kind: "cron-run",
+            status: "ok",
+            completionStatus: "failed",
+            durationMs: 100,
+          },
         });
-        expect(row?.error).toBeUndefined();
         expect(row?.terminalSummary).toBeUndefined();
         expect(
           readCronTaskRunHistoryPage({
@@ -485,7 +494,12 @@ describe("cron task run terminal records", () => {
           expect.objectContaining({
             jobId: job.id,
             status: "ok",
+            completionStatus: "failed",
             error: undefined,
+            summary: "payload complete",
+            delivered: false,
+            deliveryStatus: "not-delivered",
+            deliveryError: "cron webhook delivery cancelled: Cancelled by operator.",
           }),
         ]);
       },

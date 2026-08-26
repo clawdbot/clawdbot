@@ -63,6 +63,11 @@ function buildOpenShellDirectoryUploadArgs(params: {
   ];
 }
 
+// Prints "0" when every managed root is missing or empty, "1" otherwise. Any
+// content in a managed root means the remote workspace was already seeded (or
+// holds operator data) and re-seeding would destroy remote-canonical state.
+const REMOTE_MANAGED_ROOTS_EMPTY_SCRIPT =
+  'for root in "$@"; do if [ -d "$root" ] && [ -n "$(ls -A "$root")" ]; then printf "1\\n"; exit 0; fi; done; printf "0\\n"';
 const PINNED_REMOTE_PATH_MUTATION_SCRIPT = [
   "set -eu",
   'die() { echo "$1" >&2; exit 1; }',
@@ -689,6 +694,17 @@ class OpenShellSandboxBackendImpl {
           throw this.buildLegacyRuntimeUnavailableError(`OpenShell reports phase "${phase}".`);
         }
       }
+      // The seed obligation must survive a gateway restart between `sandbox
+      // create` and the first exec: process memory is gone, so adopted remote
+      // sandboxes probe the managed roots instead. Only completely empty roots
+      // arm the seed — the wipe step is then a no-op, so recovery can never
+      // destroy operator content in a remote-canonical workspace.
+      if (
+        this.params.execContext.config.mode === "remote" &&
+        (await this.remoteManagedRootsEmpty())
+      ) {
+        this.remoteSeedPending = true;
+      }
       return;
     }
     if (this.params.legacyRuntimeAdopted) {
@@ -900,6 +916,16 @@ class OpenShellSandboxBackendImpl {
         }
       },
     );
+  }
+
+  private async remoteManagedRootsEmpty(): Promise<boolean> {
+    const result = await this.runRemoteShellScriptInternal({
+      script: REMOTE_MANAGED_ROOTS_EMPTY_SCRIPT,
+      args: [this.params.remoteWorkspaceDir, this.params.remoteAgentWorkspaceDir],
+    });
+    // Anything other than an exact "0" reads as non-empty so the seed never
+    // fires on ambiguous probe output.
+    return result.stdout.toString("utf8").trim() === "0";
   }
 
   private async maybeSeedRemoteWorkspace(): Promise<boolean> {

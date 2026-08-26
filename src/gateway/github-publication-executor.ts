@@ -54,6 +54,8 @@ const PUBLICATION_MARKER = "OpenClaw-Publication";
 
 type PublicationRow = StateDatabase["github_publication_requests"];
 
+class GitHubPublicationAuthorityLostError extends Error {}
+
 export function matchesGitHubPublicationIdentityRow(
   row: PublicationRow,
   identity: PreparedGitHubPublicationIdentity,
@@ -72,7 +74,14 @@ async function runCommand(
 ) {
   return await runCommandBuffered(argv, {
     ...(options.cwd ? { cwd: options.cwd } : {}),
-    env: { ...(options.env ?? process.env), GIT_NO_REPLACE_OBJECTS: "1" },
+    env: {
+      ...(options.env ?? process.env),
+      GIT_NO_REPLACE_OBJECTS: "1",
+      // Pin every command against repository hooks; explicit hook-disabling -c flags stay stronger.
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "core.hooksPath",
+      GIT_CONFIG_VALUE_0: os.devNull,
+    },
     ...(options.input !== undefined ? { input: options.input } : {}),
     timeoutMs: 60_000,
     maxOutputBytes: 256 * 1024,
@@ -202,6 +211,7 @@ export async function executeGitHubPublication(params: {
     headCommit: string;
   }) => PublicationRow;
   complete: (row: PublicationRow, result: SessionGitHubPublicationResult) => PublicationRow;
+  defer?: (row: PublicationRow) => PublicationRow;
 }): Promise<SessionGitHubPublicationResult> {
   const { initial } = params;
   if (initial.status === "published" || initial.status === "failed") {
@@ -221,7 +231,9 @@ export async function executeGitHubPublication(params: {
     });
   const assertAuthority = () => {
     if (!params.validateAuthority()) {
-      throw new Error("GitHub publication session authority changed.");
+      throw new GitHubPublicationAuthorityLostError(
+        "GitHub publication session authority changed.",
+      );
     }
     currentWorktree();
     if (
@@ -652,6 +664,9 @@ export async function executeGitHubPublication(params: {
   } catch (error) {
     if (error instanceof GitHubPublicationRecoveryPendingError) {
       throw error;
+    }
+    if (error instanceof GitHubPublicationAuthorityLostError && params.defer) {
+      return params.projectResult(params.defer(initial));
     }
     const failure = resolveGitHubPublicationFailure(error);
     const result = params.projectResult(

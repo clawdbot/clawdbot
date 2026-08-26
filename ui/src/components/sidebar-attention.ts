@@ -36,6 +36,7 @@ import {
   buildScopeUpgradeInboxEntry,
   buildSidebarInboxEntries,
   buildUpdateInboxEntry,
+  sidebarInboxTabCounts,
   type SidebarAttentionDismissal,
   type SidebarAttentionItem,
   type SidebarInboxEntry,
@@ -431,6 +432,7 @@ class SidebarAttention extends OpenClawLightDomElement {
       canDismiss: updateState.canUpdate,
       dismissal: updateState.dismissal,
       forced: updateState.forced,
+      requiresAction: updateState.forced || (updateState.canUpdate && updateState.actionable),
       severity: overlaySnapshot.updateStatusBanner?.tone === "danger" ? "error" : "warning",
       visible: updateState.present,
     });
@@ -621,7 +623,7 @@ class SidebarAttention extends OpenClawLightDomElement {
     const updateEntry = entries.find((entry) => entry.type === "update");
     const updateDismissal = updateEntry?.dismissal ?? null;
     const updateState = resolveSidebarUpdateAttention(this.context);
-    const count = entries.length;
+    const count = sidebarInboxTabCounts(entries).all;
     const label = t(count === 1 ? "attention.issueCount" : "attention.issueCountPlural", {
       count: String(count),
     });
@@ -665,7 +667,6 @@ class SidebarAttention extends OpenClawLightDomElement {
               <span class="sidebar-footer-update__icon" aria-hidden="true"
                 >${updateState.busy ? icons.refresh : icons.download}</span
               >
-              <span class="sidebar-footer-update__label">${t("updates.sidebar.action")}</span>
             </button>
             ${updateDismissal
               ? html`<openclaw-tooltip
