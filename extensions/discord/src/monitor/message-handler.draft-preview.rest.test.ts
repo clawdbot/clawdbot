@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it } from "vitest";
 import { RequestClient } from "../internal/discord.js";
 import { createDiscordDraftPreviewController } from "./message-handler.draft-preview.js";
@@ -46,11 +47,17 @@ describe("Discord draft preview REST lifecycle", () => {
     expect(requests).toEqual(["POST /channels/c1/messages"]);
   });
 
-  it.each([false, true])(
-    "removes a late prior-turn preview at teardown (first delete fails: %s)",
-    async (failFirstDelete) => {
-      const firstCreateStarted = Promise.withResolvers<void>();
-      const finishFirstCreate = Promise.withResolvers<void>();
+  it.each([
+    ["queued admission", 0],
+    ["queued admission", 1],
+    ["teardown", 0],
+    ["teardown", 1],
+    ["teardown", 2],
+  ] as const)(
+    "removes a late preview after %s (%i delete failures)",
+    async (boundary, deleteFailures) => {
+      const firstCreateStarted = createDeferred<void>();
+      const finishFirstCreate = createDeferred<void>();
       const visibleMessages = new Map<string, string>();
       const deletedIds: string[] = [];
       let createdCount = 0;
@@ -59,21 +66,21 @@ describe("Discord draft preview REST lifecycle", () => {
           const url = new URL(input instanceof Request ? input.url : input);
           if (init?.method === "POST") {
             const id = `preview-${++createdCount}`;
-            if (createdCount === 1) {
-              firstCreateStarted.resolve();
-              await finishFirstCreate.promise;
-            }
             if (typeof init.body !== "string") {
               throw new Error("Expected a serialized Discord JSON request body");
             }
             const body = JSON.parse(init.body) as { content: string };
             visibleMessages.set(id, body.content);
+            if (createdCount === 1) {
+              firstCreateStarted.resolve();
+              await finishFirstCreate.promise;
+            }
             return Response.json({ id });
           }
           if (init?.method === "DELETE") {
             const id = url.pathname.split("/").at(-1)!;
             deletedIds.push(id);
-            if (failFirstDelete && deletedIds.length === 1) {
+            if (deletedIds.length <= deleteFailures) {
               return Response.json({ message: "temporarily unavailable" }, { status: 503 });
             }
             visibleMessages.delete(id);
@@ -86,19 +93,30 @@ describe("Discord draft preview REST lifecycle", () => {
 
       controller.draftStream?.update("prior turn progress");
       await firstCreateStarted.promise;
-      controller.handleQueuedFollowupAdmitted();
-      controller.draftStream?.update("queued turn progress");
-      finishFirstCreate.resolve();
-      await controller.flush();
+      if (boundary === "queued admission") {
+        controller.handleQueuedFollowupAdmitted();
+        controller.draftStream?.update("queued turn progress");
+        finishFirstCreate.resolve();
+        await controller.flush();
 
-      expect(controller.draftStream?.messageId()).toBe("preview-2");
-      expect(visibleMessages.get("preview-2")).toBe("queued turn progress");
-      controller.markFinalReplyStarted();
-      controller.markFinalReplyDelivered(false);
-      await controller.cleanup();
+        expect(controller.draftStream?.messageId()).toBe("preview-2");
+        expect(visibleMessages.get("preview-2")).toBe("queued turn progress");
+        controller.markFinalReplyStarted();
+        controller.markFinalReplyDelivered(false);
+        await controller.cleanup();
+      } else {
+        const cleanup = controller.cleanup();
+        finishFirstCreate.resolve();
+        await cleanup;
+      }
 
+      if (deleteFailures === 2) {
+        expect(deletedIds).toEqual(["preview-1", "preview-1"]);
+        expect([...visibleMessages]).toEqual([["preview-1", "prior turn progress"]]);
+        await controller.cleanup();
+      }
       expect([...visibleMessages]).toEqual([]);
-      expect(deletedIds.filter((id) => id === "preview-1")).toHaveLength(failFirstDelete ? 2 : 1);
+      expect(deletedIds.filter((id) => id === "preview-1")).toHaveLength(deleteFailures + 1);
     },
   );
 });
