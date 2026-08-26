@@ -8,8 +8,10 @@ import {
 import type { VoiceCallProvider } from "../providers/base.js";
 import type { CallRecord, HangupCallInput, NormalizedEvent } from "../types.js";
 import { processEvent } from "./events.js";
+import { finalizeCall } from "./lifecycle.js";
 import { speakInitialMessage } from "./outbound.js";
 import { MAX_CALL_REPLAY_KEYS } from "./replay-keys.js";
+import { findCallMatchesInStore, getCallHistoryFromStore } from "./store.js";
 
 const logSpy = vi.hoisted(() => {
   const logEntries: string[] = [];
@@ -510,6 +512,67 @@ describe("processEvent (functional)", () => {
       waiterResolved: false,
     });
     expect(replayResult).toEqual({ kind: "ignored" });
+  });
+
+  it("does not birth a phantom record for a late status callback on a finalized call", async () => {
+    // Reproduces #130059: after finalizeCall removes a record from the active
+    // maps, a late provider "completed" status callback arrives with a fresh
+    // dedupe key (the local end never records one for the provider's eventual
+    // status callback). findCall misses the now-removed record, so the
+    // auto-register branch must consult the persistent store instead of
+    // fabricating a phantom zero-duration record under the default agent.
+    const now = Date.now();
+    const ctx = createContext();
+    const providerCallId = "CA-late-callback";
+    const realCall: CallRecord = {
+      callId: "call-real-agent",
+      providerCallId,
+      provider: "twilio",
+      direction: "outbound",
+      state: "answered",
+      from: "+15550000000",
+      to: "+15550000001",
+      agentId: "agent-sales",
+      startedAt: now - 30_000,
+      answeredAt: now - 25_000,
+      transcript: [],
+      processedEventIds: [],
+    };
+    ctx.activeCalls.set(realCall.callId, realCall);
+    ctx.providerCallIdMap.set(providerCallId, realCall.callId);
+
+    // The realtime/bot end closes the lifecycle: finalizeCall transitions to a
+    // terminal state, persists the terminal snapshot, and removes the record
+    // from the active maps (it remains only in the persistent store).
+    finalizeCall({ ctx, call: realCall, endReason: "hangup-bot" });
+    expect(ctx.activeCalls.size).toBe(0);
+    expect(ctx.providerCallIdMap.has(providerCallId)).toBe(false);
+
+    // The provider's eventual "completed" status callback arrives late, with a
+    // fresh dedupe key the local end never recorded.
+    const result = processEvent(ctx, {
+      id: "evt-late-completed",
+      type: "call.ended",
+      callId: providerCallId,
+      providerCallId,
+      timestamp: now,
+      direction: "outbound",
+      reason: "completed",
+      from: "+15550000000",
+      to: "+15550000001",
+    });
+    expect(result.kind).toBe("processed");
+
+    // No phantom: the store owns only snapshots of the original real call —
+    // retaining its agent — not a freshly-minted default-agent zero-duration
+    // phantom with a new callId.
+    const matches = await findCallMatchesInStore(ctx.storePath, providerCallId);
+    const owner = matches.byProviderCallId;
+    expect(owner).toBeDefined();
+    expect(owner!.callId).toBe("call-real-agent");
+    expect(owner!.agentId).toBe("agent-sales");
+    const history = await getCallHistoryFromStore(ctx.storePath, 50);
+    expect(history.every((call) => call.callId === "call-real-agent")).toBe(true);
   });
 
   it.each([

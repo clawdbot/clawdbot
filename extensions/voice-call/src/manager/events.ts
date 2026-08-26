@@ -18,7 +18,7 @@ import {
   reserveRejectedProviderCall,
 } from "./replay-keys.js";
 import { addTranscriptEntry, transitionState } from "./state.js";
-import { persistCallRecord } from "./store.js";
+import { findCallByProviderCallIdInStore, persistCallRecord } from "./store.js";
 import { resolveTranscriptWaiter, startMaxDurationTimer } from "./timers.js";
 
 const log = createSubsystemLogger("voice-call/events");
@@ -212,13 +212,23 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): Process
       return { kind: "processed" };
     }
 
-    call = createWebhookCall({
-      ctx,
-      providerCallId,
-      direction: eventDirection === "outbound" ? "outbound" : "inbound",
-      from: event.from || "unknown",
-      to: event.to || ctx.config.fromNumber || "unknown",
-    });
+    // A late provider status callback can arrive after finalizeCall removed the
+    // record from the active maps; the local end records no dedupe key for the
+    // provider's eventual terminal callback, so findCall misses. Consult the
+    // store before fabricating — otherwise a phantom zero-duration call is
+    // birthed under the default agent. Fold into an existing owner instead.
+    const persisted = findCallByProviderCallIdInStore(ctx.storePath, providerCallId);
+    if (persisted) {
+      call = persisted;
+    } else {
+      call = createWebhookCall({
+        ctx,
+        providerCallId,
+        direction: eventDirection === "outbound" ? "outbound" : "inbound",
+        from: event.from || "unknown",
+        to: event.to || ctx.config.fromNumber || "unknown",
+      });
+    }
 
     // Normalize event to internal ID for downstream consumers.
     event.callId = call.callId;

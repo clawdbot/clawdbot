@@ -422,7 +422,11 @@ describe("CallManager verification on restore", () => {
 
     expect(manager.getActiveCalls()).toHaveLength(0);
 
-    manager.processEvent({
+    // The dropped (out-of-window) dedupe key is no longer restored, so the
+    // replayed webhook is not ignored by the dedupe gate. But the call is
+    // already terminal — the event must fold into the existing record instead
+    // of birthing a phantom zero-duration record under the default agent.
+    const result = manager.processEvent({
       id: replayKeys[0] as string,
       type: "call.initiated",
       callId: String(persisted.providerCallId),
@@ -433,6 +437,7 @@ describe("CallManager verification on restore", () => {
       to: "+15550000001",
     });
 
-    expect(manager.getActiveCalls()).toHaveLength(1);
+    expect(result.kind).toBe("processed");
+    expect(manager.getActiveCalls()).toHaveLength(0);
   });
 });

@@ -409,6 +409,16 @@ export async function findCallMatchesInStore(
   };
 }
 
+/** Find the newest retained snapshot owning a provider call id. Sync (the webhook event path cannot await); mirrors the scan in {@link findCallMatchesInStore}. */
+export function findCallByProviderCallIdInStore(
+  storePath: string,
+  providerCallId: string,
+): CallRecord | undefined {
+  return readCallHistoryFromStore(storePath).findLast(
+    (call) => call.providerCallId === providerCallId,
+  );
+}
+
 /** Return the newest persisted call history rows up to the requested limit. */
 export async function getCallHistoryFromStore(
   storePath: string,
