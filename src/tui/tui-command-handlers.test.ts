@@ -2381,13 +2381,10 @@ describe("tui command handlers", () => {
   it.each([
     { mode: "gateway", local: false, command: "/think default", field: "thinkingLevel" },
     { mode: "gateway", local: false, command: "/fast default", field: "fastMode" },
-    { mode: "gateway", local: false, command: "/model default", field: "model" },
     { mode: "embedded", local: true, command: "/think default", field: "thinkingLevel" },
     { mode: "embedded", local: true, command: "/fast default", field: "fastMode" },
-    { mode: "embedded", local: true, command: "/model default", field: "model" },
     { mode: "gateway", local: false, command: "/think inherit", field: "thinkingLevel" },
     { mode: "embedded", local: true, command: "/fast reset", field: "fastMode" },
-    { mode: "gateway", local: false, command: "/model DEFAULT", field: "model" },
   ])(
     "clears the $field session override for $command in $mode mode",
     async ({ local, command, field }) => {
@@ -2471,6 +2468,93 @@ describe("tui command handlers", () => {
     );
     expect(addSystem).toHaveBeenNthCalledWith(2, "usage: /think <off|max|default>");
   });
+
+  it.each([
+    {
+      name: "provider-specific binary on",
+      local: false,
+      levels: [
+        { id: "off", label: "off" },
+        { id: "high", label: "on" },
+      ],
+      input: "on",
+      expected: "high",
+    },
+    {
+      name: "case-insensitive binary on in embedded mode",
+      local: true,
+      levels: [{ id: "high", label: "on" }],
+      input: "ON",
+      expected: "high",
+    },
+    {
+      name: "always-on high profile",
+      local: false,
+      levels: [{ id: "high", label: "always on" }],
+      input: "always on",
+      expected: "high",
+    },
+    {
+      name: "always-on off profile",
+      local: false,
+      levels: [{ id: "off", label: "always on" }],
+      input: "always on",
+      expected: "off",
+    },
+    {
+      name: "Moonshot binary on",
+      local: false,
+      levels: [{ id: "low", label: "on" }],
+      input: "on",
+      expected: "low",
+    },
+    {
+      name: "canonical id ahead of another option's label",
+      local: false,
+      levels: [
+        { id: "low", label: "high" },
+        { id: "high", label: "turbo" },
+      ],
+      input: "high",
+      expected: "high",
+    },
+  ])(
+    "resolves $name to its canonical thinking level",
+    async ({ local, levels, input, expected }) => {
+      const { handleCommand, patchSession, addSystem } = createHarness({
+        opts: { local },
+        sessionInfo: { thinkingLevels: levels },
+      });
+
+      await handleCommand(`/think ${input}`);
+
+      expect(patchSession).toHaveBeenCalledWith({
+        key: "agent:main:main",
+        thinkingLevel: expected,
+      });
+      expect(addSystem).toHaveBeenCalledWith(`thinking set to ${input}`);
+    },
+  );
+
+  it.each([undefined, []])(
+    "resolves thinking labels from the provider policy when session levels are %j",
+    async (thinkingLevels) => {
+      const { handleCommand, patchSession } = createHarness({
+        sessionInfo: {
+          modelProvider: "opencode-go",
+          model: "minimax-m3",
+          thinkingLevels,
+        },
+      });
+
+      await handleCommand("/think on");
+
+      expect(patchSession).toHaveBeenCalledWith({
+        key: "agent:main:main",
+        thinkingLevel: "high",
+      });
+    },
+  );
 
   it.each([
     { command: "verbose", usage: "usage: /verbose <on|off|full>" },
@@ -2994,13 +3078,24 @@ describe("tui command handlers", () => {
     expect(closeOverlay).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["codex", "openclaw"])(
-    "forwards model/runtime transactions through the server directive path for %s",
-    async (runtime) => {
+  it.each([
+    { local: false, command: "/model default" },
+    { local: true, command: "/model default" },
+    { local: false, command: "/model DEFAULT" },
+    {
+      local: false,
+      command: "/model openai/gpt-5.6-luna --runtime codex continue with this model",
+    },
+    {
+      local: false,
+      command: "/model openai/gpt-5.6-luna --runtime openclaw continue with this model",
+    },
+  ])(
+    "forwards $command through the server directive path (local: $local)",
+    async ({ command, local }) => {
       const sendChat = vi.fn().mockResolvedValue({ status: "ok" });
       const patchSession = vi.fn();
-      const command = `/model openai/gpt-5.6-luna --runtime ${runtime} continue with this model`;
-      const { handleCommand } = createHarness({ sendChat, patchSession });
+      const { handleCommand } = createHarness({ sendChat, patchSession, opts: { local } });
 
       await handleCommand(command);
 

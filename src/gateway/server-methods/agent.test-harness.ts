@@ -700,7 +700,6 @@ export function setupNewYorkTimeConfig(isoDate: string) {
   vi.useFakeTimers({ toFake: ["Date"] });
   dateOnlyFakeClockActive = true;
   vi.setSystemTime(new Date(isoDate)); // Wed Jan 28, 8:30 PM EST
-  mocks.agentCommand.mockClear();
   mocks.loadConfigReturn = {
     agents: {
       defaults: {

@@ -1,5 +1,6 @@
 // Ollama setup runtime handles plugin onboarding behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import type { ProviderAuthMethod } from "openclaw/plugin-sdk/plugin-entry";
 import type {
   OpenClawConfig,
   SecretInput,
@@ -32,6 +33,7 @@ import {
   enrichOllamaModelsWithContext,
   fetchOllamaModels,
   isOllamaCloudModel,
+  queryOllamaModelShowInfo,
   resolveOllamaApiBase,
   type OllamaModelWithContext,
 } from "./provider-models.js";
@@ -445,6 +447,62 @@ export async function promptAndConfigureOllama(params: {
     env: params.env,
     ...(params.signal ? { signal: params.signal } : {}),
   });
+}
+
+/** Checks existing host models without pulling or mutating state before reset. */
+export async function validateOllamaNonInteractive(
+  ctx: Parameters<NonNullable<ProviderAuthMethod["validateNonInteractive"]>>[0],
+): Promise<boolean> {
+  const configuredBaseUrl =
+    typeof ctx.opts.customBaseUrl === "string" ? ctx.opts.customBaseUrl.trim() : undefined;
+  const baseUrl = resolveOllamaApiBase(configuredBaseUrl || resolveOllamaSetupDefaultBaseUrl());
+  const discovery = await fetchOllamaModels(baseUrl);
+  const fail = (message: string) => {
+    ctx.runtime.error(message);
+    ctx.runtime.exit(1);
+    return false;
+  };
+  if (!discovery.reachable) {
+    return fail(
+      `Ollama could not be reached at ${baseUrl}.\nDownload it at https://ollama.com/download`,
+    );
+  }
+
+  const requestedModel = normalizeOllamaModelName(
+    typeof ctx.opts.customModelId === "string" ? ctx.opts.customModelId : undefined,
+  );
+  const availableModelNames = discovery.models.map((model) => model.name);
+  if (requestedModel && isOllamaCloudModel(requestedModel)) {
+    const cloudAuth = await checkOllamaCloudAuth(baseUrl);
+    if (!cloudAuth.signedIn) {
+      return fail(
+        `Cloud models on this Ollama host need \`ollama signin\`.\n${
+          cloudAuth.signinUrl ?? "Run `ollama signin` on the configured Ollama host."
+        }`,
+      );
+    }
+    // A catalog row alone does not prove a cloud model still exists.
+    const showInfo = await queryOllamaModelShowInfo(baseUrl, requestedModel);
+    if (typeof showInfo.contextWindow !== "number" && (showInfo.capabilities?.length ?? 0) === 0) {
+      return fail(
+        `Ollama model ${requestedModel} was not found at ${baseUrl}.\nAvailable models: ${
+          availableModelNames.join(", ") || "(none)"
+        }`,
+      );
+    }
+    return true;
+  }
+  if (availableModelNames.length === 0) {
+    return fail(
+      `No Ollama models are available at ${baseUrl}.\nPull a model first, then re-run setup.`,
+    );
+  }
+  if (requestedModel && !findAvailableOllamaModelName(requestedModel, availableModelNames)) {
+    return fail(
+      `Ollama model ${requestedModel} was not found at ${baseUrl}.\nAvailable models: ${availableModelNames.join(", ")}`,
+    );
+  }
+  return true;
 }
 
 export async function configureOllamaNonInteractive(params: {

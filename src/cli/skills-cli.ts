@@ -43,10 +43,8 @@ import {
 } from "../skills/lifecycle/source-install.js";
 import {
   getSkillCuratorStatus,
-  pinCuratedSkill,
-  restoreCuratedSkill,
+  SKILL_LIFECYCLE_CURATION_RETIRED_MESSAGE,
   type SkillCuratorStatus,
-  unpinCuratedSkill,
 } from "../skills/workshop/curator.js";
 import {
   applySkillProposal,
@@ -471,16 +469,18 @@ async function callSkillCurator<T>(
   }
 }
 
-async function runSkillCuratorMutation(method: "pin" | "restore" | "unpin", skill: string) {
-  return await callSkillCurator(method, { skill }, () => {
-    if (method === "pin") {
-      return pinCuratedSkill(skill);
-    }
-    if (method === "unpin") {
-      return unpinCuratedSkill(skill);
-    }
-    return restoreCuratedSkill(skill);
-  });
+function throwRetiredSkillCuratorAction(): never {
+  throw new Error(SKILL_LIFECYCLE_CURATION_RETIRED_MESSAGE);
+}
+
+async function runSkillCuratorMutation(
+  method: "pin" | "restore" | "unpin",
+  skill: string,
+): Promise<never> {
+  // Retired actions still reach the Gateway so remote operators get its error;
+  // the local fallback raises the same message when no Gateway answers.
+  await callSkillCurator(method, { skill }, throwRetiredSkillCuratorAction);
+  return throwRetiredSkillCuratorAction();
 }
 
 async function runSkillProposalApply(
@@ -968,7 +968,7 @@ export function registerSkillsCli(program: Command) {
 
   const curator = skills
     .command("curator")
-    .description("Inspect and manage skill lifecycle curation")
+    .description("Inspect skill usage and collection review outcomes")
     .option("--json", "Output as JSON", false);
 
   const showCuratorStatus = async (opts: { json?: boolean }, command: Command) => {
@@ -984,24 +984,17 @@ export function registerSkillsCli(program: Command) {
 
   curator
     .command("status")
-    .description("Show curator run and lifecycle status")
+    .description("Show skill usage and collection review status")
     .action(showCuratorStatus);
 
   for (const action of ["pin", "unpin", "restore"] as const) {
     curator
       .command(action)
-      .description(`${action} a curated skill`)
+      .description(`${action} is retired; collection review manages skills`)
       .argument("<skill>", "Skill name or key")
-      .action(async (skill: string, opts: { json?: boolean }, command: Command) => {
+      .action(async (skill: string) => {
         await runCommandWithRuntime(defaultRuntime, async () => {
-          const result = await runSkillCuratorMutation(action, skill);
-          if (hasJsonOutput(opts) || inheritOptionFromParent<boolean>(command, "json")) {
-            defaultRuntime.writeJson(result);
-            return;
-          }
-          defaultRuntime.writeStdout(
-            `${action[0]?.toUpperCase()}${action.slice(1)} ${result.skillKey}\n`,
-          );
+          await runSkillCuratorMutation(action, skill);
         });
       });
   }

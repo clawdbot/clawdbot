@@ -15,7 +15,11 @@ import type { CronJob } from "../types.js";
 import { proposeCronRunRecovery, recoverCronRunProposal } from "./run-recovery.js";
 import { createCronServiceState } from "./state.js";
 import { runPostPersistCronNotifications } from "./store.js";
-import { tryCreateCronTaskRunHandle, tryFinishCronTaskRunWithoutHistory } from "./task-runs.js";
+import {
+  tryCreateCronTaskRunHandle,
+  tryFinishCronTaskRun,
+  tryFinishCronTaskRunWithoutHistory,
+} from "./task-runs.js";
 
 function tryCreateCronTaskRun(
   params: Parameters<typeof tryCreateCronTaskRunHandle>[0],
@@ -262,7 +266,7 @@ describe("atomic cron run recovery", () => {
       state,
       job,
       startedAt: startedAtMs,
-      publicRunId: receipt.receiptId,
+      runReceipt: receipt,
     });
     tryFinishCronTaskRunWithoutHistory(state, {
       taskRunId,
@@ -283,6 +287,84 @@ describe("atomic cron run recovery", () => {
         .get(receipt.receiptId),
     ) as { status: string };
     expect(receiptRow.status).toBe("skipped");
+  });
+
+  it("does not restore a prior same-millisecond task for a different receipt", async () => {
+    const { storePath } = await makeStorePath();
+    const startedAtMs = Date.parse("2026-08-13T10:50:00.000Z");
+    const job = makeJob("same-millisecond-task-recovery", startedAtMs);
+    await writeCronStoreSnapshot({ storePath, jobs: [job] });
+    const state = makeState(storePath, startedAtMs + 30_000);
+    const priorReceipt = claimReceipt(storePath, job, startedAtMs);
+    const priorTaskRunId = tryCreateCronTaskRun({
+      state,
+      job,
+      startedAt: startedAtMs,
+      runReceipt: priorReceipt,
+    });
+    tryFinishCronTaskRun(state, {
+      taskRunId: priorTaskRunId,
+      job,
+      event: {
+        jobId: job.id,
+        action: "finished",
+        job,
+        status: "ok",
+        summary: "prior receipt completed",
+        runAtMs: startedAtMs,
+        durationMs: 1,
+      },
+    });
+    finishCronRunReceipt({
+      handle: priorReceipt,
+      status: "ok",
+      finishedAtMs: startedAtMs + 1,
+    });
+    const receipt = claimReceipt(storePath, job, startedAtMs);
+    const proposal = proposeCronRunRecovery(state, job.id, undefined, startedAtMs);
+    releaseLocalCronRunReceiptOwnership(receipt);
+
+    expect(recoverCronRunProposal(state, proposal)).toMatchObject({ kind: "repaired" });
+    expect((await loadCronStore(storePath)).jobs[0]?.state).toMatchObject({
+      lastRunStatus: "error",
+      lastError: expect.stringContaining("interrupted by gateway restart"),
+    });
+  });
+
+  it("fails closed for a legacy caller-ID task without exact receipt identity", async () => {
+    const { storePath } = await makeStorePath();
+    const startedAtMs = Date.parse("2026-08-13T10:55:00.000Z");
+    const job = makeJob("legacy-manual-task-recovery", startedAtMs);
+    await writeCronStoreSnapshot({ storePath, jobs: [job] });
+    const state = makeState(storePath, startedAtMs + 30_000);
+    const receipt = claimReceipt(storePath, job, startedAtMs);
+    const taskRunId = tryCreateCronTaskRun({
+      state,
+      job,
+      startedAt: startedAtMs,
+      publicRunId: "manual:legacy-manual-task-recovery:1",
+    });
+    tryFinishCronTaskRun(state, {
+      taskRunId,
+      job,
+      event: {
+        jobId: job.id,
+        action: "finished",
+        job,
+        status: "ok",
+        runId: "manual:legacy-manual-task-recovery:1",
+        runAtMs: startedAtMs,
+        durationMs: 1,
+      },
+    });
+    const proposal = proposeCronRunRecovery(state, job.id, undefined, startedAtMs);
+    releaseLocalCronRunReceiptOwnership(receipt);
+
+    expect(recoverCronRunProposal(state, proposal)).toMatchObject({ kind: "repaired" });
+    expect((await loadCronStore(storePath)).jobs[0]?.state).toMatchObject({
+      lastRunStatus: "error",
+      lastError: expect.stringContaining("interrupted by gateway restart"),
+    });
   });
 
   it("retires a dead owner receipt after timeout state already finalized", async () => {

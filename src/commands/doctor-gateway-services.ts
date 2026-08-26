@@ -55,7 +55,7 @@ import { readWindowsProcessArgsSync } from "../infra/windows-port-pids.js";
 import { runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { buildGatewayInstallPlan } from "./daemon-install-helpers.js";
-import { DEFAULT_GATEWAY_DAEMON_RUNTIME, type GatewayDaemonRuntime } from "./daemon-runtime.js";
+import { resolveGatewayDaemonRuntime, type GatewayDaemonRuntime } from "./daemon-runtime.js";
 import { resolveGatewayAuthTokenForService } from "./doctor-gateway-auth-token.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
 import { isDoctorUpdateRepairMode } from "./doctor-repair-mode.js";
@@ -180,20 +180,6 @@ async function confirmLegacyLaunchdServiceUnloaded(serviceTarget: string): Promi
 }
 const GATEWAY_SERVICES_EXTRA_CHECK_ID = "core/doctor/gateway-services/extra";
 
-function detectGatewayRuntime(programArguments: string[] | undefined): GatewayDaemonRuntime {
-  const first = programArguments?.[0];
-  if (first) {
-    const base = normalizeLowercaseStringOrEmpty(path.basename(first));
-    if (base === "bun" || base === "bun.exe") {
-      return DEFAULT_GATEWAY_DAEMON_RUNTIME; // Legacy Bun services cannot open node:sqlite state.
-    }
-    if (base === "node" || base === "node.exe") {
-      return "node";
-    }
-  }
-  return DEFAULT_GATEWAY_DAEMON_RUNTIME;
-}
-
 function findGatewayEntrypoint(programArguments?: string[]): string | null {
   if (!programArguments || programArguments.length === 0) {
     return null;
@@ -211,13 +197,13 @@ async function buildExpectedGatewayServicePlan(params: {
   serviceInstallEnv: NodeJS.ProcessEnv;
   port: number;
   runtime: GatewayDaemonRuntime;
-  nodePath?: string;
+  runtimePath?: string;
 }) {
   return buildGatewayInstallPlan({
     env: params.serviceInstallEnv,
     port: params.port,
     runtime: params.runtime,
-    nodePath: params.nodePath,
+    runtimePath: params.runtimePath,
     existingEnvironment: params.command.environment,
     existingEnvironmentValueSources: params.command.environmentValueSources,
     warn: (message, title) => note(message, title),
@@ -616,13 +602,16 @@ export async function maybeRepairGatewayServiceConfig(
   }
   const expectedGatewayToken = tokenRefConfigured ? undefined : gatewayTokenResolution.token;
   const port = resolveGatewayPort(cfg, process.env);
-  const runtimeChoice = detectGatewayRuntime(managedDefinition.programArguments);
+  const runtimeChoice = resolveGatewayDaemonRuntime(managedDefinition.programArguments);
+  const installedRuntimePath =
+    runtimeChoice === "bun" ? managedDefinition.programArguments[0] : undefined;
   const expectedPlan = await buildExpectedGatewayServicePlan({
     cfg,
     command: managedDefinition,
     serviceInstallEnv,
     port,
     runtime: runtimeChoice,
+    runtimePath: installedRuntimePath,
   });
   const expectedManagedServiceEnvKeys = readManagedServiceEnvKeysFromEnvironment(
     expectedPlan.environment,
@@ -646,7 +635,7 @@ export async function maybeRepairGatewayServiceConfig(
     });
   }
   const needsNodeRuntime = needsNodeRuntimeMigration(audit.issues);
-  // Bun-hosted services cannot run some repair paths; migrate through a concrete Node binary.
+  // Unsupported Bun and version-managed Node services migrate through a concrete system Node.
   const systemNodeInfo = needsNodeRuntime
     ? await resolveSystemNodeInfo({ env: process.env })
     : null;
@@ -671,7 +660,7 @@ export async function maybeRepairGatewayServiceConfig(
           serviceInstallEnv,
           port,
           runtime: "node",
-          nodePath: systemNodePath,
+          runtimePath: systemNodePath,
         })
       : expectedPlan;
   const { programArguments } = expectedRuntimePlan;
@@ -935,7 +924,7 @@ export async function maybeRepairGatewayServiceConfig(
     serviceInstallEnv,
     port: updatedPort,
     runtime: needsNodeRuntime && systemNodePath ? "node" : runtimeChoice,
-    nodePath: systemNodePath ?? undefined,
+    runtimePath: needsNodeRuntime && systemNodePath ? systemNodePath : installedRuntimePath,
   });
   // Windows `install` activates the task/login item. Require both a running
   // gateway and parent authorization so `update --no-restart` stays non-disruptive.

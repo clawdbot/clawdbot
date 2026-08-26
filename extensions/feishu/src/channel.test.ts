@@ -48,6 +48,7 @@ const assertFeishuChatMemberMock = vi.hoisted(() => vi.fn());
 const getFeishuMemberInfoMock = vi.hoisted(() => vi.fn());
 const listFeishuDirectoryPeersLiveMock = vi.hoisted(() => vi.fn());
 const listFeishuDirectoryGroupsLiveMock = vi.hoisted(() => vi.fn());
+const feishuOutboundSendTextMock = vi.hoisted(() => vi.fn());
 const feishuOutboundSendMediaMock = vi.hoisted(() => vi.fn());
 const feishuOutboundSendPayloadMock = vi.hoisted(() => vi.fn());
 
@@ -80,7 +81,7 @@ vi.mock("./channel.runtime.js", () => ({
     sendCardFeishu: sendCardFeishuMock,
     sendMessageFeishu: sendMessageFeishuMock,
     feishuOutbound: {
-      sendText: vi.fn(),
+      sendText: feishuOutboundSendTextMock,
       sendMedia: feishuOutboundSendMediaMock,
       sendPayload: feishuOutboundSendPayloadMock,
     },
@@ -122,6 +123,14 @@ function mockCallArg(mock: unknown, callIndex: number, argIndex: number, label: 
 
 function resultDetails(result: unknown) {
   return requireRecord(requireRecord(result, "action result").details, "action result details");
+}
+
+function mockFeishuOutboundTextDelivery(messageId: string, chatId = "oc_group_1") {
+  feishuOutboundSendTextMock.mockResolvedValueOnce({
+    channel: "feishu",
+    messageId,
+    target: { kind: "chat", id: chatId },
+  });
 }
 
 afterAll(() => {
@@ -456,7 +465,7 @@ describe("feishuPlugin actions", () => {
   });
 
   it("sends text messages", async () => {
-    sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_sent", chatId: "oc_group_1" });
+    mockFeishuOutboundTextDelivery("om_sent");
 
     const result = await feishuPlugin.actions?.handleAction?.({
       action: "send",
@@ -466,18 +475,94 @@ describe("feishuPlugin actions", () => {
       toolContext: {},
     } as never);
 
-    expect(sendMessageFeishuMock).toHaveBeenCalledWith({
+    expect(feishuOutboundSendTextMock).toHaveBeenCalledWith({
       cfg,
       to: "chat:oc_group_1",
       text: "hello",
       accountId: undefined,
-      replyToMessageId: undefined,
-      replyInThread: false,
+      mediaLocalRoots: undefined,
+      replyToId: undefined,
     });
     const details = resultDetails(result);
     expect(details.ok).toBe(true);
     expect(details.messageId).toBe("om_sent");
     expect(details.chatId).toBe("oc_group_1");
+  });
+
+  it.each([
+    {
+      name: "over-limit rich posts",
+      action: "send",
+      text: "明".repeat(11_000),
+      renderMode: "raw",
+    },
+    {
+      name: "configured card rendering",
+      action: "send",
+      text: "Render this as a card",
+      renderMode: "card",
+    },
+    {
+      name: "thread-preserving rich-post fanout",
+      action: "thread-reply",
+      text: "明".repeat(11_000),
+      renderMode: "raw",
+    },
+  ] as const)("uses canonical outbound text delivery for $name", async (scenario) => {
+    const actionCfg = {
+      ...cfg,
+      channels: {
+        ...cfg.channels,
+        feishu: { ...cfg.channels?.feishu, renderMode: scenario.renderMode },
+      },
+    } as OpenClawConfig;
+    feishuOutboundSendTextMock.mockResolvedValueOnce({
+      channel: "feishu",
+      messageId: "om_outbound",
+      target: { kind: "chat", id: "oc_provider_authoritative" },
+    });
+    if (scenario.renderMode === "raw") {
+      sendMessageFeishuMock.mockImplementationOnce(async (params) => {
+        const { sendMessageFeishu } =
+          await vi.importActual<typeof import("./send.js")>("./send.js");
+        return await sendMessageFeishu(params);
+      });
+    } else {
+      sendMessageFeishuMock.mockResolvedValueOnce({
+        messageId: "om_bypassed_owner",
+        chatId: "oc_group_1",
+      });
+    }
+
+    const result = await feishuPlugin.actions?.handleAction?.({
+      action: scenario.action,
+      params: {
+        to: "chat:oc_requested_alias",
+        text: scenario.text,
+        ...(scenario.action === "thread-reply" ? { messageId: "om_parent" } : {}),
+      },
+      cfg: actionCfg,
+      accountId: undefined,
+      toolContext: {},
+    } as never);
+
+    expect(feishuOutboundSendTextMock).toHaveBeenCalledWith({
+      cfg: actionCfg,
+      to: "chat:oc_requested_alias",
+      text: scenario.text,
+      accountId: undefined,
+      mediaLocalRoots: undefined,
+      ...(scenario.action === "thread-reply"
+        ? { threadId: "om_parent" }
+        : { replyToId: undefined }),
+    });
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(resultDetails(result)).toMatchObject({
+      ok: true,
+      action: scenario.action,
+      messageId: "om_outbound",
+      chatId: "oc_provider_authoritative",
+    });
   });
 
   it("sends plain message card JSON as a native Feishu card", async () => {
@@ -647,7 +732,7 @@ describe("feishuPlugin actions", () => {
   });
 
   it("keeps ordinary JSON messages on the text path", async () => {
-    sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_sent", chatId: "oc_group_1" });
+    mockFeishuOutboundTextDelivery("om_sent");
     const message = JSON.stringify({ ok: true, elements: "not-a-card" });
 
     await feishuPlugin.actions?.handleAction?.({
@@ -659,13 +744,13 @@ describe("feishuPlugin actions", () => {
     } as never);
 
     expect(sendCardFeishuMock).not.toHaveBeenCalled();
-    expect(sendMessageFeishuMock).toHaveBeenCalledWith({
+    expect(feishuOutboundSendTextMock).toHaveBeenCalledWith({
       cfg,
       to: "chat:oc_group_1",
       text: message,
       accountId: undefined,
-      replyToMessageId: undefined,
-      replyInThread: false,
+      mediaLocalRoots: undefined,
+      replyToId: undefined,
     });
   });
 
@@ -1528,7 +1613,7 @@ describe("feishuPlugin actions", () => {
   );
 
   it("ignores a blank `file` attachment intent field on send", async () => {
-    sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_plain", chatId: "oc_group_1" });
+    mockFeishuOutboundTextDelivery("om_plain");
 
     await feishuPlugin.actions?.handleAction?.({
       action: "send",
@@ -1545,7 +1630,7 @@ describe("feishuPlugin actions", () => {
 
     // A blank `file` is not an attachment-intent signal; with no media alias
     // the send still takes the text-only success branch (unchanged).
-    expect(sendMessageFeishuMock).toHaveBeenCalledOnce();
+    expect(feishuOutboundSendTextMock).toHaveBeenCalledOnce();
     expect(feishuOutboundSendMediaMock).not.toHaveBeenCalled();
   });
 
@@ -1614,7 +1699,7 @@ describe("feishuPlugin actions", () => {
       params: { attachments: [{ media: "   " }] },
     },
   ])("ignores blank $location media source on send (not malformed)", async ({ params }) => {
-    sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_plain", chatId: "oc_group_1" });
+    mockFeishuOutboundTextDelivery("om_plain");
 
     await feishuPlugin.actions?.handleAction?.({
       action: "send",
@@ -1631,7 +1716,7 @@ describe("feishuPlugin actions", () => {
 
     // A blank string is a string, not malformed; with no usable media it
     // still takes the text-only success branch (unchanged).
-    expect(sendMessageFeishuMock).toHaveBeenCalledOnce();
+    expect(feishuOutboundSendTextMock).toHaveBeenCalledOnce();
     expect(feishuOutboundSendMediaMock).not.toHaveBeenCalled();
   });
 
@@ -1642,7 +1727,7 @@ describe("feishuPlugin actions", () => {
       params: { attachments: [{ buffer: "", base64: "  " }] },
     },
   ])("ignores blank $location attachment payload fields on send", async ({ params }) => {
-    sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_plain", chatId: "oc_group_1" });
+    mockFeishuOutboundTextDelivery("om_plain");
 
     await feishuPlugin.actions?.handleAction?.({
       action: "send",
@@ -1659,17 +1744,24 @@ describe("feishuPlugin actions", () => {
 
     // Blank buffer/base64 is not an unsupported payload intent; with no media
     // alias the send still takes the text-only success branch (unchanged).
-    expect(sendMessageFeishuMock).toHaveBeenCalledOnce();
+    expect(feishuOutboundSendTextMock).toHaveBeenCalledOnce();
     expect(feishuOutboundSendMediaMock).not.toHaveBeenCalled();
   });
 
-  it.each(["send", "thread-reply"] as const)(
-    "preserves only trusted workspace media access for %s actions",
-    async (action) => {
-      feishuOutboundSendMediaMock.mockResolvedValueOnce({
+  it.each([
+    { action: "send", kind: "media" },
+    { action: "thread-reply", kind: "media" },
+    { action: "send", kind: "text" },
+    { action: "thread-reply", kind: "text" },
+  ] as const)(
+    "preserves only trusted workspace media access for $action $kind actions",
+    async ({ action, kind }) => {
+      const outboundSender =
+        kind === "media" ? feishuOutboundSendMediaMock : feishuOutboundSendTextMock;
+      outboundSender.mockResolvedValueOnce({
         channel: "feishu",
-        messageId: "om_media",
-        details: { messageId: "om_media", chatId: "oc_group_1" },
+        messageId: "om_delivered",
+        target: { kind: "chat", id: "oc_group_1" },
       });
       const trustedReadFile = vi.fn(async () => Buffer.from("approved image"));
       const legacyReadFile = vi.fn(async () => Buffer.from("legacy image"));
@@ -1688,7 +1780,7 @@ describe("feishuPlugin actions", () => {
         params: {
           to: "chat:oc_group_1",
           message: "test",
-          media: "image.png",
+          ...(kind === "media" ? { media: "image.png" } : {}),
           mediaAccess: forgedMediaAccess,
           mediaLocalRoots: ["/forged/workspace"],
           mediaReadFile: vi.fn(),
@@ -1702,11 +1794,11 @@ describe("feishuPlugin actions", () => {
         mediaReadFile: legacyReadFile,
       } as never);
 
-      expect(feishuOutboundSendMediaMock).toHaveBeenCalledWith({
+      expect(outboundSender).toHaveBeenCalledWith({
         cfg,
         to: "chat:oc_group_1",
         text: "test",
-        mediaUrl: "image.png",
+        ...(kind === "media" ? { mediaUrl: "image.png" } : {}),
         accountId: undefined,
         mediaAccess,
         mediaLocalRoots: ["/legacy/workspace"],
@@ -1715,15 +1807,20 @@ describe("feishuPlugin actions", () => {
         // Only the direct `send` action propagates media-upload failures;
         // thread-reply keeps its existing fallback-text behavior for
         // compatibility (issue #112244).
-        ...(action === "send" ? { propagateMediaUploadFailure: true } : {}),
+        ...(action === "send" && kind === "media" ? { propagateMediaUploadFailure: true } : {}),
       });
       const outboundArgs = requireRecord(
-        mockCallArg(feishuOutboundSendMediaMock, 0, 0, "feishuOutbound.sendMedia"),
+        mockCallArg(
+          outboundSender,
+          0,
+          0,
+          `feishuOutbound.send${kind === "media" ? "Media" : "Text"}`,
+        ),
         "outbound args",
       );
       expect(outboundArgs.mediaAccess).toBe(mediaAccess);
       expect(outboundArgs.mediaAccess).not.toBe(forgedMediaAccess);
-      expect(resultDetails(result).messageId).toBe("om_media");
+      expect(resultDetails(result).messageId).toBe("om_delivered");
     },
   );
 
@@ -2033,7 +2130,7 @@ describe("feishuPlugin actions", () => {
   });
 
   it("sends explicit thread replies with reply_in_thread semantics", async () => {
-    sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_reply", chatId: "oc_group_1" });
+    mockFeishuOutboundTextDelivery("om_reply");
 
     const result = await feishuPlugin.actions?.handleAction?.({
       action: "thread-reply",
@@ -2043,13 +2140,13 @@ describe("feishuPlugin actions", () => {
       toolContext: {},
     } as never);
 
-    expect(sendMessageFeishuMock).toHaveBeenCalledWith({
+    expect(feishuOutboundSendTextMock).toHaveBeenCalledWith({
       cfg,
       to: "chat:oc_group_1",
       text: "reply body",
       accountId: undefined,
-      replyToMessageId: "om_parent",
-      replyInThread: true,
+      mediaLocalRoots: undefined,
+      threadId: "om_parent",
     });
     const details = resultDetails(result);
     expect(details.ok).toBe(true);
@@ -2058,7 +2155,7 @@ describe("feishuPlugin actions", () => {
   });
 
   it("auto-threads `send` text against the inbound trigger in group_topic sessions", async () => {
-    sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_topic", chatId: "oc_group_1" });
+    mockFeishuOutboundTextDelivery("om_topic");
 
     await feishuPlugin.actions?.handleAction?.({
       action: "send",
@@ -2069,13 +2166,13 @@ describe("feishuPlugin actions", () => {
       toolContext: { currentMessageId: "om_inbound" },
     } as never);
 
-    expect(sendMessageFeishuMock).toHaveBeenCalledWith({
+    expect(feishuOutboundSendTextMock).toHaveBeenCalledWith({
       cfg,
       to: "chat:oc_group_1",
       text: "topic reply",
       accountId: undefined,
-      replyToMessageId: "om_inbound",
-      replyInThread: true,
+      mediaLocalRoots: undefined,
+      threadId: "om_inbound",
     });
   });
 
@@ -2135,7 +2232,7 @@ describe("feishuPlugin actions", () => {
   });
 
   it("auto-threads `send` in group_topic_sender sessions too", async () => {
-    sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_topic", chatId: "oc_group_1" });
+    mockFeishuOutboundTextDelivery("om_topic");
 
     await feishuPlugin.actions?.handleAction?.({
       action: "send",
@@ -2147,15 +2244,15 @@ describe("feishuPlugin actions", () => {
     } as never);
 
     const sendArgs = requireRecord(
-      mockCallArg(sendMessageFeishuMock, 0, 0, "sendMessageFeishu"),
+      mockCallArg(feishuOutboundSendTextMock, 0, 0, "feishuOutbound.sendText"),
       "send args",
     );
-    expect(sendArgs.replyToMessageId).toBe("om_inbound");
-    expect(sendArgs.replyInThread).toBe(true);
+    expect(sendArgs.threadId).toBe("om_inbound");
+    expect("replyToId" in sendArgs).toBe(false);
   });
 
   it("does not auto-thread `send` in plain group sessions (no topic)", async () => {
-    sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_plain", chatId: "oc_group_1" });
+    mockFeishuOutboundTextDelivery("om_plain");
 
     await feishuPlugin.actions?.handleAction?.({
       action: "send",
@@ -2166,18 +2263,18 @@ describe("feishuPlugin actions", () => {
       toolContext: { currentMessageId: "om_inbound" },
     } as never);
 
-    expect(sendMessageFeishuMock).toHaveBeenCalledWith({
+    expect(feishuOutboundSendTextMock).toHaveBeenCalledWith({
       cfg,
       to: "chat:oc_group_1",
       text: "plain group reply",
       accountId: undefined,
-      replyToMessageId: undefined,
-      replyInThread: false,
+      mediaLocalRoots: undefined,
+      replyToId: undefined,
     });
   });
 
   it("does not auto-thread `send` in group_topic when no inbound currentMessageId is available", async () => {
-    sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_topic", chatId: "oc_group_1" });
+    mockFeishuOutboundTextDelivery("om_topic");
 
     await feishuPlugin.actions?.handleAction?.({
       action: "send",
@@ -2188,13 +2285,13 @@ describe("feishuPlugin actions", () => {
       toolContext: {},
     } as never);
 
-    expect(sendMessageFeishuMock).toHaveBeenCalledWith({
+    expect(feishuOutboundSendTextMock).toHaveBeenCalledWith({
       cfg,
       to: "chat:oc_group_1",
       text: "topic reply",
       accountId: undefined,
-      replyToMessageId: undefined,
-      replyInThread: false,
+      mediaLocalRoots: undefined,
+      replyToId: undefined,
     });
   });
 

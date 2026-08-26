@@ -46,9 +46,9 @@ already holds `operator.admin`.
 ## Named operator roles
 
 Team Gateways can bind authenticated user profiles to named operator roles.
-Each role combines exactly three closed policies: access to other people's
-sessions, agents available for session creation and agent runs, and a maximum
-set of operator scopes.
+Each role combines four closed policies: access to other people's sessions,
+agents available for session creation and agent runs, a maximum set of operator
+scopes, and whether newly created sessions require sandboxing.
 
 ```json5
 {
@@ -58,13 +58,14 @@ set of operator scopes.
       definitions: {
         maintainer: {
           sessions: { others: "write" },
-          agents: "*",
+          agents: ["roboclaw"],
           scopes: ["operator.read", "operator.write", "operator.approvals"],
         },
         guest: {
           sessions: { others: "view" },
-          agents: ["guest-agent"],
+          agents: ["roboclaw"],
           scopes: ["operator.read", "operator.write"],
+          sandbox: "required",
         },
       },
     },
@@ -108,6 +109,24 @@ holding `operator.admin` retain their administrative session access.
 Set `agents: "*"` to allow session creation and agent runs on every agent, list
 agent IDs to allow only those agents, or use an empty array to disallow both.
 The allowlist also applies when a run targets an already-existing session.
+
+The optional `sandbox` policy defaults to `"inherit"`, which keeps the agent's
+configured sandbox mode. Set `sandbox: "required"` to sandbox every new session
+created by an authenticated person with that role, even when the agent's
+sandbox mode is `"off"`. The example lets maintainers use host execution on
+`roboclaw` while guest-created sessions on the same agent remain sandboxed.
+
+The Gateway records the creator's sandbox requirement once when the session is
+created. Existing sessions are unaffected, and role changes, session sharing,
+maintainer participation, and `sessions.patch` cannot remove or replace the
+requirement. A person whose role requires sandboxing cannot start a run in an
+existing host-execution session, even when explicitly invited. Required sessions
+fail if their sandbox backend is unavailable or provisioning fails; they never
+fall back to the Gateway or a node. `/elevated`, `exec` host overrides, and
+configured host targets cannot bypass this restriction. The agent's managed
+GitHub identity is not injected into sandboxed execution: `GH_CONFIG_DIR` is
+absent, and `GH_TOKEN` and `GITHUB_TOKEN` are blanked.
+
 The role's `scopes` list intersects scopes granted through connection auth,
 identity grants, pairing, scope upgrades, and authenticated trusted-proxy HTTP
 requests. It cannot grant scopes the connection did not already receive.

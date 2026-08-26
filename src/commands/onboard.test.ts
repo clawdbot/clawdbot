@@ -1098,7 +1098,7 @@ describe("setupWizardCommand", () => {
     ["--skip-bootstrap", { skipBootstrap: true }],
     ["--no-install-daemon", { installDaemon: false }],
     ["--custom-text-input", { customImageInput: false }],
-    ["--daemon-runtime", { daemonRuntime: "node" as const }],
+    ["--daemon-runtime", { daemonRuntime: "bun" as const }],
     ["a provider auth flag", { mistralApiKey: "sk-x" }],
   ])("keeps the classic interactive wizard for %s", async (_label, opts) => {
     const runtime = makeRuntime();

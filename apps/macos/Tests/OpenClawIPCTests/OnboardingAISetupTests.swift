@@ -750,7 +750,8 @@ private func rejectedSetupVerificationResponse(id: String) -> Data {
 
 private func unconfiguredSetupVerificationResponse(id: String) -> Data {
     Data(
-        #"{"type":"res","id":"\#(id)","ok":true,"payload":{"ok":false,"status":"unavailable","error":"No agent model is configured."}}"#.utf8)
+        #"{"type":"res","id":"\#(id)","ok":true,"payload":{"ok":false,"status":"unavailable","error":"No agent model is configured."}}"#
+            .utf8)
 }
 
 private func unavailableGatewayResponse(id: String) -> Data {
@@ -2243,21 +2244,30 @@ struct OnboardingAISetupTests {
         #expect(harness.session.latestTask()?.snapshotSendCount() == 1)
     }
 
-    @Test func `configured gateway probe refuses an unpersisted endpoint selection`() async throws {
+    @Test(arguments: [false, true])
+    func `configured gateway probe refuses an unpersisted endpoint selection`(remote: Bool) async throws {
         let url = try #require(URL(string: "ws://localhost:18789"))
-        let harness = AISetupHarness(url: url) { _, request, _ in configuredModelResponse(id: request.id) }
+        let harness = AISetupHarness(url: url) { _, request, _ in
+            switch request.method {
+            case "agents.list": missingConfiguredModelResponse(id: request.id)
+            case "openclaw.setup.detect": detectedSetupResponse(id: request.id)
+            default: nil
+            }
+        }
         let appState = AppState(preview: true)
-        appState.connectionMode = .remote
-        appState.remoteTransport = .direct
-        appState.remoteUrl = "wss://replacement.example.test"
+        appState.connectionMode = remote ? .remote : .local
+        if remote {
+            appState.remoteTransport = .direct
+            appState.remoteUrl = "wss://replacement.example.test"
+        }
         var persistAttempts = 0
         let view = makeAISetupView(
             state: appState,
             gateway: harness.gateway,
-            routeIdentityProvider: { "remote:direct:replacement.example.test" },
+            routeIdentityProvider: { remote ? "remote:direct:replacement.example.test" : "local" },
             gatewaySelectionPersister: {
                 persistAttempts += 1
-                return false
+                return persistAttempts > 2
             })
         view.onboardingVisible = true
 
@@ -2268,6 +2278,27 @@ struct OnboardingAISetupTests {
         #expect(persistAttempts == 1)
         #expect(harness.session.snapshotMakeCount() == 0)
         #expect(!view.aiSetup.connected)
+        #expect(view.aiSetup.phase == .ready)
+        #expect(view.aiSetup.configuredGatewayProbeUnavailable)
+        #expect(view.aiSetup.detectError?.summary ==
+            "Could not save Gateway settings. Check your connection settings and try again.")
+
+        #expect(view.retryConfiguredGatewayProbe() == nil)
+        #expect(persistAttempts == 2)
+        #expect(harness.session.snapshotMakeCount() == 0)
+        #expect(view.aiSetup.phase == .ready)
+        #expect(view.aiSetup.configuredGatewayProbeUnavailable)
+
+        let retry = try #require(view.retryConfiguredGatewayProbe())
+        await retry.value
+        let requests = await waitForAISetupRequests(harness.recorder, count: 2)
+        await settleQueuedAISetupTasks()
+
+        #expect(persistAttempts == 3)
+        #expect(requests.methods == ["agents.list", "openclaw.setup.detect"])
+        #expect(view.aiSetup.phase == .ready)
+        #expect(!view.aiSetup.configuredGatewayProbeUnavailable)
+        #expect(!view.aiSetup.candidates.isEmpty)
     }
 
     @Test func `read only configured gateway retry does not own inference transition`() {
@@ -3072,16 +3103,16 @@ struct OnboardingAISetupTests {
         let harness = AISetupHarness(url: url) { _, request, _ in
             switch request.method {
             case "openclaw.setup.detect":
-                return selectableCandidatesDetectedSetupResponse(id: request.id)
+                selectableCandidatesDetectedSetupResponse(id: request.id)
             case "openclaw.setup.activate" where attempts.claim() < 2:
-                return failedActivationResponse(id: request.id)
+                failedActivationResponse(id: request.id)
             case "openclaw.setup.activate":
-                return successfulActivationResponse(
+                successfulActivationResponse(
                     id: request.id,
                     modelRef: "openai/gpt-5.5",
                     latencyMs: 120)
             default:
-                return nil
+                nil
             }
         }
         let model = harness.model(defaults: defaults)

@@ -1178,7 +1178,8 @@ details.msg-meta:not([open]) .msg-meta__details {
 }
 
 :root[data-theme="openknot"] .chat-confirm-popover__yes,
-:root[data-theme="dash"] .chat-confirm-popover__yes {
+:root[data-theme="dash"] .chat-confirm-popover__yes,
+:root[data-theme="absolutely"] .chat-confirm-popover__yes {
   background: var(--destructive);
   color: var(--destructive-foreground);
 }
@@ -1192,7 +1193,8 @@ details.msg-meta:not([open]) .msg-meta__details {
 }
 
 :root[data-theme="openknot"] .chat-confirm-popover__yes:hover,
-:root[data-theme="dash"] .chat-confirm-popover__yes:hover {
+:root[data-theme="dash"] .chat-confirm-popover__yes:hover,
+:root[data-theme="absolutely"] .chat-confirm-popover__yes:hover {
   background: var(--destructive-hover);
 }
 

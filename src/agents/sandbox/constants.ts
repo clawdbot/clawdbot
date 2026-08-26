@@ -59,7 +59,7 @@ export const SANDBOX_BROWSER_IMAGE_CONTRACT_EPOCH = "2026-05-12-cdp-relay-auth";
 
 // Bump with shared Docker create-flag changes so existing ordinary and browser
 // sandboxes roll through the hash/recreate path instead of keeping stale flags.
-export const SANDBOX_DOCKER_CREATE_ARGS_EPOCH = "2026-07-10-init";
+export const SANDBOX_DOCKER_CREATE_ARGS_EPOCH = "2026-08-25-container-env-file";
 
 export const DEFAULT_SANDBOX_BROWSER_PREFIX = "openclaw-sbx-browser-";
 export const DEFAULT_SANDBOX_BROWSER_CDP_PORT = 9222;

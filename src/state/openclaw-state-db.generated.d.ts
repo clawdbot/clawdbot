@@ -1259,17 +1259,6 @@ export interface SkillCuratorState {
   last_success_at_ms: number | null;
 }
 
-export interface SkillLifecycle {
-  archived_reason: string | null;
-  created_at_ms: number;
-  pinned: Generated<number>;
-  skill_file: string;
-  skill_key: string;
-  skill_name: string;
-  state: string;
-  state_changed_at_ms: number;
-}
-
 export interface SkillUploadChunks {
   byte_offset: number;
   chunk_blob: Uint8Array;
@@ -1326,13 +1315,6 @@ export interface SkillWorkshopProposalEvents {
   proposed_version: string;
   revision_hash: string;
   sequence: Generated<number>;
-}
-
-export interface SkillWorkshopProposalOriginRuns {
-  mutation_count: number;
-  position: number;
-  proposal_id: string;
-  run_id: string;
 }
 
 export interface SkillWorkshopProposalRollbacks {
@@ -1877,13 +1859,11 @@ export interface DB {
   session_watch_cursors: SessionWatchCursors;
   sidebar_sections: SidebarSections;
   skill_curator_state: SkillCuratorState;
-  skill_lifecycle: SkillLifecycle;
   skill_upload_chunks: SkillUploadChunks;
   skill_uploads: SkillUploads;
   skill_usage: SkillUsage;
   skill_workshop_collection_reviews: SkillWorkshopCollectionReviews;
   skill_workshop_proposal_events: SkillWorkshopProposalEvents;
-  skill_workshop_proposal_origin_runs: SkillWorkshopProposalOriginRuns;
   skill_workshop_proposal_rollbacks: SkillWorkshopProposalRollbacks;
   skill_workshop_proposals: SkillWorkshopProposals;
   state_leases: StateLeases;

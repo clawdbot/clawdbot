@@ -5970,6 +5970,11 @@ button.chat-pr__diff {
   gap: 2px;
 }
 
+.chat-controls__model-settings-icon,
+.chat-controls__mobile-effort-option {
+  display: none;
+}
+
 .chat-controls__model-settings .chat-controls__inline-select-trigger {
   width: auto;
 }
@@ -6400,7 +6405,7 @@ button.chat-pr__diff {
   display: block;
   min-width: 0;
   padding: 0 7px 7px;
-  overflow-y: auto;
+  overflow: hidden auto;
   overscroll-behavior: none;
 }
 
@@ -7192,6 +7197,7 @@ button.chat-pr__diff {
 
   .agent-chat__input .chat-controls__model-trigger {
     gap: 3px;
+    justify-content: center;
     padding-inline: 0;
   }
 
@@ -7297,6 +7303,39 @@ button.chat-pr__diff {
     min-width: 0;
     width: fit-content;
     max-width: 100%;
+  }
+
+  .agent-chat__input .chat-composer-model-control,
+  .agent-chat__input .chat-controls__model-settings,
+  .agent-chat__input .chat-controls__model-picker,
+  .agent-chat__input .chat-controls__model-trigger {
+    flex: 0 0 var(--chat-composer-control-size);
+    width: var(--chat-composer-control-size);
+    min-width: var(--chat-composer-control-size);
+    max-width: var(--chat-composer-control-size);
+  }
+
+  .agent-chat__input .chat-controls__model-trigger > :not(.chat-controls__model-settings-icon) {
+    display: none;
+  }
+
+  .agent-chat__input .chat-controls__model-settings-icon,
+  .agent-chat__input .chat-controls__mobile-effort-option {
+    display: inline-flex;
+  }
+
+  .agent-chat__input .chat-controls__model-settings-icon svg {
+    width: var(--chat-composer-chip-icon);
+    height: var(--chat-composer-chip-icon);
+  }
+
+  .agent-chat__input .chat-controls__effort-picker {
+    position: absolute;
+    width: 0;
+  }
+
+  .agent-chat__input .chat-controls__effort-picker > .chat-controls__effort-trigger {
+    display: none;
   }
 }
 

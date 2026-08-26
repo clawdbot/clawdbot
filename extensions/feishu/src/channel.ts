@@ -31,12 +31,7 @@ import {
   createRuntimeDirectoryLiveAdapter,
 } from "openclaw/plugin-sdk/directory-runtime";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
-import {
-  legacyInteractiveReplyToPresentation,
-  normalizeLegacyInteractiveReply,
-  normalizeMessagePresentation,
-  resolveLegacyInteractiveTextFallback,
-} from "openclaw/plugin-sdk/interactive-runtime";
+import { resolveLegacyInteractiveTextFallback } from "openclaw/plugin-sdk/interactive-runtime";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
@@ -98,6 +93,7 @@ import {
   assertFeishuCardWithinEnvelope,
   buildFeishuPresentationCard,
   isFeishuCardWithinEnvelope,
+  resolveFeishuRichReply,
 } from "./presentation-card.js";
 import {
   assertFeishuChatReadAllowed,
@@ -1356,10 +1352,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             const textCard = readNativeFeishuCardJson(text, {
               responsePrefix: resolveFeishuMessageActionResponsePrefix(ctx),
             });
-            const interactive = normalizeLegacyInteractiveReply(ctx.params.interactive);
-            const presentation =
-              normalizeMessagePresentation(ctx.params.presentation) ??
-              (interactive ? legacyInteractiveReplyToPresentation(interactive) : undefined);
+            const { interactive, presentation } = resolveFeishuRichReply(ctx.params);
             // send promotes every attachment alias (path/filePath/mediaUrl/fileUrl/
             // image/mediaUrls/attachments[]) to a canonical mediaUrl and rejects
             // unsupported buffer/base64 payloads or multiple attachments instead
@@ -1460,12 +1453,11 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                 replyToMessageId,
                 replyInThread,
               });
-            } else if (mediaUrl) {
-              result = await sendMedia!({
+            } else {
+              const outboundContext = {
                 cfg: ctx.cfg,
                 to,
                 text: text ?? "",
-                mediaUrl,
                 accountId: ctx.accountId ?? undefined,
                 ...(ctx.mediaAccess ? { mediaAccess: ctx.mediaAccess } : {}),
                 mediaLocalRoots: ctx.mediaLocalRoots,
@@ -1473,24 +1465,22 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                 ...(replyInThread
                   ? { threadId: replyToMessageId }
                   : { replyToId: replyToMessageId }),
-                ...(audioAsVoice === true ? { audioAsVoice: true } : {}),
-                // The direct send action must not report `ok:true` when the
-                // requested attachment cannot be delivered; propagate the
-                // upload failure so the agent sees a visible error instead of
-                // a text-only fallback receipt (issue #112244). Scoped to
-                // `send` only — thread-reply keeps its existing fallback-text
-                // behavior for compatibility.
-                ...(ctx.action === "send" ? { propagateMediaUploadFailure: true } : {}),
-              });
-            } else {
-              result = await runtime.sendMessageFeishu({
-                cfg: ctx.cfg,
-                to,
-                text: text!,
-                accountId: ctx.accountId ?? undefined,
-                replyToMessageId,
-                replyInThread,
-              });
+              };
+              if (mediaUrl) {
+                result = await sendMedia!({
+                  ...outboundContext,
+                  mediaUrl,
+                  ...(audioAsVoice === true ? { audioAsVoice: true } : {}),
+                  // Direct sends surface upload failures; thread replies retain
+                  // their existing attachment fallback behavior.
+                  ...(ctx.action === "send" ? { propagateMediaUploadFailure: true } : {}),
+                });
+              } else {
+                const { target, ...delivery } = await (
+                  await resolveFeishuTextSender()
+                )(outboundContext);
+                result = { ...delivery, chatId: target?.id };
+              }
             }
             return jsonActionResult({
               ok: true,

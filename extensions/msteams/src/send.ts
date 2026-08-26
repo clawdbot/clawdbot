@@ -60,6 +60,15 @@ const FILE_CONSENT_THRESHOLD_BYTES = 4 * 1024 * 1024; // 4MB
  */
 const MSTEAMS_MAX_MEDIA_BYTES = 100 * 1024 * 1024;
 
+function createMSTeamsSendError(errorPrefix: string, error: unknown): Error {
+  const classification = classifyMSTeamsSendError(error);
+  const hint = formatMSTeamsSendErrorHint(classification);
+  const status = classification.statusCode ? ` (HTTP ${classification.statusCode})` : "";
+  return new Error(
+    `${errorPrefix} failed${status}: ${formatUnknownError(error)}${hint ? ` (${hint})` : ""}`,
+    { cause: error },
+  );
+}
 type SendMSTeamsPollParams = {
   /** Full config (for credentials) */
   cfg: OpenClawConfig;
@@ -288,13 +297,7 @@ export async function sendMessageMSTeams(
         kind: "media",
       });
     } catch (err) {
-      const classification = classifyMSTeamsSendError(err);
-      const hint = formatMSTeamsSendErrorHint(classification);
-      const status = classification.statusCode ? ` (HTTP ${classification.statusCode})` : "";
-      throw new Error(
-        `msteams file send failed${status}: ${formatUnknownError(err)}${hint ? ` (${hint})` : ""}`,
-        { cause: err },
-      );
+      throw createMSTeamsSendError("msteams file send", err);
     }
   }
 
@@ -342,13 +345,7 @@ async function sendTextWithMedia(
       serviceUrlBoundary: ctx.sdkCloudOptions,
     });
   } catch (err) {
-    const classification = classifyMSTeamsSendError(err);
-    const hint = formatMSTeamsSendErrorHint(classification);
-    const status = classification.statusCode ? ` (HTTP ${classification.statusCode})` : "";
-    throw new Error(
-      `msteams send failed${status}: ${formatUnknownError(err)}${hint ? ` (${hint})` : ""}`,
-      { cause: err },
-    );
+    throw createMSTeamsSendError("msteams send", err);
   }
 
   const messageId = platformMessageIds[0] ?? "unknown";
@@ -394,13 +391,7 @@ async function sendProactiveActivity({
   try {
     return await sendProactiveActivityRaw({ ctx, activity });
   } catch (err) {
-    const classification = classifyMSTeamsSendError(err);
-    const hint = formatMSTeamsSendErrorHint(classification);
-    const status = classification.statusCode ? ` (HTTP ${classification.statusCode})` : "";
-    throw new Error(
-      `${errorPrefix} failed${status}: ${formatUnknownError(err)}${hint ? ` (${hint})` : ""}`,
-      { cause: err },
-    );
+    throw createMSTeamsSendError(errorPrefix, err);
   }
 }
 
@@ -501,35 +492,18 @@ export async function sendAdaptiveCardMSTeams(
   };
 }
 
-type EditMSTeamsMessageParams = {
+type MSTeamsMessageMutationParams = {
   /** Full config (for credentials) */
   cfg: OpenClawConfig;
   /** Optional account ID for multi-account Teams configs */
   accountId?: string | null;
   /** Conversation ID or user ID */
   to: string;
-  /** Activity ID of the message to edit */
-  activityId: string;
-  /** New message text */
-  text: string;
-};
-
-type EditMSTeamsMessageResult = {
-  conversationId: string;
-};
-
-type DeleteMSTeamsMessageParams = {
-  /** Full config (for credentials) */
-  cfg: OpenClawConfig;
-  /** Optional account ID for multi-account Teams configs */
-  accountId?: string | null;
-  /** Conversation ID or user ID */
-  to: string;
-  /** Activity ID of the message to delete */
+  /** Activity ID of the message to edit or delete */
   activityId: string;
 };
 
-type DeleteMSTeamsMessageResult = {
+type MSTeamsMessageMutationResult = {
   conversationId: string;
 };
 
@@ -540,8 +514,8 @@ type DeleteMSTeamsMessageResult = {
  * original turn context.
  */
 export async function editMessageMSTeams(
-  params: EditMSTeamsMessageParams,
-): Promise<EditMSTeamsMessageResult> {
+  params: MSTeamsMessageMutationParams & { text: string },
+): Promise<MSTeamsMessageMutationResult> {
   const { cfg, accountId, to, activityId, text } = params;
   const { app, conversationId, ref, log, sdkCloudOptions } = await resolveMSTeamsSendContext({
     cfg,
@@ -565,13 +539,7 @@ export async function editMessageMSTeams(
       { serviceUrlBoundary: sdkCloudOptions },
     );
   } catch (err) {
-    const classification = classifyMSTeamsSendError(err);
-    const hint = formatMSTeamsSendErrorHint(classification);
-    const status = classification.statusCode ? ` (HTTP ${classification.statusCode})` : "";
-    throw new Error(
-      `msteams edit failed${status}: ${formatUnknownError(err)}${hint ? ` (${hint})` : ""}`,
-      { cause: err },
-    );
+    throw createMSTeamsSendError("msteams edit", err);
   }
 
   log.info("edited proactive message", { conversationId, activityId });
@@ -586,8 +554,8 @@ export async function editMessageMSTeams(
  * original turn context.
  */
 export async function deleteMessageMSTeams(
-  params: DeleteMSTeamsMessageParams,
-): Promise<DeleteMSTeamsMessageResult> {
+  params: MSTeamsMessageMutationParams,
+): Promise<MSTeamsMessageMutationResult> {
   const { cfg, accountId, to, activityId } = params;
   const { app, conversationId, ref, log, sdkCloudOptions } = await resolveMSTeamsSendContext({
     cfg,
@@ -603,13 +571,7 @@ export async function deleteMessageMSTeams(
       serviceUrlBoundary: sdkCloudOptions,
     });
   } catch (err) {
-    const classification = classifyMSTeamsSendError(err);
-    const hint = formatMSTeamsSendErrorHint(classification);
-    const status = classification.statusCode ? ` (HTTP ${classification.statusCode})` : "";
-    throw new Error(
-      `msteams delete failed${status}: ${formatUnknownError(err)}${hint ? ` (${hint})` : ""}`,
-      { cause: err },
-    );
+    throw createMSTeamsSendError("msteams delete", err);
   }
 
   log.info("deleted proactive message", { conversationId, activityId });
