@@ -434,7 +434,23 @@ export async function sendSubagentAnnounceDirectly(params: {
 
     if (isGatewayAgentRunPending(directAnnounceResponse)) {
       const directAnnounceStatus = directAnnounceResponse.status;
-      // Any nonterminal ordinary completion handoff already owns the prompt;
+      if (
+        !params.requireVisibleReply &&
+        params.expectsCompletionMessage &&
+        directAnnounceStatus === "in_flight" &&
+        directAnnounceResponse.admitted !== true
+      ) {
+        // A pre-admission reservation blocks duplicate dispatch but does not own
+        // delivery yet. Avoid fallback injection while retaining the durable retry.
+        return {
+          delivered: false,
+          path: "direct",
+          reason: "completion_handoff_pending",
+          error: "requester agent admission is still pending",
+          disposition: "ambiguous",
+        };
+      }
+      // An admitted ordinary completion handoff already owns the prompt;
       // fallback steering would inject it twice. Settle wakes still need terminal evidence on replay.
       if (
         !params.requireVisibleReply &&

@@ -31,7 +31,7 @@ const FAILED_COMPLETION_NOTICE =
 
 export function isGatewayAgentRunPending(
   response: unknown,
-): response is { status: "accepted" | "in_flight" | "started" } {
+): response is { admitted?: unknown; status: "accepted" | "in_flight" | "started" } {
   if (!response || typeof response !== "object") {
     return false;
   }

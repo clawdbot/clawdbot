@@ -3802,6 +3802,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     const callGateway = createGatewayMock({
       runId: "subagent:child:replay",
       status: "in_flight",
+      admitted: true,
     });
     const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
     let activityChecks = 0;
@@ -3840,6 +3841,59 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
           delivered: true,
           path: "direct",
           error: undefined,
+        },
+      ],
+    });
+    expect(callGateway).toHaveBeenCalledOnce();
+    expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
+    expect(activityChecks).toBe(1);
+  });
+
+  it("retains a pre-admission completion replay without fallback steering", async () => {
+    const callGateway = createGatewayMock({
+      runId: "subagent:child:reservation",
+      status: "in_flight",
+    });
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
+    let activityChecks = 0;
+    testing.setDepsForTest({
+      callGateway,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session-channel",
+        isActive: activityChecks++ > 0,
+      }),
+      getRuntimeConfig: () => ({}) as never,
+      queueEmbeddedAgentMessageWithOutcome,
+    });
+    const origin = { channel: "slack", to: "channel:C123", accountId: "acct-1" };
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:main:slack:channel:C123",
+      targetRequesterSessionKey: "agent:main:slack:channel:C123",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterOrigin: origin,
+      requesterSessionOrigin: origin,
+      completionDirectOrigin: origin,
+      directOrigin: origin,
+      requesterIsSubagent: false,
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: "announce-channel-completion-reservation",
+    });
+
+    expectRecordFields(result, {
+      delivered: false,
+      path: "direct",
+      reason: "completion_handoff_pending",
+      disposition: "ambiguous",
+      phases: [
+        {
+          phase: "direct-primary",
+          delivered: false,
+          path: "direct",
+          reason: "completion_handoff_pending",
+          error: "requester agent admission is still pending",
         },
       ],
     });

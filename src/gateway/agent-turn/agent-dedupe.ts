@@ -29,6 +29,7 @@ export function readGatewayDedupeEntry(params: {
 
 export function isAcceptedAgentDedupePayload(payload: unknown): payload is {
   acceptedAt?: unknown;
+  admitted?: unknown;
   agentId?: unknown;
   dedupeKeys?: unknown;
   expiresAtMs?: unknown;
