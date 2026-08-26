@@ -4,7 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { PendingSystemRunEvent } from "./node-registry.invoke-stream.js";
 
 /** Normalize system.run timeout values, preserving null for no expiry. */
-export function normalizeSystemRunTimeoutMs(value: unknown): number | null | undefined {
+function normalizeSystemRunTimeoutMs(value: unknown): number | null | undefined {
   if (value === undefined) {
     return undefined;
   }
@@ -22,6 +22,7 @@ export function resolvePendingSystemRunEvent(params: {
   if (params.command !== "system.run" || !params.params || typeof params.params !== "object") {
     return undefined;
   }
+  // SAFETY: the guard above rejects every non-object params payload.
   const obj = params.params as Record<string, unknown>;
   const runId = normalizeOptionalString(obj.runId) ?? "";
   if (!runId) {
@@ -48,6 +49,7 @@ export function normalizeSystemRunInvokeParams(params: {
   ) {
     return params.params;
   }
+  // SAFETY: the guard above rejects every non-object and array params payload.
   const obj = params.params as Record<string, unknown>;
   const normalized: Record<string, unknown> = {
     ...obj,
