@@ -428,6 +428,23 @@ describe("runGuidedOnboarding", () => {
     expect(options).not.toHaveProperty("local");
   });
 
+  it("keeps the local terminal hatch for configured reruns", async () => {
+    localOnboarding.persisted.config = { gateway: {} };
+    const prompter = createWizardPrompter();
+    const deps: GuidedOnboardingDeps = setupDeps({ prompter });
+    delete deps.launchHatchTui;
+
+    await runGuidedOnboarding(
+      { acceptRisk: true, workspace: "/tmp/work", tui: true },
+      makeRuntime(),
+      deps,
+    );
+
+    expect(launchTuiCli).toHaveBeenCalledOnce();
+    expect(launchTuiCli).toHaveBeenCalledWith(expect.objectContaining({ local: true }));
+    expect(deps.applySetup).not.toHaveBeenCalled();
+  });
+
   it("uses --skip-ui to skip both browser and terminal handoffs", async () => {
     const prompter = createWizardPrompter();
     const deps = setupDeps({ prompter });
