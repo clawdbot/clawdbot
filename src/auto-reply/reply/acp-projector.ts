@@ -461,9 +461,7 @@ export function createAcpReplyProjector(params: {
       if (accepted.length > 0) {
         emittedOutputChars += accepted.length;
         const safeText = filterConversationContext(accepted);
-        if (safeText) {
-          lastVisibleOutputTail = safeText.slice(-1);
-        }
+        lastVisibleOutputTail = safeText.slice(-1) || lastVisibleOutputTail;
         if (settings.deliveryMode === "live") {
           liveBufferText += safeText;
           if (shouldFlushLiveBufferOnBoundary(liveBufferText)) {

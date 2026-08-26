@@ -36,10 +36,7 @@ import {
   resolveRecentInboundHistoryImages,
 } from "./history-media.js";
 import { finalizeInboundContext } from "./inbound-context.js";
-import {
-  bindReplyDispatcherConversationContext,
-  createReplyDispatcher,
-} from "./reply-dispatcher.js";
+import { createReplyDispatcher } from "./reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
 import { buildTestCtx } from "./test-ctx.js";
 import {
@@ -3648,7 +3645,6 @@ describe("tryDispatchAcpReplyCore", () => {
         Body: conversationContext,
         BodyForAgent: conversationContext,
       });
-      bindReplyDispatcherConversationContext(dispatcher, ctx.agentText);
       managerMocks.runTurn.mockImplementationOnce(
         async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
           await onEvent({

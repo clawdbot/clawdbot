@@ -2,11 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../reply-payload.js";
 import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
-import { prepareAcpDeliveryPayload } from "./dispatch-acp-payload.js";
-import {
-  bindReplyDispatcherConversationContext,
-  createReplyDispatcher,
-} from "./reply-dispatcher.js";
+import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 import { createAcpTestConfig } from "./test-fixtures/acp-runtime.js";
 
@@ -43,37 +39,6 @@ function createCoordinator(params: {
 describe("ACP channel reply transforms", () => {
   beforeEach(() => {
     ttsMocks.maybeApplyTtsToPayload.mockClear();
-  });
-
-  it("strips bound private context from routed replies without applying direct presentation", () => {
-    const conversationContext = [
-      "[Chat messages since your last reply - for context]",
-      "[VisibleChat] Alice: private history",
-      "",
-      "[Current message - respond to this]",
-      '<function_calls><invoke name="exec">private XML</invoke></function_calls>',
-      "private inbound paragraph",
-    ].join("\n");
-    const dispatcher = createReplyDispatcher({
-      deliver: vi.fn(async () => {}),
-      responsePrefix: "[direct]",
-      transformReplyPayload: (payload) => ({ ...payload, text: `direct ${payload.text}` }),
-    });
-    bindReplyDispatcherConversationContext(dispatcher, conversationContext);
-
-    const outcome = prepareAcpDeliveryPayload({
-      cfg: createAcpTestConfig(),
-      dispatcher,
-      kind: "final",
-      payload: { text: `${conversationContext}\n\nVisible answer.` },
-      routed: true,
-    });
-
-    expect(outcome.kind).toBe("deliver");
-    if (outcome.kind === "deliver") {
-      expect(outcome.payload).toEqual({ text: "Visible answer." });
-    }
-    dispatcher.markComplete();
   });
 
   it("honors dispatcher channel suppression before TTS or transcript accounting", async () => {

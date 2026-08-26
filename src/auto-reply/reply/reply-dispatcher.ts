@@ -124,36 +124,6 @@ export function bindReplyDispatcherConversationContext(
   conversationContextsByDispatcher.set(dispatcher, conversationContext);
 }
 
-/** Keep private sanitization context and its owner attached when a dispatcher is wrapped. */
-export function inheritReplyDispatcherNormalization(
-  source: ReplyDispatcher,
-  dispatcher: ReplyDispatcher,
-): ReplyDispatcher {
-  const conversationContext = conversationContextsByDispatcher.get(source);
-  if (conversationContext !== undefined) {
-    conversationContextsByDispatcher.set(dispatcher, conversationContext);
-  }
-  const preparer = replyDispatcherPreparers.get(source);
-  if (preparer) {
-    replyDispatcherPreparers.set(dispatcher, preparer);
-  }
-  return dispatcher;
-}
-
-export function normalizeReplyPayloadForDispatcher(
-  dispatcher: ReplyDispatcher,
-  payload: ReplyPayload,
-  options: Omit<
-    NonNullable<Parameters<typeof normalizeReplyPayloadOutcome>[1]>,
-    "conversationContext"
-  >,
-): NormalizeReplyOutcome {
-  return normalizeReplyPayloadOutcome(payload, {
-    ...options,
-    conversationContext: conversationContextsByDispatcher.get(dispatcher),
-  });
-}
-
 /** Capture one core-dispatcher delivery outcome without changing send* return types. */
 export function captureReplyDispatchDeliveryOutcome(payload: ReplyPayload): {
   promise: Promise<ReplyDispatchDeliveryOutcome>;
@@ -347,11 +317,12 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     payload: ReplyPayload,
     notifySkip: boolean,
   ) =>
-    normalizeReplyPayloadForDispatcher(dispatcher, payload, {
+    normalizeReplyPayloadOutcome(payload, {
       responsePrefix: options.responsePrefix,
       responsePrefixContext:
         options.responsePrefixContextProvider?.() ?? options.responsePrefixContext,
       transformReplyPayload: options.transformReplyPayload,
+      conversationContext: conversationContextsByDispatcher.get(dispatcher),
       onHeartbeatStrip: options.onHeartbeatStrip,
       onSkip: notifySkip
         ? (reason) =>

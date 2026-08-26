@@ -180,11 +180,8 @@ export function createVerifiedConversationContextStreamFilter(
   let releasedText: string | null = "";
   return (delta) => {
     accumulatedText += delta;
-    const safeText = stripVerifiedConversationContext(
-      accumulatedText,
-      getConversationContext?.(),
-      true,
-    );
+    const conversationContext = getConversationContext?.();
+    const safeText = stripVerifiedConversationContext(accumulatedText, conversationContext, true);
     // Already delivered stream text cannot be retracted if its safe projection changes.
     if (releasedText === null || !safeText.startsWith(releasedText)) {
       releasedText = null;
