@@ -18,7 +18,7 @@ const progressCard: ProgressCard = {
 };
 
 describe("renderSessionProgressCard", () => {
-  it.each(["board", "composer", "hovercard", "rail"] as const)(
+  it.each(["board", "composer", "hovercard"] as const)(
     "shows the last activity time for %s cards with and without checklist steps",
     (placement) => {
       const container = document.createElement("div");
@@ -46,7 +46,7 @@ describe("renderSessionProgressCard", () => {
 
   it("renders sanitized markdown and one accessible typed checklist", () => {
     const container = document.createElement("div");
-    render(renderSessionProgressCard(progressCard, "rail"), container);
+    render(renderSessionProgressCard(progressCard, "hovercard"), container);
 
     const card = container.querySelector(".session-progress-card");
     expect(card?.getAttribute("aria-label")).toMatch(/^1 of 3 completed\. Last activity: /);

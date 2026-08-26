@@ -234,7 +234,6 @@ export class ChatPane extends ChatPaneLayoutRender {
     } = createChatPaneRails({
       state,
       sidebarLayout,
-      paneWidth: this.paneWidth,
       presentationId: this.presentationId,
       presented: this.presented,
       gatewaySnapshot,
@@ -320,8 +319,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       waitingApproval: state.waitingApprovalStatuses.size > 0,
       compactionStatus: state.compactionStatus,
       fallbackStatus: state.fallbackStatus,
-      progressCard:
-        progressCardPlacement === "rail" || !this.progressCard.card ? null : this.progressCard.card,
+      progressCard: this.progressCard.card,
       onDismissProgressCard,
       gatewayQuestionPrompts: catalogKey || sessionParticipationBlocked ? [] : this.questionPrompts,
       onGatewayQuestionChange: () => {
@@ -650,8 +648,6 @@ export class ChatPane extends ChatPaneLayoutRender {
       currentAgentId,
       board,
       sidebarLayout,
-      progressCardPlacement,
-      onDismissProgressCard,
       sessionWorkspace,
       backgroundTasks,
       chatProps: props,

@@ -7,7 +7,7 @@ import { formatTimeMs } from "../lib/format.ts";
 import { icons } from "./icons.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 
-type SessionProgressCardPlacement = "board" | "composer" | "hovercard" | "rail";
+type SessionProgressCardPlacement = "board" | "composer" | "hovercard";
 
 const STATUS_LABEL_KEYS: Record<ProgressCardStep["status"], Parameters<typeof t>[0]> = {
   completed: "sessionProgressCard.status.completed",
