@@ -35,6 +35,23 @@ describe("parsePortFromArgs", () => {
 });
 
 describe("renderGatewayServiceStartHints", () => {
+  it.each([
+    {
+      name: "the default profile",
+      env: {},
+      installCommand: "openclaw gateway install",
+      startCommand: "openclaw gateway start",
+    },
+    {
+      name: "a named profile",
+      env: { OPENCLAW_PROFILE: "work" },
+      installCommand: "openclaw --profile work gateway install",
+      startCommand: "openclaw --profile work gateway start",
+    },
+  ])("recommends managed service commands for $name", ({ env, installCommand, startCommand }) => {
+    expect(renderGatewayServiceStartHints(env).slice(0, 2)).toEqual([installCommand, startCommand]);
+  });
+
   it("uses GUI session wording for installed LaunchAgents that cannot access gui/$UID", () => {
     expect(
       renderRuntimeHints(
@@ -71,10 +88,11 @@ describe("renderGatewayServiceStartHints", () => {
     expect(
       renderGatewayServiceStartHints({
         OPENCLAW_CONTAINER_HINT: "openclaw-demo-container",
+        OPENCLAW_PROFILE: "work",
       } as NodeJS.ProcessEnv),
-    ).toContain(
+    ).toEqual([
       "Restart the container or the service that manages it for openclaw-demo-container.",
-    );
+    ]);
   });
 });
 

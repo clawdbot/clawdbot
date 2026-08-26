@@ -127,7 +127,6 @@ export async function collectStatusScanOverview(params: {
   channelCredentialResolutionSkipped?: boolean;
   useGatewayCallOverridesForChannelsStatus?: boolean;
   includeChannelSecretTargets?: boolean;
-  skipConfigPluginValidation?: boolean;
   includeAdvertisedControlUiLinks?: boolean;
   progress?: {
     setLabel(label: string): void;
@@ -157,11 +156,16 @@ export async function collectStatusScanOverview(params: {
     env,
     commandName: params.commandName,
     allowMissingConfigFastPath: params.allowMissingConfigFastPath,
-    readConfigSnapshot: async () =>
-      (await configModuleLoader.load()).readBestEffortConfigSnapshot({
-        observe: false,
-        skipPluginValidation: params.skipConfigPluginValidation,
-      }),
+    readConfigSnapshot: async () => {
+      const { snapshot } = await (
+        await import("../cli/command-config-snapshot.js")
+      ).readCommandConfigSnapshot({ observe: false, skipPluginValidation: true });
+      return {
+        config: snapshot.runtimeConfig,
+        sourceConfig: snapshot.sourceConfig,
+        configDiagnostics: snapshot.valid ? null : { path: snapshot.path, issues: snapshot.issues },
+      };
+    },
     resolveConfig: async (loadedConfig) =>
       await (
         await commandConfigResolutionModuleLoader.load()

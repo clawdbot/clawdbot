@@ -237,13 +237,13 @@ describe("exec SecretRef id parity", () => {
       if (token.kind === "literal") {
         return [];
       }
-      return [token.kind === "array" ? "0" : "sample"];
+      return [token.kind === "array" ? 0 : "sample"];
     });
     const segments = materializePathTokens(tokens, captures);
     if (!segments) {
       throw new Error(`failed to sample path segments for pattern "${entry.pathPattern}"`);
     }
-    return segments;
+    return segments.map(String);
   }
 
   const registryPlanTargets = listSecretTargetRegistryEntries().filter(

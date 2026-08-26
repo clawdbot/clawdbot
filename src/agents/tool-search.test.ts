@@ -18,6 +18,8 @@ import {
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
 import { resetAdjustedParamsByToolCallIdForTests } from "./agent-tools.before-tool-call.state.js";
+import { finalizeAgentTools } from "./agent-tools.finalize.js";
+import { filterToolsByPolicy } from "./agent-tools.policy.js";
 import { normalizeAgentRuntimeTools } from "./runtime-plan/tools.js";
 import { SESSION_TOOL_STDERR_TAIL_BYTES } from "./sessions/tools/limits.js";
 import {
@@ -46,6 +48,8 @@ import {
 } from "./tool-search.js";
 import { testing } from "./tool-search.test-support.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
+import { createGatewayTool } from "./tools/gateway-tool.js";
+import { createOpenClawDelegateToolsForRun } from "./tools/openclaw-delegate-tool.js";
 
 type TestCatalogContext = {
   sessionId?: string;
@@ -926,6 +930,75 @@ describe("Tool Search", () => {
 
     expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["fake_lookup"]);
   });
+
+  it.each([
+    {
+      scenario: "delegation was never provided",
+      agentId: "openclaw",
+      denyOpenClaw: false,
+      expected: "Read gateway config + schema. Writes/restart unavailable; ask human.",
+    },
+    {
+      scenario: "policy removed delegation",
+      agentId: "main",
+      denyOpenClaw: true,
+      expected: "Read gateway config + schema. Writes/restart unavailable; ask human.",
+    },
+    {
+      scenario: "delegation remains authorized",
+      agentId: "main",
+      denyOpenClaw: false,
+      expected: "Read gateway config + schema. Writes/restart: use openclaw tool.",
+    },
+  ])(
+    "keeps gateway guidance consistent across final and deferred surfaces when $scenario",
+    ({ agentId, denyOpenClaw, expected }) => {
+      const authorizedTools = filterToolsByPolicy(
+        [createGatewayTool(), ...createOpenClawDelegateToolsForRun({ sessionAgentId: agentId })],
+        denyOpenClaw ? { deny: ["openclaw"] } : undefined,
+      );
+      const finalizedTools = finalizeAgentTools({
+        tools: authorizedTools,
+        hookContext: {},
+        wrapBeforeToolCallHook: false,
+      });
+      const gateway = expectDefined(
+        finalizedTools.find((tool) => tool.name === "gateway"),
+        "finalized gateway tool",
+      );
+
+      expect(finalizedTools.some((tool) => tool.name === "openclaw")).toBe(
+        expected.includes("openclaw"),
+      );
+      expect(gateway.description).toBe(expected);
+
+      for (const mode of ["code", "tools", "directory"] as const) {
+        const catalogRef = createToolSearchCatalogRef();
+        const config = { tools: { toolSearch: { enabled: true, mode } } };
+        const tools = [...createToolSearchTools({ config, catalogRef }), ...finalizedTools];
+
+        if (mode === "directory") {
+          applyToolSchemaDirectoryCatalog({ tools, config, catalogRef });
+        } else {
+          applyToolSearchCatalog({ tools, config, catalogRef });
+        }
+
+        const entry = expectDefined(
+          catalogRef.current?.entries.find((candidate) => candidate.name === "gateway"),
+          `${mode} gateway catalog entry`,
+        );
+
+        expect(entry.description).toBe(expected);
+        expect(entry.tool.description).toBe(expected);
+        expect(buildToolSchemaDirectoryPrompt({ config, catalogRef })).toContain(
+          `- gateway (core): ${expected}`,
+        );
+        expect(resolveToolSearchCatalogTool({ config, catalogRef }, "gateway")?.description).toBe(
+          expected,
+        );
+      }
+    },
+  );
 
   it.each([
     {

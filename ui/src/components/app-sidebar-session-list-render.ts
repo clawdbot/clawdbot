@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { repeat } from "lit/directives/repeat.js";
 import type { SessionCatalog } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { CatalogOpenTarget } from "../app/settings.ts";
@@ -8,6 +9,7 @@ import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.t
 import type { SidebarSessionSection } from "../lib/sessions/grouping.ts";
 import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.ts";
 import {
+  renderChildSessionLoadError,
   renderRecentSession,
   renderSessionTree,
   type SessionListHost,
@@ -21,7 +23,6 @@ import {
   type SidebarRecentSession,
 } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
-import { renderPanelRefreshStatus, type PanelRefreshStatus } from "./panel-refresh-status.ts";
 
 type RenderableSessionSection = SidebarSessionSection<SidebarRecentSession> & {
   totalRowCount: number;
@@ -37,7 +38,6 @@ type SidebarSessionListHost = SessionListHost & {
 
 type SessionCatalogRenderSnapshot = {
   catalogs: readonly SessionCatalog[];
-  refreshStatus: PanelRefreshStatus;
   basePath: string;
   routeSessionKey: string;
   newSessionAgentId: string;
@@ -234,7 +234,11 @@ function renderSessionSection(params: {
         : html`
             ${section.rows.length > 0
               ? html`<div class="sidebar-recent-sessions__list" role="list" aria-label=${label}>
-                  ${section.rows.map((session) => renderSessionTree({ host, session }))}
+                  ${repeat(
+                    section.rows,
+                    (session) => session.key,
+                    (session) => renderSessionTree({ host, session }),
+                  )}
                 </div>`
               : nothing}
             ${renderSessionPagination({
@@ -353,6 +357,8 @@ function renderSessionCatalog(params: {
       terminalAvailable: snapshot.terminalAvailable,
       onOpenTerminal: openCatalogSessionInTerminal,
       onOpenMenu: (request, x, y, trigger) => host.openCatalogMenu(request, x, y, trigger),
+      onCatalogMenuTriggerRendered: (key, element) => host.retargetCatalogMenuTrigger(key, element),
+      isMenuOpen: (key) => host.sidebarMenus.catalogMenu.isOpenFor(key),
     })}
   `;
 }
@@ -365,59 +371,49 @@ function renderSessionListBody(params: {
   catalogRenderer: SessionCatalogGroupsRenderer | null;
 }) {
   const { host } = params;
-  const catalogsVisible = host.sessionsStatusFilter !== "archived";
   const catalogsBySectionId = new Map(
     params.catalogs.catalogs.map((catalog) => [`catalog:${catalog.id}`, catalog]),
   );
-  const firstCatalogSectionIndex = catalogsVisible
-    ? params.sections.findIndex((section) => section.id.startsWith("catalog:"))
-    : -1;
-  const catalogStatus = catalogsVisible
-    ? renderPanelRefreshStatus({
-        status: params.catalogs.refreshStatus,
-        onRetry: () => void host.sessionData.refreshSessionCatalogs(),
-        className: "sidebar-session-error sidebar-session-catalog-error",
-      })
-    : nothing;
   return html`
-    ${params.sections.map((section, index) => {
-      if (section.id.startsWith("catalog:")) {
-        const catalog = catalogsBySectionId.get(section.id);
-        return html`${index === firstCatalogSectionIndex ? catalogStatus : nothing}${catalog
-          ? params.catalogRenderer
+    ${repeat(
+      params.sections,
+      (section) => section.id,
+      (section) => {
+        if (section.id.startsWith("catalog:")) {
+          const catalog = catalogsBySectionId.get(section.id);
+          return catalog && params.catalogRenderer
             ? renderSessionCatalog({
                 host,
                 snapshot: params.catalogs,
                 catalog,
                 renderer: params.catalogRenderer,
               })
-            : nothing
-          : nothing}`;
-      }
-      if (section.id === "work") {
-        if (section.totalRowCount === 0) {
+            : nothing;
+        }
+        if (section.id === "work") {
+          if (section.totalRowCount === 0) {
+            return nothing;
+          }
+          return renderSessionSection({ host, section });
+        }
+        // Empty Other remains useful only as a collaborator or drag destination.
+        if (
+          section.id === "ungrouped" &&
+          section.totalRowCount === 0 &&
+          !params.nativeSessionsHaveMore &&
+          !host.sessionOwnershipVisible &&
+          host.sessionsStatusFilter === "active" &&
+          host.sessionOrganizer.draggingSessionKey === null
+        ) {
           return nothing;
         }
-        return renderSessionSection({ host, section });
-      }
-      // Empty Other remains useful only as a collaborator or drag destination.
-      if (
-        section.id === "ungrouped" &&
-        section.totalRowCount === 0 &&
-        !params.nativeSessionsHaveMore &&
-        !host.sessionOwnershipVisible &&
-        host.sessionsStatusFilter === "active" &&
-        host.sessionOrganizer.draggingSessionKey === null
-      ) {
-        return nothing;
-      }
-      return renderSessionSection({
-        host,
-        section,
-        nativeSessionsHaveMore: params.nativeSessionsHaveMore,
-      });
-    })}
-    ${firstCatalogSectionIndex < 0 ? catalogStatus : nothing}
+        return renderSessionSection({
+          host,
+          section,
+          nativeSessionsHaveMore: params.nativeSessionsHaveMore,
+        });
+      },
+    )}
   `;
 }
 
@@ -466,6 +462,7 @@ export function renderSessionList(params: {
   catalogRenderer: SessionCatalogGroupsRenderer | null;
 }) {
   const { host } = params;
+  const hiddenMainSessionKey = host.mainSessionRow()?.key;
   return html`
     <section
       class="sidebar-sessions ${host.sessionOrganizer.sessionListRemovalDrop
@@ -476,6 +473,7 @@ export function renderSessionList(params: {
       @drop=${(event: DragEvent) => host.handleSessionListDrop(event)}
     >
       ${renderSessionListToolbar(host)}
+      ${hiddenMainSessionKey ? renderChildSessionLoadError(host, hiddenMainSessionKey) : nothing}
       ${host.sessionData.sessionMutationError
         ? html`
             <div

@@ -437,11 +437,7 @@ export function resolveMainSessionResumePolicy(
     return { action: "resume", forceRestartSafeTools: true };
   }
   if (isRestartAbortedWaitFailure(lastMeaningful)) {
-    const waitCall = readCodeModeWaitCall(meaningfulMessages[1]);
-    const checkpoint = readCodeModeCheckpoint(meaningfulMessages[2]);
-    return waitCall && checkpoint?.replaySafe === true && checkpoint.runId === waitCall.runId
-      ? { action: "resume", forceRestartSafeTools: true, forceCodeModeTools: true }
-      : { action: "resume", forceRestartSafeTools: true };
+    return { action: "resume", forceRestartSafeTools: true };
   }
   const waitCall = readCodeModeWaitCall(lastMeaningful);
   if (waitCall) {

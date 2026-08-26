@@ -5,6 +5,7 @@ import {
   type GatewayProtocolSocketHandlers,
 } from "@openclaw/gateway-client/browser";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   GatewayRequestError,
   type GatewayBrowserClient,
@@ -113,6 +114,116 @@ const targetedSessionReconciliationCases = [
 ];
 
 describe("session connection hydration", () => {
+  it("publishes the signed-in owner's roster before loading the shared roster", async () => {
+    const ownerResult: SessionsListResult = {
+      ...emptySessionsResult(),
+      count: 2,
+      sessions: [
+        {
+          key: "agent:main:mine-new",
+          kind: "direct",
+          updatedAt: 3,
+          createdActor: { type: "human", id: "operator" },
+        },
+        {
+          key: "agent:main:mine-old",
+          kind: "direct",
+          updatedAt: 1,
+          createdActor: { type: "human", id: "operator" },
+        },
+      ],
+    };
+    const sharedResult: SessionsListResult = {
+      ...emptySessionsResult(),
+      count: 2,
+      sessions: [
+        ownerResult.sessions[0]!,
+        {
+          key: "agent:main:theirs",
+          kind: "direct",
+          updatedAt: 2,
+          createdActor: { type: "human", id: "collaborator" },
+        },
+      ],
+    };
+    const ownerList = createDeferred<SessionsListResult>();
+    const sharedList = createDeferred<SessionsListResult>();
+    const queuedList = createDeferred<SessionsListResult>();
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "sessions.subscribe") {
+        return { subscribed: true };
+      }
+      if (method === "sessions.list") {
+        if (params?.ownerId === "operator") {
+          return await ownerList.promise;
+        }
+        return params?.search === "queued" ? await queuedList.promise : await sharedList.promise;
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    let snapshot = {
+      client: null as GatewayBrowserClient | null,
+      phase: "reconnecting" as "connected" | "reconnecting",
+      sessionKey: "agent:main:mine-new",
+      assistantAgentId: "main" as string | null,
+      hello: null as GatewayHelloOk | null,
+      selfUser: { id: "operator", name: "Operator" },
+    };
+    let gatewayListener: ((next: typeof snapshot) => void) | undefined;
+    const sessions = createSessionCapability({
+      get snapshot() {
+        return snapshot;
+      },
+      subscribe(listener) {
+        gatewayListener = listener;
+        return () => undefined;
+      },
+      subscribeEvents: () => () => undefined,
+    });
+
+    snapshot = { ...snapshot, client, phase: "connected" };
+    gatewayListener?.(snapshot);
+
+    await waitForFast(() =>
+      expect(request).toHaveBeenCalledWith(
+        "sessions.list",
+        expect.objectContaining({ ownerId: "operator", limit: 60 }),
+      ),
+    );
+    await waitForFast(() =>
+      expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(2),
+    );
+    expect(sessions.state.result).toBeNull();
+    expect(request.mock.calls.at(-1)?.[1]).toEqual(
+      expect.objectContaining({ agentId: "main", limit: 60 }),
+    );
+    expect(request.mock.calls.at(-1)?.[1]).not.toHaveProperty("ownerId");
+    const queuedRefresh = sessions.refresh({ agentId: "other", search: "queued", force: true });
+
+    ownerList.resolve(ownerResult);
+    await waitForFast(() => expect(sessions.state.result).toBe(ownerResult));
+    expect(sessions.state.loading).toBe(false);
+
+    sharedList.resolve(sharedResult);
+    await waitForFast(() =>
+      expect(sessions.state.result?.sessions.map((row) => row.key)).toEqual([
+        "agent:main:mine-new",
+        "agent:main:mine-old",
+        "agent:main:theirs",
+      ]),
+    );
+    await waitForFast(() =>
+      expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(3),
+    );
+    expect(request.mock.calls.at(-1)?.[1]).toEqual(
+      expect.objectContaining({ agentId: "other", search: "queued" }),
+    );
+    queuedList.resolve(emptySessionsResult());
+    await queuedRefresh;
+    sessions.dispose();
+  });
+
   it("uses the selected agent before a session key is available", async () => {
     const result: SessionsListResult = {
       ts: 1,
@@ -164,7 +275,7 @@ describe("session connection hydration", () => {
     sessions.dispose();
   });
 
-  it("ignores same-connection gateway metadata snapshots during hydration", async () => {
+  it("rehydrates owner sessions when identity arrives on the same connection", async () => {
     let resolveList: (result: SessionsListResult) => void = () => undefined;
     const pendingList = new Promise<SessionsListResult>((resolve) => {
       resolveList = resolve;
@@ -177,7 +288,7 @@ describe("session connection hydration", () => {
       defaults: { modelProvider: null, model: null, contextTokens: null },
       sessions: [],
     };
-    const request = vi.fn(async (method: string) => {
+    const request = vi.fn(async (method: string, _params?: Record<string, unknown>) => {
       if (method === "sessions.subscribe") {
         return { subscribed: true };
       }
@@ -215,14 +326,25 @@ describe("session connection hydration", () => {
 
     snapshot = { ...snapshot, canvasPluginSurfaceUrl: "https://gateway.example.test/canvas" };
     gatewayListener?.(snapshot);
+    await Promise.resolve();
+    expect(listCalls).toBe(1);
+
     snapshot = { ...snapshot, selfUser: { id: "operator", name: "Operator" } };
     gatewayListener?.(snapshot);
     resolveList(result);
-    await waitForFast(() => expect(sessions.state.result).toBe(result));
-    await Promise.resolve();
-    await Promise.resolve();
+    await waitForFast(() => expect(listCalls).toBe(3));
 
-    expect(listCalls).toBe(1);
+    expect(
+      request.mock.calls
+        .filter(([method]) => method === "sessions.list")
+        .map(([, params]) => params),
+    ).toEqual([
+      expect.not.objectContaining({ ownerId: expect.anything() }),
+      expect.objectContaining({ ownerId: "operator", limit: 60 }),
+      expect.not.objectContaining({ ownerId: expect.anything() }),
+    ]);
+    expect(sessions.state.result?.sessions).toEqual([]);
+    expect(sessions.state.agentId).toBe("main");
     sessions.dispose();
   });
 
@@ -383,31 +505,31 @@ describe("session connection hydration", () => {
 
     try {
       connect();
-      expect(sent).toEqual([{ id: "request", method: "sessions.subscribe" }]);
+      expect(sent).toEqual([{ id: "1:request", method: "sessions.subscribe" }]);
 
       await vi.advanceTimersByTimeAsync(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS);
-      expect(sent).toContainEqual({ id: "request:1", method: "sessions.list" });
-      respond("request:1", initialResult);
+      expect(sent).toContainEqual({ id: "2:request", method: "sessions.list" });
+      respond("2:request", initialResult);
       await vi.advanceTimersByTimeAsync(0);
       expect(sessions.state.result).toEqual(initialResult);
 
       await vi.advanceTimersByTimeAsync(500);
-      expect(sent).toContainEqual({ id: "request:2", method: "sessions.subscribe" });
+      expect(sent).toContainEqual({ id: "3:request", method: "sessions.subscribe" });
 
-      respond("request", { status: "accepted" });
-      respond("request", { subscribed: true });
+      respond("1:request", { status: "accepted" });
+      respond("1:request", { subscribed: true });
       await vi.advanceTimersByTimeAsync(0);
       expect(sessions.state.error).not.toBeNull();
       expect(sent.filter(({ method }) => method === "sessions.list")).toHaveLength(1);
 
-      respond("request:2", { subscribed: true });
+      respond("3:request", { subscribed: true });
       await vi.advanceTimersByTimeAsync(0);
-      expect(sent).toContainEqual({ id: "request:3", method: "sessions.list" });
-      respond("request:3", recoveredResult);
+      expect(sent).toContainEqual({ id: "4:request", method: "sessions.list" });
+      respond("4:request", recoveredResult);
       await vi.advanceTimersByTimeAsync(0);
 
-      respond("request", { status: "accepted" });
-      respond("request", { subscribed: true });
+      respond("1:request", { status: "accepted" });
+      respond("1:request", { subscribed: true });
       await vi.advanceTimersByTimeAsync(0);
 
       expect(sessions.state.error).toBeNull();

@@ -150,37 +150,6 @@ function fallbackListBlocks(params: {
   });
 }
 
-function actionCapacity(limits: ActionLimits | undefined): number | undefined {
-  const maxActions = positiveInteger(limits?.maxActions);
-  const maxRows = positiveInteger(limits?.maxRows);
-  const maxActionsPerRow = positiveInteger(limits?.maxActionsPerRow);
-  const rowCapacity = maxRows && maxActionsPerRow ? maxRows * maxActionsPerRow : undefined;
-  if (maxActions && rowCapacity) {
-    return Math.min(maxActions, rowCapacity);
-  }
-  return maxActions ?? rowCapacity;
-}
-
-function buttonCapacityAfterReservedSelects(
-  limits: ActionLimits | undefined,
-  reservedSelects: number,
-): number | undefined {
-  const maxActions = positiveInteger(limits?.maxActions);
-  const maxRows = positiveInteger(limits?.maxRows);
-  const maxActionsPerRow = positiveInteger(limits?.maxActionsPerRow);
-  const remainingActions =
-    maxActions === undefined ? undefined : Math.max(0, maxActions - reservedSelects);
-  const remainingRows = maxRows === undefined ? undefined : Math.max(0, maxRows - reservedSelects);
-  const rowCapacity =
-    remainingRows !== undefined && maxActionsPerRow !== undefined
-      ? remainingRows * maxActionsPerRow
-      : undefined;
-  if (remainingActions !== undefined && rowCapacity !== undefined) {
-    return Math.min(remainingActions, rowCapacity);
-  }
-  return remainingActions ?? rowCapacity;
-}
-
 function createActionBudget(limits: ActionLimits | undefined): ActionBudget {
   return {
     remainingActions: positiveInteger(limits?.maxActions),
@@ -235,12 +204,12 @@ function hasActionSlotBudget(budget: ActionBudget): boolean {
   return budget.remainingActions !== 0 && budget.remainingRows !== 0;
 }
 
-function consumeSelectBudget(budget: ActionBudget): void {
+function consumeSelectBudget(budget: ActionBudget, count = 1): void {
   if (budget.remainingActions !== undefined) {
-    budget.remainingActions = Math.max(0, budget.remainingActions - 1);
+    budget.remainingActions = Math.max(0, budget.remainingActions - count);
   }
   if (budget.remainingRows !== undefined) {
-    budget.remainingRows = Math.max(0, budget.remainingRows - 1);
+    budget.remainingRows = Math.max(0, budget.remainingRows - count);
   }
 }
 
@@ -330,20 +299,6 @@ function adaptButtonsBlock(
   );
   blocks.push(...fallback);
   return blocks;
-}
-
-function appendAdaptedButtonsBlock(
-  blocks: MessagePresentationBlock[],
-  block: Extract<MessagePresentationBlock, { type: "buttons" }>,
-  limits: ActionLimits | undefined,
-  budget: ActionBudget,
-  fallbackBlockType: "context" | "text",
-  buttonSelection: ButtonSelection,
-  textLimits?: TextLimits,
-): void {
-  blocks.push(
-    ...adaptButtonsBlock(block, limits, budget, fallbackBlockType, buttonSelection, textLimits),
-  );
 }
 
 function adaptOption(
@@ -449,12 +404,20 @@ function createGlobalButtonSelection(params: {
   if (params.capabilities?.buttons === false) {
     return undefined;
   }
-  const reservedSelectSlots = countRenderableSelectBlocks(
-    params.presentation.blocks,
-    params.capabilities,
-    params.selectLimits,
+  const reservationBudget = createActionBudget(params.limits);
+  consumeSelectBudget(
+    reservationBudget,
+    countRenderableSelectBlocks(
+      params.presentation.blocks,
+      params.capabilities,
+      params.selectLimits,
+    ),
   );
-  const capacity = buttonCapacityAfterReservedSelects(params.limits, reservedSelectSlots);
+  // Without a per-row size, row-only limits follow authored block order rather than preselecting buttons.
+  const capacity =
+    reservationBudget.remainingRows === 0 && reservationBudget.maxActionsPerRow === undefined
+      ? reservationBudget.remainingActions
+      : buttonCapacity(reservationBudget);
   if (capacity === undefined) {
     return undefined;
   }
@@ -566,14 +529,15 @@ export function adaptMessagePresentationForChannel(params: {
         );
         continue;
       }
-      appendAdaptedButtonsBlock(
-        blocks,
-        block,
-        limits?.actions,
-        actionBudget,
-        fallbackBlockType,
-        buttonSelection,
-        limits?.text,
+      blocks.push(
+        ...adaptButtonsBlock(
+          block,
+          limits?.actions,
+          actionBudget,
+          fallbackBlockType,
+          buttonSelection,
+          limits?.text,
+        ),
       );
       continue;
     }
@@ -634,7 +598,7 @@ export function presentationPageSize(
   reservedActions = 0,
   maxPageSize = Number.POSITIVE_INFINITY,
 ): number {
-  const capacity = actionCapacity(capabilities?.limits?.actions);
+  const capacity = buttonCapacity(createActionBudget(capabilities?.limits?.actions));
   const remaining = Math.max(0, (capacity ?? maxPageSize) - Math.max(0, reservedActions));
   return Math.max(1, Math.min(remaining || 1, maxPageSize));
 }

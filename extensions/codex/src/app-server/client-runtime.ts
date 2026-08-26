@@ -2,9 +2,10 @@
 import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { refreshCodexAppServerAuthTokens } from "./auth-bridge.js";
 import type { CodexAppServerClient } from "./client.js";
-import type { CodexServiceTier } from "./protocol.js";
+import { isJsonObject, type CodexServiceTier } from "./protocol.js";
 import { mergeCodexRateLimitsUpdate } from "./rate-limit-cache.js";
 import type { CodexAppServerAuthProfileLookup } from "./session-binding.js";
+import { withTimeout } from "./timeout.js";
 
 type ClientRuntimeContext = Omit<CodexAppServerAuthProfileLookup, "agentDir"> & {
   agentDir: string;
@@ -44,6 +45,8 @@ export type CodexAppServerLiveThreadOwnership = {
 const CODEX_APP_SERVER_LIVE_THREAD_IDLE_TIMEOUT_MS = 30 * 60_000;
 /** Native-child parents are active ownership, so only otherwise-idle threads count against this cap. */
 const CODEX_APP_SERVER_LIVE_THREAD_MAX_IDLE = 64;
+/** Return a deterministic error before Codex cancels its ten-second external-auth request. */
+const CODEX_EXTERNAL_AUTH_REFRESH_TIMEOUT_MS = 9_000;
 
 const configuredClients = new WeakMap<CodexAppServerClient, ClientRuntime>();
 const physicalThreadReleases = new WeakMap<
@@ -71,9 +74,9 @@ export function ensureCodexAppServerClientRuntime(
     if (existing.closed) {
       return;
     }
-    // Shared-client keys already isolate agent/auth identity. Keep config fresh
-    // without installing another physical-client handler set.
-    existing.context = context;
+    // A live Codex process owns its original profile/store for its entire lifetime;
+    // later leases may refresh config but must never redirect account-token refresh.
+    existing.context = { ...existing.context, config: context.config };
     return;
   }
   const runtime: ClientRuntime = {
@@ -104,14 +107,26 @@ export function ensureCodexAppServerClientRuntime(
     if (runtime.context.authMode === "prepared-api-key") {
       throw new Error("ChatGPT token refresh is unavailable for prepared Codex API-key auth.");
     }
-    const tokens = await refreshCodexAppServerAuthTokens({
-      agentDir: runtime.context.agentDir,
-      authProfileId: runtime.context.authProfileId,
-      ...(runtime.context.authProfileStore
-        ? { authProfileStore: runtime.context.authProfileStore }
-        : {}),
-      config: runtime.context.config,
-    });
+    const previousAccountId =
+      isJsonObject(request.params) && typeof request.params.previousAccountId === "string"
+        ? request.params.previousAccountId.trim() || undefined
+        : undefined;
+    const tokens = await withTimeout(
+      refreshCodexAppServerAuthTokens({
+        agentDir: runtime.context.agentDir,
+        authProfileId: runtime.context.authProfileId,
+        ...(previousAccountId ? { previousAccountId } : {}),
+        ...(runtime.context.authProfileStore
+          ? { authProfileStore: runtime.context.authProfileStore }
+          : {}),
+        config: runtime.context.config,
+      }),
+      CODEX_EXTERNAL_AUTH_REFRESH_TIMEOUT_MS,
+      "Codex app-server ChatGPT token refresh timed out before its external-auth deadline",
+    );
+    if (previousAccountId && tokens.chatgptAccountId !== previousAccountId) {
+      throw new Error("ChatGPT workspace changed during Codex token refresh.");
+    }
     return { ...tokens };
   });
   client.addNotificationHandler((notification) => {

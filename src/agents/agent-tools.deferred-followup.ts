@@ -10,7 +10,8 @@ function replaceDescription(tool: AnyAgentTool, description: string): AnyAgentTo
   return copyAgentToolMetadata(tool, updated);
 }
 
-const SESSION_TOOL_FOLLOWUPS = [
+const TOOL_FOLLOWUPS = [
+  ["gateway", "openclaw", " unavailable; ask human.", ": use openclaw tool."],
   [
     "sessions_search",
     "sessions_history",
@@ -32,13 +33,10 @@ const SESSION_TOOL_FOLLOWUPS = [
   ],
 ] as const;
 
-function describeAvailableSessionTool(
-  tool: AnyAgentTool,
-  availableTools: ReadonlySet<string>,
-): string {
+function describeAvailableTool(tool: AnyAgentTool, availableTools: ReadonlySet<string>): string {
   let description = tool.description;
   // Preserve byte-stable default prompt placement while gating every named sibling.
-  for (const [sourceTool, requiredTool, original, expanded] of SESSION_TOOL_FOLLOWUPS) {
+  for (const [sourceTool, requiredTool, original, expanded] of TOOL_FOLLOWUPS) {
     if (sourceTool === tool.name && availableTools.has(requiredTool)) {
       description = description.replace(original, expanded);
     }
@@ -95,7 +93,7 @@ export function applyToolAvailabilityDescriptions(
     if (tool.name === "agents_wait") {
       return replaceDescription(tool, describeAgentsWaitTool(hasSessionsSpawnTool));
     }
-    const description = describeAvailableSessionTool(tool, availableTools);
+    const description = describeAvailableTool(tool, availableTools);
     return description === tool.description ? tool : replaceDescription(tool, description);
   });
 }

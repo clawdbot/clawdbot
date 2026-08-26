@@ -7,11 +7,12 @@ export const gatewayServerBackedHttpTestFiles = [
   "src/gateway/probe.auth.integration.test.ts",
 ];
 
+// Gateway method tests whose deep module mocks can be defeated by a neighbour's
+// shared cache. These keep the shared methods runner but use a fresh module graph.
+export const gatewayMethodsIsolatedTestFiles = ["src/gateway/server-methods/agent.test.ts"];
+
 // Gateway server tests that replace a module the Gateway reaches only through
-// re-exports. `gateway-server` is `isolate: false`, so a neighbour that boots a
-// full Gateway leaves those importers bound to the real implementation and the
-// mock silently never fires. These run in `gateway-server-isolated` instead,
-// which gives each file a fresh module graph.
+// re-exports. These need both a fresh graph and the plain Vitest runner.
 export const gatewayServerIsolatedTestFiles = [
   "src/gateway/server.sessions.compaction-read-errors.test.ts",
 ];

@@ -3,6 +3,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionDeliveryState } from "../../../config/sessions/types.js";
 import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
+import { maybeSpawnVisibleSession } from "../../tools/sessions-spawn-visible.js";
+import { createSessionsYieldTool } from "../../tools/sessions-yield-tool.js";
 import { testing as subagentAnnounceDeliveryTesting } from "../announce/subagent-announce-delivery.test-support.js";
 import { testing as subagentAnnounceOutputTesting } from "../announce/subagent-announce-output.test-support.js";
 import { testing as subagentAnnounceTesting } from "../announce/subagent-announce.js";
@@ -402,6 +404,98 @@ describe("subagent registry lifecycle error grace", () => {
         return typeof event?.result === "string" ? [event.result] : [];
       });
   }
+
+  it("yields an owned visible child and delivers its requester final exactly once", async () => {
+    const requesterTurnRunId = "run-requester-visible-yield";
+    const runId = "run-visible-yield";
+    const childSessionKey = "agent:main:dashboard:visible-yield";
+    const spawnResult = await maybeSpawnVisibleSession({
+      raw: { visible: true },
+      task: "finish visible dashboard work",
+      label: "Visible child",
+      runtime: "subagent",
+      sandbox: "inherit",
+      options: {
+        agentSessionKey: MAIN_REQUESTER_SESSION_KEY,
+        requesterTurnRunId,
+        requesterAgentIdOverride: "main",
+        config: {
+          agents: { list: [{ id: "main" }] },
+          session: { mainKey: "main", scope: "per-sender" },
+        },
+        callGateway: vi.fn(async () => ({
+          key: childSessionKey,
+          runStarted: true,
+          runId,
+        })) as never,
+        registerRun: mod.registerSubagentRun,
+        countActiveRuns: () => 0,
+      },
+    });
+    expect(spawnResult).toMatchObject({ status: "accepted", runId, childSessionKey });
+    setAssistantOutput(childSessionKey, "visible dashboard child complete");
+
+    const onYield = vi.fn();
+    const yieldTool = createSessionsYieldTool({
+      sessionId: "sess-main",
+      claimYield: () =>
+        mod.markRequesterTurnYielded({
+          requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
+          requesterAgentId: "main",
+          requesterTurnRunId,
+        }) > 0,
+      onYield,
+    });
+    const yieldResult = await yieldTool.execute("yield-visible-child", {
+      message: "Wait for the visible dashboard child",
+    });
+    expect(yieldResult.details).toEqual({
+      status: "yielded",
+      message: "Wait for the visible dashboard child",
+    });
+    expect(onYield).toHaveBeenCalledOnce();
+
+    expect(
+      mod.settleRequesterAfterSessionSpawns({
+        requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
+        requesterAgentId: "main",
+        requesterTurnRunId,
+        requesterYielded: true,
+        acceptedSessionSpawns: [{ runId, childSessionKey }],
+      }),
+    ).toBe(true);
+    expect(
+      mod
+        .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
+        .find((run) => run.runId === runId)?.execution.status,
+    ).toBe("running");
+    expect(getAgentCalls()).toHaveLength(0);
+
+    const endedAt = Date.now();
+    const terminalResult = {
+      phase: "end",
+      endedAt,
+      terminalReply: {
+        disposition: "visible" as const,
+        text: "visible dashboard child complete",
+      },
+    };
+    emitLifecycleEvent(runId, terminalResult, { sessionKey: childSessionKey });
+    await waitForAgentCallCount(1);
+    await waitForDeliveredCleanup(runId);
+    expect(getAgentCalls()).toHaveLength(1);
+    expect(getRequesterWakeCalls()).toHaveLength(1);
+    expect(getRequesterWakeCalls()[0]?.params).toMatchObject({
+      sessionKey: MAIN_REQUESTER_SESSION_KEY,
+      message: expect.stringContaining("visible final answer"),
+    });
+
+    emitLifecycleEvent(runId, terminalResult, { sessionKey: childSessionKey });
+    await vi.advanceTimersByTimeAsync(30_000);
+    await flushAsync();
+    expect(getAgentCalls()).toHaveLength(1);
+    expect(getRequesterWakeCalls()).toHaveLength(1);
+  });
 
   it("does not replay a requester-owned final already delivered before its turn yields", async () => {
     const requesterTurnRunId = "run-requester-already-delivered";

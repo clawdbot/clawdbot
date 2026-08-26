@@ -165,7 +165,7 @@ function validatePreflightOptions(opts: OnboardOptions, runtime: RuntimeEnv): bo
     );
   }
   if (opts.daemonRuntime !== undefined && !isGatewayDaemonRuntime(opts.daemonRuntime)) {
-    return rejectOption(opts, runtime, 'Invalid --daemon-runtime. Use "node".');
+    return rejectOption(opts, runtime, 'Invalid --daemon-runtime. Use "node" or "bun".');
   }
   if (opts.nodeManager !== undefined && !isNodeManagerChoice(opts.nodeManager)) {
     return rejectOption(opts, runtime, 'Invalid --node-manager. Use "npm", "pnpm", or "bun".');
@@ -378,6 +378,7 @@ async function validateResetAuthChoice(params: {
         allowProfile: params.resetScope === "config",
         required: false,
         secretInputMode: params.opts.secretInputMode,
+        json: params.opts.json,
       });
       if (params.opts.customApiKey?.trim() && !customCredential) {
         return false;
@@ -448,6 +449,7 @@ async function validateResetAuthChoice(params: {
           workspaceDir: params.workspaceDir,
           allowProfile: input.allowProfile === false ? false : params.resetScope === "config",
           secretInputMode: params.opts.secretInputMode,
+          json: params.opts.json,
         }),
     });
     if (!valid) {
@@ -642,8 +644,7 @@ export async function setupWizardCommand(
   if (!normalizedOpts.nonInteractive && !hasInteractiveOnboardingTty()) {
     // Reset is destructive, so prove the selected interactive surface can run
     // before reading or moving any operator state.
-    runtime.error(t("wizard.guided.ttyRequired"));
-    runtime.exit(1);
+    rejectOption(normalizedOpts, runtime, t("wizard.guided.ttyRequired"));
     return;
   }
 

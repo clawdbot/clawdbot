@@ -6,6 +6,7 @@ import type {
   RealtimeVoiceAudioClearReason,
   RealtimeVoiceAudioFormat,
   RealtimeVoiceBargeInOptions,
+  RealtimeVoiceCloseOptions,
   RealtimeVoiceCloseReason,
   RealtimeVoiceBridgeEvent,
   RealtimeVoiceProviderConfig,
@@ -37,7 +38,7 @@ export type RealtimeVoiceMarkStrategy = "transport" | "ack-immediately" | "ignor
 export type RealtimeVoiceBridgeSession = {
   bridge: RealtimeVoiceBridge;
   acknowledgeMark(markName?: string): void;
-  close(): void;
+  close(options?: RealtimeVoiceCloseOptions): void;
   connect(): Promise<void>;
   sendAudio(audio: Buffer): void;
   sendUserMessage(text: string): void;
@@ -110,13 +111,13 @@ export function createRealtimeVoiceBridgeSession(
       return requireBridge();
     },
     acknowledgeMark: (markName) => requireBridge().acknowledgeMark(markName),
-    close: () => {
+    close: (options) => {
       if (phase === "disposed") {
         return;
       }
       const bridge = requireBridge();
       phase = "disposed";
-      bridge.close();
+      bridge.close(options);
     },
     connect: () => {
       if (phase === "disposed") {

@@ -2,6 +2,8 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   applyOnboardingPrimaryModel,
+  prepareAgentModelDefaults,
+  projectAgentModelDefaults,
   resolveOnboardingSetupTarget,
 } from "../commands/onboard-agent-target.js";
 import type { AuthChoice, OnboardOptions } from "../commands/onboard-types.js";
@@ -205,6 +207,7 @@ export async function runSetupModelAuthStep(params: {
         prompter,
         runtime,
         config: nextConfig,
+        target: resolveTarget(nextConfig),
         secretInputMode: opts.secretInputMode,
         setAsPrimary: !params.preserveExistingModelSelection,
       });
@@ -254,11 +257,12 @@ export async function runSetupModelAuthStep(params: {
     ] = await Promise.all([loadAuthChoiceModule(), loadModelPickerModule()]);
     prompter.disableBackNavigation?.();
     const target = resolveTarget(nextConfig);
+    const agentScopedModels = nextConfig.agents?.ownership === "explicit";
     let authResult: PreparedAuthChoiceResult;
     try {
       authResult = await prepareAuthChoice({
         authChoice,
-        config: nextConfig,
+        config: agentScopedModels ? prepareAgentModelDefaults(nextConfig, target) : nextConfig,
         prompter,
         runtime,
         agentId: target.agentId,
@@ -285,12 +289,14 @@ export async function runSetupModelAuthStep(params: {
       );
       continue;
     }
-    nextConfig = authResult.config;
+    nextConfig = agentScopedModels
+      ? projectAgentModelDefaults(nextConfig, target, authResult.config)
+      : authResult.config;
     authProfiles = authResult.authProfiles;
     persistAuthProfiles = authResult.persistAuthProfiles;
     if (authResult.retrySelection) {
       if (authChoiceFromPrompt) {
-        replacementBaseConfig = authResult.config;
+        replacementBaseConfig = nextConfig;
         continue;
       }
       break;

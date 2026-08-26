@@ -68,7 +68,7 @@ const multiAgentRoster = [
 ];
 
 suite.define(() => {
-  it("keeps a newer in-flight roster ahead of delayed chat startup", async () => {
+  it("preserves an in-flight canonical roster refresh while chat startup is delayed", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1440 } },
       async ({ page }) => {
@@ -79,16 +79,11 @@ suite.define(() => {
 
         await page.goto(`${suite.server.baseUrl}chat`);
         await gateway.waitForRequest("chat.startup");
+        await gateway.waitForRequest("agents.list");
         await gateway.deferNext("agents.list");
         await gateway.emitGatewayEvent("config.changed", { path: "agents.entries" });
-        await gateway.waitForRequest("agents.list");
+        await gateway.waitForRequest("agents.list", { after: 1 });
         await gateway.resolveDeferred("chat.startup", {
-          agentsList: {
-            defaultId: "main",
-            mainKey: "main",
-            scope: "agent",
-            agents: [{ id: "main", name: "Stale Main" }],
-          },
           messages: [],
           metadata: { models: [] },
           sessionId: "control-ui-e2e-session",
@@ -111,7 +106,7 @@ suite.define(() => {
     );
   });
 
-  it("keeps a refreshed roster ahead of delayed chat startup", async () => {
+  it("keeps a refreshed canonical roster while chat startup remains delayed", async () => {
     if (captureUiProof) {
       await mkdir(proofDir, { recursive: true });
     }
@@ -143,20 +138,15 @@ suite.define(() => {
 
         await page.goto(`${suite.server.baseUrl}chat`);
         await gateway.waitForRequest("chat.startup");
-        await gateway.emitGatewayEvent("config.changed", { path: "agents.entries" });
         await gateway.waitForRequest("agents.list");
+        await gateway.emitGatewayEvent("config.changed", { path: "agents.entries" });
+        await gateway.waitForRequest("agents.list", { after: 1 });
 
         const sidebar = page.locator("openclaw-app-sidebar");
         const agentName = sidebar.locator(".sidebar-agent-card__name");
         await expect.poll(async () => (await agentName.textContent())?.trim()).toBe("Research");
 
         await gateway.resolveDeferred("chat.startup", {
-          agentsList: {
-            defaultId: "main",
-            mainKey: "main",
-            scope: "agent",
-            agents: [{ id: "main", name: "Stale Main" }],
-          },
           messages: [],
           metadata: { models: [] },
           sessionId: "control-ui-e2e-session",

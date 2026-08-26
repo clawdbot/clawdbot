@@ -747,6 +747,11 @@ export type ChannelMessageActionContext = {
   toolContext?: ChannelThreadingToolContext;
   dryRun?: boolean;
   gatewayClientScopes?: readonly string[];
+  /**
+   * Server-owned fact: this caller receives proven-not-sent failures and resends
+   * them. Plugins forward it into durable sends so recovery does not replay too.
+   */
+  deliveryRetryOwner?: "caller";
 };
 
 export type ChannelToolSend = {

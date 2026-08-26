@@ -34,12 +34,26 @@ export function updateChatRunProgressSnapshot(
     ["start", "input_delta", "update", "review", "result"].includes(phase) &&
     (phase !== "review" || Boolean(reviewId));
   const isPreamble = event.stream === "item" && data.kind === "preamble";
+  const isNotice = event.stream === "notice" && phase === "warning";
   const guardianTargetItemId =
     typeof data.targetItemId === "string" ? data.targetItemId.trim() : "";
+  const isGuardian = event.stream === "codex_app_server.guardian";
   const isStandaloneGuardian =
-    event.stream === "codex_app_server.guardian" &&
-    (phase === "warning" || (phase === "completed" && !guardianTargetItemId));
-  if (!isTool && !isPreamble && !isStandaloneGuardian) {
+    isGuardian &&
+    (phase === "warning" ||
+      phase === "strict_review_required" ||
+      ((phase === "started" || phase === "completed") && !guardianTargetItemId));
+  const resolvesStrictReview =
+    isGuardian &&
+    phase === "completed" &&
+    Boolean(guardianTargetItemId) &&
+    snapshot?.events.some(
+      (candidate) =>
+        candidate.stream === event.stream &&
+        candidate.data.phase === "strict_review_required" &&
+        candidate.data.reviewId === data.reviewId,
+    );
+  if (!isTool && !isPreamble && !isStandaloneGuardian && !isNotice && !resolvesStrictReview) {
     return snapshot;
   }
 
@@ -83,6 +97,14 @@ export function updateChatRunProgressSnapshot(
     const progressText = typeof data.progressText === "string" ? data.progressText.trim() : "";
     removeWhere(matchesPreamble);
     if (!progressText) {
+      return next;
+    }
+  } else if ((isStandaloneGuardian || resolvesStrictReview) && typeof data.reviewId === "string") {
+    removeWhere(
+      (candidate) =>
+        candidate.stream === event.stream && candidate.data?.reviewId === data.reviewId,
+    );
+    if (resolvesStrictReview) {
       return next;
     }
   }

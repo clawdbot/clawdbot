@@ -126,12 +126,10 @@ export function createWorkerSessionToolExecutor(params: {
     const authorizedTools = WORKER_TOOL_NAMES.filter((name) =>
       params.placements.isWorkerTurnToolAuthorized(operation.source.turnClaim, name),
     );
-    const lineageCapability = getWorkerTurnExecutionIdentityCapability(params.placements, {
-      sessionId: operation.source.sessionId,
-      environmentId: operation.source.turnClaim.owner.environmentId,
-      ownerEpoch: operation.source.turnClaim.owner.ownerEpoch,
-      runId: operation.source.turnClaim.runId,
-    });
+    const lineageCapability = getWorkerTurnExecutionIdentityCapability(
+      params.placements,
+      operation.source.turnClaim,
+    );
     let workerIdentity: WorkerTurnExecutionIdentity | undefined;
     const gatewayCall: InProcessGatewayCaller = async <T = Record<string, unknown>>(
       method: string,
@@ -172,6 +170,9 @@ export function createWorkerSessionToolExecutor(params: {
       } else {
         const createParams: Record<string, unknown> = {
           ...requestParams,
+          ...(operation.source.entry.permissionMode
+            ? { permissionMode: operation.source.entry.permissionMode }
+            : {}),
           key: operation.childSessionKey,
         };
         delete createParams.task;
@@ -430,6 +431,7 @@ export function createWorkerSessionToolExecutor(params: {
                 sessionKey: identity.sessionKey,
                 operationalRunInstance: identity.operationalRunInstance,
                 executionIdentityToken: identity.executionIdentityToken,
+                receiptAuthority: identity.receiptAuthority,
                 workerTurnClaim: identity.turnClaim,
                 workerTurnExecutionIdentityCapability: lineageCapability,
               },

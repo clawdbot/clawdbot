@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 345049,
-  "reason": "streamed-markdown highlighting changes (#127749, #127754) consumed the ratchet",
-  "updatedAt": "2026-08-22"
+  "startupJsGzipBytes": 340810,
+  "reason": "sidebar gateway status pill rebased onto the composer-queue main: combined tree measures 340754-340770 B; pinned with jitter headroom",
+  "updatedAt": "2026-08-26"
 }

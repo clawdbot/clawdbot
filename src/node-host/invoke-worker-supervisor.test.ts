@@ -42,6 +42,11 @@ function launchInput() {
   return testWorkerLaunchInput(fixture.workspaceDir, "launch-1", "wait");
 }
 
+function mismatchedLaunchInput() {
+  const input = launchInput();
+  return { ...input, launchId: "other-launch" };
+}
+
 function fullReceipt(input = launchInput()): NodeWorkerLaunchReceipt {
   return {
     launchId: input.launchId,
@@ -741,6 +746,11 @@ describe("node-host worker supervisor commands", () => {
       name: "extra cancel identity field",
       command: NODE_WORKER_SUPERVISOR_CANCEL_COMMAND,
       raw: JSON.stringify({ ...cancelInput(fullReceipt()), extra: true }),
+    },
+    {
+      name: "mismatched launch and turn ids",
+      command: NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
+      raw: JSON.stringify(mismatchedLaunchInput()),
     },
     {
       name: "extra launch field",

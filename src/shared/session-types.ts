@@ -45,6 +45,12 @@ export type GatewayThinkingLevelOption = {
   label: string;
 };
 
+export type GatewayContextWindowOption = {
+  id: string;
+  label: string;
+  contextWindow: number;
+};
+
 export type GatewayAgentKind = "agent" | "system";
 
 /** Assignable identity returned by the complete session-owner facet. */

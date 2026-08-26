@@ -104,6 +104,7 @@ export async function applyNonInteractiveAuthChoice(params: {
       agentDir: params.target.agentDir,
       workspaceDir: params.target.workspaceDir,
       secretInputMode: requestedSecretInputMode,
+      json: opts.json,
     });
   const toApiKeyCredential = (paramsLocal: {
     provider: string;
@@ -280,6 +281,7 @@ export async function applyNonInteractiveAuthChoice(params: {
         apiKey: customApiKeyInput,
         providerId: customAuth.providerId,
         supportsImageInput: customAuth.supportsImageInput,
+        target: params.target,
       });
       if (result.providerIdRenamedFrom && result.providerId) {
         runtime.log(

@@ -55,6 +55,12 @@ Provider and channel execution paths must use the active runtime config snapshot
 
 ## Reusable runtime utilities
 
+Channel plugins must admit authenticated agent turns through their injected
+`api.runtime.agent.runCommandFromIngress(options, runtime)` capability. The host
+accepts owner authority only from the exact active, trusted plugin registered for
+`options.messageChannel`; guest turns retain their non-owner identity. The public
+`agentCommandFromIngress` SDK helper never accepts a caller-supplied owner claim.
+
 Model-picker integrations use two focused runtime subpaths. Import the typed
 `ModelPickerAction` and `ModelPickerCapabilityProfile` contracts from
 `openclaw/plugin-sdk/interactive-runtime`. Import
@@ -609,6 +615,12 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
     `node.pluginTools.update` after local plugin/MCP inventory changes.
 
     Inside the Gateway this runtime is in-process. In plugin CLI commands it calls the configured Gateway over RPC, so commands such as `openclaw googlemeet recover-tab` can inspect paired nodes from the terminal. Node commands still go through normal Gateway node pairing, command allowlists, plugin node-invoke policies, and node-local command handling.
+
+    When execution identity auditing is enabled for an admitted run, those
+    Gateway gates appear as enforced decision receipts. A successful node
+    result is attribution-only. A policy that returns without calling its
+    supplied `invokeNode` callback leaves the action unknown; returning a
+    successful plugin result does not prove that the node action occurred.
 
     Plugins that expose node-hosted agent tools can set `agentTool.defaultPlatforms` for non-dangerous commands that should be allowlisted by default. Omit it when operators must opt in with `gateway.nodes.commands.allow`. Dangerous node-host commands should register a node-invoke policy with `api.registerNodeInvokePolicy(...)`; the policy runs in the Gateway after command allowlist checks and before the command is forwarded to the node, so direct `node.invoke` calls, node-hosted plugin tools, and higher-level plugin tools share the same enforcement path.
 

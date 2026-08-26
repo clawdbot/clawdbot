@@ -381,7 +381,5 @@ export async function statusCommand(
       updateRestartValue,
     }),
   );
-  for (const line of lines) {
-    runtime.log(line);
-  }
+  runtime.log(lines.join("\n"));
 }

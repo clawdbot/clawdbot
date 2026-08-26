@@ -1,6 +1,9 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { getAdmittedRunDelegatedAuthority } from "../../agents/admitted-run-context.js";
-import { attachAgentCommandAdmissionFacts } from "../../agents/agent-command-admission-facts.js";
+import {
+  attachAgentCommandAdmissionFacts,
+  attachAgentCommandRecoveryAdmissionFacts,
+} from "../../agents/agent-command-admission-facts.js";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import { prepareGitCoauthorAttribution } from "../../agents/git-coauthor-attribution.js";
 import { repairMainSessionRecoveryMutation } from "../../agents/main-session-recovery/main-session-recovery-lifecycle.js";
@@ -265,7 +268,9 @@ export function startAgentRunExecution(params: {
       );
 
       const localUserIngress = getGatewayLocalUserIngress(params.client);
-      if (localUserIngress) {
+      if (params.isRestartRecoveryResumeRun) {
+        attachAgentCommandRecoveryAdmissionFacts(runContext);
+      } else if (localUserIngress) {
         attachAgentCommandAdmissionFacts(runContext, localUserIngress.facts);
       }
       finalizePreparedAgentRunUserTurn(prepared.userTurn);
@@ -381,7 +386,11 @@ export function startAgentRunExecution(params: {
               abortSignal: prepared.activeRunAbort.controller.signal,
               lifecycleGeneration: params.lifecycleGeneration,
               onExecutionStarted: () => {
-                if (prepared.activeRunAbort.markExecutionStarted() && params.resolvedSessionKey) {
+                if (!prepared.activeRunAbort.markExecutionStarted()) {
+                  return;
+                }
+                params.io.emitExecutionStarted?.();
+                if (params.resolvedSessionKey) {
                   emitSessionsChanged(params.context, {
                     sessionKey: params.resolvedSessionKey,
                     agentId: params.agentId,

@@ -388,30 +388,16 @@ suite.define(() => {
     const widgetHost = page.locator(".chat-tool-card__widget-host");
     const rawDetailsToggle = widgetHost.locator(".chat-tool-card__raw-toggle");
     await rawDetailsToggle.waitFor({ state: "attached" });
-    const widgetActions = widgetHost.getByRole("button", { name: "Widget actions" });
-    const rawDetailsAction =
-      '.chat-tool-card__widget-actions wa-dropdown-item[value="raw-details"]';
-    const rawDetailsItem = widgetHost.locator(rawDetailsAction);
     await page.locator(".chat-thread").evaluate((thread) => {
       thread.scrollTop = thread.scrollHeight;
     });
     await waitForChatScrollIdle(page);
     expect(Math.abs(await chatThreadDistanceFromBottom(page))).toBeLessThanOrEqual(2);
     const traces: Record<string, DisclosureFrame[]> = {};
-    await widgetActions.click();
-    await rawDetailsItem.waitFor({ state: "visible" });
-    traces.rawDetailsEndExpand = await toggleDisclosureWithFrameTrace(
-      page,
-      rawDetailsToggle,
-      rawDetailsAction,
-    );
-    await widgetActions.click();
-    await rawDetailsItem.waitFor({ state: "visible" });
-    traces.rawDetailsEndCollapse = await toggleDisclosureWithFrameTrace(
-      page,
-      rawDetailsToggle,
-      rawDetailsAction,
-    );
+    // Menu selection already proves it clicks this toggle; exclude the popup's
+    // own close/reposition geometry from the transcript-anchor measurement.
+    traces.rawDetailsEndExpand = await toggleDisclosureWithFrameTrace(page, rawDetailsToggle);
+    traces.rawDetailsEndCollapse = await toggleDisclosureWithFrameTrace(page, rawDetailsToggle);
 
     await rawDetailsToggle.evaluate((button) => {
       const row = button.closest<HTMLElement>(".chat-virtual-row");
@@ -423,13 +409,7 @@ suite.define(() => {
       thread.scrollTop += Math.round(rowTop - thread.clientHeight / 2);
     });
     await waitForChatScrollIdle(page);
-    await widgetActions.click();
-    await rawDetailsItem.waitFor({ state: "visible" });
-    traces.rawDetailsMiddleExpand = await toggleDisclosureWithFrameTrace(
-      page,
-      rawDetailsToggle,
-      rawDetailsAction,
-    );
+    traces.rawDetailsMiddleExpand = await toggleDisclosureWithFrameTrace(page, rawDetailsToggle);
 
     if (artifactDir) {
       await fs.mkdir(artifactDir, { recursive: true });
@@ -448,13 +428,7 @@ suite.define(() => {
         path: path.join(artifactDir, "raw-details-geometry-dark.png"),
       });
     }
-    await widgetActions.click();
-    await rawDetailsItem.waitFor({ state: "visible" });
-    traces.rawDetailsMiddleCollapse = await toggleDisclosureWithFrameTrace(
-      page,
-      rawDetailsToggle,
-      rawDetailsAction,
-    );
+    traces.rawDetailsMiddleCollapse = await toggleDisclosureWithFrameTrace(page, rawDetailsToggle);
     const video = page.video();
     await context.close();
     if (artifactDir) {

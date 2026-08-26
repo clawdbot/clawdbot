@@ -81,7 +81,11 @@ import {
 } from "../providers/tool-result-text.js";
 import { tagPendingCommentaryText } from "../utils/assistant-text-phase.js";
 import { createDeferredEventBuffer } from "../utils/deferred-event-buffer.js";
-import { parseStreamingJson } from "../utils/json-parse.js";
+import {
+  createToolArgumentPreviewSchedule,
+  parseStreamingJson,
+  type ToolArgumentPreviewSchedule,
+} from "../utils/json-parse.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import {
   buildAnthropicReplayPlan,
@@ -1205,6 +1209,11 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         }
         const blocks = output.content;
         const blockIndexes = new Map<number, number>();
+        // Preview schedules are per active tool call; WeakMap keys die with the block.
+        const toolArgumentPreviewSchedules = new WeakMap<
+          Extract<TransportContentBlock, { type: "toolCall" }>,
+          ToolArgumentPreviewSchedule
+        >();
         const sealedToolCalls: Array<{
           block: Extract<TransportContentBlock, { type: "toolCall" }>;
           contentIndex: number;
@@ -1521,6 +1530,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               };
               output.content.push(block);
               blockIndexes.set(index, output.content.length - 1);
+              toolArgumentPreviewSchedules.set(block, createToolArgumentPreviewSchedule());
               eventSink.push({
                 type: "toolcall_start",
                 contentIndex: output.content.length - 1,
@@ -1625,7 +1635,11 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             ) {
               const partialJson = `${block.partialJson ?? ""}${delta.partial_json}`;
               block.partialJson = partialJson;
-              block.arguments = parseAnthropicToolCallArguments(partialJson);
+              // Preview refresh is scheduled geometrically; content_block_stop
+              // re-parses the full buffer authoritatively either way.
+              if (toolArgumentPreviewSchedules.get(block)?.(partialJson.length)) {
+                block.arguments = parseAnthropicToolCallArguments(partialJson);
+              }
               eventSink.push({
                 type: "toolcall_delta",
                 contentIndex: index,

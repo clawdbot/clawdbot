@@ -521,6 +521,18 @@ describe("channel-health-monitor", () => {
     await expectNoRestart(manager);
   });
 
+  it.each([false, true])("restarts stale future channels (connected: %s)", async (connected) => {
+    const now = Date.now();
+    const account = disconnectedAccount(now + 60_000, {
+      connected,
+      lifecycle: connected ? "ready" : "starting",
+      lastTransportActivityAt: connected ? now - 300_000 : undefined,
+    });
+    const manager = createSnapshotManager({ discord: { default: account } });
+
+    await expectRestartedChannel(manager, "discord");
+  });
+
   it("does not restart a long-running channel during fresh reconnect grace", async () => {
     const now = Date.now();
     const manager = createSlackSnapshotManager(

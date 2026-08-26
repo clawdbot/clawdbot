@@ -583,12 +583,13 @@ describe("sessions.usage", () => {
     });
   });
 
-  it("keeps global session entries in requested-agent usage lookups", async () => {
+  it("keeps legacy global session entries in explicitly scoped agent usage lookups", async () => {
     const config: OpenClawConfig = {
       agents: {
-        list: [{ id: "main", default: true }, { id: "opus" }],
+        ownership: "explicit",
+        list: [{ id: "main" }, { id: "opus" }],
       },
-      session: { scope: "global" },
+      session: {},
     };
 
     await withUsageState(async (writeSessionFile) => {

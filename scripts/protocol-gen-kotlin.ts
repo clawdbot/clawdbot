@@ -87,6 +87,7 @@ const schemaNames = new Map<string, string>([
   ["SessionGitHubPublicationPublished", "SessionGitHubPublicationPublished"],
   ["SessionGitHubPublicationFailed", "SessionGitHubPublicationFailed"],
   ["SessionGitHubPublicationResult", "SessionGitHubPublicationResult"],
+  ["TalkSessionCancelOutputResult", "TalkSessionCancelOutputResult"],
 ]);
 
 const androidEnums: EnumSpec[] = [
@@ -335,11 +336,13 @@ function emitWireModels(): string[] {
         const type = kotlinType(propertySchema, `${name}${upperCamel(wireName)}`);
         const literal = literalValue(propertySchema);
         const optional = !required.has(wireName);
+        const useLiteralDefault =
+          literal !== undefined && (optional || typeof literal !== "boolean");
         return {
           annotation:
             propertyName === wireName ? [] : [`  @SerialName(${JSON.stringify(wireName)})`],
           declaration: `  val ${propertyName}: ${type}${optional ? "?" : ""}${
-            literal !== undefined ? ` = ${kotlinLiteral(literal)}` : optional ? " = null" : ""
+            useLiteralDefault ? ` = ${kotlinLiteral(literal)}` : optional ? " = null" : ""
           },`,
         };
       });

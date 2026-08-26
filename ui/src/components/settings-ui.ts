@@ -224,6 +224,10 @@ export function renderSettingsToggleRow(props: {
   `;
 }
 
+export function renderSettingsDefaultDescription(value: string, overridden: boolean) {
+  return html`${t(overridden ? "configForm.defaultValue" : "configForm.usingDefault", { value })}`;
+}
+
 export function renderSettingsDefaultState(props: {
   value: string;
   overridden: boolean;
@@ -234,10 +238,7 @@ export function renderSettingsDefaultState(props: {
   action: TemplateResult | typeof nothing;
 } {
   return {
-    description: html`${t(
-      props.overridden ? "configForm.defaultValue" : "configForm.usingDefault",
-      { value: props.value },
-    )}`,
+    description: renderSettingsDefaultDescription(props.value, props.overridden),
     action: props.overridden
       ? html`
           <button
@@ -263,6 +264,8 @@ export function renderSettingsSegmented<T extends string>(props: {
   options: ReadonlyArray<{ value: T; label: unknown; title?: string; testId?: string }>;
   /** The selected radio is passed so callers can anchor visual transitions. */
   onChange: (value: T, element: HTMLElement) => void;
+  /** Optional activation for an already-selected value, such as clearing an explicit default. */
+  onReselect?: (value: T, element: HTMLElement) => void;
   disabled?: boolean;
   ariaLabel?: string;
   className?: string;
@@ -299,6 +302,11 @@ export function renderSettingsSegmented<T extends string>(props: {
             .checked=${live(option.value === props.value)}
             title=${option.title ?? nothing}
             data-test-id=${option.testId ?? nothing}
+            @click=${(event: Event) => {
+              if (option.value === props.value && event.currentTarget instanceof HTMLElement) {
+                props.onReselect?.(option.value, event.currentTarget);
+              }
+            }}
           >
             ${option.label}
           </wa-radio>

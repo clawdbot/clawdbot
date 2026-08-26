@@ -498,6 +498,23 @@ describe("memory index", () => {
     await pendingSync;
   });
 
+  it("reports session-only refreshes from the manager sync owner", async () => {
+    const manager = await getPersistentManager(
+      createCfg({ provider: "none", minScore: 0, onSearch: true, hybrid: { enabled: true } }),
+    );
+    await manager.sync({ reason: "test" });
+
+    Reflect.set(manager, "dirty", false);
+    Reflect.set(manager, "sessionsDirty", true);
+    Reflect.set(manager, "syncing", new Promise<void>(() => {}));
+    try {
+      expect(manager.status().pendingSyncSources).toEqual(["sessions"]);
+    } finally {
+      Reflect.set(manager, "syncing", null);
+      Reflect.set(manager, "sessionsDirty", false);
+    }
+  });
+
   it("waits for dirty sync before querying", async () => {
     providerFixture.forceNoProvider = true;
     const manager = await getPersistentManager(

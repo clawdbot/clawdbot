@@ -276,6 +276,45 @@ describe("sendMessageSlack file upload with user IDs", () => {
     vi.restoreAllMocks();
   });
 
+  it.each(["first", "batched"] as const)(
+    "records an accepted %s upload when its remaining caption post fails",
+    async (replyToMode) => {
+      const { handleSlackAction, slackActionRuntime } = await import("./action-runtime.js");
+      const { sendSlackMessage: sendSlackMessageThroughPublicOwner } = await import("./actions.js");
+      const originalSender = slackActionRuntime.sendSlackMessage;
+      const hasRepliedRef = { value: false };
+      client.chat.postMessage.mockRejectedValueOnce(new Error("Remaining Slack caption failed"));
+      slackActionRuntime.sendSlackMessage = async (target, content, options) =>
+        await sendSlackMessageThroughPublicOwner(target, content, { ...options, client });
+
+      try {
+        await expect(
+          handleSlackAction(
+            {
+              action: "uploadFile",
+              to: "channel:C123CHAN",
+              filePath: "/tmp/report.txt",
+              initialComment: "a".repeat(8500),
+            },
+            SLACK_TEST_CFG,
+            {
+              currentChannelId: "C123CHAN",
+              currentThreadTs: "1111111111.111111",
+              replyToMode,
+              hasRepliedRef,
+            },
+          ),
+        ).rejects.toThrow("Remaining Slack caption failed");
+
+        expect(client.files.completeUploadExternal).toHaveBeenCalledOnce();
+        expect(client.chat.postMessage).toHaveBeenCalledOnce();
+        expect(hasRepliedRef.value).toBe(true);
+      } finally {
+        slackActionRuntime.sendSlackMessage = originalSender;
+      }
+    },
+  );
+
   it("disables image optimization for forced-media uploads", async () => {
     await sendUpload(client, {
       mediaUrl: "/tmp/original.png",
@@ -540,6 +579,7 @@ describe("sendMessageSlack file upload with user IDs", () => {
         vi.stubEnv("NO_PROXY", "127.0.0.1,localhost");
         vi.stubEnv("no_proxy", "127.0.0.1,localhost");
         const alternateClient = createUploadTestClient(`${baseUrl}/api/`);
+        const onDeliveryResult = vi.fn();
         mockUploadDestination(alternateClient, `${baseUrl}/upload/v1/capability`);
         fetchWithSsrFGuard.mockImplementationOnce(async (params) => {
           const mockedFetch = globalThis.fetch;
@@ -551,9 +591,30 @@ describe("sendMessageSlack file upload with user IDs", () => {
           }
         });
 
-        await sendUpload(alternateClient, { mediaUrl: "/tmp/alternate-root.png" });
+        const result = await sendUpload(alternateClient, {
+          mediaUrl: "/tmp/alternate-root.png",
+          message: "a".repeat(8_500),
+          threadTs: "171.222",
+          onDeliveryResult,
+        });
 
         expectCompletedUpload({ client: alternateClient, expected: { channel_id: "C123CHAN" } });
+        expect(alternateClient.chat.postMessage).toHaveBeenCalledOnce();
+        expect(
+          onDeliveryResult.mock.calls.map(([delivery]) => delivery.receipt.parts[0]?.kind),
+        ).toEqual(["media", "text"]);
+        expect(
+          result.receipt.parts.map(({ platformMessageId, kind, index, threadId }) => ({
+            platformMessageId,
+            kind,
+            index,
+            threadId,
+          })),
+        ).toEqual([
+          { platformMessageId: "F001", kind: "media", index: 0, threadId: "171.222" },
+          { platformMessageId: "171234.567", kind: "text", index: 1, threadId: "171.222" },
+        ]);
+        expect(result.receipt.threadId).toBe("171.222");
         expect(cleanupUploadTimeout).toHaveBeenCalledOnce();
         expect(uploadTimeoutControllers).toHaveLength(0);
       },

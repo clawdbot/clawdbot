@@ -57,25 +57,37 @@ export function renderIdentitySection(props: IdentitySectionProps) {
                 .user=${avatarViewer(props.profile, props.avatarUrl)}
                 variant="profile"
               ></openclaw-viewer-avatar>
-              <label class="btn btn--sm">
+              <button
+                type="button"
+                class="btn btn--sm"
+                ?disabled=${props.busy !== null}
+                @click=${(event: Event) => {
+                  const button = event.currentTarget;
+                  const input =
+                    button instanceof HTMLButtonElement ? button.nextElementSibling : null;
+                  if (input instanceof HTMLInputElement) {
+                    input.click();
+                  }
+                }}
+              >
                 ${props.busy === "avatar"
                   ? t("profilePage.identity.processingAvatar")
                   : t("profilePage.identity.chooseAvatar")}
-                <input
-                  type="file"
-                  accept="image/png,image/jpeg,image/webp"
-                  hidden
-                  ?disabled=${props.busy !== null}
-                  @change=${(event: Event) => {
-                    const input = event.currentTarget as HTMLInputElement;
-                    const file = input.files?.[0];
-                    input.value = "";
-                    if (file) {
-                      props.onAvatarSelect(file);
-                    }
-                  }}
-                />
-              </label>
+              </button>
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                hidden
+                ?disabled=${props.busy !== null}
+                @change=${(event: Event) => {
+                  const input = event.currentTarget as HTMLInputElement;
+                  const file = input.files?.[0];
+                  input.value = "";
+                  if (file) {
+                    props.onAvatarSelect(file);
+                  }
+                }}
+              />
             </span>
           `,
         })}

@@ -549,22 +549,22 @@ function evaluateTokenEfficiencySummary(
   expectedTokenUsageSource: QaConfidenceManifestLane["expectedTokenUsageSource"],
 ): QaConfidenceLaneEvaluation {
   const base = evaluatePassSummary(payload);
-  if (!base.passed || !expectedTokenUsageSource) {
+  if (!base.passed || !isRecord(payload)) {
     return base;
   }
-  if (!isRecord(payload) || !Array.isArray(payload.rows)) {
+  const rows = Array.isArray(payload.rows) ? payload.rows : undefined;
+  if (!rows || rows.length === 0 || readString(payload.status) === "skipped") {
     return {
       passed: false,
-      details: `token summary missing rows for expected usageSource=${expectedTokenUsageSource}`,
+      details: !rows
+        ? `token summary missing rows${expectedTokenUsageSource ? ` for expected usageSource=${expectedTokenUsageSource}` : ""}`
+        : `token summary has no ${expectedTokenUsageSource ?? "usage"} rows`,
     };
   }
-  if (readString(payload.status) === "skipped" || payload.rows.length === 0) {
-    return {
-      passed: false,
-      details: `token summary has no ${expectedTokenUsageSource} rows`,
-    };
+  if (!expectedTokenUsageSource) {
+    return base;
   }
-  const mismatched = payload.rows.filter(
+  const mismatched = rows.filter(
     (row) => !isRecord(row) || row.usageSource !== expectedTokenUsageSource,
   );
   return {

@@ -115,7 +115,8 @@ view renders these sections:
 3. **Lineage**: parent context or an explicit absent, unknown, or unsupported
    state.
 4. **Decisions**: bounded run-admission and authoritative action-decision
-   receipts, including terminal operator approvals.
+   receipts, including terminal operator approvals and exact-bound cron, task,
+   and task-flow lifecycle rows.
 5. **Missing evidence** and **Next steps**.
 
 Every field includes `present`, `absent`, `unknown`, or `unsupported`; the CLI
@@ -124,6 +125,15 @@ credential. A direct local run currently shows authoritative `local-cli`
 ingress, an absent invoker, and
 `unattributed` coverage. Its admission receipt says `not-applicable` because no
 identity-aware policy or grant evaluation was proven.
+
+Lifecycle rows from `cron_run_receipts`, `task_runs`, and `flow_runs` appear as
+owner-native, attribution-only receipts when their keyed lifecycle metadata
+carries the exact inspected context and execution ids. They contain status and
+bounded record references, not prompts, task goals, hook payloads, paths, or raw
+errors. Their decision is `not-applicable` because lifecycle attribution does
+not prove authorization.
+Treat every decision cursor as opaque: numeric and `a:`, `m:`, and `g:` values
+remain compatible, while cron/task/flow pages may return `c:`, `t:`, or `f:`.
 
 For Gateway runs, a resolved authenticated profile can make the invoker
 `present` and coverage `attribution-only`. Paired devices and shared credentials
@@ -192,6 +202,28 @@ message policy, and active-turn capability denials are `enforced` only when
 their exact tuple was recorded and the gate changed the outcome.
 Portable actions and early suppressions that have no durable delivery record
 use the generic decision-fact owner instead of duplicating delivery state.
+
+Plugin, node, and worker receipts use the same coverage vocabulary:
+
+- A registered plugin `before_tool_call` hook allow/block, node pairing or
+  capability decision, and exact worker credential/build/owner-epoch admission
+  are `enforced` gates.
+- A successful node result or completed plugin-owned run is
+  `attribution-only`; success never upgrades the earlier gate into proof of
+  authorization.
+- A plugin node policy that returns without its supplied node callback is
+  `unknown` with `node.action_callback` missing.
+- An action performed wholly inside an ACP or other external native runtime
+  without an OpenClaw pre-action callback produces an ACP-owner `unsupported`
+  receipt after admitted prompt submission, with `native.action_callback`
+  missing. It does not claim a side effect. Add an authoritative native-action
+  callback to the adapter to provide stronger evidence; transcript or task text
+  cannot repair this evidence gap.
+
+These generic receipts retain no plugin id, node id, worker environment or
+session id, credential or build hash, token, command, parameters, or raw error
+text. Owner-native approval, pairing, placement, and worker-operation rows are
+not duplicated.
 
 JSON output is the Gateway's safe-only result without lossy reformatting. An
 exact result contains one bounded V1 context (maximum 16 KiB), up to 100
@@ -318,7 +350,8 @@ and no identity context; its required `decisionDisplays` array is empty until
 the caller selects an execution id.
 For one selected context, receipt paging starts with admission, then reads
 owner-native terminal approvals, merges outbound progress and terminal records,
-and finally reads generic facts for boundaries without a native durable record.
+then reads generic facts and the cron, task, and flow lifecycle owners. The
+complete order is admission, approval, message, generic, cron, task, then flow.
 The merge is deterministic across restart and rejects a cursor whose exact
 owner row has expired. Approval and message selectors use the opaque
 `approval-decision:` and `message-decision:` namespaces minted from the same

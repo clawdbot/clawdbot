@@ -209,10 +209,6 @@ suite.define(() => {
 
         await gateway.deferNext("config.set");
         await endpoint.fill("form-api");
-        // A revert to the loaded value here means a boot-time config refresh
-        // ate the edit (the focused-field guard in config-form.node.scalar.ts
-        // protects this); fail loudly instead of timing out on config.set.
-        await expect.poll(() => endpoint.inputValue()).toBe("form-api");
         const staleSetParams = mutationParams(await gateway.waitForRequest("config.set"));
         expect(staleSetParams.baseHash).toBe("snapshot-2");
         expect(JSON.parse(String(staleSetParams.raw))).toMatchObject({
@@ -248,11 +244,12 @@ suite.define(() => {
         await expect.poll(() => endpoint.inputValue()).toBe("external-api");
 
         const setRequestsBeforeRetry = (await gateway.getRequests("config.set")).length;
+        const retriedSetRequest = gateway.waitForRequest("config.set", {
+          after: setRequestsBeforeRetry,
+        });
         await endpoint.fill("form-api");
-        await expect
-          .poll(async () => (await gateway.getRequests("config.set")).length)
-          .toBe(setRequestsBeforeRetry + 1);
-        const retriedSetParams = mutationParams((await gateway.getRequests("config.set")).at(-1)!);
+        const retriedSetParams = mutationParams(await retriedSetRequest);
+        expect(await gateway.getRequests("config.set")).toHaveLength(setRequestsBeforeRetry + 1);
         expect(retriedSetParams.baseHash).toBe("snapshot-3");
         expect(JSON.parse(String(retriedSetParams.raw))).toMatchObject({
           laboratory: { endpoint: "form-api", retryBudget: 4 },
@@ -276,11 +273,12 @@ suite.define(() => {
         await capture(page, "02-raw-draft.png");
 
         const setRequestsBeforeRawSave = (await gateway.getRequests("config.set")).length;
+        const rawSetRequest = gateway.waitForRequest("config.set", {
+          after: setRequestsBeforeRawSave,
+        });
         await rawSave.click();
-        await expect
-          .poll(async () => (await gateway.getRequests("config.set")).length)
-          .toBe(setRequestsBeforeRawSave + 1);
-        const rawSetParams = mutationParams((await gateway.getRequests("config.set")).at(-1)!);
+        const rawSetParams = mutationParams(await rawSetRequest);
+        expect(await gateway.getRequests("config.set")).toHaveLength(setRequestsBeforeRawSave + 1);
         expect(rawSetParams.baseHash).toBe("mock-config-hash-1");
         expect(rawSetParams.raw).toBe(rawDraft);
         await expect

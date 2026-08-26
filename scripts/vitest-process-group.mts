@@ -1,6 +1,7 @@
 // Shared Vitest child process-group signal forwarding helpers.
-import { execFileSync, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
+import path from "node:path";
 
 type VitestProcessSignal = "SIGINT" | "SIGKILL" | "SIGTERM";
 type KillProcess = (pid: number, signal?: VitestProcessSignal | 0) => boolean;
@@ -24,6 +25,291 @@ type CleanupParams = ProcessGroupParams & {
   onSignal?: (signal: VitestProcessSignal) => void;
   processObject?: NodeJS.Process;
 };
+type DiagnosticsProbe = (
+  command: string,
+  args: string[],
+  params: { platform: NodeJS.Platform; signal: AbortSignal },
+) => Promise<string | null>;
+type DiagnosticsParams = {
+  childPid?: number;
+  platform?: NodeJS.Platform;
+  signal: AbortSignal;
+  log?: (message: string) => void;
+  probe?: DiagnosticsProbe;
+};
+type TimeoutTerminationParams = ProcessGroupParams & {
+  diagnosticsDeadlineMs?: number;
+  log?: (message: string) => void;
+  onTimeout?: () => void;
+  startDiagnostics?: (signal: AbortSignal) => Promise<void>;
+  setTimeoutFn?: typeof setTimeout;
+  clearTimeoutFn?: typeof clearTimeout;
+};
+
+const VITEST_DIAGNOSTICS_DEADLINE_MS = 1_000;
+const VITEST_DIAGNOSTICS_MAX_BYTES = 64 * 1024;
+const VITEST_DIAGNOSTICS_MAX_PROCESSES = 20;
+const SAFE_DIAGNOSTIC_COMMANDS = new Set([
+  "bash",
+  "bun",
+  "dash",
+  "git",
+  "node",
+  "node.exe",
+  "npm",
+  "pnpm",
+  "pwsh",
+  "sh",
+  "zsh",
+]);
+
+function sanitizeDiagnosticToken(value: string, fallback = "unknown") {
+  const sanitized = value.replace(/[^\w.+:-]/gu, "").slice(0, 40);
+  return sanitized || fallback;
+}
+
+function classifyDiagnosticComm(value: string) {
+  const executable = value.trim().split(/\s+/u)[0] ?? "";
+  const basename = path.basename(executable).toLowerCase();
+  return SAFE_DIAGNOSTIC_COMMANDS.has(basename) ? basename : "other";
+}
+
+function parseDiagnosticProcessRows(output: string, processGroupId?: number) {
+  return output.split(/\r?\n/u).flatMap((line) => {
+    const match =
+      /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(\S+)\s+([\d.]+)\s+(\d+)\s+(\S+)\s+(.+?)\s*$/u.exec(
+        line,
+      );
+    if (!match || (processGroupId !== undefined && Number(match[3]) !== processGroupId)) {
+      return [];
+    }
+    return [
+      {
+        comm: classifyDiagnosticComm(match[9] ?? ""),
+        cpu: sanitizeDiagnosticToken(match[6] ?? "", "0"),
+        elapsed: sanitizeDiagnosticToken(match[4] ?? ""),
+        pgid: Number(match[3]),
+        pid: Number(match[1]),
+        ppid: Number(match[2]),
+        rssKb: Number(match[7]),
+        state: sanitizeDiagnosticToken(match[5] ?? ""),
+        wchan: sanitizeDiagnosticToken(match[8] ?? "", "-"),
+      },
+    ];
+  });
+}
+
+function formatDiagnosticProcess(
+  prefix: string,
+  processInfo: {
+    comm: string;
+    cpu: string;
+    elapsed: string;
+    pgid: number;
+    pid: number;
+    ppid: number;
+    rssKb: number;
+    state: string;
+    wchan: string;
+  },
+) {
+  return (
+    `[vitest] ${prefix}: pid=${processInfo.pid} ppid=${processInfo.ppid} ` +
+    `pgid=${processInfo.pgid} elapsed=${processInfo.elapsed} state=${processInfo.state} ` +
+    `cpu=${processInfo.cpu}% rss_kb=${processInfo.rssKb} wchan=${processInfo.wchan} ` +
+    `comm=${processInfo.comm}`
+  );
+}
+
+function summarizeDiagnosticFds(output: string) {
+  let total = 0;
+  const types = new Map<string, number>();
+  for (const line of output.split(/\r?\n/u)) {
+    if (line.startsWith("f")) {
+      total += 1;
+      continue;
+    }
+    if (!line.startsWith("t")) {
+      continue;
+    }
+    const type = sanitizeDiagnosticToken(line.slice(1).toUpperCase(), "OTHER");
+    types.set(type, (types.get(type) ?? 0) + 1);
+  }
+  const summary = [...types.entries()]
+    .toSorted(([left], [right]) => left.localeCompare(right))
+    .map(([type, count]) => `${type}:${count}`)
+    .join(",");
+  return total > 0 ? `total=${total} types=${summary || "unknown"}` : null;
+}
+
+function runVitestDiagnosticsProbe(
+  command: string,
+  args: string[],
+  params: { platform: NodeJS.Platform; signal: AbortSignal },
+): Promise<string | null> {
+  return new Promise((resolve) => {
+    let output = "";
+    let settled = false;
+    const child = spawn(command, args, {
+      detached: shouldUseDetachedVitestProcessGroup(params.platform),
+      stdio: ["ignore", "pipe", "ignore"],
+      windowsHide: true,
+    });
+    const finish = (value: string | null) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      params.signal.removeEventListener("abort", abort);
+      resolve(value);
+    };
+    const forceKill = () => {
+      forwardSignalToVitestProcessGroup({
+        child,
+        kill: process.kill.bind(process),
+        platform: params.platform,
+        signal: "SIGKILL",
+      });
+    };
+    const abort = () => {
+      forceKill();
+      finish(null);
+    };
+    if (params.signal.aborted) {
+      abort();
+      return;
+    }
+    params.signal.addEventListener("abort", abort, { once: true });
+    child.stdout?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => {
+      output += chunk;
+      if (Buffer.byteLength(output) > VITEST_DIAGNOSTICS_MAX_BYTES) {
+        forceKill();
+        finish(null);
+      }
+    });
+    child.once("error", () => finish(null));
+    child.once("close", (code) => finish(code === 0 ? output : null));
+  });
+}
+
+/**
+ * Logs bounded process-group evidence without argv, identities, paths, endpoints, or FD targets.
+ */
+export async function writeVitestProcessDiagnostics(params: DiagnosticsParams) {
+  const pid = params.childPid;
+  const log = params.log ?? console.error;
+  const platform = params.platform ?? process.platform;
+  if (!Number.isInteger(pid) || !pid || pid <= 0) {
+    log("[vitest] process diagnostics unavailable: child PID is missing");
+    return;
+  }
+  if (platform === "win32") {
+    log(`[vitest] process diagnostics: pid=${pid} platform=win32 details=unavailable`);
+    return;
+  }
+
+  const probe = params.probe ?? runVitestDiagnosticsProbe;
+  const probeParams = { platform, signal: params.signal };
+  const processColumns = "pid=,ppid=,pgid=,etime=,state=,%cpu=,rss=,wchan=,comm=";
+  const [processOutput, memberOutput, fdOutput] = await Promise.all([
+    probe("ps", ["-o", processColumns, "-p", String(pid)], probeParams),
+    probe("pgrep", ["-g", String(pid)], probeParams),
+    probe("lsof", ["-nP", "-a", "-p", String(pid), "-d", "0-64", "-Fft"], probeParams),
+  ]);
+  if (params.signal.aborted) {
+    return;
+  }
+
+  log(`[vitest] no-output process diagnostics begin (pid=${pid})`);
+  const processInfo = processOutput ? parseDiagnosticProcessRows(processOutput)[0] : undefined;
+  log(
+    processInfo
+      ? formatDiagnosticProcess("process", processInfo)
+      : "[vitest] process diagnostics: details=unavailable",
+  );
+
+  const memberPids = (memberOutput?.match(/\d+/gu) ?? []).slice(
+    0,
+    VITEST_DIAGNOSTICS_MAX_PROCESSES,
+  );
+  if (memberPids.length === 0) {
+    log("[vitest] process tree: unavailable");
+  } else {
+    const treeOutput = await probe(
+      "ps",
+      ["-o", processColumns, "-p", memberPids.join(",")],
+      probeParams,
+    );
+    if (params.signal.aborted) {
+      return;
+    }
+    const tree = treeOutput ? parseDiagnosticProcessRows(treeOutput, pid) : [];
+    log(`[vitest] process tree: pgid=${pid} members=${tree.length}`);
+    for (const member of tree.slice(0, VITEST_DIAGNOSTICS_MAX_PROCESSES)) {
+      log(formatDiagnosticProcess("process tree", member));
+    }
+  }
+
+  const fdSummary = fdOutput ? summarizeDiagnosticFds(fdOutput) : null;
+  log(`[vitest] fd summary: ${fdSummary ?? "unavailable"}`);
+}
+
+/**
+ * Signals the stalled Vitest group synchronously, then runs diagnostics under one deadline.
+ */
+export function terminateVitestProcessGroupForTimeout(params: TimeoutTerminationParams) {
+  const platform = params.platform ?? process.platform;
+  const log = params.log ?? console.error;
+  const signaled = forwardSignalToVitestProcessGroup({
+    child: params.child,
+    kill: params.kill ?? process.kill.bind(process),
+    platform,
+    signal: "SIGTERM",
+  });
+
+  const controller = new AbortController();
+  const setTimeoutFn = params.setTimeoutFn ?? setTimeout;
+  const clearTimeoutFn = params.clearTimeoutFn ?? clearTimeout;
+  const deadlineMs = params.diagnosticsDeadlineMs ?? VITEST_DIAGNOSTICS_DEADLINE_MS;
+  const startDiagnostics =
+    params.startDiagnostics ??
+    ((signal: AbortSignal) =>
+      writeVitestProcessDiagnostics({
+        childPid: params.child.pid,
+        log,
+        platform,
+        signal,
+      }));
+  let settled = false;
+  let resolveDiagnostics!: () => void;
+  const diagnostics = new Promise<void>((resolve) => {
+    resolveDiagnostics = resolve;
+  });
+  const finish = () => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    clearTimeoutFn(timer);
+    resolveDiagnostics();
+  };
+  const timer = setTimeoutFn(() => {
+    controller.abort();
+    log(`[vitest] process diagnostics deadline reached after ${deadlineMs}ms.`);
+    finish();
+  }, deadlineMs);
+  void Promise.resolve()
+    .then(() => startDiagnostics(controller.signal))
+    .then(finish, () => {
+      if (!settled) {
+        log("[vitest] process diagnostics unavailable.");
+      }
+      finish();
+    });
+  params.onTimeout?.();
+  return { diagnostics, signaled };
+}
 
 export function shouldUseDetachedVitestProcessGroup(
   platform: NodeJS.Platform = process.platform,
@@ -119,11 +405,7 @@ function parseLinuxProcStat(raw: string, expectedId: number) {
   ) {
     return undefined;
   }
-  const comm = raw
-    .slice(head[0].length, end)
-    .replace(/\p{Cc}+/gu, " ")
-    .trim()
-    .slice(0, 80);
+  const comm = classifyDiagnosticComm(raw.slice(head[0].length, end));
   return { comm, pgid, ppid, state };
 }
 
@@ -231,7 +513,9 @@ export function parseVitestProcessGroupMembers(output: string, processGroupId: n
     if (!match || Number(match[3]) !== processGroupId) {
       return [];
     }
-    return [`pid=${match[1]} ppid=${match[2]} state=${match[4]} comm=${match[5]?.slice(0, 80)}`];
+    return [
+      `pid=${match[1]} ppid=${match[2]} state=${match[4]} comm=${classifyDiagnosticComm(match[5] ?? "")}`,
+    ];
   });
   return members.slice(0, 20).join("; ") || "none";
 }

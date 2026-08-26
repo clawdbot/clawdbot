@@ -16,10 +16,12 @@ import { resolvePluginWebSearchProviders } from "../plugins/web-search-providers
 import { sortWebSearchProvidersForAutoDetect } from "../plugins/web-search-providers.shared.js";
 import { normalizeOptionalAccountId } from "../routing/session-key.js";
 import { loadChannelSecretContractApi } from "../secrets/channel-contract-api.js";
+import { compileTargetRegistryEntry, matchPathTokens } from "../secrets/target-registry-pattern.js";
 import {
   discoverConfigSecretTargetsByIds,
   listSecretTargetRegistryEntries,
 } from "../secrets/target-registry.js";
+import { parseConcreteConfigPathTokens } from "../shared/dot-path.js";
 
 const STATIC_QR_REMOTE_TARGET_IDS = ["gateway.remote.token", "gateway.remote.password"] as const;
 const STATIC_MODEL_TARGET_IDS = [
@@ -107,36 +109,27 @@ function getChannelSecretTargetIds(): string[] {
   return cachedChannelSecretTargetIds;
 }
 
-function isPluginWebCredentialTargetId(id: string): boolean {
-  const segments = id.split(".");
-  if (segments[0] !== "plugins" || segments[1] !== "entries" || segments[3] !== "config") {
-    return false;
+function pluginWebCredentialConfigPath(entry: {
+  id: string;
+  pathPatternSegments?: string[];
+}): string | undefined {
+  const segments = entry.pathPatternSegments;
+  if (segments?.[0] === "plugins" && segments[1] === "entries" && segments[3] === "config") {
+    return segments.slice(4).join(".");
   }
-  const configPath = segments.slice(4).join(".");
-  return configPath === "webSearch.apiKey" || configPath === "webFetch.apiKey";
-}
-
-function isPluginWebSearchCredentialTargetId(id: string): boolean {
-  const segments = id.split(".");
-  if (segments[0] !== "plugins" || segments[1] !== "entries" || segments[3] !== "config") {
-    return false;
+  for (const configPath of ["webSearch.apiKey", "webFetch.apiKey"] as const) {
+    if (entry.id.startsWith("plugins.entries.") && entry.id.endsWith(`.config.${configPath}`)) {
+      return configPath;
+    }
   }
-  return segments.slice(4).join(".") === "webSearch.apiKey";
-}
-
-function isPluginWebFetchCredentialTargetId(id: string): boolean {
-  const segments = id.split(".");
-  if (segments[0] !== "plugins" || segments[1] !== "entries" || segments[3] !== "config") {
-    return false;
-  }
-  return segments.slice(4).join(".") === "webFetch.apiKey";
+  return undefined;
 }
 
 function getCapabilityWebSearchTargetIds(): string[] {
   cachedCapabilityWebSearchTargetIds ??= sortUniqueStrings(
     listSecretTargetRegistryEntries()
-      .map((entry) => entry.id)
-      .filter(isPluginWebSearchCredentialTargetId),
+      .filter((entry) => pluginWebCredentialConfigPath(entry) === "webSearch.apiKey")
+      .map((entry) => entry.id),
   );
   return cachedCapabilityWebSearchTargetIds;
 }
@@ -144,8 +137,8 @@ function getCapabilityWebSearchTargetIds(): string[] {
 function getCapabilityWebFetchTargetIds(): string[] {
   cachedCapabilityWebFetchTargetIds ??= sortUniqueStrings(
     listSecretTargetRegistryEntries()
-      .map((entry) => entry.id)
-      .filter(isPluginWebFetchCredentialTargetId),
+      .filter((entry) => pluginWebCredentialConfigPath(entry) === "webFetch.apiKey")
+      .map((entry) => entry.id),
   );
   return cachedCapabilityWebFetchTargetIds;
 }
@@ -171,38 +164,11 @@ function resolveSearchConfig(config: OpenClawConfig): Record<string, unknown> | 
     : undefined;
 }
 
-function pathPatternMatchesConcretePath(pathPattern: string, path: string): boolean {
-  const pathSegments = path.split(".");
-  const patternSegments = pathPattern.split(".");
-  let pathIndex = 0;
-  for (const segment of patternSegments) {
-    if (segment === "*") {
-      if (!pathSegments[pathIndex]) {
-        return false;
-      }
-      pathIndex += 1;
-      continue;
-    }
-    if (segment.endsWith("[]")) {
-      const field = segment.slice(0, -2);
-      if (pathSegments[pathIndex] !== field || !/^\d+$/.test(pathSegments[pathIndex + 1] ?? "")) {
-        return false;
-      }
-      pathIndex += 2;
-      continue;
-    }
-    if (pathSegments[pathIndex] !== segment) {
-      return false;
-    }
-    pathIndex += 1;
-  }
-  return pathIndex === pathSegments.length;
-}
-
 // Registry entries use wildcard path patterns; command inputs often identify one concrete config path.
 function targetIdsForConfigPath(path: string): string[] {
+  const pathSegments = parseConcreteConfigPathTokens(path);
   return listSecretTargetRegistryEntries()
-    .filter((entry) => pathPatternMatchesConcretePath(entry.pathPattern ?? entry.id, path))
+    .filter((entry) => matchPathTokens(pathSegments, compileTargetRegistryEntry(entry).pathTokens))
     .map((entry) => entry.id)
     .toSorted();
 }
@@ -621,8 +587,11 @@ function getAgentRuntimeBaseTargetIds(): string[] {
   cachedAgentRuntimeBaseTargetIds ??= [
     ...STATIC_AGENT_RUNTIME_BASE_TARGET_IDS,
     ...listSecretTargetRegistryEntries()
+      .filter((entry) => {
+        const configPath = pluginWebCredentialConfigPath(entry);
+        return configPath === "webSearch.apiKey" || configPath === "webFetch.apiKey";
+      })
       .map((entry) => entry.id)
-      .filter(isPluginWebCredentialTargetId)
       .toSorted(),
   ];
   return cachedAgentRuntimeBaseTargetIds;

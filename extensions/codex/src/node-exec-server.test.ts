@@ -1,4 +1,4 @@
-/** Protects paired-node policy, real pinned Codex stdio framing, and child cleanup. */
+/** Protects node policy, real pinned Codex stdio framing, and child cleanup. */
 import { once } from "node:events";
 import { access, readFile, realpath } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -115,12 +115,32 @@ async function readNodeResponse(
   return response.result as JsonRpcRecord;
 }
 
+async function readNodeProcessNotifications(
+  frames: ReturnType<typeof createNodeFrames>,
+  processId: string,
+  count: number,
+): Promise<JsonRpcRecord[]> {
+  const matching = () =>
+    frames.outbound.filter(
+      (message) =>
+        String(message.method).startsWith("process/") &&
+        (message.params as { processId?: string }).processId === processId,
+    );
+  await vi.waitFor(() => expect(matching()).toHaveLength(count));
+  return matching().toSorted(
+    (left, right) => (left.params as { seq: number }).seq - (right.params as { seq: number }).seq,
+  );
+}
+
 afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-describe("Codex paired-node exec-server", () => {
-  it("requires exact one-time approval before the dangerous explicit-allowlist command runs", async () => {
+describe("Codex node exec-server", () => {
+  it.each([
+    { host: "paired device", nodeId: "paired-node" },
+    { host: "cloud worker", nodeId: "cloud-worker-node" },
+  ])("requires critical one-time approval on a $host", async ({ nodeId }) => {
     const policy = createCodexNodeExecServerInvokePolicy();
     expect(policy.commands).toEqual([CODEX_NODE_EXEC_SERVER_COMMAND]);
     expect(policy.dangerous).toBe(true);
@@ -134,7 +154,7 @@ describe("Codex paired-node exec-server", () => {
     const request = vi.fn();
     const { placement } = createManagedWorkspaceInvocation(process.cwd());
     const context = {
-      nodeId: "paired-node",
+      nodeId,
       command: CODEX_NODE_EXEC_SERVER_COMMAND,
       params: placement,
       config: {},
@@ -178,14 +198,14 @@ describe("Codex paired-node exec-server", () => {
     expect(invokeNode).toHaveBeenCalledWith({ params: approvedPlacement });
     expect(request).toHaveBeenCalledWith(
       expect.objectContaining({
-        title: "Run Codex execution on paired device",
-        description: expect.stringContaining(`paired-node: ${approvedPlacement.cwd}`),
+        title: "Run Codex execution on node",
+        description: expect.stringContaining(`${nodeId}: ${approvedPlacement.cwd}`),
         severity: "critical",
         allowedDecisions: ["allow-once"],
       }),
     );
     expect(request.mock.lastCall?.[0].description).toContain(
-      "arbitrary processes and filesystem access across the paired-device account",
+      "arbitrary processes and filesystem access across the node account",
     );
   });
 
@@ -364,14 +384,7 @@ describe("Codex paired-node exec-server", () => {
             },
           });
           await readNodeResponse(frames, 9);
-          await vi.waitFor(() =>
-            expect(frames.outbound.some((message) => message.method === "process/closed")).toBe(
-              true,
-            ),
-          );
-          const notifications = frames.outbound.filter((message) =>
-            String(message.method).startsWith("process/"),
-          );
+          const notifications = await readNodeProcessNotifications(frames, "node-proof", 3);
           expect(notifications.map((message) => message.method)).toEqual([
             "process/output",
             "process/exited",
@@ -492,24 +505,15 @@ describe("Codex paired-node exec-server", () => {
               },
             });
             expect(await readNodeResponse(frames, control.id + 1)).toEqual(control.result);
-            await vi.waitFor(() =>
-              expect(
-                frames.outbound.some(
-                  (message) =>
-                    message.method === "process/closed" &&
-                    (message.params as { processId?: string }).processId === control.processId,
-                ),
-              ).toBe(true),
+            const controlNotifications = await readNodeProcessNotifications(
+              frames,
+              control.processId,
+              2,
             );
-            expect(
-              frames.outbound
-                .filter(
-                  (message) =>
-                    String(message.method).startsWith("process/") &&
-                    (message.params as { processId?: string }).processId === control.processId,
-                )
-                .map((message) => message.method),
-            ).toEqual(["process/exited", "process/closed"]);
+            expect(controlNotifications.map((message) => message.method)).toEqual([
+              "process/exited",
+              "process/closed",
+            ]);
           }
 
           const httpServer = createServer((_request, response) => {

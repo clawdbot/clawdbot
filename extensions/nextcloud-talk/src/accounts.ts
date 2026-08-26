@@ -120,20 +120,6 @@ export function resolveNextcloudTalkAccount(params: {
     const accountEnabled = merged.enabled !== false;
     const enabled = baseEnabled && accountEnabled;
     const secretResolution = resolveNextcloudTalkSecret(accountId, merged);
-    const apiCredentialResolution = resolveNextcloudTalkApiCredentialsResult({
-      apiUser: merged.apiUser,
-      apiPassword: merged.apiPassword,
-      apiPasswordFile: merged.apiPasswordFile,
-      configPath: `channels.nextcloud-talk.accounts.${accountId}.apiPasswordFile`,
-    });
-    const diagnostics = [
-      secretResolution.diagnostic,
-      apiCredentialResolution.status === "configured_unavailable"
-        ? apiCredentialResolution.diagnostic
-        : undefined,
-    ].filter((diagnostic): diagnostic is NextcloudTalkCredentialUnavailableDiagnostic =>
-      Boolean(diagnostic),
-    );
     const baseUrl = merged.baseUrl?.trim()?.replace(/\/$/, "") ?? "";
 
     debugAccounts("resolve", {
@@ -151,8 +137,9 @@ export function resolveNextcloudTalkAccount(params: {
       secret: secretResolution.secret,
       secretSource: secretResolution.source,
       tokenStatus: secretResolution.status,
-      apiCredentialStatus: apiCredentialResolution.status,
-      ...(diagnostics.length > 0 ? { credentialDiagnostics: diagnostics } : {}),
+      ...(secretResolution.diagnostic
+        ? { credentialDiagnostics: [secretResolution.diagnostic] }
+        : {}),
       config: merged,
     } satisfies ResolvedNextcloudTalkAccount;
   };
@@ -164,4 +151,28 @@ export function resolveNextcloudTalkAccount(params: {
     hasCredential: (account) => account.tokenStatus !== "missing",
     resolveDefaultAccountId: () => resolveDefaultNextcloudTalkAccountId(params.cfg),
   });
+}
+
+export function inspectNextcloudTalkAccount(params: {
+  cfg: CoreConfig;
+  accountId?: string | null;
+}): ResolvedNextcloudTalkAccount {
+  const account = resolveNextcloudTalkAccount(params);
+  const apiCredentialResolution = resolveNextcloudTalkApiCredentialsResult({
+    apiUser: account.config.apiUser,
+    apiPassword: account.config.apiPassword,
+    apiPasswordFile: account.config.apiPasswordFile,
+    configPath: `channels.nextcloud-talk.accounts.${account.accountId}.apiPasswordFile`,
+  });
+  const credentialDiagnostics = [
+    ...(account.credentialDiagnostics ?? []),
+    ...(apiCredentialResolution.status === "configured_unavailable"
+      ? [apiCredentialResolution.diagnostic]
+      : []),
+  ];
+  return {
+    ...account,
+    apiCredentialStatus: apiCredentialResolution.status,
+    ...(credentialDiagnostics.length > 0 ? { credentialDiagnostics } : {}),
+  };
 }

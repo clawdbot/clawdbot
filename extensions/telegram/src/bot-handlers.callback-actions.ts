@@ -85,7 +85,11 @@ export function createTelegramCallbackMessageActions(params: {
   };
 
   const deleteCallbackMessage = async () => {
-    return await bot.api.deleteMessage(callbackMessage.chat.id, callbackMessage.message_id);
+    return callbackBusinessParams
+      ? await bot.api.deleteBusinessMessages(callbackBusinessParams.business_connection_id, [
+          callbackMessage.message_id,
+        ])
+      : await bot.api.deleteMessage(callbackMessage.chat.id, callbackMessage.message_id);
   };
 
   const replyToCallbackChat = async (text: string, replyParams?: TelegramCallbackReplyParams) => {

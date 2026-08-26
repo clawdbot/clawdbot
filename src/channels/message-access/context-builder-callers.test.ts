@@ -153,12 +153,12 @@ const SCOPED_BUILDER_HANDOFFS = [
   [
     "discord",
     "extensions/discord/src/monitor/provider.ts",
-    'opts.channelRuntime as PluginRuntime["channel"] | undefined',
+    "buildContext: pluginChannelRuntime?.inbound.buildContext",
   ],
   [
     "imessage",
     "extensions/imessage/src/monitor/monitor-provider.ts",
-    'opts.channelRuntime as PluginRuntime["channel"] | undefined',
+    "buildContext: pluginChannelRuntime?.inbound.buildContext",
   ],
   [
     "line",
@@ -181,7 +181,7 @@ const SCOPED_BUILDER_HANDOFFS = [
   [
     "telegram-webhook",
     "extensions/telegram/src/monitor.ts",
-    'opts.channelRuntime as PluginRuntime["channel"] | undefined',
+    "buildContext: pluginChannelRuntime?.inbound.buildContext",
   ],
   ["telegram-webhook", "extensions/telegram/src/webhook.ts", "buildContext: opts.buildContext"],
   [
@@ -198,7 +198,7 @@ const SCOPED_BUILDER_HANDOFFS = [
   [
     "whatsapp",
     "extensions/whatsapp/src/auto-reply/monitor.ts",
-    'tuning.channelRuntime as PluginRuntime["channel"] | undefined',
+    "buildContext: pluginChannelRuntime?.inbound.buildContext",
   ],
   [
     "whatsapp",
@@ -235,12 +235,6 @@ describe("channel context builder caller inventory", () => {
     }
     expect(source("extensions/signal/src/monitor.ts")).toContain(
       "channelRuntime: opts.channelRuntime",
-    );
-    expect(source("extensions/telegram/src/monitor.ts")).toContain(
-      'opts.channelRuntime as PluginRuntime["channel"] | undefined',
-    );
-    expect(source("extensions/whatsapp/src/auto-reply/monitor.ts")).toContain(
-      'tuning.channelRuntime as PluginRuntime["channel"] | undefined',
     );
   });
 

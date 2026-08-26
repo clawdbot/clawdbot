@@ -28,6 +28,7 @@ import { buildChatItems } from "./chat-thread-build.ts";
 import { getChatSessionProjection, reduceChatSessionProjection } from "./history-merge.ts";
 import { scheduleControlUiAfterPaint } from "./performance.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
+import { activatePanel, openSlot } from "./sidebar-layout.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 
 beforeEach(() => {
@@ -908,7 +909,12 @@ describe("canonical session message recovery", () => {
     expect(state.chatStream).toBe("Current partial reply");
   });
 
-  it("renders distinct live peers immediately and coalesces their stale history", async () => {
+  it("coalesces distinct live peers into one frame and their stale history into one load", async () => {
+    let renderFrame: FrameRequestCallback | undefined;
+    vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((callback) => {
+      renderFrame = callback;
+      return 1;
+    });
     let resolveHistory!: (result: {
       messages: unknown[];
       sessionId: string;
@@ -945,8 +951,10 @@ describe("canonical session message recovery", () => {
       });
 
       expect(state.chatMessages).toHaveLength(index + 1);
-      expect(state.requestUpdate).toHaveBeenCalledTimes(index + 1);
+      expect(state.requestUpdate).not.toHaveBeenCalled();
     }
+    renderFrame?.(0);
+    expect(state.requestUpdate).toHaveBeenCalledOnce();
 
     expect(request).toHaveBeenCalledOnce();
     resolveHistory({
@@ -1371,7 +1379,7 @@ describe("ChatStateController render lifecycle", () => {
     return {
       agents: {
         state: { agentsList: null },
-        adoptList: vi.fn(),
+        ensureList: vi.fn(async () => null),
       },
       agentSelection: { state: { selectedId: "main" } },
       basePath: "",
@@ -1387,6 +1395,52 @@ describe("ChatStateController render lifecycle", () => {
       sessions: {},
     } as unknown as ApplicationContext;
   }
+
+  it("owns attachment views in Files without replacing Detail content", () => {
+    const state = createPageState(
+      createPageContext(),
+      { invalidate: vi.fn(), afterCommit: () => () => {} },
+      {
+        getBoundingClientRect: () => new DOMRect(0, 0, 1_440, 0),
+        querySelector: () => null,
+      },
+    );
+    const detailContent = {
+      kind: "markdown" as const,
+      content: "Existing review",
+      rawText: "Existing review",
+    };
+    state.sidebarContent = detailContent;
+    state.sidebarLayout = openSlot(state.sidebarLayout, "detail");
+
+    state.handleOpenSidebar({
+      kind: "attachment",
+      attachmentKind: "document",
+      title: "report.pdf",
+      src: "/media/report.pdf",
+    });
+
+    expect(
+      state.sidebarLayout.columns.flatMap((column) => column.panels.map((panel) => panel.slot)),
+    ).toEqual(["detail", "workspace"]);
+    expect(state.attachmentSidebarContent?.kind).toBe("attachment");
+    expect(state.sidebarContent).toBe(detailContent);
+
+    state.sidebarLayout = activatePanel(state.sidebarLayout, "detail");
+    state.handleCloseSidebar("detail");
+
+    expect(
+      state.sidebarLayout.columns.flatMap((column) => column.panels.map((panel) => panel.slot)),
+    ).toEqual(["workspace"]);
+    expect(state.attachmentSidebarContent?.kind).toBe("attachment");
+    expect(state.sidebarContent).toBe(detailContent);
+
+    state.handleCloseSidebar("workspace");
+
+    expect(state.sidebarLayout.columns.flatMap((column) => column.panels)).toHaveLength(0);
+    expect(state.attachmentSidebarContent).toBeNull();
+    expect(state.sidebarContent).toBe(detailContent);
+  });
 
   it("keeps the active observer digest when another run streams in the same session", () => {
     const projectedDigest = {
@@ -1746,7 +1800,10 @@ describe("ChatStateController render lifecycle", () => {
     expect(state.waitingApprovalStatuses.size).toBe(0);
   });
 
-  it("skips no-op assistant invalidation while tool changes render immediately", () => {
+  it("skips no-op assistant invalidation while tool changes render on the next frame", () => {
+    const requestAnimationFrame = vi
+      .spyOn(globalThis, "requestAnimationFrame")
+      .mockImplementation(() => 1);
     const requestUpdate = vi.fn();
     const state = createStreamEventState({
       requestUpdate,
@@ -1768,7 +1825,9 @@ describe("ChatStateController render lifecycle", () => {
     expect(requestUpdate).not.toHaveBeenCalled();
 
     emitAgent(2, "tool", { phase: "start", name: "read", toolCallId: "tool-1" });
-    expect(requestUpdate).toHaveBeenCalledOnce();
+    emitAgent(3, "tool", { phase: "update", name: "read", toolCallId: "tool-1" });
+    expect(requestAnimationFrame).toHaveBeenCalledOnce();
+    expect(requestUpdate).not.toHaveBeenCalled();
   });
 
   it("coalesces stream invalidations into one animation frame", () => {
@@ -1814,9 +1873,11 @@ describe("ChatStateController render lifecycle", () => {
       event: "session.operation",
       payload: {},
     });
+    expect(frames.size).toBe(1);
+    expect(requestUpdate).toHaveBeenCalledOnce();
     staleFrame?.(0);
 
-    expect(cancelFrame).toHaveBeenCalledWith(2);
+    expect(cancelFrame).not.toHaveBeenCalledWith(2);
     expect(requestUpdate).toHaveBeenCalledTimes(2);
     expect(state.chatStreamRenderFrame).toBeNull();
   });
@@ -2263,7 +2324,7 @@ describe("image lightbox lifecycle", () => {
     const context = {
       agents: {
         state: { agentsList: null },
-        adoptList: vi.fn(),
+        ensureList: vi.fn(async () => null),
       },
       agentSelection: { state: { selectedId: "main" } },
       basePath: "",
@@ -2324,7 +2385,7 @@ describe("loadPageAssistantIdentity", () => {
     }));
     const client = { request } as unknown as GatewayBrowserClient;
     const context = {
-      agents: { state: { agentsList: null }, adoptList: vi.fn() },
+      agents: { state: { agentsList: null }, ensureList: vi.fn(async () => null) },
       agentSelection: { state: { selectedId: "main" } },
       basePath: "",
       config: {
@@ -2392,41 +2453,51 @@ describe("refreshChatMetadata", () => {
     } as unknown as ChatPageHost;
   }
 
-  it("refreshes session metadata after full model discovery completes", async () => {
-    const refreshSessions = vi.fn().mockResolvedValue(undefined);
-    const request = vi.fn(async (method: string, params?: unknown) => {
-      expect(method).toBe("models.list");
-      expect(params).toEqual({ view: "configured", agentId: "work" });
-      return {
-        models: [
-          {
-            id: "reasoner",
-            name: "Reasoner",
-            provider: "dynamic-router",
-            reasoning: true,
-          },
-        ],
-      };
-    });
-    const state = createMetadataState(request, {
-      sessions: { refresh: refreshSessions } as never,
-    });
+  it.each([
+    {
+      label: "warm",
+      existingModels: [{ id: "cached-model", name: "Cached Model", provider: "openai" }],
+    },
+    { label: "cold", existingModels: [] },
+  ])(
+    "refreshes $label session metadata after full model discovery completes",
+    async ({ existingModels }) => {
+      const refreshSessions = vi.fn().mockResolvedValue(undefined);
+      const discovery = createDeferred<{
+        models: Array<{ id: string; name: string; provider: string; reasoning: boolean }>;
+      }>();
+      const request = vi.fn((method: string, params?: unknown) => {
+        expect(method).toBe("models.list");
+        expect(params).toEqual({ view: "configured", agentId: "work", refresh: true });
+        return discovery.promise;
+      });
+      const state = createMetadataState(request, {
+        chatModelCatalog: existingModels,
+        sessions: { refresh: refreshSessions } as never,
+      });
 
-    await refreshChatModelCatalogOnDemand(state);
+      const refresh = refreshChatModelCatalogOnDemand(state);
+      expect(state.chatModelCatalog).toEqual(existingModels);
+      expect(state.chatModelsLoading).toBe(existingModels.length === 0);
+      discovery.resolve({
+        models: [{ id: "reasoner", name: "Reasoner", provider: "dynamic-router", reasoning: true }],
+      });
+      await refresh;
 
-    expect(state.chatModelCatalog).toEqual([
-      {
-        id: "reasoner",
-        name: "Reasoner",
-        provider: "dynamic-router",
-        reasoning: true,
-      },
-    ]);
-    expect(refreshSessions).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "work", force: true }),
-    );
-    expect(state.chatModelCatalogError).toBeNull();
-  });
+      expect(state.chatModelCatalog).toEqual([
+        {
+          id: "reasoner",
+          name: "Reasoner",
+          provider: "dynamic-router",
+          reasoning: true,
+        },
+      ]);
+      expect(refreshSessions).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: "work", force: true }),
+      );
+      expect(state.chatModelCatalogError).toBeNull();
+    },
+  );
 
   it("applies agent-scoped metadata after a same-agent session switch", async () => {
     let resolveMetadata:

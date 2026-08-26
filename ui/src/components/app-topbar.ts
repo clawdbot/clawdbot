@@ -1,5 +1,6 @@
-import { html, nothing, type TemplateResult } from "lit";
+import { html } from "lit";
 import { property } from "lit/decorators.js";
+import type { ControlUiEnvironment } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import { t } from "../i18n/index.ts";
@@ -12,7 +13,7 @@ import "./tooltip.ts";
 class AppTopbar extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) navDrawerOpen = false;
   @property({ attribute: false }) resourceBasePath = "";
-  @property({ attribute: false }) trailingActions: TemplateResult | typeof nothing = nothing;
+  @property({ attribute: false }) environment: ControlUiEnvironment | null = null;
   @property({ attribute: false }) onToggleDrawer!: (trigger: HTMLElement) => void;
   @property({ attribute: false }) onOpenPalette!: () => void;
 
@@ -44,10 +45,11 @@ class AppTopbar extends OpenClawLightDomContentsElement {
                 aria-hidden="true"
               />
               <span class="topbar-brand__title">OpenClaw</span>
+              ${this.environment &&
+              html`<span class="control-ui-environment-pill">${this.environment.label}</span>`}
             </div>
           </div>
           <div class="topnav-shell__actions">
-            ${this.trailingActions}
             <openclaw-tooltip .content=${t("chat.commandPaletteTitle")}>
               <button
                 class="topbar-search"

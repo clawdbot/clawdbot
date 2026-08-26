@@ -105,12 +105,28 @@ export function projectDevicePlacements(
   return projected;
 }
 
-export function findDevicePlacement(
+export function resolveAutomaticDevicePlacementDisabledReason(
   environments: readonly DraftEnvironment[] | null,
-  deviceId: string,
-  requirement?: DevicePlacementRequirement,
-): DevicePlacementOption | undefined {
-  return projectDevicePlacements(environments, requirement).find(
-    (device) => device.deviceId === deviceId,
+  devices: readonly DevicePlacementOption[],
+  runtimeDisabledReason?: string,
+): string | undefined {
+  if (runtimeDisabledReason) {
+    return runtimeDisabledReason;
+  }
+  const sessionHostIds = new Set(
+    (environments ?? [])
+      .filter((environment) => environment.type === "node" && environment.sessionHost === true)
+      .map((environment) => environment.id),
   );
+  if (sessionHostIds.size === 0) {
+    const outdated = (environments ?? []).find((environment) =>
+      environment.issues?.some((issue) => issue.code === "update-required"),
+    );
+    return outdated
+      ? unavailableReason(outdated, DEFAULT_DEVICE_PLACEMENT)
+      : t("newSession.noSessionHosts");
+  }
+  return devices.some((device) => device.selectable)
+    ? undefined
+    : devices.find((device) => sessionHostIds.has(`node:${device.deviceId}`))?.disabledReason;
 }

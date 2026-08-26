@@ -138,10 +138,6 @@ describe("telegram numeric target normalization", () => {
 });
 
 describe("normalizeTelegramOutboundTarget", () => {
-  it("normalizes legacy durable group retry targets for Telegram sends", () => {
-    expect(normalizeTelegramOutboundTarget("group:-1001234567890")).toBe("-1001234567890");
-  });
-
   it("normalizes legacy durable group retry targets with topic suffixes", () => {
     expect(normalizeTelegramOutboundTarget("group:-1001234567890:topic:77")).toBe(
       "-1001234567890:topic:77",

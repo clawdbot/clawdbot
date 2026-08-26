@@ -224,6 +224,12 @@ an empty tool list. Disable and attest those native capabilities for the fresh
 turn, use a separate transport that can serialize a true zero-tool request, or
 leave the capability unsupported.
 
+Audit evidence follows the same boundary. OpenClaw can record registered plugin
+ownership and run admission, but it cannot claim an external native side effect
+from an ACP update or transcript. A side effect wholly inside that runtime is
+`unsupported` unless an adapter invokes an OpenClaw-owned callback before the
+action. Do not reconstruct the callback from native tool status events.
+
 ### Delegated execution
 
 A harness owner may set `delegatedExecutionPluginIds` to the ids of trusted
@@ -364,6 +370,14 @@ local, non-interactive runs where the attempt must not resolve until those
 side effects finish. Both helpers accept the same `{ event, ctx }` payload as
 `runAgentHarnessAgentEndHook(...)`; their failures do not alter the completed
 attempt result.
+
+Pass `ctx.foregroundPromptContext` built with
+`buildEmbeddedForegroundPromptContext(params, agentDir)` from the same
+`EmbeddedRunAttemptParams` the attempt ran with. The detached Skill Workshop
+experience review rebuilds its system prompt and tool catalog from that
+context, so the review shares the foreground turn's prompt-cache prefix.
+Omit it only for runs that have no foreground prompt, such as CLI hook
+contexts; the review is skipped for those.
 
 ### User input and tool surfaces
 

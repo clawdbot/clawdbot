@@ -604,7 +604,7 @@ function assertHostReadMediaAllowed(params: {
   );
 }
 
-function toJpegFileName(fileName?: string): string | undefined {
+function toImageFileName(fileName: string | undefined, mimeType: string): string | undefined {
   if (!fileName) {
     return undefined;
   }
@@ -613,10 +613,10 @@ function toJpegFileName(fileName?: string): string | undefined {
     return fileName;
   }
   const parsed = path.parse(trimmed);
-  if (!parsed.ext || HEIC_EXT_RE.test(parsed.ext)) {
-    return path.format({ dir: parsed.dir, name: parsed.name || trimmed, ext: ".jpg" });
-  }
-  return path.format({ dir: parsed.dir, name: parsed.name, ext: ".jpg" });
+  const ext = extensionForMime(mimeType);
+  return mimeType !== "image/jpeg" && parsed.ext.toLowerCase() === ext
+    ? fileName
+    : path.format({ dir: parsed.dir, name: parsed.name || trimmed, ext });
 }
 
 type OptimizedImage = {
@@ -994,7 +994,7 @@ export async function optimizeImageBufferForWebMedia(params: {
     buffer: optimized.buffer,
     contentType: optimized.mimeType,
     kind: "image",
-    fileName: optimized.format === "jpeg" ? toJpegFileName(params.fileName) : params.fileName,
+    fileName: toImageFileName(params.fileName, optimized.mimeType),
   };
 }
 
@@ -1054,7 +1054,7 @@ async function loadWebMediaInternal(
       throw new Error(formatCapReduce("Media", cap, optimized.buffer.length));
     }
 
-    const fileName = optimized.format === "jpeg" ? toJpegFileName(meta?.fileName) : meta?.fileName;
+    const fileName = toImageFileName(meta?.fileName, optimized.mimeType);
 
     return {
       buffer: optimized.buffer,

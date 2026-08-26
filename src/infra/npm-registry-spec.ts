@@ -201,6 +201,15 @@ function isOpenClawStableCorrectionVersion(value: string): boolean {
   return parsed !== null && isOpenClawCorrectionSemver(parsed);
 }
 
+/** Resolves stable correction releases to their shared base release cohort. */
+export function resolveOpenClawReleaseCohortVersion(value: string): string {
+  const trimmed = value.trim();
+  const parsed = parseOpenClawReleaseVersion(trimmed);
+  return parsed && isOpenClawCorrectionSemver(parsed)
+    ? `${parsed.major}.${parsed.minor}.${parsed.patch}`
+    : trimmed;
+}
+
 /** Compares OpenClaw monthly patch release versions across alpha, beta, stable, and corrections. */
 export function compareOpenClawReleaseVersions(left: string, right: string): number | null {
   const parsedLeft = parseOpenClawReleaseVersion(left);

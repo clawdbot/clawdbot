@@ -44,13 +44,19 @@ import {
   refreshSessionWorkspace,
   retireSessionWorkspaceCheckout,
 } from "./components/chat-session-workspace.ts";
+import {
+  resolveStoredChatOutboxScope,
+  storedChatOutboxScopeKey,
+  type StoredChatOutboxScope,
+} from "./composer-persistence.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 import {
   reconcileChatRunFromCurrentSessionRow,
   reconcileChatRunFromSessionRow,
-  reconcileStaleChatRunAfterSessionStatePublication,
+  reconcileChatRunAfterSessionStatePublication,
 } from "./run-lifecycle.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
+import { isSidebarSlotVisible } from "./sidebar-layout.ts";
 import { rememberAuthoritativeTerminal } from "./terminal-message-identity.ts";
 import { handleAgentEvent, handleSessionOperationEvent } from "./tool-stream.ts";
 
@@ -94,7 +100,7 @@ function reconcileSessionEvent(state: ChatPageHost, payload: unknown): SessionCh
     state.sessionsResult = state.sessions.state.result;
     state.sessionsResultAgentId = state.sessions.state.agentId;
     state.sessionsError = state.sessions.state.error;
-    reconcileStaleChatRunAfterSessionStatePublication(state);
+    reconcileChatRunAfterSessionStatePublication(state);
   }
   return reconciled;
 }
@@ -240,7 +246,7 @@ function handleSessionsChangedEvent(
     state.chatBranches = [];
     state.chatBranchesSessionKey = null;
     state.chatBranchesConnectionEpoch = null;
-    retireSessionWorkspaceCheckout(state, presented);
+    retireSessionWorkspaceCheckout(state);
     if (presented) {
       void loadChatBranches(state);
     }
@@ -375,13 +381,10 @@ function hasVisibleFinalAssistantReply(
   state: ChatPageHost,
   payload: ChatEventPayload | undefined,
 ): boolean {
-  if (payload?.state !== "final") {
-    return false;
-  }
-  const ownsReply =
-    chatScopedEventSessionMatches(state, payload.sessionKey, payload.agentId) ||
-    (typeof payload.runId === "string" && payload.runId === state.chatRunId);
-  if (!ownsReply) {
+  if (
+    payload?.state !== "final" ||
+    !chatScopedEventSessionMatches(state, payload.sessionKey, payload.agentId)
+  ) {
     return false;
   }
   const finalText = extractText(payload.message);
@@ -425,10 +428,13 @@ export function handlePageGatewayEvent(
 ) {
   if (event.event === "chat") {
     const payload = event.payload as ChatEventPayload | undefined;
+    const sessionMatches = Boolean(
+      payload && chatScopedEventSessionMatches(state, payload.sessionKey, payload.agentId),
+    );
     if (
       payload?.state === "delta" &&
       typeof payload.runId === "string" &&
-      chatScopedEventSessionMatches(state, payload.sessionKey, payload.agentId) &&
+      sessionMatches &&
       // Same-session background streams cannot clear the foreground run's status.
       (!state.chatRunId || state.chatRunId === payload.runId) &&
       state.observerDigest &&
@@ -436,27 +442,39 @@ export function handlePageGatewayEvent(
     ) {
       state.observerDigest = null;
     }
-    if (
-      payload?.state === "delta" &&
-      typeof payload.deltaText === "string" &&
-      chatScopedEventSessionMatches(state, payload.sessionKey, payload.agentId)
-    ) {
+    if (payload?.state === "delta" && typeof payload.deltaText === "string" && sessionMatches) {
       refreshPullRequestsForStreamedLinks(state, payload, payload.deltaText);
     }
     const shouldCelebrateFirstReply = hasVisibleFinalAssistantReply(state, payload);
     const shouldRefreshPullRequests =
       shouldCelebrateFirstReply && finalAssistantReplyHasPullRequestLink(state, payload);
-    const terminal =
-      payload?.state === "final" || payload?.state === "aborted" || payload?.state === "error";
-    const delivered = terminal ? rememberDeliveredQueuedUserTurn(state, payload?.runId) : null;
+    const terminalPayload =
+      payload &&
+      (payload.state === "final" || payload.state === "aborted" || payload.state === "error")
+        ? payload
+        : undefined;
+    // Missing ownership must not fall back to correlation-only run IDs, which
+    // can collide across sessions.
+    const outboxScope =
+      terminalPayload &&
+      resolveStoredChatOutboxScope(
+        state,
+        terminalPayload.sessionKey,
+        isUiGlobalSessionKey(terminalPayload.sessionKey)
+          ? selectedGlobalEventAgentId(state, terminalPayload.agentId ?? null)
+          : terminalPayload.agentId,
+      );
+    const delivered = outboxScope
+      ? rememberDeliveredQueuedUserTurn(state, terminalPayload.runId, outboxScope)
+      : null;
     if (delivered) {
       // The queued projection is the only local copy until history catches up.
       // Materialize it before the terminal assistant to preserve transcript order.
       preserveQueuedUserTurn(state, delivered);
     }
     const result = handleChatGatewayEvent(state, payload);
-    if (terminal) {
-      clearPendingQueueItemsForRun(state, payload?.runId);
+    if (terminalPayload && sessionMatches) {
+      clearPendingQueueItemsForRun(state, terminalPayload.runId);
     }
     if (shouldCelebrateFirstReply && result === "final") {
       fireFirstReplyConfetti();
@@ -465,14 +483,16 @@ export function handlePageGatewayEvent(
       void state.refreshSessionPullRequests?.({ refresh: true });
     }
     replayPendingSessionMessageReload(state, payload, isPresented);
-    if (terminal) {
-      removeDeliveredQueuedChatSendForRun(state, payload?.runId);
+    if (terminalPayload) {
+      if (outboxScope) {
+        removeDeliveredQueuedChatSendForRun(state, terminalPayload.runId, outboxScope);
+      }
       void resumeStoredChatOutboxes(state);
-      if (chatScopedEventSessionMatches(state, payload?.sessionKey, payload?.agentId)) {
+      if (sessionMatches) {
         if (isPresented()) {
-          refreshSessionWorkspace(state);
+          refreshSessionWorkspace(state, isSidebarSlotVisible(state.sidebarLayout, "workspace"));
         } else {
-          retireSessionWorkspaceCheckout(state, false);
+          retireSessionWorkspaceCheckout(state);
         }
       }
     }
@@ -501,13 +521,13 @@ export function handlePageGatewayEvent(
   }
   if (event.event === "agent" || event.event === "session.tool") {
     if (handleAgentEvent(state as never, event.payload as never)) {
-      requestChatPageUpdate(state);
+      requestChatPageUpdate(state, "animation-frame");
     }
     return;
   }
   if (event.event === "session.operation") {
     handleSessionOperationEvent(state as never, event.payload as never);
-    requestChatPageUpdate(state);
+    requestChatPageUpdate(state, "animation-frame");
     return;
   }
   if (event.event === "chat.send_timing") {
@@ -517,13 +537,13 @@ export function handlePageGatewayEvent(
   if (event.event === "session.message") {
     handleSessionMessageEvent(state, event.payload, isPresented);
     void resumeStoredChatOutboxes(state);
-    requestChatPageUpdate(state);
+    requestChatPageUpdate(state, "animation-frame");
     return;
   }
   if (event.event === "sessions.changed") {
     handleSessionsChangedEvent(state, event.payload, isPresented);
     void resumeStoredChatOutboxes(state);
-    requestChatPageUpdate(state);
+    requestChatPageUpdate(state, "animation-frame");
     return;
   }
   if (event.event === "task") {
@@ -537,6 +557,7 @@ const deliveredQueueTurnsByClient = new WeakMap<object, Map<string, ChatQueueIte
 function rememberDeliveredQueuedUserTurn(
   state: ChatPageHost,
   runId: string | undefined,
+  scope: StoredChatOutboxScope,
 ): ChatQueueItem | null {
   if (!runId) {
     return null;
@@ -550,10 +571,11 @@ function rememberDeliveredQueuedUserTurn(
     turns = new Map();
     deliveredQueueTurnsByClient.set(owner, turns);
   }
-  const stored = readDeliveredQueuedChatSendForRun(state, runId)?.item;
+  const deliveryKey = `${storedChatOutboxScopeKey(scope)}|${runId}`;
+  const stored = readDeliveredQueuedChatSendForRun(state, runId, scope)?.item;
   if (stored) {
-    turns.delete(runId);
-    turns.set(runId, stored);
+    turns.delete(deliveryKey);
+    turns.set(deliveryKey, stored);
     while (turns.size > MAX_REMEMBERED_DELIVERED_QUEUE_TURNS) {
       const oldestRunId = turns.keys().next().value;
       if (typeof oldestRunId !== "string") {
@@ -562,5 +584,5 @@ function rememberDeliveredQueuedUserTurn(
       turns.delete(oldestRunId);
     }
   }
-  return stored ?? turns.get(runId) ?? null;
+  return stored ?? turns.get(deliveryKey) ?? null;
 }

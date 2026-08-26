@@ -30,11 +30,12 @@ type StreamMessageOptions = Pick<
   | "canvasPluginSurfaceUrl"
   | "resourceBasePath"
   | "localMediaPreviewRoots"
+  | "connectionEpoch"
   | "assistantAttachmentAuthToken"
   | "resolveArtifactDownload"
-  | "onAssistantAttachmentLoaded"
   | "onRequestOpenImage"
   | "onOpenImage"
+  | "onAssistantAttachmentLoaded"
   | "embedSandboxMode"
   | "allowExternalEmbedUrls"
   | "fetchLinkFavicon"
@@ -92,11 +93,12 @@ export function renderStreamGroupParts(
               canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
               resourceBasePath: opts.resourceBasePath,
               localMediaPreviewRoots: opts.localMediaPreviewRoots,
+              connectionEpoch: opts.connectionEpoch,
               assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
               resolveArtifactDownload: opts.resolveArtifactDownload,
-              onAssistantAttachmentLoaded: opts.onAssistantAttachmentLoaded,
               onRequestOpenImage: opts.onRequestOpenImage,
               onOpenImage: opts.onOpenImage,
+              onAssistantAttachmentLoaded: opts.onAssistantAttachmentLoaded,
               embedSandboxMode: opts.embedSandboxMode,
               allowExternalEmbedUrls: opts.allowExternalEmbedUrls,
               fetchLinkFavicon: opts.fetchLinkFavicon,
@@ -158,34 +160,37 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
  */
 export function renderWorkGroupSummary(
   item: { key: string; durationMs: number | null },
-  opts: { expanded: boolean; onToggle: () => void },
+  opts: { expanded: boolean; onToggle: () => void; presentation?: "standalone" | "continuation" },
 ) {
   const duration = formatDurationCompact(item.durationMs);
   const label = duration ? t("chat.workRun.workedFor", { duration }) : t("chat.workRun.worked");
-  return html`
-    <div class="chat-group tool chat-group--work" data-chat-row-key=${item.key}>
-      <div class="chat-group-messages">
-        <div class="chat-activity-group chat-work-group ${opts.expanded ? "is-open" : ""}">
-          <button
-            class="chat-inline-disclosure chat-activity-group__summary"
-            type="button"
-            aria-expanded=${String(opts.expanded)}
-            @pointerenter=${syncToolDisclosureOverflow}
-            @focus=${syncToolDisclosureOverflow}
-            @click=${(event: MouseEvent) => {
-              if (shouldToggleSelectableDisclosure(event)) {
-                opts.onToggle();
-              }
-            }}
-          >
-            <span class="chat-tool-disclosure__content">
-              <span class="chat-activity-group__label" title=${label}>${label}</span>
-            </span>
-            <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
-          </button>
-          <div class="chat-work-group__separator" aria-hidden="true"></div>
-        </div>
-      </div>
+  const content = html`
+    <div class="chat-activity-group chat-work-group ${opts.expanded ? "is-open" : ""}">
+      <button
+        class="chat-inline-disclosure chat-activity-group__summary"
+        type="button"
+        aria-expanded=${String(opts.expanded)}
+        @pointerenter=${syncToolDisclosureOverflow}
+        @focus=${syncToolDisclosureOverflow}
+        @click=${(event: MouseEvent) => {
+          if (shouldToggleSelectableDisclosure(event)) {
+            opts.onToggle();
+          }
+        }}
+      >
+        <span class="chat-tool-disclosure__content">
+          <span class="chat-activity-group__label" title=${label}>${label}</span>
+        </span>
+        <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
+      </button>
+      <div class="chat-work-group__separator" aria-hidden="true"></div>
     </div>
   `;
+  return opts.presentation === "continuation"
+    ? content
+    : html`
+        <div class="chat-group tool chat-group--work" data-chat-row-key=${item.key}>
+          <div class="chat-group-messages">${content}</div>
+        </div>
+      `;
 }

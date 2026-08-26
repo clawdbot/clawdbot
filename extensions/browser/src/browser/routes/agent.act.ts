@@ -51,7 +51,10 @@ import {
   withRouteTabContext,
   SELECTOR_UNSUPPORTED_MESSAGE,
 } from "./agent.shared.js";
-import { resolveTargetIdAfterNavigate } from "./agent.snapshot-target.js";
+import {
+  captureBrowserOperationTarget,
+  resolveOperationTargetOutcome,
+} from "./agent.snapshot-target.js";
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
 import { readRoutePositiveInteger, readRouteTimerTimeoutMs } from "./route-numeric.js";
 import type { BrowserRouteRegistrar } from "./types.js";
@@ -467,17 +470,22 @@ export function registerBrowserAgentActRoutes(
         const hasNavigationResultPolicy = Boolean(
           navigationPolicy.ssrfPolicy || navigationPolicy.browserProxyMode,
         );
+        const resolveRelayTarget = captureBrowserOperationTarget({
+          ctx,
+          profileName: profileCtx.profile.name,
+          targetId: tab.targetId,
+        });
         const jsonOk = async (
           extra?: Record<string, unknown>,
-          options?: { resolveCurrentTarget?: boolean },
+          options?: { resolveCurrentTarget?: boolean; operationTargetId?: string },
         ) => {
           const shouldResolveCurrentTarget =
             options?.resolveCurrentTarget && (!isExistingSession || hasNavigationResultPolicy);
           const responseTargetId = shouldResolveCurrentTarget
-            ? await resolveTargetIdAfterNavigate({
-                oldTargetId: tab.targetId,
-                navigatedUrl: tab.url,
-                listTabs: () => profileCtx.listTabs(existingSessionCallOptions),
+            ? resolveOperationTargetOutcome({
+                actedOnTargetId: tab.targetId,
+                operationTargetId: options?.operationTargetId,
+                resolveRelayTarget,
               })
             : tab.targetId;
           const url =
@@ -716,6 +724,10 @@ export function registerBrowserAgentActRoutes(
           ...navigationPolicy,
           signal,
         });
+        const resultTargetOptions = {
+          resolveCurrentTarget: true,
+          operationTargetId: result.targetId,
+        };
         if (result.blockedByDialog) {
           return await jsonOk({
             blockedByDialog: true,
@@ -734,25 +746,24 @@ export function registerBrowserAgentActRoutes(
                 ...(result.aborted ? { aborted: result.aborted } : {}),
                 ...(downloads ? { downloads } : {}),
               },
-              { resolveCurrentTarget: result.aborted?.reason !== "closed" },
+              {
+                ...resultTargetOptions,
+                resolveCurrentTarget: result.aborted?.reason !== "closed",
+              },
             );
           case "evaluate":
             return await jsonOk(
               { result: result.result, ...(downloads ? { downloads } : {}) },
-              { resolveCurrentTarget: true },
+              resultTargetOptions,
             );
           case "click":
           case "clickCoords":
-            return await jsonOk(downloads ? { downloads } : undefined, {
-              resolveCurrentTarget: true,
-            });
+            return await jsonOk(downloads ? { downloads } : undefined, resultTargetOptions);
           case "resize":
           case "close":
             return await jsonOk(downloads ? { downloads } : undefined);
           default:
-            return await jsonOk(downloads ? { downloads } : undefined, {
-              resolveCurrentTarget: true,
-            });
+            return await jsonOk(downloads ? { downloads } : undefined, resultTargetOptions);
         }
       },
     });

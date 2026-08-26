@@ -12,7 +12,7 @@ const snapshot: BoardSnapshot = {
   widgets: [],
 };
 
-function recorder() {
+function recorder(boardSnapshot: BoardSnapshot = snapshot) {
   const calls: Array<[string, Record<string, unknown>]> = [];
   const commands: Array<{ sessionKey: string; command: BoardCommand }> = [];
   const callGateway: InProcessGatewayCaller = async <T>(
@@ -20,7 +20,7 @@ function recorder() {
     params: Record<string, unknown>,
   ): Promise<T> => {
     calls.push([method, params]);
-    return snapshot as T;
+    return boardSnapshot as T;
   };
   return {
     calls,
@@ -45,6 +45,8 @@ describe("dashboard tool", () => {
     );
     expect(directoryDescription).toContain("explicit dashboard request");
     expect(directoryDescription).toContain("multiple non-code visualizations");
+    expect(directoryDescription).toMatch(/widget_put.*plugin.*only/i);
+    expect(tool.description).not.toMatch(/show_widget|widget_code|\bpin\b/);
     expect(tool.parameters).toMatchObject({
       additionalProperties: false,
       properties: {
@@ -90,6 +92,68 @@ describe("dashboard tool", () => {
       type: "text",
       text: expect.stringContaining('"revision":3'),
     });
+  });
+
+  it("returns content ownership and valid update paths in model-visible snapshot details", async () => {
+    const widget = (
+      name: string,
+      contentKind: BoardSnapshot["widgets"][number]["contentKind"],
+      contentOwner: "html" | "mcp-app" | "plugin" | "registered",
+      instanceId?: string,
+    ): BoardSnapshot["widgets"][number] => ({
+      name,
+      tabId: "main",
+      contentKind,
+      contentOwner,
+      ...(contentOwner === "registered" ? { registeredContentKind: "diagram" } : {}),
+      ...(contentKind === "plugin" ? { pluginKind: `${name}:card` } : {}),
+      ...(instanceId ? { instanceId } : {}),
+      sizeW: 6,
+      sizeH: 4,
+      position: 0,
+      grantState: "none",
+      revision: 1,
+    });
+    const boardSnapshot: BoardSnapshot = {
+      ...snapshot,
+      widgets: [
+        widget("custom-html", "html", "html", "html-instance"),
+        widget("trusted-plugin", "plugin", "plugin", "incidental-instance"),
+        widget("registered-source", "plugin", "registered"),
+        widget("mcp-app", "mcp-app", "mcp-app", "mcp-instance"),
+      ],
+    };
+    const harness = recorder(boardSnapshot);
+    const tool = createDashboardTool({
+      agentSessionKey: "agent:main:main",
+      callGateway: harness.callGateway,
+    });
+
+    const result = await tool.execute("read", { action: "read" });
+
+    expect(result.details).toMatchObject({
+      widgets: [
+        { name: "custom-html", contentOwner: "html" },
+        { name: "trusted-plugin", contentOwner: "plugin" },
+        {
+          name: "registered-source",
+          contentOwner: "registered",
+          registeredContentKind: "diagram",
+        },
+        { name: "mcp-app", contentOwner: "mcp-app" },
+      ],
+      contentUpdatePaths: {
+        html: expect.stringMatching(/authoring.*tool catalog.*same name/i),
+        plugin: expect.stringMatching(/widget_put.*same name.*pluginKind/i),
+        registered: expect.stringMatching(/authoring.*tool catalog.*same source kind/i),
+        "mcp-app": expect.stringMatching(/MCP app/i),
+      },
+    });
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining('"contentOwner":"registered"'),
+    });
+    expect(JSON.stringify(result.details)).not.toMatch(/show_widget|widget_code|\bpin\b/);
   });
 
   it("rejects protocol-invalid focus tab ids before broadcasting", async () => {

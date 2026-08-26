@@ -845,6 +845,7 @@
               "type": "string"
             },
             "path": {
+              "description": "Required for config.schema.lookup; optional for config.get.",
               "type": "string"
             },
             "timeoutMs": {
@@ -1119,6 +1120,7 @@
             },
             "kinds": {
               "items": {
+                "enum": ["main", "group", "cron", "hook", "node", "other"],
                 "type": "string"
               },
               "type": "array"

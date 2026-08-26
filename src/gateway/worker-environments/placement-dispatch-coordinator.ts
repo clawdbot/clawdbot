@@ -119,23 +119,21 @@ export function coordinateWorkerPlacementDispatch(
       operation: ReturnType<WorkerPlacementDispatchService["move"]>;
     }
   >();
+  const joinOperation = async <T>(operation: Promise<T>, authorize?: () => void): Promise<T> => {
+    // Shared placement work must never inherit another caller's authority across an await.
+    authorize?.();
+    const result = await operation;
+    authorize?.();
+    return result;
+  };
   return {
     dispatch: async (request, onTransition, authorize) => {
       const inFlight = dispatchInFlight.get(request.sessionId);
       if (inFlight) {
-        if (
-          inFlight.request.sessionKey !== request.sessionKey ||
-          inFlight.request.agentId !== request.agentId ||
-          inFlight.request.profileId !== request.profileId ||
-          inFlight.request.executionMode !== request.executionMode ||
-          inFlight.request.idempotencyKey !== request.idempotencyKey ||
-          inFlight.request.deviceId !== request.deviceId ||
-          inFlight.request.machineClass !== request.machineClass ||
-          !isDeepStrictEqual(inFlight.request.inheritedProfile, request.inheritedProfile)
-        ) {
+        if (!isDeepStrictEqual(inFlight.request, request)) {
           throw new Error(`Session ${request.sessionKey} is already dispatching another request`);
         }
-        return await inFlight.operation;
+        return await joinOperation(inFlight.operation, authorize);
       }
       const operation = runPlacementOperation(() =>
         service.dispatch(request, onTransition, authorize),
@@ -159,7 +157,7 @@ export function coordinateWorkerPlacementDispatch(
         if (!isDeepStrictEqual(inFlight.request, request)) {
           throw new Error(`Session ${request.sessionKey} is already moving to another target`);
         }
-        return await inFlight.operation;
+        return await joinOperation(inFlight.operation, authorize);
       }
       const operation = runExclusivePlacementOperation(() =>
         service.move(request, onTransition, authorize),
@@ -175,7 +173,7 @@ export function coordinateWorkerPlacementDispatch(
     },
     reclaim: async (request, authorize) =>
       await runExclusivePlacementOperation(() => service.reclaim(request, authorize)),
-    reconcile: () => runReconciliation(service.reconcile),
+    reconcile: (mode) => runReconciliation(() => service.reconcile(mode)),
     reconcileActive: (environmentId) =>
       environmentId === undefined
         ? runReconciliation(() => service.reconcileActive())

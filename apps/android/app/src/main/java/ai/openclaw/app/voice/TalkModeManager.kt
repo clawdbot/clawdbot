@@ -3,6 +3,7 @@ package ai.openclaw.app.voice
 import ai.openclaw.app.gateway.ChatSendAck
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.TalkSessionCancelOutputResult
 import ai.openclaw.app.gateway.chatSendAckHistorySinceSeconds
 import ai.openclaw.app.gateway.parseChatSendAck
 import ai.openclaw.app.i18n.NativeText
@@ -60,6 +61,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.yield
+import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -384,7 +386,9 @@ class TalkModeManager internal constructor(
   private var realtimeWrittenFrames = 0L
   private val pendingRealtimePlaybackMarks = LinkedHashMap<String, PendingRealtimePlaybackMark>()
 
-  @Volatile private var pendingRealtimeOutputClear: CompletableDeferred<Unit>? = null
+  @Volatile private var pendingRealtimeOutputClear: CompletableDeferred<String?>? = null
+
+  @Volatile private var realtimeOutputTurnId: String? = null
   private val realtimeOutputCancellationMutex = Mutex()
 
   @Volatile
@@ -1305,7 +1309,7 @@ class TalkModeManager internal constructor(
       }
   }
 
-  private fun shouldAppendRealtimeCapturedFrame(length: Int): Boolean = !isRealtimePlaybackActive() && length > 0
+  private fun shouldAppendRealtimeCapturedFrame(length: Int): Boolean = pendingRealtimeOutputClear == null && !isRealtimePlaybackActive() && length > 0
 
   private fun isRealtimePlaybackActive(): Boolean = _isSpeaking.value || SystemClock.elapsedRealtime() < realtimePlaybackEndsAtMs
 
@@ -1338,6 +1342,9 @@ class TalkModeManager internal constructor(
       }
       "audio" -> {
         if (realtimeOutputSuppressed) return
+        val turnId = obj["talkEvent"].asObjectOrNull()?.get("turnId").asStringOrNull() ?: return
+        if (turnId.isBlank()) return
+        realtimeOutputTurnId = turnId
         finishRealtimeConversationEntry(VoiceConversationRole.User)
         val audioBase64 = obj["audioBase64"].asStringOrNull() ?: return
         val bytes =
@@ -1350,10 +1357,14 @@ class TalkModeManager internal constructor(
         playRealtimeAudio(bytes)
       }
       "clear" -> {
+        val turnId = obj["talkEvent"].asObjectOrNull()?.get("turnId").asStringOrNull()
+        val activeTurnId = realtimeOutputTurnId
+        if (!turnId.isNullOrBlank() && activeTurnId != null && turnId != activeTurnId) return
         val marks = takePendingRealtimePlaybackMarks()
         stopRealtimePlayback()
+        realtimeOutputTurnId = null
         acknowledgeRealtimePlaybackMarks(marks)
-        pendingRealtimeOutputClear?.complete(Unit)
+        pendingRealtimeOutputClear?.complete(turnId)
       }
       "mark" -> {
         val markName = obj["markName"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty) ?: return
@@ -1684,6 +1695,7 @@ class TalkModeManager internal constructor(
         currentSessionId to currentCaptureJobs
       }
     realtimeOutputSuppressed = false
+    realtimeOutputTurnId = null
     pendingRealtimeOutputClear?.cancel()
     pendingRealtimeOutputClear = null
     if (cancelCapture) {
@@ -1713,6 +1725,8 @@ class TalkModeManager internal constructor(
   }
 
   internal suspend fun pauseRealtimeCaptureForPushToTalk(captureId: String) {
+    val cancellationSessionId = realtimeSessionId
+    val cancellationTurnId = realtimeOutputTurnId?.trim()?.takeIf(String::isNotEmpty)
     val captureJobs =
       synchronized(realtimeCapturePauseLock) {
         val currentSessionId = realtimeSessionId
@@ -1729,7 +1743,13 @@ class TalkModeManager internal constructor(
     appendJob?.cancelAndJoin()
     // Stop input first so no frame can create new provider output while the
     // cancellation boundary is being established.
-    if (!cancelRealtimeOutput(reason = "android-push-to-talk")) {
+    if (
+      !cancelRealtimeOutput(
+        reason = "android-push-to-talk",
+        sessionId = cancellationSessionId,
+        turnId = cancellationTurnId,
+      )
+    ) {
       Log.w(tag, "realtime output cancellation was not confirmed; closing relay")
       stopRealtimeRelay(preserveStatus = true)
       synchronized(realtimeCapturePauseLock) {
@@ -2904,29 +2924,50 @@ class TalkModeManager internal constructor(
   }
 
   fun stopTts() {
+    val sessionId = realtimeSessionId
+    val turnId = realtimeOutputTurnId?.trim()?.takeIf(String::isNotEmpty)
     realtimeOutputSuppressed = true
     stopRealtimePlayback()
-    scope.launch { cancelRealtimeOutput(reason = "android-stop-tts") }
+    if (sessionId != null && turnId != null) {
+      scope.launch {
+        cancelRealtimeOutput(
+          reason = "android-stop-tts",
+          sessionId = sessionId,
+          turnId = turnId,
+        )
+      }
+    }
     stopSpeaking(resetInterrupt = true)
     _isSpeaking.value = false
     setStatus(nativeText("Listening"))
   }
 
-  private suspend fun cancelRealtimeOutput(reason: String): Boolean =
+  private suspend fun cancelRealtimeOutput(
+    reason: String,
+    sessionId: String?,
+    turnId: String?,
+  ): Boolean =
     realtimeOutputCancellationMutex.withLock {
-      val sessionId = realtimeSessionId ?: return@withLock true
-      val clear = CompletableDeferred<Unit>()
+      sessionId ?: return@withLock true
+      turnId ?: return@withLock false
+      val clear = CompletableDeferred<String?>()
       pendingRealtimeOutputClear = clear
       try {
         val params =
           buildJsonObject {
             put("sessionId", JsonPrimitive(sessionId))
             put("reason", JsonPrimitive(reason))
+            put("turnId", JsonPrimitive(turnId))
           }
-        requestGateway("talk.session.cancelOutput", params.toString(), timeoutMs = 5_000)
+        val response = requestGateway("talk.session.cancelOutput", params.toString(), timeoutMs = 5_000)
+        val result = requireAcceptedRealtimeOutputCancellation(response, turnId)
+        if (result.status == "stale" || result.status == "idle") return@withLock true
         // The response confirms provider cancellation; clear confirms that the
         // old playback boundary reached Android before capture can resume.
-        withTimeout(2_000) { clear.await() }
+        val clearedTurnId = withTimeout(2_000) { clear.await() }
+        check(clearedTurnId == turnId) {
+          "talk.session.cancelOutput clear turnId did not match"
+        }
         true
       } catch (err: TimeoutCancellationException) {
         Log.d(tag, "realtime cancelOutput unconfirmed: ${err.message ?: "timeout"}")
@@ -3321,6 +3362,26 @@ class TalkModeManager internal constructor(
 }
 
 private fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
+
+internal fun requireAcceptedRealtimeOutputCancellation(
+  response: String,
+  turnId: String?,
+): TalkSessionCancelOutputResult {
+  val result = Json.decodeFromString<TalkSessionCancelOutputResult>(response)
+  check(result.ok) { "talk.session.cancelOutput was not accepted" }
+  when (result.status) {
+    null,
+    "applied",
+    "stale",
+    "idle",
+    -> Unit
+    else -> error("unknown talk.session.cancelOutput status")
+  }
+  check(turnId == null || result.turnId == null || result.turnId == turnId) {
+    "talk.session.cancelOutput turnId did not match"
+  }
+  return result
+}
 
 private fun JsonElement?.asStringOrNull(): String? = (this as? JsonPrimitive)?.takeIf { it.isString }?.content
 

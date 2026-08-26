@@ -3,6 +3,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
+  readSessionProgressCard,
+  writeSessionProgressCard,
+} from "../../session-cards/progress-card-store.js";
+import {
   closeOpenClawAgentDatabasesForTest,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
@@ -403,6 +407,19 @@ describe("legacy main session migration", () => {
       session: { store: storePath },
     });
     seedClaim({ databaseAgentId: "main", databasePath: storePath, key: "agent:main:chat" });
+    runOpenClawAgentWriteTransaction(
+      (database) => {
+        writeSessionProgressCard(database.db, "agent:main:chat", {
+          markdown: "Keep working on the existing task",
+        });
+        database.db
+          .prepare(
+            "INSERT INTO heartbeat_outcomes (session_key, run_session_key, outcome, summary, occurred_at, updated_at) VALUES (?, ?, 'progress', 'Still working', 10, 10)",
+          )
+          .run("agent:main:chat", "agent:main:chat");
+      },
+      { agentId: "main", path: storePath },
+    );
 
     const result = await migrateLegacyMainSessionKeys({
       cfg: fixture.cfg,
@@ -417,6 +434,23 @@ describe("legacy main session migration", () => {
     expect(
       readClaim({ databaseAgentId: "main", databasePath: storePath, key: "agent:ops:chat" }),
     ).toBeDefined();
+    const migratedArtifacts = runOpenClawAgentWriteTransaction(
+      (database) => ({
+        heartbeat: database.db
+          .prepare("SELECT session_key, run_session_key FROM heartbeat_outcomes")
+          .get(),
+        progressCard: readSessionProgressCard(database.db, "agent:ops:chat"),
+      }),
+      { agentId: "main", path: storePath },
+    );
+    expect(migratedArtifacts).toMatchObject({
+      heartbeat: { session_key: "agent:ops:chat", run_session_key: "agent:ops:chat" },
+      progressCard: {
+        markdown: "Keep working on the existing task",
+        revision: 1,
+        sessionKey: "agent:ops:chat",
+      },
+    });
   });
 
   it.each([

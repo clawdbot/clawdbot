@@ -194,6 +194,29 @@ describe("auth profile batch persistence", () => {
     });
   });
 
+  it("reports a schema write failure instead of lock-contention retry advice", async () => {
+    await withAgentDir(async (agentDir) => {
+      await upsertAuthProfileWithLockOrThrow({
+        agentDir,
+        profileId: "openai:existing",
+        credential: apiKey("sk-existing"),
+      });
+      openOpenClawAgentDatabase({
+        agentId: "work",
+        path: resolveAuthProfileDatabasePath(agentDir),
+      }).db.exec("ALTER TABLE auth_profile_store DROP COLUMN updated_at");
+
+      const failure = await upsertAuthProfileWithLockOrThrow({
+        agentDir,
+        profileId: "openai:new",
+        credential: apiKey("sk-new"),
+      }).catch((error: unknown) => error);
+
+      expect(String(failure)).toContain("no column named updated_at");
+      expect(String(failure)).not.toContain("lock may be busy");
+    });
+  });
+
   it("leaves no partial profile batch when the SQLite state write fails", async () => {
     await withAgentDir(async (agentDir) => {
       const database = openOpenClawAgentDatabase({

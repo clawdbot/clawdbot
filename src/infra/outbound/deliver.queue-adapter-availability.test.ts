@@ -204,7 +204,7 @@ describe("queued lazy outbound adapter availability", () => {
     ).rejects.toThrow("provider result was lost");
     expect((await loadPendingDeliveries(tmpDir))[0]).toMatchObject({
       id: deliveryIntentId,
-      recoveryState: "send_attempt_started",
+      recoveryState: "unknown_after_send",
     });
 
     const recoveryDeliver = vi.fn<DeliverFn>(async () => []);

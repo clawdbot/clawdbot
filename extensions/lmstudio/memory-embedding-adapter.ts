@@ -30,7 +30,7 @@ export const lmstudioMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdap
           provider: providerId,
           baseUrl: client.baseUrl,
           model: client.model,
-          headers: sanitizeEmbeddingCacheHeaders(client.headers, ["authorization"]),
+          headers: sanitizeEmbeddingCacheHeaders(client.headers, ["authorization", "x-api-key"]),
         },
       },
     };

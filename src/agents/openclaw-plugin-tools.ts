@@ -31,7 +31,6 @@ import {
   resolveOpenClawPluginToolInputs,
   type OpenClawPluginToolOptions,
 } from "./openclaw-tools.plugin-context.js";
-import { applyPluginToolDeliveryDefaults } from "./plugin-tool-delivery-defaults.js";
 import { getPreparedPluginRuntimeLoadContext } from "./prepared-model-runtime.plugin-context.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
 import { resolveAgentRuntimeToolConfig } from "./tool-runtime-config.js";
@@ -188,7 +187,7 @@ function createPluginToolDelivery(params: {
   };
 }
 
-/** Resolves plugin tools for an agent run and applies delivery-context defaults. */
+/** Resolves plugin tools and their delivery context for an agent run. */
 export function resolveOpenClawPluginToolsForOptions(params: {
   options?: ResolveOpenClawPluginToolsOptions;
   resolvedConfig?: OpenClawConfig;
@@ -327,8 +326,5 @@ export function resolveOpenClawPluginToolsForOptions(params: {
     }),
   );
 
-  return applyPluginToolDeliveryDefaults({
-    tools: pluginTools,
-    deliveryContext: pluginToolInputs.context.deliveryContext,
-  });
+  return pluginTools;
 }

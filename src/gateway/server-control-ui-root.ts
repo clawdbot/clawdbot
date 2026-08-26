@@ -9,6 +9,7 @@ import {
   resolveControlUiRootSync,
 } from "../infra/control-ui-assets.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { createControlUiAssetRetention } from "./control-ui-asset-retention.js";
 import type { ControlUiRootState } from "./control-ui.js";
 
 type GatewayControlUiRootParams = {
@@ -33,19 +34,25 @@ function resolveAutoRoot(): string | null {
 }
 
 function createResolvedRootState(root: string, configured = false): ControlUiRootState {
-  return {
-    kind:
-      !configured &&
-      isPackageProvenControlUiRootSync(root, {
-        moduleUrl: import.meta.url,
-        argv1: process.argv[1],
-        cwd: process.cwd(),
-      })
-        ? "bundled"
-        : "resolved",
-    path: root,
-    realPath: fs.realpathSync(root),
-  };
+  const bundled =
+    !configured &&
+    isPackageProvenControlUiRootSync(root, {
+      moduleUrl: import.meta.url,
+      argv1: process.argv[1],
+      cwd: process.cwd(),
+    });
+  return bundled
+    ? {
+        kind: "bundled",
+        path: root,
+        realPath: fs.realpathSync(root),
+        retainedAssets: createControlUiAssetRetention(root),
+      }
+    : {
+        kind: "resolved",
+        path: root,
+        realPath: fs.realpathSync(root),
+      };
 }
 
 function prepareResolvedRootState(params: {
@@ -92,9 +99,28 @@ export function createGatewayControlUiRootLifecycle(
   }
 
   let buildPromise: Promise<void> | undefined;
-  const start = (isStopped: () => boolean, signal: AbortSignal): Promise<void> => {
-    if (state?.kind !== "preparing" || isStopped() || signal.aborted) {
+  let retentionPromise: Promise<void> | undefined;
+  const prepareRetention = (isStopped: () => boolean, signal: AbortSignal): Promise<void> => {
+    if (state?.kind !== "bundled" || !state.retainedAssets) {
       return Promise.resolve();
+    }
+    retentionPromise ??= state.retainedAssets
+      .prepare({ isCancelled: isStopped, signal })
+      .catch((error: unknown) => {
+        if (isStopped() || signal.aborted) {
+          return;
+        }
+        const detail = error instanceof Error ? error.message : String(error);
+        params.log.warn(`gateway: Control UI asset retention failed: ${detail}`);
+      });
+    return retentionPromise;
+  };
+  const start = (isStopped: () => boolean, signal: AbortSignal): Promise<void> => {
+    if (isStopped() || signal.aborted) {
+      return Promise.resolve();
+    }
+    if (state?.kind !== "preparing") {
+      return prepareRetention(isStopped, signal);
     }
     const preparingState = state;
     buildPromise ??= (async () => {
@@ -122,6 +148,7 @@ export function createGatewayControlUiRootLifecycle(
         // Listeners retain this object from before bind; replacing it would strand
         // their routes in the preparing state after a successful background build.
         Object.assign(preparingState, createResolvedRootState(resolvedRoot));
+        await prepareRetention(isStopped, signal);
       } catch (error) {
         if (isStopped() || signal.aborted) {
           return;
@@ -139,7 +166,7 @@ export function createGatewayControlUiRootLifecycle(
     state,
     start,
     stop: async () => {
-      await buildPromise;
+      await Promise.all([buildPromise, retentionPromise]);
     },
   };
 }

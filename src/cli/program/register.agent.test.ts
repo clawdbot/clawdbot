@@ -80,7 +80,7 @@ vi.mock("../one-shot-exit.js", () => ({
 
 describe("agent command registration", () => {
   async function runCli(args: string[]) {
-    const program = new Command();
+    const program = new Command().enablePositionalOptions();
     registerAgentTurnCommand(program, { agentChannelOptions: "last|telegram|discord" });
     registerAgentsCommands(program);
     await program.parseAsync(args, { from: "user" });
@@ -108,7 +108,7 @@ describe("agent command registration", () => {
     return call;
   }
 
-  it("keeps both agent thinking help surfaces aligned with the canonical levels", () => {
+  it("keeps agent help aligned with supported thinking levels and auth sources", () => {
     const program = new Command();
     registerAgentTurnCommand(program, { agentChannelOptions: "last|telegram|discord" });
     const agent = program.commands.find((command) => command.name() === "agent");
@@ -119,6 +119,9 @@ describe("agent command registration", () => {
     );
     expect(exec?.options.find((option) => option.long === "--thinking")?.description).toContain(
       "ultra",
+    );
+    expect(agent?.options.find((option) => option.long === "--local")?.description).toContain(
+      "configured provider credentials or local CLI logins",
     );
   });
 
@@ -177,12 +180,22 @@ describe("agent command registration", () => {
     expect(deps).toBeUndefined();
   });
 
-  it("keeps bare agent on the existing parent action", async () => {
-    await runCli(["agent", "--message", "hi", "--agent", "ops"]);
+  it.each([0, 1])("keeps bare agent on the parent action with exit code %i", async (exitCode) => {
+    const previousExitCode = process.exitCode;
+    agentCliCommandMock.mockImplementationOnce(async () => {
+      process.exitCode = exitCode;
+    });
 
-    expect(agentCliCommandMock).toHaveBeenCalledTimes(1);
-    expect(agentExecCommandMock).not.toHaveBeenCalled();
-    expect(requestExitAfterOneShotOutputMock).toHaveBeenCalledWith(runtime, 0);
+    try {
+      await runCli(["agent", "--message", "hi", "--agent", "ops"]);
+
+      expect(agentCliCommandMock).toHaveBeenCalledTimes(1);
+      expect(agentExecCommandMock).not.toHaveBeenCalled();
+      expect(requestExitAfterOneShotOutputMock).toHaveBeenCalledWith(runtime);
+      expect(process.exitCode).toBe(exitCode);
+    } finally {
+      process.exitCode = previousExitCode;
+    }
   });
 
   it("keeps an exec-valued parent message on the existing parent action", async () => {
@@ -258,6 +271,29 @@ describe("agent command registration", () => {
     expect(agentExecCommandMock).toHaveBeenCalledWith(
       "fix it",
       expect.objectContaining({ model: "openai/gpt-5.6-sol", json: true }),
+      runtime,
+    );
+  });
+
+  it("resolves nested exec --timeout from the explicit leaf, then the parent, then the default", async () => {
+    await runCli(["agent", "exec", "fix it", "--timeout", "120"]);
+    expect(agentExecCommandMock).toHaveBeenLastCalledWith(
+      "fix it",
+      expect.objectContaining({ timeout: "120" }),
+      runtime,
+    );
+
+    await runCli(["agent", "--timeout", "30", "exec", "fix it"]);
+    expect(agentExecCommandMock).toHaveBeenLastCalledWith(
+      "fix it",
+      expect.objectContaining({ timeout: "30" }),
+      runtime,
+    );
+
+    await runCli(["agent", "--timeout", "30", "exec", "fix it", "--timeout", "120"]);
+    expect(agentExecCommandMock).toHaveBeenLastCalledWith(
+      "fix it",
+      expect.objectContaining({ timeout: "120" }),
       runtime,
     );
   });

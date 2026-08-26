@@ -298,6 +298,11 @@ export function buildQaToolSearchArgs(
   if (targetTool === "message") {
     return { action: "send", message: "runtime parity message fixture" };
   }
+  if (targetTool === "openclaw") {
+    return {
+      message: "Reply exactly QA-SYSTEM-AGENT-DELEGATE-INFERENCE-OK. Do not call tools.",
+    };
+  }
   if (targetTool === "ask_user") {
     return {
       questions: [

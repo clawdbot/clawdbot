@@ -7,6 +7,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { isDeepStrictEqual } from "node:util";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isSecretRef } from "../../config/types.secrets.js";
+import { isSqliteLockError } from "../../infra/sqlite-transaction.js";
 import { isRecord } from "../../utils.js";
 import { cloneAuthProfileStore } from "./clone.js";
 import { AUTH_STORE_VERSION, authProfilesLog } from "./constants.js";
@@ -862,7 +863,7 @@ function mergeRuntimeExternalProfileState(params: {
   return merged;
 }
 
-/** Apply an auth store update inside the SQLite write lock; null on write failure, rethrows credential-boundary errors. */
+/** Apply an auth store update inside the SQLite write lock; null only on lock contention. */
 export async function updateAuthProfileStoreWithLock(params: {
   agentDir?: string;
   sharedStoreWrite?: boolean;
@@ -896,19 +897,14 @@ export async function updateAuthProfileStoreWithLock(params: {
       { sharedStoreWrite: params.sharedStoreWrite, stateDir: params.stateDir },
     );
   } catch (error) {
-    // Credential-boundary failures name their own remediation; collapsing them
-    // into `null` makes callers report a lock-contention retry that never clears.
-    const isCredentialBoundaryFailure =
-      error instanceof AuthProfileMigrationRequiredError ||
-      error instanceof AuthProfileStoreUnreadableError;
-    if (isCredentialBoundaryFailure) {
-      throw error;
-    }
     const message = error instanceof Error ? error.message : String(error);
     authProfilesLog.warn(`auth profile store update failed: ${message}`, {
       agentDir,
       error: message,
     });
+    if (!isSqliteLockError(error)) {
+      throw error;
+    }
     return null;
   }
   publishRuntimeSnapshotsAfterCommit(publishRuntimeSnapshots);

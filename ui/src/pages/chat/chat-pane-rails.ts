@@ -14,6 +14,26 @@ import {
 type ChatPaneSidebarLayout = Parameters<typeof isSidebarSlotVisible>[0];
 type ChatPaneGatewaySnapshot = Parameters<typeof isDesktopPanelAvailable>[0];
 
+export type ChatProgressCardPlacement = "composer" | "rail";
+
+/** Picks the single live progress-card placement for one chat pane. */
+function chatProgressCardPlacement(params: {
+  companionRailVisible: boolean;
+}): ChatProgressCardPlacement {
+  if (params.companionRailVisible) {
+    return "rail";
+  }
+  return "composer";
+}
+
+export function releaseAttachmentWorkspaceOwner(state: ChatPageHost, slot: SidebarSlotId): void {
+  // Attachment views temporarily own Files content. Release that owner
+  // with the slot so reopening Files restores the session workspace.
+  if (slot === "workspace") {
+    state.attachmentSidebarContent = null;
+  }
+}
+
 /** Builds the two rail models and their shared sidebar slot controls. */
 export function createChatPaneRails(params: {
   state: ChatPageHost;
@@ -37,13 +57,14 @@ export function createChatPaneRails(params: {
     if (slot === "companion") {
       params.setObserverVisibility(false);
     }
+    releaseAttachmentWorkspaceOwner(state, slot);
     state.updateSidebarLayout(closeSlot(state.sidebarLayout, slot));
   };
   const togglePanelSlot = (slot: SidebarSlotId) =>
     hasPanelSlot(slot) ? closePanelSlot(slot) : openPanelSlot(slot);
   const sessionWorkspaceBase = createSessionWorkspaceProps(state, {
     draftScope: params.presentationId,
-    expanded: hasPanelSlot("workspace"),
+    expanded: isSidebarSlotVisible(sidebarLayout, "workspace"),
     narrowLayout: false,
     presented: params.presented,
   });
@@ -70,14 +91,16 @@ export function createChatPaneRails(params: {
     narrowLayout: false,
     onToggleCollapsed: () => togglePanelSlot("tasks"),
   };
-  const progressCardInRail =
-    params.paneWidth >= SIDEBAR_NARROW_BREAKPOINT_PX &&
-    isSidebarSlotVisible(sidebarLayout, "companion");
+  const progressCardPlacement = chatProgressCardPlacement({
+    companionRailVisible:
+      params.paneWidth >= SIDEBAR_NARROW_BREAKPOINT_PX &&
+      isSidebarSlotVisible(sidebarLayout, "companion"),
+  });
   return {
     backgroundTasks,
     closePanelSlot,
     openPanelSlot,
-    progressCardInRail,
+    progressCardPlacement,
     sessionWorkspace,
   };
 }

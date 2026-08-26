@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
+import type { SessionMessageSubscriberRegistry } from "./server-chat-state.js";
 
 const sessionRow = vi.hoisted(() => ({
   key: "agent:main:main",
@@ -16,9 +17,11 @@ const sessionRow = vi.hoisted(() => ({
 const resolveEmbeddedAgentRunProgressStateMock = vi.hoisted(() => vi.fn());
 const loadGatewaySessionRowMock = vi.hoisted(() => vi.fn());
 const projectChatDisplayMessageMock = vi.hoisted(() => vi.fn((message: unknown) => message));
+const listAccessorSessionEntriesReadOnlyMock = vi.hoisted(() => vi.fn());
 const loadAccessorSessionEntryReadOnlyMock = vi.hoisted(() => vi.fn());
 const loadGatewaySessionEntryReadOnlyMock = vi.hoisted(() => vi.fn());
 const readSessionMessageCountAsyncMock = vi.hoisted(() => vi.fn());
+const resolveTranscriptSessionKeyBySessionIdMock = vi.hoisted(() => vi.fn());
 const runtimeConfigState = vi.hoisted(() => ({ value: {} as Record<string, unknown> }));
 
 vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => runtimeConfigState.value }));
@@ -26,7 +29,9 @@ vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/sessions/session-accessor.js")>();
   return {
     ...actual,
+    listSessionEntriesReadOnly: listAccessorSessionEntriesReadOnlyMock,
     loadSessionEntryReadOnly: loadAccessorSessionEntryReadOnlyMock,
+    resolveTranscriptSessionKeyBySessionId: resolveTranscriptSessionKeyBySessionIdMock,
   };
 });
 vi.mock("./chat-display-projection.js", () => ({
@@ -76,17 +81,43 @@ function createActiveRun(
   };
 }
 
-function createHandler(projectSessionActive: boolean, executionStarted = true) {
+function fixedStoreRuntimeConfig(ownerAgentId: string, configuredAgentIds: string[]) {
+  return {
+    session: { store: "/tmp/shared.sqlite" },
+    agents: {
+      ownership: "explicit",
+      defaults: { sessionStore: { agentId: ownerAgentId } },
+      entries: Object.fromEntries(configuredAgentIds.map((agentId) => [agentId, {}])),
+    },
+  };
+}
+
+function createHandler(
+  projectSessionActive: boolean,
+  executionStarted = true,
+  getSessionMessageSubscribers: SessionMessageSubscriberRegistry["get"] = () => new Set<string>(),
+) {
   const broadcastToConnIds = vi.fn();
   const handler = createTranscriptUpdateBroadcastHandler({
     broadcastToConnIds,
     sessionEventSubscribers: { getAll: () => new Set(["conn-1"]) },
-    sessionMessageSubscribers: { get: () => new Set<string>() },
+    sessionMessageSubscribers: { get: getSessionMessageSubscribers },
     chatAbortControllers: new Map([
       ["run-before-finalize", createActiveRun(projectSessionActive, executionStarted)],
     ]),
   });
   return { broadcastToConnIds, handler };
+}
+
+const PRIVATE_SESSION_FIELDS =
+  "agentId session message owner goal status hasActiveRun activeRunIds model responseUsage".split(
+    " ",
+  );
+
+function expectPrivateSessionInvalidation(payload: unknown) {
+  for (const field of PRIVATE_SESSION_FIELDS) {
+    expect(payload, field).not.toHaveProperty(field);
+  }
 }
 
 async function emitAssistantTranscriptUpdate(
@@ -110,10 +141,12 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resolveEmbeddedAgentRunProgressStateMock.mockReturnValue(undefined);
+    listAccessorSessionEntriesReadOnlyMock.mockReturnValue([]);
     loadAccessorSessionEntryReadOnlyMock.mockReturnValue(undefined);
     loadGatewaySessionEntryReadOnlyMock.mockReturnValue({ entry: undefined, storePath: "" });
     loadGatewaySessionRowMock.mockReturnValue(sessionRow);
     readSessionMessageCountAsyncMock.mockResolvedValue(undefined);
+    resolveTranscriptSessionKeyBySessionIdMock.mockReturnValue(undefined);
     loadGatewaySessionRowMock.mockReturnValue(sessionRow);
     runtimeConfigState.value = {};
     sessionRow.key = "agent:main:main";
@@ -197,6 +230,35 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     expect(payload).not.toHaveProperty("storePath");
     expect(payload).not.toHaveProperty("target.storePath");
     expect(readSessionMessageCountAsyncMock).not.toHaveBeenCalled();
+  });
+
+  it("scopes a queued marker update to its final transcript key", async () => {
+    resolveTranscriptSessionKeyBySessionIdMock
+      .mockReturnValueOnce("agent:main:queued")
+      .mockReturnValue("agent:main:current");
+    listAccessorSessionEntriesReadOnlyMock.mockReturnValue([
+      { key: "agent:main:current", entry: { sessionId: "sess-main" } },
+    ]);
+    const getSessionMessageSubscribers = vi.fn((sessionKey: string) =>
+      sessionKey === "agent:main:current" ? new Set(["conn-current"]) : new Set(["conn-stale"]),
+    );
+    const { broadcastToConnIds, handler } = createHandler(
+      false,
+      true,
+      getSessionMessageSubscribers,
+    );
+
+    await handler({
+      sessionFile: "sqlite:main:sess-main:/tmp/explicit-sessions.json",
+    });
+
+    expect(getSessionMessageSubscribers).toHaveBeenCalledWith("agent:main:current");
+    expect(getSessionMessageSubscribers).not.toHaveBeenCalledWith("agent:main:queued");
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.changed",
+      expect.objectContaining({ sessionKey: "agent:main:current" }),
+      new Set(["conn-1", "conn-current"]),
+    );
   });
 
   it("rejects an identity-only invalidation when its custom-store owner was deleted", async () => {
@@ -481,11 +543,13 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     expect(payload).not.toHaveProperty("session.thinkingDefault");
   });
 
-  it("emits an explicit null when the thinking override is cleared", async () => {
+  it("emits explicit tombstones in transcript snapshots", async () => {
     sessionRow.thinkingLevel = undefined;
 
     await expect(emitAssistantTranscriptUpdate(false)).resolves.toMatchObject({
-      session: { thinkingLevel: null },
+      agentStatus: null,
+      observerDigest: null,
+      session: { thinkingLevel: null, agentStatus: null, observerDigest: null },
     });
   });
 
@@ -516,16 +580,24 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     expect(resolveEmbeddedAgentRunProgressStateMock).toHaveBeenCalledWith("sess-main");
   });
 
-  it("routes an ownerless bare transcript event through the persisted fixed-store owner", async () => {
-    runtimeConfigState.value = {
-      session: { store: "/tmp/owned-shared.sqlite" },
-      agents: {
-        ownership: "explicit",
-        defaults: { sessionStore: { agentId: "ops" } },
-        entries: { ops: {}, research: {} },
-      },
-    };
+  it.each([
+    { name: "routes the configured persisted owner without publishing its goal" },
+    { name: "publishes the explicit owner's identity and goal", agentId: "ops" },
+  ])("$name", async ({ agentId }) => {
+    runtimeConfigState.value = fixedStoreRuntimeConfig("ops", ["ops", "research"]);
     sessionRow.key = "global";
+    const goal = {
+      schemaVersion: 1 as const,
+      id: "goal-ops",
+      objective: "Ops only",
+      status: "active" as const,
+      createdAt: 1,
+      updatedAt: 2,
+      tokenStart: 0,
+      tokensUsed: 3,
+      continuationTurns: 0,
+    };
+    loadGatewaySessionRowMock.mockReturnValue({ ...sessionRow, goal });
     const getSessionMessageSubscribers = vi.fn((sessionKey: string) =>
       sessionKey === "global"
         ? new Set(["conn-global"])
@@ -543,6 +615,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
 
     await handler({
       sessionKey: "global",
+      ...(agentId ? { agentId } : {}),
       message: { role: "assistant", content: [{ type: "text", text: "Owner reply" }] },
       messageId: "message-global-owner",
       messageSeq: 1,
@@ -559,6 +632,53 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       expect.objectContaining({ sessionKey: "global" }),
       new Set(["conn-scoped", "conn-global"]),
     );
+    const payload = broadcastToConnIds.mock.calls[0]?.[1];
+    if (agentId) {
+      expect(payload).toMatchObject({ agentId: "ops", goal, session: { goal } });
+    } else {
+      expect(payload).not.toHaveProperty("agentId");
+      expect(payload).not.toHaveProperty("goal");
+      expect(payload).not.toHaveProperty("session.goal");
+    }
+  });
+
+  it("keeps a retired fixed-store owner private instead of routing through another agent", async () => {
+    runtimeConfigState.value = fixedStoreRuntimeConfig("ops", ["research"]);
+    const getSessionMessageSubscribers = vi.fn((sessionKey: string) =>
+      sessionKey === "agent:ops:global"
+        ? new Set(["conn-ops"])
+        : sessionKey === "agent:research:global"
+          ? new Set(["conn-research"])
+          : new Set<string>(),
+    );
+    const { broadcastToConnIds, handler } = createHandler(
+      false,
+      true,
+      getSessionMessageSubscribers,
+    );
+
+    await handler({
+      sessionKey: "global",
+      message: { role: "assistant", content: [{ type: "text", text: "private owner" }] },
+      messageId: "message-retired-owner",
+      messageSeq: 1,
+    });
+
+    expect(getSessionMessageSubscribers).toHaveBeenCalledWith("agent:ops:global");
+    expect(getSessionMessageSubscribers).not.toHaveBeenCalledWith("agent:research:global");
+    expect(loadGatewaySessionRowMock).not.toHaveBeenCalled();
+    expect(broadcastToConnIds).toHaveBeenCalledOnce();
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.changed",
+      expect.objectContaining({ sessionKey: "global", phase: "message" }),
+      new Set(["conn-1", "conn-ops"]),
+      {
+        agentId: "ops",
+        dropIfSlow: true,
+        sessionKeys: ["agent:ops:global"],
+      },
+    );
+    expectPrivateSessionInvalidation(broadcastToConnIds.mock.calls[0]?.[1]);
   });
 
   it("broadcasts user idempotency keys in session.message metadata", async () => {
@@ -650,14 +770,30 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     expect(broadcastToConnIds.mock.calls[0]?.[1]).toMatchObject({ messageSeq: 7 });
   });
 
-  it("does not stall one session's broadcasts behind another session's pending seq read", async () => {
+  it.each([
+    {
+      name: "distinct session keys",
+      slowAgentId: "main",
+      slowSessionKey: "agent:main:slow",
+      fastAgentId: "main",
+      fastSessionKey: "agent:main:main",
+    },
+    {
+      name: "global sessions owned by different agents",
+      slowAgentId: "main",
+      slowSessionKey: "global",
+      fastAgentId: "research",
+      fastSessionKey: "global",
+    },
+  ])("does not stall $name behind another transcript's pending seq read", async (scenario) => {
     let releaseSlowCount: (value: number | undefined) => void = () => undefined;
-    readSessionMessageCountAsyncMock.mockImplementation((params: { sessionKey?: string }) =>
-      params.sessionKey === "agent:main:slow"
-        ? new Promise<number | undefined>((resolve) => {
-            releaseSlowCount = resolve;
-          })
-        : Promise.resolve(3),
+    readSessionMessageCountAsyncMock.mockImplementation(
+      (params: { agentId?: string; sessionKey?: string }) =>
+        params.agentId === scenario.slowAgentId && params.sessionKey === scenario.slowSessionKey
+          ? new Promise<number | undefined>((resolve) => {
+              releaseSlowCount = resolve;
+            })
+          : Promise.resolve(3),
     );
     loadAccessorSessionEntryReadOnlyMock.mockReturnValue({ sessionId: "sess-main" });
     const { broadcastToConnIds, handler } = createHandler(false);
@@ -667,32 +803,81 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       message: { role: "assistant", content: [{ type: "text", text: "slow" }] },
       messageId: "slow-1",
       target: {
-        agentId: "main",
+        agentId: scenario.slowAgentId,
         sessionId: "sess-slow",
-        sessionKey: "agent:main:slow",
+        sessionKey: scenario.slowSessionKey,
         storePath: "/tmp/slow-sessions.json",
       },
     });
+    await vi.waitFor(() => expect(readSessionMessageCountAsyncMock).toHaveBeenCalledOnce());
 
-    await handler({
+    const fastTask = handler({
       sessionFile: "/tmp/sess-main.jsonl",
-      sessionKey: "agent:main:main",
+      agentId: scenario.fastAgentId,
+      sessionKey: scenario.fastSessionKey,
       message: { role: "assistant", content: [{ type: "text", text: "fast" }] },
       messageId: "fast-1",
       messageSeq: 1,
     });
 
-    // The independent lane broadcast completed while the slow lane is parked.
-    expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
-    expect(broadcastToConnIds.mock.calls[0]?.[1]).toMatchObject({ messageId: "fast-1" });
+    try {
+      // The independent lane must publish while the other transcript remains parked.
+      await vi.waitFor(() => expect(broadcastToConnIds).toHaveBeenCalledOnce(), {
+        timeout: 100,
+        interval: 5,
+      });
+      expect(broadcastToConnIds.mock.calls[0]?.[1]).toMatchObject({ messageId: "fast-1" });
+    } finally {
+      releaseSlowCount(5);
+      await Promise.allSettled([slowTask, fastTask]);
+    }
 
-    releaseSlowCount(5);
-    await slowTask;
     expect(broadcastToConnIds).toHaveBeenCalledTimes(2);
     expect(broadcastToConnIds.mock.calls[1]?.[1]).toMatchObject({ messageId: "slow-1" });
   });
 
-  it("preserves message order within one session lane", async () => {
+  it.each([
+    {
+      name: "an agent-qualified session",
+      firstSessionKey: "agent:main:main",
+      secondSessionKey: "agent:main:main",
+      agentId: "main",
+    },
+    {
+      name: "an ownerless legacy global update",
+      firstSessionKey: "global",
+      secondSessionKey: "global",
+      agentId: "main",
+    },
+    {
+      name: "a global session and its agent-qualified alias",
+      firstSessionKey: "global",
+      secondSessionKey: "agent:main:global",
+      agentId: "main",
+    },
+    {
+      name: "a marker-only update and its canonical transcript key",
+      firstSessionKey: "agent:main:main",
+      secondSessionKey: "agent:main:main",
+      agentId: "main",
+      markerOnly: true,
+    },
+    {
+      name: "an ownerless global update in its configured fixed store",
+      firstSessionKey: "global",
+      secondSessionKey: "global",
+      agentId: "ops",
+      config: {
+        session: { store: "/tmp/owned-shared.sqlite" },
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          entries: { ops: {}, research: {} },
+        },
+      },
+    },
+  ])("preserves message order for $name", async (scenario) => {
+    runtimeConfigState.value = scenario.config ?? {};
     let releaseFirstCount: (value: number | undefined) => void = () => undefined;
     readSessionMessageCountAsyncMock.mockImplementationOnce(
       () =>
@@ -701,31 +886,45 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
         }),
     );
     loadAccessorSessionEntryReadOnlyMock.mockReturnValue({ sessionId: "sess-main" });
+    if (scenario.markerOnly) {
+      listAccessorSessionEntriesReadOnlyMock.mockReturnValue([
+        { key: scenario.firstSessionKey, entry: { sessionId: "sess-main" } },
+      ]);
+      resolveTranscriptSessionKeyBySessionIdMock.mockReturnValue(scenario.firstSessionKey);
+    }
     const { broadcastToConnIds, handler } = createHandler(false);
 
     const firstTask = handler({
       message: { role: "assistant", content: [{ type: "text", text: "first" }] },
       messageId: "ordered-1",
-      target: {
-        agentId: "main",
-        sessionId: "sess-main",
-        sessionKey: "agent:main:main",
-        storePath: "/tmp/explicit-sessions.json",
-      },
+      ...(scenario.markerOnly
+        ? { sessionFile: `sqlite:${scenario.agentId}:sess-main:/tmp/explicit-sessions.json` }
+        : {
+            target: {
+              agentId: scenario.agentId,
+              sessionId: "sess-main",
+              sessionKey: scenario.firstSessionKey,
+              storePath: "/tmp/explicit-sessions.json",
+            },
+          }),
     });
+    await vi.waitFor(() => expect(readSessionMessageCountAsyncMock).toHaveBeenCalledOnce());
     const secondTask = handler({
       sessionFile: "/tmp/sess-main.jsonl",
-      sessionKey: "agent:main:main",
+      sessionKey: scenario.secondSessionKey,
       message: { role: "assistant", content: [{ type: "text", text: "second" }] },
       messageId: "ordered-2",
       messageSeq: 2,
     });
 
     await Promise.resolve();
-    expect(broadcastToConnIds).not.toHaveBeenCalled();
-
-    releaseFirstCount(1);
-    await Promise.all([firstTask, secondTask]);
+    await Promise.resolve();
+    try {
+      expect(broadcastToConnIds).not.toHaveBeenCalled();
+    } finally {
+      releaseFirstCount(1);
+      await Promise.allSettled([firstTask, secondTask]);
+    }
     expect(broadcastToConnIds.mock.calls.map((call) => call[1]?.messageId)).toEqual([
       "ordered-1",
       "ordered-2",
@@ -797,16 +996,24 @@ describe("createLifecycleEventBroadcastHandler", () => {
     }
   });
 
-  it("projects active state for a bare lifecycle event through the persisted owner", () => {
-    runtimeConfigState.value = {
-      session: { store: "/tmp/owned-shared.sqlite" },
-      agents: {
-        ownership: "explicit",
-        defaults: { sessionStore: { agentId: "ops" } },
-        entries: { ops: {}, research: {} },
-      },
-    };
+  it.each([
+    { name: "projects configured persisted state without publishing its goal" },
+    { name: "publishes active state and goal for the explicit owner", agentId: "ops" },
+  ])("$name", ({ agentId }) => {
+    runtimeConfigState.value = fixedStoreRuntimeConfig("ops", ["ops", "research"]);
     sessionRow.key = "global";
+    const goal = {
+      schemaVersion: 1 as const,
+      id: "goal-ops",
+      objective: "Ops only",
+      status: "active" as const,
+      createdAt: 1,
+      updatedAt: 2,
+      tokenStart: 0,
+      tokensUsed: 3,
+      continuationTurns: 0,
+    };
+    loadGatewaySessionRowMock.mockReturnValue({ ...sessionRow, goal });
     const activeRun = {
       ...createActiveRun(true),
       agentId: "ops",
@@ -819,7 +1026,7 @@ describe("createLifecycleEventBroadcastHandler", () => {
       chatAbortControllers: new Map([["run-before-finalize", activeRun]]),
     });
 
-    handler({ sessionKey: "global", reason: "updated" });
+    handler({ sessionKey: "global", ...(agentId ? { agentId } : {}), reason: "updated" });
 
     expect(loadGatewaySessionRowMock).toHaveBeenCalledWith("global", { agentId: "ops" });
     expect(broadcastToConnIds).toHaveBeenCalledWith(
@@ -832,5 +1039,38 @@ describe("createLifecycleEventBroadcastHandler", () => {
       new Set(["conn-1"]),
       { dropIfSlow: true },
     );
+    const payload = broadcastToConnIds.mock.calls[0]?.[1];
+    if (agentId) {
+      expect(payload).toMatchObject({ agentId: "ops", goal });
+    } else {
+      expect(payload).not.toHaveProperty("agentId");
+      expect(payload).not.toHaveProperty("goal");
+      expect(payload).not.toHaveProperty("session.goal");
+    }
+  });
+
+  it("publishes only a private invalidation for a retired fixed-store lifecycle owner", () => {
+    runtimeConfigState.value = fixedStoreRuntimeConfig("ops", ["research"]);
+    const broadcastToConnIds = vi.fn();
+    const handler = createLifecycleEventBroadcastHandler({
+      broadcastToConnIds,
+      sessionEventSubscribers: { getAll: () => new Set(["conn-events"]) },
+      chatAbortControllers: new Map(),
+    });
+
+    handler({ sessionKey: "global", reason: "updated" });
+
+    expect(loadGatewaySessionRowMock).not.toHaveBeenCalled();
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.changed",
+      expect.objectContaining({ sessionKey: "global", reason: "updated" }),
+      new Set(["conn-events"]),
+      {
+        agentId: "ops",
+        dropIfSlow: true,
+        sessionKeys: ["agent:ops:global"],
+      },
+    );
+    expectPrivateSessionInvalidation(broadcastToConnIds.mock.calls[0]?.[1]);
   });
 });

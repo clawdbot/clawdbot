@@ -661,7 +661,7 @@ private actor ProcessMLXTTSTransport: MLXTTSTransport {
         }
 
         let configuration = Subprocess.Configuration(
-            .path(.init(invocation.executableURL.path)),
+            executable: .path(.init(invocation.executableURL.path)),
             arguments: Arguments(invocation.argumentPrefix))
         let process = ManagedProcess.launch(
             configuration: configuration,

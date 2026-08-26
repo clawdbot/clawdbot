@@ -100,7 +100,7 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     .command("install")
     .description("Install the Gateway service (launchd/systemd/schtasks)")
     .option("--port <port>", "Gateway port")
-    .option("--runtime <runtime>", "Daemon runtime (node). Default: node")
+    .option("--runtime <runtime>", "Daemon runtime (node|bun). Default: node")
     .option("--token <token>", "Gateway token (token auth)")
     .option("--wrapper <path>", "Executable wrapper for generated service ProgramArguments")
     .option("--force", "Reinstall/overwrite if already installed", false)
@@ -153,7 +153,11 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
         "(bounded wait; may force after the timeout expires)",
       false,
     )
-    .option("--skip-deferral", "Bypass the safe-restart deferral gate; requires --safe", false)
+    .option(
+      "--skip-deferral",
+      "Bypass the safe-restart active-work deferral gate; close-stage reply drain still applies; requires --safe",
+      false,
+    )
     .option(
       "--wait <duration>",
       "Wait duration before restart (ms, 10s, 5m; 0 waits indefinitely). " +

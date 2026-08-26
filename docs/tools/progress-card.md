@@ -86,9 +86,11 @@ An empty plan plus empty or whitespace-only Markdown also clears it. A successfu
 The current chat shows exactly one live card:
 
 - When the session rail is visible, the card appears in the rail.
-- At narrow widths where the rail is hidden, the card appears in the collapsible surface beside the composer.
+- Otherwise, when the chat is wide enough that the centered composer leaves a free gutter, the card docks in that space beside the composer with its full checklist expanded.
+- At narrower widths the card appears in the collapsible surface inside the composer.
 
-The two placements are mutually exclusive. Hover a session row in the sidebar or a session-reference link in chat to see the same card for that session. All card placements read the same Gateway-backed state and refresh after `progressCard.changed` notifications.
+The placements are mutually exclusive. Hover a session row in the sidebar or a session-reference link in chat to see the same card for that session. All card placements read the same Gateway-backed state and refresh after `progressCard.changed` notifications.
+Each placement shows the local time of the last progress update, including seconds.
 
 ## Pin the card to the dashboard
 

@@ -37,6 +37,21 @@ async function withListeningServer(
 }
 
 describe("tryListenOnPort", () => {
+  it("rejects an already-aborted bind without opening a listener", async () => {
+    const abortController = new AbortController();
+    const reason = new Error("probe cancelled");
+    abortController.abort(reason);
+
+    await expect(
+      tryListenOnPort({
+        port: 0,
+        host: "127.0.0.1",
+        exclusive: true,
+        signal: abortController.signal,
+      }),
+    ).rejects.toBe(reason);
+  });
+
   it("can bind and release an ephemeral loopback port", async () => {
     let port;
     try {

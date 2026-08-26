@@ -4,10 +4,7 @@
 import { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionContextBudgetStatus } from "../../../config/sessions.js";
-import {
-  MIN_PROMPT_BUDGET_RATIO,
-  MIN_PROMPT_BUDGET_TOKENS,
-} from "../../agent-compaction-constants.js";
+import { resolveEffectiveCompactionReserveTokens } from "../../agent-compaction-constants.js";
 import { SAFETY_MARGIN } from "../../compaction.js";
 import type { AgentMessage, BashExecutionMessage } from "../../runtime/index.js";
 import {
@@ -156,6 +153,9 @@ function estimateContentTokenPressure(
 }
 
 function estimateMessageTokenPressure(message: AgentMessage): number {
+  if ("excludeFromContext" in message && message.excludeFromContext === true) {
+    return 0;
+  }
   // Provider replay can carry legacy aliases outside the canonical AgentMessage union.
   const legacy: Record<string, unknown> = isRecord(message) ? message : {};
   let tokens = MESSAGE_BOUNDARY_OVERHEAD_TOKENS;
@@ -169,9 +169,6 @@ function estimateMessageTokenPressure(message: AgentMessage): number {
   }
 
   if (message.role === "bashExecution") {
-    if (message.excludeFromContext === true) {
-      return 0;
-    }
     const bashMessage: BashExecutionMessage = message;
     tokens += estimateStringTokenPressure(bashExecutionToText(bashMessage));
     return tokens;
@@ -368,16 +365,10 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
     }
   }
   const contextTokenBudget = Math.max(1, Math.floor(params.contextTokenBudget));
-  const requestedReserveTokens = Math.max(0, Math.floor(params.reserveTokens));
-  const minPromptBudget = Math.min(
-    MIN_PROMPT_BUDGET_TOKENS,
-    Math.max(1, Math.floor(contextTokenBudget * MIN_PROMPT_BUDGET_RATIO)),
-  );
-  // Keep a minimum prompt budget even when reserveTokens asks for most of the context window.
-  const effectiveReserveTokens = Math.min(
-    requestedReserveTokens,
-    Math.max(0, contextTokenBudget - minPromptBudget),
-  );
+  const effectiveReserveTokens = resolveEffectiveCompactionReserveTokens({
+    contextTokenBudget,
+    reserveTokens: params.reserveTokens,
+  });
   const promptBudgetBeforeReserve = Math.max(1, contextTokenBudget - effectiveReserveTokens);
   const overflowTokens = Math.max(0, estimatedPromptTokens - promptBudgetBeforeReserve);
   const toolResultPotential = estimateToolResultReductionPotential({

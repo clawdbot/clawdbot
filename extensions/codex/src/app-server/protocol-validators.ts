@@ -441,7 +441,7 @@ function normalizeThreadItem(value: unknown): unknown {
   const item = value as { type?: unknown };
   switch (item.type) {
     case "agentMessage":
-      return { phase: null, memoryCitation: null, ...value };
+      return { phase: null, delivery: null, memoryCitation: null, ...value };
     case "plan":
       return { text: "", ...value };
     case "reasoning":
