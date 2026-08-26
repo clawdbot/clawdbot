@@ -297,6 +297,7 @@ OpenClaw builds the candidate list from the currently requested `provider/model`
   <Tab title="Does not continue on">
     - explicit aborts that are not timeout/failover-shaped
     - context overflow errors that should stay inside compaction/retry logic (for example `request_too_large`, `input token count exceeds the maximum number of input tokens`, `input exceeds the maximum number of tokens`, `input too long for the model`, or `ollama error: context length exceeded`)
+    - provider request-size ceilings, where the refusal states a single request larger than the whole token limit (for example Groq's `413 ... on tokens per minute (TPM): Limit 8000, Requested 8098`). These classify as context overflow so the reset guidance is shown, but they are terminal: compaction cannot reach a per-request ceiling, so OpenClaw does not compact or retry them
     - a final unknown error when there are no candidates left
     - Claude Fable 5 safety refusals; direct API-key requests handle those at the provider level via Anthropic's server-side fallback to `claude-opus-4-8` instead (see [Anthropic](/providers/anthropic#safety-refusal-fallback-claude-opus-5-and-fable-5))
 

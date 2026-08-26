@@ -41,13 +41,17 @@ function readStatedTokenCount(raw: string, pattern: RegExp): number | undefined 
  * the whole limit does not fit even an empty bucket, so waiting can never admit it and the
  * failure is an overflow. Ordinary throttling states a requested size within the limit and
  * remains a rate limit.
+ *
+ * This is narrower than context overflow in general. The ceiling belongs to the single request
+ * rather than to the model's context window, so compaction budgeted against that window cannot
+ * satisfy it; recovery owners branch on this to stay terminal instead of compacting and retrying.
  */
-function statesRequestAboveWholeTokenLimit(raw: string): boolean {
-  if (!hasRateLimitTpmHint(raw)) {
+export function isProviderRequestSizeCeilingError(errorMessage?: string): boolean {
+  if (!errorMessage || !hasRateLimitTpmHint(errorMessage)) {
     return false;
   }
-  const limit = readStatedTokenCount(raw, STATED_TOKEN_LIMIT_RE);
-  const requested = readStatedTokenCount(raw, STATED_TOKENS_REQUESTED_RE);
+  const limit = readStatedTokenCount(errorMessage, STATED_TOKEN_LIMIT_RE);
+  const requested = readStatedTokenCount(errorMessage, STATED_TOKENS_REQUESTED_RE);
   return limit !== undefined && requested !== undefined && requested > limit;
 }
 
@@ -58,7 +62,7 @@ export function isContextOverflowErrorFromTables(errorMessage?: string): boolean
   }
   // Groq uses 413 for TPM (tokens per minute) limits, which is a rate limit, not context
   // overflow — unless the request alone exceeds the whole limit, which no wait can satisfy.
-  if (hasRateLimitTpmHint(errorMessage) && !statesRequestAboveWholeTokenLimit(errorMessage)) {
+  if (hasRateLimitTpmHint(errorMessage) && !isProviderRequestSizeCeilingError(errorMessage)) {
     return false;
   }
 
@@ -91,7 +95,7 @@ export function isLikelyContextOverflowError(errorMessage?: string): boolean {
 
   // Settle an unsatisfiable request size first: the TPM and rate-limit exclusions below would
   // otherwise claim the message on its rate-limit wording alone.
-  if (statesRequestAboveWholeTokenLimit(errorMessage)) {
+  if (isProviderRequestSizeCeilingError(errorMessage)) {
     return isContextOverflowErrorFromTables(errorMessage);
   }
 

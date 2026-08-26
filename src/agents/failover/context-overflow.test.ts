@@ -46,10 +46,15 @@ describe("provider request-size ceilings worded as TPM limits", () => {
     expect(classifyFailoverReason(GROQ_THROTTLED_REQUEST_429)).toBe("rate_limit");
   });
 
-  it("keeps a TPM refusal that states no request size a rate limit", () => {
-    const withoutSizes = "413 request too large: 203557 tokens per minute (TPM)";
-    expect(isContextOverflowError(withoutSizes)).toBe(false);
-    expect(isLikelyContextOverflowError(withoutSizes)).toBe(false);
-    expect(classifyFailoverReason(withoutSizes)).toBe("rate_limit");
+  it.each([
+    ["states neither size", "413 request too large: 203557 tokens per minute (TPM)"],
+    [
+      "states a limit but no requested size",
+      "413 Request too large on tokens per minute (TPM): Limit 8000, please reduce your message size.",
+    ],
+  ])("keeps a TPM refusal that %s a rate limit", (_name, message) => {
+    expect(isContextOverflowError(message)).toBe(false);
+    expect(isLikelyContextOverflowError(message)).toBe(false);
+    expect(classifyFailoverReason(message)).toBe("rate_limit");
   });
 });

@@ -9,6 +9,7 @@ import {
   extractObservedOverflowTokenCount,
   isCompactionFailureError,
   isLikelyContextOverflowError,
+  isProviderRequestSizeCeilingError,
 } from "../../embedded-agent-helpers.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { log } from "../logger.js";
@@ -33,6 +34,20 @@ import {
 } from "./session-bootstrap.js";
 
 type CompactResult = Awaited<ReturnType<ContextEngine["compact"]>>;
+
+function renderOverflowResetGuidance(
+  attempt: EmbeddedRunCompactionRecoveryInput["attempt"],
+): string {
+  const replayMetadata = attempt.currentAttemptReplayMetadata ?? attempt.replayMetadata;
+  const sideEffectCaution = replayMetadata.hadPotentialSideEffects
+    ? " Completed tool actions were not replayed; verify their effects before retrying."
+    : "";
+  return (
+    "Context overflow: prompt too large for the model. " +
+    "Try /reset (or /new) to start a fresh session, or use a larger-context model." +
+    sideEffectCaution
+  );
+}
 
 type EmbeddedRunOverflowRecoveryOutcome =
   | { action: "none" }
@@ -137,6 +152,25 @@ export async function recoverEmbeddedRunOverflow(
   );
 
   const isCompactionFailure = isCompactionFailureError(errorText);
+
+  // The provider refused this request for its own size, against a limit that is not the model's
+  // context window: compaction here budgets against that window, so it cannot make the request
+  // fit and every retry re-sends a payload the provider has already rejected. Surface the reset
+  // guidance instead of compacting, adopting a successor transcript, or truncating and retrying.
+  if (isProviderRequestSizeCeilingError(errorText)) {
+    log.warn(
+      `[context-overflow-recovery] provider request-size ceiling for ${input.provider}/${input.modelId}; ` +
+        `livenessState=blocked suggestedAction=reset_or_new kind=${isCompactionFailure ? "compaction_failure" : "context_overflow"} ` +
+        `compaction=skipped retry=skipped`,
+    );
+    return {
+      action: "surface",
+      kind: isCompactionFailure ? "compaction_failure" : "context_overflow",
+      errorText,
+      userText: renderOverflowResetGuidance(input.attempt),
+    };
+  }
+
   // A parked code-mode run is bound to the session it started in and `wait`
   // rejects any other session, so a compaction that adopts a successor cannot
   // redeem parked nested work. The compaction itself stays committed (hooks and
@@ -371,15 +405,7 @@ export async function recoverEmbeddedRunOverflow(
     );
   }
   const kind = isCompactionFailure ? "compaction_failure" : "context_overflow";
-  const currentReplayMetadata =
-    input.attempt.currentAttemptReplayMetadata ?? input.attempt.replayMetadata;
-  const sideEffectCaution = currentReplayMetadata.hadPotentialSideEffects
-    ? " Completed tool actions were not replayed; verify their effects before retrying."
-    : "";
-  const userText =
-    "Context overflow: prompt too large for the model. " +
-    "Try /reset (or /new) to start a fresh session, or use a larger-context model." +
-    sideEffectCaution;
+  const userText = renderOverflowResetGuidance(input.attempt);
   log.warn(
     `[context-overflow-recovery] exhausted provider overflow recovery for ${input.provider}/${input.modelId}; ` +
       `livenessState=blocked suggestedAction=reset_or_new kind=${kind}`,
