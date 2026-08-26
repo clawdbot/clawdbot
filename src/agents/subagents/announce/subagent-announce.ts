@@ -533,11 +533,10 @@ export async function runSubagentAnnounceFlow(params: {
     if (
       continuation.originDelegateFlowStatus === "queued" ||
       continuation.originDelegateFlowStatus === "running" ||
-      (continuation.originDelegateFlowStatus !== undefined &&
-        countPendingDescendantRuns(params.childSessionKey) > 0)
+      (childSessionEffectsAllowed() && countPendingDescendantRuns(params.childSessionKey) > 0)
     ) {
-      // The token-emitting child owns its delegate until the bound return settles.
-      // Retry preserves disposable-session cleanup without replaying the token flow.
+      // Coordination can admit a child after the earlier descendant check.
+      // Recheck now so cleanup cannot retire the orchestrator before its return.
       shouldDeleteChildSession = false;
       return "retryable";
     }

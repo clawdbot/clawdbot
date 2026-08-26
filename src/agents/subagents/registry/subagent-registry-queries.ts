@@ -60,11 +60,17 @@ export function listRunsForRequesterFromRuns(
 
   const results: SubagentRunRecord[] = [];
   for (const entry of runs.values()) {
+    const boundRequesterRunId = entry.requesterTurnRunId?.trim();
+    const belongsToRequesterRun =
+      !requesterRunId ||
+      (boundRequesterRunId
+        ? boundRequesterRunId === requesterRunId
+        : (typeof lowerBound !== "number" || entry.createdAt >= lowerBound) &&
+          (typeof upperBound !== "number" || entry.createdAt <= upperBound));
     if (
       entry.requesterSessionKey === key &&
       (!options?.requesterAgentId || entry.requesterAgentId === options.requesterAgentId) &&
-      (typeof lowerBound !== "number" || entry.createdAt >= lowerBound) &&
-      (typeof upperBound !== "number" || entry.createdAt <= upperBound)
+      belongsToRequesterRun
     ) {
       results.push(entry);
     }
