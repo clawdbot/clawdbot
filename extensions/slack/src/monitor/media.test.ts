@@ -1292,6 +1292,49 @@ describe("Slack message file intake", () => {
     expect(mockFetch).not.toHaveBeenCalled();
     expect(result?.effectiveDirectMedia).toEqual([preloaded]);
     expect(result?.effectiveDirectMedia?.[0]).toBe(preloaded);
+    expect(result?.rawBody.match(/fileId: FVOICE/g)).toHaveLength(1);
+  });
+
+  it("keeps failed file identities beside renamed, overlapping, and ID-less downloads", async () => {
+    const downloaded = file("F11");
+    const unavailable = { id: "F1", name: "missing-contract.pdf", mimetype: "application/pdf" };
+    const downloadedWithoutId = { name: "available.png", mimetype: "image/png" };
+    const unavailableWithSameMetadata = { ...downloadedWithoutId };
+    const unavailableWithoutId = { name: "missing.png", mimetype: "image/png" };
+
+    const result = await resolveMessageFiles({
+      direct: [
+        downloaded,
+        unavailable,
+        downloadedWithoutId,
+        unavailableWithSameMetadata,
+        unavailableWithoutId,
+      ],
+      preloadedMedia: new Map([
+        [
+          downloaded,
+          {
+            path: "/tmp/renamed.png",
+            fileName: "renamed.png",
+            placeholder: "[Slack file: renamed.png (fileId: F11)]",
+          },
+        ],
+        [
+          downloadedWithoutId,
+          {
+            path: "/tmp/available.png",
+            fileName: "available.png",
+            placeholder: "[Slack file: available.png (image/png)]",
+          },
+        ],
+      ]),
+    });
+
+    expect(result?.effectiveDirectMedia).toHaveLength(2);
+    expect(result?.rawBody.match(/fileId: F11/g)).toHaveLength(1);
+    expect(result?.rawBody.match(/available\.png/g)).toHaveLength(2);
+    expect(result?.rawBody).toContain("missing-contract.pdf (application/pdf, fileId: F1)");
+    expect(result?.rawBody).toContain("missing.png (image/png)");
   });
 
   it("applies Slack's eight-file budget once across direct and forwarded sources", async () => {
@@ -1343,6 +1386,7 @@ describe("Slack message file intake", () => {
     expect(result?.rawBody).toContain(
       "FDIRECT)] [Forwarded image: first-image.png] [Slack file: FFIRST",
     );
+    expect(result?.rawBody).toContain("FFAILED.png (image/png, fileId: FFAILED)");
   });
 
   it("preserves distinct files without Slack file identifiers", async () => {

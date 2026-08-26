@@ -2098,6 +2098,48 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     );
   });
 
+  it("keeps a failed file recoverable when a sibling download reaches the agent", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(Buffer.from("image contents"), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+    ) as typeof fetch;
+    let downloadedPath: string | undefined;
+
+    try {
+      const prepared = await prepareWithDefaultCtx(
+        createSlackMessage({
+          text: "Please inspect both attachments",
+          files: [
+            {
+              id: "F11",
+              name: "available.png",
+              mimetype: "image/png",
+              url_private_download: "https://files.slack.com/available.png",
+            },
+            { id: "F1", name: "missing-contract.pdf", mimetype: "application/pdf" },
+          ],
+        }),
+      );
+
+      assertPrepared(prepared);
+      downloadedPath = prepared.ctxPayload.media?.[0]?.path;
+      expect(prepared.ctxPayload.media).toHaveLength(1);
+      expect(prepared.ctxPayload.RawBody).toContain("available.png (image/png, fileId: F11)");
+      expect(prepared.ctxPayload.BodyForAgent).toContain(
+        "missing-contract.pdf (application/pdf, fileId: F1)",
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (downloadedPath) {
+        await fs.rm(downloadedPath, { force: true });
+      }
+    }
+  });
+
   it("delivers forwarded file-only messages with metadata when media download fails", async () => {
     const prepared = await prepareWithDefaultCtx(
       createSlackMessage({
