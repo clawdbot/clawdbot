@@ -247,6 +247,37 @@ describe("runBrowserHatchHandoff", () => {
     expect(displayed).not.toContain("#bootstrapToken=");
   });
 
+  it("prints an HTTPS tunnel destination for a headless loopback TLS Gateway", async () => {
+    const prompter = createWizardPrompter();
+    const config = {
+      gateway: {
+        port: 18789,
+        bind: "loopback" as const,
+        controlUi: { basePath: "/control" },
+        tls: { enabled: true },
+      },
+    };
+
+    await runBrowserHatchHandoff(
+      { config, prompter },
+      {
+        env: {},
+        platform: "linux",
+        waitForDocument: async () => ({ ready: true }),
+        verifyLoopbackAlias: async () => true,
+        probePresence: async () => ({ reachable: true, clientKeys: [] }),
+        pollForClient: async () => ({ connected: false, reason: "timeout" }),
+      },
+    );
+
+    const displayed = vi
+      .mocked(prompter.note)
+      .mock.calls.map(([message]) => message)
+      .join("\n");
+    expect(displayed).toContain("https://localhost:18789/control/");
+    expect(displayed).not.toContain("http://localhost:18789/control/");
+  });
+
   it.each([
     {
       openerOutcome: "returns false",

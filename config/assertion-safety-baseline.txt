@@ -3106,7 +3106,6 @@ src/gateway/worker-environments/transcript-commit.ts	6
 src/gateway/worker-environments/worker-session-tool-executor.ts	1
 src/gateway/worker-environments/worker-turn-admission.ts	3
 src/gateway/worker-environments/worker-turn-payload.ts	4
-src/gateway/worker-environments/worker-turn-rpc.ts	2
 src/gateway/worker-environments/workspace-accepted-publication.ts	1
 src/gateway/worker-environments/workspace-manifest.ts	14
 src/gateway/worker-environments/workspace-path-exclusions.ts	2
@@ -3420,7 +3419,6 @@ src/model-catalog/bundled-catalog-stamp.ts	1
 src/model-catalog/remote-overlay.ts	1
 src/model-picker/apply-session-model-selection.ts	1
 src/node-host/config.ts	1
-src/node-host/desktop-stream-command.ts	2
 src/node-host/invoke-agent-cli-claude-params.ts	4
 src/node-host/invoke-agent-cli-claude.ts	1
 src/node-host/invoke-file-commands.ts	1

@@ -19,6 +19,7 @@ export const WORKER_SESSION_TOOL_NAMES = [
   "sessions_spawn",
   "sessions_send",
   "github_publish",
+  "portal",
 ] as const;
 
 export const WORKER_TOOL_NAMES = [

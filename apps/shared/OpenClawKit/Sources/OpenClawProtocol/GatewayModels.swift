@@ -20861,6 +20861,7 @@ public struct PortalSummary: Codable, Sendable {
     public let publicurl: String
     public let path: String?
     public let description: String?
+    public let origin: String?
     public let createdatms: Int
 
     public init(
@@ -20873,6 +20874,7 @@ public struct PortalSummary: Codable, Sendable {
         publicurl: String,
         path: String? = nil,
         description: String? = nil,
+        origin: String? = nil,
         createdatms: Int)
     {
         self.id = id
@@ -20884,6 +20886,7 @@ public struct PortalSummary: Codable, Sendable {
         self.publicurl = publicurl
         self.path = path
         self.description = description
+        self.origin = origin
         self.createdatms = createdatms
     }
 
@@ -20897,6 +20900,7 @@ public struct PortalSummary: Codable, Sendable {
         case publicurl = "publicUrl"
         case path
         case description
+        case origin
         case createdatms = "createdAtMs"
     }
 }
@@ -20942,6 +20946,7 @@ public struct PortalOpenResult: Codable, Sendable {
     public let publicurl: String
     public let path: String?
     public let description: String?
+    public let origin: String?
     public let createdatms: Int
 
     public init(
@@ -20954,6 +20959,7 @@ public struct PortalOpenResult: Codable, Sendable {
         publicurl: String,
         path: String? = nil,
         description: String? = nil,
+        origin: String? = nil,
         createdatms: Int)
     {
         self.id = id
@@ -20965,6 +20971,7 @@ public struct PortalOpenResult: Codable, Sendable {
         self.publicurl = publicurl
         self.path = path
         self.description = description
+        self.origin = origin
         self.createdatms = createdatms
     }
 
@@ -20978,6 +20985,7 @@ public struct PortalOpenResult: Codable, Sendable {
         case publicurl = "publicUrl"
         case path
         case description
+        case origin
         case createdatms = "createdAtMs"
     }
 }

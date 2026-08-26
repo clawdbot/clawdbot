@@ -1,5 +1,6 @@
 import type {
   WorkerGitHubPublishParams,
+  WorkerPortalParams,
   WorkerSessionsSendParams,
   WorkerSessionsSpawnParams,
   WorkerSessionToolResult,
@@ -28,6 +29,7 @@ import type { WorkerLiveEventReceiver } from "./live-events.js";
 import type { WorkerNodeDesktopCarrier } from "./node-desktop-carrier.js";
 import type { NodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import type { WorkerSessionPlacementGate } from "./placement-worker-gate.js";
+import type { WorkerNodePortalCarrier } from "./portal-node-carrier.js";
 import { createWorkerProviderLifecycle } from "./provider-lifecycle.js";
 import type { WorkerProviderLifecycleInputOptions } from "./provider-lifecycle.types.js";
 import type { WorkerEnvironmentState } from "./state.js";
@@ -67,6 +69,8 @@ type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOptions & {
   tunnelManager?: WorkerTunnelManager;
   nodeTunnelManager?: NodeWorkerTunnelManager;
   nodeDesktopCarrier?: WorkerNodeDesktopCarrier;
+  nodePortalCarrier?: WorkerNodePortalCarrier;
+  closeWorkerPortals?: (environmentId: string, ownerEpoch?: number) => Promise<void>;
   stopNodeEnrollmentWaits?: () => void;
   stopNodeWorkerBundleTransfers?: () => void;
   reconcileIntervalMs?: number;
@@ -108,6 +112,12 @@ type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOptions & {
           toolName: "github_publish";
           request: WorkerGitHubPublishParams;
           signal?: AbortSignal;
+        }
+      | {
+          identity: WorkerConnectionIdentity;
+          toolName: "portal";
+          request: WorkerPortalParams;
+          signal?: AbortSignal;
         },
   ) => Promise<WorkerSessionToolResult>;
 };
@@ -126,13 +136,18 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   const activeOperations = new Set<Promise<unknown>>();
   const now = options.now ?? Date.now;
   const tunnelLifecycle =
-    options.tunnelManager || options.nodeTunnelManager || options.nodeDesktopCarrier
+    options.tunnelManager ||
+    options.nodeTunnelManager ||
+    options.nodeDesktopCarrier ||
+    options.nodePortalCarrier
       ? {
           stop: async (environmentId: string, ownerEpoch?: number) => {
             await Promise.all([
               options.tunnelManager?.stop(environmentId, ownerEpoch),
               options.nodeTunnelManager?.stop(environmentId, ownerEpoch),
               options.nodeDesktopCarrier?.stop(environmentId, ownerEpoch),
+              options.nodePortalCarrier?.stop(environmentId, ownerEpoch),
+              options.closeWorkerPortals?.(environmentId, ownerEpoch),
             ]);
           },
         }
@@ -456,7 +471,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     options.liveEvents?.clear();
     options.stopNodeWorkerBundleTransfers?.();
     try {
-      await environmentAccess.stopAllTunnels();
+      await Promise.all([environmentAccess.stopAllTunnels(), options.nodePortalCarrier?.stopAll()]);
     } finally {
       // Tunnel failures cannot release shutdown before admitted owner-bound operations drain.
       const reconciliation = reconcileInFlight;
@@ -509,6 +524,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       return id ? options.resolveProvider(id)?.requiresNodeEnrollment === true : false;
     },
     get: environmentAccess.get,
+    supportsNodePortal: async (environmentId: string, ownerEpoch: number) =>
+      (await options.nodePortalCarrier?.supports(environmentId, ownerEpoch)) === true,
     hasPendingNodeEnrollmentSetup: (setupId: string, deviceId: string) =>
       store.hasPendingNodeEnrollmentSetup(setupId, deviceId),
     listMachineOptions: async (profileId: string) =>
@@ -588,7 +605,13 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     acquireTurnCredential: credentialBroker.acquireTurnCredential,
     acknowledgeCredentialDelivery: credentialBroker.acknowledgeCredentialDelivery,
     startTunnel: environmentAccess.startTunnel,
-    stopTunnel: environmentAccess.stopTunnel,
+    stopTunnel: async (environmentId: string, ownerEpoch?: number) => {
+      await Promise.all([
+        environmentAccess.stopTunnel(environmentId, ownerEpoch),
+        options.nodePortalCarrier?.stop(environmentId, ownerEpoch),
+        options.closeWorkerPortals?.(environmentId, ownerEpoch),
+      ]);
+    },
     stopNodeEnrollmentWaits: options.stopNodeEnrollmentWaits,
     installReconcileEnvironmentGuard,
     reconcileEnvironment,

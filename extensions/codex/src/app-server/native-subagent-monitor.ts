@@ -68,6 +68,9 @@ type ParentState = {
   // Overlapping runs share this parent; the last owner releases it only after
   // detached children finish recovery and delivery.
   owners: Map<symbol, ParentOwner>;
+  // turn/started can precede bindTurn; retain receipt ownership until the
+  // foreground run has finalized its reply and releases this registration.
+  turnIds: Set<string>;
   requesterSessionKey?: string;
   taskRuntimeScope?: AgentHarnessTaskRuntimeScope;
   agentId?: string;
@@ -93,6 +96,7 @@ type ChildState = {
   terminal: boolean;
   fallbackCompletion?: RecoveredCompletion;
   pendingCompletion?: CodexNativeSubagentCompletion;
+  nativeCompletionDelivered: boolean;
   completionDeliveryAttempt: number;
   completionDeliveryTimer?: ReturnType<typeof setTimeout>;
   deliveringCompletion: boolean;
@@ -346,6 +350,8 @@ class Monitor {
     this.parentThreadRetentions.clear();
     for (const state of this.parentStates.values()) {
       state.owners.clear();
+      state.turnIds.clear();
+      this.deliverDetachedCompletions(state);
     }
     this.pendingDirectSpawnEvidence.clear();
     for (const [parentThreadId] of this.parentStates) {
@@ -384,7 +390,7 @@ class Monitor {
       throw new Error(`Codex thread ${parentThreadId} is already bound to another session`);
     }
     if (!state) {
-      state = { parentThreadId, owners: new Map() };
+      state = { parentThreadId, owners: new Map(), turnIds: new Set() };
       this.parentStates.set(parentThreadId, state);
     }
     state.requesterSessionKey ??= params.requesterSessionKey;
@@ -428,6 +434,7 @@ class Monitor {
           return;
         }
         current.turnId = turnId;
+        registeredState.turnIds.add(turnId);
         this.drainPendingDirectSpawnEvidence(registeredState, current, turnId);
         this.clearUnconsumablePendingDirectSpawnEvidence();
       },
@@ -438,8 +445,16 @@ class Monitor {
         registered = false;
         const current = this.parentStates.get(parentThreadId);
         if (current === registeredState) {
+          const turnId = current.owners.get(owner)?.turnId;
           current.owners.delete(owner);
+          if (turnId) {
+            current.turnIds.delete(turnId);
+          }
+          if (current.owners.size === 0) {
+            current.turnIds.clear();
+          }
           this.clearUnconsumablePendingDirectSpawnEvidence();
+          this.deliverDetachedCompletions(current);
           this.pruneParentIfUnused(current);
         }
       },
@@ -500,6 +515,13 @@ class Monitor {
     const threadStatus = isJsonObject(params?.status)
       ? normalizeIdentifier(readString(params.status, "type"))
       : undefined;
+    const parent = threadId ? this.parentStates.get(threadId) : undefined;
+    if (parent && parent.owners.size > 0 && notification.method === "turn/started") {
+      const turnId = isJsonObject(params?.turn) ? readString(params.turn, "id") : undefined;
+      if (turnId) {
+        parent.turnIds.add(turnId);
+      }
+    }
     const tracksRecoveryRevision = Boolean(threadId && this.threadStatusRevisions.has(threadId));
     if (
       RECOVERY_REVISION_NOTIFICATION_METHODS.has(notification.method) &&
@@ -532,7 +554,11 @@ class Monitor {
     }
     const childState = threadId ? this.childStates.get(threadId) : undefined;
     if (notification.method === "turn/started" && childState) {
+      childState.nativeCompletionDelivered = false;
       this.resumeChild(childState);
+    }
+    if (parent && parent.turnIds.has(readString(params, "turnId") ?? "")) {
+      this.recordNativeCompletionDelivery(parent, notification);
     }
     if (childState && !childState.terminal) {
       this.emitChildTaskActivity(notification, childState);
@@ -1196,6 +1222,10 @@ class Monitor {
       this.unregisterChild(childState);
       return;
     }
+    if (childState.nativeCompletionDelivered) {
+      this.finishCompletionDelivery(state, childState);
+      return;
+    }
     childState.pendingCompletion = completion;
     state.taskRuntime?.setDetachedTaskDeliveryStatusByRunId({
       runId: codexNativeSubagentRunId(completion.childThreadId),
@@ -1211,6 +1241,11 @@ class Monitor {
   ): Promise<void> {
     const completion = childState.pendingCompletion;
     if (!completion || !state.requesterSessionKey || !state.taskRuntimeScope) {
+      return;
+    }
+    // Codex owns completion input from registration through reply finalization,
+    // including turn startup before its id is bound. Only wake detached parents.
+    if (state.owners.size > 0) {
       return;
     }
     if (childState.deliveringCompletion || childState.completionDeliveryTimer) {
@@ -1238,13 +1273,7 @@ class Monitor {
         return;
       }
       if (isDurableAgentHarnessCompletionDelivery(delivery)) {
-        childState.pendingCompletion = undefined;
-        childState.completionDeliveryAttempt = 0;
-        state.taskRuntime?.setDetachedTaskDeliveryStatusByRunId({
-          runId: codexNativeSubagentRunId(completion.childThreadId),
-          deliveryStatus: "delivered",
-        });
-        this.unregisterChild(childState);
+        this.finishCompletionDelivery(state, childState);
         return;
       }
       const error = delivery.error ?? "completion delivery did not produce a parent response";
@@ -1275,6 +1304,43 @@ class Monitor {
       });
     } finally {
       childState.deliveringCompletion = false;
+    }
+  }
+
+  private recordNativeCompletionDelivery(
+    state: ParentState,
+    notification: CodexServerNotification,
+  ): void {
+    for (const agentPath of nativeSubagentNotifications.deliveredAgentPaths(notification)) {
+      const childThreadId = this.childThreadIdsByAgentPath.get(
+        buildParentAgentPathKey(state.parentThreadId, agentPath),
+      );
+      const child = childThreadId ? this.childStates.get(childThreadId) : undefined;
+      if (!child || child.parentThreadId !== state.parentThreadId) {
+        continue;
+      }
+      child.nativeCompletionDelivered = true;
+      if (child.pendingCompletion && !child.deliveringCompletion) {
+        this.finishCompletionDelivery(state, child);
+      }
+    }
+  }
+
+  private finishCompletionDelivery(state: ParentState, child: ChildState): void {
+    child.pendingCompletion = undefined;
+    child.completionDeliveryAttempt = 0;
+    state.taskRuntime?.setDetachedTaskDeliveryStatusByRunId({
+      runId: codexNativeSubagentRunId(child.childThreadId),
+      deliveryStatus: "delivered",
+    });
+    this.unregisterChild(child);
+  }
+
+  private deliverDetachedCompletions(state: ParentState): void {
+    for (const child of this.childStates.values()) {
+      if (child.parentThreadId === state.parentThreadId && child.pendingCompletion) {
+        void this.deliverPendingCompletion(state, child);
+      }
     }
   }
 
@@ -1359,6 +1425,7 @@ class Monitor {
         assistantMessagesByTurn: new Map<string, ChildAssistantMessages>(),
         recoveryAttempt: 0,
         terminal: false,
+        nativeCompletionDelivered: false,
         settledWithoutCompletion: false,
         completionDeliveryAttempt: 0,
         deliveringCompletion: false,
@@ -1918,6 +1985,7 @@ class Monitor {
         state = {
           parentThreadId,
           owners: new Map(),
+          turnIds: new Set(),
           requesterSessionKey: candidate.requesterSessionKey,
           taskRuntimeScope: candidate.taskRuntimeScope,
           agentId: candidate.agentId,

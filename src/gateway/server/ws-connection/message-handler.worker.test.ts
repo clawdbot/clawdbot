@@ -14,6 +14,7 @@ import {
   type WorkerLiveEventErrorDetails,
   WORKER_GITHUB_PUBLICATION_PROTOCOL_FEATURE,
   WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
+  WORKER_PORTAL_PROTOCOL_FEATURE,
   WORKER_SESSION_TOOLS_PROTOCOL_FEATURE,
   type WorkerSessionToolResult,
   type WorkerTranscriptCommitErrorReason,
@@ -61,6 +62,7 @@ const HANDSHAKE = {
     WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
     WORKER_SESSION_TOOLS_PROTOCOL_FEATURE,
     WORKER_GITHUB_PUBLICATION_PROTOCOL_FEATURE,
+    WORKER_PORTAL_PROTOCOL_FEATURE,
     WORKER_INFERENCE_PROTOCOL_FEATURE,
   ],
 };
@@ -172,6 +174,12 @@ const SESSION_TOOL_CASES = [
     method: "worker.github.publish",
     toolName: "github_publish",
     request: { toolCallId: "call-publish", title: "Publish the fix" },
+  },
+  {
+    name: "portal",
+    method: "worker.portal",
+    toolName: "portal",
+    request: { toolCallId: "call-portal", action: "open", port: 3000 },
   },
 ] as const;
 const cleanups: Array<() => void> = [];
@@ -656,9 +664,11 @@ describe("dedicated worker websocket protocol", () => {
 
   it.each(SESSION_TOOL_CASES)("feature-gates $name independently", async (testCase) => {
     const requiredFeature =
-      testCase.toolName === "github_publish"
-        ? WORKER_GITHUB_PUBLICATION_PROTOCOL_FEATURE
-        : WORKER_SESSION_TOOLS_PROTOCOL_FEATURE;
+      testCase.toolName === "portal"
+        ? WORKER_PORTAL_PROTOCOL_FEATURE
+        : testCase.toolName === "github_publish"
+          ? WORKER_GITHUB_PUBLICATION_PROTOCOL_FEATURE
+          : WORKER_SESSION_TOOLS_PROTOCOL_FEATURE;
     const harness = attachHarness({
       identity: {
         ...ATTACHED_IDENTITY,
@@ -674,6 +684,26 @@ describe("dedicated worker websocket protocol", () => {
       expect(harness.close).toHaveBeenCalledWith(1008, "method-not-allowed"),
     );
     expect(harness.service.executeSessionTool).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["an invalid action", { toolCallId: "call-portal", action: "delete", port: 3000 }],
+    [
+      "an unexpected field",
+      { toolCallId: "call-portal", action: "open", port: 3000, unexpected: true },
+    ],
+  ])("rejects portal parameters with %s before execution", async (_reason, request) => {
+    const harness = attachHarness({ identity: ATTACHED_IDENTITY });
+    await admit(harness);
+    harness.sendRequest("worker.portal", request);
+
+    await waitForWorkerProtocol(() => expect(harness.responses).toHaveLength(2));
+    expect(harness.responses[1]).toMatchObject({
+      ok: false,
+      error: { details: { reason: "invalid-frame" } },
+    });
+    expect(harness.service.executeSessionTool).not.toHaveBeenCalled();
+    expect(harness.close).not.toHaveBeenCalled();
   });
 
   it("dispatches semantic transcript commits on the closed worker allowlist", async () => {
