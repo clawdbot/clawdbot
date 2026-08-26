@@ -439,6 +439,24 @@ describe("WorkerConnection state listener isolation", () => {
     expect(listeners.observed).toEqual(["fenced"]);
     expect(terminalErrors).toEqual([new WorkerFencedError("owner-epoch-mismatch")]);
   });
+
+  it("keeps terminal errors bound to their emitted state during nested transitions", () => {
+    const connection = createIdleConnection();
+    const terminalErrors: Error[] = [];
+    connection.onStateChange((state) => {
+      if (state.kind === "fenced") {
+        void connection.stop();
+      }
+    });
+    connection.onTerminalError((error) => terminalErrors.push(error));
+
+    connection.fence("owner-epoch-mismatch");
+
+    expect(terminalErrors).toEqual([
+      new WorkerConnectionStoppedError(),
+      new WorkerFencedError("owner-epoch-mismatch"),
+    ]);
+  });
 });
 
 describe("WorkerConnection inference listener isolation", () => {
