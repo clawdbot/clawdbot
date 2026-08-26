@@ -26,6 +26,7 @@ import {
   runPluginsCommand,
   runtimeErrors,
   pluginsCliRuntimeLogs,
+  promptYesNoMock,
   setInstalledPluginIndexInstallRecords,
   setHookInstallRecords,
   updateNpmInstalledHookPacksMock,
@@ -282,6 +283,7 @@ describe("plugins cli update", () => {
 
     expect(helpText).toContain("--dangerously-force-unsafe-install");
     expect(helpText).toContain("--acknowledge-install-policy-warning");
+    expect(helpText).toContain("--accept-capabilities");
     expect(helpText).toContain("Deprecated no-op");
     expect(helpText).toContain("Acknowledge");
     expect(helpText).toContain("security.installPolicy");
@@ -1488,6 +1490,73 @@ describe("plugins cli update", () => {
     );
   });
 
+  it("passes explicit capability acceptance to plugin updates", async () => {
+    setTty(false);
+    const config = createTrackedPluginConfig({ pluginId: "alpha", spec: "@acme/alpha" });
+    pluginCliConfigMock.mockReturnValue(config);
+    setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
+    primePluginUpdate(config);
+
+    await runPluginsCommand(["plugins", "update", "alpha", "--accept-capabilities"]);
+
+    expect(updateNpmInstalledPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ pluginIds: ["alpha"], acknowledgeCapabilities: true }),
+    );
+  });
+
+  it("shows widened capabilities and requests consent for interactive plugin updates", async () => {
+    setTty(true);
+    const config = createTrackedPluginConfig({ pluginId: "alpha", spec: "@acme/alpha" });
+    pluginCliConfigMock.mockReturnValue(config);
+    setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
+    primePluginUpdate(config);
+
+    await runPluginsCommand(["plugins", "update", "alpha"]);
+
+    const consent = expectSingleCallParams(updateNpmInstalledPluginsMock).onCapabilityConsent;
+    if (typeof consent !== "function") {
+      throw new Error("expected interactive plugin capability consent callback");
+    }
+    await expect(
+      consent({
+        pluginId: "alpha",
+        name: "Alpha plugin",
+        version: "2.0.0",
+        source: { kind: "npm", spec: "@acme/alpha", integrity: "sha512-alpha" },
+        declared: {
+          channels: [],
+          providers: [],
+          tools: ["read", "write"],
+          hooks: [],
+          mcpServers: [],
+          cliCommands: [],
+          cliBackends: [],
+          skills: [],
+          dangerousConfigFlags: [],
+        },
+        grants: {
+          hooks: {
+            allowPromptInjection: { effective: true },
+            allowConversationAccess: { effective: false },
+          },
+        },
+        widened: { tools: ["write"] },
+        trust: { disposition: "review-recommended", reasons: ["Community maintained"] },
+      }),
+    ).resolves.toBe(true);
+
+    expect(pluginsCliRuntimeLogs).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("Alpha plugin (alpha) @ 2.0.0"),
+        expect.stringContaining("Integrity: sha512-alpha"),
+        expect.stringContaining("New tools: write"),
+        expect.stringContaining("Conversation access: denied"),
+        expect.stringContaining("Trust: review-recommended"),
+      ]),
+    );
+    expect(promptYesNoMock).toHaveBeenCalledWith('Accept these capabilities and update "alpha"?');
+  });
+
   it("does not pass an interactive ClawHub risk prompt to dry-run plugin updates", async () => {
     setTty(true);
     const config = createTrackedPluginConfig({
@@ -1505,6 +1574,7 @@ describe("plugins cli update", () => {
     expect(updateParams.acknowledgeClawHubRisk).not.toBe(true);
     expect(updateParams.onClawHubRisk).toBeUndefined();
     expect(updateParams.onInstallPolicyWarning).toBeUndefined();
+    expect(updateParams.onCapabilityConsent).toBeUndefined();
   });
 
   it("passes an install-policy warning prompt to interactive plugin updates", async () => {

@@ -6,6 +6,11 @@ import {
 } from "../../../../packages/gateway-protocol/src/clawhub-trust-error-details.js";
 import type {
   PluginCatalogEntry,
+  PluginDeclaredSurface as ProtocolPluginDeclaredSurface,
+  PluginHookGrant as ProtocolPluginHookGrant,
+  PluginInspectSource as ProtocolPluginInspectSource,
+  PluginOperatorGrants as ProtocolPluginOperatorGrants,
+  PluginsInspectResult as ProtocolPluginsInspectResult,
   PluginsInstallParams,
   PluginsInstallResult,
   PluginsListResult as ProtocolPluginsListResult,
@@ -17,6 +22,11 @@ import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gatewa
 import type { RuntimeConfigCapability } from "../config/runtime-config-capability.ts";
 
 export type PluginCatalogItem = PluginCatalogEntry;
+export type PluginDeclaredSurface = ProtocolPluginDeclaredSurface;
+export type PluginHookGrant = ProtocolPluginHookGrant;
+export type PluginInspectSource = ProtocolPluginInspectSource;
+export type PluginOperatorGrants = ProtocolPluginOperatorGrants;
+export type PluginsInspectResult = ProtocolPluginsInspectResult;
 export type PluginListResult = ProtocolPluginsListResult;
 export type PluginSearchResult = ProtocolPluginsSearchResult["results"][number];
 export type PluginInstallRequest = PluginsInstallParams;
@@ -67,8 +77,13 @@ export function setPluginEnabled(
   client: GatewayBrowserClient,
   pluginId: string,
   enabled: boolean,
+  options?: { acknowledgeCapabilities?: true },
 ): Promise<PluginMutationResult> {
-  return client.request<PluginMutationResult>("plugins.setEnabled", { pluginId, enabled });
+  return client.request<PluginMutationResult>("plugins.setEnabled", {
+    pluginId,
+    enabled,
+    ...(options?.acknowledgeCapabilities ? { acknowledgeCapabilities: true } : {}),
+  });
 }
 
 /** Serialize every plugin config write without discarding structured Gateway failures. */

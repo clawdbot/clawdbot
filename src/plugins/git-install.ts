@@ -32,6 +32,7 @@ import {
   isPluginInstallCommitDeferred,
   type PluginInstallTransaction,
 } from "./install-transaction.js";
+import type { PluginInstallArtifactConsentHandler } from "./install-types.js";
 import {
   installPluginFromInstalledPackageDir,
   PLUGIN_INSTALL_ERROR_CODE,
@@ -386,6 +387,7 @@ export async function installPluginFromGitSpec(
     mode?: "install" | "update";
     dryRun?: boolean;
     expectedPluginId?: string;
+    onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
   },
 ): Promise<GitPluginInstallResult> {
   const parsed = parseGitPluginSpec(params.spec);
@@ -525,6 +527,12 @@ export async function installPluginFromGitSpec(
     }
     let transaction: PluginInstallTransaction | undefined;
     if (!params.dryRun) {
+      await params.onBeforePluginArtifactCommit?.({
+        pluginId: result.pluginId,
+        ...(effectiveMode === "update" ? { currentArtifactDir: persistentRepoDir } : {}),
+        stagedArtifactDir: repoDir,
+        mode: effectiveMode,
+      });
       const replaceResult = await replaceManagedGitRepo({
         stagedRepoDir: repoDir,
         persistentRepoDir,

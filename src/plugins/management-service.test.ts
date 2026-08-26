@@ -1,12 +1,14 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   configSnapshot,
   emptyMetadataSnapshot,
   hostedDiffsEntry,
   hostedFeedDiffsEntry,
   metadataSnapshot,
+  reviewManagedPluginTestArtifact,
 } from "./management-service.test-helpers.js";
+import { cleanupTrackedTempDirs } from "./test-helpers/fs-fixtures.js";
 
 const mocks = vi.hoisted(() => ({
   applyUninstall: vi.fn(),
@@ -123,23 +125,30 @@ function mockHostedOfficialCatalog(entries: unknown[]) {
   });
 }
 
+const trackedArtifactDirs: string[] = [];
+
 function mockClawHubInstall(pluginId: string, packageName: string, targetDir?: string) {
-  mocks.clawhubInstall.mockResolvedValue({
-    ok: true,
-    pluginId,
-    targetDir: targetDir ?? `/tmp/extensions/${pluginId}`,
-    extensions: ["index.js"],
-    packageName,
-    clawhub: {
-      source: "clawhub",
-      clawhubUrl: "https://clawhub.ai",
-      clawhubPackage: packageName,
-      clawhubFamily: "code-plugin",
-    },
+  mocks.clawhubInstall.mockImplementation(async (params) => {
+    await reviewManagedPluginTestArtifact(params, pluginId, trackedArtifactDirs);
+    return {
+      ok: true,
+      pluginId,
+      targetDir: targetDir ?? `/tmp/extensions/${pluginId}`,
+      extensions: ["index.js"],
+      packageName,
+      clawhub: {
+        source: "clawhub",
+        clawhubUrl: "https://clawhub.ai",
+        clawhubPackage: packageName,
+        clawhubFamily: "code-plugin",
+      },
+    };
   });
 }
 
 describe("plugin management service", () => {
+  afterEach(() => cleanupTrackedTempDirs(trackedArtifactDirs));
+
   beforeEach(() => {
     clearManagedPluginOfficialCatalogCache();
     for (const mock of Object.values(mocks)) {
@@ -644,7 +653,11 @@ describe("plugin management service", () => {
     );
 
     const result = await installManagedPlugin({
-      request: { source: "clawhub", packageName: "@openclaw/bluebubbles" },
+      request: {
+        source: "clawhub",
+        packageName: "@openclaw/bluebubbles",
+        acknowledgeCapabilities: true,
+      },
       env: {},
     });
 
@@ -698,7 +711,7 @@ describe("plugin management service", () => {
     );
 
     await installManagedPlugin({
-      request: { source: "official", pluginId: "diffs" },
+      request: { source: "official", pluginId: "diffs", acknowledgeCapabilities: true },
       env: {},
     });
 
@@ -744,6 +757,11 @@ describe("plugin management service", () => {
           reason: "Review installed dependencies",
         }),
       ).resolves.toEqual({ status: "approved" });
+      await reviewManagedPluginTestArtifact(
+        params as Parameters<typeof reviewManagedPluginTestArtifact>[0],
+        "diffs",
+        trackedArtifactDirs,
+      );
       return {
         ok: true,
         pluginId: "diffs",
@@ -768,6 +786,7 @@ describe("plugin management service", () => {
         source: "official",
         pluginId: "diffs",
         acknowledgeInstallPolicyWarning: true,
+        acknowledgeCapabilities: true,
       },
       env: {},
     });
@@ -790,7 +809,11 @@ describe("plugin management service", () => {
       .mockReturnValueOnce(metadataSnapshot({ enabled: true }));
 
     const install = installManagedPlugin({
-      request: { source: "clawhub", packageName: "community/demo" },
+      request: {
+        source: "clawhub",
+        packageName: "community/demo",
+        acknowledgeCapabilities: true,
+      },
       env: {},
     });
     await vi.waitFor(() => expect(mocks.persistInstall).toHaveBeenCalledTimes(1));

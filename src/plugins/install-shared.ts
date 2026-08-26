@@ -16,6 +16,7 @@ import {
   PLUGIN_INSTALL_ERROR_CODE,
   type InstallPluginResult,
   type PackageManifest,
+  type PluginInstallArtifactConsentHandler,
   type PluginInstallErrorCode,
   type PluginInstallFailureResult,
   type PluginInstallLogger,
@@ -388,6 +389,7 @@ export async function installPluginDirectoryIntoExtensions(params: {
     installedDir: string,
   ) => Promise<Extract<InstallPluginResult, { ok: false }> | null>;
   nameEncoder?: (pluginId: string) => string;
+  onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
 }): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();
   let targetDir = params.targetDir;
@@ -422,6 +424,13 @@ export async function installPluginDirectoryIntoExtensions(params: {
       setup: params.setup,
     });
   }
+
+  await params.onBeforePluginArtifactCommit?.({
+    pluginId: params.pluginId,
+    ...(params.mode === "update" ? { currentArtifactDir: targetDir } : {}),
+    stagedArtifactDir: params.sourceDir,
+    mode: params.mode,
+  });
 
   const packageInstallParams = {
     sourceDir: params.sourceDir,

@@ -43,6 +43,10 @@ import {
   type NpmPluginUpdateSuccess,
 } from "./update-attempt.js";
 import {
+  preparePluginUpdateCapabilityConsent,
+  type PluginUpdateCapabilityConsentHandler,
+} from "./update-capability-consent.js";
+import {
   createTrackedNpmUpdateInstaller,
   resolveClawHubRiskAcknowledgementOptions,
   resolveRecordedClawHubPackage,
@@ -103,6 +107,9 @@ export async function updateNpmInstalledPlugins(params: {
   onIntegrityDrift?: (params: PluginUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
   acknowledgeClawHubRisk?: boolean;
   onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
+  acknowledgeCapabilities?: boolean;
+  onCapabilityConsent?: PluginUpdateCapabilityConsentHandler;
+  packagePluginIds?: Readonly<Record<string, readonly string[]>>;
 }): Promise<PluginUpdateSummary> {
   const logger = params.logger ?? {};
   const installs = params.config.plugins?.installs ?? {};
@@ -498,6 +505,15 @@ export async function updateNpmInstalledPlugins(params: {
       }
     }
 
+    const capabilityConsent = preparePluginUpdateCapabilityConsent({
+      config: params.config,
+      pluginId,
+      record,
+      installPath,
+      packagePluginIds: params.packagePluginIds?.[pluginId],
+      acknowledgeCapabilities: params.acknowledgeCapabilities,
+      onCapabilityConsent: params.onCapabilityConsent,
+    });
     const runAttempt = () =>
       runPluginUpdateAttempt(
         copyPluginInstallTransactionRequest(params, {
@@ -510,6 +526,7 @@ export async function updateNpmInstalledPlugins(params: {
           timeoutMs: params.timeoutMs,
           dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
           onInstallPolicyWarning: params.onInstallPolicyWarning,
+          onBeforePluginArtifactCommit: capabilityConsent.onBeforePluginArtifactCommit,
           expectedIntegrity,
           npmSpecs,
           clawhubSpecs,
@@ -645,7 +662,7 @@ export async function updateNpmInstalledPlugins(params: {
       const npmResult = result as NpmPluginUpdateSuccess;
       next = recordPluginInstall(
         usedOfficialNpmFallback ? withoutPluginInstallRecord(next, resolvedPluginId) : next,
-        {
+        capabilityConsent.acceptInstallRecord({
           pluginId: resolvedPluginId,
           source: "npm",
           spec: resolveNpmInstallRecordSpec({
@@ -660,41 +677,50 @@ export async function updateNpmInstalledPlugins(params: {
           installPath: result.targetDir,
           version: nextVersion,
           ...buildNpmResolutionInstallFields(npmResult.npmResolution),
-        },
+        }),
       );
     } else if (resultSource === "clawhub") {
       const clawhubResult = result as ClawHubPluginUpdateSuccess;
-      next = recordPluginInstall(next, {
-        pluginId: resolvedPluginId,
-        ...buildClawHubPluginInstallRecordFields(clawhubResult.clawhub),
-        spec: recordSpec ?? record.spec ?? `clawhub:${record.clawhubPackage!}`,
-        installPath: result.targetDir,
-        version: nextVersion,
-      });
+      next = recordPluginInstall(
+        next,
+        capabilityConsent.acceptInstallRecord({
+          pluginId: resolvedPluginId,
+          ...buildClawHubPluginInstallRecordFields(clawhubResult.clawhub),
+          spec: recordSpec ?? record.spec ?? `clawhub:${record.clawhubPackage!}`,
+          installPath: result.targetDir,
+          version: nextVersion,
+        }),
+      );
     } else if (record.source === "git") {
       const gitResult = result as GitPluginUpdateSuccess;
-      next = recordPluginInstall(next, {
-        pluginId: resolvedPluginId,
-        source: "git",
-        spec: effectiveSpec ?? record.spec,
-        installPath: result.targetDir,
-        version: nextVersion,
-        resolvedAt: gitResult.git.resolvedAt,
-        gitUrl: gitResult.git.url,
-        gitRef: gitResult.git.ref,
-        gitCommit: gitResult.git.commit,
-      });
+      next = recordPluginInstall(
+        next,
+        capabilityConsent.acceptInstallRecord({
+          pluginId: resolvedPluginId,
+          source: "git",
+          spec: effectiveSpec ?? record.spec,
+          installPath: result.targetDir,
+          version: nextVersion,
+          resolvedAt: gitResult.git.resolvedAt,
+          gitUrl: gitResult.git.url,
+          gitRef: gitResult.git.ref,
+          gitCommit: gitResult.git.commit,
+        }),
+      );
     } else {
       const marketplaceResult = result as MarketplacePluginUpdateSuccess;
-      next = recordPluginInstall(next, {
-        pluginId: resolvedPluginId,
-        source: "marketplace",
-        installPath: result.targetDir,
-        version: nextVersion,
-        marketplaceName: marketplaceResult.marketplaceName ?? record.marketplaceName,
-        marketplaceSource: record.marketplaceSource,
-        marketplacePlugin: record.marketplacePlugin,
-      });
+      next = recordPluginInstall(
+        next,
+        capabilityConsent.acceptInstallRecord({
+          pluginId: resolvedPluginId,
+          source: "marketplace",
+          installPath: result.targetDir,
+          version: nextVersion,
+          marketplaceName: marketplaceResult.marketplaceName ?? record.marketplaceName,
+          marketplaceSource: record.marketplaceSource,
+          marketplacePlugin: record.marketplacePlugin,
+        }),
+      );
     }
     changed = true;
 

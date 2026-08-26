@@ -58,6 +58,39 @@ function readInstallRecordRow(stateDir: string): {
 }
 
 describe("installed plugin index install-record persistence", () => {
+  it("round-trips artifact-anchored capability acceptance in the existing install-record JSON", async () => {
+    const stateDir = makeStateDir();
+    const acceptedSurface = {
+      channels: [],
+      providers: [],
+      tools: ["read"],
+      hooks: [],
+      mcpServers: [],
+      cliCommands: [],
+      cliBackends: [],
+      skills: [],
+      dangerousConfigFlags: [],
+    };
+    const acceptedRecord = {
+      source: "npm" as const,
+      integrity: "sha512-artifact",
+      acceptedSurface,
+      acceptedSurfaceHash: "surface-hash",
+      acceptedSurfaceAt: "2026-08-25T00:00:00.000Z",
+      acceptedSurfaceIntegrity: "sha512-artifact",
+    };
+
+    await writePersistedInstalledPluginIndex(createIndex({ demo: acceptedRecord }), { stateDir });
+
+    const persisted = await readPersistedInstalledPluginIndex({ stateDir });
+    expect(getPluginInstallRecordMapEntry(persisted?.installRecords, "demo")).toEqual(
+      acceptedRecord,
+    );
+    expect(JSON.parse(readInstallRecordRow(stateDir).install_records_json)).toEqual({
+      demo: acceptedRecord,
+    });
+  });
+
   it("persists legal prototype-named plugin ids as inert own properties", async () => {
     const stateDir = makeStateDir();
     const installRecords =

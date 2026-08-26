@@ -98,6 +98,37 @@ Toggles a plugin's config entry without touching installed files. Some
 bundled plugins (bundled model/speech providers, the bundled browser plugin)
 are enabled by default; others require `enable` after install.
 
+## Capability consent
+
+OpenClaw asks you to review an external plugin's declared capabilities before
+installing or enabling it. The consent screen identifies the plugin, its
+version and source, artifact integrity, and available trust information. It
+also lists declared channels, providers, tools, hooks, MCP servers, CLI
+commands and backends, skills, and dangerous configuration flags, along with
+the operator grants that apply to hooks, model access, and subagents.
+
+The Gateway records acceptance against the installed artifact's integrity and
+a hash of the exact declared capability surface. Enabling an installed plugin
+requires acceptance for its current surface. Updates require fresh consent
+only when the new artifact declares additional capabilities; unchanged or
+narrower surfaces refresh an existing acceptance automatically.
+
+Interactive CLI commands prompt when consent is required. For noninteractive
+installs, updates, or enablement, review the plugin first and pass
+`--accept-capabilities` explicitly:
+
+```bash
+openclaw plugins install clawhub:<package> --accept-capabilities
+openclaw plugins update <plugin-id> --accept-capabilities
+openclaw plugins enable <plugin-id> --accept-capabilities
+```
+
+Bundled plugins are exempt because they ship with the OpenClaw release rather
+than arriving as separately installed artifacts. Workspace plugins and plugins
+loaded directly from configured paths have no managed install record, so the
+Gateway cannot persist capability acceptance for them. The Control UI can
+still present their declared capabilities before enabling them.
+
 ## Install plugins
 
 ```bash

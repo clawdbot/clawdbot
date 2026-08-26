@@ -1,4 +1,5 @@
 // Shared Vitest mocks and runtime capture helpers for plugin CLI command tests.
+import { realpathSync } from "node:fs";
 import { Command } from "commander";
 import type { Mock } from "vitest";
 import { vi } from "vitest";
@@ -6,8 +7,11 @@ import { getRuntimeConfig } from "../config/config.js";
 import type { HookInstallRecord } from "../config/types.hooks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import type { PluginInstallArtifactConsentHandler } from "../plugins/install-types.js";
 import type { InstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { recordPluginManifestInstallOwner } from "../plugins/manifest-install-owner.js";
+import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import type { CliMockOutputRuntime } from "./test-runtime-capture.js";
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
@@ -89,6 +93,43 @@ export function createTestInstalledPluginIndex(params: {
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper preserves mock call and result types.
 function invokeMock<TArgs extends unknown[], TResult>(mock: unknown, ...args: TArgs): TResult {
   return (mock as (...args: TArgs) => TResult)(...args);
+}
+
+async function invokePluginArtifactInstallMock<
+  TParams extends {
+    onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
+    mode?: "install" | "update";
+    dryRun?: boolean;
+    expectedPluginId?: string;
+  },
+  TResult extends { ok: boolean; pluginId?: string; version?: string },
+>(mock: unknown, params: TParams): Promise<TResult> {
+  const result = await invokeMock<[TParams], Promise<TResult>>(mock, params);
+  const reviewArtifact = params.onBeforePluginArtifactCommit;
+  const pluginId = result.pluginId;
+  if (
+    !result.ok ||
+    !pluginId ||
+    !reviewArtifact ||
+    params.dryRun ||
+    (params.expectedPluginId && params.expectedPluginId !== pluginId)
+  ) {
+    return result;
+  }
+  return await withTempDir("openclaw-plugin-cli-staged-", async (rootDir) => {
+    const stagedArtifactDir = realpathSync(rootDir);
+    createColdPluginFixture({
+      rootDir: stagedArtifactDir,
+      pluginId,
+      ...(result.version ? { packageVersion: result.version } : {}),
+    });
+    await reviewArtifact({
+      pluginId,
+      stagedArtifactDir,
+      mode: params.mode ?? "install",
+    });
+    return result;
+  });
 }
 
 export const pluginCliConfigMock: Mock<LoadConfigFn> = vi.fn<LoadConfigFn>(
@@ -316,8 +357,11 @@ vi.mock("../config/paths.js", async (importOriginal) => {
 });
 
 vi.mock("../plugins/marketplace.js", () => ({
-  installPluginFromMarketplace: ((...args: Parameters<InstallPluginFromMarketplaceFn>) =>
-    installPluginFromMarketplaceMock(...args)) as InstallPluginFromMarketplaceFn,
+  installPluginFromMarketplace: ((params: Parameters<InstallPluginFromMarketplaceFn>[0]) =>
+    invokePluginArtifactInstallMock<
+      Parameters<InstallPluginFromMarketplaceFn>[0],
+      Awaited<ReturnType<InstallPluginFromMarketplaceFn>>
+    >(installPluginFromMarketplaceMock, params)) as InstallPluginFromMarketplaceFn,
   listMarketplacePlugins: ((...args: Parameters<ListMarketplacePluginsFn>) =>
     listMarketplacePlugins(...args)) as ListMarketplacePluginsFn,
   resolveMarketplaceInstallShortcut: ((...args: Parameters<ResolveMarketplaceInstallShortcutFn>) =>
@@ -399,6 +443,16 @@ vi.mock("../plugins/installed-plugin-index-records.js", async (importOriginal) =
         },
       };
     },
+  };
+});
+
+vi.mock("../plugins/installed-plugin-index-record-reader.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../plugins/installed-plugin-index-record-reader.js")>();
+  return {
+    ...actual,
+    loadInstalledPluginIndexInstallRecordsSync: () =>
+      clonePluginInstallRecords(mockInstalledPluginIndexInstallRecords),
   };
 });
 
@@ -653,34 +707,38 @@ vi.mock("../plugins/install.js", () => ({
     UNSUPPORTED_PLAIN_FILE_PLUGIN: "unsupported_plain_file_plugin",
   },
   installPluginFromNpmSpec: ((
-    ...args: Parameters<(typeof import("../plugins/install.js"))["installPluginFromNpmSpec"]>
+    params: Parameters<(typeof import("../plugins/install.js"))["installPluginFromNpmSpec"]>[0],
   ) =>
-    invokeMock<
-      Parameters<(typeof import("../plugins/install.js"))["installPluginFromNpmSpec"]>,
-      ReturnType<(typeof import("../plugins/install.js"))["installPluginFromNpmSpec"]>
+    invokePluginArtifactInstallMock<
+      Parameters<(typeof import("../plugins/install.js"))["installPluginFromNpmSpec"]>[0],
+      Awaited<ReturnType<(typeof import("../plugins/install.js"))["installPluginFromNpmSpec"]>>
     >(
       installPluginFromNpmSpecMock,
-      ...args,
+      params,
     )) as (typeof import("../plugins/install.js"))["installPluginFromNpmSpec"],
   installPluginFromNpmPackArchive: ((
-    ...args: Parameters<(typeof import("../plugins/install.js"))["installPluginFromNpmPackArchive"]>
+    params: Parameters<
+      (typeof import("../plugins/install.js"))["installPluginFromNpmPackArchive"]
+    >[0],
   ) =>
-    invokeMock<
-      Parameters<(typeof import("../plugins/install.js"))["installPluginFromNpmPackArchive"]>,
-      ReturnType<(typeof import("../plugins/install.js"))["installPluginFromNpmPackArchive"]>
+    invokePluginArtifactInstallMock<
+      Parameters<(typeof import("../plugins/install.js"))["installPluginFromNpmPackArchive"]>[0],
+      Awaited<
+        ReturnType<(typeof import("../plugins/install.js"))["installPluginFromNpmPackArchive"]>
+      >
     >(
       installPluginFromNpmPackArchiveMock,
-      ...args,
+      params,
     )) as (typeof import("../plugins/install.js"))["installPluginFromNpmPackArchive"],
   installPluginFromPath: ((
-    ...args: Parameters<(typeof import("../plugins/install.js"))["installPluginFromPath"]>
+    params: Parameters<(typeof import("../plugins/install.js"))["installPluginFromPath"]>[0],
   ) =>
-    invokeMock<
-      Parameters<(typeof import("../plugins/install.js"))["installPluginFromPath"]>,
-      ReturnType<(typeof import("../plugins/install.js"))["installPluginFromPath"]>
+    invokePluginArtifactInstallMock<
+      Parameters<(typeof import("../plugins/install.js"))["installPluginFromPath"]>[0],
+      Awaited<ReturnType<(typeof import("../plugins/install.js"))["installPluginFromPath"]>>
     >(
       installPluginFromPathMock,
-      ...args,
+      params,
     )) as (typeof import("../plugins/install.js"))["installPluginFromPath"],
 }));
 
@@ -706,14 +764,14 @@ vi.mock("../plugins/bundled-sources.js", async (importOriginal) => {
 
 vi.mock("../plugins/git-install.js", () => ({
   installPluginFromGitSpec: ((
-    ...args: Parameters<(typeof import("../plugins/git-install.js"))["installPluginFromGitSpec"]>
+    params: Parameters<(typeof import("../plugins/git-install.js"))["installPluginFromGitSpec"]>[0],
   ) =>
-    invokeMock<
-      Parameters<(typeof import("../plugins/git-install.js"))["installPluginFromGitSpec"]>,
-      ReturnType<(typeof import("../plugins/git-install.js"))["installPluginFromGitSpec"]>
+    invokePluginArtifactInstallMock<
+      Parameters<(typeof import("../plugins/git-install.js"))["installPluginFromGitSpec"]>[0],
+      Awaited<ReturnType<(typeof import("../plugins/git-install.js"))["installPluginFromGitSpec"]>>
     >(
       installPluginFromGitSpecMock,
-      ...args,
+      params,
     )) as (typeof import("../plugins/git-install.js"))["installPluginFromGitSpec"],
   parseGitPluginSpec: ((
     ...args: Parameters<(typeof import("../plugins/git-install.js"))["parseGitPluginSpec"]>
@@ -776,14 +834,14 @@ vi.mock("../plugins/clawhub.js", () => ({
     ARTIFACT_UNAVAILABLE: "artifact_unavailable",
   },
   installPluginFromClawHub: ((
-    ...args: Parameters<(typeof import("../plugins/clawhub.js"))["installPluginFromClawHub"]>
+    params: Parameters<(typeof import("../plugins/clawhub.js"))["installPluginFromClawHub"]>[0],
   ) =>
-    invokeMock<
-      Parameters<(typeof import("../plugins/clawhub.js"))["installPluginFromClawHub"]>,
-      ReturnType<(typeof import("../plugins/clawhub.js"))["installPluginFromClawHub"]>
+    invokePluginArtifactInstallMock<
+      Parameters<(typeof import("../plugins/clawhub.js"))["installPluginFromClawHub"]>[0],
+      Awaited<ReturnType<(typeof import("../plugins/clawhub.js"))["installPluginFromClawHub"]>>
     >(
       installPluginFromClawHubMock,
-      ...args,
+      params,
     )) as (typeof import("../plugins/clawhub.js"))["installPluginFromClawHub"],
 }));
 

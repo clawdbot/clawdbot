@@ -29,16 +29,21 @@ import {
   type PluginInstallRequest,
   type PluginListResult,
   type PluginSearchResult,
+  type PluginsInspectResult,
 } from "../../lib/plugins/index.ts";
+import {
+  renderArtTile,
+  renderPluginConsentDialog,
+  renderPluginDeclaredCapabilities,
+  renderPluginGrants,
+  type PluginConsentState,
+} from "./consent-dialog.ts";
 import type { PluginInstallPolicyWarningDetails } from "./install-policy-warning.ts";
 import {
   CONNECTOR_GROUP_ORDER,
   CONNECTOR_SUGGESTIONS,
   PLUGIN_CATEGORY_ORDER,
-  pluginArtPath,
   pluginCategoryLabel,
-  pluginFallbackGradient,
-  pluginMonogram,
   type ConnectorGroup,
   type ConnectorSuggestion,
 } from "./presentation.ts";
@@ -89,6 +94,12 @@ type PluginsViewProps = {
   messages: Readonly<Record<string, PluginRowMessage>>;
   pendingRemoval: Readonly<Record<string, boolean>>;
   detailPluginId: string | null;
+  detailInspection: PluginsInspectResult | null;
+  detailInspectionLoading: boolean;
+  consent: PluginConsentState | null;
+  consentInspection: PluginsInspectResult | null;
+  consentInspectionLoading: boolean;
+  consentInspectionError: string | null;
   iconUrls: Readonly<Record<string, string>>;
   canMutate: boolean;
   mutationBlockedReason: string | null;
@@ -105,6 +116,9 @@ type PluginsViewProps = {
   onShowDetails: (pluginId: string | null) => void;
   onSetEnabled: (pluginId: string, enabled: boolean, rowKey: string) => void;
   onInstall: (request: PluginInstallRequest, installIdentity: string) => void;
+  onCancelConsent: () => void;
+  onConfirmConsent: () => void;
+  onRetryConsentInspection: () => void;
   onDismissMessage: (rowKey: string) => void;
   onRequestUninstall: (rowKey: string) => void;
   onCancelUninstall: (rowKey: string) => void;
@@ -312,42 +326,6 @@ const compactNumber = new Intl.NumberFormat(undefined, {
   notation: "compact",
   maximumFractionDigits: 1,
 });
-
-function renderArtTile(
-  slug: string,
-  name: string,
-  iconUrl?: string,
-  onIconError?: () => void,
-  className = "plugins-tile",
-): TemplateResult {
-  const art = pluginArtPath(slug);
-  if (art) {
-    return html`<span class=${className}>
-      <img src=${art} alt="" loading="lazy" decoding="async" />
-    </span>`;
-  }
-  if (iconUrl) {
-    return html`<span class=${className}>
-      <img
-        class="plugins-icon"
-        src=${iconUrl}
-        alt=""
-        loading="lazy"
-        decoding="async"
-        @error=${onIconError}
-      />
-    </span>`;
-  }
-  const [from, to] = pluginFallbackGradient(slug);
-  const monogram = pluginMonogram(name);
-  return html`<span
-    class=${`${className} ${className}--fallback`}
-    style=${`--plugins-art-a:${from};--plugins-art-b:${to}`}
-    aria-hidden="true"
-  >
-    ${monogram ? html`<span>${monogram}</span>` : icons.puzzle}
-  </span>`;
-}
 
 function stateLabel(plugin: PluginCatalogItem): string {
   switch (plugin.state) {
@@ -1331,6 +1309,20 @@ function renderDetailOverlay(props: PluginsViewProps) {
               : nothing}
             ${detailMetaRow(t("pluginsPage.detailPluginId"), html`<code>${plugin.id}</code>`)}
           </div>
+          ${plugin.installed && (props.detailInspection || props.detailInspectionLoading)
+            ? html`<section class="plugins-detail__capabilities">
+                <h3>${t("pluginsPage.capabilities")}</h3>
+                ${props.detailInspection
+                  ? html`
+                      ${renderPluginDeclaredCapabilities(props.detailInspection.declared)}
+                      ${renderPluginGrants(
+                        props.detailInspection.grants,
+                        props.detailInspection.plugin.origin,
+                      )}
+                    `
+                  : html`<p class="plugins-consent__hint">${t("pluginConsent.loading")}</p>`}
+              </section>`
+            : nothing}
         </div>
       </section>
     </openclaw-modal-dialog>
@@ -1447,6 +1439,27 @@ export function renderPlugins(props: PluginsViewProps) {
               : renderActivePanel(props)}
       </wa-tab-panel>
       ${renderDetailOverlay(props)}
+      ${props.consent
+        ? renderPluginConsentDialog({
+            consent: props.consent,
+            inspection: props.consentInspection,
+            loading: props.consentInspectionLoading,
+            error: props.consentInspectionError,
+            iconUrl: props.consent.pluginId ? props.iconUrls[props.consent.pluginId] : undefined,
+            canMutate: props.canMutate,
+            mutationBlockedReason: props.mutationBlockedReason,
+            busy: Boolean(
+              props.busy[
+                props.consent.intent.kind === "install"
+                  ? props.consent.intent.installIdentity
+                  : props.consent.intent.rowKey
+              ],
+            ),
+            onCancel: props.onCancelConsent,
+            onConfirm: props.onConfirmConsent,
+            onRetry: props.onRetryConsentInspection,
+          })
+        : nothing}
     `,
     { wide: true },
   );

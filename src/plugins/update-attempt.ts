@@ -7,7 +7,10 @@ import { installPluginFromClawHub, type ClawHubRiskAcknowledgementRequest } from
 import { installPluginFromGitSpec } from "./git-install.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.types.js";
 import { copyPluginInstallTransactionRequest } from "./install-transaction.js";
-import { PLUGIN_INSTALL_ERROR_CODE } from "./install-types.js";
+import {
+  PLUGIN_INSTALL_ERROR_CODE,
+  type PluginInstallArtifactConsentHandler,
+} from "./install-types.js";
 import { installPluginFromNpmSpec } from "./install.js";
 import { installPluginFromMarketplace } from "./marketplace.js";
 import { shouldFallbackClawHubBridgeToNpm } from "./update-config.js";
@@ -362,6 +365,7 @@ export async function runPluginUpdateAttempt(params: {
   timeoutMs?: number;
   dangerouslyForceUnsafeInstall?: boolean;
   onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
+  onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
   expectedIntegrity?: string;
   npmSpecs?: PluginUpdateSpecPlan;
   clawhubSpecs?: PluginUpdateSpecPlan;
@@ -396,6 +400,7 @@ export async function runPluginUpdateAttempt(params: {
               ...dryRunOption,
               dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
               onInstallPolicyWarning: params.onInstallPolicyWarning,
+              onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
               trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
               expectedPluginId: params.pluginId,
               expectedReplacementPluginId: params.expectedReplacementPluginId,
@@ -421,6 +426,7 @@ export async function runPluginUpdateAttempt(params: {
                 ...dryRunOption,
                 dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
                 onInstallPolicyWarning: params.onInstallPolicyWarning,
+                onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
                 expectedPluginId: params.pluginId,
                 ...params.clawHubRiskAcknowledgementOptions,
                 logger: params.logger,
@@ -437,6 +443,7 @@ export async function runPluginUpdateAttempt(params: {
                   ...dryRunOption,
                   dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
                   onInstallPolicyWarning: params.onInstallPolicyWarning,
+                  onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
                   expectedPluginId: params.pluginId,
                   logger: params.logger,
                 }),
@@ -452,6 +459,7 @@ export async function runPluginUpdateAttempt(params: {
                   ...dryRunOption,
                   dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
                   onInstallPolicyWarning: params.onInstallPolicyWarning,
+                  onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
                   expectedPluginId: params.pluginId,
                   logger: params.logger,
                 }),
@@ -510,6 +518,7 @@ export async function runPluginUpdateAttempt(params: {
         ...dryRunOption,
         dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
         onInstallPolicyWarning: params.onInstallPolicyWarning,
+        onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
         trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
         expectedPluginId: params.pluginId,
         expectedReplacementPluginId: params.expectedReplacementPluginId,
@@ -550,6 +559,7 @@ export async function runPluginUpdateAttempt(params: {
         ...dryRunOption,
         dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
         onInstallPolicyWarning: params.onInstallPolicyWarning,
+        onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
         expectedPluginId: params.pluginId,
         ...params.clawHubRiskAcknowledgementOptions,
         logger: params.logger,
@@ -590,6 +600,7 @@ export async function runPluginUpdateAttempt(params: {
         ...dryRunOption,
         dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
         onInstallPolicyWarning: params.onInstallPolicyWarning,
+        onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
         trustedSourceLinkedOfficialInstall: true,
         expectedPluginId: params.pluginId,
         expectedReplacementPluginId: params.expectedReplacementPluginId,

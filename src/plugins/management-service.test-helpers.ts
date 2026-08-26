@@ -1,3 +1,7 @@
+import type { PluginManifestRecord } from "./manifest-registry.js";
+import { createColdPluginFixture } from "./test-helpers/cold-plugin-fixtures.js";
+import { makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
+
 export function configSnapshot(config: Record<string, unknown> = {}) {
   return {
     snapshot: {
@@ -28,7 +32,7 @@ export function metadataSnapshot(params: {
   const installRecord =
     params.installRecord ??
     (origin === "global" ? { source: "path", installPath: `/tmp/${id}` } : undefined);
-  const manifest = {
+  const manifest: PluginManifestRecord = {
     id,
     name: params.name ?? "Workboard",
     description: "Coordinate agent work in a shared board.",
@@ -73,6 +77,34 @@ export function emptyMetadataSnapshot() {
     diagnostics: [],
     normalizePluginId: (pluginId: string) => pluginId,
   };
+}
+
+export async function reviewManagedPluginTestArtifact(
+  params: {
+    expectedPluginId?: string;
+    onBeforePluginArtifactCommit?: (request: {
+      pluginId: string;
+      stagedArtifactDir: string;
+      mode: "install";
+    }) => Promise<void>;
+  },
+  pluginId: string,
+  trackedDirs: string[],
+) {
+  if (params.expectedPluginId && params.expectedPluginId !== pluginId) {
+    return;
+  }
+  const artifactDir = makeTrackedTempDir("managed-plugin-consent", trackedDirs);
+  createColdPluginFixture({
+    rootDir: artifactDir,
+    pluginId,
+    manifest: { providers: [], channels: [], channelConfigs: {}, providerAuthChoices: [] },
+  });
+  await params.onBeforePluginArtifactCommit?.({
+    pluginId,
+    stagedArtifactDir: artifactDir,
+    mode: "install",
+  });
 }
 
 export const hostedDiffsEntry = {

@@ -18861,6 +18861,56 @@ public struct QuestionListResult: Codable, Sendable {
     }
 }
 
+public struct CapabilityConsentErrorDetails: Codable, Sendable {
+    public let capabilityconsentcode: String
+    public let pluginid: String
+    public let name: String
+    public let version: String?
+    public let declared: PluginDeclaredSurface
+    public let grants: PluginOperatorGrants
+    public let source: PluginInspectSource?
+    public let trust: PluginInstallTrust?
+    public let widened: PluginDeclaredSurfaceWidening?
+    public let acceptedat: String?
+
+    public init(
+        capabilityconsentcode: String,
+        pluginid: String,
+        name: String,
+        version: String? = nil,
+        declared: PluginDeclaredSurface,
+        grants: PluginOperatorGrants,
+        source: PluginInspectSource? = nil,
+        trust: PluginInstallTrust? = nil,
+        widened: PluginDeclaredSurfaceWidening? = nil,
+        acceptedat: String? = nil)
+    {
+        self.capabilityconsentcode = capabilityconsentcode
+        self.pluginid = pluginid
+        self.name = name
+        self.version = version
+        self.declared = declared
+        self.grants = grants
+        self.source = source
+        self.trust = trust
+        self.widened = widened
+        self.acceptedat = acceptedat
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case capabilityconsentcode = "capabilityConsentCode"
+        case pluginid = "pluginId"
+        case name
+        case version
+        case declared
+        case grants
+        case source
+        case trust
+        case widened
+        case acceptedat = "acceptedAt"
+    }
+}
+
 public struct HooksStatusParams: Codable, Sendable {
     public let agentid: String?
 
@@ -19137,6 +19187,191 @@ public struct PluginControlUiDescriptor: Codable, Sendable {
     }
 }
 
+public struct PluginDeclaredSurface: Codable, Sendable {
+    public let channels: [String]
+    public let providers: [String]
+    public let tools: [String]
+    public let hooks: [String]
+    public let mcpservers: [String]
+    public let clicommands: [String]
+    public let clibackends: [String]
+    public let skills: [String]
+    public let dangerousconfigflags: [String]
+
+    public init(
+        channels: [String],
+        providers: [String],
+        tools: [String],
+        hooks: [String],
+        mcpservers: [String],
+        clicommands: [String],
+        clibackends: [String],
+        skills: [String],
+        dangerousconfigflags: [String])
+    {
+        self.channels = channels
+        self.providers = providers
+        self.tools = tools
+        self.hooks = hooks
+        self.mcpservers = mcpservers
+        self.clicommands = clicommands
+        self.clibackends = clibackends
+        self.skills = skills
+        self.dangerousconfigflags = dangerousconfigflags
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case channels
+        case providers
+        case tools
+        case hooks
+        case mcpservers = "mcpServers"
+        case clicommands = "cliCommands"
+        case clibackends = "cliBackends"
+        case skills
+        case dangerousconfigflags = "dangerousConfigFlags"
+    }
+}
+
+public struct PluginDeclaredSurfaceWidening: Codable, Sendable {
+    public let channels: [String]?
+    public let providers: [String]?
+    public let tools: [String]?
+    public let hooks: [String]?
+    public let mcpservers: [String]?
+    public let clicommands: [String]?
+    public let clibackends: [String]?
+    public let skills: [String]?
+    public let dangerousconfigflags: [String]?
+
+    public init(
+        channels: [String]? = nil,
+        providers: [String]? = nil,
+        tools: [String]? = nil,
+        hooks: [String]? = nil,
+        mcpservers: [String]? = nil,
+        clicommands: [String]? = nil,
+        clibackends: [String]? = nil,
+        skills: [String]? = nil,
+        dangerousconfigflags: [String]? = nil)
+    {
+        self.channels = channels
+        self.providers = providers
+        self.tools = tools
+        self.hooks = hooks
+        self.mcpservers = mcpservers
+        self.clicommands = clicommands
+        self.clibackends = clibackends
+        self.skills = skills
+        self.dangerousconfigflags = dangerousconfigflags
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case channels
+        case providers
+        case tools
+        case hooks
+        case mcpservers = "mcpServers"
+        case clicommands = "cliCommands"
+        case clibackends = "cliBackends"
+        case skills
+        case dangerousconfigflags = "dangerousConfigFlags"
+    }
+}
+
+public struct PluginHookGrant: Codable, Sendable {
+    public let effective: Bool
+    public let configured: Bool?
+
+    public init(
+        effective: Bool,
+        configured: Bool? = nil)
+    {
+        self.effective = effective
+        self.configured = configured
+    }
+}
+
+public struct PluginInspectSource: Codable, Sendable {
+    public let kind: AnyCodable
+    public let spec: String?
+    public let packagename: String?
+    public let integrity: String?
+    public let integritykind: AnyCodable?
+
+    public init(
+        kind: AnyCodable,
+        spec: String? = nil,
+        packagename: String? = nil,
+        integrity: String? = nil,
+        integritykind: AnyCodable? = nil)
+    {
+        self.kind = kind
+        self.spec = spec
+        self.packagename = packagename
+        self.integrity = integrity
+        self.integritykind = integritykind
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case spec
+        case packagename = "packageName"
+        case integrity
+        case integritykind = "integrityKind"
+    }
+}
+
+public struct PluginInstallTrust: Codable, Sendable {
+    public let disposition: AnyCodable
+    public let reasons: [String]?
+    public let checkedat: String?
+    public let acknowledgedat: String?
+    public let pending: Bool?
+    public let stale: Bool?
+
+    public init(
+        disposition: AnyCodable,
+        reasons: [String]? = nil,
+        checkedat: String? = nil,
+        acknowledgedat: String? = nil,
+        pending: Bool? = nil,
+        stale: Bool? = nil)
+    {
+        self.disposition = disposition
+        self.reasons = reasons
+        self.checkedat = checkedat
+        self.acknowledgedat = acknowledgedat
+        self.pending = pending
+        self.stale = stale
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case disposition
+        case reasons
+        case checkedat = "checkedAt"
+        case acknowledgedat = "acknowledgedAt"
+        case pending
+        case stale
+    }
+}
+
+public struct PluginOperatorGrants: Codable, Sendable {
+    public let hooks: [String: AnyCodable]
+    public let llm: [String: AnyCodable]?
+    public let subagent: [String: AnyCodable]?
+
+    public init(
+        hooks: [String: AnyCodable],
+        llm: [String: AnyCodable]? = nil,
+        subagent: [String: AnyCodable]? = nil)
+    {
+        self.hooks = hooks
+        self.llm = llm
+        self.subagent = subagent
+    }
+}
+
 public struct PluginSearchPackage: Codable, Sendable {
     public let name: String
     public let displayname: String
@@ -19197,6 +19432,45 @@ public struct PluginSearchResultEntry: Codable, Sendable {
     {
         self.score = score
         self.package = package
+    }
+}
+
+public struct PluginsInspectParams: Codable, Sendable {
+    public let pluginid: String
+
+    public init(
+        pluginid: String)
+    {
+        self.pluginid = pluginid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case pluginid = "pluginId"
+    }
+}
+
+public struct PluginsInspectResult: Codable, Sendable {
+    public let ok: Bool
+    public let plugin: [String: AnyCodable]
+    public let source: PluginInspectSource?
+    public let declared: PluginDeclaredSurface
+    public let grants: PluginOperatorGrants
+    public let trust: PluginInstallTrust?
+
+    public init(
+        ok: Bool,
+        plugin: [String: AnyCodable],
+        source: PluginInspectSource? = nil,
+        declared: PluginDeclaredSurface,
+        grants: PluginOperatorGrants,
+        trust: PluginInstallTrust? = nil)
+    {
+        self.ok = ok
+        self.plugin = plugin
+        self.source = source
+        self.declared = declared
+        self.grants = grants
+        self.trust = trust
     }
 }
 
@@ -19442,18 +19716,22 @@ public struct PluginsSessionActionSuccessResult: Codable, Sendable {
 public struct PluginsSetEnabledParams: Codable, Sendable {
     public let pluginid: String
     public let enabled: Bool
+    public let acknowledgecapabilities: Bool?
 
     public init(
         pluginid: String,
-        enabled: Bool)
+        enabled: Bool,
+        acknowledgecapabilities: Bool? = nil)
     {
         self.pluginid = pluginid
         self.enabled = enabled
+        self.acknowledgecapabilities = acknowledgecapabilities
     }
 
     private enum CodingKeys: String, CodingKey {
         case pluginid = "pluginId"
         case enabled
+        case acknowledgecapabilities = "acknowledgeCapabilities"
     }
 }
 

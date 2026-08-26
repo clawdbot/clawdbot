@@ -1,6 +1,8 @@
 // Plugins CLI policy tests cover plugin command policy checks and warnings.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   buildPluginRegistrySnapshotReportMock,
   enablePluginInConfigMock,
@@ -11,6 +13,7 @@ import {
   runtimeErrors,
   pluginsCliRuntimeLogs,
   runPluginsCommand,
+  setInstalledPluginIndexInstallRecords,
   configWriteMock,
 } from "./plugins-cli-test-helpers.js";
 
@@ -99,6 +102,26 @@ describe("plugins cli policy mutations", () => {
       installRecords: {},
       policyPluginIds: ["alpha"],
       reason: "policy-changed",
+    });
+  });
+
+  it("rejects enabling an unconsented installed plugin without --accept-capabilities", async () => {
+    await withTempDir("openclaw-cli-capability-consent-", async (rootDir) => {
+      createColdPluginFixture({ rootDir, pluginId: "alpha" });
+      const sourceConfig = {
+        plugins: { entries: { alpha: { enabled: false } } },
+      } as OpenClawConfig;
+      pluginCliConfigMock.mockReturnValue(sourceConfig);
+      setInstalledPluginIndexInstallRecords({
+        alpha: { source: "npm", spec: "@acme/alpha", installPath: rootDir },
+      });
+      mockPluginRegistry(["alpha"]);
+
+      await expect(runPluginsCommand(["plugins", "enable", "alpha"])).rejects.toThrow("__exit__:1");
+
+      expect(runtimeErrors.at(-1)).toContain("--accept-capabilities");
+      expect(replaceConfigFileMock).not.toHaveBeenCalled();
+      expect(configWriteMock).not.toHaveBeenCalled();
     });
   });
 

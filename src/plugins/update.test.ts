@@ -6,6 +6,10 @@ import { bundledPluginRootAt } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import {
+  computeDeclaredSurfaceHash,
+  resolvePluginArtifactDeclaredSurface,
+} from "./capability-consent.js";
 import { makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const APP_ROOT = "/app";
@@ -380,6 +384,46 @@ function createInstalledPackageDir(params: {
     fs.writeFileSync(path.join(dir, "index.js"), "export default function register() {}\n");
   }
   return dir;
+}
+
+function createCapabilityConsentPackage(params: {
+  pluginId: string;
+  version: string;
+  childProviders: string[];
+}): string {
+  const packageName = `@acme/${params.pluginId}`;
+  const rootDir = createInstalledPackageDir({ name: packageName, version: params.version });
+  const childDir = path.join(rootDir, "children", "addon");
+  fs.mkdirSync(childDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(rootDir, "package.json"),
+    JSON.stringify({
+      name: packageName,
+      version: params.version,
+      openclaw: { extensions: ["./index.js", "./children/addon/index.js"] },
+    }),
+  );
+  fs.writeFileSync(path.join(rootDir, "index.js"), "export default () => {};\n");
+  fs.writeFileSync(path.join(childDir, "index.js"), "export default () => {};\n");
+  fs.writeFileSync(
+    path.join(rootDir, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: params.pluginId,
+      name: "Consent fixture",
+      version: params.version,
+      providers: ["root-provider"],
+      configSchema: { type: "object" },
+    }),
+  );
+  fs.writeFileSync(
+    path.join(childDir, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: `${params.pluginId}-addon`,
+      providers: params.childProviders,
+      configSchema: { type: "object" },
+    }),
+  );
+  return rootDir;
 }
 
 function createOpenClawPeerLinkFixtures(plugins: Array<{ pluginId: string; packageName: string }>) {
@@ -767,6 +811,143 @@ describe("updateNpmInstalledPlugins", () => {
     runCommandWithTimeoutMock.mockReset();
     validatePackageExtensionEntriesForInstallMock.mockReset();
   });
+
+  it.each([
+    {
+      label: "rejects widened sibling capabilities before replacing the installed artifact",
+      nextProviders: ["existing-child-provider", "new-child-provider"],
+      acknowledgeCapabilities: false,
+      rejected: true,
+      ownerEnabled: false,
+      childEnabled: true,
+    },
+    {
+      label: "accepts widened sibling capabilities and refreshes the artifact-bound acceptance",
+      nextProviders: ["existing-child-provider", "new-child-provider"],
+      acknowledgeCapabilities: true,
+      rejected: false,
+      ownerEnabled: true,
+      childEnabled: false,
+    },
+    {
+      label: "silently refreshes existing acceptance when package capabilities are unchanged",
+      nextProviders: ["existing-child-provider"],
+      acknowledgeCapabilities: false,
+      rejected: false,
+      ownerEnabled: true,
+      childEnabled: false,
+    },
+  ])(
+    "$label",
+    async ({ nextProviders, acknowledgeCapabilities, rejected, ownerEnabled, childEnabled }) => {
+      const pluginId = "consent-fixture";
+      const packageName = `@acme/${pluginId}`;
+      const installedDir = createCapabilityConsentPackage({
+        pluginId,
+        version: "1.0.0",
+        childProviders: ["existing-child-provider"],
+      });
+      const stagedDir = createCapabilityConsentPackage({
+        pluginId,
+        version: "2.0.0",
+        childProviders: nextProviders,
+      });
+      const previousDeclared = resolvePluginArtifactDeclaredSurface(installedDir);
+      const previousAcceptedAt = "2026-01-01T00:00:00.000Z";
+      const childManifestPath = path.join(
+        installedDir,
+        "children",
+        "addon",
+        "openclaw.plugin.json",
+      );
+      const previousChildManifest = fs.readFileSync(childManifestPath, "utf8");
+      const config = {
+        plugins: {
+          entries: {
+            [pluginId]: { enabled: ownerEnabled },
+            [`${pluginId}-addon`]: { enabled: childEnabled },
+          },
+          installs: {
+            [pluginId]: {
+              source: "npm" as const,
+              spec: packageName,
+              installPath: installedDir,
+              integrity: "sha512-previous",
+              acceptedSurface: previousDeclared,
+              acceptedSurfaceHash: computeDeclaredSurfaceHash(previousDeclared),
+              acceptedSurfaceAt: previousAcceptedAt,
+              acceptedSurfaceIntegrity: "sha512-previous",
+            },
+          },
+        },
+      } satisfies OpenClawConfig;
+      mockNpmViewMetadata({ name: packageName, version: "2.0.0", integrity: "sha512-next" });
+      installPluginFromNpmSpecMock.mockImplementationOnce(
+        async (options: {
+          onBeforePluginArtifactCommit?: (request: {
+            pluginId: string;
+            currentArtifactDir: string;
+            stagedArtifactDir: string;
+            mode: "update";
+          }) => Promise<void>;
+        }) => {
+          await options.onBeforePluginArtifactCommit?.({
+            pluginId,
+            currentArtifactDir: installedDir,
+            stagedArtifactDir: stagedDir,
+            mode: "update",
+          });
+          fs.copyFileSync(
+            path.join(stagedDir, "children", "addon", "openclaw.plugin.json"),
+            childManifestPath,
+          );
+          return {
+            ok: true,
+            pluginId,
+            targetDir: installedDir,
+            version: "2.0.0",
+            extensions: ["index.js"],
+            npmResolution: {
+              name: packageName,
+              version: "2.0.0",
+              resolvedSpec: `${packageName}@2.0.0`,
+              integrity: "sha512-next",
+            },
+          };
+        },
+      );
+
+      const result = await updatePlugin(config, pluginId, {
+        acknowledgeCapabilities,
+        packagePluginIds: { [pluginId]: [pluginId, `${pluginId}-addon`] },
+      });
+
+      if (rejected) {
+        expect(result.changed).toBe(false);
+        expect(result.outcomes).toEqual([
+          expect.objectContaining({
+            pluginId,
+            status: "error",
+            message: expect.stringContaining("--accept-capabilities"),
+          }),
+        ]);
+        expect(fs.readFileSync(childManifestPath, "utf8")).toBe(previousChildManifest);
+        expect(result.config.plugins?.installs?.[pluginId]).toBe(config.plugins.installs[pluginId]);
+        return;
+      }
+
+      const install = result.config.plugins?.installs?.[pluginId];
+      expect(result.outcomes).toEqual([expect.objectContaining({ pluginId, status: "updated" })]);
+      expect(install?.acceptedSurface?.providers).toEqual(
+        ["root-provider", ...nextProviders].toSorted(),
+      );
+      expect(install?.acceptedSurfaceHash).toBe(
+        computeDeclaredSurfaceHash(resolvePluginArtifactDeclaredSurface(installedDir)),
+      );
+      expect(install?.acceptedSurfaceAt).not.toBe(previousAcceptedAt);
+      expect(install?.acceptedSurfaceIntegrity).toBe("sha512-next");
+    },
+  );
 
   it("moves only the replaced npm plugin's exact explicit load path", async () => {
     const previousInstallPath = createInstalledPackageDir({

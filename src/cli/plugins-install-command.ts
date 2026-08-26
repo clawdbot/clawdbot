@@ -7,7 +7,11 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "../plugins/clawhub.js";
 import { resolveDefaultPluginExtensionsDir } from "../plugins/install-paths.js";
 import { persistPluginInstall } from "../plugins/install-persistence.js";
-import { installManagedPluginSource } from "../plugins/management-service.js";
+import { loadInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
+import {
+  createManagedPluginArtifactConsentHandler,
+  installManagedPluginSource,
+} from "../plugins/management-service.js";
 import { installPluginFromMarketplace } from "../plugins/marketplace.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
@@ -21,6 +25,7 @@ import {
   confirmNonClawHubInstall,
   type NonClawHubInstallSourceClass,
 } from "./non-clawhub-install-acknowledgement.js";
+import { resolvePluginCapabilityConsentCliOptions } from "./plugin-capability-consent.js";
 import {
   createPluginInstallLogger,
   formatPluginInstallWithHookFallbackError,
@@ -96,6 +101,11 @@ async function runPluginInstallCommandUnlocked(
       dangerouslyForceUnsafeInstall: opts.dangerouslyForceUnsafeInstall,
     }),
   });
+  const capabilityConsent = resolvePluginCapabilityConsentCliOptions({
+    acceptCapabilities: opts.acceptCapabilities,
+    action: "install",
+    runtime,
+  });
   const acknowledgeNonClawHubSource = async (
     sourceClass: NonClawHubInstallSourceClass,
     spec: string,
@@ -113,6 +123,15 @@ async function runPluginInstallCommandUnlocked(
     ) {
       return runtime.exit(1);
     }
+    const artifactConsent = createManagedPluginArtifactConsentHandler({
+      config: snapshot.config,
+      source: "marketplace",
+      spec: `${raw}@${preflight.marketplace}`,
+      ...(installMode === "update"
+        ? { previousRecords: await loadInstalledPluginIndexInstallRecords() }
+        : {}),
+      ...capabilityConsent,
+    });
     const result = await installPluginFromMarketplace({
       ...safetyOverrides,
       marketplace: preflight.marketplace,
@@ -120,6 +139,7 @@ async function runPluginInstallCommandUnlocked(
       plugin: raw,
       extensionsDir: resolveDefaultPluginExtensionsDir(),
       logger: createPluginInstallLogger(runtime),
+      onBeforePluginArtifactCommit: artifactConsent.onBeforePluginArtifactCommit,
     });
     if (!result.ok) {
       if (!isClawHubBlockedCliFailure(result)) {
@@ -128,17 +148,18 @@ async function runPluginInstallCommandUnlocked(
       return runtime.exit(1);
     }
 
+    const install = artifactConsent.applyAcceptedSurface(result.pluginId, {
+      source: "marketplace",
+      installPath: result.targetDir,
+      version: result.version,
+      marketplaceName: result.marketplaceName,
+      marketplaceSource: result.marketplaceSource,
+      marketplacePlugin: result.marketplacePlugin,
+    });
     await persistPluginInstall({
       snapshot,
       pluginId: result.pluginId,
-      install: {
-        source: "marketplace",
-        installPath: result.targetDir,
-        version: result.version,
-        marketplaceName: result.marketplaceName,
-        marketplaceSource: result.marketplaceSource,
-        marketplacePlugin: result.marketplacePlugin,
-      },
+      install,
       invalidateRuntimeCache,
       runtime,
     });
@@ -204,6 +225,7 @@ async function runPluginInstallCommandUnlocked(
       const result = await installManagedPluginSource({
         request: sourceRequest,
         snapshot,
+        ...capabilityConsent,
         safetyOverrides,
         logger: createPluginInstallLogger(runtime),
         invalidateRuntimeCache,
@@ -236,6 +258,7 @@ async function runPluginInstallCommandUnlocked(
       const result = await installManagedPluginSource({
         request: sourceRequest,
         snapshot,
+        ...capabilityConsent,
         safetyOverrides,
         logger: createPluginInstallLogger(runtime),
         invalidateRuntimeCache,
@@ -278,6 +301,7 @@ async function runPluginInstallCommandUnlocked(
         spec: sourceRequest.spec,
         pin: sourceRequest.pin,
         safetyOverrides,
+        capabilityConsent,
         allowBundledFallback: false,
         expectedPluginId: sourceRequest.pluginId,
         expectedIntegrity: sourceRequest.expectedIntegrity,
@@ -312,6 +336,7 @@ async function runPluginInstallCommandUnlocked(
               : {}),
           },
           snapshot: installSnapshot,
+          ...capabilityConsent,
           safetyOverrides: installSafetyOverrides,
           logger: createPluginInstallLogger(runtime),
           invalidateRuntimeCache,
@@ -374,6 +399,7 @@ async function runPluginInstallCommandUnlocked(
         spec: sourceRequest.spec,
         pin: sourceRequest.pin,
         safetyOverrides,
+        capabilityConsent,
         allowBundledFallback: sourceRequest.allowBundledFallback ?? false,
         invalidateRuntimeCache,
         expectedPluginId: sourceRequest.expectedPluginId,
