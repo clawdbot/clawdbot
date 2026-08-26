@@ -392,9 +392,14 @@ export function buildGatewayCronService(params: {
       onLaneWait,
     }) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
-      const sessionKey = resolveCronSessionTargetSessionKey(job.sessionTarget) ?? `cron:${job.id}`;
+      const sessionTargetKey = resolveCronSessionTargetSessionKey(job.sessionTarget);
+      const sessionKey = sessionTargetKey ?? `cron:${job.id}`;
+      // Cron-scoped runs track browser tabs under the runner-minted
+      // agent:<id>:cron:<jobId>:run:<sessionId> key, which the idle sweep skips;
+      // session-targeted runs reuse a live session whose tabs stay sweep-owned.
+      let cronRunSessionKey: string | undefined;
       try {
-        return await runCronIsolatedAgentTurn({
+        const result = await runCronIsolatedAgentTurn({
           cfg: runtimeConfig,
           deps: params.deps,
           job,
@@ -407,9 +412,15 @@ export function buildGatewayCronService(params: {
           sessionKey,
           lane: "cron",
         });
+        if (!sessionTargetKey) {
+          cronRunSessionKey = result.sessionKey;
+        }
+        return result;
       } finally {
+        const cleanupSessionKey = sessionTargetKey ?? cronRunSessionKey;
         await cleanupBrowserSessionsForLifecycleEnd({
-          sessionKeys: [sessionKey],
+          cfg: runtimeConfig,
+          sessionKeys: cleanupSessionKey ? [cleanupSessionKey] : [],
           onWarn: (msg) => cronLogger.warn({ jobId: job.id }, msg),
         });
       }

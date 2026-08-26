@@ -5,11 +5,12 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { RunCronAgentTurnResult } from "../cron/isolated-agent.js";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 
 type RunCronIsolatedAgentTurnMock = (params: {
   abortSignal?: AbortSignal;
-}) => Promise<{ status: "ok"; summary: string }>;
+}) => Promise<RunCronAgentTurnResult>;
 
 const {
   enqueueSystemEventMock,
@@ -1251,11 +1252,18 @@ describe("buildGatewayCronService", () => {
         wakeMode: "next-heartbeat",
         payload: { kind: "agentTurn", message: "hello" },
       });
+      runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
+        status: "ok",
+        summary: "ok",
+        sessionKey: "agent:main:live-session-canonical",
+      });
 
       await state.cron.run(job.id, "force");
 
       const options = expectIsolatedRunFields({ sessionKey });
       expect(requireRecord(options.job, "isolated job").id).toBe(job.id);
+      // Session-targeted runs clean the stored target key only; the runner's
+      // canonical live-session key must not widen the close set.
       expectCleanupForSessionKeys([sessionKey]);
     } finally {
       state.cron.stop();
@@ -1297,7 +1305,45 @@ describe("buildGatewayCronService", () => {
           return record.sessionKey === "main";
         }),
       ).toBe(false);
-      expectCleanupForSessionKeys([`cron:${job.id}`]);
+      // No runner-reported run key here (stub result), so nothing is closed;
+      // the raw cron:<jobId> key never has tracked tabs.
+      expectCleanupForSessionKeys([]);
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("cleans up browser tabs under the runner-reported run session key", async () => {
+    const cfg = createCronConfig("server-cron-isolated-browser-cleanup");
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "isolated-browser-cleanup",
+        enabled: true,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "open tabs" },
+      });
+      // Isolated runs execute (and track browser tabs) under the runner-minted
+      // per-run store key, not the job-level cron:<id> fallback key.
+      const runSessionKey = `agent:main:cron:${job.id}:run:1234`;
+      runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
+        status: "ok",
+        summary: "ok",
+        sessionKey: runSessionKey,
+      });
+
+      await state.cron.run(job.id, "force");
+
+      expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(1);
+      expectCleanupForSessionKeys([runSessionKey]);
     } finally {
       state.cron.stop();
     }
