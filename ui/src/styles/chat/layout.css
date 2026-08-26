@@ -6353,7 +6353,7 @@ button.chat-pr__diff {
   display: block;
   min-width: 0;
   padding: 0 7px 7px;
-  overflow-y: auto;
+  overflow: hidden auto;
   overscroll-behavior: none;
 }
 
