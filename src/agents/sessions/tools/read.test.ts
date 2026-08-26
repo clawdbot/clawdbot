@@ -4,6 +4,7 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import JSZip from "jszip";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
@@ -37,6 +38,47 @@ function createTinyBmp(): Buffer {
   buffer[56] = 0xff;
   return buffer;
 }
+
+async function createOoxmlDocument(params: {
+  mainMime: string;
+  partPath: string;
+}): Promise<Buffer> {
+  const zip = new JSZip();
+  zip.file(
+    "[Content_Types].xml",
+    `<Types><Override PartName="${params.partPath}" ContentType="${params.mainMime}.main+xml"/></Types>`,
+  );
+  zip.file(params.partPath.slice(1), "<xml/>");
+  return await zip.generateAsync({ type: "nodebuffer" });
+}
+
+const DOCUMENT_FIXTURES = [
+  ["PDF", async () => Buffer.from("%PDF-1.7\n1 0 obj\n<<>>\nendobj\n%%EOF", "ascii")],
+  [
+    "DOCX",
+    () =>
+      createOoxmlDocument({
+        mainMime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        partPath: "/word/document.xml",
+      }),
+  ],
+  [
+    "XLSX",
+    () =>
+      createOoxmlDocument({
+        mainMime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        partPath: "/xl/workbook.xml",
+      }),
+  ],
+  [
+    "PPTX",
+    () =>
+      createOoxmlDocument({
+        mainMime: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        partPath: "/ppt/presentation.xml",
+      }),
+  ],
+] as const;
 
 function textContent(
   result: Awaited<ReturnType<ReturnType<typeof createReadToolDefinition>["execute"]>>,
@@ -366,6 +408,54 @@ describe("read tool", () => {
     );
 
     expect(textContent(result)).toBe("plain text");
+  });
+
+  it.each(DOCUMENT_FIXTURES)(
+    "does not decode %s bytes from a renamed .bin file",
+    async (label, createDocument) => {
+      const document = await createDocument();
+      const fileName = `${label.toLowerCase()}.bin`;
+      const tempDir = tempDirs.make("openclaw-read-document-");
+      await fs.writeFile(path.join(tempDir, fileName), document);
+      const readFile = vi.fn(async () => document);
+      const tool =
+        label === "PDF"
+          ? createReadToolDefinition(tempDir)
+          : createReadToolDefinition("/workspace", {
+              operations: { access: async () => {}, readFile },
+            });
+      const result = await tool.execute(
+        "call-document",
+        { path: fileName },
+        undefined,
+        undefined,
+        {} as never,
+      );
+      expect(textContent(result)).toMatch(
+        /^Read did not return file contents because it detected a binary document \[.+\]\. Use an available document parser or converter, or convert the file to text, Markdown, or CSV, then read the converted file\.$/,
+      );
+      expect(result.details.kind).toBe("text");
+      expect(readFile).toHaveBeenCalledTimes(label === "PDF" ? 0 : 1);
+    },
+  );
+
+  it.each([
+    ["plaintext named DOCX", "notes.docx", "plain text"],
+    ["JSON", "data.json", '{"ready":true}'],
+    ["YAML", "config.yaml", "ready: true"],
+  ])("keeps %s output unchanged", async (_label, fileName, contents) => {
+    const tool = createReadToolDefinition("/workspace", {
+      operations: { access: async () => {}, readFile: async () => Buffer.from(contents) },
+    });
+
+    const result = await tool.execute(
+      "call-text",
+      { path: fileName },
+      undefined,
+      undefined,
+      {} as never,
+    );
+    expect(textContent(result)).toBe(contents);
   });
 
   it("resolves one Unicode-equivalent filename and names the correction", async () => {

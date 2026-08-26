@@ -2,6 +2,7 @@ import { constants } from "node:fs";
 import { access as fsAccess, readdir as fsReaddir, stat as fsStat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
 import { Text } from "@earendil-works/pi-tui";
+import { classifyAttachmentBytes } from "@openclaw/media-core/attachment-classify";
 import { hasErrnoCode, toErrorObject } from "../../../infra/errors.js";
 import { readRegularFile } from "../../../infra/regular-file.js";
 import { decodeWindowsTextFileBuffer } from "../../../infra/windows-encoding.js";
@@ -551,10 +552,18 @@ export function createReadToolDefinition(
               return;
             }
             const mimeType = await detectReadImageMimeType(ops, buffer, absolutePath);
+            const attachment = mimeType ? undefined : await classifyAttachmentBytes({ buffer });
             let content: (TextContent | ImageContent)[];
             let truncated: Parameters<typeof createReadToolDetails>[1];
             const nonVisionImageNote = getNonVisionImageNote(ctx?.model);
-            if (mimeType) {
+            if (attachment?.class === "document") {
+              content = [
+                {
+                  type: "text",
+                  text: `Read did not return file contents because it detected a binary document [${attachment.mime ?? "unknown"}]. Use an available document parser or converter, or convert the file to text, Markdown, or CSV, then read the converted file.`,
+                },
+              ];
+            } else if (mimeType) {
               const base64 = buffer.toString("base64");
               const processed = await processImage(
                 { type: "image", data: base64, mimeType },
