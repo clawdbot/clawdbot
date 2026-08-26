@@ -8,6 +8,7 @@ import {
   countPluginStateLiveEntries,
   resetPluginStateStoreForTests,
 } from "../../plugin-state/plugin-state-store.js";
+import * as pluginStateSqlite from "../../plugin-state/plugin-state-store.sqlite.js";
 import { buildSafeExternalPrompt } from "../../security/external-content.js";
 import { buildChannelJoinIntroPrompt } from "./join-intro-prompt.js";
 import { reportChannelRoomJoin } from "./report-channel-room-join.js";
@@ -107,6 +108,33 @@ describe("reportChannelRoomJoin", () => {
     expect(countPluginStateLiveEntries("slack")).toBe(rowsBefore + 1);
     expect(params.resolveRoomContext).toHaveBeenCalledExactlyOnceWith({ messageLimit: 30 });
     expect(runCronIsolatedAgentTurn).toHaveBeenCalledOnce();
+  });
+
+  it("never repeats a delivered introduction when its durable commit fails", async () => {
+    const params = createJoinParams("commit-failed");
+    const sendMessage = vi.fn();
+    runCronIsolatedAgentTurn.mockImplementation(async () => {
+      sendMessage();
+      return { status: "ok", delivered: true };
+    });
+    const commitFailure = vi
+      .spyOn(pluginStateSqlite, "pluginStateUpdate")
+      .mockImplementationOnce(() => {
+        throw new Error("durable commit failed");
+      });
+
+    try {
+      const firstOutcome = await reportChannelRoomJoin(params);
+      const secondOutcome = await reportChannelRoomJoin(params);
+
+      expect(runCronIsolatedAgentTurn).toHaveBeenCalledOnce();
+      expect(sendMessage).toHaveBeenCalledOnce();
+      expect(firstOutcome).toEqual({ kind: "posted" });
+      expect(secondOutcome).toEqual({ kind: "skipped", reason: "already-introduced" });
+      expect(params.resolveRoomContext).toHaveBeenCalledOnce();
+    } finally {
+      commitFailure.mockRestore();
+    }
   });
 
   it("scopes room dedupe to the owning account", async () => {

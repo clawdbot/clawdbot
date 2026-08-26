@@ -195,8 +195,16 @@ export async function reportChannelRoomJoin(
       });
     }
 
-    // A commit failure follows visible delivery, so waiting claims must never replay the send.
-    await dedupe.commit(dedupeKey);
+    // Delivery is already visible, so retain the settled memory claim if durable commit fails.
+    await dedupe.commit(dedupeKey, {
+      onDiskError: (error) =>
+        log.warn("channel room join introduction was delivered but its durable commit failed", {
+          channel: params.channel,
+          accountId: params.accountId,
+          conversationId: params.conversationId,
+          error: formatErrorMessage(error),
+        }),
+    });
     return logChannelJoinIntroOutcome(params, { kind: "posted" });
   } catch (error) {
     return logChannelJoinIntroOutcome(params, {
