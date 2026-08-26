@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { spawnNodeEvalSync } from "../../../test-utils/node-process.js";
+import { createWindowsOutputDecoder } from "../../../infra/windows-encoding.js";
 import { OutputAccumulator } from "./output-accumulator.js";
 
 describe("OutputAccumulator", () => {
@@ -219,6 +220,21 @@ describe("OutputAccumulator", () => {
     expect(flushed).toBe("��");
   });
 
+  it("decodes Windows console code page output for session bash streams", () => {
+    const accumulator = new OutputAccumulator({
+      createTextDecoder: () =>
+        createWindowsOutputDecoder({ platform: "win32", windowsEncoding: "gbk" }),
+    });
+    const cp936DirHeader = Buffer.from([
+      199, 253, 182, 175, 198, 247, 32, 67, 32, 214, 208, 181, 196, 190, 237, 202, 199, 32, 65, 99,
+      101, 114,
+    ]);
+
+    const text = accumulator.append(cp936DirHeader, "stdout") + accumulator.finish();
+
+    expect(text).toBe("\u9a71\u52a8\u5668 C \u4e2d\u7684\u5377\u662f Acer");
+    expect(accumulator.snapshot().content).toBe("\u9a71\u52a8\u5668 C \u4e2d\u7684\u5377\u662f Acer");
+  });
   it("spills tagged streams in decoded delivery order", async () => {
     const accumulator = new OutputAccumulator({
       maxBytes: 1,
@@ -235,6 +251,30 @@ describe("OutputAccumulator", () => {
 
     expect(snapshot.fullOutputPath).toBeDefined();
     expect(await readFile(snapshot.fullOutputPath!, "utf8")).toBe("E日");
+    await rm(snapshot.fullOutputPath!, { force: true });
+  });
+
+  it("spills decoded text for truncated untagged custom-decoder output", async () => {
+    const accumulator = new OutputAccumulator({
+      maxBytes: 1,
+      maxLines: 10,
+      tempFilePrefix: "openclaw-output-test",
+      createTextDecoder: () =>
+        createWindowsOutputDecoder({ platform: "win32", windowsEncoding: "gbk" }),
+    });
+    const cp936Text = "\u9a71\u52a8\u5668 C \u4e2d\u7684\u5377\u662f Acer";
+    const cp936Bytes = Buffer.from([
+      199, 253, 182, 175, 198, 247, 32, 67, 32, 214, 208, 181, 196, 190, 237, 202, 199, 32, 65, 99,
+      101, 114,
+    ]);
+
+    accumulator.append(cp936Bytes);
+    accumulator.finish();
+    const snapshot = accumulator.snapshot({ persistIfTruncated: true });
+    await accumulator.closeTempFile();
+
+    expect(snapshot.truncation.truncated).toBe(true);
+    expect(await readFile(snapshot.fullOutputPath!, "utf8")).toBe(cp936Text);
     await rm(snapshot.fullOutputPath!, { force: true });
   });
 });

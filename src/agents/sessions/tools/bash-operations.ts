@@ -1,8 +1,11 @@
 /**
  * Minimal shell execution interface injected into bash session tools.
  */
+import type { OutputTextDecoder } from "./output-accumulator.js";
 
 export interface BashOperations {
+  /** Decoder selected by this operation owner; omitted custom backends default to UTF-8. */
+  createTextDecoder?: () => OutputTextDecoder;
   exec: (
     command: string,
     cwd: string,
