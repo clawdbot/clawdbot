@@ -392,6 +392,8 @@ export function buildNodeServiceEnvironment(params: {
     CF_ACCESS_CLIENT_ID: cloudflareAccessClientId,
     CF_ACCESS_CLIENT_SECRET: cloudflareAccessClientSecret,
     OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: allowInsecurePrivateWs,
+    // launchd manager variables outlive the installer; fence node hosts from an unsuitable cache.
+    NODE_DISABLE_COMPILE_CACHE: platform === "darwin" ? "1" : undefined,
     ...resolveNodeServiceIdentityEnvironment(),
   };
 }

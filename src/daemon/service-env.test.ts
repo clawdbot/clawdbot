@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { resolveAutoNodeExtraCaCerts } from "../bootstrap/node-extra-ca-certs.js";
 import { inspectGatewayHeapLimit } from "./gateway-heap.js";
+import { buildLaunchAgentPlist } from "./launchd-plist.js";
 import { resolveGatewayStateDir } from "./paths.js";
 import {
   buildNodeServiceEnvironment,
@@ -783,6 +784,44 @@ describe("buildNodeServiceEnvironment", () => {
 
     expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.node");
   });
+
+  it("fences inherited Node compile cache in macOS node LaunchAgents", () => {
+    const environment = buildNodeServiceEnvironment({
+      env: {
+        HOME: "/Users/user",
+        NODE_COMPILE_CACHE: "/tmp/ambient-node-compile-cache",
+      },
+      platform: "darwin",
+    });
+    const plist = buildLaunchAgentPlist({
+      label: "ai.openclaw.node",
+      programArguments: ["/usr/local/bin/node", "dist/index.js", "node", "run"],
+      stdoutPath: "/tmp/openclaw-node.log",
+      stderrPath: "/tmp/openclaw-node.err.log",
+      environment,
+    });
+
+    expect(environment.NODE_DISABLE_COMPILE_CACHE).toBe("1");
+    expect(environment.NODE_COMPILE_CACHE).toBeUndefined();
+    expect(plist).toContain("<key>NODE_DISABLE_COMPILE_CACHE</key>");
+    expect(plist).not.toContain("<key>NODE_COMPILE_CACHE</key>");
+  });
+
+  it.each(["linux", "win32"] as const)(
+    "does not force Node compile cache off for %s node services",
+    (platform) => {
+      const environment = buildNodeServiceEnvironment({
+        env: {
+          HOME: platform === "win32" ? "C:\\Users\\user" : "/home/user",
+          NODE_COMPILE_CACHE: "/tmp/ambient-node-compile-cache",
+        },
+        platform,
+      });
+
+      expect(environment.NODE_DISABLE_COMPILE_CACHE).toBeUndefined();
+      expect(environment.NODE_COMPILE_CACHE).toBeUndefined();
+    },
+  );
 
   it("passes through OPENCLAW_GATEWAY_TOKEN for node services", () => {
     const env = buildNodeServiceEnvironment({
