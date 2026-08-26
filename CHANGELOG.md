@@ -6,7 +6,6 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
-- **Webchat CLI transcript provenance:** record which imported Claude CLI user-role turns were harness-injected (skill instruction bodies, continuation summaries) and render them as collapsed "Injected context" system notices instead of operator-authored bubbles.
 - **Secret egress host binding:** bind each shared-store secret to exact HTTPS destination hosts across CLI, Gateway RPC, and Control UI so unbound sentinel substitution fails closed before plaintext egress.
 - **Release validation:** defer beta candidate Parallels smoke to postpublish `release:beta-smoke` by default, keep stable/full prepublish coverage, and bound nested release workflow monitors with explicit job timeouts.
 - **macOS app profiles:** isolate named app instances across state, preferences, Keychain, Gateway services, and duplicate-instance ownership while keeping host-global login and node services untouched.
