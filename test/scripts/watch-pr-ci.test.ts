@@ -5,10 +5,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   buildFindRunArgs,
   classifyAttachedCiRun,
-  filterIgnoredRollupChecks,
   classifyRollup,
   classifyRunAttachment,
   collectRollupContexts,
+  filterProcessIgnoredRollupChecks,
   parseArgs,
   pollUntilDeadline,
   sanitizeCheckName,
@@ -29,7 +29,6 @@ describe("watch-pr-ci", () => {
       timeout: 3600,
       interval: 120,
       completion: "rollup",
-      ignoreChecks: [],
     });
     expect(
       parseArgs([
@@ -47,8 +46,6 @@ describe("watch-pr-ci", () => {
         "5",
         "--completion",
         "ci-run",
-        "--ignore-check",
-        "clownfish/exact-merge",
       ]),
     ).toMatchObject({
       repo: "fork/project",
@@ -57,7 +54,6 @@ describe("watch-pr-ci", () => {
       timeout: 90,
       interval: 5,
       completion: "ci-run",
-      ignoreChecks: ["clownfish/exact-merge"],
     });
     expect(parseArgs(["1", sha.toUpperCase()]).headSha).toBe(sha);
   });
@@ -73,6 +69,12 @@ describe("watch-pr-ci", () => {
     );
     expect(() => parseArgs(["1", sha, "--completion", "required"])).toThrow(
       "--completion must be rollup or ci-run",
+    );
+  });
+
+  it.each(["unit", "clownfish/exact-merge"])("rejects --ignore-check %s", (name) => {
+    expect(() => parseArgs(["1", sha, "--ignore-check", name])).toThrow(
+      "Usage: node scripts/watch-pr-ci.mjs",
     );
   });
 
@@ -199,8 +201,8 @@ esac
     ).toEqual(["deploy?prod", "unit?owned?"]);
   });
 
-  it("allows the named exact-merge check without hiding unknown contexts", () => {
-    const ignored = filterIgnoredRollupChecks(
+  it("only ignores the process-owned exact-merge check", () => {
+    const ignored = filterProcessIgnoredRollupChecks(
       {
         statusCheckRollup: {
           state: "FAILURE",
@@ -217,11 +219,34 @@ esac
           },
         },
       },
-      ["clownfish/exact-merge"],
     );
     expect(classifyRollup(ignored.statusCheckRollup).verdict).toBe("GREEN");
 
-    const incomplete = filterIgnoredRollupChecks(
+    const otherFailure = filterProcessIgnoredRollupChecks(
+      {
+        statusCheckRollup: {
+          state: "FAILURE",
+          contexts: {
+            totalCount: 2,
+            nodes: [
+              {
+                kind: "CheckRun",
+                name: "clownfish/exact-merge",
+                status: "COMPLETED",
+                conclusion: "FAILURE",
+              },
+              { kind: "CheckRun", name: "unit", status: "COMPLETED", conclusion: "FAILURE" },
+            ],
+          },
+        },
+      },
+    );
+    expect(classifyRollup(otherFailure.statusCheckRollup)).toMatchObject({
+      verdict: "FAILING",
+      failingNames: ["unit"],
+    });
+
+    const incomplete = filterProcessIgnoredRollupChecks(
       {
         statusCheckRollup: {
           state: "FAILURE",
@@ -238,7 +263,6 @@ esac
           },
         },
       },
-      ["clownfish/exact-merge"],
     );
     expect(classifyRollup(incomplete.statusCheckRollup).verdict).toBe("FAILING");
   });
