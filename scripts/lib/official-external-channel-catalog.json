@@ -240,6 +240,27 @@
                       },
                       "requireMention": {
                         "type": "boolean"
+                      },
+                      "groupPolicy": {
+                        "type": "string",
+                        "enum": [
+                          "open",
+                          "disabled",
+                          "allowlist"
+                        ]
+                      },
+                      "groupAllowFrom": {
+                        "type": "array",
+                        "items": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "number"
+                            }
+                          ]
+                        }
                       }
                     },
                     "additionalProperties": false
@@ -2557,7 +2578,8 @@
       "openclaw": {
         "contracts": {
           "tools": [
-            "whatsapp_call"
+            "whatsapp_call",
+            "whatsapp_login"
           ]
         },
         "channel": {

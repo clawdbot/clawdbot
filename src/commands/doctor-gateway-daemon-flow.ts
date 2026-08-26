@@ -25,10 +25,7 @@ import {
 import { renderSystemdUnavailableHints } from "../daemon/systemd-hints.js";
 import { classifySystemdUnavailableDetail } from "../daemon/systemd-unavailable.js";
 import { resolveGatewayBindHost, resolveGatewayRequiredListenHosts } from "../gateway/net.js";
-import {
-  isGatewayHostServiceEnvironment,
-  NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON,
-} from "../infra/gateway-supervision.js";
+import { NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON } from "../infra/gateway-supervision.js";
 import { formatPortDiagnostics, isExpectedGatewayListeners } from "../infra/ports-format.js";
 import { inspectPortConnections, inspectPortUsage } from "../infra/ports-inspect.js";
 import type { PortConnection } from "../infra/ports-types.js";
@@ -53,6 +50,7 @@ import {
   isServiceRepairExternallyManaged,
   resolveServiceRepairPolicy,
   SERVICE_REPAIR_POLICY_ENV,
+  shouldManageGatewayService,
 } from "./doctor-service-repair-policy.js";
 import { resolveGatewayInstallToken } from "./gateway-install-token.js";
 import { formatGatewayClosedDiagnostic, formatHealthCheckFailure } from "./health-format.js";
@@ -234,14 +232,11 @@ export async function maybeRepairGatewayDaemon(params: {
     return;
   }
 
-  if (!isGatewayHostServiceEnvironment()) {
+  if (!(await shouldManageGatewayService())) {
     if (params.cfg.gateway?.mode !== "remote") {
       await noteGatewayPortDiagnostics(params.cfg, params.options.deep ?? false);
     }
-    note(
-      "Container lifecycle is externally managed; skipping host service installation.",
-      "Gateway",
-    );
+    note(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway");
     return;
   }
 

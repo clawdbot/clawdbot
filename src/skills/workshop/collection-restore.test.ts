@@ -220,7 +220,6 @@ describe("skill collection backup and restore", () => {
           description: "Updated Workshop procedure",
           content: "# Owned updated\n",
         },
-        { action: "keep", name: "external" },
       ],
     });
     const externalFile = path.join(workspaceDir, "skills", "external", "SKILL.md");
@@ -283,8 +282,6 @@ describe("skill collection backup and restore", () => {
         env: testState.env,
         ...(await readCollectionReceipt()),
         plan: [
-          { action: "keep", name: "created" },
-          { action: "keep", name: "dropped" },
           {
             action: "write",
             name: "updated",
@@ -366,7 +363,6 @@ describe("skill collection backup and restore", () => {
           description: "Updated Workshop procedure",
           content: "# Owned updated\n",
         },
-        { action: "keep", name: "external" },
       ],
     });
     const backupDir = path.join(

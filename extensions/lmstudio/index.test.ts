@@ -568,6 +568,7 @@ describe("lmstudio plugin", () => {
                 reasoning: true,
                 input: ["text", "image"],
                 compat: {
+                  codeMode: "preferred",
                   supportsReasoningEffort: true,
                   supportedReasoningEfforts: ["off", "on"],
                   reasoningEffortMap: { off: "off", high: "on" },
@@ -575,6 +576,7 @@ describe("lmstudio plugin", () => {
               },
               {
                 id: "phi-4",
+                compat: { codeMode: "capable" },
               },
               {
                 id: " ",
@@ -600,6 +602,7 @@ describe("lmstudio plugin", () => {
         name: "Qwen 3 8B Instruct",
         compat: {
           supportsUsageInStreaming: true,
+          codeMode: "preferred",
           supportsReasoningEffort: true,
           supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
           reasoningEffortMap: { off: "none", none: "none", adaptive: "xhigh", max: "xhigh" },
@@ -613,7 +616,7 @@ describe("lmstudio plugin", () => {
         provider: "lmstudio",
         id: "phi-4",
         name: "phi-4",
-        compat: { supportsUsageInStreaming: true },
+        compat: { supportsUsageInStreaming: true, codeMode: "capable" },
         contextWindow: undefined,
         contextTokens: undefined,
         reasoning: undefined,

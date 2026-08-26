@@ -111,7 +111,6 @@ export function buildCliAgentSystemPrompt(params: {
   runtimeChatType?: ChatType;
   runtimeCapabilities?: string[];
   ownerNumbers?: string[];
-  heartbeatPrompt?: string;
   docsPath?: string;
   sourcePath?: string;
   tools: AgentTool[];
@@ -160,7 +159,6 @@ export function buildCliAgentSystemPrompt(params: {
     silentReplyPromptMode: params.silentReplyPromptMode,
     ownerNumbers: params.ownerNumbers,
     reasoningTagHint: false,
-    heartbeatPrompt: params.heartbeatPrompt,
     docsPath: params.docsPath,
     sourcePath: params.sourcePath,
     acpEnabled: isAcpRuntimeSpawnAvailable({ config: params.config }),

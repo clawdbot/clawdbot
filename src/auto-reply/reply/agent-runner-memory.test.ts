@@ -2339,6 +2339,11 @@ describe("runMemoryFlushIfNeeded", () => {
     const compactCall = requireCompactEmbeddedAgentSessionCall();
     expect(compactCall.contextTokenBudget).toBe(200_000);
     expect(replyOperation.setPhase).toHaveBeenCalledWith("preflight_compacting");
+    expect(
+      replyOperation.setPhase.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    ).toBeLessThan(
+      compactEmbeddedAgentSessionMock.mock.invocationCallOrder[0] ?? Number.NEGATIVE_INFINITY,
+    );
     expect(replyOperation.updateSessionId).not.toHaveBeenCalled();
     expect(incrementCompactionCountMock).not.toHaveBeenCalled();
     expect(refreshQueuedFollowupSessionMock).not.toHaveBeenCalled();

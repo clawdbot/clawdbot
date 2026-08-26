@@ -64,6 +64,7 @@ type RequestExecApprovalDecisionParams = {
   approvalReviewerDeviceIds?: string[];
   requireDeliveryRoute?: boolean;
   suppressDelivery?: boolean;
+  deliverToApprovalClientsOnly?: boolean;
 };
 
 type ExecApprovalRequestToolParams = RequestExecApprovalDecisionParams & {
@@ -103,6 +104,7 @@ function buildExecApprovalRequestToolParams(
     approvalReviewerDeviceIds: params.approvalReviewerDeviceIds,
     requireDeliveryRoute: params.requireDeliveryRoute,
     suppressDelivery: params.suppressDelivery,
+    deliverToApprovalClientsOnly: params.deliverToApprovalClientsOnly,
     timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
     twoPhase: true,
   };
@@ -339,10 +341,19 @@ async function buildHostApprovalDecisionParams(
     runId: params.runId,
     toolCallId: params.toolCallId,
     requireDeliveryRoute: params.requireDeliveryRoute,
-    // Cron has no live reviewer. Register for audit/fallback resolution without
-    // exposing an operator-visible request that the scheduled run cannot answer.
+    // Gateway-host cron cards go only to connected approval clients (Control
+    // UI/TUI); allow-always there mints a standing grant that ends the
+    // recurrence. With no client connected, the request still registers and
+    // expires no-route into the headless denial (#128031). Node-host cron has
+    // no grant mint/consume path yet, so it keeps the fully suppressed
+    // headless policy instead of raising cards whose allow-always could not
+    // stick as a scoped grant.
     suppressDelivery:
-      params.suppressDelivery === true || params.trigger === "cron" ? true : undefined,
+      params.suppressDelivery === true || (params.trigger === "cron" && params.host !== "gateway")
+        ? true
+        : undefined,
+    deliverToApprovalClientsOnly:
+      params.trigger === "cron" && params.host === "gateway" ? true : undefined,
     approvalReviewerDeviceIds: params.approvalReviewerDeviceIds,
     ...buildExecApprovalTurnSourceContext(params),
   };

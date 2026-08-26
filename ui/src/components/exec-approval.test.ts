@@ -123,7 +123,7 @@ describe("openclaw-exec-approval", () => {
     );
     expect(buttons.map((button) => button.getAttribute("aria-label"))).toEqual([
       "Allow once",
-      "Always allow",
+      "Always allow here",
       "Deny",
     ]);
     expect(buttons.every((button) => button.tabIndex === 0)).toBe(true);

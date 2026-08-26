@@ -129,4 +129,30 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
     expect(getComputedStyle(summary!).paddingBlock).toBe("8px");
     expect(item!.getBoundingClientRect().right).toBeCloseTo(list!.getBoundingClientRect().right, 1);
   });
+
+  it("keeps mobile dismiss actions visible and touch-sized", () => {
+    const shell = document.createElement("div");
+    shell.className = "shell shell--mobile-nav";
+    shell.innerHTML = `
+      <section class="sidebar-issues-panel">
+        <header class="sidebar-issues-panel__header">
+          <button class="sidebar-issues-panel__dismiss-shown" type="button">Dismiss shown</button>
+        </header>
+        <div class="sidebar-issues-panel__summary">
+          <button class="sidebar-issues-panel__dismiss" type="button">Dismiss</button>
+        </div>
+      </section>
+    `;
+    document.body.append(shell);
+
+    const dismiss = shell.querySelector<HTMLElement>(".sidebar-issues-panel__dismiss")!;
+    const dismissShown = shell.querySelector<HTMLElement>(".sidebar-issues-panel__dismiss-shown")!;
+    const style = getComputedStyle(dismiss);
+
+    expect(style.opacity).toBe("1");
+    expect(style.pointerEvents).not.toBe("none");
+    expect(dismiss.getBoundingClientRect().width).toBeGreaterThanOrEqual(40);
+    expect(dismiss.getBoundingClientRect().height).toBeGreaterThanOrEqual(40);
+    expect(dismissShown.getBoundingClientRect().height).toBeGreaterThanOrEqual(40);
+  });
 });

@@ -57,7 +57,7 @@ export async function createBuzzRoomMembershipTracker(params: {
   channelIds: string[];
   botPublicKey: string;
   since: number;
-  messageSince: number;
+  messageSince: (channelId: string) => number;
   messageLimit: number;
   reserveDispatchCapacity: (slots: number) => Promise<BuzzReplayDispatchReservation | undefined>;
   onMessageEvent: (
@@ -323,7 +323,7 @@ export async function createBuzzRoomMembershipTracker(params: {
             {
               kinds: [...BUZZ_INBOUND_MESSAGE_KINDS],
               "#h": [channelId],
-              since: params.messageSince,
+              since: params.messageSince(channelId),
               limit: params.messageLimit,
             },
           ],
@@ -395,7 +395,7 @@ export async function createBuzzRoomMembershipTracker(params: {
           const outcome = await catchUpBuzzRoomHistory({
             relay: params.relay,
             channelId,
-            since: params.messageSince,
+            since: params.messageSince(channelId),
             until: page.oldest,
             limit: params.messageLimit,
             reserveCapacity: params.reserveDispatchCapacity,

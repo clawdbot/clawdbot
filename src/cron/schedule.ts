@@ -322,9 +322,12 @@ export function computePreviousRunAtMs(schedule: CronSchedule, nowMs: number): n
     return undefined;
   }
 
-  // previousRuns ends at Croner's minimum supported year; never drop valid
-  // historical occurrences after an arbitrary number of changed DST rules.
-  while (!matchesCronOccurrence(cron, new Date(previousMs))) {
+  // Croner's wall-clock decrement can cross spring gaps; its year horizon
+  // bounds transition walking without dropping valid historical occurrences.
+  while (
+    !matchesCronOccurrence(cron, new Date(previousMs)) ||
+    (resolveFirstCronOccurrenceMs(previousMs, timezone) ?? previousMs) >= nowMs
+  ) {
     const transitionMs = findCronTimezoneTransitionMs(previousMs - DAY_MS, previousMs, timezone);
     if (transitionMs === undefined) {
       return undefined;

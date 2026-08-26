@@ -151,6 +151,7 @@ export function createGatewayHarness(client: GatewayBrowserClient) {
       bootstrapToken: "",
       password: "",
     },
+    connectionRevision: 0,
     setSessionKey: () => undefined,
     subscribe(listener: (next: ApplicationGatewaySnapshot) => void) {
       listeners.add(listener);

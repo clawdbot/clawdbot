@@ -376,6 +376,37 @@ describe("ssh sandbox backend", () => {
     expect(commandParams.remoteCommand).toContain('rm -rf -- "$1"');
   });
 
+  it.each([
+    ["permission denied", "permission denied"],
+    ["", "exit 1"],
+  ])(
+    "rejects failed SSH runtime removal instead of orphaning its registry entry: %s",
+    async (stderr, expected) => {
+      sshMocks.runSshSandboxCommand.mockResolvedValueOnce({
+        stdout: Buffer.alloc(0),
+        stderr: Buffer.from(stderr),
+        code: 1,
+      });
+
+      await expect(
+        sshSandboxBackendManager.removeRuntime({
+          entry: {
+            containerName: "openclaw-ssh-worker-abcd1234",
+            backendId: "ssh",
+            runtimeLabel: "openclaw-ssh-worker-abcd1234",
+            sessionKey: "agent:worker",
+            createdAtMs: 1,
+            lastUsedAtMs: 1,
+            image: "peter@example.com:2222",
+            configLabelKind: "Target",
+          },
+          config: createConfig(),
+        }),
+      ).rejects.toThrow(expected);
+      expect(sshMocks.disposeSshSandboxSession).toHaveBeenCalledOnce();
+    },
+  );
+
   it("creates a remote-canonical backend that seeds once and reuses ssh exec", async () => {
     sshMocks.runSshSandboxCommand
       .mockResolvedValueOnce({

@@ -13,20 +13,32 @@ openclaw-chat-question-panel {
   max-height: min(58vh, 36rem);
   overflow-y: auto;
   padding: 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--card) 94%, transparent);
-  box-shadow: var(--shadow-lg);
+  border: 1px solid var(--chat-composer-hairline, var(--border));
+  border-radius: calc(20px * var(--openclaw-corner-radius-scale));
+  corner-shape: superellipse(1.5);
+  background: var(--chat-composer-surface, var(--popover));
+  box-shadow: none;
   color: var(--text);
   outline: none;
   animation: fade-in 0.16s var(--ease-out);
 }
 
-.chat-question-panel:focus-visible {
-  border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
+:root[data-theme-mode="dark"] .chat-question-panel {
+  border-color: color-mix(in srgb, var(--text-strong) 9%, transparent);
+}
+
+:root[data-theme-mode="light"] .chat-question-panel {
+  border-color: transparent;
   box-shadow:
-    0 0 0 3px var(--accent-subtle),
-    var(--shadow-lg);
+    0 0 0 1px rgb(0 0 0 / 6%),
+    0 1px 2px -1px rgb(0 0 0 / 6%),
+    0 2px 4px rgb(0 0 0 / 4%);
+}
+
+.chat-question-panel:focus-visible {
+  border-color: var(--chat-composer-hairline, var(--border));
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
 }
 
 @supports (backdrop-filter: blur(1px)) {
@@ -145,12 +157,12 @@ openclaw-chat-question-panel {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 34px;
-  min-height: 24px;
-  padding: 0 8px;
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--accent) 11%, var(--panel));
-  color: var(--accent);
+  min-width: 0;
+  min-height: 0;
+  margin-left: auto;
+  padding: 0;
+  background: transparent;
+  color: var(--muted);
   font-family: var(--mono);
   font-size: var(--control-ui-text-sm);
   font-variant-numeric: tabular-nums;
@@ -178,7 +190,8 @@ openclaw-chat-question-panel {
   width: 100%;
   padding: 10px 11px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: calc(11px * var(--openclaw-corner-radius-scale));
+  corner-shape: superellipse(1.5);
   background: color-mix(in srgb, var(--panel) 72%, transparent);
   color: var(--text);
   font: inherit;
@@ -186,10 +199,25 @@ openclaw-chat-question-panel {
   cursor: var(--cursor-action);
 }
 
-.chat-question-panel__option:hover:not(:disabled),
+.chat-question-panel__option:hover:not(:disabled) {
+  border-color: var(--border);
+  background: color-mix(in srgb, var(--text-strong) 7%, var(--panel));
+  outline: none;
+}
+
 .chat-question-panel__option:focus-visible {
-  border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
-  background: var(--panel-hover);
+  border-color: var(--border);
+  background: color-mix(in srgb, var(--text-strong) 7%, var(--panel));
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+.chat-question-panel__option:hover:not(:disabled) .chat-question-panel__option-copy strong {
+  color: var(--text-strong);
+}
+
+.chat-question-panel__option:hover:not(:disabled) .chat-question-panel__option-marker {
+  background: color-mix(in srgb, var(--text-strong) 5%, transparent);
   outline: none;
 }
 
@@ -254,19 +282,21 @@ openclaw-chat-question-panel {
 .chat-question-panel__other {
   box-sizing: border-box;
   width: 100%;
-  min-height: 38px;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-elevated);
+  min-width: 0;
+  min-height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   color: var(--text);
   font: inherit;
   outline: none;
 }
 
-.chat-question-panel__other:focus {
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
-  box-shadow: 0 0 0 3px var(--accent-subtle);
+.chat-question-panel__option--other:has(.chat-question-panel__other:focus-visible) {
+  background: color-mix(in srgb, var(--text-strong) 7%, var(--panel));
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
 }
 
 .chat-question-panel__other::placeholder {
@@ -294,7 +324,7 @@ openclaw-chat-question-panel {
 }
 
 .chat-question-panel__skip {
-  border-color: var(--border);
+  border: 0;
   background: transparent;
   color: var(--muted);
 }

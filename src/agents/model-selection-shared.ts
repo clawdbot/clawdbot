@@ -68,6 +68,20 @@ type EffectiveModelAlias = ModelAliasCandidate & {
   ref: ModelRef;
 };
 
+function isStaticDefaultProviderAliasCandidate(
+  candidate: ModelAliasCandidate,
+  cfg: OpenClawConfig,
+): boolean {
+  const raw = candidate.keyRaw.trim();
+  const slash = raw.indexOf("/");
+  return (
+    slash > 0 &&
+    slash < raw.length - 1 &&
+    normalizeProviderId(raw.slice(0, slash)) === normalizeProviderId(DEFAULT_PROVIDER) &&
+    !findExactConfiguredProviderRefParts({ cfg, raw })
+  );
+}
+
 type ExactConfiguredProviderRefParts = {
   configuredProvider: string;
   modelRaw: string;
@@ -139,7 +153,7 @@ function listConfiguredModelMaps(cfg: OpenClawConfig, agentId?: string) {
   ];
 }
 
-function listModelAliasCandidates(cfg: OpenClawConfig, agentId?: string): ModelAliasCandidate[] {
+export function listModelAliasCandidates(cfg: OpenClawConfig, agentId?: string) {
   return listConfiguredModelMaps(cfg, agentId).flatMap(({ models }) =>
     Object.entries(models ?? {}).flatMap(([keyRaw, entryRaw]) => {
       if (parseModelPolicyWildcardRef(keyRaw)) {
@@ -164,15 +178,29 @@ function buildEffectiveModelAliases(
   if (candidates.length === 0) {
     return { aliases: [], disabledKeys: new Set() };
   }
-  const manifestPlugins = params.manifestPluginContext.get();
+  // One alias index must use one manifest generation. Skip discovery only when
+  // every candidate is a default-provider identity transform.
+  const useStaticDefaultProviderAliases =
+    params.allowManifestNormalization !== false &&
+    candidates.every((candidate) => isStaticDefaultProviderAliasCandidate(candidate, params.cfg)) &&
+    params.manifestPluginContext.peek() === undefined &&
+    !getActivePluginRegistryWorkspaceDirFromState() &&
+    !getCurrentPluginMetadataSnapshot({ config: params.cfg, env: process.env });
+  const manifestPlugins = useStaticDefaultProviderAliases
+    ? undefined
+    : params.manifestPluginContext.get();
   for (const candidate of candidates) {
     const ref = parseModelRefWithCompatAlias({
       cfg: params.cfg,
       agentId: params.agentId,
       raw: candidate.keyRaw,
       defaultProvider: params.defaultProvider,
-      allowManifestNormalization: params.allowManifestNormalization,
-      allowPluginNormalization: params.allowPluginNormalization,
+      allowManifestNormalization: useStaticDefaultProviderAliases
+        ? false
+        : params.allowManifestNormalization,
+      allowPluginNormalization: useStaticDefaultProviderAliases
+        ? false
+        : params.allowPluginNormalization,
       manifestPlugins,
     });
     if (!ref) {
@@ -840,18 +868,7 @@ export function resolveConfiguredModelRef(
     if (profileAliasCandidate) {
       // Auth-profile suffixes are not part of alias matching; resolve the alias
       // target while preserving the provider/model semantics of the key.
-      const aliasRef = parseModelRefWithCompatAlias({
-        cfg: params.cfg,
-        agentId: params.agentId,
-        raw: profileAliasCandidate.keyRaw,
-        defaultProvider: params.defaultProvider,
-        allowManifestNormalization: params.allowManifestNormalization,
-        allowPluginNormalization: params.allowPluginNormalization,
-        manifestPlugins: manifestPluginContext.get(),
-      });
-      if (aliasRef) {
-        return aliasRef;
-      }
+      return profileAliasCandidate.ref;
     }
     const primaryWithoutProfile = modelWithoutProfile || trimmed;
     const exactConfiguredPrimary = findExactConfiguredProviderRefParts({
@@ -885,18 +902,7 @@ export function resolveConfiguredModelRef(
       }
     }
     if (aliasCandidate) {
-      const aliasRef = parseModelRefWithCompatAlias({
-        cfg: params.cfg,
-        agentId: params.agentId,
-        raw: aliasCandidate.keyRaw,
-        defaultProvider: params.defaultProvider,
-        allowManifestNormalization: params.allowManifestNormalization,
-        allowPluginNormalization: params.allowPluginNormalization,
-        manifestPlugins: manifestPluginContext.get(),
-      });
-      if (aliasRef) {
-        return aliasRef;
-      }
+      return aliasCandidate.ref;
     }
 
     if (!trimmed.includes("/")) {
@@ -1458,6 +1464,7 @@ export function buildConfiguredModelCatalog(params: {
         contextTokens,
         reasoning,
         ...(typeof model?.reasoning === "boolean" ? { configuredReasoning: model.reasoning } : {}),
+        ...(model.thinkingLevelMap ? { thinkingLevelMap: model.thinkingLevelMap } : {}),
         input,
         ...(modelParams ? { params: modelParams } : {}),
         compat,

@@ -3,6 +3,7 @@ import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import { requestChatSessionSnapshot } from "./chat-history.ts";
 import {
   appendChatMessageToCache,
@@ -264,7 +265,9 @@ class SessionPrefetcher {
             }
             cached = {
               ...updated,
-              deltaCursor: result.deltaCursor,
+              // Prefetch does not own transient run replay. Keep the prior cursor
+              // so the opening pane can consume the same authoritative snapshot.
+              ...(result.inFlightRun ? {} : { deltaCursor: result.deltaCursor }),
               ...(Object.hasOwn(result.sessionInfo, "activeLeafEntryId")
                 ? { displayedLeafEntryId: result.sessionInfo.activeLeafEntryId?.trim() || null }
                 : {}),
@@ -297,13 +300,18 @@ class SessionPrefetcher {
         resolveChatSnapshotKey(snapshot.snapshotHost, { sessionKey }),
       ),
     );
-    const rows = [...(snapshot.rows ?? [])].toSorted(
+    const rows = (snapshot.rows ?? []).toSorted(
       (left, right) => sessionActivityAt(right) - sessionActivityAt(left),
     );
     const candidates: SessionPrefetchCandidate[] = [];
     const seen = new Set<string>();
     let deferMs: number | null = null;
     for (const row of rows) {
+      // The presented pane owns transient run adoption and replay. Background
+      // prefetch only warms durable history, so it must not consume active state.
+      if (isSessionRunActive(row)) {
+        continue;
+      }
       const snapshotKey = resolveChatSnapshotKey(snapshot.snapshotHost, {
         sessionKey: row.key,
         agentId: row.agentId,

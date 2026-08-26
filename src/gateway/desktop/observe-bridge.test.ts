@@ -209,7 +209,7 @@ describe("worker desktop observer proxy", () => {
       harness.ws.once("close", (code, reason) => resolve({ code, reason: reason.toString() }));
     });
     harness.ws.send(
-      Buffer.concat([Buffer.from("RFB 003.008\n", "ascii"), Buffer.from([1, 1, 255])]),
+      Buffer.concat([Buffer.from("RFB 003.008\n", "ascii"), Buffer.from([1, 1, 254])]),
     );
     await expect(closed).resolves.toEqual({
       code: 1008,

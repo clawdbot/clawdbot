@@ -51,9 +51,13 @@ const mocks = vi.hoisted(() => ({
   maybeRepairGatewayDaemon: vi.fn().mockResolvedValue(undefined),
   maybeRepairLegacyOAuthProfileIds: vi.fn(async (cfg: unknown) => ({
     config: cfg,
-    retiredProfileCleanupPlans: [],
+    retiredProfileCleanupPlans: [] as Array<{
+      agentDir?: string;
+      profileIds: readonly string[];
+    }>,
   })),
   maybeRepairLegacyOAuthSidecarProfiles: vi.fn().mockResolvedValue(undefined),
+  removeAuthProfilesAcrossOwnerStores: vi.fn(async () => true),
   collectAuthProfileHealthFindings: vi.fn(async () => []),
   noteAuthProfileHealth: vi.fn().mockResolvedValue(undefined),
   noteLegacyCodexProviderOverride: vi.fn(),
@@ -192,6 +196,13 @@ const mocks = vi.hoisted(() => ({
   ),
   shortenHomePath: vi.fn((p: string) => p),
   formatCliCommand: vi.fn((cmd: string) => cmd),
+  findInstalledSystemdGatewayScope: vi.fn<
+    (typeof import("../daemon/systemd.js"))["findInstalledSystemdGatewayScope"]
+  >(async () => ({
+    scope: "user",
+    unitName: "openclaw-gateway.service",
+    unitPath: "/home/alice/.config/systemd/user/openclaw-gateway.service",
+  })),
   isSystemdUserServiceAvailable: vi.fn(async () => true),
   readSystemdUserLingerStatus: vi.fn(
     async (_params: {
@@ -299,6 +310,7 @@ vi.mock("../daemon/systemd.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../daemon/systemd.js")>();
   return {
     ...actual,
+    findInstalledSystemdGatewayScope: mocks.findInstalledSystemdGatewayScope,
     isSystemdUserServiceAvailable: mocks.isSystemdUserServiceAvailable,
     readSystemdUserLingerStatus: mocks.readSystemdUserLingerStatus,
     resolveSystemdUserServiceAccount: mocks.resolveSystemdUserServiceAccount,
@@ -324,6 +336,11 @@ vi.mock("../commands/doctor-plugin-manifests.js", () => ({
 
 vi.mock("../commands/doctor-auth-oauth-sidecar.js", () => ({
   maybeRepairLegacyOAuthSidecarProfiles: mocks.maybeRepairLegacyOAuthSidecarProfiles,
+}));
+
+vi.mock("../agents/auth-profiles.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/auth-profiles.js")>()),
+  removeAuthProfilesAcrossOwnerStores: mocks.removeAuthProfilesAcrossOwnerStores,
 }));
 
 vi.mock("../commands/doctor-auth.js", () => ({
@@ -659,6 +676,7 @@ describe("doctor health contributions", () => {
     mocks.legacyPluginManifestContractMigrationToHealthFinding.mockClear();
     mocks.maybeRepairLegacyPluginManifestContracts.mockClear().mockResolvedValue(undefined);
     mocks.maybeRepairLegacyOAuthSidecarProfiles.mockClear().mockResolvedValue(undefined);
+    mocks.removeAuthProfilesAcrossOwnerStores.mockClear().mockResolvedValue(true);
     mocks.collectAuthProfileHealthFindings.mockClear().mockResolvedValue([]);
     mocks.noteAuthProfileHealth.mockClear().mockResolvedValue(undefined);
     mocks.noteLegacyCodexProviderOverride.mockClear();
@@ -802,6 +820,11 @@ describe("doctor health contributions", () => {
     mocks.collectBundledChannelPackageStateLoadFailures.mockReset().mockReturnValue([]);
     mocks.collectStalePluginRuntimeSymlinkHealthFindings.mockReset().mockResolvedValue([]);
     mocks.collectChannelPreviewWarningHealthFindings.mockReset().mockResolvedValue([]);
+    mocks.findInstalledSystemdGatewayScope.mockReset().mockResolvedValue({
+      scope: "user",
+      unitName: "openclaw-gateway.service",
+      unitPath: "/home/alice/.config/systemd/user/openclaw-gateway.service",
+    });
     mocks.isSystemdUserServiceAvailable.mockReset().mockResolvedValue(true);
     mocks.readSystemdUserLingerStatus
       .mockReset()
@@ -1928,8 +1951,28 @@ describe("doctor health contributions", () => {
     );
   });
 
-  it("silently skips the host-service contribution in an externally managed container", async () => {
+  it("repairs an installed Gateway service during an authorized update inside Docker", async () => {
     mocks.isContainerEnvironment.mockReturnValue(true);
+
+    await withProcessPlatform("linux", async () => {
+      const ctx = createDoctorContext({
+        cfg: { gateway: { mode: "local" } },
+        shouldRepair: true,
+        env: {
+          OPENCLAW_UPDATE_IN_PROGRESS: "1",
+          OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR: "1",
+        },
+      });
+
+      await requireDoctorContribution("doctor:gateway-services").run(ctx);
+
+      expect(mocks.maybeRepairGatewayServiceConfig).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("silently skips the host-service contribution in a container without an OpenClaw service", async () => {
+    mocks.isContainerEnvironment.mockReturnValue(true);
+    mocks.findInstalledSystemdGatewayScope.mockResolvedValue(null);
     const contribution = requireDoctorContribution("doctor:gateway-services");
     const ctx = createDoctorContext({
       cfg: { gateway: { mode: "local" } },
@@ -2218,6 +2261,89 @@ describe("doctor health contributions", () => {
     expect(mocks.maybeRepairLegacyOAuthProfileIds.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.maybeMigrateModelCatalogCredentials.mock.invocationCallOrder[0]!,
     );
+    expect(mocks.removeAuthProfilesAcrossOwnerStores).not.toHaveBeenCalled();
+    expect(mocks.noteAuthProfileHealth).toHaveBeenCalledOnce();
+  });
+
+  it("cleans retired auth profiles before reporting profile health", async () => {
+    const contribution = requireDoctorContribution("doctor:auth-profiles");
+    const cfg = {
+      auth: {
+        profiles: {
+          "anthropic:claude-cli": { provider: "claude-cli", mode: "oauth" as const },
+        },
+      },
+    };
+    const repairedCfg = {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+    mocks.maybeRepairLegacyOAuthProfileIds.mockResolvedValue({
+      config: repairedCfg,
+      retiredProfileCleanupPlans: [
+        {
+          agentDir: "/tmp/openclaw/agents/main",
+          profileIds: ["anthropic:claude-cli"],
+        },
+      ],
+    });
+    const ctx = createDoctorHealthFlowContext({
+      cfg,
+      cfgForPersistence: structuredClone(cfg),
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: { nonInteractive: true },
+    });
+
+    await contribution.run(ctx);
+
+    expect(mocks.replaceConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({ nextConfig: repairedCfg }),
+    );
+    expect(mocks.removeAuthProfilesAcrossOwnerStores).toHaveBeenCalledWith({
+      agentDir: "/tmp/openclaw/agents/main",
+      profileIds: ["anthropic:claude-cli"],
+    });
+    expect(mocks.replaceConfigFile.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.removeAuthProfilesAcrossOwnerStores.mock.invocationCallOrder[0]!,
+    );
+    expect(mocks.removeAuthProfilesAcrossOwnerStores.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.noteAuthProfileHealth.mock.invocationCallOrder[0]!,
+    );
+    expect(ctx.configResult.retiredAuthProfileCleanupPlans).toBeUndefined();
+  });
+
+  it("does not clean or report retired profiles when an update handoff skips persistence", async () => {
+    const contribution = requireDoctorContribution("doctor:auth-profiles");
+    const cfg = {};
+    mocks.maybeRepairLegacyOAuthProfileIds.mockResolvedValue({
+      config: { agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } } },
+      retiredProfileCleanupPlans: [
+        {
+          agentDir: "/tmp/openclaw/agents/main",
+          profileIds: ["anthropic:claude-cli"],
+        },
+      ],
+    });
+    const ctx = createDoctorHealthFlowContext({
+      cfg,
+      cfgForPersistence: cfg,
+      env: { OPENCLAW_UPDATE_IN_PROGRESS: "1" },
+      prompter: buildDoctorPrompter(true),
+    });
+
+    await contribution.run(ctx);
+
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+    expect(mocks.removeAuthProfilesAcrossOwnerStores).not.toHaveBeenCalled();
+    expect(mocks.noteAuthProfileHealth).not.toHaveBeenCalled();
+    expect(ctx.configResult.retiredAuthProfileCleanupPlans).toHaveLength(1);
   });
 
   it("persists provider runtime mappings added while removing retired auth profiles", async () => {
@@ -2368,6 +2494,19 @@ describe("doctor health contributions", () => {
     });
   });
 
+  it("preserves interactive linger repair for a user-scoped Gateway service", async () => {
+    const contribution = requireDoctorContribution("doctor:systemd-linger");
+    const ctx = createDoctorContext({
+      cfg: { gateway: { mode: "local" } },
+    });
+
+    await withProcessPlatform("linux", async () => {
+      await contribution.run(ctx);
+    });
+
+    expect(mocks.readSystemdUserLingerStatus).toHaveBeenCalledOnce();
+  });
+
   it("keeps selected systemd linger quiet when the gateway service is not loaded", async () => {
     mocks.gatewayServiceIsLoaded.mockResolvedValue(false);
     const contributionChecks = await resolveDoctorContributionHealthChecks();
@@ -2393,8 +2532,40 @@ describe("doctor health contributions", () => {
     expect(mocks.readSystemdUserLingerStatus).not.toHaveBeenCalled();
   });
 
-  it("never probes systemd linger when selected inside an externally managed container", async () => {
+  it("skips user lingering for a reachable system-scoped Gateway service in a container", async () => {
     mocks.isContainerEnvironment.mockReturnValue(true);
+    mocks.findInstalledSystemdGatewayScope.mockResolvedValue({
+      scope: "system",
+      unitName: "openclaw-gateway.service",
+      unitPath: "/etc/systemd/system/openclaw-gateway.service",
+    });
+    const contribution = requireDoctorContribution("doctor:systemd-linger");
+    const checks = await resolveDoctorContributionHealthChecks();
+    const lingerCheck = checks.find((check) => check.id === "core/doctor/systemd-linger");
+    expect(lingerCheck).toBeDefined();
+    const lintResult = await withProcessPlatform("linux", async () => {
+      await contribution.run(
+        createDoctorContext({
+          cfg: { gateway: { mode: "local" } },
+        }),
+      );
+      return await runDoctorLintChecks(createDoctorLintFixture({ gateway: { mode: "local" } }), {
+        checks: [lingerCheck!],
+        onlyIds: ["core/doctor/systemd-linger"],
+      });
+    });
+
+    expect(mocks.findInstalledSystemdGatewayScope).toHaveBeenCalledTimes(2);
+    expect(mocks.gatewayServiceIsLoaded).not.toHaveBeenCalled();
+    expect(mocks.isSystemdUserServiceAvailable).not.toHaveBeenCalled();
+    expect(mocks.readSystemdUserLingerStatus).not.toHaveBeenCalled();
+    expect(lintResult).toMatchObject({ checksRun: 1, findings: [] });
+    expect(JSON.stringify(lintResult)).not.toContain("loginctl enable-linger");
+  });
+
+  it("never probes systemd linger inside a container without an OpenClaw service", async () => {
+    mocks.isContainerEnvironment.mockReturnValue(true);
+    mocks.findInstalledSystemdGatewayScope.mockResolvedValue(null);
     const checks = await resolveDoctorContributionHealthChecks();
     const lingerCheck = checks.find((check) => check.id === "core/doctor/systemd-linger");
     expect(lingerCheck).toBeDefined();

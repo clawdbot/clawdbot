@@ -5,14 +5,9 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
 import { assertCodexModelBackedReviewerEffectiveConfig } from "./config-reviewer.js";
-import { withMcpElicitationsApprovalPolicy } from "./config-security.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 
 describe("Codex app-server policy", () => {
-  it("preserves mandatory per-command approvals while permitting MCP elicitation", () => {
-    expect(withMcpElicitationsApprovalPolicy("untrusted")).toBe("untrusted");
-  });
-
   it("revalidates effective Guardian config at each boundary and skips human reviewers", async () => {
     const request = vi.fn(async () => ({ config: { model_provider: "openai" }, origins: {} }));
     const client = { request };

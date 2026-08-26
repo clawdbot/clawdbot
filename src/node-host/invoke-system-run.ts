@@ -54,6 +54,12 @@ import {
   resolveMutableFileOperandSnapshotSync,
 } from "../infra/system-run-approval-binding.js";
 import { formatExecCommand, resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
+import {
+  APPROVAL_CWD_DRIFT_DENIED_MESSAGE,
+  type ApprovedCwdSnapshot,
+  captureApprovedCwdSnapshotSync,
+  revalidateApprovedCwdSnapshot,
+} from "../infra/system-run-cwd-binding.js";
 import { logWarn } from "../logger.js";
 import type { NodeHostClient } from "./client.js";
 import { evaluateSystemRunPolicy, resolveExecApprovalDecision } from "./exec-policy.js";
@@ -63,11 +69,7 @@ import {
   resolvePlannedAllowlistArgv,
   resolveSystemRunExecArgv,
 } from "./invoke-system-run-allowlist.js";
-import {
-  hardenApprovedExecutionPaths,
-  revalidateApprovedCwdSnapshot,
-  type ApprovedCwdSnapshot,
-} from "./invoke-system-run-plan.js";
+import { hardenApprovedExecutionPaths } from "./invoke-system-run-plan.js";
 import type {
   ExecEventPayload,
   ExecFinishedResult,
@@ -154,8 +156,6 @@ const safeBinTrustedDirWarningCache = createDedupeCache({
   ttlMs: 0,
   maxSize: 4096,
 });
-const APPROVAL_CWD_DRIFT_DENIED_MESSAGE =
-  "SYSTEM_RUN_DENIED: approval cwd changed before execution";
 const APPROVAL_SCRIPT_OPERAND_BINDING_DENIED_MESSAGE =
   "SYSTEM_RUN_DENIED: approval missing script operand binding";
 const APPROVAL_STATE_WRITE_FAILED_MESSAGE =
@@ -808,8 +808,21 @@ async function evaluateSystemRunPolicyPhase(
     });
     return null;
   }
-  const approvedCwdSnapshot = approvalContextBound ? hardenedPaths.approvedCwdSnapshot : undefined;
-  if (approvalContextBound && hardenedPaths.cwd && !approvedCwdSnapshot) {
+  let executionCwd = hardenedPaths.cwd;
+  let approvedCwdSnapshot = approvalContextBound ? hardenedPaths.approvedCwdSnapshot : undefined;
+  if (security === "allowlist" && !approvedCwdSnapshot) {
+    const capturedCwd = captureApprovedCwdSnapshotSync(executionCwd ?? process.cwd());
+    if (!capturedCwd.ok) {
+      await sendSystemRunDenied(opts, parsed.execution, {
+        reason: "approval-required",
+        message: capturedCwd.message,
+      });
+      return null;
+    }
+    executionCwd = capturedCwd.snapshot.cwd;
+    approvedCwdSnapshot = capturedCwd.snapshot;
+  }
+  if ((approvalContextBound || security === "allowlist") && !approvedCwdSnapshot) {
     await sendSystemRunDenied(opts, parsed.execution, {
       reason: "approval-required",
       message: APPROVAL_CWD_DRIFT_DENIED_MESSAGE,
@@ -832,9 +845,9 @@ async function evaluateSystemRunPolicyPhase(
   }
   return {
     ...parsed,
+    cwd: executionCwd,
     approvalDecision,
     argv: hardenedPaths.argv,
-    cwd: hardenedPaths.cwd,
     approvals,
     evaluationPolicySnapshot,
     security,
@@ -867,10 +880,7 @@ async function revalidateSystemRunApprovedPathBindings(
   opts: HandleSystemRunInvokeOptions,
   phase: SystemRunPolicyPhase,
 ): Promise<boolean> {
-  if (
-    phase.approvedCwdSnapshot &&
-    !revalidateApprovedCwdSnapshot({ snapshot: phase.approvedCwdSnapshot })
-  ) {
+  if (phase.approvedCwdSnapshot && !revalidateApprovedCwdSnapshot(phase.approvedCwdSnapshot)) {
     logWarn(`security: system.run approval cwd drift blocked (runId=${phase.runId})`);
     await sendSystemRunDenied(opts, phase.execution, {
       reason: "approval-required",

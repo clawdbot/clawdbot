@@ -173,6 +173,8 @@ export function githubPublicationPushArgs(
 ): string[] {
   return [
     ...GITHUB_CREDENTIAL_ARGS,
+    "-c",
+    `core.hooksPath=${os.devNull}`,
     "push",
     "--porcelain",
     "--no-follow-tags",

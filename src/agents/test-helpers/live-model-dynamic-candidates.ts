@@ -11,11 +11,13 @@ import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/numb
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Model } from "../../llm/types.js";
+import { withBundledPluginEnablementCompat } from "../../plugins/bundled-compat.js";
 import type {
   prepareProviderDynamicModel,
   runProviderDynamicModel,
 } from "../../plugins/provider-runtime.js";
 import { resolveProviderModernModelRef } from "../../plugins/provider-runtime.js";
+import { resolveOwningPluginIdsForProviderRef } from "../../plugins/providers.js";
 import type { ProviderResolveDynamicModelContext } from "../../plugins/types.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { liveProvidersShareOwningPlugin } from "../live-provider-owner.js";
@@ -322,6 +324,76 @@ function liveModelKey(provider: string, id: string): string | null {
   const normalizedProvider = normalizeProviderId(provider);
   const normalizedId = normalizeLowercaseStringOrEmpty(id);
   return normalizedProvider && normalizedId ? `${normalizedProvider}/${normalizedId}` : null;
+}
+
+export function resolveLiveProviderDiscoveryProviderIds(params: {
+  providerFilter: ReadonlySet<string> | null;
+  explicitRefs: readonly { provider: string; id: string }[];
+  priorityRefs?: readonly { provider: string; id: string }[];
+}): string[] | undefined {
+  const providers = new Set<string>();
+  for (const provider of params.providerFilter ?? []) {
+    const normalized = normalizeProviderId(provider);
+    if (normalized) {
+      providers.add(normalized);
+    }
+  }
+  for (const ref of params.explicitRefs) {
+    providers.add(ref.provider);
+  }
+  for (const ref of params.priorityRefs ?? []) {
+    providers.add(ref.provider);
+  }
+  return providers.size > 0
+    ? [...providers].toSorted((left, right) => left.localeCompare(right))
+    : undefined;
+}
+
+export function applyLiveProviderPluginDiscoveryCompat(params: {
+  config: OpenClawConfig;
+  providers: readonly string[] | undefined;
+  env?: NodeJS.ProcessEnv;
+}): OpenClawConfig {
+  const pluginIds = new Set<string>();
+  for (const provider of params.providers ?? []) {
+    const owners =
+      resolveOwningPluginIdsForProviderRef({
+        provider,
+        config: params.config,
+        env: params.env,
+      }) ?? [];
+    if (owners.length === 0) {
+      pluginIds.add(provider);
+      continue;
+    }
+    for (const owner of owners) {
+      pluginIds.add(owner);
+    }
+  }
+  if (pluginIds.size === 0) {
+    return params.config;
+  }
+  const orderedPluginIds = [...pluginIds].toSorted((left, right) => left.localeCompare(right));
+  const compatConfig =
+    withBundledPluginEnablementCompat({
+      config: params.config,
+      pluginIds: orderedPluginIds,
+    }) ?? params.config;
+  const entries = { ...compatConfig.plugins?.entries };
+  const allow = new Set(compatConfig.plugins?.allow ?? []);
+  for (const pluginId of orderedPluginIds) {
+    allow.add(pluginId);
+    entries[pluginId] ??= { enabled: true };
+  }
+  return {
+    ...compatConfig,
+    plugins: {
+      ...compatConfig.plugins,
+      enabled: true,
+      allow: [...allow].toSorted((left, right) => left.localeCompare(right)),
+      entries,
+    },
+  };
 }
 
 /**
