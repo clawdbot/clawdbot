@@ -97,6 +97,7 @@ const sharedUiTestConfig = {
 const nodeDrivenBrowserLayoutTests = [
   "src/ui/chat/sidebar-session-picker.browser.test.ts",
   "src/pages/chat/chat-responsive.browser.test.ts",
+  "src/pages/chat/components/chat-swarm-progress.browser.test.ts",
   "src/components/form-controls.browser.test.ts",
   "src/pages/sessions/view.browser.test.ts",
   "src/styles/corner-shape.browser.test.ts",

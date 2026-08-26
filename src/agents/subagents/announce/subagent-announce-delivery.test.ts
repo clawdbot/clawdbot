@@ -4424,7 +4424,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       accountId: "acct-1",
       to: "dm:U123",
     });
-    expect(agentParams.sourceReplyDeliveryMode).toBeUndefined();
+    expect(agentParams.sourceReplyDeliveryMode).toBe(requireVisibleReply ? "automatic" : undefined);
   });
 
   it.each([

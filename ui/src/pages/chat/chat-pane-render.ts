@@ -70,18 +70,16 @@ export class ChatPane extends ChatPaneLayoutRender {
     }
     void this.ensureTaskSuggestionCloudProfiles();
     const selectedSession = selectedChatSessionRow(state);
-    const selectedSessionId = selectedSession?.sessionId?.trim() || undefined;
     const mutationAccess = readChatPaneMutationAccess(
       this.context.gateway.snapshot,
       state.sessionKey,
     );
-    const projectedObserverDigest = projectSessionObserverDigest(
-      selectedSession?.key ?? state.sessionKey,
-      selectedSession?.observerDigest,
-    );
     const observerDigest = pickFreshestObserverDigest(
       state.observerDigest,
-      projectedObserverDigest,
+      projectSessionObserverDigest(
+        selectedSession?.key ?? state.sessionKey,
+        selectedSession?.observerDigest,
+      ),
     );
     const observerRunId = resolveChatPaneObserverRunId({
       localRunId: state.chatRunId,
@@ -387,12 +385,16 @@ export class ChatPane extends ChatPaneLayoutRender {
           (!sessionParticipationBlocked || suggestionViewer) &&
           !placementStartupPending,
       disabledReason: catalogDisabledReason ?? disabledReason,
+      disabledReasonTone:
+        sessionParticipationBlocked && !suggestionViewer && !catalogDisabledReason
+          ? "info"
+          : "danger",
       disabledBanner: this.sessionDisabledBanner({
         catalogDisabledReason,
         modelSetupRequired,
         restartRecoveryTombstoned,
         selectedSessionArchived,
-        selectedSessionId,
+        selectedSessionId: selectedSession?.sessionId?.trim() || undefined,
         sessionKey: state.sessionKey,
         unarchiveAccess: mutationAccess.unarchive,
       }),

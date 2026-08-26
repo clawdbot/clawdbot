@@ -595,7 +595,34 @@ describe("handleSlackMessageAction", () => {
     expect(firstAction(invoke)).toMatchObject({ content: `- ${label}`, blocks: undefined });
   });
 
-  it("rejects presentation fallback edits that overflow after Slack markdown rendering", async () => {
+  it.each(["text", "context"] as const)(
+    "keeps a complete oversized %s presentation in one text-only edit",
+    async (type) => {
+      const invoke = createInvokeSpy();
+      const text = "x".repeat(3_001);
+
+      await handleSlackMessageAction({
+        providerId: "slack",
+        ctx: {
+          action: "edit",
+          cfg: {},
+          params: {
+            channelId: "C1",
+            messageId: "171234.567",
+            presentation: { blocks: [{ type, text }] },
+          },
+        } as never,
+        invoke: invoke as never,
+      });
+
+      expect(firstAction(invoke)).toMatchObject({ content: text, blocks: undefined });
+    },
+  );
+
+  it.each([
+    { name: "Slack markdown rendering", text: `${"&".repeat(801)}${"x".repeat(2_200)}` },
+    { name: "UTF-8 expansion", text: "😀".repeat(1_501) },
+  ])("rejects presentation fallback edits that overflow after $name", async ({ text }) => {
     const invoke = createInvokeSpy();
 
     await expect(
@@ -608,7 +635,7 @@ describe("handleSlackMessageAction", () => {
             channelId: "C1",
             messageId: "171234.567",
             presentation: {
-              blocks: [{ type: "text", text: `${"&".repeat(801)}${"x".repeat(2_200)}` }],
+              blocks: [{ type: "text", text }],
             },
           },
         } as never,

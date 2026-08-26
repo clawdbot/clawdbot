@@ -68,9 +68,9 @@ export function autoDisableCronJob(params: {
       ...(deliveryContext ? { deliveryContext } : {}),
     });
     state.deps.requestHeartbeat({
-      source: "cron",
-      intent: "event",
-      reason: `cron:${job.id}:auto-disabled`,
+      source: "notifications-event",
+      intent: "immediate",
+      reason: "wake",
       agentId,
       sessionKey: job.sessionKey,
     });

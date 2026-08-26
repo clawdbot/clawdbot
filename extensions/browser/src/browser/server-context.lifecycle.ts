@@ -171,13 +171,14 @@ function combineSignals(lifecycleSignal: AbortSignal, callerSignal?: AbortSignal
   return AbortSignal.any([lifecycleSignal, callerSignal]);
 }
 
-function waitForStart(promise: Promise<void>, signal?: AbortSignal): Promise<void> {
+/** Observe shared lifecycle work without transferring cancellation ownership. */
+export function waitForProfileOperation<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
   if (!signal) {
     return promise;
   }
   signal.throwIfAborted();
   let onAbort!: () => void;
-  const waiting = new Promise<void>((resolve, reject) => {
+  const waiting = new Promise<T>((resolve, reject) => {
     onAbort = () => reject(toLifecycleError(signal.reason, "Browser operation aborted."));
     signal.addEventListener("abort", onAbort, { once: true });
     void promise.then(resolve, reject);
@@ -274,13 +275,15 @@ export async function withProfileOperationLease<T>(params: {
   runtime: ProfileRuntimeState;
   configRevision: number;
   signal?: AbortSignal;
+  /** Shared producers belong to the lifecycle, never to their first caller. */
+  ownership?: "caller" | "lifecycle";
   run: (signal: AbortSignal) => Promise<T>;
   commit?: (result: T) => void | Promise<void>;
 }): Promise<T> {
   params.signal?.throwIfAborted();
   const actor = getProfileLifecycle(params.runtime);
   const inherited = profileLeaseStorage.getStore();
-  const parent = inherited?.get(params.runtime);
+  const parent = params.ownership === "lifecycle" ? undefined : inherited?.get(params.runtime);
   if (parent) {
     const signal = combineSignals(parent.signal, params.signal);
     signal.throwIfAborted();
@@ -307,7 +310,10 @@ export async function withProfileOperationLease<T>(params: {
   assertProfileCurrent({ ...params, generation: requestedGeneration });
   const generation = requestedGeneration;
   const lifecycleSignal = actor.controller.signal;
-  const signal = combineSignals(lifecycleSignal, params.signal);
+  const signal =
+    params.ownership === "lifecycle"
+      ? lifecycleSignal
+      : combineSignals(lifecycleSignal, params.signal);
   signal.throwIfAborted();
   const release = createLease(actor);
   try {
@@ -340,7 +346,7 @@ export function enqueueProfileStart(params: {
   const actor = getProfileLifecycle(params.runtime);
   const existing = actor.starts.get(params.key);
   if (existing) {
-    return waitForStart(existing, params.signal);
+    return waitForProfileOperation(existing, params.signal);
   }
 
   const generation = actor.generation;
@@ -361,7 +367,7 @@ export function enqueueProfileStart(params: {
     }
   };
   actor.tail = promise.then(settleStart, settleStart);
-  return waitForStart(promise, params.signal);
+  return waitForProfileOperation(promise, params.signal);
 }
 
 function capturePlaywrightRetirement(
@@ -437,6 +443,9 @@ async function cleanupProfileResources(params: {
       actor.cleanupRelays.delete(relay);
       if (params.state.extensionRelays?.get(runtime.profile.name) === relay) {
         params.state.extensionRelays.delete(runtime.profile.name);
+        const tokens = { ...params.state.resolved.extensionRelayInternalTokens };
+        delete tokens[runtime.profile.name];
+        params.state.resolved = { ...params.state.resolved, extensionRelayInternalTokens: tokens };
       }
     } catch (err) {
       firstError ??= toLifecycleError(err, "Browser relay cleanup failed.");

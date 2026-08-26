@@ -11,6 +11,7 @@ import {
   createSandboxBrowserConfig,
   createSandboxPruneConfig,
   createSandboxSshConfig,
+  createSandboxTestContext,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createOpenShellSandboxBackendFactory } from "./backend.js";
@@ -111,6 +112,11 @@ describe("openshell backend exec workdir validation", () => {
     tempWorkspaces.push(workspace);
     const workspaceDir = workspace.dir;
     await fs.writeFile(path.join(workspaceDir, "seed.txt"), "seed", "utf8");
+    for (const protectedDirectory of [".git", "hooks", "git-hooks"]) {
+      const protectedPath = path.join(workspaceDir, protectedDirectory);
+      await fs.mkdir(protectedPath, { recursive: true });
+      await fs.writeFile(path.join(protectedPath, "private.txt"), "host-only", "utf8");
+    }
     const backendFactory = createOpenShellSandboxBackendFactory({
       pluginConfig: resolveOpenShellPluginConfig({
         command: "openshell",
@@ -144,7 +150,35 @@ describe("openshell backend exec workdir validation", () => {
         "--no-git-ignore",
         backend.runtimeId,
         expect.stringMatching(/\/seed\.txt$/),
-        "/sandbox",
+        "/sandbox/",
+      ],
+      cwd: workspaceDir,
+    });
+    const nestedFile = path.join(workspaceDir, "nested", "note.txt");
+    const bridge = backend.createFsBridge?.({
+      sandbox: createSandboxTestContext({
+        overrides: {
+          backendId: "openshell",
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+          containerWorkdir: backend.workdir,
+          backend,
+        },
+      }),
+    });
+    if (!bridge) {
+      throw new Error("Expected OpenShell mirror filesystem bridge");
+    }
+    await bridge.writeFile({ filePath: "nested/note.txt", data: "nested", mkdir: true });
+    expect(cliMocks.runOpenShellCli).toHaveBeenLastCalledWith({
+      context: expect.objectContaining({ sandboxName: backend.runtimeId }),
+      args: [
+        "sandbox",
+        "upload",
+        "--no-git-ignore",
+        backend.runtimeId,
+        nestedFile,
+        "/sandbox/nested/note.txt",
       ],
       cwd: workspaceDir,
     });

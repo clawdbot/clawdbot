@@ -29,7 +29,6 @@ export type DraftCloudProfile = {
   id: string;
   providerId: string;
   trust?: "persistent" | "disposable";
-  executionMode?: WorkerExecutionMode;
   executionModes?: readonly WorkerExecutionMode[];
   machines?: DraftMachineOption[];
 };
@@ -118,7 +117,6 @@ export function readDraftCloudProfiles(value: unknown): DraftCloudProfile[] {
         id?: unknown;
         providerId?: unknown;
         trust?: unknown;
-        executionMode?: unknown;
         executionModes?: unknown;
         machines?: unknown;
       };
@@ -131,17 +129,12 @@ export function readDraftCloudProfiles(value: unknown): DraftCloudProfile[] {
         profile.trust === "persistent" || profile.trust === "disposable"
           ? profile.trust
           : undefined;
-      const executionMode: WorkerExecutionMode | undefined =
-        profile.executionMode === "worker-turn" || profile.executionMode === "remote-exec"
-          ? profile.executionMode
-          : undefined;
       const machines = readDraftMachineOptions(profile.machines);
       return [
         {
           id,
           providerId,
           trust,
-          executionMode,
           ...(Object.hasOwn(profile, "executionModes")
             ? { executionModes: readDraftCloudProfileExecutionModes(profile.executionModes) }
             : {}),

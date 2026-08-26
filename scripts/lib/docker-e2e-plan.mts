@@ -746,6 +746,9 @@ export function requiredPrepublishPluginPackagesForLanes(poolLanes: DockerE2eLan
   const configuredChannelIds = new Set<string>();
   const requiredPackages = new Set<string>();
   for (const poolLane of poolLanes) {
+    for (const packageName of poolLane.prepublishPluginPackages ?? []) {
+      requiredPackages.add(packageName);
+    }
     const scenario = upgradeSurvivorScenarioForLane(poolLane);
     if (!scenario) {
       continue;

@@ -231,11 +231,12 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       pending.push(...session.children);
       if (
         session.childSessionKeys.length > 0 &&
-        this.isSessionChildrenExpanded(session) &&
+        (session.visuallyActive || this.isSessionChildrenExpanded(session)) &&
         !this.sessionData.loadedChildSessionKeys.has(session.key) &&
         !this.sessionData.childSessionErrorsByParent.has(session.key) &&
         !this.sessionData.loadingChildSessionKeys.has(session.key)
       ) {
+        // Selected collapsed rows need child liveness so delegated work does not look finished.
         void this.sessionData.loadChildSessions(session.key);
       }
     }
@@ -302,13 +303,16 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   }
 
   readonly selectSession = (sessionKey: string) => {
-    const face = resolveSessionPreferredFace(this.findSidebarSessionByKey(sessionKey));
+    const navigationState = this.getSessionNavigationState();
+    const sessionResultsByAgent = this.sessionData.sessionResultsByAgent;
+    const row = findProjectedSidebarSession({ sessionKey, navigationState, sessionResultsByAgent });
+    const face = resolveSessionPreferredFace(row);
     const target = sessionNavigationTarget({
       face,
       sessionKey,
-      fallbackAgentId: this.selectedAgentIdForSessions(),
+      fallbackAgentId: navigationState.selectedAgentId,
       basePath: this.basePath,
-      row: this.findSidebarSessionByKey(sessionKey),
+      row,
       mainKey: this.sessionMainKey(),
       preferenceDerivedFace: true,
       navigationKey: sessionKey,
@@ -392,9 +396,9 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     const navigationState = this.getSessionNavigationState();
     const rows = this.selectedAgentSessionRows(navigationState);
     const { visibleRows } = this.zonedVisibleSections(rows);
-    const pinnedByKey = new Map(rows.filter((row) => row.pinned).map((row) => [row.key, row]));
-    const pinnedRows = this.reconciledSidebarZone().entries.flatMap((entry) => {
-      const row = entry.type === "session" ? pinnedByKey.get(entry.key) : undefined;
+    const { entries, sessionRows } = this.reconciledSidebarZone();
+    const pinnedRows = entries.flatMap((entry) => {
+      const row = entry.type === "session" ? sessionRows.get(entry.key) : undefined;
       return row ? [row] : [];
     });
     return [...pinnedRows, ...visibleRows];
@@ -459,13 +463,14 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   }
 
   readonly replaceCurrentSession = (sessionKey: string) => {
-    const face = resolveSessionPreferredFace(this.findSidebarSessionByKey(sessionKey));
+    const row = this.findSidebarSessionByKey(sessionKey);
+    const face = resolveSessionPreferredFace(row);
     const target = sessionNavigationTarget({
       face,
       sessionKey,
       fallbackAgentId: this.selectedAgentIdForSessions(),
       basePath: this.basePath,
-      row: this.findSidebarSessionByKey(sessionKey),
+      row,
       mainKey: this.sessionMainKey(),
       preferenceDerivedFace: true,
     });

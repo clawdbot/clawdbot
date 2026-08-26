@@ -108,6 +108,72 @@ describe("chat transcript rendering", () => {
     transcript.hostDisconnected();
   });
 
+  it("renders interrupted status after a partial assistant reply", async () => {
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const props = {
+      ...threadProps("pane-interrupted", "agent:main:main", [
+        {
+          role: "user",
+          content: "Start the task",
+          timestamp: 1_000,
+          __openclaw: { idempotencyKey: "run-1:user" },
+        },
+        { role: "assistant", content: "Partial response", timestamp: 2_000 },
+      ]),
+      runStatus: {
+        phase: "interrupted" as const,
+        runId: "run-1",
+        sessionKey: "agent:main:main",
+        occurredAt: 3_000,
+      },
+    };
+
+    render(renderChatThread(props, transcript), container);
+    transcript.hostConnected();
+    transcript.hostUpdated();
+    await flushDeferredRowPrune();
+
+    const status = requireElement(container, ".chat-turn-terminal-status--interrupted");
+    expect(status.textContent).toContain("Interrupted");
+    expect(status.closest(".chat-group")).toBeNull();
+    transcript.hostDisconnected();
+  });
+
+  it("renders interrupted status after the current turn when it has no assistant reply", async () => {
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const props = {
+      ...threadProps("pane-interrupted-empty", "agent:main:main", [
+        { role: "user", content: "Earlier task", timestamp: 1_000 },
+        { role: "assistant", content: "Earlier reply", timestamp: 2_000 },
+        {
+          role: "user",
+          content: "Stop this task",
+          timestamp: 3_000,
+          __openclaw: { idempotencyKey: "run-2:user" },
+        },
+      ]),
+      runStatus: {
+        phase: "interrupted" as const,
+        runId: "run-2",
+        sessionKey: "agent:main:main",
+        occurredAt: 4_000,
+      },
+    };
+
+    render(renderChatThread(props, transcript), container);
+    transcript.hostConnected();
+    transcript.hostUpdated();
+    await flushDeferredRowPrune();
+
+    const status = requireElement(container, ".chat-turn-terminal-status--interrupted");
+    expect(status.textContent).toContain("Interrupted");
+    expect(status.closest(".chat-group")).toBeNull();
+    expect(container.querySelector(".chat-group.assistant")?.contains(status)).toBe(false);
+    transcript.hostDisconnected();
+  });
+
   it("reveals touched metadata across stored and live groups within one transcript", async () => {
     const firstTranscript = createTestTranscript();
     const secondTranscript = createTestTranscript();

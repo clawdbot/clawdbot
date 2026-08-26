@@ -1,3 +1,4 @@
+import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credential-modes.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../../agents/auth-profiles.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { createOpenAIModelRoutesResolver } from "../../agents/openai-model-routes.js";
@@ -47,6 +48,7 @@ export async function listModels(params: {
   staticEntries?: ModelCatalogEntry[];
   cfg?: OpenClawConfig;
   discoveryModes?: Record<string, "refreshable" | "runtime" | "static">;
+  preparedAuthModes?: PreparedAgentCredentialModes;
   metadataSnapshot?: PluginMetadataSnapshot;
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
   view?: "all" | "configured" | "provider-config" | "default";
@@ -60,7 +62,7 @@ export async function listModels(params: {
       catalogComplete: false,
       workspaceDir: "/tmp/models-list-openai-workspace",
       config,
-      authModes: {},
+      authModes: params.preparedAuthModes ?? {},
       authStore: loadAuthProfileStoreWithoutExternalProfiles("/tmp/models-list-openai-agent", {
         allowKeychainPrompt: false,
       }),

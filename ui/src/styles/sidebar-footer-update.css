@@ -7,7 +7,7 @@
 .shell--nav-collapsed:has(
   openclaw-sidebar-attention.sidebar-attention--floating .sidebar-footer-update-slot
 ) {
-  --shell-attention-width: 72px;
+  --shell-attention-width: 80px;
 }
 
 openclaw-sidebar-attention.sidebar-attention--floating {
@@ -60,74 +60,32 @@ html.openclaw-native-macos openclaw-sidebar-attention.sidebar-attention--floatin
 
 .sidebar-footer-update-slot {
   position: relative;
-  width: 32px;
-  height: 32px;
-  flex: 0 0 32px;
-  transition:
-    width var(--duration-fast) ease,
-    flex-basis var(--duration-fast) ease;
-}
-
-.sidebar-footer-update-slot:is(:hover:has(.sidebar-footer-update:not(:disabled)), :focus-within) {
-  width: 76px;
-  flex-basis: 76px;
-}
-
-.sidebar-footer-update-slot::before {
-  content: "";
-  position: absolute;
-  z-index: 1;
-  inset-block: 0;
-  inset-inline-end: 20px;
-  width: 64px;
-  pointer-events: none;
-  background: linear-gradient(to right, transparent, var(--sidebar-bg));
-  opacity: 0;
-  transition: opacity var(--duration-fast) ease;
-}
-
-.sidebar-footer-update-slot:is(
-  :hover:has(.sidebar-footer-update:not(:disabled)),
-  :focus-within
-)::before {
-  opacity: 1;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
 }
 
 .sidebar-footer-update {
-  position: absolute;
-  z-index: 2;
-  inset-block-start: 2px;
-  inset-inline-end: 2px;
-  display: inline-flex;
-  width: 28px;
-  height: 28px;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 5px;
-  overflow: hidden;
-  padding: 0 7px;
-  border: 0;
+  display: inline-grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--inbox-attention) 24%, var(--border));
   border-radius: var(--radius-full);
-  background: var(--inbox-attention);
-  color: var(--inbox-attention-foreground);
+  background: color-mix(in srgb, var(--inbox-attention) 8%, var(--sidebar-bg));
+  color: color-mix(in srgb, var(--inbox-attention) 52%, var(--muted));
   cursor: var(--cursor-action);
   transition:
-    width var(--duration-fast) ease,
-    background var(--duration-fast) ease;
+    border-color var(--duration-fast) ease,
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
 }
 
-.sidebar-footer-update-slot:is(:hover, :focus-within) .sidebar-footer-update:not(:disabled) {
-  width: 76px;
-  background: var(--inbox-attention-hover);
-}
-
-.sidebar-footer-update-slot:hover:has(.sidebar-footer-update:not(:disabled)),
-.sidebar-footer-update-slot:hover:has(.sidebar-footer-update:not(:disabled))::before,
-.sidebar-footer-update-slot:hover .sidebar-footer-update:not(:disabled),
-.sidebar-footer-update-slot:hover:has(.sidebar-footer-update:not(:disabled))
-  .sidebar-footer-update__label,
-.sidebar-footer-update-slot:hover .sidebar-footer-update__dismiss {
-  transition-delay: var(--duration-slow);
+.sidebar-footer-update:is(:hover, :focus-visible):not(:disabled) {
+  border-color: color-mix(in srgb, var(--inbox-attention) 42%, var(--border));
+  background: color-mix(in srgb, var(--inbox-attention) 14%, var(--sidebar-bg));
+  color: var(--inbox-attention);
 }
 
 .sidebar-footer-update:focus-visible {
@@ -136,26 +94,21 @@ html.openclaw-native-macos openclaw-sidebar-attention.sidebar-attention--floatin
 }
 
 .sidebar-footer-update:disabled {
+  border-color: color-mix(in srgb, var(--muted) 24%, var(--border));
+  background: color-mix(in srgb, var(--muted) 8%, var(--sidebar-bg));
+  color: var(--muted);
   cursor: not-allowed;
-  opacity: 0.56;
 }
 
 .sidebar-footer-update__icon {
   display: inline-flex;
-  flex: 0 0 14px;
+  width: 16px;
+  height: 16px;
 }
 
-.sidebar-footer-update__label {
-  opacity: 0;
-  font-size: var(--control-ui-text-xs);
-  font-weight: 600;
-  white-space: nowrap;
-  transition: opacity var(--duration-fast) ease;
-}
-
-.sidebar-footer-update-slot:is(:hover:has(.sidebar-footer-update:not(:disabled)), :focus-within)
-  .sidebar-footer-update__label {
-  opacity: 1;
+.sidebar-footer-update__icon svg {
+  width: 16px;
+  height: 16px;
 }
 
 .sidebar-footer-update__dismiss {
@@ -190,7 +143,13 @@ html.openclaw-native-macos openclaw-sidebar-attention.sidebar-attention--floatin
   width: 9px;
 }
 
-@media (hover: none) and (pointer: coarse) {
+@media (hover: none), (pointer: coarse) {
+  .sidebar-footer-update:not(:disabled):active {
+    border-color: color-mix(in srgb, var(--inbox-attention) 42%, var(--border));
+    background: color-mix(in srgb, var(--inbox-attention) 14%, var(--sidebar-bg));
+    color: var(--inbox-attention);
+  }
+
   .sidebar-footer-update__dismiss {
     opacity: 1;
     pointer-events: auto;

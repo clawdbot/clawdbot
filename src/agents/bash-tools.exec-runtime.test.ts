@@ -191,6 +191,43 @@ describe("runExecProcess cursor tracking", () => {
 });
 
 describe("sandbox exec preparation failures", () => {
+  it("runs the final authorization check after async preparation and before spawn", async () => {
+    const preparation =
+      createDeferred<Awaited<ReturnType<NonNullable<BashSandboxConfig["buildExecSpec"]>>>>();
+    const denied = new Error("approval directory changed");
+    const beforeSpawn = vi.fn(async () => {
+      throw denied;
+    });
+    const pending = runExecProcess({
+      command: "sandbox-command",
+      workdir: "/tmp",
+      env: {},
+      sandbox: {
+        containerName: "sandbox",
+        workspaceDir: "/workspace",
+        containerWorkdir: "/workspace",
+        buildExecSpec: async () => await preparation.promise,
+      },
+      usePty: false,
+      warnings: [],
+      maxOutput: 1000,
+      pendingMaxOutput: 1000,
+      notifyOnExit: false,
+      timeoutSec: null,
+      beforeSpawn,
+    });
+
+    expect(beforeSpawn).not.toHaveBeenCalled();
+    preparation.resolve({
+      argv: ["sandbox-command"],
+      env: {},
+      stdinMode: "pipe-closed",
+    });
+    await expect(pending).rejects.toBe(denied);
+    expect(beforeSpawn).toHaveBeenCalledOnce();
+    expect(supervisorMock.spawn).not.toHaveBeenCalled();
+  });
+
   it("settles the registered session once when buildExecSpec rejects", async () => {
     const registry = await import("./bash-process-registry.js");
     const sessionSlugs = await import("./session-slug.js");

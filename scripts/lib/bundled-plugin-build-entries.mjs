@@ -37,7 +37,7 @@ function parseBundledPluginBuildIdFilter(env = process.env) {
   );
 }
 
-function parseDockerSelectedPluginBuildIdFilter(env = process.env) {
+export function parseDockerSelectedPluginBuildIdFilter(env = process.env) {
   const raw = env[DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV];
   if (typeof raw !== "string" || raw.trim() === "") {
     return null;

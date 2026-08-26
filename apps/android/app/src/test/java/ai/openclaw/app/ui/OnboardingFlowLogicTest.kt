@@ -228,6 +228,31 @@ class OnboardingFlowLogicTest {
         currentLocationMode = LocationMode.WhileUsing,
         requestedLocationMode = LocationMode.WhileUsing,
       ),
+      PermissionApprovalCase(
+        expected = false,
+        currentLocationMode = LocationMode.Always,
+        requestedLocationMode = LocationMode.Always,
+      ),
+      PermissionApprovalCase(
+        expected = true,
+        currentLocationMode = LocationMode.Always,
+        requestedLocationMode = LocationMode.WhileUsing,
+      ),
+      PermissionApprovalCase(
+        expected = true,
+        currentLocationMode = LocationMode.Always,
+        requestedLocationMode = LocationMode.Off,
+      ),
+      PermissionApprovalCase(
+        expected = true,
+        currentLocationMode = LocationMode.WhileUsing,
+        requestedLocationMode = LocationMode.Always,
+      ),
+      PermissionApprovalCase(
+        expected = true,
+        currentLocationMode = LocationMode.Off,
+        requestedLocationMode = LocationMode.Always,
+      ),
     ).forEach { case ->
       assertBoolean(
         case.expected,

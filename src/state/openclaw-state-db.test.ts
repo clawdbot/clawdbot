@@ -1,9 +1,11 @@
 // OpenClaw state database tests cover state DB migrations and persistence.
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { gunzipSync } from "node:zlib";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
@@ -51,6 +53,7 @@ import {
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { getOpenClawStateRuntimeSchema } from "./openclaw-state-schema-compatibility.js";
+import { STATE_SCHEMA_10_TO_9_DOWNGRADE_SQL } from "./openclaw-state-schema-v10-retirement.test-support.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import {
   collectSqliteSchemaShape,
@@ -67,8 +70,52 @@ type StateDbTestDatabase = Pick<
 const stateDbTempDirs: string[] = [];
 let canonicalStateDatabaseTemplatePath: string | undefined;
 
+const V2026_7_1_2_STATE_FIXTURE_URL = new URL(
+  "../../test/fixtures/sqlite/openclaw-state-v2026.7.1-2.sqlite.gz",
+  import.meta.url,
+);
+const V2026_7_1_2_STATE_FIXTURE_GZIP_SHA256 =
+  "62c2e22acc5b0d9d7a2d4c8afeb17735c5ef526593c937499614d9aba2ffd2f4";
+const V2026_7_1_2_STATE_FIXTURE_RAW_SHA256 =
+  "17807b83d33115fb9e523ae40a829d9177c8cab2ae3cb2ac872318a573fc0269";
+const V2026_7_1_2_STATE_FIXTURE_SCHEMA_SHA256 =
+  "f2fd6488e283470718547fb45886f04cc940b1de798e52fbf34a3a3408ae25e4";
+
 function createTempStateDir(): string {
   return makeTempDir(stateDbTempDirs, "openclaw-state-db-");
+}
+
+function sha256(value: string | Uint8Array): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function hashSqliteSchema(database: DatabaseSync): string {
+  const schema = database
+    .prepare(
+      `SELECT type, name, tbl_name, sql
+         FROM sqlite_schema
+        WHERE name NOT LIKE 'sqlite_%'
+        ORDER BY type, name`,
+    )
+    .all();
+  return sha256(JSON.stringify(schema));
+}
+
+function materializeV2026_7_1_2StateDatabase(stateDir: string): {
+  compressedSha256: string;
+  databasePath: string;
+  rawSha256: string;
+} {
+  const compressed = fs.readFileSync(V2026_7_1_2_STATE_FIXTURE_URL);
+  const raw = gunzipSync(compressed);
+  const databasePath = resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir });
+  fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+  fs.writeFileSync(databasePath, raw);
+  return {
+    compressedSha256: sha256(compressed),
+    databasePath,
+    rawSha256: sha256(raw),
+  };
 }
 
 function markStateDatabaseAsPreviousAppVersion(database: DatabaseSync): void {
@@ -220,6 +267,15 @@ const RETIRED_COMMITMENT_SCHEMA_OBJECTS = [
   "idx_commitments_agent_sent",
 ] as const;
 
+const RETIRED_STATE_TABLES_V10 = [
+  "agent_model_catalogs",
+  "android_notification_recent_packages",
+  "command_log_entries",
+  "diagnostic_stability_bundles",
+  "media_blobs",
+  "model_capability_cache",
+] as const;
+
 function seedV6CommitmentSchema(database: DatabaseSync): void {
   database.exec(`
     CREATE TABLE IF NOT EXISTS commitments (
@@ -326,63 +382,6 @@ function seedAdditiveV6CommitmentSchema(database: DatabaseSync): void {
       ON commitments(agent_id, status, sent_at_ms, session_key);
   `);
   markStateDatabaseVersion(database, 6);
-}
-
-function seedV2026_7_1_2CommitmentSchema(database: DatabaseSync): void {
-  database.exec(`
-    CREATE TABLE commitments (
-      id TEXT NOT NULL PRIMARY KEY,
-      agent_id TEXT NOT NULL,
-      session_key TEXT NOT NULL,
-      channel TEXT NOT NULL,
-      account_id TEXT,
-      recipient_id TEXT,
-      thread_id TEXT,
-      sender_id TEXT,
-      kind TEXT NOT NULL,
-      sensitivity TEXT NOT NULL,
-      source TEXT NOT NULL,
-      status TEXT NOT NULL,
-      reason TEXT NOT NULL,
-      suggested_text TEXT NOT NULL,
-      dedupe_key TEXT NOT NULL,
-      confidence REAL NOT NULL,
-      due_earliest_ms INTEGER NOT NULL,
-      due_latest_ms INTEGER NOT NULL,
-      due_timezone TEXT NOT NULL,
-      source_message_id TEXT,
-      source_run_id TEXT,
-      created_at_ms INTEGER NOT NULL,
-      updated_at_ms INTEGER NOT NULL,
-      attempts INTEGER NOT NULL,
-      last_attempt_at_ms INTEGER,
-      sent_at_ms INTEGER,
-      dismissed_at_ms INTEGER,
-      snoozed_until_ms INTEGER,
-      expired_at_ms INTEGER,
-      record_json TEXT NOT NULL
-    );
-    CREATE INDEX idx_commitments_scope_due
-      ON commitments(agent_id, session_key, status, due_earliest_ms, due_latest_ms);
-    CREATE INDEX idx_commitments_status_due
-      ON commitments(status, due_earliest_ms, due_latest_ms);
-    CREATE INDEX idx_commitments_scope_dedupe
-      ON commitments(agent_id, session_key, channel, dedupe_key, status);
-    INSERT INTO commitments (
-      id, agent_id, session_key, channel, kind, sensitivity, source, status,
-      reason, suggested_text, dedupe_key, confidence, due_earliest_ms,
-      due_latest_ms, due_timezone, created_at_ms, updated_at_ms, attempts, record_json
-    ) VALUES (
-      'released-commitment', 'main', 'agent:main:main', 'telegram', 'followup',
-      'normal', 'message', 'pending', 'inert', 'follow up', 'released-dedupe',
-      1.0, 10, 20, 'UTC', 1, 1, 0, '{}'
-    );
-    INSERT INTO state_leases (
-      scope, lease_key, owner, expires_at, heartbeat_at, payload_json, created_at, updated_at
-    ) VALUES ('test', 'released-preserved-lease', 'migration-test', 100, 50, '{}', 1, 2);
-    PRAGMA user_version = 1;
-    UPDATE schema_meta SET schema_version = 1 WHERE meta_key = 'primary';
-  `);
 }
 
 function seedPartiallyAdditiveV6CommitmentSchema(database: DatabaseSync): void {
@@ -1692,7 +1691,7 @@ describe("openclaw state database", () => {
       warnings: [],
     });
     const migrated = openOpenClawStateDatabase({ env });
-    expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(9);
+    expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
     expect(
       migrated.db.prepare("SELECT agent_id, path FROM agent_databases ORDER BY agent_id").all(),
     ).toEqual([
@@ -1719,6 +1718,53 @@ describe("openclaw state database", () => {
       expect.objectContaining({ agentId: "preserved", path: preservedDefaultPath }),
     ]);
   });
+
+  it.each(["runtime open", "doctor repair"] as const)(
+    "retires six dead v9 shared-state tables through %s",
+    (migrationPath) => {
+      const stateDir = createTempStateDir();
+      const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+      const databasePath = materializeCurrentStateDatabase(stateDir);
+      const { DatabaseSync } = requireNodeSqlite();
+      const legacy = new DatabaseSync(databasePath);
+      legacy.exec(STATE_SCHEMA_10_TO_9_DOWNGRADE_SQL);
+      legacy.exec(`
+        INSERT INTO agent_model_catalogs (catalog_key, agent_dir, raw_json, updated_at)
+        VALUES ('main', '/agents/main', '{"models":[]}', 1);
+      `);
+      legacy.close();
+
+      expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toContainEqual({
+        kind: "state-table-retirement-v10",
+        path: databasePath,
+      });
+      if (migrationPath === "doctor repair") {
+        expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+          changes: ["Retired six dead shared-state tables (v10)"],
+          warnings: [],
+        });
+      }
+
+      const migrated = openOpenClawStateDatabase(options);
+      expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(10);
+      expect(
+        migrated.db
+          .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
+          .get(),
+      ).toEqual({ schema_version: 10 });
+      for (const tableName of RETIRED_STATE_TABLES_V10) {
+        expect(
+          migrated.db
+            .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+            .get(tableName),
+        ).toBeUndefined();
+      }
+      expect(detectOpenClawStateDatabaseSchemaMigrations(options)).not.toContainEqual({
+        kind: "state-table-retirement-v10",
+        path: databasePath,
+      });
+    },
+  );
 
   it.each(["runtime open", "doctor repair"] as const)(
     "retires v6 commitments through %s while preserving shared leases",
@@ -1863,80 +1909,224 @@ describe("openclaw state database", () => {
     },
   );
 
-  it.each(["runtime open", "doctor repair"] as const)(
-    "retires the shipped v2026.7.1-2 commitments layout through %s",
-    (migrationPath) => {
-      const stateDir = createTempStateDir();
-      const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
-      const databasePath = materializeCurrentStateDatabase(stateDir);
-      const { DatabaseSync } = requireNodeSqlite();
-      const released = new DatabaseSync(databasePath);
-      seedV2026_7_1_2CommitmentSchema(released);
+  it("migrates the exact v2026.7.1-2 shared state database through Doctor", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const fixture = materializeV2026_7_1_2StateDatabase(stateDir);
+    expect(fixture.compressedSha256).toBe(V2026_7_1_2_STATE_FIXTURE_GZIP_SHA256);
+    expect(fixture.rawSha256).toBe(V2026_7_1_2_STATE_FIXTURE_RAW_SHA256);
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const released = new DatabaseSync(fixture.databasePath, { readOnly: true });
+    try {
       expect(readSqliteNumberPragma(released, "user_version")).toBe(1);
       expect(
-        released.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get(),
-      ).toEqual({ schema_version: 1 });
+        released
+          .prepare("SELECT schema_version, app_version FROM schema_meta WHERE meta_key = 'primary'")
+          .get(),
+      ).toEqual({ schema_version: 1, app_version: "2026.7.1" });
+      expect(released.prepare("PRAGMA integrity_check").all()).toEqual([{ integrity_check: "ok" }]);
+      expect(released.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
       expect(
-        released.prepare("SELECT strict FROM pragma_table_list WHERE name = 'commitments'").get(),
-      ).toEqual({ strict: 0 });
+        released
+          .prepare(
+            `SELECT
+               (SELECT count(*) FROM sqlite_schema
+                 WHERE type = 'table' AND name NOT LIKE 'sqlite_%') AS tables,
+               (SELECT count(*) FROM sqlite_schema
+                 WHERE type = 'index' AND name NOT LIKE 'sqlite_autoindex_%') AS indexes,
+               (SELECT count(*) FROM pragma_table_list
+                 WHERE schema = 'main' AND type = 'table'
+                   AND name NOT LIKE 'sqlite_%' AND strict = 1) AS strict_tables`,
+          )
+          .get(),
+      ).toEqual({ tables: 73, indexes: 103, strict_tables: 0 });
+      expect(hashSqliteSchema(released)).toBe(V2026_7_1_2_STATE_FIXTURE_SCHEMA_SHA256);
       expect(
         released
           .prepare(
             `SELECT name
                FROM sqlite_schema
-              WHERE type = 'index'
-                AND tbl_name = 'commitments'
-                AND sql IS NOT NULL
+              WHERE name IN (
+                'commitments',
+                'cron_run_logs',
+                'node_pairing_pending',
+                'node_pairing_paired',
+                'idx_diagnostic_events_scope_created'
+              )
               ORDER BY name`,
           )
           .all(),
       ).toEqual([
-        { name: "idx_commitments_scope_dedupe" },
-        { name: "idx_commitments_scope_due" },
-        { name: "idx_commitments_status_due" },
+        { name: "commitments" },
+        { name: "cron_run_logs" },
+        { name: "idx_diagnostic_events_scope_created" },
+        { name: "node_pairing_paired" },
+        { name: "node_pairing_pending" },
       ]);
-      released.close();
-
-      if (migrationPath === "doctor repair") {
-        const result = repairOpenClawStateDatabaseSchema(options);
-        expect(result.warnings).toEqual([]);
-        expect(result.changes).toContain("Retired shared state commitments table and indexes");
-      }
-      const migrated = openOpenClawStateDatabase(options);
-      expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(
-        OPENCLAW_STATE_SCHEMA_VERSION,
-      );
       expect(
-        migrated.db
-          .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
+        released
+          .prepare("SELECT 1 FROM pragma_table_info('diagnostic_events') WHERE name = 'sequence'")
           .get(),
-      ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
-      for (const name of RETIRED_COMMITMENT_SCHEMA_OBJECTS) {
+      ).toBeUndefined();
+      for (const tableName of RETIRED_STATE_TABLES_V10) {
         expect(
-          migrated.db.prepare("SELECT name FROM sqlite_schema WHERE name = ?").get(name),
-        ).toBeUndefined();
+          released
+            .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+            .get(tableName),
+        ).toEqual({ name: tableName });
       }
+    } finally {
+      released.close();
+    }
+
+    expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([
+      { kind: "commitments-retirement-v7", path: fixture.databasePath },
+      { kind: "state-table-retirement-v10", path: fixture.databasePath },
+      { kind: "audit-events-v2", path: fixture.databasePath },
+      { kind: "strict-tables-v3", path: fixture.databasePath },
+    ]);
+    expectStateSchemaMigrationRequired(() => openOpenClawStateDatabase(options), {
+      kind: "audit-events-v2",
+      pathname: fixture.databasePath,
+    });
+
+    expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+      changes: [
+        "Retired shared state commitments table and indexes",
+        "Retired six dead shared-state tables (v10)",
+        "Migrated shared state audit event ledger → versioned message lifecycle schema",
+        "Migrated shared state tables to SQLite STRICT typing (64)",
+      ],
+      warnings: [],
+    });
+    const migrated = openOpenClawStateDatabase(options);
+
+    expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+    expect(
+      migrated.db
+        .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
+        .get(),
+    ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
+    expect(migrated.db.prepare("PRAGMA integrity_check").all()).toEqual([
+      { integrity_check: "ok" },
+    ]);
+    expect(migrated.db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    expect(normalizeSqliteSchemaShapeSql(collectSqliteSchemaShape(migrated.db))).toEqual(
+      normalizeSqliteSchemaShapeSql(createInitialStateSchemaShape()),
+    );
+    expect(
+      migrated.db
+        .prepare(
+          "SELECT store_key, store_json, updated_at FROM auth_profile_stores WHERE store_key = ?",
+        )
+        .get("fixture-store"),
+    ).toEqual({ store_key: "fixture-store", store_json: '{"fixture":true}', updated_at: 1000 });
+    expect(
+      migrated.db
+        .prepare(
+          "SELECT sequence, event_id, source_id, schema_version, agent_id, run_id FROM audit_events WHERE event_id = ?",
+        )
+        .get("fixture-audit-event"),
+    ).toEqual({
+      sequence: 7,
+      event_id: "fixture-audit-event",
+      source_id: "fixture-source",
+      schema_version: 1,
+      agent_id: "fixture-agent",
+      run_id: "fixture-run",
+    });
+    expect(
+      migrated.db
+        .prepare(
+          `INSERT INTO audit_events (
+             event_id, source_id, source_sequence, occurred_at, kind, action, status,
+             actor_type, actor_id
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          "fixture-audit-next",
+          "fixture-source-next",
+          2,
+          1600,
+          "message",
+          "message.received",
+          "succeeded",
+          "channel_sender",
+          "fixture-sender",
+        ).lastInsertRowid,
+    ).toBe(41);
+    expect(
+      migrated.db
+        .prepare(
+          `SELECT scope, event_key, sequence
+             FROM diagnostic_events
+            ORDER BY scope, sequence`,
+        )
+        .all(),
+    ).toEqual([
+      { scope: "fixture-scope", event_key: "event-a", sequence: 1 },
+      { scope: "fixture-scope", event_key: "event-b", sequence: 2 },
+      { scope: "other-scope", event_key: "event-c", sequence: 1 },
+    ]);
+    expect(
+      migrated.db
+        .prepare(
+          `SELECT task_id, runtime, source_id, status, ended_at
+             FROM task_runs
+            WHERE runtime = 'cron' AND source_id = 'fixture-cron'`,
+        )
+        .get(),
+    ).toEqual({
+      task_id: "cron-runlog-import:fixture-cron:1500:1",
+      runtime: "cron",
+      source_id: "fixture-cron",
+      status: "succeeded",
+      ended_at: 1500,
+    });
+    expect(
+      migrated.db
+        .prepare(
+          `SELECT task_runs.task_id, task_runs.status, task_delivery_state.last_notified_event_at
+             FROM task_runs
+             JOIN task_delivery_state USING (task_id)
+            WHERE task_runs.task_id = 'fixture-task'`,
+        )
+        .get(),
+    ).toEqual({
+      task_id: "fixture-task",
+      status: "completed",
+      last_notified_event_at: 1320,
+    });
+    for (const name of [
+      ...RETIRED_COMMITMENT_SCHEMA_OBJECTS,
+      ...RETIRED_STATE_TABLES_V10,
+      "cron_run_logs",
+      "node_pairing_pending",
+      "node_pairing_paired",
+      "idx_diagnostic_events_scope_created",
+    ]) {
       expect(
-        migrated.db
-          .prepare(
-            `SELECT scope, lease_key, owner, expires_at, heartbeat_at, payload_json,
-                    created_at, updated_at
-               FROM state_leases
-              WHERE scope = 'test' AND lease_key = 'released-preserved-lease'`,
-          )
-          .get(),
-      ).toEqual({
-        scope: "test",
-        lease_key: "released-preserved-lease",
-        owner: "migration-test",
-        expires_at: 100,
-        heartbeat_at: 50,
-        payload_json: "{}",
-        created_at: 1,
-        updated_at: 2,
-      });
-    },
-  );
+        migrated.db.prepare("SELECT name FROM sqlite_schema WHERE name = ?").get(name),
+      ).toBeUndefined();
+    }
+    expect(
+      migrated.db
+        .prepare(
+          "SELECT name FROM sqlite_schema WHERE name = 'idx_diagnostic_events_scope_sequence'",
+        )
+        .get(),
+    ).toEqual({ name: "idx_diagnostic_events_scope_sequence" });
+
+    closeOpenClawStateDatabaseForTest();
+    expect(repairOpenClawStateDatabaseSchema(options)).toEqual({ changes: [], warnings: [] });
+    expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([]);
+    const reopened = openOpenClawStateDatabase(options);
+    expect(reopened.db.prepare("PRAGMA integrity_check").all()).toEqual([
+      { integrity_check: "ok" },
+    ]);
+    expect(reopened.db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+  });
 
   it.each(["runtime open", "doctor repair"] as const)(
     "preserves a foreign commitments table and colliding index through %s",

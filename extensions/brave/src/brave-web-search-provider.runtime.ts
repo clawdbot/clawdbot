@@ -67,6 +67,24 @@ type BraveHttpDiagnostics = {
   enabled?: boolean;
 };
 
+type BraveRequestParams = {
+  baseUrl: string;
+  endpointMode: BraveEndpointMode;
+  apiKey: string;
+  timeoutSeconds: number;
+  diagnostics?: BraveHttpDiagnostics;
+  signal?: AbortSignal;
+};
+
+type BraveSearchRequestParams = BraveRequestParams & {
+  query: string;
+  country?: string;
+  search_lang?: string;
+  freshness?: string;
+  dateAfter?: string;
+  dateBefore?: string;
+};
+
 function logBraveHttp(
   diagnostics: BraveHttpDiagnostics | undefined,
   event: string,
@@ -76,18 +94,6 @@ function logBraveHttp(
     return;
   }
   braveHttpLogger.info(`brave http ${event}`, meta);
-}
-
-function describeBraveRequestUrl(url: URL): {
-  url: string;
-  query: string;
-  params: Record<string, string>;
-} {
-  return {
-    url: url.toString(),
-    query: url.searchParams.get("q") ?? "",
-    params: Object.fromEntries(url.searchParams.entries()),
-  };
 }
 
 function resolveBraveApiKey(searchConfig?: SearchConfigRecord): string | undefined {
@@ -198,15 +204,9 @@ function setBraveSearchUrlParams(
 }
 
 async function runBraveJsonRequest<T>(
-  params: {
-    baseUrl: string;
+  params: BraveRequestParams & {
     endpointPath: string;
-    endpointMode: BraveEndpointMode;
     mode: BraveSearchMode;
-    apiKey: string;
-    timeoutSeconds: number;
-    diagnostics?: BraveHttpDiagnostics;
-    signal?: AbortSignal;
     configureUrl: (url: URL) => void;
   },
   errorLabel: string,
@@ -218,7 +218,9 @@ async function runBraveJsonRequest<T>(
   params.configureUrl(url);
   logBraveHttp(params.diagnostics, "request", {
     mode: params.mode,
-    ...describeBraveRequestUrl(url),
+    url: url.toString(),
+    query: url.searchParams.get("q") ?? "",
+    params: Object.fromEntries(url.searchParams.entries()),
   });
   const startedAt = Date.now();
   const withEndpoint =
@@ -251,20 +253,7 @@ async function runBraveJsonRequest<T>(
   );
 }
 
-async function runBraveLlmContextSearch(params: {
-  baseUrl: string;
-  endpointMode: BraveEndpointMode;
-  query: string;
-  apiKey: string;
-  timeoutSeconds: number;
-  diagnostics?: BraveHttpDiagnostics;
-  signal?: AbortSignal;
-  country?: string;
-  search_lang?: string;
-  freshness?: string;
-  dateAfter?: string;
-  dateBefore?: string;
-}): Promise<{
+async function runBraveLlmContextSearch(params: BraveSearchRequestParams): Promise<{
   results: Array<{
     url: string;
     title: string;
@@ -275,14 +264,9 @@ async function runBraveLlmContextSearch(params: {
 }> {
   const data = await runBraveJsonRequest<BraveLlmContextResponse>(
     {
-      baseUrl: params.baseUrl,
+      ...params,
       endpointPath: BRAVE_LLM_CONTEXT_ENDPOINT_PATH,
       mode: "llm-context",
-      endpointMode: params.endpointMode,
-      apiKey: params.apiKey,
-      timeoutSeconds: params.timeoutSeconds,
-      diagnostics: params.diagnostics,
-      signal: params.signal,
       configureUrl: (url) => {
         setBraveSearchUrlParams(url, params);
       },
@@ -292,32 +276,17 @@ async function runBraveLlmContextSearch(params: {
   return { results: mapBraveLlmContextResults(data), sources: data.sources };
 }
 
-async function runBraveWebSearch(params: {
-  baseUrl: string;
-  endpointMode: BraveEndpointMode;
-  query: string;
-  count: number;
-  apiKey: string;
-  timeoutSeconds: number;
-  diagnostics?: BraveHttpDiagnostics;
-  signal?: AbortSignal;
-  country?: string;
-  search_lang?: string;
-  ui_lang?: string;
-  freshness?: string;
-  dateAfter?: string;
-  dateBefore?: string;
-}): Promise<Array<Record<string, unknown>>> {
+async function runBraveWebSearch(
+  params: BraveSearchRequestParams & {
+    count: number;
+    ui_lang?: string;
+  },
+): Promise<Array<Record<string, unknown>>> {
   const data = await runBraveJsonRequest<BraveSearchResponse>(
     {
-      baseUrl: params.baseUrl,
+      ...params,
       endpointPath: BRAVE_SEARCH_ENDPOINT_PATH,
       mode: "web",
-      endpointMode: params.endpointMode,
-      apiKey: params.apiKey,
-      timeoutSeconds: params.timeoutSeconds,
-      diagnostics: params.diagnostics,
-      signal: params.signal,
       configureUrl: (url) => {
         setBraveSearchUrlParams(url, {
           ...params,

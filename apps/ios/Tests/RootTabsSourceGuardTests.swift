@@ -165,9 +165,15 @@ struct RootTabsSourceGuardTests {
             source,
             from: "func refreshSessions(appModel: NodeAppModel) async {",
             to: "func reportSessionError(_ error: any Error) {")
-        let rosterCommit = try #require(refresh.range(of: "self.sessions = loadedRoster.sessions"))
+        let rosterOwner = try Self.extract(
+            source,
+            from: "private func applyRoster(_ roster: ChatSessionRosterSnapshot) {",
+            to: "private func loadRoster(")
+        let rosterCommit = try #require(refresh.range(of: "self.applyRoster(loadedRoster)"))
         let dashboardWait = try #require(refresh.range(of: "let loadedDashboard = await dashboard"))
 
+        #expect(rosterOwner.contains("self.sessions = roster.sessions"))
+        #expect(rosterOwner.contains("self.isSessionRosterComplete = roster.isComplete"))
         #expect(source.contains("private var rosterGeneration = 0"))
         #expect(source.contains("private var dashboardGeneration = 0"))
         #expect(source.matches(of: /self\.rosterGeneration &\+= 1/).count == 2)

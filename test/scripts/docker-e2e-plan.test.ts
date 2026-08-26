@@ -1463,6 +1463,8 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(lane.timeoutMs).toBe(1_800_000);
     expect(plan.needs.bareImage).toBe(true);
     expect(plan.needs.package).toBe(true);
+    expect(plan.requiredPrepublishPluginPackages).toEqual(["@openclaw/codex"]);
+    expect(plan.needs.prepublishPluginRegistry).toBe(true);
   });
 
   it("plans the plugin binding command escape lane as source Docker proof", () => {

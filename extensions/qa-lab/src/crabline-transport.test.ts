@@ -1,4 +1,4 @@
-// Qa Lab tests cover Crabline local-provider transport integration behavior.
+// Qa Lab tests cover Crabline channel-driver integration with local provider servers.
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawCrablineChannelDriverSelection } from "@openclaw/crabline";
@@ -29,6 +29,40 @@ function requireString(value: unknown, label: string): string {
 }
 
 describe("crabline transport", () => {
+  it("rejects oversized successful inbound responses before parsing provider metadata", async () => {
+    await withTempDir("qa-crabline-transport-", async (outputDir) => {
+      const transport = await createQaCrablineTransportAdapter({
+        outputDir,
+        selection: createSelection(),
+        state: createQaBusState(),
+      });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          async () =>
+            new Response(
+              JSON.stringify({
+                update: { message: { message_id: 42, padding: "x".repeat(1024 * 1024) } },
+              }),
+            ),
+        ),
+      );
+
+      try {
+        await expect(
+          transport.sendInbound({
+            conversation: { id: "-1001234567890", kind: "group" },
+            senderId: "100001",
+            senderName: "Alice",
+            text: "Oversized response marker.",
+          }),
+        ).rejects.toThrow("JSON response exceeds 1048576 bytes");
+      } finally {
+        await transport.cleanup?.();
+      }
+    });
+  });
+
   it("cancels a failed inbound response before surfacing the provider error", async () => {
     await withTempDir("qa-crabline-transport-", async (outputDir) => {
       const transport = await createQaCrablineTransportAdapter({
@@ -97,7 +131,7 @@ describe("crabline transport", () => {
         expect(delivery.replyTo).toBe(delivery.to);
 
         await expect(
-          fs.access(path.join(outputDir, "crabline-fake-provider-server.json")),
+          fs.access(path.join(outputDir, "crabline-provider-server.json")),
         ).rejects.toMatchObject({ code: "ENOENT" });
         await expect(
           transport.sendInbound({
@@ -435,7 +469,9 @@ describe("crabline transport", () => {
         const env = transport.createRuntimeEnvPatch?.() ?? {};
         expect(env).toMatchObject({
           CRABLINE_WHATSAPP_ADMIN_TOKEN: expect.any(String),
-          CRABLINE_WHATSAPP_RECORDER_PATH: expect.stringMatching(/whatsapp-fake-provider\.jsonl$/u),
+          CRABLINE_WHATSAPP_RECORDER_PATH: expect.stringMatching(
+            /whatsapp-provider-server\.jsonl$/u,
+          ),
           CRABLINE_WHATSAPP_SELF_JID: "15550000000@s.whatsapp.net",
           OPENCLAW_WHATSAPP_WEB_SOCKET_URL: expect.stringMatching(
             /^ws:\/\/127\.0\.0\.1:\d+\/ws\/chat\?access_token=/u,

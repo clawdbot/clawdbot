@@ -434,13 +434,23 @@ async function rawPathExists(target: string | Buffer): Promise<boolean> {
 }
 
 async function containsSnapshotGitMarker(
-  record: ManagedWorktreeRecord,
-  snapshotPaths: Iterable<Buffer>,
+  checkoutRoot: string,
+  snapshotPaths?: Iterable<Buffer>,
 ): Promise<boolean> {
+  const visiblePaths = snapshotPaths ? [...snapshotPaths] : [];
+  if (!snapshotPaths) {
+    const indexEntries = splitNullBuffer(
+      await requireGitBuffer(checkoutRoot, ["ls-files", "--stage", "-z"]),
+    );
+    if (indexEntries.some((entry) => entry.subarray(0, 7).toString() === "160000 ")) {
+      return true;
+    }
+    const visibleGitPaths = ["ls-files", "-z", "--cached", "--others", "--exclude-standard"];
+    visiblePaths.push(...splitNullBuffer(await requireGitBuffer(checkoutRoot, visibleGitPaths)));
+  }
   const checked = new Set<string>();
-  let ownedWorktrees: Set<string> | undefined;
   const ignoredPaths = splitNullBuffer(
-    await requireGitBuffer(record.path, [
+    await requireGitBuffer(checkoutRoot, [
       "ls-files",
       "-z",
       "--others",
@@ -448,28 +458,17 @@ async function containsSnapshotGitMarker(
       "--exclude-standard",
     ]),
   );
-  for (const [paths, ignored] of [
-    [snapshotPaths, false],
-    [ignoredPaths, true],
-  ] as const) {
-    for (const gitPath of paths) {
-      for (let end = gitPath.indexOf(47); end !== -1; end = gitPath.indexOf(47, end + 1)) {
-        const directory = gitPath.subarray(0, end);
-        const key = gitPathKey(directory);
-        if (checked.has(key)) {
-          continue;
-        }
-        checked.add(key);
-        const marker = Buffer.concat([directory, Buffer.from("/.git")]);
-        if (!(await rawPathExists(checkoutPathFromGitBytes(record.path, marker)))) {
-          continue;
-        }
-        ownedWorktrees ??= new Set(
-          (await listGitWorktrees(record.repoRoot)).map((entry) => path.resolve(entry.path)),
-        );
-        if (!ignored || !ownedWorktrees.has(path.resolve(record.path, directory.toString()))) {
-          return true;
-        }
+  for (const gitPath of [...visiblePaths, ...ignoredPaths]) {
+    for (let end = gitPath.indexOf(47); end !== -1; end = gitPath.indexOf(47, end + 1)) {
+      const directory = gitPath.subarray(0, end);
+      const key = gitPathKey(directory);
+      if (checked.has(key)) {
+        continue;
+      }
+      checked.add(key);
+      const marker = Buffer.concat([directory, Buffer.from("/.git")]);
+      if (await rawPathExists(checkoutPathFromGitBytes(checkoutRoot, marker))) {
+        return true;
       }
     }
   }
@@ -553,8 +552,7 @@ async function snapshotWorktree(
         addSnapshotPath(entry);
       }
     }
-    // Only Git-owned ignored worktrees are disposable; foreign repositories must stay protected.
-    if (await containsSnapshotGitMarker(record, snapshotPaths.values())) {
+    if (await containsSnapshotGitMarker(record.path, snapshotPaths.values())) {
       throw new Error("nested git repositories cannot be snapshotted losslessly");
     }
     await requireGit(record.path, ["read-tree", "HEAD"], { env });
@@ -1194,7 +1192,9 @@ export class ManagedWorktreeService {
           ? "retained-unpushed"
           : ignoredDrift
             ? "retained-provisioned-drift"
-            : undefined;
+            : (await containsSnapshotGitMarker(record.path))
+              ? "retained-dirty"
+              : undefined;
       if (retainedOutcome) {
         abortWorktreeRemoval(this.env, id, claimToken);
         recordOutcome(retainedOutcome);
@@ -1287,8 +1287,8 @@ export class ManagedWorktreeService {
   }
 
   /**
-   * Shared auto-removal guard for idle and limit cleanup: owner protection, live
-   * run leases, and live/foreign git locks veto removal; a dead lock is cleared.
+   * Shared auto-removal guard: owners, leases, nested repositories, and live or
+   * foreign Git locks veto removal; a dead lock is cleared.
    */
   private async isProtectedFromAutoRemoval(
     record: ManagedWorktreeRecord,
@@ -1318,7 +1318,7 @@ export class ManagedWorktreeService {
     if (state.kind === "dead") {
       await requireGit(record.repoRoot, ["worktree", "unlock", record.path]);
     }
-    return false;
+    return await containsSnapshotGitMarker(record.path);
   }
 
   /**

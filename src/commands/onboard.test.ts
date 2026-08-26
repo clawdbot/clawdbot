@@ -270,14 +270,21 @@ describe("setupWizardCommand", () => {
   it.each([
     ["guided", { reset: true }],
     ["classic", { reset: true, classic: true }],
+    ["guided JSON", { reset: true, json: true }],
+    ["classic JSON", { reset: true, classic: true, json: true }],
   ] as const)("rejects headless %s onboarding before reset", async (_label, options) => {
     const runtime = makeRuntime();
     mocks.hasInteractiveOnboardingTty.mockReturnValue(false);
 
     await setupWizardCommand(options, runtime);
 
-    expect(runtime.error).toHaveBeenCalledWith(
-      "Onboarding needs an interactive TTY. Use `openclaw onboard --non-interactive --accept-risk ...` for automation.",
+    const message =
+      "Onboarding needs an interactive TTY. Use `openclaw onboard --non-interactive --accept-risk ...` for automation.";
+    expect(runtime.error).toHaveBeenCalledWith(message);
+    expect(vi.mocked(runtime.log).mock.calls).toEqual(
+      "json" in options
+        ? [[JSON.stringify({ ok: false, phase: "options", message }, null, 2)]]
+        : [],
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();

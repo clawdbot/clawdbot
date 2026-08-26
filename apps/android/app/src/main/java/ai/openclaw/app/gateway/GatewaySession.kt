@@ -950,6 +950,7 @@ class GatewaySession(
     private var socket: WebSocket? = null
     private val loggerTag = "OpenClawGateway"
     private val incomingMessages = Channel<String>(Channel.UNLIMITED)
+    private var lastEventSequence: Long? = null
 
     // RPC waiters belong to this socket generation. Closing it must not touch a replacement connection.
     private val pending = ConcurrentHashMap<String, CompletableDeferred<RpcResponse>>()
@@ -1707,6 +1708,15 @@ class GatewaySession(
       }
       // Retired sockets can still drain queued frames after reconnect. Never let them mutate current state.
       if (currentConnection !== this) return
+      gatewayEvent.seq?.let { sequence ->
+        val previous = lastEventSequence
+        if (previous != null && sequence > previous + 1) {
+          onEvent("seqGap", null)
+          // Recovery can retire this socket before its triggering event is delivered.
+          if (currentConnection !== this || !isReady()) return
+        }
+        lastEventSequence = sequence
+      }
       if (event == GatewayEvent.NodeInvokeRequest.rawValue && payloadJson != null && onInvoke != null) {
         handleInvokeEvent(payloadJson)
         return

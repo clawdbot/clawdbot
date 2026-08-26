@@ -281,6 +281,7 @@ export function createBeamMirrorRunner(params: {
   const controller = new AbortController();
   const { signal } = controller;
   let lastWarnAt = 0;
+  let warnedProcessHomeIsolation = false;
   let redirectBlockedEndpoint: string | undefined;
   let activeTick: Promise<void> | undefined;
   let stopPromise: Promise<void> | undefined;
@@ -458,6 +459,15 @@ export function createBeamMirrorRunner(params: {
           // would otherwise re-mirror each other's rows forever.
           catalog.id !== "beam" && mirror.catalogs.includes(catalog.id),
       );
+      if (
+        !warnedProcessHomeIsolation &&
+        catalogs.some((catalog) => !catalog.processHomeFallbackAllowed)
+      ) {
+        warnedProcessHomeIsolation = true;
+        params.logger.warn(
+          "beam mirror process-HOME fallback disabled: isolated state; only explicit catalog roots can be mirrored",
+        );
+      }
       const catalogById = new Map(catalogs.map((catalog) => [catalog.id, catalog]));
       const candidates: BeamMirrorCandidate[] = [];
       for (const catalog of catalogs) {

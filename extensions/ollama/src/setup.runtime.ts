@@ -53,7 +53,7 @@ const OLLAMA_SUGGESTED_MODELS_CLOUD = OLLAMA_CLOUD_DEFAULT_MODELS.map((model) =>
 const OLLAMA_SUGGESTED_MODELS_LOCAL_CLOUD = OLLAMA_CLOUD_DEFAULT_MODELS.map(
   (model) => `${model.id}:cloud`,
 );
-const OLLAMA_CLOUD_MAX_DISCOVERED_MODELS = 500;
+const OLLAMA_CLOUD_MODEL_CAP = 500;
 const OLLAMA_RECOMMENDED_TOOLS_MODEL = "gemma4:e4b";
 const OLLAMA_RECOMMENDED_TOOLS_MODEL_SIZE = "about 9.6 GB";
 
@@ -414,11 +414,11 @@ export async function promptAndConfigureOllama(params: {
       secretInputMode: params.secretInputMode,
       allowSecretRefPrompt: params.allowSecretRefPrompt,
     });
-    const { models: rawDiscoveredModels } = await fetchOllamaModels(OLLAMA_CLOUD_BASE_URL, {
+    const { models } = await fetchOllamaModels(OLLAMA_CLOUD_BASE_URL, {
       apiKey: discoveryApiKey,
+      signal: params.signal,
     });
-    const discoveredModels = rawDiscoveredModels.slice(0, OLLAMA_CLOUD_MAX_DISCOVERED_MODELS);
-    const discoveredModelNames = discoveredModels.map((model) => model.name);
+    const discoveredModelNames = models.slice(0, OLLAMA_CLOUD_MODEL_CAP).map((model) => model.name);
     const modelNames =
       discoveredModelNames.length > 0
         ? mergeUniqueModelNames(OLLAMA_SUGGESTED_MODELS_CLOUD, discoveredModelNames)

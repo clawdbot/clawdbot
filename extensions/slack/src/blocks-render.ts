@@ -29,6 +29,7 @@ import {
   hasSlackDataVisualizationBlock,
   SLACK_DATA_VISUALIZATION_BLOCKS_MAX,
 } from "./data-visualization.js";
+import { chunkSlackMrkdwnText } from "./format.js";
 import { renderSlackMessagePresentationChartFallbackText } from "./presentation-fallback.js";
 import {
   SLACK_ACTION_BLOCK_ELEMENTS_MAX,
@@ -284,22 +285,12 @@ export function buildSlackPresentationBlocks(
       if (!text) {
         continue;
       }
-      if (block.type === "context") {
-        blocks.push({
-          type: "context",
-          elements: [
-            {
-              type: "mrkdwn",
-              text: truncateSlackText(text, SLACK_SECTION_TEXT_MAX),
-              verbatim: true,
-            },
-          ],
-        });
-      } else {
-        blocks.push({
-          type: "section",
-          text: { type: "mrkdwn", text: truncateSlackText(text, SLACK_SECTION_TEXT_MAX) },
-        });
+      for (const chunk of chunkSlackMrkdwnText(text, SLACK_SECTION_TEXT_MAX)) {
+        blocks.push(
+          block.type === "context"
+            ? { type: "context", elements: [{ type: "mrkdwn", text: chunk, verbatim: true }] }
+            : { type: "section", text: { type: "mrkdwn", text: chunk } },
+        );
       }
       continue;
     }
@@ -451,9 +442,6 @@ export function canRenderSlackPresentation(
   let dataVisualizationCount = options.dataVisualizationCountOffset ?? 0;
   for (const block of presentation.blocks) {
     if (block.type === "text" || block.type === "context") {
-      if (!isWithinSlackLimit(block.text.trim(), SLACK_SECTION_TEXT_MAX)) {
-        return false;
-      }
       continue;
     }
     if (block.type === "buttons") {

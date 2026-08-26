@@ -2055,33 +2055,36 @@ describe("ollama plugin", () => {
     },
   );
 
-  it("treats custom 127/8 Ollama providers as loopback for implicit discovery", async () => {
-    const provider = registerProvider();
-    mockDiscoveredOllamaProvider([], { once: true });
+  it.each(["127.0.0.2", "[::ffff:127.0.0.2]", "[::ffff:7f00:2]"])(
+    "treats custom 127/8 Ollama provider %s as loopback for implicit discovery",
+    async (hostname) => {
+      const provider = registerProvider();
+      mockDiscoveredOllamaProvider([], { once: true });
 
-    const result = await provider.catalog.run({
-      config: {
-        models: {
-          providers: {
-            "ollama-alt-local": {
-              api: "ollama",
-              baseUrl: "http://127.0.0.2:11434",
-              models: [{ id: "llama3.2", name: "Llama 3.2" }],
+      const result = await provider.catalog.run({
+        config: {
+          models: {
+            providers: {
+              "ollama-alt-local": {
+                api: "ollama",
+                baseUrl: `http://${hostname}:11434`,
+                models: [{ id: "llama3.2", name: "Llama 3.2" }],
+              },
             },
           },
         },
-      },
-      env: { NODE_ENV: "development", OLLAMA_API_KEY: "ollama-live" },
-      resolveProviderApiKey: () => ({ apiKey: "ollama-live" }),
-    } as never);
+        env: { NODE_ENV: "development", OLLAMA_API_KEY: "ollama-live" },
+        resolveProviderApiKey: () => ({ apiKey: "ollama-live" }),
+      } as never);
 
-    const resultProvider = requireRecord(result?.provider, "catalog provider");
-    expect(resultProvider.baseUrl).toBe("http://127.0.0.1:11434");
-    expect(resultProvider.api).toBe("ollama");
-    expect(buildOllamaProviderMock).toHaveBeenCalledWith(undefined, {
-      quiet: false,
-    });
-  });
+      const resultProvider = requireRecord(result?.provider, "catalog provider");
+      expect(resultProvider.baseUrl).toBe("http://127.0.0.1:11434");
+      expect(resultProvider.api).toBe("ollama");
+      expect(buildOllamaProviderMock).toHaveBeenCalledWith(undefined, {
+        quiet: false,
+      });
+    },
+  );
 
   it.each([
     {

@@ -150,7 +150,7 @@ async function noteDefaultModelResult(params: {
 
 async function applyDefaultModelFromAuthChoice(params: {
   config: OpenClawConfig;
-  configBeforeProviderAuth?: OpenClawConfig;
+  entryConfig: OpenClawConfig;
   selectedModel: string;
   selectedModelDisplay?: string;
   preserveExistingDefaultModel: boolean | undefined;
@@ -158,13 +158,13 @@ async function applyDefaultModelFromAuthChoice(params: {
   runtime: RuntimeEnv;
   workspaceDir?: string;
   runSelectedModelHook: (config: OpenClawConfig) => Promise<void>;
-}): Promise<OpenClawConfig> {
-  const defaultModelBaseConfig = params.configBeforeProviderAuth ?? params.config;
-  const previousPrimary = resolveConfiguredDefaultModelPrimary(defaultModelBaseConfig);
+}): Promise<OpenClawConfig | null> {
+  const previousPrimary = resolveConfiguredDefaultModelPrimary(params.entryConfig);
   const preservesDifferentPrimary =
     params.preserveExistingDefaultModel === true &&
     previousPrimary !== undefined &&
     previousPrimary !== params.selectedModel;
+  const defaultModelBaseConfig = params.entryConfig;
   const defaultModelConfig =
     params.preserveExistingDefaultModel === true
       ? restoreConfiguredPrimaryModel(params.config, defaultModelBaseConfig)
@@ -173,18 +173,21 @@ async function applyDefaultModelFromAuthChoice(params: {
     preserveExistingPrimary: params.preserveExistingDefaultModel === true,
   });
   if (!preservesDifferentPrimary) {
-    const { CODEX_RUNTIME_PLUGIN_ID, ensureCodexRuntimePluginForModelSelection } =
-      await import("../commands/codex-runtime-plugin-install.js");
-    const codexInstall = await ensureCodexRuntimePluginForModelSelection({
+    const runtimePlugins = await import("../commands/runtime-plugin-install.js");
+    const installed = await runtimePlugins.ensureModelSelectionRuntimePlugins({
       cfg: nextConfig,
       model: params.selectedModel,
       prompter: params.prompter,
       runtime: params.runtime,
       ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
     });
-    nextConfig = codexInstall.cfg;
+    if (!installed.ok) {
+      await params.prompter.note(installed.message, "Runtime unavailable");
+      return null;
+    }
+    nextConfig = installed.cfg;
     await params.runSelectedModelHook(nextConfig);
-    if (codexInstall.installed) {
+    if (installed.codexInstalled) {
       // Offer Codex CLI state migration whenever the harness is in place for
       // the selected model, regardless of whether this run was a fresh install
       // or a repair against an already-present harness. The user can always
@@ -196,20 +199,10 @@ async function applyDefaultModelFromAuthChoice(params: {
         config: nextConfig,
         runtime: params.runtime,
         prompter: params.prompter,
-        installedPluginIds: [CODEX_RUNTIME_PLUGIN_ID],
+        installedPluginIds: [runtimePlugins.CODEX_RUNTIME_PLUGIN_ID],
       });
       nextConfig = migrationResult.config;
     }
-    const { ensureCopilotRuntimePluginForModelSelection } =
-      await import("../commands/copilot-runtime-plugin-install.js");
-    const copilotInstall = await ensureCopilotRuntimePluginForModelSelection({
-      cfg: nextConfig,
-      model: params.selectedModel,
-      prompter: params.prompter,
-      runtime: params.runtime,
-      ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-    });
-    nextConfig = copilotInstall.cfg;
   }
   await noteDefaultModelResult({
     previousPrimary,
@@ -405,6 +398,7 @@ async function prepareProviderPluginAuthMethod(
 export async function prepareAuthChoiceLoadedPluginProvider(
   params: ApplyProviderAuthChoiceParams,
 ): Promise<PreparedApplyProviderAuthChoiceResult | null> {
+  const entryConfig = params.config;
   const agentId = params.agentId ?? resolveDefaultAgentId(params.config);
   const workspaceDir =
     params.workspaceDir ??
@@ -520,7 +514,6 @@ export async function prepareAuthChoiceLoadedPluginProvider(
     nextConfig = enabledConfig;
   }
 
-  const configBeforeProviderAuth = nextConfig;
   const applied = await prepareProviderPluginAuthMethod({
     config: nextConfig,
     env: params.env,
@@ -546,9 +539,9 @@ export async function prepareAuthChoiceLoadedPluginProvider(
     const selectedModel = applied.defaultModel;
     const selectedModelDisplay = formatModelRefForDisplay(selectedModel, resolved.provider);
     if (params.setDefaultModel) {
-      nextConfig = await applyDefaultModelFromAuthChoice({
+      const defaultModelConfig = await applyDefaultModelFromAuthChoice({
         config: nextConfig,
-        configBeforeProviderAuth,
+        entryConfig,
         selectedModel,
         selectedModelDisplay,
         preserveExistingDefaultModel: params.preserveExistingDefaultModel,
@@ -565,6 +558,13 @@ export async function prepareAuthChoiceLoadedPluginProvider(
           });
         },
       });
+      if (!defaultModelConfig) {
+        return preparedWithoutAuthProfiles({
+          config: entryConfig,
+          retrySelection: true,
+        });
+      }
+      nextConfig = defaultModelConfig;
       return {
         config: nextConfig,
         authProfiles: applied.authProfiles,

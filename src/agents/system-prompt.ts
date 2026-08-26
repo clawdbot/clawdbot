@@ -94,7 +94,7 @@ const CONTEXT_FILE_ORDER = new Map<string, number>([
 
 const DYNAMIC_CONTEXT_FILE_BASENAMES = new Set<string>();
 const DEFAULT_HEARTBEAT_PROMPT_CONTEXT_BLOCK =
-  "Default heartbeat prompt:\n`Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`";
+  /Default heartbeat prompt:\r?\n`(?:Read HEARTBEAT\.md if it exists|Follow the heartbeat monitor scratch context when provided\.)[^`\r\n]*HEARTBEAT_OK\.`/gu;
 const SYSTEM_PROMPT_STABLE_PREFIX_CACHE_LIMIT = 64;
 
 type StablePromptPrefixCacheEntry = {
@@ -162,9 +162,8 @@ function isBootstrapContextFile(pathValue: string): boolean {
 }
 
 function sanitizeContextFileContentForPrompt(content: string): string {
-  // Claude Code subscription mode rejects this exact prompt-policy quote when it
-  // appears in system context. The live heartbeat user turn still carries the
-  // actual instruction, and the generated heartbeat section below covers behavior.
+  // Old workspace templates otherwise route Claude subscriptions to paid extra
+  // usage; heartbeat behavior remains in the actual scheduled user turn.
   return content.replaceAll(DEFAULT_HEARTBEAT_PROMPT_CONTEXT_BLOCK, "").replace(/\n{3,}/g, "\n\n");
 }
 
@@ -238,19 +237,6 @@ function buildProjectContextSection(params: {
     lines.push(`## ${file.path}`, "", sanitizeContextFileContentForPrompt(file.content), "");
   }
   return lines;
-}
-
-function buildHeartbeatSection(params: { isMinimal: boolean; heartbeatPrompt?: string }) {
-  if (params.isMinimal || !params.heartbeatPrompt) {
-    return [];
-  }
-  return [
-    "## Heartbeats",
-    "Heartbeat poll; nothing needs attention: reply exactly:",
-    "HEARTBEAT_OK",
-    'Attention needed: alert text only; omit "HEARTBEAT_OK".',
-    "",
-  ];
 }
 
 function buildExecApprovalPromptGuidance(params: {
@@ -819,7 +805,6 @@ export function buildAgentSystemPrompt(params: {
   bootstrapTruncationNotice?: string;
   skillsPrompt?: string;
   codeModeActive?: boolean;
-  heartbeatPrompt?: string;
   docsPath?: string;
   sourcePath?: string;
   workspaceNotes?: string[];
@@ -911,9 +896,8 @@ export function buildAgentSystemPrompt(params: {
     // Channel docking: add login tools here when a channel needs interactive linking.
     browser: "Control browser",
     screen: "Drive operator web UI",
-    terminal: availableTools.has("exec")
-      ? "Own visible shell. Use for long/interactive jobs user should watch. exec for quiet work"
-      : "Own visible shell. Use for long/interactive jobs user should watch",
+    terminal:
+      "List/read/resize/close operator-opened session terminals; input follows exec policy and may require exact-input approval; never open shells",
     canvas: "Present/eval/snapshot Canvas",
     nodes: "Paired node status/control/media",
     [AUTOMATIONS_TOOL_NAME]:
@@ -1079,7 +1063,6 @@ export function buildAgentSystemPrompt(params: {
   const userTimezone = params.userTimezone?.trim();
   const userDate = params.userDate?.trim();
   const skillsPrompt = params.skillsPrompt?.trim();
-  const heartbeatPrompt = params.heartbeatPrompt?.trim();
   const runtimeInfo = params.runtimeInfo;
   const modelIdentityLine = buildModelIdentityPromptLine(runtimeInfo?.model);
   const runtimeChannel = normalizeOptionalLowercaseString(runtimeInfo?.channel);
@@ -1556,8 +1539,6 @@ export function buildAgentSystemPrompt(params: {
   // Watched sessions change rarely but per-session; keep them below the cache
   // boundary so the shared stable prefix stays byte-identical across sessions.
   lines.push(...buildWatchedSessionsPromptLines(params.preparedWatchedSessions));
-
-  lines.push(...buildHeartbeatSection({ isMinimal, heartbeatPrompt }));
 
   lines.push(
     "## Runtime",

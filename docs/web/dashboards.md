@@ -117,9 +117,9 @@ being interrupted.
 
 If your gateway has MCP servers configured, interactive MCP apps that appear
 in chat can be pinned like any widget. Pinned apps come back to life on the
-board with fresh sessions; by default they are display-only, and granting the
-widget its declared server tools makes it fully interactive — with the same
-one-tap, revision-bound approval as everything else.
+board with fresh sessions. By default they render without server tools or
+same-server resource access. Granting the widget its declared server tools
+enables both bridges while that revision-bound grant remains active.
 
 ## A2UI widgets
 

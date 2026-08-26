@@ -630,12 +630,17 @@ export async function migrateOrphanedSessionKeys(params: {
     });
   const pluginAgentIdSet = new Set(pluginAgentIds.map((id) => normalizeAgentId(id)));
 
-  // Collect all known agent store paths with their owning agentIds.
-  // A single path may be shared by multiple agents when session.store
-  // does not contain {agentId}.
+  // Fixed session.store paths can be shared by several agent owners.
   const storeMap = new Map<string, Set<string>>();
   const storeAliasCandidates = new Map<string, Set<string>>();
   const addToStoreMap = (p: string, id: string) => {
+    try {
+      if (!fs.statSync(p, { throwIfNoEntry: false })?.isFile()) {
+        return;
+      }
+    } catch {
+      // Inaccessible paths must stay in their fail-closed alias group.
+    }
     // A fixed-store owner is durable migration provenance. Keep other configured
     // agents from making that store's unscoped rows look ambiguous.
     const ownerId =
@@ -649,12 +654,7 @@ export async function migrateOrphanedSessionKeys(params: {
     const aliasCandidates = storeAliasCandidates.get(storePath) ?? new Set([storePath]);
     aliasCandidates.add(p);
     storeAliasCandidates.set(storePath, aliasCandidates);
-    const existing = storeMap.get(storePath);
-    if (existing) {
-      existing.add(ownerId);
-    } else {
-      storeMap.set(storePath, new Set([ownerId]));
-    }
+    storeMap.set(storePath, (storeMap.get(storePath) ?? new Set<string>()).add(ownerId));
   };
   // Configured ownership includes normal agents plus ACP runtime/default hints.
   for (const configuredAgentId of listConfiguredSessionStoreAgentIds(params.cfg)) {

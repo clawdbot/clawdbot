@@ -67,6 +67,19 @@ export { applyPathPrepend, normalizePathPrepend } from "../infra/path-prepend.js
 
 export { execSchema } from "./bash-tools.schemas.js";
 
+export class ExecProcessPreflightError extends Error {
+  constructor(readonly result: AgentToolResult<ExecToolDetails>) {
+    super("exec denied by final preflight");
+  }
+
+  static unwrap(error: unknown): AgentToolResult<ExecToolDetails> {
+    if (error instanceof ExecProcessPreflightError) {
+      return error.result;
+    }
+    throw error;
+  }
+}
+
 const SMKX = "\x1b[?1h";
 const RMKX = "\x1b[?1l";
 
@@ -657,6 +670,8 @@ export async function runExecProcess(opts: {
   onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void;
   /** Runs after process finalization and before the exit wake is queued. */
   onSettledBeforeNotify?: (outcome: ExecProcessOutcome) => void;
+  /** Revalidates authorization after async preparation, immediately before each spawn attempt. */
+  beforeSpawn?: () => Promise<AgentToolResult<ExecToolDetails> | undefined>;
 }): Promise<ExecProcessHandle> {
   const startedAt = Date.now();
   const sessionId = createSessionSlug(isProcessSessionIdTaken);
@@ -916,6 +931,13 @@ export async function runExecProcess(opts: {
     handleStdout(chunk);
   };
 
+  const assertPreSpawnAuthorized = async () => {
+    const denied = await opts.beforeSpawn?.();
+    if (denied) {
+      throw new ExecProcessPreflightError(denied);
+    }
+  };
+
   try {
     const spawnSpec = await prepareSpawnSpec();
     usingPty = spawnSpec.mode === "pty";
@@ -933,6 +955,7 @@ export async function runExecProcess(opts: {
     };
     if (spawnSpec.mode === "pty") {
       try {
+        await assertPreSpawnAuthorized();
         managedRun = await supervisor.spawn({
           ...spawnBase,
           mode: "pty",
@@ -945,6 +968,7 @@ export async function runExecProcess(opts: {
         );
         opts.warnings.push(warning);
         usingPty = false;
+        await assertPreSpawnAuthorized();
         managedRun = await supervisor.spawn({
           ...spawnBase,
           mode: "child",
@@ -954,6 +978,7 @@ export async function runExecProcess(opts: {
         });
       }
     } else {
+      await assertPreSpawnAuthorized();
       managedRun = await supervisor.spawn({
         ...spawnBase,
         mode: "child",

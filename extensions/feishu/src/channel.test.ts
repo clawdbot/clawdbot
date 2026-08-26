@@ -3,6 +3,7 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { feishuPlugin } from "./channel.js";
+import { FEISHU_PROPAGATE_MEDIA_UPLOAD_FAILURE_MARKER } from "./outbound.js";
 import { looksLikeFeishuId, normalizeFeishuTarget, resolveReceiveIdType } from "./targets.js";
 
 describe("feishu target classification", () => {
@@ -821,6 +822,78 @@ describe("feishuPlugin actions", () => {
     expect(fallbackArgs.mediaReadFile).toBe(legacyReadFile);
   });
 
+  // Regression for #112244 (third-review P1): when a direct `send` attachment
+  // routes through the presentation-fallback path (card falls back to text),
+  // an upload failure must still surface as a visible error instead of an
+  // `ok:true` receipt for a text-only fallback. The action stamps the
+  // propagate marker on channelData.feishu so sendFeishuFallbackPayload
+  // re-throws; here we verify the marker is stamped and the failure rejects.
+  it("propagates a media-upload failure on the send presentation-fallback path instead of returning ok:true", async () => {
+    feishuOutboundSendPayloadMock.mockRejectedValueOnce(new Error("upload failed"));
+    const trustedReadFile = vi.fn(async () => Buffer.from("approved image"));
+    const mediaAccess = {
+      localRoots: ["/approved/workspace"],
+      workspaceDir: "/approved/workspace",
+      readFile: trustedReadFile,
+    };
+    // An oversized table falls outside the Feishu card envelope, so
+    // `presentationFellBack` is true and the direct send routes the attachment
+    // through sendPayload instead of the normal sendMedia branch.
+    const presentation = {
+      blocks: [
+        {
+          type: "table" as const,
+          caption: "Large pipeline",
+          headers: ["Account", "Stage"],
+          rows: Array.from({ length: 400 }, (_entry, index) => [
+            `account-${String(index)}-${"x".repeat(80)}`,
+            "Review",
+          ]),
+        },
+      ],
+    };
+    const rawCardText = JSON.stringify({
+      schema: "2.0",
+      body: { elements: [{ tag: "markdown", content: "Raw card JSON must stay hidden" }] },
+    });
+
+    await expect(
+      feishuPlugin.actions?.handleAction?.({
+        action: "send",
+        params: {
+          to: "chat:oc_group_1",
+          message: `[Nexus] ${rawCardText}`,
+          presentation,
+          media: "pipeline.png",
+        },
+        cfg: {
+          ...cfg,
+          channels: {
+            ...cfg.channels,
+            feishu: { ...cfg.channels?.feishu, responsePrefix: "[Nexus]" },
+          },
+        },
+        accountId: undefined,
+        toolContext: {},
+        mediaAccess,
+        mediaLocalRoots: ["/approved/workspace"],
+        mediaReadFile: trustedReadFile,
+      } as never),
+    ).rejects.toThrow("upload failed");
+
+    expect(feishuOutboundSendPayloadMock).toHaveBeenCalledTimes(1);
+    const fallbackArgs = requireRecord(
+      mockCallArg(feishuOutboundSendPayloadMock, 0, 0, "feishuOutbound.sendPayload"),
+      "fallback args",
+    );
+    const fallbackPayload = requireRecord(fallbackArgs.payload, "fallback payload");
+    const feishuChannelData = requireRecord(
+      requireRecord(fallbackPayload.channelData, "fallback channelData").feishu,
+      "fallback channelData.feishu",
+    );
+    expect(feishuChannelData[FEISHU_PROPAGATE_MEDIA_UPLOAD_FAILURE_MARKER]).toBe(true);
+  });
+
   it("prefers structured presentation over raw card JSON text", async () => {
     sendCardFeishuMock.mockResolvedValueOnce({ messageId: "om_card", chatId: "oc_group_1" });
 
@@ -1073,6 +1146,523 @@ describe("feishuPlugin actions", () => {
     ]);
   });
 
+  // Regression for #112244: a direct Gateway `message.action send` may arrive
+  // with attachment aliases (path/filePath/fileUrl/image/mediaUrl) instead of
+  // the canonical `media` field. The Feishu handler must promote any alias to a
+  // canonical mediaUrl and deliver through sendMedia, rather than silently
+  // dropping the attachment on the text-only success branch.
+  it.each([
+    ["path", "/tmp/script.py"],
+    ["filePath", "/tmp/script.py"],
+    ["fileUrl", "file:///tmp/script.py"],
+    ["image", "/tmp/image.png"],
+    ["mediaUrl", "/tmp/media.png"],
+  ] as const)("promotes send attachment alias %s to sendMedia", async (key, value) => {
+    feishuOutboundSendMediaMock.mockResolvedValueOnce({
+      channel: "feishu",
+      messageId: "om_media",
+      details: { messageId: "om_media", chatId: "oc_group_1" },
+    });
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: {
+        to: "chat:oc_group_1",
+        message: "see attached",
+        [key]: value,
+      },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+      mediaLocalRoots: ["/tmp"],
+    } as never);
+
+    expect(feishuOutboundSendMediaMock).toHaveBeenCalledOnce();
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    const mediaArgs = requireRecord(
+      mockCallArg(feishuOutboundSendMediaMock, 0, 0, "feishuOutbound.sendMedia"),
+      "outbound args",
+    );
+    expect(mediaArgs.mediaUrl).toBe(value);
+  });
+
+  it("rejects unsupported buffer payload on send instead of text-only success", async () => {
+    await expect(
+      feishuPlugin.actions?.handleAction?.({
+        action: "send",
+        params: {
+          to: "chat:oc_group_1",
+          message: "see attached",
+          buffer: "aGVsbG8=",
+        },
+        cfg,
+        accountId: undefined,
+        toolContext: {},
+        mediaLocalRoots: ["/tmp"],
+      } as never),
+    ).rejects.toThrow(
+      "Feishu send supports media attachments through media, mediaUrl, path, filePath, fileUrl, image, mediaUrls, or attachments[] with one of those fields; buffer/base64 payloads are not supported.",
+    );
+
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendCardFeishuMock).not.toHaveBeenCalled();
+    expect(feishuOutboundSendMediaMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects multiple media attachments on send rather than dropping all but the first", async () => {
+    await expect(
+      feishuPlugin.actions?.handleAction?.({
+        action: "send",
+        params: {
+          to: "chat:oc_group_1",
+          message: "see attached",
+          mediaUrls: ["/tmp/first.png", "/tmp/second.png"],
+        },
+        cfg,
+        accountId: undefined,
+        toolContext: {},
+        mediaLocalRoots: ["/tmp"],
+      } as never),
+    ).rejects.toThrow("Feishu send supports a single media attachment.");
+
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(feishuOutboundSendMediaMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["file_path", "/tmp/script.py"],
+    ["media_url", "/tmp/media.png"],
+    ["file_url", "file:///tmp/script.py"],
+  ] as const)("promotes snake_case send attachment alias %s to sendMedia", async (key, value) => {
+    feishuOutboundSendMediaMock.mockResolvedValueOnce({
+      channel: "feishu",
+      messageId: "om_media",
+      details: { messageId: "om_media", chatId: "oc_group_1" },
+    });
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: {
+        to: "chat:oc_group_1",
+        message: "see attached",
+        [key]: value,
+      },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+      mediaLocalRoots: ["/tmp"],
+    } as never);
+
+    expect(feishuOutboundSendMediaMock).toHaveBeenCalledOnce();
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    const mediaArgs = requireRecord(
+      mockCallArg(feishuOutboundSendMediaMock, 0, 0, "feishuOutbound.sendMedia"),
+      "outbound args",
+    );
+    expect(mediaArgs.mediaUrl).toBe(value);
+  });
+
+  it("promotes media_urls snake_case array alias to sendMedia", async () => {
+    feishuOutboundSendMediaMock.mockResolvedValueOnce({
+      channel: "feishu",
+      messageId: "om_media",
+      details: { messageId: "om_media", chatId: "oc_group_1" },
+    });
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: {
+        to: "chat:oc_group_1",
+        message: "see attached",
+        media_urls: ["/tmp/report.md"],
+      },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+      mediaLocalRoots: ["/tmp"],
+    } as never);
+
+    expect(feishuOutboundSendMediaMock).toHaveBeenCalledOnce();
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    const mediaArgs = requireRecord(
+      mockCallArg(feishuOutboundSendMediaMock, 0, 0, "feishuOutbound.sendMedia"),
+      "outbound args",
+    );
+    expect(mediaArgs.mediaUrl).toBe("/tmp/report.md");
+  });
+
+  it("accepts a single string mediaUrls value instead of dropping it", async () => {
+    feishuOutboundSendMediaMock.mockResolvedValueOnce({
+      channel: "feishu",
+      messageId: "om_media",
+      details: { messageId: "om_media", chatId: "oc_group_1" },
+    });
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: {
+        to: "chat:oc_group_1",
+        message: "see attached",
+        mediaUrls: "/tmp/single.png",
+      },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+      mediaLocalRoots: ["/tmp"],
+    } as never);
+
+    expect(feishuOutboundSendMediaMock).toHaveBeenCalledOnce();
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    const mediaArgs = requireRecord(
+      mockCallArg(feishuOutboundSendMediaMock, 0, 0, "feishuOutbound.sendMedia"),
+      "outbound args",
+    );
+    expect(mediaArgs.mediaUrl).toBe("/tmp/single.png");
+  });
+
+  // Regression for #112244 (ClawSweeper P1): a valid nested
+  // `attachments[].mediaUrls` string list must be collected as a media
+  // candidate, not just validated for malformed entries. Without this the
+  // request would fall through to a text-only `ok:true` — the silent drop the
+  // PR removes.
+  it("accepts a nested attachments[].mediaUrls list instead of dropping it", async () => {
+    feishuOutboundSendMediaMock.mockResolvedValueOnce({
+      channel: "feishu",
+      messageId: "om_media",
+      details: { messageId: "om_media", chatId: "oc_group_1" },
+    });
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: {
+        to: "chat:oc_group_1",
+        message: "see attached",
+        attachments: [{ mediaUrls: ["/tmp/nested.png"] }],
+      },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+      mediaLocalRoots: ["/tmp"],
+    } as never);
+
+    expect(feishuOutboundSendMediaMock).toHaveBeenCalledOnce();
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    const mediaArgs = requireRecord(
+      mockCallArg(feishuOutboundSendMediaMock, 0, 0, "feishuOutbound.sendMedia"),
+      "outbound args",
+    );
+    expect(mediaArgs.mediaUrl).toBe("/tmp/nested.png");
+  });
+
+  // `attachments[].image` must be collected as a media candidate just like the
+  // top-level `image` alias. Without this the request would fall through to a
+  // text-only `ok:true` — the silent drop the PR removes.
+  it("accepts a nested attachments[].image alias instead of dropping it", async () => {
+    feishuOutboundSendMediaMock.mockResolvedValueOnce({
+      channel: "feishu",
+      messageId: "om_media_image",
+      details: { messageId: "om_media_image", chatId: "oc_group_1" },
+    });
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: {
+        to: "chat:oc_group_1",
+        message: "see attached image",
+        attachments: [{ image: "/tmp/nested-image.png" }],
+      },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+      mediaLocalRoots: ["/tmp"],
+    } as never);
+
+    expect(feishuOutboundSendMediaMock).toHaveBeenCalledOnce();
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    const mediaArgs = requireRecord(
+      mockCallArg(feishuOutboundSendMediaMock, 0, 0, "feishuOutbound.sendMedia"),
+      "outbound args",
+    );
+    expect(mediaArgs.mediaUrl).toBe("/tmp/nested-image.png");
+  });
+
+  it.each(["buffer", "base64"] as const)(
+    "rejects nested %s attachment payload on send instead of text-only success",
+    async (field) => {
+      await expect(
+        feishuPlugin.actions?.handleAction?.({
+          action: "send",
+          params: {
+            to: "chat:oc_group_1",
+            message: "see attached",
+            attachments: [{ [field]: "aGVsbG8=", filename: "report.md" }],
+          },
+          cfg,
+          accountId: undefined,
+          toolContext: {},
+          mediaLocalRoots: ["/tmp"],
+        } as never),
+      ).rejects.toThrow("buffer/base64 payloads are not supported");
+
+      expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+      expect(sendCardFeishuMock).not.toHaveBeenCalled();
+      expect(feishuOutboundSendMediaMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects mixed supported and nested unsupported attachment payloads on send", async () => {
+    await expect(
+      feishuPlugin.actions?.handleAction?.({
+        action: "send",
+        params: {
+          to: "chat:oc_group_1",
+          message: "see attached",
+          attachments: [
+            { filePath: "/tmp/report.md" },
+            { buffer: "aGVsbG8=", filename: "report-copy.md" },
+          ],
+        },
+        cfg,
+        accountId: undefined,
+        toolContext: {},
+        mediaLocalRoots: ["/tmp"],
+      } as never),
+    ).rejects.toThrow("buffer/base64 payloads are not supported");
+
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(feishuOutboundSendMediaMock).not.toHaveBeenCalled();
+  });
+
+  // The linked issue's literal reproduction is `{ message, file: "/path" }`.
+  // `file` is an attachment-intent key the Feishu send path does not map to a
+  // media source, so it must fail visibly instead of returning ok:true on a
+  // text-only send (issue #112244 expected behavior).
+  it.each([
+    { location: "top-level", params: { file: "/tmp/script.py", filename: "script.py" } },
+    { location: "nested", params: { attachments: [{ file: "/tmp/script.py" }] } },
+  ])(
+    "rejects $location `file` attachment intent on send instead of text-only success",
+    async ({ params }) => {
+      await expect(
+        feishuPlugin.actions?.handleAction?.({
+          action: "send",
+          params: {
+            to: "chat:oc_group_1",
+            message: "here is the script",
+            ...params,
+          },
+          cfg,
+          accountId: undefined,
+          toolContext: {},
+          mediaLocalRoots: ["/tmp"],
+        } as never),
+      ).rejects.toThrow("`file` attachment-intent parameter is not supported");
+
+      // No text-only send slips through with a false ok:true.
+      expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+      expect(sendCardFeishuMock).not.toHaveBeenCalled();
+      expect(feishuOutboundSendMediaMock).not.toHaveBeenCalled();
+    },
+  );
+
+  // Regression for the eighteenth-review P1 finding: a present NON-string value
+  // for an unsupported attachment-intent key (`file`/`buffer`/`base64`) used to
+  // be silently skipped (readFeishuStringParam returns undefined for objects),
+  // leaving no candidate and falling through to a text-only ok:true — the exact
+  // silent-drop this PR removes. Post-fix the resolver rejects the malformed
+  // intent before the text branch, at both the top level and inside attachments[].
+  it.each([
+    {
+      label: "top-level `file: {}`",
+      params: { file: {} },
+      expectedError: "`file` attachment-intent parameter is not supported",
+    },
+    {
+      label: "top-level `buffer: {}`",
+      params: { buffer: {} },
+      expectedError: "buffer/base64 payloads are not supported",
+    },
+    {
+      label: "top-level `base64: {}`",
+      params: { base64: {} },
+      expectedError: "buffer/base64 payloads are not supported",
+    },
+    {
+      label: "top-level `file: 42`",
+      params: { file: 42 },
+      expectedError: "`file` attachment-intent parameter is not supported",
+    },
+    {
+      label: "nested `attachments: [{ file: {} }]`",
+      params: { attachments: [{ file: {} }] },
+      expectedError: "`file` attachment-intent parameter is not supported",
+    },
+    {
+      label: "nested `attachments: [{ buffer: {} }]`",
+      params: { attachments: [{ buffer: {} }] },
+      expectedError: "buffer/base64 payloads are not supported",
+    },
+  ])(
+    "rejects malformed (non-string) $label attachment intent on send instead of text-only success",
+    async ({ params, expectedError }) => {
+      await expect(
+        feishuPlugin.actions?.handleAction?.({
+          action: "send",
+          params: {
+            to: "chat:oc_group_1",
+            message: "see attached",
+            ...params,
+          },
+          cfg,
+          accountId: undefined,
+          toolContext: {},
+          mediaLocalRoots: ["/tmp"],
+        } as never),
+      ).rejects.toThrow(expectedError);
+
+      // No text-only send slips through with a false ok:true.
+      expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+      expect(sendCardFeishuMock).not.toHaveBeenCalled();
+      expect(feishuOutboundSendMediaMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("ignores a blank `file` attachment intent field on send", async () => {
+    sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_plain", chatId: "oc_group_1" });
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: {
+        to: "chat:oc_group_1",
+        message: "plain text",
+        file: "   ",
+      },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+      mediaLocalRoots: ["/tmp"],
+    } as never);
+
+    // A blank `file` is not an attachment-intent signal; with no media alias
+    // the send still takes the text-only success branch (unchanged).
+    expect(sendMessageFeishuMock).toHaveBeenCalledOnce();
+    expect(feishuOutboundSendMediaMock).not.toHaveBeenCalled();
+  });
+
+  // Regression for the second-review P1 finding: a declared media source whose
+  // value is present but malformed (e.g. `media: {}` or `mediaUrls: [{}]`)
+  // expresses attachment intent the Feishu send path cannot represent. Treating
+  // such a value as absent recreates the silent text-only `ok:true` success this
+  // PR removes, so it must fail visibly before the text branch instead.
+  it.each([
+    { location: "top-level scalar `media`", params: { media: {} } },
+    { location: "top-level scalar `filePath`", params: { filePath: 42 } },
+    { location: "top-level `mediaUrls` object", params: { mediaUrls: {} } },
+    { location: "top-level `mediaUrls` array with non-string entry", params: { mediaUrls: [{}] } },
+    {
+      location: "top-level `mediaUrls` array with number entry",
+      params: { mediaUrls: ["/tmp/a.png", 7] },
+    },
+    { location: "nested scalar `media`", params: { attachments: [{ media: {} }] } },
+    {
+      location: "nested `mediaUrls` with non-string entry",
+      params: { attachments: [{ mediaUrls: [{}] }] },
+    },
+    // A declared `attachments` field that is not an array (an object container
+    // whose nested media source is not a top-level alias) is an attachment
+    // intent the resolver cannot promote; treating it as absent recreates the
+    // silent text-only `ok:true` drop this PR removes (issue #112244, ClawSweeper P1).
+    {
+      location: "object `attachments` container",
+      params: { attachments: { media: "/tmp/a.png" } },
+    },
+    // A non-record array entry is a declared attachment intent the resolver
+    // cannot promote; skipping it silently would fall through to a text-only
+    // success (issue #112244, ClawSweeper P1).
+    { location: "`attachments` array with null entry", params: { attachments: [null] } },
+    { location: "`attachments` array with non-record entry", params: { attachments: [42] } },
+  ])(
+    "rejects $location malformed media source on send instead of text-only success",
+    async ({ params }) => {
+      await expect(
+        feishuPlugin.actions?.handleAction?.({
+          action: "send",
+          params: {
+            to: "chat:oc_group_1",
+            message: "see attached",
+            ...params,
+          },
+          cfg,
+          accountId: undefined,
+          toolContext: {},
+          mediaLocalRoots: ["/tmp"],
+        } as never),
+      ).rejects.toThrow("a present malformed media source value is not supported");
+
+      // No text-only send slips through with a false ok:true.
+      expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+      expect(sendCardFeishuMock).not.toHaveBeenCalled();
+      expect(feishuOutboundSendMediaMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { location: "blank scalar `media`", params: { media: "   " } },
+    { location: "blank `mediaUrls` array entry", params: { mediaUrls: ["   "] } },
+    {
+      location: "blank nested `media`",
+      params: { attachments: [{ media: "   " }] },
+    },
+  ])("ignores blank $location media source on send (not malformed)", async ({ params }) => {
+    sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_plain", chatId: "oc_group_1" });
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: {
+        to: "chat:oc_group_1",
+        message: "plain text",
+        ...params,
+      },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+      mediaLocalRoots: ["/tmp"],
+    } as never);
+
+    // A blank string is a string, not malformed; with no usable media it
+    // still takes the text-only success branch (unchanged).
+    expect(sendMessageFeishuMock).toHaveBeenCalledOnce();
+    expect(feishuOutboundSendMediaMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { location: "top-level", params: { buffer: "", base64: "  " } },
+    {
+      location: "nested",
+      params: { attachments: [{ buffer: "", base64: "  " }] },
+    },
+  ])("ignores blank $location attachment payload fields on send", async ({ params }) => {
+    sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_plain", chatId: "oc_group_1" });
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: {
+        to: "chat:oc_group_1",
+        message: "plain text",
+        ...params,
+      },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+      mediaLocalRoots: ["/tmp"],
+    } as never);
+
+    // Blank buffer/base64 is not an unsupported payload intent; with no media
+    // alias the send still takes the text-only success branch (unchanged).
+    expect(sendMessageFeishuMock).toHaveBeenCalledOnce();
+    expect(feishuOutboundSendMediaMock).not.toHaveBeenCalled();
+  });
+
   it.each(["send", "thread-reply"] as const)(
     "preserves only trusted workspace media access for %s actions",
     async (action) => {
@@ -1122,6 +1712,10 @@ describe("feishuPlugin actions", () => {
         mediaLocalRoots: ["/legacy/workspace"],
         mediaReadFile: legacyReadFile,
         ...(action === "thread-reply" ? { threadId: "om_parent" } : { replyToId: undefined }),
+        // Only the direct `send` action propagates media-upload failures;
+        // thread-reply keeps its existing fallback-text behavior for
+        // compatibility (issue #112244).
+        ...(action === "send" ? { propagateMediaUploadFailure: true } : {}),
       });
       const outboundArgs = requireRecord(
         mockCallArg(feishuOutboundSendMediaMock, 0, 0, "feishuOutbound.sendMedia"),
@@ -1132,6 +1726,43 @@ describe("feishuPlugin actions", () => {
       expect(resultDetails(result).messageId).toBe("om_media");
     },
   );
+
+  // Regression for #112244 (round-5 P1): upload-failure propagation is scoped
+  // to `send` only; a thread-reply whose media upload fails must keep its
+  // existing fallback-text behavior (no throw), preserving compatibility.
+  it("does not propagate media-upload failure for thread-reply (keeps fallback)", async () => {
+    // sendMedia resolves to a text fallback result (the fallback path lives in
+    // the outbound adapter; here we verify the action does not throw and does
+    // not pass propagateMediaUploadFailure for thread-reply).
+    feishuOutboundSendMediaMock.mockResolvedValueOnce({
+      channel: "feishu",
+      messageId: "om_thread_fallback",
+      details: { messageId: "om_thread_fallback", chatId: "oc_group_1" },
+    });
+
+    const result = await feishuPlugin.actions?.handleAction?.({
+      action: "thread-reply",
+      params: {
+        to: "chat:oc_group_1",
+        message: "thread reply",
+        messageId: "om_parent",
+        // thread-reply reads only the canonical `media` field (send promotes
+        // aliases, thread-reply does not), so use `media` to reach sendMedia.
+        media: "/tmp/script.py",
+      },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+      mediaLocalRoots: ["/tmp"],
+    } as never);
+
+    const outboundArgs = requireRecord(
+      mockCallArg(feishuOutboundSendMediaMock, 0, 0, "feishuOutbound.sendMedia"),
+      "outbound args",
+    );
+    expect(outboundArgs.propagateMediaUploadFailure).toBeUndefined();
+    expect(resultDetails(result).messageId).toBe("om_thread_fallback");
+  });
 
   it("passes asVoice through media sends", async () => {
     feishuOutboundSendMediaMock.mockResolvedValueOnce({

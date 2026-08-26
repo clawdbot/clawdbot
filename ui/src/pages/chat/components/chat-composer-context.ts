@@ -16,6 +16,7 @@ import {
   type QuotaBudgetSummary,
   type QuotaLimitSummary,
 } from "../../../lib/provider-quota-summary.ts";
+import { handleChatComposerDetailsToggle } from "./chat-picker-overlay.ts";
 
 const CONTEXT_NOTICE_RATIO = 0.85;
 const CONTEXT_COMPACT_RATIO = 0.9;
@@ -384,7 +385,7 @@ export function renderContextNotice(
       class="context-usage"
       style=${model ? `--ctx-color:${model.color};--ctx-bg:${model.bg}` : ""}
     >
-      <details>
+      <details @toggle=${handleChatComposerDetailsToggle}>
         <summary
           class="context-ring ${model?.warning ? "context-ring--warning" : ""}"
           aria-label=${summary}

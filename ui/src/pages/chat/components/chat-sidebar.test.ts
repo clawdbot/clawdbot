@@ -161,6 +161,26 @@ describe("markdown sidebar", () => {
     panel.remove();
   });
 
+  it.each([
+    ["a Hebrew document as rtl", "מסמך בעברית עם כמה שורות טקסט", "rtl"],
+    ["a Hebrew heading behind Markdown punctuation as rtl", "## כותרת ראשית", "rtl"],
+    ["an English document as ltr", "# Heading\n\nPlain English body.", "ltr"],
+    // The raw-text view hands the same panel one fenced block; direction still
+    // comes from the first strong character, not from the fence.
+    ["raw Hebrew text as rtl", "```\nשורה ראשונה\n```", "rtl"],
+  ] as const)("renders %s", async (_name, markdown, expected) => {
+    const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
+      content: unknown;
+      updateComplete?: Promise<unknown>;
+    };
+    panel.content = { kind: "markdown", content: markdown };
+    document.body.append(panel);
+    await panel.updateComplete;
+
+    expect(panel.querySelector(".sidebar-markdown-reader")?.getAttribute("dir")).toBe(expected);
+    panel.remove();
+  });
+
   it.each(["Enter", " "])("opens focused markdown preview file links with %j", async (key) => {
     const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
       content: unknown;

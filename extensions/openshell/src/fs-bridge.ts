@@ -308,6 +308,9 @@ class OpenShellFsBridge implements SandboxFsBridge {
       const hostPath = relative
         ? path.resolve(workspaceRoot, ...relative.split("/"))
         : workspaceRoot;
+      if (!isPathInside(workspaceRoot, hostPath)) {
+        throw new Error(`Sandbox path escapes allowed mounts; cannot access: ${input}`);
+      }
       return {
         hostPath,
         relativePath: relative,
@@ -326,6 +329,9 @@ class OpenShellFsBridge implements SandboxFsBridge {
     ) {
       const relative = path.posix.relative(agentContainerRoot, input) || "";
       const hostPath = relative ? path.resolve(agentRoot, ...relative.split("/")) : agentRoot;
+      if (!isPathInside(agentRoot, hostPath)) {
+        throw new Error(`Sandbox path escapes allowed mounts; cannot access: ${input}`);
+      }
       return {
         hostPath,
         relativePath: relative ? agentContainerRoot + "/" + relative : agentContainerRoot,

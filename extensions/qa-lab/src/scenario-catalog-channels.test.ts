@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
+import { createQaBusState } from "./bus-state.js";
 import {
   readQaScenarioById,
   readQaScenarioExecutionConfig,
   readQaScenarioPack,
   validateQaScenarioExecutionConfig,
 } from "./scenario-catalog.js";
+import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
+import { recentOutboundSummary } from "./suite-runtime-transport.js";
 
 type CatalogScenario = ReturnType<typeof readQaScenarioById>;
 type FlowCatalogScenario = CatalogScenario & {
@@ -265,6 +268,79 @@ describe("qa scenario catalog channel contracts", () => {
     const scenario = requireFlowScenario(readQaScenarioById("channel-canary"));
 
     expect(scenario.execution.channels).toEqual(["qa-channel", "telegram", "buzz", "msteams"]);
+  });
+
+  it.each([
+    {
+      label: "accepts only the authorized driver reply",
+      observerReplies: false,
+      driverReplies: true,
+      expectedFailure: null,
+    },
+    {
+      label: "rejects an observer reply when the authorized driver never replies",
+      observerReplies: true,
+      driverReplies: false,
+      expectedFailure: "waiting for outbound marker",
+    },
+    {
+      label: "rejects a late observer reply even when the authorized driver replies",
+      observerReplies: true,
+      driverReplies: true,
+      expectedFailure: "blocked sender replied",
+    },
+  ])("$label", async ({ observerReplies, driverReplies, expectedFailure }) => {
+    const state = createQaBusState();
+    const result = runLoadedScenarioFlow("channel-sender-allowlist", {
+      state,
+      api: { recentOutboundSummary },
+      onWaitForOutboundMessage: ({ state: currentState }) => {
+        for (const [senderId, replies] of [
+          ["observer", observerReplies],
+          ["driver", driverReplies],
+        ] as const) {
+          if (!replies) {
+            continue;
+          }
+          const inbound = currentState
+            .getSnapshot()
+            .messages.find(
+              (message) => message.direction === "inbound" && message.senderId === senderId,
+            );
+          if (!inbound) {
+            throw new Error(`missing ${senderId} inbound message`);
+          }
+          const marker = inbound.text.split("reply exactly: ")[1];
+          if (!marker) {
+            throw new Error(`missing ${senderId} requested reply marker`);
+          }
+          currentState.addOutboundMessage({
+            accountId: "qa-channel",
+            to: "group:qa-routing-allowlist",
+            replyToId: inbound.id,
+            text: marker,
+          });
+        }
+      },
+    });
+
+    if (expectedFailure) {
+      await expect(result).rejects.toThrow(expectedFailure);
+    } else {
+      await expect(result).resolves.toMatchObject({ status: "pass" });
+    }
+
+    const snapshot = state.getSnapshot();
+    const senderIdsByInboundId = new Map(
+      snapshot.messages
+        .filter((message) => message.direction === "inbound")
+        .map((message) => [message.id, message.senderId]),
+    );
+    expect(
+      snapshot.messages
+        .filter((message) => message.direction === "outbound")
+        .map((message) => senderIdsByInboundId.get(message.replyToId ?? "")),
+    ).toEqual([...(observerReplies ? ["observer"] : []), ...(driverReplies ? ["driver"] : [])]);
   });
 
   it("keeps transcript-role delivery on the Crabline driver", () => {

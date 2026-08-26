@@ -163,6 +163,10 @@ class CloudWorkersPage extends OpenClawLightDomElement {
     if (!this.canManage()) {
       return;
     }
+    if (profile.providerId !== "crabbox") {
+      this.context.navigate("advanced", { search: "?section=cloudWorkers" });
+      return;
+    }
     this.editor = { kind: "edit", profileId: profile.id };
     this.draft = createCloudWorkerDraft(profile);
     this.formError = null;

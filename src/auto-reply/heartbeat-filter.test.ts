@@ -58,13 +58,14 @@ describe("isHeartbeatUserMessage", () => {
       ),
     ).toBe(true);
 
-    expect(
-      isHeartbeatUserMessage({
-        role: "user",
-        content:
-          "Run the following periodic tasks (only those due based on their intervals):\n\n- email-check: Check for urgent unread emails\n\nAfter completing all due tasks, reply HEARTBEAT_OK.",
-      }),
-    ).toBe(true);
+    for (const acknowledgement of ["HEARTBEAT_OK", "NO_REPLY"]) {
+      expect(
+        isHeartbeatUserMessage({
+          role: "user",
+          content: `Run the following periodic tasks (only those due based on their intervals):\n\n- email-check: Check for urgent unread emails\n\nAfter completing all due tasks, reply ${acknowledgement}.`,
+        }),
+      ).toBe(true);
+    }
 
     expect(
       isHeartbeatUserMessage({
@@ -111,6 +112,13 @@ describe("isHeartbeatUserMessage", () => {
 
 describe("isHeartbeatOkResponse", () => {
   it("matches no-op heartbeat acknowledgements", () => {
+    expect(
+      isHeartbeatOkResponse({
+        role: "assistant",
+        content: "NO_REPLY",
+      }),
+    ).toBe(true);
+
     expect(
       isHeartbeatOkResponse({
         role: "assistant",
@@ -188,7 +196,7 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
       { role: "user", content: "Hello" },
       { role: "assistant", content: "Hi there!" },
       { role: "user", content: HEARTBEAT_PROMPT },
-      { role: "assistant", content: "HEARTBEAT_OK" },
+      { role: "assistant", content: "NO_REPLY" },
       { role: "user", content: HEARTBEAT_TRANSCRIPT_PROMPT },
       { role: "assistant", content: "HEARTBEAT_OK" },
       { role: "user", content: "What time is it?" },

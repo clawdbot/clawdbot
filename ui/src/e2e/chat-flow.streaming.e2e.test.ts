@@ -539,23 +539,24 @@ suite.define(() => {
           await mkdir(artifactDir, { recursive: true });
           await page.screenshot({ path: path.join(artifactDir, `terminal-partial-${label}.png`) });
         }
-        const alert = page.locator(".chat-run-error");
+        const alert = page.locator(".chat-error");
         await alert.getByText(errorText).waitFor({ timeout: 10_000 });
         expect(await alert.locator("button").count()).toBe(0);
         expect(await page.locator(".chat-thread-inner").getByText(errorText).count()).toBe(0);
-        expect(
-          await alert.evaluate((element) =>
-            element.nextElementSibling?.classList.contains("agent-chat__composer-shell"),
-          ),
-        ).toBe(true);
         const [alertBox, composerBox] = await Promise.all([
           alert.boundingBox(),
           page.locator(".agent-chat__composer-shell").boundingBox(),
         ]);
         expect(alertBox).not.toBeNull();
         expect(composerBox).not.toBeNull();
-        expect(Math.abs((alertBox?.x ?? 0) - (composerBox?.x ?? 0))).toBeLessThan(1);
-        expect(Math.abs((alertBox?.width ?? 0) - (composerBox?.width ?? 0))).toBeLessThan(1);
+        expect(
+          Math.abs(
+            (alertBox?.x ?? 0) +
+              (alertBox?.width ?? 0) / 2 -
+              ((composerBox?.x ?? 0) + (composerBox?.width ?? 0) / 2),
+          ),
+        ).toBeLessThan(1);
+        expect(alertBox?.width ?? 0).toBeLessThanOrEqual(composerBox?.width ?? 0);
 
         await page.locator(".agent-chat__composer-combobox textarea").fill("retry after error");
         await page.getByRole("button", { name: "Send message" }).click();

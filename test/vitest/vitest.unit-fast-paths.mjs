@@ -169,6 +169,8 @@ const ownerRoutedUnitTestPatterns = [
   "src/agents/embedded-agent-runner/run.incomplete-turn.*.test.ts",
   "src/agents/embedded-agent-runner/run/attempt.abort-race.test.ts",
   "src/agents/openai-transport-stream.*.test.ts",
+  "src/agents/embedded-agent-runner/run.inherited-auth-owner.test.ts",
+  "src/agents/embedded-agent-runner/run.session-permissions.test.ts",
   "src/agents/embedded-agent-runner/run.shared-integration.test.ts",
   "src/auto-reply/reply/dispatch-from-config.test.ts",
 ];

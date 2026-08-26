@@ -383,7 +383,6 @@
   .chat-tool-card__preview.chat-tool-card__preview,
   .chat-thread.chat-thread,
   .chat-bubble.chat-bubble,
-  .agent-chat__input.agent-chat__input,
   .chat-pr.chat-pr,
   .nav-item.nav-item,
   .list-item.list-item,
@@ -401,7 +400,11 @@
     corner-shape: superellipse(1.5);
   }
 
-  .option-card.option-card {
+  /* The composer's resting shape is the multiline one; its single-line pill
+     opts back out to a circular corner in chat/layout.css, because the
+     superellipse flattens a fully rounded end. */
+  .option-card.option-card,
+  .agent-chat__input.agent-chat__input {
     border-radius: calc(20px * var(--openclaw-corner-radius-scale));
     corner-shape: superellipse(1.5);
   }

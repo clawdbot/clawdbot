@@ -212,7 +212,7 @@ describe("trusted-proxy browser device auto-approval", () => {
     expect(
       warnings.filter((message) =>
         message.includes(
-          "SECURITY WARNING: gateway.auth.trustedProxy.deviceAutoApprove.scopes includes operator.admin; every proxy-authenticated user can auto-approve a new browser device with full admin, and requests without scopes receive full admin automatically. Remove operator.admin to require manual approval until per-identity roles are available.",
+          "SECURITY WARNING: gateway.auth.trustedProxy.deviceAutoApprove.scopes includes operator.admin; every proxy-authenticated user can auto-approve a new browser device with full admin, and requests without scopes receive full admin automatically. Remove operator.admin and grant admin per identity via gateway.auth.identityScopes instead.",
         ),
       ),
     ).toHaveLength(1);
@@ -463,6 +463,60 @@ describe("trusted-proxy browser device auto-approval", () => {
       "operator.read",
       "operator.write",
     ]);
+  });
+
+  test("narrows same-key reconnects without a pairing round-trip", async () => {
+    await writeGatewayAuthConfig({
+      mode: "trusted-proxy",
+      deviceAutoApprove: { enabled: true, scopes: ["operator.read", "operator.write"] },
+    });
+    const identityPath = deviceIdentityPath("trusted-proxy-noop-scope-upgrade");
+    const identity = loadOrCreateDeviceIdentity({ path: identityPath });
+    const warnings: string[] = [];
+
+    await withGatewayServer(async ({ port }) => {
+      const initial = await connectBrowser({
+        port,
+        identityPath,
+        scopes: ["operator.read", "operator.write"],
+      });
+      expect(initial.ok).toBe(true);
+
+      loggingState.rawConsole = {
+        log: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn((message: string) => warnings.push(message)),
+        error: vi.fn(),
+      };
+      setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+      try {
+        const reconnect = await connectBrowser({
+          port,
+          identityPath,
+          scopes: ["operator.read", "operator.write", "operator.admin", "operator.pairing"],
+        });
+        expect(reconnect.ok).toBe(true);
+        expect((reconnect.payload as { auth?: { scopes?: string[] } })?.auth?.scopes).toEqual([
+          "operator.read",
+          "operator.write",
+        ]);
+      } finally {
+        loggingState.rawConsole = null;
+        resetLogger();
+      }
+    });
+
+    expect(
+      (await listDevicePairing()).pending.filter((entry) => entry.deviceId === identity.deviceId),
+    ).toEqual([]);
+    expect((await getPairedDevice(identity.deviceId))?.approvedScopes).toEqual([
+      "operator.read",
+      "operator.write",
+    ]);
+    expect(
+      warnings.filter((message) => message.includes("device access upgrade requested")),
+    ).toEqual([]);
+    expect(warnings.filter((message) => message.includes("auto-approved"))).toEqual([]);
   });
 
   test("rejects a foreign-key connect for an already-paired deviceId", async () => {
