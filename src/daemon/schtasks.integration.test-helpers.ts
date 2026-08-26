@@ -157,11 +157,13 @@ function inspectNativeAclCommand(
   executable: string,
   args: string[],
   env?: NodeJS.ProcessEnv,
+  windowsVerbatimArguments = false,
 ): NativeAclCommandResult {
   const result = spawnSync(executable, args, {
     encoding: "utf8",
     env,
     windowsHide: true,
+    windowsVerbatimArguments,
     timeout: 10_000,
   });
   return {
@@ -231,14 +233,16 @@ async function inspectNativeAclDenial(params: {
   );
   const cmdType = inspectNativeAclCommand(
     getWindowsCmdExePath(),
-    ["/d", "/v:off", "/c", 'type "%OPENCLAW_STARTUP_SCRIPT_PROBE%"'],
+    ["/d", "/s", "/v:off", "/c", '"type "%OPENCLAW_STARTUP_SCRIPT_PROBE%""'],
     scriptEnv,
+    true,
   );
   await fs.rm(params.batchMarkerPath, { force: true });
   const cmdBatchResult = inspectNativeAclCommand(
     getWindowsCmdExePath(),
-    ["/d", "/v:off", "/c", '"%OPENCLAW_STARTUP_SCRIPT_PROBE%"'],
+    ["/d", "/s", "/v:off", "/c", '""%OPENCLAW_STARTUP_SCRIPT_PROBE%""'],
     scriptEnv,
+    true,
   );
   const markerWritten = await fs
     .access(params.batchMarkerPath)

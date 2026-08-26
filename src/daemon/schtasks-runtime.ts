@@ -237,13 +237,21 @@ export async function launchFallbackTaskScript(
     throw Object.assign(new Error("Windows login item script is not readable"), { code: "EACCES" });
   }
   const { child } = await spawnWithFallback({
-    // Percent substitution is nonrecursive; quoting keeps path metacharacters inert.
-    argv: [getWindowsCmdExePath(), "/d", "/v:off", "/c", '"%OPENCLAW_STARTUP_SCRIPT_PROBE%"'],
+    // Node's verbatim /s shell contract preserves inner quotes; percent expansion is nonrecursive.
+    argv: [
+      getWindowsCmdExePath(),
+      "/d",
+      "/s",
+      "/v:off",
+      "/c",
+      '""%OPENCLAW_STARTUP_SCRIPT_PROBE%""',
+    ],
     options: {
       detached: true,
       env: scriptEnv,
       stdio: "ignore",
       windowsHide: true,
+      windowsVerbatimArguments: true,
     },
   });
   child.unref();
