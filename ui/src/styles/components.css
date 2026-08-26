@@ -773,6 +773,10 @@ openclaw-session-owner-chip {
     right: auto;
     max-width: calc(var(--app-toast-anchor-width) - 24px);
   }
+
+  .app-toast:not(.app-toast--anchored) .app-toast__message {
+    flex: 1 1 auto;
+  }
 }
 
 /* Toasts carry recovery instructions ("Undo", where to re-enable), so a message
