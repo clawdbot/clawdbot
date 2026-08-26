@@ -83,6 +83,33 @@ describe("openai completions params", () => {
     expect(params).not.toHaveProperty("max_completion_tokens");
   });
 
+  it.each([
+    // A Qwen-family provider accepts an arbitrary custom `baseUrl`. A proxy that
+    // happens to serve the same path is not an Alibaba endpoint, and Alibaba's
+    // compatibility reference says nothing about what it accepts.
+    ["a custom proxy route", "https://proxy.example/compatible-mode/v1"],
+    // Suffix, not substring: this host sits under evil.example, not aliyuncs.com.
+    ["a look-alike host", "https://dashscope.aliyuncs.com.evil.example/compatible-mode/v1"],
+    // Ends with the string "aliyuncs.com" without being inside that domain.
+    ["a host merely ending in the domain text", "https://notaliyuncs.com/compatible-mode/v1"],
+    // The gate reads a path segment, not a prefix of one.
+    ["a look-alike path", "https://dashscope.aliyuncs.com/compatible-mode-preview/v1"],
+  ])("keeps max_completion_tokens on %s", (_label, baseUrl) => {
+    const params = buildOpenAICompletionsParams(
+      makeCompletionsModel({
+        id: "qwen3.5-plus",
+        name: "Qwen 3.5 Plus",
+        provider: "qwen",
+        baseUrl,
+      }),
+      emptyContext(),
+      undefined,
+    ) as Record<string, unknown>;
+
+    expect(params).toHaveProperty("max_completion_tokens");
+    expect(params).not.toHaveProperty("max_tokens");
+  });
+
   it("still sends max_completion_tokens on the OpenAI endpoint", () => {
     // Guards the change above from widening: OpenAI itself deprecated max_tokens.
     const params = buildOpenAICompletionsParams(

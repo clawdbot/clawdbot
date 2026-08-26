@@ -61,6 +61,35 @@ function isDefaultRouteProvider(provider: string | undefined, ...ids: string[]) 
   return provider !== undefined && ids.includes(provider);
 }
 
+/**
+ * True when `baseUrl` is an Alibaba-owned Model Studio endpoint on the
+ * `/compatible-mode` surface, which is the surface Alibaba's OpenAI-compatibility
+ * reference covers.
+ *
+ * The host shapes mirror `resolveDashscopeAigcApiBaseUrl` in
+ * `extensions/qwen/video-generation-provider.ts`: the
+ * `dashscope[-region].aliyuncs.com` family and the Token Plan
+ * `*.maas.aliyuncs.com` regions.
+ */
+function isAlibabaCompatibleModeBaseUrl(baseUrl: string | undefined): boolean {
+  const trimmed = baseUrl?.trim();
+  if (!trimmed) {
+    return false;
+  }
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    return false;
+  }
+  const hostname = url.hostname.toLowerCase().replace(/\.+$/u, "");
+  const isAlibabaHost =
+    /(?:^|\.)dashscope(?:-[^.]+)?\.aliyuncs\.com$/u.test(hostname) ||
+    hostname.endsWith(".maas.aliyuncs.com");
+  // Trailing slash so `/compatible-mode` matches and `/compatible-mode-x` does not.
+  return isAlibabaHost && `${url.pathname}/`.startsWith("/compatible-mode/");
+}
+
 /** Resolves default request flags for an OpenAI-compatible completions endpoint. */
 function resolveOpenAICompletionsCompatDefaults(
   input: OpenAICompletionsCompatDefaultsInput,
@@ -90,10 +119,16 @@ function resolveOpenAICompletionsCompatDefaults(
   // both token-plan regions). The two Coding Plan endpoints
   // (coding[-intl].dashscope.aliyuncs.com) are plain `/v1` and are not covered by
   // that reference, so they keep the existing field until someone with a Coding
-  // Plan key can check. Matching the path segment rather than a URL list so a new
-  // Alibaba region does not silently fall out of the documented surface.
+  // Plan key can check.
+  //
+  // The gate is the host together with the path, not the path alone. A Qwen-family
+  // provider accepts an arbitrary custom `baseUrl`, so a bare path test would hand
+  // `max_tokens` to any proxy that happens to serve `/compatible-mode/` — a route
+  // Alibaba does not own and the reference does not describe. Matching the host
+  // shapes still lets a future Alibaba region into the documented surface, which a
+  // fixed URL list would not.
   const isModelStudioCompatibleMode =
-    isModelStudioLike && input.baseUrl?.includes("/compatible-mode/") === true;
+    isModelStudioLike && isAlibabaCompatibleModeBaseUrl(input.baseUrl);
   const isZai =
     endpointClass === "zai-native" ||
     (isDefaultRoute && isDefaultRouteProvider(input.provider, "zai"));
