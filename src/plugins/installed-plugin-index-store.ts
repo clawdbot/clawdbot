@@ -47,6 +47,7 @@ import {
   type RefreshInstalledPluginIndexParams,
 } from "./installed-plugin-index.js";
 import { hasMissingInstalledPluginOwnerMetadata } from "./installed-plugin-package-ownership.js";
+import type { PluginDiagnostic } from "./manifest-types.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 export {
   resolveInstalledPluginIndexStorePath,
@@ -156,6 +157,13 @@ const InstalledPluginIndexSchema = z.object({
   diagnostics: z.array(PluginDiagnosticSchema),
 });
 
+/** Backfills the closed duplicate-id code on diagnostics persisted by earlier releases. */
+function migrateLegacyDuplicateDiagnostic(diagnostic: PluginDiagnostic): PluginDiagnostic {
+  return diagnostic.code === undefined && diagnostic.message.startsWith("duplicate plugin id")
+    ? { ...diagnostic, code: "duplicate-plugin-id" }
+    : diagnostic;
+}
+
 export function parseInstalledPluginIndex(value: unknown): InstalledPluginIndex | null {
   const parsed = safeParseWithSchema(InstalledPluginIndexSchema, value) as
     | (Omit<InstalledPluginIndex, "installRecords" | "plugins"> & {
@@ -191,7 +199,7 @@ export function parseInstalledPluginIndex(value: unknown): InstalledPluginIndex 
     plugins: parsed.plugins.map(({ installOwner, installOwnerAmbiguous, ...plugin }) =>
       recordInstalledPluginIndexInstallOwner(plugin, installOwner, installOwnerAmbiguous === true),
     ),
-    diagnostics: parsed.diagnostics,
+    diagnostics: parsed.diagnostics.map(migrateLegacyDuplicateDiagnostic),
   };
 }
 

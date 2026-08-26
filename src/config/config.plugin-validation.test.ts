@@ -4,7 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { clearLoadInstalledPluginIndexInstallRecordsCache } from "../plugins/installed-plugin-index-records.js";
-import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
+import {
+  parseInstalledPluginIndex,
+  writePersistedInstalledPluginIndex,
+} from "../plugins/installed-plugin-index-store.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import type { PluginDiagnostic } from "../plugins/manifest-types.js";
 import { shouldSuppressMissingCodexPluginDiagnostics } from "./codex-plugin-diagnostics.js";
@@ -1676,6 +1679,56 @@ describe("config plugin validation", () => {
     expect(dupWarning!.message).toContain(`overridden copy at ${loserPath}`);
   });
 
+  it("appends overridden copy path after migrating a legacy persisted duplicate diagnostic", () => {
+    const loserPath = path.join(suiteHome, "extensions", "loser-plugin", "openclaw.plugin.json");
+    const parsed = parseInstalledPluginIndex({
+      version: 1,
+      hostContractVersion: "2026.4.25",
+      compatRegistryVersion: "compat-v1",
+      migrationVersion: 1,
+      policyHash: "policy-v1",
+      generatedAtMs: 1,
+      installRecords: {},
+      plugins: [],
+      diagnostics: [
+        {
+          level: "warn",
+          pluginId: "ekho-adapter",
+          source: loserPath,
+          message:
+            "duplicate plugin id detected; global plugin will be overridden by global plugin (/winner/path/index.js)",
+        },
+      ],
+    });
+    expect(parsed?.diagnostics[0]?.code).toBe("duplicate-plugin-id");
+
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "openclaw" }] },
+        plugins: {
+          entries: { "ekho-adapter": { enabled: true } },
+        },
+      },
+      {
+        env: suiteEnv(),
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: parsed!.diagnostics,
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    const dupWarning = res.warnings.find((w) => w.message.includes("duplicate plugin id"));
+    expect(dupWarning).toBeDefined();
+    expect(dupWarning!.message).toContain(`overridden copy at ${loserPath}`);
+  });
+
   it("counts config-selected duplicate diagnostics as overridden in validation consumers", () => {
     const bundledGoogleRecord: PluginManifestRecord = {
       id: "google",
@@ -1721,6 +1774,74 @@ describe("config plugin validation", () => {
           manifestRegistry: {
             plugins: [bundledGoogleRecord],
             diagnostics: [configSelectedDuplicate],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expectPathMessageIncludes(res.warnings, "plugins.entries.google", "but config is present");
+  });
+
+  it("counts a legacy persisted config-selected duplicate as overridden after index parse", () => {
+    const bundledGoogleRecord: PluginManifestRecord = {
+      id: "google",
+      origin: "bundled",
+      channels: [],
+      providers: [],
+      contracts: { webSearchProviders: ["google"] },
+      cliBackends: [],
+      skills: [],
+      hooks: [],
+      rootDir: "/plugin-fixtures/bundled-google",
+      source: "test",
+      manifestPath: "/plugin-fixtures/bundled-google/openclaw.plugin.json",
+      schemaCacheKey: "test:google",
+      configSchema: {
+        type: "object",
+        properties: { apiKey: { type: "string" } },
+      },
+    };
+    const parsed = parseInstalledPluginIndex({
+      version: 1,
+      hostContractVersion: "2026.4.25",
+      compatRegistryVersion: "compat-v1",
+      migrationVersion: 1,
+      policyHash: "policy-v1",
+      generatedAtMs: 1,
+      installRecords: {},
+      plugins: [],
+      diagnostics: [
+        {
+          level: "warn",
+          pluginId: "google",
+          source: "/plugin-fixtures/overridden-copy/openclaw.plugin.json",
+          message:
+            "duplicate plugin id resolved by explicit config-selected plugin; bundled plugin will be overridden by config plugin (/plugin-fixtures/config-copy/index.js)",
+        },
+      ],
+    });
+    expect(parsed?.diagnostics[0]?.code).toBe("duplicate-plugin-id");
+
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "openclaw" }] },
+        plugins: {
+          allow: ["imessage"],
+          entries: {
+            google: { config: { apiKey: "test-google-key" } },
+          },
+        },
+      },
+      {
+        env: suiteEnv(),
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [bundledGoogleRecord],
+            diagnostics: parsed!.diagnostics,
           },
         },
       },

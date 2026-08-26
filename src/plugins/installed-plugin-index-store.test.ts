@@ -753,6 +753,45 @@ describe("installed plugin index persistence", () => {
     await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toBeNull();
   });
 
+  it("migrates duplicate-id diagnostics persisted before the closed code existed", async () => {
+    const stateDir = makeTempDir();
+    const duplicate = {
+      level: "warn",
+      pluginId: "demo",
+      source: "/plugins/demo-loser/index.ts",
+      message:
+        "duplicate plugin id detected; global plugin will be overridden by global plugin (/plugins/demo-winner/index.ts)",
+    };
+    const configSelected = {
+      level: "warn",
+      pluginId: "demo",
+      source: "/plugins/demo-loser/index.ts",
+      message:
+        "duplicate plugin id resolved by explicit config-selected plugin; global plugin will be overridden by config plugin (/plugins/demo-winner/index.ts)",
+    };
+    const coded = {
+      level: "warn",
+      pluginId: "demo",
+      code: "plugin-verification",
+      message: "plugin demo failed verification",
+    };
+    const unrelated = {
+      level: "error",
+      message: "plugin path not found: /gone",
+    };
+    insertPersistedIndexRow(stateDir, {
+      diagnosticsJson: JSON.stringify([duplicate, configSelected, coded, unrelated]),
+    });
+
+    const persisted = requirePersisted(await readPersistedInstalledPluginIndex({ stateDir }));
+    expect(persisted.diagnostics).toEqual([
+      { ...duplicate, code: "duplicate-plugin-id" },
+      { ...configSelected, code: "duplicate-plugin-id" },
+      coded,
+      unrelated,
+    ]);
+  });
+
   it("refreshes and persists a rebuilt index without loading plugin runtime", async () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "plugins", "demo");
