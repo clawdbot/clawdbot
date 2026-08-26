@@ -242,13 +242,23 @@ jobs:
             echo "expected_sha must be a full 40-character SHA; got: ${EXPECTED_SHA}" >&2
             exit 1
           fi
-          if [[ -n "${expected_sha// }" && "$selected_revision" != "$expected_sha" ]]; then
-            echo "Ref '${INPUT_REF}' resolved to ${selected_revision}, expected ${EXPECTED_SHA}." >&2
+          if [[ ! "$SUCCESSOR_ATTEMPT" =~ ^[0-2]$ ]]; then
+            echo "successor_attempt must be 0, 1, or 2." >&2
             exit 1
           fi
 
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-          if [[ -z "${expected_sha// }" && "$branch_candidate" == "$DEFAULT_BRANCH" ]]; then
+          if [[ -n "${expected_sha// }" && "$selected_revision" != "$expected_sha" ]]; then
+            if [[ "$SUCCESSOR_ATTEMPT" == "0" || "$branch_candidate" != "$DEFAULT_BRANCH" ]] ||
+              ! git merge-base --is-ancestor "$expected_sha" refs/remotes/origin/main; then
+              echo "Ref '${INPUT_REF}' resolved to ${selected_revision}, expected ${EXPECTED_SHA}." >&2
+              exit 1
+            fi
+            # A queued successor may start after main advances. Refreeze only a forward-moving
+            # main descendant here; arbitrary mismatches and the initial dispatch still fail.
+            floating_default_branch=true
+            selected_revision="$(git rev-parse refs/remotes/origin/main)"
+          elif [[ -z "${expected_sha// }" && "$branch_candidate" == "$DEFAULT_BRANCH" ]]; then
             # A direct main dispatch may wait while checkout fetches full history. Freeze the
             # latest fetched main here so later reusable jobs never receive a moving branch.
             floating_default_branch=true
@@ -275,10 +285,6 @@ jobs:
 
           if [[ ! "$EVIDENCE_RUN_ID" =~ ^[0-9]+$ ]]; then
             echo "qa_evidence_run_id must be a numeric GitHub Actions run id." >&2
-            exit 1
-          fi
-          if [[ ! "$SUCCESSOR_ATTEMPT" =~ ^[0-2]$ ]]; then
-            echo "successor_attempt must be 0, 1, or 2." >&2
             exit 1
           fi
           publication_base="${DEFAULT_BRANCH}"

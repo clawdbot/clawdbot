@@ -1124,6 +1124,39 @@ function runQaSelectedRefValidation(
   return { ...result, outputs: readWorkflowOutputs(githubOutput) };
 }
 
+function runMaturitySelectedRefValidation(params: {
+  topology: ReturnType<typeof createQaProtocolTopology>;
+  expectedSha: string;
+  revision: string;
+  successorAttempt: string;
+}) {
+  runGit(params.topology.checkout, ["checkout", "-q", "--detach", params.revision]);
+  const githubOutput = path.join(params.topology.checkout, "github-output");
+  rmSync(githubOutput, { force: true });
+  const validateStep = expectDefined(
+    readMaturityScorecardWorkflow().jobs.validate_selected_ref.steps.find(
+      (step: WorkflowStep) => step.name === "Validate selected ref",
+    ),
+    "maturity selected-ref validation step",
+  );
+  const result = runWorkflowShellScript(expectDefined(validateStep.run, "validation script"), {
+    cwd: params.topology.checkout,
+    env: {
+      ...process.env,
+      DEFAULT_BRANCH: "main",
+      EVIDENCE_RUN_ID: "42",
+      EXPECTED_SHA: params.expectedSha,
+      GITHUB_OUTPUT: githubOutput,
+      GITHUB_STEP_SUMMARY: path.join(params.topology.checkout, "github-summary"),
+      INPUT_REF: "main",
+      PATH: `${params.topology.fakeBin}:${process.env.PATH ?? ""}`,
+      PUBLISH_PULL_REQUEST: "false",
+      SUCCESSOR_ATTEMPT: params.successorAttempt,
+    },
+  });
+  return { ...result, outputs: readWorkflowOutputs(githubOutput) };
+}
+
 function runProtocolSinceFixture(checkout: string, baseSha: string) {
   for (const scriptPath of [
     "packages/normalization-core/src/record-coerce.ts",
@@ -2579,6 +2612,37 @@ NODE
       expect(publishStep.with["pr-body"]).toContain("${{ needs.resolve-base.outputs.sha }}");
       expect(publishStep.with["pr-body"]).not.toContain("${{ github.sha }}");
     }
+  });
+
+  it("refreezes a queued maturity successor only across a forward main advance", () => {
+    const topology = createQaProtocolTopology();
+    const currentMain = runGit(topology.origin, ["rev-parse", "main"]);
+    const successor = runMaturitySelectedRefValidation({
+      topology,
+      expectedSha: topology.mainBase,
+      revision: currentMain,
+      successorAttempt: "1",
+    });
+    expect(successor.status, successor.stderr).toBe(0);
+    expect(successor.outputs.selected_revision).toBe(currentMain);
+
+    const initial = runMaturitySelectedRefValidation({
+      topology,
+      expectedSha: topology.mainBase,
+      revision: currentMain,
+      successorAttempt: "0",
+    });
+    expect(initial.status).not.toBe(0);
+    expect(initial.stderr).toContain(`expected ${topology.mainBase}`);
+
+    const divergent = runMaturitySelectedRefValidation({
+      topology,
+      expectedSha: topology.featureHead,
+      revision: currentMain,
+      successorAttempt: "1",
+    });
+    expect(divergent.status).not.toBe(0);
+    expect(divergent.stderr).toContain(`expected ${topology.featureHead}`);
   });
 
   it.skipIf(process.platform === "win32")(
