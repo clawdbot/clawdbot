@@ -351,6 +351,31 @@ describe("Row-overflow table delivery through production outbound adapter over l
     expect(requests.every((request) => request.body.messages.length <= 5)).toBe(true);
   });
 
+  it("keeps rendered-code quick replies on final media on the actual LINE HTTP wire", async () => {
+    const markdown = "```js\nfirst()\n```";
+
+    await lineOutboundAdapter.sendPayload!({
+      to: "line:user:UtestRichMedia",
+      text: markdown,
+      payload: {
+        text: markdown,
+        mediaUrl: "https://example.com/image.jpg",
+        channelData: { line: { quickReplies: ["Continue"] } },
+      },
+      cfg: LINE_TEST_CFG,
+    });
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.body.messages).toMatchObject([
+      { type: "flex", altText: "Code" },
+      {
+        type: "image",
+        originalContentUrl: "https://example.com/image.jpg",
+        quickReply: { items: [{ action: { label: "Continue", text: "Continue" } }] },
+      },
+    ]);
+  });
+
   it("carries a valid Bearer token and recipient through the production outbound adapter", async () => {
     const rows = Array.from({ length: 15 }, (_, i) => `| Item${i + 1} | $${i + 1}.00 |`).join("\n");
     const markdown = `| Name | Price |\n|---|---|\n${rows}`;
