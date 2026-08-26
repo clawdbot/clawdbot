@@ -1,6 +1,4 @@
 // Control UI E2E tests cover session ownership dormancy and owner filtering.
-import { mkdir } from "node:fs/promises";
-import path from "node:path";
 import type { Page } from "playwright";
 import { expect as expectBrowser } from "playwright/test";
 import { afterEach, expect, it } from "vitest";
@@ -9,21 +7,18 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 import { openNewSessionPlusMenu, replaceGatewayClient } from "./new-session-page.test-support.ts";
 import {
   avatarLabelCenterDelta,
+  captureSessionOwnerPageProof,
+  captureSessionOwnerProof,
+  captureUiProof,
+  captureUiProofEnabled,
+  openSidebarSortMenu,
   routeAvatarFixtures,
+  sessionOwnerProofArtifactDir,
 } from "./session-ownership-visuals.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI session ownership",
 });
-
-const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const uiProofArtifactDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "drafts-ux");
-const sessionOwnerProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "session-owner-stack",
-);
 
 let page: Page | undefined;
 function sessionsList(owners: [string, string], withAvatars = false) {
@@ -143,50 +138,6 @@ function collaborativeSessionsList() {
     ],
     ts: 1,
   };
-}
-
-async function captureUiProof(targetPage: Page, fileName: string) {
-  if (!captureUiProofEnabled) {
-    return;
-  }
-  await mkdir(uiProofArtifactDir, { recursive: true });
-  await targetPage.screenshot({
-    animations: "disabled",
-    fullPage: true,
-    path: path.join(uiProofArtifactDir, fileName),
-  });
-}
-
-async function captureSessionOwnerProof(targetPage: Page, fileName: string) {
-  if (!captureUiProofEnabled) {
-    return;
-  }
-  await mkdir(sessionOwnerProofArtifactDir, { recursive: true });
-  await targetPage.locator(".sidebar-sessions").screenshot({
-    animations: "disabled",
-    path: path.join(sessionOwnerProofArtifactDir, fileName),
-  });
-}
-
-async function captureSessionOwnerPageProof(targetPage: Page, fileName: string) {
-  if (!captureUiProofEnabled) {
-    return;
-  }
-  await mkdir(sessionOwnerProofArtifactDir, { recursive: true });
-  await targetPage.screenshot({
-    animations: "disabled",
-    fullPage: true,
-    path: path.join(sessionOwnerProofArtifactDir, fileName),
-  });
-}
-
-async function openSidebarSortMenu(targetPage: Page) {
-  const filterAndSort = targetPage.getByRole("button", { name: "Filter & sort" });
-  await expect.poll(() => filterAndSort.count(), { timeout: 2_000 }).toBe(1);
-  await filterAndSort.click();
-  const menu = targetPage.locator(".sidebar-session-sort-menu");
-  await menu.waitFor();
-  return menu;
 }
 
 suite.define(() => {

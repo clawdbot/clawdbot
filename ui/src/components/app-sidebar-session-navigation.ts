@@ -70,18 +70,16 @@ import {
   loadStoredSidebarSessionsShowPreview,
   loadStoredSidebarSessionsShowSystem,
   resolveSidebarSessionSortMode,
-  loadStoredSidebarSessionOwnerFilter,
-  storeSidebarSessionOwnerFilter,
   storeSidebarSessionSortMode,
   type SidebarRecentSession,
   type SidebarSessionSortMode,
   type SidebarSessionStatusFilter,
-  type SidebarSessionOwnerFilter,
 } from "./app-sidebar-session-types.ts";
 import { SessionAttentionController } from "./session-attention-controller.ts";
 import { SessionDataController } from "./session-data-controller.ts";
 import type { SessionOrganizerController } from "./session-organizer-controller.ts";
 import type { SessionOwnerOption } from "./session-owner-chip.ts";
+import { SessionOwnerFilterController } from "./session-owner-filter-controller.ts";
 import type { SidebarMenusController } from "./sidebar-menus-controller.ts";
 
 /** Session-row projection, selection, sorting, and agent scope navigation. */
@@ -142,21 +140,20 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     this.sessionSortMode = storeSidebarSessionSortMode(mode, this.sessionPeopleSortCapability());
   }
 
-  @state() private sessionOwnerFilter: SidebarSessionOwnerFilter = { kind: "all" };
-  private sessionOwnerFilterScope: string | null = null;
+  private readonly sessionOwnerFilter = new SessionOwnerFilterController(this, () => this.context);
 
   get sessionOwnerFilterId(): string | null {
-    return this.sessionOwnerFilter.kind === "owner" ? this.sessionOwnerFilter.ownerId : null;
+    return this.sessionOwnerFilter.ownerId;
   }
 
   get sessionInvolvingMeFilterActive(): boolean {
-    return this.sessionOwnerFilter.kind === "involving-me";
+    return this.sessionOwnerFilter.involvingMe;
   }
 
   sessionOwnerOptions: readonly SessionOwnerOption[] = [];
   protected activeSessionOwnerId: string | null = null;
   get sessionOwnerFilterActive() {
-    return this.sessionOwnerFilter.kind === "owner";
+    return this.sessionOwnerFilter.ownerActive;
   }
   sessionOwnershipVisible = false;
 
@@ -217,7 +214,6 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
 
   override updated(changedProperties: PropertyValues<this>) {
     super.updated(changedProperties);
-    this.restoreSessionOwnerFilter();
     if (this.sessionSortMode === "people" && this.sessionPeopleSortCapability() === false) {
       this.setSessionSortMode("created");
     }
@@ -256,57 +252,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   }
 
   setSessionOwnerFilter(ownerId: string | null, involvingMe = false): void {
-    const normalizedOwnerId = ownerId?.trim() ?? "";
-    this.sessionOwnerFilter = involvingMe
-      ? { kind: "involving-me" }
-      : normalizedOwnerId
-        ? { kind: "owner", ownerId: normalizedOwnerId }
-        : { kind: "all" };
-    const context = this.context;
-    const selfUserId = context?.gateway.snapshot.selfUser?.id.trim();
-    if (context && selfUserId) {
-      storeSidebarSessionOwnerFilter(
-        context.gateway.connection.gatewayUrl,
-        selfUserId,
-        this.sessionOwnerFilter,
-      );
-    }
-    void this.applySessionOwnerFilterRequest();
-  }
-
-  private restoreSessionOwnerFilter(): void {
-    const context = this.context;
-    const selfUserId = context?.gateway.snapshot.selfUser?.id.trim();
-    if (!context || !selfUserId) {
-      return;
-    }
-    const gatewayUrl = context.gateway.connection.gatewayUrl;
-    const scope = `${gatewayUrl}\0${selfUserId}`;
-    if (scope === this.sessionOwnerFilterScope) {
-      return;
-    }
-    const previousScope = this.sessionOwnerFilterScope;
-    this.sessionOwnerFilterScope = scope;
-    if (previousScope === null && this.sessionOwnerFilter.kind !== "all") {
-      storeSidebarSessionOwnerFilter(gatewayUrl, selfUserId, this.sessionOwnerFilter);
-    } else {
-      this.sessionOwnerFilter = loadStoredSidebarSessionOwnerFilter(gatewayUrl, selfUserId);
-    }
-    if (previousScope !== null || this.sessionOwnerFilter.kind !== "all") {
-      void this.applySessionOwnerFilterRequest();
-    }
-  }
-
-  private applySessionOwnerFilterRequest(): Promise<void> {
-    const sessions = this.context?.sessions;
-    if (!sessions) {
-      return Promise.resolve();
-    }
-    return this.sessionOwnerFilter.kind === "involving-me"
-      ? sessions.setInvolvingMeFilter(true)
-      : sessions.setOwnerFilter(
-          this.sessionOwnerFilter.kind === "owner" ? this.sessionOwnerFilter.ownerId : null,
-        );
+    this.sessionOwnerFilter.set(ownerId, involvingMe);
   }
 
   protected applySessionOwnerFilter(
