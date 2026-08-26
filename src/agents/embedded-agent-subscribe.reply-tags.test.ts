@@ -34,7 +34,7 @@ describe("subscribeEmbeddedAgentSession reply tags", () => {
     const { session, emit } = createStubSessionHarness();
     const onBlockReply = vi.fn();
 
-    subscribeEmbeddedAgentSession({
+    const subscription = subscribeEmbeddedAgentSession({
       session,
       runId: "run",
       onBlockReply,
@@ -46,7 +46,7 @@ describe("subscribeEmbeddedAgentSession reply tags", () => {
       },
     });
 
-    return { emit, onBlockReply };
+    return { emit, onBlockReply, subscription };
   }
 
   it("carries reply_to_current across tag-only block chunks", () => {
@@ -136,13 +136,14 @@ describe("subscribeEmbeddedAgentSession reply tags", () => {
     }
   });
 
-  it("strips a malformed reply prefix from the final block reply", () => {
-    const { emit, onBlockReply } = createBlockReplyHarness();
+  it("strips a malformed reply prefix from the final block reply", async () => {
+    const { emit, onBlockReply, subscription } = createBlockReplyHarness();
 
     emit({ type: "message_start", message: { role: "assistant" } });
     emitAssistantTextDelta({ emit, delta: "[[reply_to_" });
     emitAssistantTextDelta({ emit, delta: "current] Visible reply" });
     emitAssistantTextEnd({ emit });
+    await subscription.waitForPendingEvents();
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
     const payload = replyPayloadAt(onBlockReply, 0);
