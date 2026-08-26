@@ -226,32 +226,39 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
     expect(result.meta.error).toBeUndefined();
   });
 
-  it("keeps parked nested tool work fail-closed when compaction rotates the session", async () => {
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      makeReplayUnsafeMidTurnOverflow({
-        activeCount: 1,
-        codeModeEngaged: true,
-        codeModeSuspended: true,
-      }),
-    );
-    mockedCompactDirect.mockResolvedValueOnce(
-      makeCompactionSuccess({
-        summary: "Compacted into a successor session",
-        firstKeptEntryId: "entry-rotated-exec",
-        tokensBefore: 201_000,
-        sessionId: "rotated-session",
-      }),
-    );
+  it.each([
+    ["with a nested tool item still active", 1],
+    // A local yield_control parks the exec without any nested lifecycle item.
+    ["parked by yield_control with no active item", 0],
+  ])(
+    "keeps a parked Code Mode run fail-closed when compaction rotates the session (%s)",
+    async (_label, activeCount) => {
+      mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+        makeReplayUnsafeMidTurnOverflow({
+          activeCount,
+          codeModeEngaged: true,
+          codeModeSuspended: true,
+        }),
+      );
+      mockedCompactDirect.mockResolvedValueOnce(
+        makeCompactionSuccess({
+          summary: "Compacted into a successor session",
+          firstKeptEntryId: "entry-rotated-exec",
+          tokensBefore: 201_000,
+          sessionId: "rotated-session",
+        }),
+      );
 
-    const result = await runEmbeddedAgent({
-      ...overflowBaseRunParams,
-      runId: "run-midturn-waiting-exec-rotated",
-    });
+      const result = await runEmbeddedAgent({
+        ...overflowBaseRunParams,
+        runId: `run-midturn-waiting-exec-rotated-${activeCount}`,
+      });
 
-    expect(mockedCompactDirect).toHaveBeenCalledOnce();
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
-    expect(result.payloads?.[0]?.text).toContain("Try /reset (or /new)");
-  });
+      expect(mockedCompactDirect).toHaveBeenCalledOnce();
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
+      expect(result.payloads?.[0]?.text).toContain("Try /reset (or /new)");
+    },
+  );
 
   it.each([
     ["a tool call without a recorded result", { resultRecorded: false }, true],

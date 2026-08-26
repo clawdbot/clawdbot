@@ -190,10 +190,12 @@ export async function recoverEmbeddedRunOverflow(
       } else if (compactResult.ok && compactResult.compacted) {
         previousSessionId = await input.adoptCompactionTranscript(compactResult);
         const adoptedSession = input.getActiveSession();
+        // Key off the recorded parked-run fact, not lifecycle counters: a local
+        // yield_control parks the exec without any nested lifecycle item.
         parkedWorkBlocksContinuation =
           previousSessionId !== undefined &&
           preflightRecovery?.source === "mid-turn" &&
-          input.attempt.itemLifecycle.activeCount > 0;
+          input.attempt.toolMetas.some((entry) => entry.codeModeSuspended === true);
         if (parkedWorkBlocksContinuation) {
           log.warn(
             `[context-overflow-recovery] compaction rotated ${previousSessionId} -> ${adoptedSession.id} ` +
