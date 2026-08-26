@@ -17,6 +17,7 @@ struct MenuContent: View {
     private let dashboardManager = DashboardManager.shared
     private let activityStore = WorkActivityStore.shared
     private let nodesStore = NodesStore.shared
+    private let nodeChannelStatus = MacNodeChannelStatusStore.shared
     @Bindable private var pairingPrompter = NodePairingApprovalPrompter.shared
     @Bindable private var devicePairingPrompter = DevicePairingApprovalPrompter.shared
     @State private var availableMics: [AudioInputDevice] = []
@@ -365,6 +366,12 @@ struct MenuContent: View {
     private var macNodeStatus: (label: String, color: Color)? {
         guard self.state.connectionMode != .unconfigured else { return nil }
         guard case .connected = self.controlChannel.state else { return nil }
+
+        // The coordinator records why the node channel is down at the connect
+        // boundary; prefer that recorded fact over inferring from node listings.
+        if let line = self.nodeChannelStatus.state.operatorStatusLine {
+            return (line.label, line.isDegraded ? .orange : .red)
+        }
 
         let deviceId: String
         switch self.nodesStore.localNodeIdentityState {
