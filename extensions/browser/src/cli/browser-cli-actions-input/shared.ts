@@ -4,11 +4,9 @@
 import fs from "node:fs/promises";
 import type { Command } from "commander";
 import { FsSafeError, readRegularFile } from "openclaw/plugin-sdk/security-runtime";
-import {
-  callBrowserRequest,
-  withBrowserActionTimeoutSlack,
-  type BrowserParentOpts,
-} from "../browser-cli-shared.js";
+import { resolveBrowserActRequestTimeoutMs } from "../../browser/act-policy.js";
+import type { BrowserActRequest } from "../../browser/client-actions.types.js";
+import { callBrowserRequest, type BrowserParentOpts } from "../browser-cli-shared.js";
 import {
   danger,
   defaultRuntime,
@@ -36,8 +34,7 @@ export function resolveBrowserActionContext(
 export async function callBrowserAct<T = unknown>(params: {
   parent: BrowserParentOpts;
   profile?: string;
-  body: Record<string, unknown>;
-  timeoutMs?: number;
+  body: BrowserActRequest;
 }): Promise<T> {
   return await callBrowserRequest<T>(
     params.parent,
@@ -47,7 +44,7 @@ export async function callBrowserAct<T = unknown>(params: {
       query: params.profile ? { profile: params.profile } : undefined,
       body: params.body,
     },
-    { timeoutMs: withBrowserActionTimeoutSlack(params.timeoutMs) },
+    { timeoutMs: resolveBrowserActRequestTimeoutMs(params.body) },
   );
 }
 
