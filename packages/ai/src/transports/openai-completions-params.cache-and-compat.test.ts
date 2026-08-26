@@ -70,6 +70,13 @@ describe("openai completions params", () => {
     // six URLs under modelstudio-native. Either way the path gate is what decides.
     ["qwen", "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"],
     ["qwen", "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"],
+    // Three more Alibaba compatible-mode regions the repository already names —
+    // extensions/alibaba, extensions/qwen and the external provider catalog —
+    // none of which appear in MODELSTUDIO_NATIVE_BASE_URLS. A fixed URL list
+    // would leave all three on the wrong field; matching the host does not.
+    ["qwen", "https://cn-hongkong.dashscope.aliyuncs.com/compatible-mode/v1"],
+    ["qwen", "https://dashscope-us.aliyuncs.com/compatible-mode/v1"],
+    ["qwen", "https://workspace.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"],
   ])("sends max_tokens on Model Studio compatible-mode provider %s", (provider, baseUrl) => {
     // Model Studio's OpenAI-compatibility reference documents `max_tokens` and
     // does not list `max_completion_tokens`.
