@@ -80,6 +80,35 @@ describe("wrapToolMemoryFlushAppendOnlyWrite output contract", () => {
     expect(await fs.readFile(absolute, "utf-8")).toBe("seed\nhello");
   });
 
+  it.each([true, false])(
+    "rejects @memory paths instead of appending to their allowed sibling (literal exists: %s)",
+    async (literalExists) => {
+      const allowedPath = path.join(root, RELATIVE_PATH);
+      const literalPath = path.join(root, `@${RELATIVE_PATH}`);
+      await fs.mkdir(path.dirname(allowedPath), { recursive: true });
+      await fs.mkdir(path.dirname(literalPath), { recursive: true });
+      await fs.writeFile(allowedPath, "allowed", "utf8");
+      if (literalExists) {
+        await fs.writeFile(literalPath, "literal", "utf8");
+      }
+      const wrapped = wrapToolMemoryFlushAppendOnlyWrite(baseWriteTool(), {
+        root,
+        relativePath: RELATIVE_PATH,
+      });
+
+      await expect(
+        wrapped.execute("at-memory-flush", {
+          path: `@${RELATIVE_PATH}`,
+          content: "wrong journal",
+        }),
+      ).rejects.toThrow(/Memory flush writes are restricted/);
+      await expect(fs.readFile(allowedPath, "utf8")).resolves.toBe("allowed");
+      if (literalExists) {
+        await expect(fs.readFile(literalPath, "utf8")).resolves.toBe("literal");
+      }
+    },
+  );
+
   it("documents the pre-fix regression: append-only metadata violates the declared schema", () => {
     const validation = validateAgainstDeclaredSchema({ path: RELATIVE_PATH, appendOnly: true });
     expect(validation.ok).toBe(false);
