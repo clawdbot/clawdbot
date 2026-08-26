@@ -7,7 +7,8 @@ const mocks = vi.hoisted(() => ({
   resolveDeliveryTarget: vi.fn(),
 }));
 
-vi.mock("./isolated-agent/delivery-target.js", () => ({
+vi.mock("./isolated-agent/delivery-target.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./isolated-agent/delivery-target.js")>()),
   resolveDeliveryTarget: mocks.resolveDeliveryTarget,
 }));
 
@@ -98,6 +99,27 @@ describe("resolveCronDeliveryPreview", () => {
     expect(preview).toEqual({
       label: "none -> telegram:direct-123",
       detail: "explicit",
+    });
+  });
+
+  it("previews current-target announce with no external route as a conversation commit", async () => {
+    mocks.resolveDeliveryTarget.mockResolvedValueOnce({
+      ok: false,
+      channel: undefined,
+      mode: "implicit",
+      error: new Error("Channel is required (no configured channels detected)."),
+    });
+    const job = makeCronJob({
+      sessionTarget: "current",
+      sessionKey: "agent:main:dashboard:c5557dcf",
+      delivery: undefined,
+    });
+
+    const preview = await previewForJob(job);
+
+    expect(preview).toEqual({
+      label: "announce -> current session",
+      detail: "commits to this conversation (no external channel route)",
     });
   });
 

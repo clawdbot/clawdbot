@@ -16,6 +16,7 @@ import { resolveSessionDeliveryTarget } from "../../infra/outbound/targets-sessi
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { isDeliverableMessageChannel } from "../../utils/message-channel.js";
 import { resolveCronStoredDeliveryContext } from "../delivery-context.js";
 import { resolveCronAgentSessionKey } from "./session-key.js";
 
@@ -38,6 +39,18 @@ export type DeliveryTargetResolution =
       mode: "explicit" | "implicit";
       error: Error;
     };
+
+/**
+ * Returns whether a delivery resolution names an external deliverable channel
+ * route. Internal surfaces (webchat/Control UI) and resolutions that found no
+ * channel at all have no external route: their conversations render from
+ * durable session history, so nothing outside the Gateway carries the message.
+ */
+export function resolvedDeliveryTargetsExternalChannel(
+  resolution: DeliveryTargetResolution,
+): boolean {
+  return resolution.channel !== undefined && isDeliverableMessageChannel(resolution.channel);
+}
 
 const targetsRuntimeLoader = createLazyImportLoader(
   () => import("../../infra/outbound/targets.runtime.js"),
