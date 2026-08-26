@@ -197,15 +197,22 @@ describe("chat pane sidebar layout", () => {
     }
   });
 
-  it("preserves owner visibility when Board chat is removed from the projection", () => {
+  it("closes an empty Board projection and preserves visibility with a real tab", () => {
     for (const open of [true, false]) {
-      const layout = resolveSidebarLayoutForBoard({
+      const empty = resolveSidebarLayoutForBoard({
         board: board("hidden", "chat"),
         layout: { ...openSlot({ columns: [] }, "chat"), open },
         paneWidth: 1_400,
       });
-      expect(layout.columns).toEqual([]);
-      expect(layout.open).toBe(open);
+      expect(empty).toMatchObject({ columns: [], open: false });
+
+      const withDetail = resolveSidebarLayoutForBoard({
+        board: board("hidden", "chat"),
+        layout: { ...openSlot(openSlot({ columns: [] }, "chat"), "detail"), open },
+        paneWidth: 1_400,
+      });
+      expect(withDetail.columns[0]?.panels.map((panel) => panel.slot)).toEqual(["detail"]);
+      expect(withDetail.open).toBe(open);
     }
   });
 
