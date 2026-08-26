@@ -96,7 +96,6 @@ export async function modelsAliasesRemoveCommand(aliasRaw: string, runtime: Runt
       if (entry?.alias?.trim().toLowerCase() === normalizedAlias) {
         nextModels[key] = { ...entry, alias: undefined };
         found = true;
-        break;
       }
     }
     if (!found) {

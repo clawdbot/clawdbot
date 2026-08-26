@@ -157,6 +157,31 @@ describe("modelsAliasesRemoveCommand", () => {
     expect(written.agents?.defaults?.models?.["openai/gpt-5.4-mini"]?.alias).toBeUndefined();
   });
 
+  it("removes every case-colliding alias from an existing config", async () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.4-mini": { alias: "Fast" },
+            "openai/gpt-5.6-sol": { alias: "fast" },
+            "anthropic/claude-sonnet-4-6": { alias: "steady" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    mocks.readConfigFileSnapshot.mockResolvedValue(snapshot(cfg));
+    mocks.replaceConfigFile.mockResolvedValue(undefined);
+
+    await modelsAliasesRemoveCommand("FAST", makeRuntime());
+
+    expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
+    const [replaceParams] = mocks.replaceConfigFile.mock.calls[0] ?? [];
+    const written = replaceParams?.nextConfig as OpenClawConfig;
+    expect(written.agents?.defaults?.models?.["openai/gpt-5.4-mini"]?.alias).toBeUndefined();
+    expect(written.agents?.defaults?.models?.["openai/gpt-5.6-sol"]?.alias).toBeUndefined();
+    expect(written.agents?.defaults?.models?.["anthropic/claude-sonnet-4-6"]?.alias).toBe("steady");
+  });
+
   it("rejects removal of a built-in alias visible only via materialized defaults", async () => {
     // Source config: model entry exists but no user-set alias. applyModelDefaults
     // would materialize `gpt-mini -> openai/gpt-5.4-mini` into the resolved config,
