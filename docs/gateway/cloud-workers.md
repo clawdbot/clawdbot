@@ -80,6 +80,37 @@ printf '%s' "$CRABBOX_COORDINATOR_TOKEN" | crabbox login \
 
 Keep the token out of repository config and shell arguments.
 
+### Daytona
+
+The bundled Crabbox provider can also lease [Daytona](https://www.daytona.io) sandboxes as cloud workers (`settings.provider: "daytona"`). Unlike AWS, Daytona needs no separate `crabbox login` step: export `DAYTONA_API_KEY` (from the [Daytona dashboard](https://app.daytona.io/dashboard/keys)) in the Gateway process's environment before Crabbox allocates a lease. Verify it without provisioning anything:
+
+```bash
+DAYTONA_API_KEY=<key> crabbox doctor --provider daytona --json
+```
+
+A `daytona-fallback auth=ready control_plane=ready inventory=ready` finding confirms the key authenticates; `mutation=false` means the check is read-only. Daytona leases are Linux-only (`target: linux`) and reachable over SSH like any other Crabbox `ssh-lease` provider. Crabbox's default Daytona snapshot already ships Node.js and `npx`, so `settings.setup` is optional here — keep it only if your own snapshot needs it, as an idempotent guard like the AWS example above.
+
+```json
+{
+  "cloudWorkers": {
+    "profiles": {
+      "daytona": {
+        "provider": "crabbox",
+        "install": "bundle",
+        "settings": {
+          "provider": "daytona",
+          "class": "beast",
+          "ttl": "8h",
+          "idleTimeout": "45m"
+        }
+      }
+    }
+  }
+}
+```
+
+`class` defaults to `beast` (Crabbox's own default for this provider) when omitted; `crabbox providers describe daytona --json` lists the full flag set. Provide `DAYTONA_API_KEY` as an environment variable on the Gateway process (for example through a systemd `EnvironmentFile`), the same way other credential-bearing provider secrets are supplied — never in `openclaw.json` itself.
+
 ## Configuration
 
 Manage profiles in the Control UI under **Settings → Connections → Cloud workers**, or edit `cloudWorkers.profiles` directly in `openclaw.json` — both write the same config keys. The settings page lists each profile's backend, class, lifetime, and idle-stop in plain language, and shows whether it is advertised to `environments.list` or waiting on a Gateway restart. With no profiles configured it explains the feature, links back to this page, and starts the add flow.
