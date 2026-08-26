@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
+  getWindowsCmdExePath,
   getWindowsPowerShellExePath,
   getWindowsSystem32ExePath,
 } from "../infra/windows-install-roots.js";
@@ -27,8 +28,23 @@ export type NativeStartupFallbackProof = {
   missingExecutableError: string;
   missingScriptError: string;
   deniedReadError: string;
+  aclDiagnostics: NativeStartupAclDiagnostics;
   existenceCheckIgnoredAcl: true;
   completedAfterLauncherExit: true;
+};
+
+type NativeAclCommandResult = {
+  exitCode: number | null;
+  accessDenied: boolean;
+  spawnErrorCode: string | null;
+};
+
+type NativeStartupAclDiagnostics = {
+  backupPrivilege: "enabled" | "disabled" | "absent" | "unknown";
+  nodeOpen: { opened: boolean; readData: boolean; errorCode: string | null };
+  dotnetOpenRead: NativeAclCommandResult;
+  cmdType: NativeAclCommandResult;
+  cmdBatch: NativeAclCommandResult & { markerWritten: boolean };
 };
 
 async function expectNativeLaunchFailure(
@@ -137,6 +153,107 @@ function updateNativeScriptAcl(scriptPath: string, args: string[]): void {
   }
 }
 
+function inspectNativeAclCommand(
+  executable: string,
+  args: string[],
+  env?: NodeJS.ProcessEnv,
+): NativeAclCommandResult {
+  const result = spawnSync(executable, args, {
+    encoding: "utf8",
+    env,
+    windowsHide: true,
+    timeout: 10_000,
+  });
+  return {
+    exitCode: result.status,
+    accessDenied: /access is denied|unauthorizedaccessexception|permission denied/i.test(
+      result.stderr ?? "",
+    ),
+    spawnErrorCode: (result.error as NodeJS.ErrnoException | undefined)?.code ?? null,
+  };
+}
+
+function resolveWindowsBackupPrivilegeState(): NativeStartupAclDiagnostics["backupPrivilege"] {
+  const result = spawnSync(
+    getWindowsSystem32ExePath("whoami.exe"),
+    ["/priv", "/fo", "csv", "/nh"],
+    {
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 10_000,
+    },
+  );
+  if (result.error || result.status !== 0) {
+    return "unknown";
+  }
+  const privilege = result.stdout
+    .split(/\r?\n/u)
+    .find((line) => line.includes("SeBackupPrivilege"));
+  if (!privilege) {
+    return "absent";
+  }
+  const state = privilege.split(",").at(-1)?.replaceAll('"', "").trim().toLowerCase();
+  return state === "enabled" || state === "disabled" ? state : "unknown";
+}
+
+async function inspectNativeAclDenial(params: {
+  batchMarkerPath: string;
+  scriptPath: string;
+}): Promise<NativeStartupAclDiagnostics> {
+  const nodeOpen: NativeStartupAclDiagnostics["nodeOpen"] = {
+    opened: false,
+    readData: false,
+    errorCode: null,
+  };
+  try {
+    const handle = await fs.open(params.scriptPath, "r");
+    nodeOpen.opened = true;
+    try {
+      const { bytesRead } = await handle.read(Buffer.alloc(1), 0, 1, 0);
+      nodeOpen.readData = bytesRead === 1;
+    } finally {
+      await handle.close();
+    }
+  } catch (error) {
+    nodeOpen.errorCode = (error as NodeJS.ErrnoException).code ?? "unknown";
+  }
+
+  const dotnetOpenRead = inspectNativeAclCommand(
+    getWindowsPowerShellExePath(),
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      '$ErrorActionPreference="Stop"; $stream=[System.IO.File]::OpenRead($env:OPENCLAW_STARTUP_ACL_PROBE_PATH); try { [void]$stream.ReadByte() } finally { $stream.Dispose() }',
+    ],
+    { ...process.env, OPENCLAW_STARTUP_ACL_PROBE_PATH: params.scriptPath },
+  );
+  const cmdType = inspectNativeAclCommand(getWindowsCmdExePath(), [
+    "/d",
+    "/c",
+    "type",
+    params.scriptPath,
+  ]);
+  await fs.rm(params.batchMarkerPath, { force: true });
+  const cmdBatchResult = inspectNativeAclCommand(getWindowsCmdExePath(), [
+    "/d",
+    "/c",
+    params.scriptPath,
+  ]);
+  const markerWritten = await fs
+    .access(params.batchMarkerPath)
+    .then(() => true)
+    .catch(() => false);
+
+  return {
+    backupPrivilege: resolveWindowsBackupPrivilegeState(),
+    nodeOpen,
+    dotnetOpenRead,
+    cmdType,
+    cmdBatch: { ...cmdBatchResult, markerWritten },
+  };
+}
+
 export async function proveNativeStartupFallbackLaunch(params: {
   env: GatewayServiceEnv;
   rootDir: string;
@@ -233,9 +350,12 @@ export async function proveNativeStartupFallbackLaunch(params: {
   const userSid = `*${resolveCurrentWindowsUserSid()}`;
   updateNativeScriptAcl(scriptPath, ["/deny", `${userSid}:(RD)`]);
   let deniedReadError: string;
+  let aclDiagnostics: NativeStartupAclDiagnostics;
   try {
     // Node's Windows existence checks ignore ACLs; opening the file must still fail.
     await fs.access(scriptPath);
+    aclDiagnostics = await inspectNativeAclDenial({ batchMarkerPath, scriptPath });
+    console.info(`[windows-startup-acl] ${JSON.stringify(aclDiagnostics)}`);
     deniedReadError = await expectNativeLaunchFailure(
       () => launchFallbackTaskScript(env, null),
       ["EACCES", "EPERM"],
@@ -253,6 +373,7 @@ export async function proveNativeStartupFallbackLaunch(params: {
     missingExecutableError,
     missingScriptError,
     deniedReadError,
+    aclDiagnostics,
     existenceCheckIgnoredAcl: true,
     completedAfterLauncherExit: true,
   };
