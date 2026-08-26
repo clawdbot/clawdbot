@@ -205,6 +205,7 @@ describe("worker portal tool execution", () => {
     });
     expect(portalOpen).toHaveBeenCalledWith({
       targetPort: 4321,
+      assertCurrent: expect.any(Function),
       target: {
         kind: "worker",
         environmentId: SOURCE.environmentId,
