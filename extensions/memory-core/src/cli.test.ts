@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import { getMemoryEmbeddingCommandSecretTargetIds as canonicalMemoryTargetIds } from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
 import { resolveSessionTranscriptsDirForAgent as resolveTestSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
@@ -80,6 +81,7 @@ vi.mock("./cli.host.runtime.js", async () => {
     {
       defaultRuntime,
       formatErrorMessage,
+      getMemoryEmbeddingCommandSecretTargetIds,
       setVerbose,
       shortenHomeInString,
       shortenHomePath,
@@ -98,6 +100,7 @@ vi.mock("./cli.host.runtime.js", async () => {
   return {
     defaultRuntime,
     formatErrorMessage,
+    getMemoryEmbeddingCommandSecretTargetIds,
     getMemorySearchManager,
     listMemoryFiles,
     getRuntimeConfig,
@@ -857,9 +860,7 @@ describe("memory cli", () => {
     ) as { config?: unknown; commandName?: unknown; targetIds?: unknown; mode?: unknown };
     expect(secretRefsCall.config).toBe(config);
     expect(secretRefsCall.commandName).toBe("memory status");
-    expect(secretRefsCall.targetIds).toStrictEqual(
-      new Set(["memory.search.remote.apiKey", "agents.entries.*.memory.search.remote.apiKey"]),
-    );
+    expect(secretRefsCall.targetIds).toStrictEqual(canonicalMemoryTargetIds());
     expect(secretRefsCall.mode).toBe("read_only_status");
   });
 

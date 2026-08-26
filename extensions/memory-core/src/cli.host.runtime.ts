@@ -3,6 +3,7 @@ export {
   defaultRuntime,
   formatErrorMessage,
   resolveCommandSecretRefsViaGateway,
+  getMemoryEmbeddingCommandSecretTargetIds,
   setVerbose,
   shortenHomeInString,
   shortenHomePath,
