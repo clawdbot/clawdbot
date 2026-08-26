@@ -504,6 +504,14 @@ export function formatActiveContinuationTraceparent(): string | undefined {
   });
 }
 
+/**
+ * Typed continuation tools capture while their current turn span is live.
+ * Preserve the full context so exporters resolve that span instead of an older ancestor.
+ */
+export function formatCurrentSpanContinuationTraceparent(): string | undefined {
+  return formatContinuationTraceparent(getActiveDiagnosticTraceContext());
+}
+
 export function resolveContinuationTraceparent(
   traceparent: string | undefined,
 ): string | undefined {
