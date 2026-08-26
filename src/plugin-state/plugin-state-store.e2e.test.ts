@@ -174,7 +174,9 @@ describe("limits", () => {
         () => store.registerIfAbsent("rejected", oversize),
         () => update("updated", () => oversize),
       ]) {
-        await expect(Promise.resolve().then(write)).rejects.toMatchObject({
+        await expect(async () => {
+          await write();
+        }).rejects.toMatchObject({
           code: "PLUGIN_STATE_LIMIT_EXCEEDED",
         });
       }
