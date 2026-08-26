@@ -14,6 +14,7 @@ import {
   listStoredChatOutboxes,
   removeStoredChatComposerQueueItem,
   resolveStoredChatOutboxScope,
+  storedChatOutboxScopeKey,
   updateStoredChatComposerQueueItem,
   updateStoredChatComposerQueueItems,
   type StoredChatQueueReplacement,
@@ -423,11 +424,12 @@ export function readDeliveredQueuedChatSendForRun(
   if (!runId) {
     return null;
   }
-  const match = listStoredChatOutboxes(host)
-    .filter((outbox) => outbox.sessionKey === scope.sessionKey && outbox.agentId === scope.agentId)
-    .flatMap((outbox) => outbox.queue.map((item) => ({ item, outbox })))
-    .find(({ item }) => item.sendRunId === runId);
-  return match ?? null;
+  const scopeKey = storedChatOutboxScopeKey(scope);
+  const outbox = listStoredChatOutboxes(host).find(
+    (candidate) => storedChatOutboxScopeKey(candidate) === scopeKey,
+  );
+  const item = outbox?.queue.find((candidate) => candidate.sendRunId === runId);
+  return item && outbox ? { item, outbox } : null;
 }
 
 export function clearPendingQueueItemsForRun(

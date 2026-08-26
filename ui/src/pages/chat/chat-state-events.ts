@@ -73,21 +73,6 @@ function selectedGlobalEventAgentId(state: ChatPageHost, agentId: string | null)
   return agentId ? normalizeAgentId(agentId) : resolveUiDefaultAgentId(state);
 }
 
-function chatEventOutboxScope(
-  state: ChatPageHost,
-  payload: ChatEventPayload | undefined,
-): StoredChatOutboxScope | undefined {
-  // Gateway chat events always carry session ownership. Missing ownership must
-  // not fall back to correlation-only run IDs, which can collide across sessions.
-  if (!payload?.sessionKey) {
-    return undefined;
-  }
-  const agentId = isUiGlobalSessionKey(payload.sessionKey)
-    ? selectedGlobalEventAgentId(state, payload.agentId ?? null)
-    : payload.agentId;
-  return resolveStoredChatOutboxScope(state, payload.sessionKey, agentId);
-}
-
 function globalSessionEventMatchesChat(
   state: ChatPageHost,
   event: NonNullable<ReturnType<typeof readSessionChangedEvent>>,
@@ -395,13 +380,10 @@ function hasVisibleFinalAssistantReply(
   state: ChatPageHost,
   payload: ChatEventPayload | undefined,
 ): boolean {
-  if (payload?.state !== "final") {
-    return false;
-  }
-  const ownsReply =
-    chatScopedEventSessionMatches(state, payload.sessionKey, payload.agentId) ||
-    (typeof payload.runId === "string" && payload.runId === state.chatRunId);
-  if (!ownsReply) {
+  if (
+    payload?.state !== "final" ||
+    !chatScopedEventSessionMatches(state, payload.sessionKey, payload.agentId)
+  ) {
     return false;
   }
   const finalText = extractText(payload.message);
@@ -462,13 +444,23 @@ export function handlePageGatewayEvent(
     if (payload?.state === "delta" && typeof payload.deltaText === "string" && sessionMatches) {
       refreshPullRequestsForStreamedLinks(state, payload, payload.deltaText);
     }
-    const shouldCelebrateFirstReply =
-      sessionMatches && hasVisibleFinalAssistantReply(state, payload);
+    const shouldCelebrateFirstReply = hasVisibleFinalAssistantReply(state, payload);
     const shouldRefreshPullRequests =
       shouldCelebrateFirstReply && finalAssistantReplyHasPullRequestLink(state, payload);
     const terminal =
       payload?.state === "final" || payload?.state === "aborted" || payload?.state === "error";
-    const outboxScope = terminal ? chatEventOutboxScope(state, payload) : undefined;
+    // Missing ownership must not fall back to correlation-only run IDs, which
+    // can collide across sessions.
+    const outboxScope =
+      terminal &&
+      payload?.sessionKey &&
+      resolveStoredChatOutboxScope(
+        state,
+        payload.sessionKey,
+        isUiGlobalSessionKey(payload.sessionKey)
+          ? selectedGlobalEventAgentId(state, payload.agentId ?? null)
+          : payload.agentId,
+      );
     const delivered = outboxScope
       ? rememberDeliveredQueuedUserTurn(state, payload?.runId, outboxScope)
       : null;
