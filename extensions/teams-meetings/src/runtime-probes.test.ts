@@ -7,10 +7,30 @@ const URL = "https://teams.microsoft.com/l/meetup-join/19%3ameeting_probe%40thre
 type TeamsMeetingsProbeContext = Parameters<typeof testTeamsMeetingListening>[0];
 
 describe("Microsoft Teams meeting runtime probes", () => {
-  it("waits for listening when Chrome launched without a tracked target", async () => {
+  it.each([
+    {
+      chrome: { health: { inCall: true }, launched: true },
+      description: "Chrome launched without a tracked target",
+      shouldRefresh: true,
+    },
+    {
+      chrome: {
+        browserTab: { openedByPlugin: false, targetId: "reused-teams-tab" },
+        health: { inCall: true },
+        launched: false,
+      },
+      description: "Chrome reused a tracked manual tab",
+      shouldRefresh: true,
+    },
+    {
+      chrome: { health: { inCall: true }, launched: false },
+      description: "Chrome neither launched nor tracks a target",
+      shouldRefresh: false,
+    },
+  ])("handles listening when $description", async ({ chrome, shouldRefresh }) => {
     const session = {
       agentId: "main",
-      chrome: { health: { inCall: true }, launched: true },
+      chrome,
       id: "teams-listen",
       mode: "transcribe",
       transport: "chrome",
@@ -38,10 +58,15 @@ describe("Microsoft Teams meeting runtime probes", () => {
       url: URL,
     });
 
-    expect(refreshCaptionHealth).toHaveBeenCalledOnce();
-    expect(result.manualAction).toEqual({
-      reason: "teams-admission-required",
-      message: "Waiting",
-    });
+    expect(refreshCaptionHealth).toHaveBeenCalledTimes(shouldRefresh ? 1 : 0);
+    if (shouldRefresh) {
+      expect(result.manualAction).toEqual({
+        reason: "teams-admission-required",
+        message: "Waiting",
+      });
+    } else {
+      expect(result.manualAction).toBeUndefined();
+      expect(result.listenTimedOut).toBe(false);
+    }
   });
 });
