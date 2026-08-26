@@ -175,8 +175,11 @@ describe("node worker launch adapter", () => {
       );
       const sleep = vi.fn(async () => {
         expect(invoke).not.toHaveBeenCalled();
-        if (outcome === "abort") controller.abort(new Error("operator cancelled capacity wait"));
-        else available = 1;
+        if (outcome === "abort") {
+          controller.abort(new Error("operator cancelled capacity wait"));
+        } else {
+          available = 1;
+        }
       });
       const adapter = createNodeWorkerLaunchAdapter({
         getTransport: () => transportWith(invoke, async () => [nodeProof("conn-1", available)]),
