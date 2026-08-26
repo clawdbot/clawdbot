@@ -918,7 +918,7 @@ describe("buildGatewayCronService", () => {
     }));
     getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope: vi.fn() });
     const state = loadCronService(createCronConfig("server-cron-on-exit-draining"));
-    let suspensionAdmission: ReturnType<typeof tryBeginGatewaySuspendAdmission>;
+    let suspensionAdmission: ReturnType<typeof tryBeginGatewaySuspendAdmission> | undefined;
 
     try {
       const job = await addCronJob(

@@ -12,7 +12,6 @@ import {
   isGatewayWorkAdmissionClosed,
   markGatewayRestartDraining,
   retainGatewayRootWorkAdmissionContinuation,
-  retainGatewayRootWorkAdmissionContinuationScope,
   resetGatewayWorkAdmission,
   rollbackGatewayRestartSignalFence,
   runWithGatewayIndependentRootWorkContinuation,
@@ -263,47 +262,6 @@ it("retains an admitted request root across its handler return", async () => {
   expect(subordinateAdmissionClosed).toBe(false);
   releaseContinuation();
   releaseContinuation();
-  expect(getActiveGatewayRootWorkCount()).toBe(0);
-});
-
-it("re-enters only an exact live retained root while unrelated drain work stays fenced", async () => {
-  const root = tryBeginGatewayRootWorkAdmission();
-  const retained = await root?.run(async () => retainGatewayRootWorkAdmissionContinuationScope());
-  root?.release();
-  expect(getActiveGatewayRootWorkCount()).toBe(1);
-
-  const suspension = tryBeginGatewaySuspendAdmission(() => {});
-  expect(suspension?.drain()).toBe(true);
-  expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
-  await retained?.run(async () => {
-    expect(isGatewaySubordinateWorkAdmissionClosed()).toBe(false);
-    const nested = tryBeginGatewayRootWorkAdmission();
-    expect(nested?.ownsRoot).toBe(false);
-    nested?.release();
-    retained.release();
-    await Promise.resolve();
-    expect(getActiveGatewayRootWorkCount()).toBe(1);
-    expect(isGatewaySubordinateWorkAdmissionClosed()).toBe(false);
-  });
-
-  retained?.release();
-  expect(getActiveGatewayRootWorkCount()).toBe(0);
-  await expect(retained?.run(async () => {})).rejects.toThrow(
-    "gateway root work continuation is no longer active",
-  );
-  expect(suspension?.release()).toBe(true);
-});
-
-it("rejects a retained root scope retired by lifecycle reset", async () => {
-  const root = tryBeginGatewayRootWorkAdmission();
-  const retained = await root?.run(async () => retainGatewayRootWorkAdmissionContinuationScope());
-  root?.release();
-  resetGatewayWorkAdmission();
-
-  await expect(retained?.run(async () => {})).rejects.toThrow(
-    "gateway root work continuation is no longer active",
-  );
-  retained?.release();
   expect(getActiveGatewayRootWorkCount()).toBe(0);
 });
 

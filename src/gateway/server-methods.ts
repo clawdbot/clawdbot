@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -303,19 +304,10 @@ function runGatewayPendingWorkContinuation<T>(params: {
   context: GatewayRequestContext;
   run: () => Promise<T>;
 }): Promise<T> | null {
-  if (
-    getGatewaySuspendAdmissionPhase() !== "draining" ||
-    !params.requestParams ||
-    typeof params.requestParams !== "object"
-  ) {
+  if (getGatewaySuspendAdmissionPhase() !== "draining" || !isRecord(params.requestParams)) {
     return null;
   }
-  const request = params.requestParams as {
-    id?: unknown;
-    invokeId?: unknown;
-    nodeId?: unknown;
-    kind?: unknown;
-  };
+  const request = params.requestParams;
   if (params.client?.connect.role === "node") {
     const invokeId =
       params.method === "node.invoke.progress"

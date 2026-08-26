@@ -416,14 +416,9 @@ export function captureGatewayRootWorkAdmissionContinuationScope(): GatewayRootW
   return createGatewayRootWorkAdmissionContinuationScope(false);
 }
 
-/** Retains exact root ownership for work that intentionally outlives its handler. */
-export function retainGatewayRootWorkAdmissionContinuationScope(): GatewayRootWorkAdmissionContinuationScope | null {
-  return createGatewayRootWorkAdmissionContinuationScope(true);
-}
-
 /** Transfers an admitted request root to work that intentionally outlives its handler. */
 export function retainGatewayRootWorkAdmissionContinuation(): (() => void) | null {
-  return retainGatewayRootWorkAdmissionContinuationScope()?.release ?? null;
+  return createGatewayRootWorkAdmissionContinuationScope(true)?.release ?? null;
 }
 
 /** Starts process-lifetime work without inheriting the request root that created it. */
