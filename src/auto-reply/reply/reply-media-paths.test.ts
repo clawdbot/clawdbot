@@ -207,6 +207,38 @@ describe("createReplyMediaPathNormalizer", () => {
     expect(ensureSandboxWorkspaceForSession).not.toHaveBeenCalled();
   });
 
+  it("realigns structured attachment sources after staging sandbox media", async () => {
+    const sandboxRoot = "/tmp/sandboxes/session-1";
+    const sourcePath = path.join(sandboxRoot, "reports", "report.csv");
+    const normalize = createTestReplyMediaNormalizer({
+      sandboxRoot,
+      sandboxContainerWorkdir: "/workspace",
+    });
+
+    const result = await normalize({
+      mediaUrls: [sourcePath],
+      attachments: [
+        {
+          path: sourcePath,
+          url: sourcePath,
+          mediaUrl: sourcePath,
+          filePath: sourcePath,
+          name: "declared-report.csv",
+          mimeType: "text/csv",
+        },
+      ],
+    });
+
+    expect(result.attachments).toEqual([
+      {
+        url: "/tmp/outbound-media/report.csv",
+        name: "declared-report.csv",
+        mimeType: "text/csv",
+      },
+    ]);
+    expect(JSON.stringify(result)).not.toContain(sourcePath);
+  });
+
   it("drops sandbox-mapped media when staging fails instead of retrying the workspace fallback", async () => {
     ensureSandboxWorkspaceForSession.mockResolvedValue({
       workspaceDir: "/tmp/sandboxes/session-1",

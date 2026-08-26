@@ -217,9 +217,10 @@ export function createReplyMediaPathNormalizer(params: {
     }
 
     const normalizedMedia: string[] = [];
+    const normalizedAttachments: NonNullable<ReplyPayload["attachments"]> = [];
     const seen = new Set<string>();
     let firstMediaDropError: unknown;
-    for (const media of mediaList) {
+    for (const [index, media] of mediaList.entries()) {
       let normalized: string;
       try {
         normalized = await normalizeMediaSource(media);
@@ -233,6 +234,13 @@ export function createReplyMediaPathNormalizer(params: {
       }
       seen.add(normalized);
       normalizedMedia.push(normalized);
+      if (payload.attachments) {
+        const attachment = { ...payload.attachments[index], url: normalized };
+        delete attachment.path;
+        delete attachment.mediaUrl;
+        delete attachment.filePath;
+        normalizedAttachments.push(attachment);
+      }
     }
 
     const text =
@@ -246,6 +254,7 @@ export function createReplyMediaPathNormalizer(params: {
         text,
         mediaUrl: undefined,
         mediaUrls: undefined,
+        ...(payload.attachments ? { attachments: undefined } : {}),
       });
     }
 
@@ -254,6 +263,7 @@ export function createReplyMediaPathNormalizer(params: {
       text,
       mediaUrl: normalizedMedia[0],
       mediaUrls: normalizedMedia,
+      ...(payload.attachments ? { attachments: normalizedAttachments } : {}),
     });
   };
 }

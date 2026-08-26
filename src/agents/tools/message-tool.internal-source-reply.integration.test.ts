@@ -281,6 +281,18 @@ describe("WebChat message tool internal source reply", () => {
           sourceReplySink: "internal-ui",
           idempotencyKey: expect.any(String),
         });
+        const sourceReplyDetails = (
+          toolResult.details as {
+            sourceReply?: {
+              mediaUrls?: string[];
+              attachments?: Array<{ url?: string }>;
+            };
+          }
+        ).sourceReply;
+        expect(sourceReplyDetails?.attachments).toEqual(
+          sourceReplyDetails?.mediaUrls?.map((url) => expect.objectContaining({ url })),
+        );
+        expect(JSON.stringify(sourceReplyDetails)).not.toContain(workspaceDir);
         expect(content[0]).toEqual({ type: "text", text: "Durable attachment reply" });
         expect(image).toMatchObject({
           type: "image",
