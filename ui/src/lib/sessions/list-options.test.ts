@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { SessionsListResult } from "../../api/types.ts";
+import type { SessionGoal, SessionsListResult } from "../../api/types.ts";
 import { createSessionCapability } from "./index.ts";
 
 function sessionsResult(sessions: SessionsListResult["sessions"], ts: number): SessionsListResult {
@@ -415,6 +415,17 @@ describe("session list replacement options", () => {
   });
 
   it("does not preserve another agent's raw-global row through background hydration", async () => {
+    const opsGoal: SessionGoal = {
+      schemaVersion: 1,
+      id: "goal-ops",
+      objective: "Ops only",
+      status: "active",
+      createdAt: 1,
+      updatedAt: 1,
+      tokenStart: 0,
+      tokensUsed: 0,
+      continuationTurns: 0,
+    };
     let listCallCount = 0;
     const request = vi.fn(async (method: string) => {
       if (method !== "sessions.list") {
@@ -429,7 +440,7 @@ describe("session list replacement options", () => {
                 kind: "global",
                 updatedAt: 1,
                 owner: { actor: { type: "agent", id: "ops", label: "Ops" } },
-                goal: "Ops only",
+                goal: opsGoal,
                 status: "running",
               },
             ]
@@ -454,7 +465,7 @@ describe("session list replacement options", () => {
     await sessions.refresh({ agentId: "ops", force: true });
     expect(sessions.state.result?.sessions[0]).toMatchObject({
       key: "global",
-      goal: "Ops only",
+      goal: opsGoal,
     });
 
     snapshot.assistantAgentId = "research";
