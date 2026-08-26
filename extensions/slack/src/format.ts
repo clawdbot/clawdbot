@@ -456,36 +456,44 @@ export function chunkSlackMrkdwnText(text: string, limit: number): string[] {
     (text.match(/<[^>\n]+>/gu)?.some(isAllowedSlackAngleToken) ?? false) ||
     /\\[\s\S]/u.test(text);
   if (!hasProtectedToken) {
-    return chunkTextForOutbound(text, limit);
+    return chunkTextForOutbound(text, limit, { preserveWhitespace: true });
   }
 
   const chunks: string[] = [];
   let activeMarker: SlackCodeMarker | undefined;
   let content = "";
-  const wrapper = () =>
-    activeMarker && limit > activeMarker.length * 2 ? activeMarker : undefined;
-  const capacity = () => limit - (wrapper()?.length ?? 0) * 2;
+  const wrapper = (marker: SlackCodeMarker | undefined) =>
+    marker && limit > marker.length * 2 ? marker : undefined;
+  const capacity = (marker: SlackCodeMarker | undefined) => limit - (wrapper(marker)?.length ?? 0);
   const flush = () => {
-    if (!content) {
-      return;
+    const marker = wrapper(activeMarker);
+    if (content && content !== marker) {
+      chunks.push(marker ? `${content}${marker}` : content);
     }
-    const marker = wrapper();
-    chunks.push(marker ? `${marker}${content}${marker}` : content);
     content = "";
   };
 
   for (const token of tokenizeSlackMrkdwn(text)) {
     const transition = resolveSlackCodeMarkerTransition(activeMarker, token);
-    if (transition !== null) {
-      flush();
-      activeMarker = transition;
+    const nextMarker = transition === null ? activeMarker : transition;
+    const sourceMarker = token === "`" || token === "```" ? token : undefined;
+    if (transition !== null && sourceMarker && !wrapper(sourceMarker)) {
+      activeMarker = nextMarker;
       continue;
     }
+    if (content && content.length + token.length > capacity(nextMarker)) {
+      flush();
+    }
+    activeMarker = nextMarker;
+    if (!content && transition === undefined) {
+      continue;
+    }
+    content ||= transition === null ? (wrapper(activeMarker) ?? "") : "";
 
-    const contentLimit = capacity();
+    const contentLimit = capacity(activeMarker) - (wrapper(activeMarker)?.length ?? 0);
     if (token.length > contentLimit) {
       flush();
-      const marker = wrapper();
+      const marker = wrapper(activeMarker);
       if (activeMarker && isAllowedSlackAngleToken(token)) {
         if (marker) {
           chunks.push(
@@ -508,9 +516,6 @@ export function chunkSlackMrkdwnText(text: string, limit: number): string[] {
       }
       chunks.push(...(token.length <= limit ? [token] : chunkTextForOutbound(token, limit)));
       continue;
-    }
-    if (content && content.length + token.length > contentLimit) {
-      flush();
     }
     content += token;
   }

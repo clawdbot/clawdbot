@@ -552,8 +552,10 @@ export function collapseSequentialDuplicateMessages(items: ChatItem[]): ChatItem
 
   return collapsed;
 }
-export function hasRenderableNormalizedMessage(message: unknown): boolean {
-  const normalized = safeNormalizeMessage(message);
+export function hasRenderableNormalizedMessage(
+  message: unknown,
+  normalized = safeNormalizeMessage(message),
+): boolean {
   if (!normalized) {
     return false;
   }

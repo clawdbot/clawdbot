@@ -17,6 +17,7 @@ import {
   executeMcpAppOperation,
   type McpAppActiveView,
   parseMcpAppOperation,
+  requireMcpAppInteraction,
   withMcpAppActiveView,
 } from "./mcp-app-operations.js";
 
@@ -209,6 +210,15 @@ function supportsStandaloneToolOperations(
   // The ticket is the short-lived grant. Tool authority still requires the
   // originating run's explicit allowlist and is revalidated on every request.
   return view.allowedAppToolNames !== undefined && view.readOnly !== true;
+}
+
+async function supportsStandaloneResourceOperations(view: McpAppViewLease): Promise<boolean> {
+  try {
+    await requireMcpAppInteraction(view);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function sendJsonRepresentation(
@@ -685,8 +695,10 @@ export async function handleMcpAppStandaloneHttpRequest(
   }
 
   try {
-    return await withMcpAppActiveView(active, "read", () => {
+    return await withMcpAppActiveView(active, "read", async () => {
       const { runtime, view } = active;
+      const serverResources =
+        runtime.readResource !== undefined && (await supportsStandaloneResourceOperations(view));
       sendJsonRepresentation(req, res, 200, {
         sandboxUrl: buildMcpAppSandboxPath(view.csp),
         sandboxPort,
@@ -696,7 +708,7 @@ export async function handleMcpAppStandaloneHttpRequest(
         toolInput: view.toolInput,
         toolResult: view.toolResult,
         serverTools: supportsStandaloneToolOperations(view),
-        serverResources: runtime.readResource !== undefined,
+        serverResources,
         ...(view.requestTimeoutMs !== undefined
           ? {
               // Keep the browser's outer deadline behind the SDK request

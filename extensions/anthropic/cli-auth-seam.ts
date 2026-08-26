@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { CLAUDE_CLI_CLEAR_ENV } from "./cli-constants.js";
 
 type ClaudeCliAuthStatus = { status: "available" } | { status: "missing" | "unreadable" };
 
@@ -8,9 +9,13 @@ export function probeClaudeCliAuthStatus(params?: {
   command?: string;
   env?: NodeJS.ProcessEnv;
 }): ClaudeCliAuthStatus {
+  const env = { ...(params?.env ?? process.env) };
+  for (const name of CLAUDE_CLI_CLEAR_ENV) {
+    delete env[name];
+  }
   const result = spawnSync(params?.command ?? "claude", ["auth", "status", "--json"], {
     encoding: "utf8",
-    env: params?.env ?? process.env,
+    env,
     maxBuffer: 64 * 1024,
     timeout: 3_000,
     windowsHide: true,

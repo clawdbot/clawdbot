@@ -827,6 +827,47 @@ describe("ensureOnboardingPluginInstalled", () => {
     );
   });
 
+  it("keeps version-bound official runtime plugins aligned with the stable core version", async () => {
+    installPluginFromNpmSpec.mockResolvedValueOnce({
+      ok: true,
+      pluginId: "codex",
+      targetDir: "/tmp/codex",
+      version: VERSION,
+      npmResolution: {
+        name: "@openclaw/codex",
+        version: VERSION,
+        resolvedSpec: `@openclaw/codex@${VERSION}`,
+      },
+    });
+
+    await ensureOnboardingPluginInstalled({
+      cfg: { update: { channel: "stable" } },
+      entry: {
+        pluginId: "codex",
+        label: "Codex",
+        install: { npmSpec: "@openclaw/codex" },
+        trustedSourceLinkedOfficialInstall: true,
+        versionBoundToOpenClaw: true,
+      },
+      prompter: {
+        select: vi.fn(async () => "npm"),
+        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+      } as never,
+      runtime: {} as never,
+      promptInstall: false,
+    });
+
+    const [npmCall] = readFirstMockCall(installPluginFromNpmSpec, "installPluginFromNpmSpec") as [
+      NpmSpecInstallCall,
+    ];
+    expect(npmCall.spec).toBe(`@openclaw/codex@${VERSION}`);
+    const [, recordUpdate] = readFirstMockCall(recordPluginInstall, "recordPluginInstall") as [
+      OpenClawConfig,
+      PluginInstallRecord,
+    ];
+    expect(recordUpdate.spec).toBe("@openclaw/codex");
+  });
+
   it("logs npm install warnings once while shortening the progress label", async () => {
     const warning =
       "npm rejected managed npm alias overrides; retrying plugin install without alias overrides for this npm version.";

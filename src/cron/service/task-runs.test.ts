@@ -18,7 +18,6 @@ import type { CronJob } from "../types.js";
 import { timeoutErrorMessage } from "./execution-errors.js";
 import { createCronServiceState as createCronServiceStateBase } from "./state.js";
 import {
-  getActiveCronTaskRunId,
   findCronTaskRunRecoveryInDatabase,
   tryCreateCronTaskRunHandle,
   tryFinishCronTaskRun,
@@ -106,9 +105,7 @@ describe("cron task run terminal records", () => {
           updatedAtMs: 100,
           enabled: true,
         };
-        let activeTaskRunId: string | undefined;
         const runIsolatedAgentJob = vi.fn(async ({ onExecutionStarted }) => {
-          activeTaskRunId = getActiveCronTaskRunId();
           onExecutionStarted?.({
             jobId: job.id,
             agentId: "ops",
@@ -143,13 +140,9 @@ describe("cron task run terminal records", () => {
         expect(taskRecords()).toHaveLength(1);
         expect(taskRecords()[0]?.agentId).toBe("ops");
         expect(taskRecords()[0]?.childSessionKey).toBe(testCase.initialSessionKey);
-        expect(getActiveCronTaskRunId()).toBeUndefined();
-
         const runPromise = executeJobCoreWithTimeout(state, job, { runId: taskRunId });
         try {
           await started;
-          expect(activeTaskRunId).toBe(taskRunId);
-          expect(getActiveCronTaskRunId()).toBeUndefined();
           expect(taskRecords()[0]?.agentId).toBe("ops");
           expect(taskRecords()[0]?.childSessionKey).toBe(testCase.executionSessionKey);
           expect(runIsolatedAgentJob.mock.calls[0]?.[0]).not.toHaveProperty("taskRunId");

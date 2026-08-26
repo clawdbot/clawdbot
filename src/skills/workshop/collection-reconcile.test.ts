@@ -101,13 +101,13 @@ describe("skill collection reconciliation", () => {
           },
         ],
       }),
-    ).rejects.toThrow("Skill Workshop does not own this skill path: handwritten");
+    ).rejects.toThrow("User-authored skill must stay unchanged: handwritten");
     await expect(
       fs.readFile(path.join(workspaceDir, "skills", "handwritten", "SKILL.md"), "utf8"),
     ).resolves.toContain("# Original");
   });
 
-  it("records collection-created skills as applied create proposals", async () => {
+  it("creates a new skill without a read receipt and records its proposal", async () => {
     await reconcileSkillCollection({
       workspaceDir,
       env: testState.env,
@@ -164,7 +164,7 @@ describe("skill collection reconciliation", () => {
           },
         ],
       }),
-    ).rejects.toThrow("Skill Workshop does not own this skill path: foo");
+    ).rejects.toThrow("User-authored skill must stay unchanged: foo");
     await expect(
       reconcileSkillCollection({
         workspaceDir,
@@ -172,7 +172,7 @@ describe("skill collection reconciliation", () => {
         ...receipt,
         plan: [{ action: "drop", name: "foo", reason: "Remove replacement" }],
       }),
-    ).rejects.toThrow("Skill Workshop does not own this skill path: foo");
+    ).rejects.toThrow("User-authored skill must stay unchanged: foo");
   });
 
   it("keeps a dropped path released when outcome persistence fails", async () => {
@@ -379,8 +379,9 @@ describe("skill collection reconciliation", () => {
     const noOp = await reconcileSkillCollection({
       workspaceDir,
       env: testState.env,
-      ...(await readCollectionReceipt()),
-      plan: [{ action: "keep", name: "deploy-one" }],
+      readSkillHashes: new Map(),
+      readSkillTreeHashes: new Map(),
+      plan: [],
     });
     expect(noOp.backupId).toBe(result.backupId);
     const backupDir = path.join(
@@ -410,39 +411,109 @@ describe("skill collection reconciliation", () => {
     expect(await fs.readdir(backupDir)).toEqual([result.backupId]);
   });
 
-  it("requires the model to read and decide every current skill", async () => {
-    await writeWorkspaceSkills(workspaceDir, [
-      { name: "first", description: "First procedure" },
-      { name: "second", description: "Second procedure" },
+  it("leaves an unlisted skill untouched and records it as kept", async () => {
+    await writeWorkshopOwnedSkills([
+      { name: "changed", description: "Changed procedure", body: "# Before\n" },
+      { name: "untouched", description: "Untouched procedure", body: "# Untouched\n" },
     ]);
+    const receipt = await readCollectionReceipt();
+    const untouchedFile = path.join(workspaceDir, "skills", "untouched", "SKILL.md");
+    await fs.appendFile(untouchedFile, "\nOperator note.\n");
 
-    await expect(
-      reconcileSkillCollection({
-        workspaceDir,
-        env: testState.env,
-        readSkillHashes: new Map([["first", "read"]]),
-        readSkillTreeHashes: new Map(),
-        plan: [{ action: "keep", name: "first" }],
-      }),
-    ).rejects.toThrow("Read every current skill before reconciling: second");
-    expect((await fs.readdir(path.join(workspaceDir, "skills"))).toSorted()).toEqual([
-      "first",
-      "second",
-    ]);
+    const result = await reconcileSkillCollection({
+      workspaceDir,
+      env: testState.env,
+      ...receipt,
+      plan: [
+        {
+          action: "write",
+          name: "changed",
+          description: "Changed procedure",
+          content: "# After\n",
+        },
+      ],
+    });
 
+    expect(result).toMatchObject({ kept: ["untouched"], written: ["changed"], dropped: [] });
+    await expect(fs.readFile(untouchedFile, "utf8")).resolves.toContain("Operator note.");
+    expect(
+      listSkillCollectionReviewOutcomes(workspaceDir, { env: testState.env })[0],
+    ).toMatchObject({ kept: ["untouched"], written: ["changed"], dropped: [] });
+  });
+
+  it.each(["write", "drop"] as const)(
+    "rejects $action of an existing skill without a read receipt",
+    async (action) => {
+      await writeWorkshopOwnedSkills([{ name: "existing", description: "Existing procedure" }]);
+      const decision =
+        action === "write"
+          ? {
+              action,
+              name: "existing",
+              description: "Changed procedure",
+              content: "# Changed\n",
+            }
+          : { action, name: "existing", reason: "No longer useful" };
+
+      await expect(
+        reconcileSkillCollection({
+          workspaceDir,
+          env: testState.env,
+          readSkillHashes: new Map(),
+          readSkillTreeHashes: new Map(),
+          plan: [decision],
+        }),
+      ).rejects.toThrow("Read the skill before changing it: existing");
+    },
+  );
+
+  it("rejects a change to a listed skill that changed after it was read", async () => {
+    await writeWorkshopOwnedSkills([{ name: "existing", description: "Existing procedure" }]);
     const staleReceipt = await readCollectionReceipt();
-    await fs.appendFile(path.join(workspaceDir, "skills", "second", "SKILL.md"), "Changed.\n");
+    await fs.appendFile(path.join(workspaceDir, "skills", "existing", "SKILL.md"), "Changed.\n");
+
     await expect(
       reconcileSkillCollection({
         workspaceDir,
         env: testState.env,
         ...staleReceipt,
+        plan: [{ action: "drop", name: "existing", reason: "No longer useful" }],
+      }),
+    ).rejects.toThrow("Skill changed after it was read: existing");
+    await expect(
+      fs.readFile(path.join(workspaceDir, "skills", "existing", "SKILL.md"), "utf8"),
+    ).resolves.toContain("Changed.");
+  });
+
+  it("retains one unlisted approved skill for every sharing agent", async () => {
+    await writeWorkshopOwnedSkills([
+      { name: "alpha", description: "Alpha procedure" },
+      { name: "beta", description: "Beta procedure" },
+    ]);
+    const receipt = await readCollectionReceipt();
+    const approvedSkillNamesByAgent = [new Set(["alpha", "beta"])];
+
+    await expect(
+      reconcileSkillCollection({
+        workspaceDir,
+        env: testState.env,
+        ...receipt,
+        approvedSkillNamesByAgent,
         plan: [
-          { action: "keep", name: "first" },
-          { action: "keep", name: "second" },
+          { action: "drop", name: "alpha", reason: "Duplicate" },
+          { action: "drop", name: "beta", reason: "Duplicate" },
         ],
       }),
-    ).rejects.toThrow("Skill changed after it was read: second");
+    ).rejects.toThrow("Every sharing agent must retain a visible skill");
+    await expect(
+      reconcileSkillCollection({
+        workspaceDir,
+        env: testState.env,
+        ...receipt,
+        approvedSkillNamesByAgent,
+        plan: [{ action: "drop", name: "alpha", reason: "Duplicate" }],
+      }),
+    ).resolves.toMatchObject({ kept: ["beta"], dropped: [{ name: "alpha" }] });
   });
 
   it("preserves a concurrent skill-tree edit made before mutation", async () => {
@@ -568,7 +639,7 @@ describe("skill collection reconciliation", () => {
         ...(await readCollectionReceipt()),
         plan: [{ action: "drop", name: "project-procedure", reason: "cleanup test" }],
       }),
-    ).rejects.toThrow("Skill Workshop does not own this skill path: project-procedure");
+    ).rejects.toThrow("User-authored skill must stay unchanged: project-procedure");
     await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
       "# Project procedure",
     );
@@ -576,16 +647,16 @@ describe("skill collection reconciliation", () => {
 
   it("rejects a plan whose resulting collection exceeds the aggregate byte limit", async () => {
     await writeWorkshopOwnedSkills(
-      Array.from({ length: 7 }, (_, index) => ({
+      Array.from({ length: 25 }, (_, index) => ({
         name: `large-${index}`,
         description: `Large procedure ${index}`,
       })),
     );
-    const plan = Array.from({ length: 7 }, (_, index) => ({
+    const plan = Array.from({ length: 25 }, (_, index) => ({
       action: "write" as const,
       name: `large-${index}`,
       description: `Rewritten large procedure ${index}`,
-      content: `# Large ${index}\n\n${"x".repeat(39_000)}\n`,
+      content: `# Large ${index}\n\n${"x".repeat(9_800)}\n`,
     }));
 
     await expect(
@@ -599,6 +670,48 @@ describe("skill collection reconciliation", () => {
     await expect(
       fs.readFile(path.join(workspaceDir, "skills", "large-0", "SKILL.md"), "utf8"),
     ).resolves.not.toContain("x".repeat(100));
+  });
+
+  it("rejects oversized growth but permits an oversized skill to shrink", async () => {
+    await writeWorkshopOwnedSkills([
+      {
+        name: "large-procedure",
+        description: "Large procedure",
+        body: `# Large procedure\n\n${"Detailed step.\n".repeat(2500)}`,
+      },
+    ]);
+    const receipt = await readCollectionReceipt();
+    await expect(
+      reconcileSkillCollection({
+        workspaceDir,
+        env: testState.env,
+        ...receipt,
+        plan: [
+          {
+            action: "write",
+            name: "large-procedure",
+            description: "Large procedure",
+            content: `# Large procedure\n\n${"Longer step.\n".repeat(3000)}`,
+          },
+        ],
+      }),
+    ).rejects.toThrow(/autonomous limit is 10,000.*bundled file/);
+
+    await expect(
+      reconcileSkillCollection({
+        workspaceDir,
+        env: testState.env,
+        ...receipt,
+        plan: [
+          {
+            action: "write",
+            name: "large-procedure",
+            description: "Large procedure",
+            content: `# Large procedure\n\n${"Lean step.\n".repeat(1200)}`,
+          },
+        ],
+      }),
+    ).resolves.toMatchObject({ written: ["large-procedure"] });
   });
 
   it("surfaces proposal reads that exceed the collection lease wait", async () => {

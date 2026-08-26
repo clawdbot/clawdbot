@@ -1,3 +1,4 @@
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { BASE_TWITCH_TEST_ACCOUNT } from "./test-fixtures.js";
 import type { TwitchChatMessage } from "./types.js";
@@ -43,7 +44,12 @@ type InboundRunInput = {
     ingest: (message: TwitchChatMessage) => unknown;
     resolveTurn: (input: unknown) => Promise<{
       delivery: {
-        deliver: (payload: { text: string }) => Promise<unknown>;
+        deliver: (payload: ReplyPayload) => Promise<{ visibleReplySent: boolean }>;
+        onDelivered: (
+          payload: ReplyPayload,
+          info: { kind: "final" },
+          result: { visibleReplySent: boolean },
+        ) => void;
       };
     }>;
   };
@@ -80,11 +86,6 @@ describe("monitorTwitchProvider", () => {
         stop: mocks.ingressStop,
       }),
     );
-    mocks.runInbound.mockImplementation(async (input: InboundRunInput) => {
-      const ingested = input.adapter.ingest(input.raw);
-      const turn = await input.adapter.resolveTurn(ingested);
-      await turn.delivery.deliver({ text: "**Hello** Twitch" });
-    });
     mocks.getRuntime.mockReturnValue({
       logging: {
         getChildLogger: () => ({
@@ -123,43 +124,123 @@ describe("monitorTwitchProvider", () => {
     });
   });
 
-  it("delivers fallback replies through the monitor boundary", async () => {
-    let onMessage: ((message: TwitchChatMessage) => void) | undefined;
-    mocks.onMessage.mockImplementation(
-      (_account: unknown, handler: (message: TwitchChatMessage) => void) => {
-        onMessage = handler;
-        return mocks.unregister;
+  it.each<{
+    name: string;
+    payload: ReplyPayload;
+    expectedText?: string;
+    expectedVisible: boolean;
+    providerError?: string;
+    expectedError?: string;
+  }>([
+    {
+      name: "plain Markdown text",
+      payload: { text: "**Hello** Twitch" },
+      expectedText: "Hello Twitch",
+      expectedVisible: true,
+    },
+    {
+      name: "caption with a legacy media URL",
+      payload: { text: "Check this:", mediaUrl: "https://example.com/image.png" },
+      expectedText: "Check this: https://example.com/image.png",
+      expectedVisible: true,
+    },
+    {
+      name: "caption with every attachment URL",
+      payload: {
+        text: "Files attached:",
+        mediaUrls: ["https://example.com/one.png", "https://example.com/two.png"],
       },
-    );
-    const account = { ...BASE_TWITCH_TEST_ACCOUNT, accessToken: "oauth:test-token" };
-    const monitor = await monitorTwitchProvider({
-      account,
-      accountId: "default",
-      config: {},
-      runtime: {},
-      abortSignal: new AbortController().signal,
-    });
-
-    onMessage?.({
-      id: "message-1",
-      username: "viewer",
-      userId: "viewer-1",
-      message: "hello bot",
-      channel: "testchannel",
-    });
-
-    await vi.waitFor(() => {
-      expect(mocks.sendMessage).toHaveBeenCalledWith(
-        account,
-        "testchannel",
-        "Hello Twitch",
-        {},
-        "default",
+      expectedText: "Files attached: https://example.com/one.png https://example.com/two.png",
+      expectedVisible: true,
+    },
+    {
+      name: "media-only reply",
+      payload: { mediaUrl: "https://example.com/image.png" },
+      expectedText: "https://example.com/image.png",
+      expectedVisible: true,
+    },
+    {
+      name: "empty reply",
+      payload: { text: "" },
+      expectedVisible: false,
+      expectedError: "No text to send in reply payload",
+    },
+    {
+      name: "provider send failure",
+      payload: { text: "Hello Twitch" },
+      expectedText: "Hello Twitch",
+      expectedVisible: false,
+      providerError: "provider unavailable",
+      expectedError: "Failed to send reply: Error: provider unavailable",
+    },
+  ])(
+    "handles $name through the public monitor boundary",
+    async ({ payload, expectedText, expectedVisible, providerError, expectedError }) => {
+      const settled = vi.fn();
+      const statusSink = vi.fn();
+      const runtimeError = vi.fn();
+      if (providerError) {
+        mocks.sendMessage.mockResolvedValueOnce({ ok: false, error: providerError });
+      }
+      mocks.runInbound.mockImplementation(async (input: InboundRunInput) => {
+        const turn = await input.adapter.resolveTurn(input.adapter.ingest(input.raw));
+        const result = await turn.delivery.deliver(payload);
+        settled(result);
+        turn.delivery.onDelivered(payload, { kind: "final" }, result);
+      });
+      let onMessage: ((message: TwitchChatMessage) => void) | undefined;
+      mocks.onMessage.mockImplementation(
+        (_account: unknown, handler: (message: TwitchChatMessage) => void) => {
+          onMessage = handler;
+          return mocks.unregister;
+        },
       );
-    });
+      const account = { ...BASE_TWITCH_TEST_ACCOUNT, accessToken: "oauth:test-token" };
+      const monitor = await monitorTwitchProvider({
+        account,
+        accountId: "default",
+        config: {},
+        runtime: { error: runtimeError },
+        abortSignal: new AbortController().signal,
+        statusSink,
+      });
 
-    await monitor.stop();
-    expect(mocks.unregister).toHaveBeenCalledOnce();
-    expect(mocks.ingressStop).toHaveBeenCalledOnce();
-  });
+      onMessage?.({
+        id: "message-1",
+        username: "viewer",
+        userId: "viewer-1",
+        message: "hello bot",
+        channel: "testchannel",
+      });
+
+      await vi.waitFor(() => expect(settled).toHaveBeenCalledOnce());
+      expect(settled).toHaveBeenCalledWith({ visibleReplySent: expectedVisible });
+      if (expectedText) {
+        expect(mocks.sendMessage).toHaveBeenCalledWith(
+          account,
+          "testchannel",
+          expectedText,
+          {},
+          "default",
+        );
+      } else {
+        expect(mocks.sendMessage).not.toHaveBeenCalled();
+      }
+      if (expectedError) {
+        expect(runtimeError).toHaveBeenCalledWith(expectedError);
+      } else {
+        expect(runtimeError).not.toHaveBeenCalled();
+      }
+      const outboundStatus = expect.objectContaining({ lastOutboundAt: expect.any(Number) });
+      if (expectedVisible) {
+        expect(statusSink).toHaveBeenCalledWith(outboundStatus);
+      } else {
+        expect(statusSink).not.toHaveBeenCalledWith(outboundStatus);
+      }
+
+      await monitor.stop();
+      expect(mocks.unregister).toHaveBeenCalledOnce();
+      expect(mocks.ingressStop).toHaveBeenCalledOnce();
+    },
+  );
 });

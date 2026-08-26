@@ -7,7 +7,7 @@ import type { SlashCommandDef } from "../../../lib/chat/commands.ts";
 import { resolveThinkingCommandArgOptionsForSession } from "../../../lib/chat/thinking.ts";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
 import { ComposerDictationController, insertComposerDictation } from "../composer-dictation.ts";
-import { discoverRealtimeTalkInputs, observeRealtimeTalkDevices } from "../realtime-talk-input.ts";
+import { ComposerMicrophonePicker } from "../composer-microphone-picker.ts";
 import { isLargePastedTextAttachment } from "./chat-attachments.ts";
 import { renderContextNotice } from "./chat-composer-context.ts";
 import { renderMicrophonePicker, type ChatRunControlsProps } from "./chat-composer-controls.ts";
@@ -46,11 +46,11 @@ import {
   hasTerminalRunStatus,
   isCurrentSessionSubmittedProgress,
   markComposerInputIntent,
-  releaseMicrophoneDeviceWatch,
   suppressStaleSubmittedDraftReplay,
 } from "./chat-composer-state.ts";
 import type { ChatComposerProps } from "./chat-composer-types.ts";
 import { renderChatComposerView } from "./chat-composer-view.ts";
+import { renderChatPermissionPicker } from "./chat-permission-picker.ts";
 import { createGatewayQuestionPanelProps } from "./chat-question-card.ts";
 
 export { isChatRunWorking, resetChatComposerState } from "./chat-composer-state.ts";
@@ -85,13 +85,21 @@ export function renderChatComposer(props: ChatComposerProps) {
   const submittedProgress = props.queue.find((item) =>
     isCurrentSessionSubmittedProgress(item, props.sessionKey, props.runStatus),
   );
+  const hasSubmittedProgress = props.queue.some(
+    (item) =>
+      !item.pendingRunId && (item.sendState === "sending" || item.sendState === "waiting-model"),
+  );
+  const sendingForCurrentSession =
+    props.sending && (!hasSubmittedProgress || submittedProgress !== undefined);
   const composerRunStatus =
-    showAbortableUi || Boolean(submittedProgress)
+    sendingForCurrentSession || showAbortableUi || Boolean(submittedProgress)
       ? { phase: "in-progress" as const }
       : props.runStatus;
   const compactBusy =
     props.compactionStatus?.phase === "active" || props.compactionStatus?.phase === "retrying";
-  const activeSession = props.sessions?.sessions?.find((row) => row.key === props.sessionKey);
+  const activeSession = props.sessions?.sessions?.find((row) =>
+    areUiSessionKeysEquivalent(row.key, props.sessionKey),
+  );
   const draftKey = composerDraftKey(props);
   if (state.dictationDraftKey !== null && state.dictationDraftKey !== draftKey) {
     state.dictation?.dispose();
@@ -140,6 +148,9 @@ export function renderChatComposer(props: ChatComposerProps) {
     },
   );
   const composerControls = props.composerControls ?? nothing;
+  const composerLeadControl = props.permissionPicker
+    ? renderChatPermissionPicker(props.permissionPicker)
+    : nothing;
   const assistantName = props.assistantName || "OpenClaw";
   const inProgressLabel = props.waitingApproval
     ? t("chat.waitingForApproval")
@@ -147,7 +158,7 @@ export function renderChatComposer(props: ChatComposerProps) {
       ? t("chat.composer.preparingModel")
       : props.stream !== null
         ? t("chat.composer.responding", { name: assistantName })
-        : props.sending || submittedProgress
+        : sendingForCurrentSession || submittedProgress
           ? t("chat.composer.sendingMessage")
           : t("chat.composer.working", { name: assistantName });
   // Persistent sr-only live region: run phases are otherwise conveyed only
@@ -262,6 +273,7 @@ export function renderChatComposer(props: ChatComposerProps) {
   // slash commands are live controls and must not execute against stale state.
   const canSubmitDraft = (draft: string) =>
     canCompose &&
+    state.dictation?.locksComposer !== true &&
     !(state.skillMenuOpen && state.skillCommandRefreshPending) &&
     (props.getPendingAttachmentReads?.() ?? props.pendingAttachmentReads ?? 0) === 0 &&
     (props.connected || !draft.trimStart().startsWith("/"));
@@ -385,72 +397,32 @@ export function renderChatComposer(props: ChatComposerProps) {
     }
     props.onToggleRealtimeTalk?.();
   };
-  const discoverMicrophones = () => {
-    state.microphonePickerLoading = true;
-    state.microphoneIssue = null;
-    const request = ++state.microphoneDiscoveryRequest;
-    requestUpdate();
-    // Permission-requesting discovery on every pass, including device changes:
-    // a microphone that just appeared has hidden labels until the probe runs,
-    // and the probe only prompts while the picker is the surface in front of
-    // the user.
-    void discoverRealtimeTalkInputs(true)
-      .then((result) => {
-        if (request !== state.microphoneDiscoveryRequest) {
-          return;
-        }
-        state.microphoneDevices = result.devices;
-        state.microphoneIssue = result.issue;
-      })
-      .catch(() => {
-        if (request !== state.microphoneDiscoveryRequest) {
-          return;
-        }
-        state.microphoneDevices = [];
-        state.microphoneIssue = "failed";
-      })
-      .finally(() => {
-        if (request !== state.microphoneDiscoveryRequest) {
-          return;
-        }
-        state.microphonePickerLoading = false;
-        requestUpdate();
-      });
-  };
-  const openMicrophonePicker = () => {
-    if (state.microphonePickerOpen) {
-      return;
-    }
-    state.microphonePickerOpen = true;
-    state.microphoneDeviceWatch ??= observeRealtimeTalkDevices(discoverMicrophones);
-    discoverMicrophones();
-  };
-  const closeMicrophonePicker = () => {
-    if (!state.microphonePickerOpen) {
-      return;
-    }
-    releaseMicrophoneDeviceWatch(state);
-    state.microphonePickerOpen = false;
-    requestUpdate();
-  };
-  const selectMicrophone = (deviceId: string) => {
-    patchSettings({ realtimeTalkInputDeviceId: deviceId.trim() || undefined });
-    releaseMicrophoneDeviceWatch(state);
-    state.microphonePickerOpen = false;
-    requestUpdate();
-  };
+  state.microphonePicker ??= new ComposerMicrophonePicker(requestUpdate);
+  const devicePicker = state.microphonePicker;
   const selectedMicrophoneId = loadSettings().realtimeTalkInputDeviceId?.trim() ?? "";
   const microphonePicker = props.onToggleRealtimeTalk
     ? renderMicrophonePicker({
-        devices: state.microphoneDevices,
-        loading: state.microphonePickerLoading,
-        open: state.microphonePickerOpen,
+        devices: devicePicker.devices,
+        loading: devicePicker.loading,
+        open: devicePicker.open,
         selectedDeviceId: selectedMicrophoneId,
         voiceActive: Boolean(props.realtimeTalkActive),
-        issue: state.microphoneIssue,
-        onOpen: openMicrophonePicker,
-        onClose: closeMicrophonePicker,
-        onSelect: selectMicrophone,
+        issue: devicePicker.issue,
+        holdToDictate: props.composerHoldToRecord !== false,
+        onOpen: devicePicker.handleOpen,
+        onClose: devicePicker.handleClose,
+        onSelect: (deviceId: string) => {
+          patchSettings({ realtimeTalkInputDeviceId: deviceId.trim() || undefined });
+          devicePicker.handleClose();
+        },
+        onHoldToDictateChange: (enabled: boolean) => {
+          if (props.onComposerHoldToRecordChange) {
+            props.onComposerHoldToRecordChange(enabled);
+          } else {
+            patchSettings({ composerHoldToRecord: enabled });
+          }
+          requestUpdate();
+        },
       })
     : nothing;
   const dictationOptions = {
@@ -575,6 +547,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     visibleDraft,
     contextNotice,
     composerControls,
+    composerLeadControl,
     runStatusAnnouncement,
     requestUpdate,
     sendShortcut,
@@ -599,6 +572,5 @@ export function renderChatComposer(props: ChatComposerProps) {
     activeSlashMenuOptionLabel,
     slashMenuListboxId,
     slashMenuAnnouncementId,
-    composerRunStatus,
   });
 }

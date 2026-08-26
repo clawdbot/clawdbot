@@ -49,8 +49,7 @@ function compactSystemEvent(line: string): string | null {
   if (lower.includes("reason periodic")) {
     return null;
   }
-  // Filter out the actual heartbeat prompt, but not cron jobs that mention "heartbeat".
-  // The heartbeat prompt starts with "Read HEARTBEAT.md" - cron payloads won't match this.
+  // Keep retired heartbeat prompts out of replayed legacy system events.
   if (lower.startsWith("read heartbeat.md")) {
     return null;
   }

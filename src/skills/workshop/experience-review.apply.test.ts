@@ -12,12 +12,30 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
+import { writeWorkspaceSkills } from "../test-support/e2e-test-helpers.js";
+import { readSkillReviewOutcomes } from "./collection-review-state.js";
 import { runSkillExperienceReview, type ExperienceReviewCandidate } from "./experience-review.js";
 import { inspectSkillProposal, listSkillProposals, proposeCreateSkill } from "./service.js";
 
 const runEmbeddedAgent = vi.hoisted(() => vi.fn());
 
 vi.mock("../../agents/embedded-agent.js", () => ({ runEmbeddedAgent }));
+vi.mock("../../agents/run-session-target.js", () => ({
+  resolveAgentRunSessionTarget: vi.fn(
+    async (params: { agentId?: string; sessionId: string; sessionKey: string }) => ({
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      storePath: "/tmp/session-store.json",
+    }),
+  ),
+}));
+vi.mock("../../agents/sessions/index.js", () => ({
+  SessionManager: {
+    open: vi.fn(() => ({ getEntries: () => [] })),
+    fromEntries: vi.fn(() => ({})),
+  },
+}));
 
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
@@ -61,14 +79,14 @@ describe("experience review auto apply", () => {
       ctx: {
         agentId: "main",
         runId: "foreground-run",
+        sessionId: "foreground-session",
         sessionKey: "agent:main:main",
         workspaceDir,
         modelProviderId: "openai",
         modelId: "gpt-test",
+        reasoningLevel: "on",
       },
       config: { skills: { workshop: { autonomous: { mode: "auto" } } } },
-      transcript: "[user]\nRecover the deployment workflow.",
-      modelIterations: 10,
     };
 
     await runSkillExperienceReview(candidate, {
@@ -88,9 +106,13 @@ describe("experience review auto apply", () => {
       expect.objectContaining({
         skillWorkshopProposalOnly: true,
         skillWorkshopAutonomousCapture: true,
-        toolsAllow: ["skill_workshop"],
+        toolExecutionAllow: ["skill_workshop"],
+        sessionPersistence: "detached",
+        reasoningLevel: "on",
       }),
     );
+    expect(runEmbeddedAgent.mock.calls[0]?.[0]).not.toHaveProperty("disableMessageTool");
+    expect(runEmbeddedAgent.mock.calls[0]?.[0]).not.toHaveProperty("cleanupBundleMcpOnRunEnd");
   });
 
   it("auto-applies updates to the durable workspace from a session worktree", async () => {
@@ -143,6 +165,7 @@ describe("experience review auto apply", () => {
       ctx: {
         agentId: "main",
         runId: "foreground-run",
+        sessionId: "foreground-session",
         sessionKey: "agent:main:main",
         workspaceDir: worktreeWorkspaceDir,
         modelProviderId: "openai",
@@ -152,8 +175,6 @@ describe("experience review auto apply", () => {
         agents: { list: [{ id: "main", default: true, workspace: canonicalWorkspaceDir }] },
         skills: { workshop: { autonomous: { mode: "auto" as const } } },
       },
-      transcript: "[user]\nRefine the deployment workflow.",
-      modelIterations: 10,
     };
 
     await runWithCanonicalSkillWorkspace(canonicalWorkspaceDir, () =>
@@ -185,6 +206,64 @@ describe("experience review auto apply", () => {
         "utf8",
       ),
     ).resolves.toContain("Operator-authored preflight steps.");
+  });
+
+  it("leaves updates to user-authored skills pending for operator review", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-experience-user-authored-");
+    await writeWorkspaceSkills(workspaceDir, [
+      {
+        name: "deployment-preflight",
+        description: "Operator-owned deployment procedure",
+        body: "# Deployment Preflight\n\nOperator-authored steps.\n",
+      },
+    ]);
+    runEmbeddedAgent.mockImplementation(async (params) => {
+      const tool = createSkillWorkshopTool({
+        workspaceDir: params.workspaceDir,
+        config: params.config,
+        agentId: params.agentId,
+        origin: params.skillWorkshopOrigin,
+        proposalOnly: params.skillWorkshopProposalOnly,
+        updateProposals: params.skillWorkshopUpdateProposals,
+        autonomousCapture: params.skillWorkshopAutonomousCapture,
+        proposalMutationBudget: params.skillWorkshopProposalMutationBudget,
+      });
+      await tool.execute("review-read", {
+        action: "read",
+        skill_name: "deployment-preflight",
+      });
+      await tool.execute("review-update", {
+        action: "update",
+        skill_name: "deployment-preflight",
+        proposal_content: "# Deployment Preflight\n\nReviewer steps.\n",
+      });
+      return {};
+    });
+    const config = { skills: { workshop: { autonomous: { mode: "auto" as const } } } };
+
+    await runSkillExperienceReview(
+      {
+        ctx: {
+          agentId: "main",
+          runId: "foreground-run",
+          sessionId: "foreground-session",
+          sessionKey: "agent:main:main",
+          workspaceDir,
+          modelProviderId: "openai",
+          modelId: "gpt-test",
+        },
+        config,
+      },
+      { getCurrentConfig: () => config },
+    );
+
+    const pending = (await listSkillProposals({ workspaceDir })).proposals[0];
+    expect(pending).toMatchObject({ kind: "update", status: "pending" });
+    const inspected = await inspectSkillProposal(pending?.id ?? "", { workspaceDir });
+    expect(inspected?.record.statusReason).toBe("user-authored skill; awaiting operator review");
+    await expect(
+      fs.readFile(`${workspaceDir}/skills/deployment-preflight/SKILL.md`, "utf8"),
+    ).resolves.toContain("Operator-authored steps.");
   });
 
   it("auto-applies reviewer patch proposals composed from the live body", async () => {
@@ -229,14 +308,13 @@ describe("experience review auto apply", () => {
       ctx: {
         agentId: "main",
         runId: "foreground-run",
+        sessionId: "foreground-session",
         sessionKey: "agent:main:main",
         workspaceDir,
         modelProviderId: "openai",
         modelId: "gpt-test",
       },
       config: { skills: { workshop: { autonomous: { mode: "auto" } } } },
-      transcript: "[user]\nRefine the deployment workflow.",
-      modelIterations: 10,
     };
 
     await runSkillExperienceReview(candidate, {
@@ -268,14 +346,13 @@ describe("experience review auto apply", () => {
       ctx: {
         agentId: "main",
         runId: "foreground-run",
+        sessionId: "foreground-session",
         sessionKey: "agent:main:main",
         workspaceDir,
         modelProviderId: "openai",
         modelId: "gpt-test",
       },
       config: { skills: { workshop: { autonomous: { mode: "propose" } } } },
-      transcript: "[user]\nRecover the deployment workflow.",
-      modelIterations: 10,
     };
 
     // The scheduler's idle timer inherits the foreground run's root-work ALS
@@ -318,14 +395,13 @@ describe("experience review auto apply", () => {
       ctx: {
         agentId: "main",
         runId: "foreground-run",
+        sessionId: "foreground-session",
         sessionKey: "agent:main:main",
         workspaceDir,
         modelProviderId: "openai",
         modelId: "gpt-test",
       },
       config: { skills: { workshop: { autonomous: { mode: "auto" } } } },
-      transcript: "[user]\nRecover the deployment workflow.",
-      modelIterations: 10,
     };
 
     await runSkillExperienceReview(candidate, {
@@ -336,6 +412,56 @@ describe("experience review auto apply", () => {
 
     expect((await listSkillProposals({ workspaceDir })).proposals[0]).toMatchObject({
       status: "pending",
+    });
+  });
+
+  it("records a failed apply and leaves the capture pending without retrying", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-experience-apply-failure-workspace-");
+    // A file where the skill directory must go makes the live write fail after the proposal exists.
+    await fs.mkdir(path.join(workspaceDir, "skills"), { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "skills", "deployment-preflight"), "blocker");
+    runEmbeddedAgent.mockImplementation(async (params) => {
+      const tool = createSkillWorkshopTool({
+        workspaceDir: params.workspaceDir,
+        config: params.config,
+        agentId: params.agentId,
+        origin: params.skillWorkshopOrigin,
+        proposalOnly: params.skillWorkshopProposalOnly,
+        autonomousCapture: params.skillWorkshopAutonomousCapture,
+        proposalMutationBudget: params.skillWorkshopProposalMutationBudget,
+      });
+      await tool.execute("review-create", {
+        action: "create",
+        name: "deployment-preflight",
+        description: "Check deployment prerequisites before retrying.",
+        proposal_content: "# Deployment Preflight\n\nVerify prerequisites before deploy.\n",
+      });
+      return {};
+    });
+    const candidate: ExperienceReviewCandidate = {
+      ctx: {
+        agentId: "main",
+        runId: "foreground-run",
+        sessionId: "foreground-session",
+        sessionKey: "agent:main:main",
+        workspaceDir,
+        modelProviderId: "openai",
+        modelId: "gpt-test",
+      },
+      config: { skills: { workshop: { autonomous: { mode: "auto" } } } },
+    };
+
+    await expect(
+      runSkillExperienceReview(candidate, { getCurrentConfig: () => candidate.config ?? {} }),
+    ).rejects.toThrow();
+
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+    expect((await listSkillProposals({ workspaceDir })).proposals[0]).toMatchObject({
+      status: "pending",
+    });
+    expect(Object.values(readSkillReviewOutcomes().experienceReviews)[0]).toMatchObject({
+      outcome: "failed",
+      error: expect.stringContaining("directory"),
     });
   });
 
@@ -372,14 +498,13 @@ describe("experience review auto apply", () => {
         ctx: {
           agentId: "main",
           runId: "foreground-run",
+          sessionId: "foreground-session",
           sessionKey: "agent:main:main",
           workspaceDir,
           modelProviderId: "openai",
           modelId: "gpt-test",
         },
         config,
-        transcript: "[user]\nRecover the deployment workflow.",
-        modelIterations: 10,
       },
       { getCurrentConfig: () => config },
     );

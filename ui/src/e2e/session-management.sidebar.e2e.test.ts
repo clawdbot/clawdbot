@@ -487,7 +487,7 @@ suite.define(() => {
     }
   });
 
-  it("keeps sidebar sessions visible through a same-client Gateway reconnect", async () => {
+  it("keeps sidebar sessions visible through transport and client replacement reconnects", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -499,7 +499,10 @@ suite.define(() => {
     const gateway = await installMockGateway(page, {
       methodResponses: {
         "sessions.list": sessionsListResponse([
-          sessionRow(sessionKey, "Disconnect proof", Date.parse("2026-07-01T16:00:00.000Z")),
+          sessionRow(sessionKey, "Disconnect proof", Date.parse("2026-07-01T16:00:00.000Z"), {
+            pinned: true,
+            pinnedAt: Date.parse("2026-07-01T16:00:00.000Z"),
+          }),
           sessionRow(otherSessionKeys[0], "Other A", Date.parse("2026-07-01T15:59:00.000Z")),
           sessionRow(otherSessionKeys[1], "Other B", Date.parse("2026-07-01T15:58:00.000Z")),
         ]),
@@ -510,7 +513,9 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
       const sidebarRow = page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
+      const pinnedEntry = page.locator(`[data-sidebar-entry="session:${sessionKey}"]`);
       await sidebarRow.waitFor({ state: "visible", timeout: 10_000 });
+      await expect.poll(() => pinnedEntry.count()).toBe(1);
       const sidebarRows = page.locator(".sidebar-recent-session");
       await expect.poll(() => sidebarRows.count()).toBe(3);
       const initialListCount = (await gateway.getRequests("sessions.list")).length;
@@ -530,6 +535,15 @@ suite.define(() => {
       await expect
         .poll(() => gateway.getSocketCount(), { timeout: 15_000 })
         .toBe(socketsBefore + 1);
+      await page.locator(".sidebar-identity-card").click();
+      const retryConnection = page.locator(
+        'wa-dropdown.sidebar-identity-menu wa-dropdown-item[value="command:retry-connect"]',
+      );
+      await retryConnection.waitFor({ state: "visible", timeout: 10_000 });
+      await retryConnection.click();
+      await expect.poll(() => pinnedEntry.count()).toBe(1);
+      await captureUiProof(page, "sidebar-sessions-during-client-replacement.png");
+
       await gateway.deferNext("sessions.list", { includeLastMessage: true });
       await gateway.setOnline(true);
       await waitForControlUiGatewayReady(page);

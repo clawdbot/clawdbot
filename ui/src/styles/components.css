@@ -5744,13 +5744,15 @@ td.data-table-key-col {
 }
 
 .session-row-state {
-  display: inline-flex;
+  display: inline-grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 14px;
   align-items: center;
-  justify-content: center;
+  justify-items: center;
   gap: 6px;
-  min-width: 24px;
-  min-height: 24px;
-  transition: opacity var(--duration-fast) ease;
+  /* The PR glyph inks 1px beyond its 14px track; keep that leading edge
+     inside the clipped details endcap without moving the trailing axis. */
+  padding-left: 1px;
   pointer-events: none;
 }
 

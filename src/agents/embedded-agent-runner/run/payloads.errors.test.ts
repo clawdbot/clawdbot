@@ -353,6 +353,59 @@ describe("buildEmbeddedRunPayloads", () => {
     expectNoPayloadTextContaining(payloads, "[[reply_to_current]]");
   });
 
+  it.each(["request timed out", "LLM request timed out."])(
+    "defers assistant timeout %j to its terminal owner without changing tool-warning policy",
+    (errorMessage) => {
+      const payloads = buildPayloads({
+        deferAssistantTimeoutError: true,
+        runAborted: true,
+        assistantTexts: [],
+        lastAssistant: makeAssistant({
+          stopReason: "aborted",
+          errorMessage,
+          content: [],
+        }),
+        lastToolError: {
+          toolName: "exec",
+          error: "command exited with code 1",
+          middlewareError: true,
+        },
+      });
+
+      expect(payloads).toEqual([]);
+    },
+  );
+
+  it.each([
+    {
+      label: "connection failures",
+      rawError: "connect ECONNREFUSED 127.0.0.1:443",
+      visibleError: "connection refused",
+    },
+    {
+      label: "authentication refresh timeouts",
+      rawError:
+        'OAuth refresh call "refreshProviderOAuthCredentialWithPlugin(openai)" exceeded hard timeout (120000ms)',
+      visibleError: "Authentication refresh timed out",
+    },
+  ])(
+    "preserves $label while terminal timeout handling is deferred",
+    ({ rawError, visibleError }) => {
+      const payloads = buildPayloads({
+        deferAssistantTimeoutError: true,
+        runAborted: true,
+        assistantTexts: [],
+        lastAssistant: makeAssistant({
+          stopReason: "aborted",
+          errorMessage: rawError,
+          content: [],
+        }),
+      });
+
+      expect(payloads).toEqual([{ text: expect.stringContaining(visibleError), isError: true }]);
+    },
+  );
+
   it("suppresses raw aborted assistant error messages in user-facing reply payloads", () => {
     const payloads = buildPayloads({
       runAborted: true,

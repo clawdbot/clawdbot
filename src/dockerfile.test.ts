@@ -484,7 +484,7 @@ describe("Dockerfile", () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     const runtimeStageIndex = dockerfile.lastIndexOf("FROM base-runtime");
     const templatesCopyIndex = dockerfile.indexOf(
-      "COPY --from=runtime-assets --chown=node:node /app/src/agents/templates ./src/agents/templates",
+      "COPY --from=runtime-assets --chown=node:node /app/docs ./docs",
       runtimeStageIndex,
     );
     const userIndex = dockerfile.indexOf("USER node", runtimeStageIndex);
@@ -612,7 +612,7 @@ describe("Dockerfile", () => {
 
     expect(workflow).toContain("Smoke test amd64 runtime workspace templates");
     expect(workflow).toContain("Smoke test arm64 runtime workspace templates");
-    expect(workflow).toContain("test -f /app/src/agents/templates/HEARTBEAT.md");
+    expect(workflow).not.toContain("test -f /app/src/agents/templates/HEARTBEAT.md");
     expect(workflow).toContain('grep -F "Missing workspace template:"');
     expect(workflow).not.toContain('test -f "${temp_root}/home/.openclaw/workspace/HEARTBEAT.md"');
   });

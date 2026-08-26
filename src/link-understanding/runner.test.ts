@@ -72,6 +72,39 @@ describe("runLinkUnderstanding", () => {
     mocks.runCommandWithTimeout.mockReset();
   });
 
+  it("applies shared media scope rules to link message context", async () => {
+    const result = await runLinkUnderstanding({
+      cfg: {
+        tools: {
+          links: {
+            enabled: true,
+            scope: {
+              default: "allow",
+              rules: [
+                {
+                  action: "deny",
+                  match: { channel: "slack", chatType: "channel", keyPrefix: "agent:main:" },
+                },
+              ],
+            },
+            models: [{ type: "cli", command: "summarize" }],
+          },
+        },
+      } as OpenClawConfig,
+      ctx: {
+        Body: "see https://example.com/page",
+        ChatType: "channel",
+        Provider: "discord",
+        SessionKey: "agent:main:slack:channel:C123",
+        Surface: "slack",
+      } as MsgContext,
+    });
+
+    expect(result).toEqual({ urls: [], outputs: [] });
+    expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
+    expect(runCommandWithTimeout).not.toHaveBeenCalled();
+  });
+
   it("fetches links through the SSRF guard before passing content to CLI stdin", async () => {
     const release = mockGuardedFetch("page body", "https://example.com/final");
     mockCommand("summarized page");

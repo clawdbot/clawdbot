@@ -28,6 +28,7 @@ import {
   type EmbedSandboxMode,
 } from "../../../lib/chat/tool-display.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
+import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { openInlineChatImage } from "./chat-image-lightbox.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
@@ -260,7 +261,10 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
                           </div>
                           ${markdownHtml
                             ? html`
-                                <article class="sidebar-markdown-reader sidebar-markdown">
+                                <article
+                                  class="sidebar-markdown-reader sidebar-markdown"
+                                  dir=${detectTextDirection(content.content)}
+                                >
                                   ${unsafeHTML(markdownHtml)}
                                 </article>
                               `

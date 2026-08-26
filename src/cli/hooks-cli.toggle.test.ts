@@ -1,7 +1,9 @@
 // Hook command tests cover metadata config keys and missing-hook exit status.
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { GatewayTransportError } from "../gateway/transport-error.js";
 import { resolveConfiguredInternalHookNames } from "../hooks/configured.js";
 import type { HookStatusEntry, HookStatusReport } from "../hooks/hooks-status.js";
 import { ExpectedCliError } from "./failure-output.js";
@@ -45,6 +47,12 @@ vi.mock("../config/config.js", () => ({
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway,
+  isGatewayClientRequestError: (error: unknown) =>
+    error instanceof Error && error.name === "GatewayClientRequestError",
+  isGatewayCredentialsRequiredError: (error: unknown) =>
+    error instanceof Error && error.name === "GatewayCredentialsRequiredError",
+  isImplicitLocalGatewayTarget: async ({ config }: { config?: OpenClawConfig }) =>
+    !process.env.OPENCLAW_GATEWAY_URL && config?.gateway?.mode !== "remote",
 }));
 
 vi.mock("../hooks/hooks-status.js", () => ({
@@ -135,6 +143,16 @@ function createHooksProgram(): Command {
   return program;
 }
 
+function createGatewayTransportError(kind: "closed" | "timeout", code = 1006) {
+  return new GatewayTransportError({
+    kind,
+    message:
+      kind === "closed" ? `gateway closed (${code}): unavailable` : "gateway timeout after 1500ms",
+    connectionDetails: { url: "ws://127.0.0.1:18789", urlSource: "local loopback", message: "" },
+    ...(kind === "closed" ? { code, reason: "unavailable" } : { timeoutMs: 1_500 }),
+  });
+}
+
 function configureExplicitFleet() {
   const config = {
     ...sourceConfig,
@@ -159,10 +177,14 @@ function configureExplicitFleet() {
 }
 
 describe("hooks CLI metadata config keys", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     capture.resetRuntimeCapture();
-    mocks.callGateway.mockRejectedValue(new Error("gateway unavailable"));
+    mocks.callGateway.mockRejectedValue(createGatewayTransportError("closed"));
     mocks.buildWorkspaceHookStatus.mockReturnValue(report);
     mocks.getRuntimeConfig.mockReturnValue(sourceConfig);
     mocks.listAgentIds.mockReturnValue(["main"]);
@@ -452,10 +474,7 @@ describe("hooks CLI metadata config keys", () => {
     }
     if (testCase.phase === "gateway") {
       mocks.callGateway.mockRejectedValue(
-        Object.assign(new Error(testCase.message), {
-          name: "GatewayClientRequestError",
-          gatewayCode: "INVALID_REQUEST",
-        }),
+        new GatewayClientRequestError({ code: "INVALID_REQUEST", message: testCase.message }),
       );
     }
     if (testCase.phase === "report") {
@@ -540,6 +559,149 @@ describe("hooks CLI metadata config keys", () => {
       mode: "cli",
     });
     expect(mocks.buildWorkspaceHookStatus).not.toHaveBeenCalled();
+  });
+
+  const explicitGatewayHookFailures = [
+    {
+      label: "configured remote missing URL",
+      config: { ...sourceConfig, gateway: { mode: "remote" as const } },
+      message: "gateway remote mode misconfigured: gateway.remote.url missing",
+    },
+    {
+      label: "configured remote transport failure",
+      config: {
+        ...sourceConfig,
+        gateway: { mode: "remote" as const, remote: { url: "ws://127.0.0.1:9" } },
+      },
+      message: "Gateway not reachable: ws://127.0.0.1:9",
+    },
+    {
+      label: "configured remote auth failure",
+      config: { ...sourceConfig, gateway: { mode: "remote" as const } },
+      message: "gateway authentication failed",
+    },
+    {
+      label: "configured remote unsupported method",
+      config: { ...sourceConfig, gateway: { mode: "remote" as const } },
+      message: "unknown method: hooks.status",
+      unsupported: true,
+    },
+    {
+      label: "environment-selected transport failure",
+      config: sourceConfig,
+      url: "ws://127.0.0.1:9",
+      message: "Gateway not reachable: ws://127.0.0.1:9",
+    },
+    {
+      label: "environment-selected auth failure",
+      config: sourceConfig,
+      url: "ws://127.0.0.1:9",
+      message: "gateway authentication failed",
+    },
+    {
+      label: "environment-selected unsupported method",
+      config: sourceConfig,
+      url: "ws://127.0.0.1:9",
+      message: "unknown method: hooks.status",
+      unsupported: true,
+    },
+  ];
+  const hookReadCommands = [
+    { label: "default", argv: ["hooks"] },
+    { label: "list", argv: ["hooks", "list"] },
+    { label: "info", argv: ["hooks", "info", "display-name"] },
+    { label: "check", argv: ["hooks", "check"] },
+  ];
+
+  it.each(
+    explicitGatewayHookFailures.flatMap((target) =>
+      hookReadCommands.flatMap((command) =>
+        [false, true].map((json) => ({
+          target,
+          command,
+          json,
+          label: `${command.label} ${json ? "JSON" : "human"}: ${target.label}`,
+        })),
+      ),
+    ),
+  )("does not substitute local hooks after $label", async ({ target, command, json }) => {
+    mocks.getRuntimeConfig.mockReturnValue(target.config);
+    if (target.url) {
+      vi.stubEnv("OPENCLAW_GATEWAY_URL", target.url);
+    }
+    const error = target.unsupported
+      ? new GatewayClientRequestError({ code: "INVALID_REQUEST", message: target.message })
+      : new Error(target.message);
+    mocks.callGateway.mockRejectedValue(error);
+
+    const failure = await createHooksProgram()
+      .parseAsync([...command.argv, ...(json ? ["--json"] : [])], { from: "user" })
+      .then(
+        () => undefined,
+        (caughtError: unknown) => caughtError,
+      );
+    expect(failure).toMatchObject({
+      name: "ExpectedCliError",
+      message: target.message,
+    });
+
+    expect(mocks.buildWorkspaceHookStatus).not.toHaveBeenCalled();
+    expect(capture.defaultRuntime.writeStdout).not.toHaveBeenCalled();
+    expect(mocks.requestExitAfterOneShotOutput).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      label: "request validation",
+      error: new GatewayClientRequestError({
+        code: "INVALID_REQUEST",
+        message: 'invalid hooks.status params: unknown agent id "retired"',
+      }),
+    },
+    {
+      label: "internal server failure",
+      error: new GatewayClientRequestError({
+        code: "INTERNAL_ERROR",
+        message: "hook inventory crashed",
+      }),
+    },
+    { label: "pairing close", error: createGatewayTransportError("closed", 1008) },
+    { label: "authentication rotation", error: createGatewayTransportError("closed", 4001) },
+    { label: "plain pairing close", error: new Error("gateway closed (1008): pairing required") },
+    {
+      label: "plain authentication close",
+      error: new Error("gateway closed (4001): auth changed"),
+    },
+    { label: "unknown failure", error: new Error("gateway unavailable") },
+  ])("does not substitute implicit-local hooks after $label", async ({ error }) => {
+    mocks.callGateway.mockRejectedValue(error);
+
+    await expect(
+      createHooksProgram().parseAsync(["hooks", "list", "--json"], { from: "user" }),
+    ).rejects.toMatchObject({ message: error.message });
+
+    expect(mocks.buildWorkspaceHookStatus).not.toHaveBeenCalled();
+    expect(mocks.requestExitAfterOneShotOutput).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      label: "missing credentials before connecting",
+      error: Object.assign(new Error("gateway requires credentials"), {
+        name: "GatewayCredentialsRequiredError",
+        method: "hooks.status",
+        configPath: "/tmp/openclaw.json",
+      }),
+    },
+    { label: "typed timeout", error: createGatewayTransportError("timeout") },
+    { label: "pending-request close", error: new Error("gateway closed (1006): abnormal closure") },
+    { label: "pending-request timeout", error: new Error("gateway timeout after 1500ms") },
+  ])("retains implicit-local hook discovery after $label", async ({ error }) => {
+    mocks.callGateway.mockRejectedValue(error);
+
+    await createHooksProgram().parseAsync(["hooks", "list", "--json"], { from: "user" });
+
+    expect(mocks.buildWorkspaceHookStatus).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -652,9 +814,9 @@ describe("hooks CLI metadata config keys", () => {
   });
 
   it("does not replace an authoritative Gateway ownership error with a local report", async () => {
-    const error = Object.assign(new Error('unknown agent id "retired"'), {
-      name: "GatewayClientRequestError",
-      gatewayCode: "INVALID_REQUEST",
+    const error = new GatewayClientRequestError({
+      code: "INVALID_REQUEST",
+      message: 'unknown agent id "retired"',
     });
     mocks.callGateway.mockRejectedValue(error);
 
@@ -672,12 +834,10 @@ describe("hooks CLI metadata config keys", () => {
   it.each([
     "unknown method: hooks.status",
     "invalid hooks.status params: unexpected property agentId",
+    "invalid hooks.status params: at root: unexpected property 'agentId'",
   ])("uses the selected local fallback for an older Gateway: %s", async (message) => {
     mocks.callGateway.mockRejectedValue(
-      Object.assign(new Error(message), {
-        name: "GatewayClientRequestError",
-        gatewayCode: "INVALID_REQUEST",
-      }),
+      new GatewayClientRequestError({ code: "INVALID_REQUEST", message }),
     );
 
     await createHooksProgram().parseAsync(["hooks", "list", "--agent", "main", "--json"], {

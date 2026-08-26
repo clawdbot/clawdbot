@@ -1701,6 +1701,43 @@ describe("runGatewayUpdate", () => {
     expect(calls).toContain(`git -C ${tempDir} reset --hard abc123`);
   });
 
+  it("rolls back and reports error when the final HEAD verification probe fails", async () => {
+    await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
+    await setupUiIndex();
+    const stableTag = "v1.0.1-1";
+    const doctorNodePath = await resolveStableNodePath(process.execPath);
+    const { runner, calls } = createRunner({
+      ...buildStableTagResponses(stableTag),
+      [`git -C ${tempDir} rev-parse --abbrev-ref HEAD`]: { stdout: "main" },
+      "pnpm install": { stdout: "" },
+      "pnpm build": { stdout: "" },
+      "pnpm ui:build": { stdout: "" },
+      [`${doctorNodePath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive --fix`]: {
+        stdout: "",
+      },
+    });
+    let revParseHeadCount = 0;
+    const runCommand = async (argv: string[]) => {
+      const key = argv.join(" ");
+      if (key === `git -C ${tempDir} rev-parse HEAD`) {
+        revParseHeadCount += 1;
+        if (revParseHeadCount === 2) {
+          return toCommandResult({ code: 1, stderr: "fatal: not a valid object name HEAD" });
+        }
+      }
+      return runner(argv);
+    };
+
+    const result = await runWithCommand(runCommand, { channel: "stable" });
+
+    expect(result.status).toBe("error");
+    expect(result.reason).toBe("head-verification-failed");
+    expect(result.after).toBeUndefined();
+    expect(calls).toContain(`git -C ${tempDir} reset --hard`);
+    expect(calls).toContain(`git -C ${tempDir} checkout --force main`);
+    expect(calls).toContain(`git -C ${tempDir} reset --hard abc123`);
+  });
+
   it("uses stable tag when beta tag is older than release", async () => {
     await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
     await setupUiIndex();
@@ -2836,30 +2873,54 @@ describe("runGatewayUpdate", () => {
     expect(calls).toContain(expectedInstallCommand);
   });
 
-  it("updates global bun installs when detected", async () => {
-    const bunInstall = path.join(tempDir, "bun-install");
-    await withEnvAsync({ BUN_INSTALL: bunInstall }, async () => {
-      const { pkgRoot } = await createGlobalPackageFixture(
-        path.join(bunInstall, "install", "global"),
-      );
-
-      const { calls, runCommand } = createGlobalInstallHarness({
-        pkgRoot,
-        installCommand: "bun add -g --trust openclaw@latest",
-        onInstall: async () => {
-          await writeGlobalPackageVersion(pkgRoot);
+  it.each(["present", "missing", "conflicting"] as const)(
+    "updates global bun installs with %s BUN_INSTALL ownership context",
+    async (ownerEnv) => {
+      const bunInstall = path.join(tempDir, "bun-install");
+      const unrelatedBunInstall = path.join(tempDir, "unrelated-bun");
+      const unrelatedGlobalProject = path.join(tempDir, "unrelated-global");
+      const owningBin = path.join(tempDir, "custom-bun-bin");
+      await withEnvAsync(
+        {
+          BUN_INSTALL:
+            ownerEnv === "present"
+              ? bunInstall
+              : ownerEnv === "conflicting"
+                ? unrelatedBunInstall
+                : undefined,
+          BUN_INSTALL_GLOBAL_DIR: ownerEnv === "conflicting" ? unrelatedGlobalProject : undefined,
+          BUN_INSTALL_BIN: owningBin,
         },
-      });
+        async () => {
+          const { pkgRoot } = await createGlobalPackageFixture(
+            path.join(bunInstall, "install", "global"),
+          );
 
-      const result = await runWithCommand(runCommand, { cwd: pkgRoot });
+          const { calls, runCommand } = createGlobalInstallHarness({
+            pkgRoot,
+            npmRootOutput: path.join(tempDir, "shell", "lib", "node_modules"),
+            installCommand: "bun add -g --trust openclaw@latest",
+            onInstall: async (options) => {
+              expect(options?.env).toMatchObject({
+                BUN_INSTALL: bunInstall,
+                BUN_INSTALL_GLOBAL_DIR: path.join(bunInstall, "install", "global"),
+                BUN_INSTALL_BIN: owningBin,
+              });
+              await writeGlobalPackageVersion(pkgRoot);
+            },
+          });
 
-      expect(result.status).toBe("ok");
-      expect(result.mode).toBe("bun");
-      expect(result.before?.version).toBe("1.0.0");
-      expect(result.after?.version).toBe("2.0.0");
-      expect(calls).toContain("bun add -g --trust openclaw@latest");
-    });
-  });
+          const result = await runWithCommand(runCommand, { cwd: pkgRoot });
+
+          expect(result.status).toBe("ok");
+          expect(result.mode).toBe("bun");
+          expect(result.before?.version).toBe("1.0.0");
+          expect(result.after?.version).toBe("2.0.0");
+          expect(calls).toContain("bun add -g --trust openclaw@latest");
+        },
+      );
+    },
+  );
 
   it("rejects git roots that are not a openclaw checkout", async () => {
     await fs.mkdir(path.join(tempDir, ".git"));

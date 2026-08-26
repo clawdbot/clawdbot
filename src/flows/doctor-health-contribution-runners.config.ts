@@ -27,6 +27,21 @@ function shouldSkipLegacyUpdateDoctorConfigWrite(env: NodeJS.ProcessEnv): boolea
   );
 }
 
+/** Removes queued retired profiles after any config references have been durably repaired. */
+export async function runRetiredAuthProfileCleanup(ctx: DoctorHealthFlowContext): Promise<void> {
+  const retiredAuthProfileCleanupPlans = ctx.configResult.retiredAuthProfileCleanupPlans;
+  if (!retiredAuthProfileCleanupPlans?.length) {
+    return;
+  }
+  const { removeAuthProfilesAcrossOwnerStores } = await import("../agents/auth-profiles.js");
+  for (const plan of retiredAuthProfileCleanupPlans) {
+    if (!(await removeAuthProfilesAcrossOwnerStores(plan))) {
+      throw new Error(`Failed to remove retired auth profile "${plan.profileIds.join(", ")}".`);
+    }
+  }
+  delete ctx.configResult.retiredAuthProfileCleanupPlans;
+}
+
 export async function runWriteConfigHealth(
   ctx: DoctorHealthFlowContext,
   options: { runPostWriteRepairs?: boolean } = {},
@@ -147,16 +162,7 @@ export async function runWriteConfigHealth(
   if (options.runPostWriteRepairs === false) {
     return;
   }
-  const retiredAuthProfileCleanupPlans = ctx.configResult.retiredAuthProfileCleanupPlans;
-  if (retiredAuthProfileCleanupPlans?.length) {
-    const { removeAuthProfilesAcrossOwnerStores } = await import("../agents/auth-profiles.js");
-    for (const plan of retiredAuthProfileCleanupPlans) {
-      if (!(await removeAuthProfilesAcrossOwnerStores(plan))) {
-        throw new Error(`Failed to remove retired auth profile "${plan.profileIds.join(", ")}".`);
-      }
-    }
-    delete ctx.configResult.retiredAuthProfileCleanupPlans;
-  }
+  await runRetiredAuthProfileCleanup(ctx);
   if (ctx.configResult.retiredPhoneControlStateCleanupPending === true) {
     const { finalizeRetiredPhoneControlCleanup } =
       await import("../commands/doctor-retired-phone-control.js");
