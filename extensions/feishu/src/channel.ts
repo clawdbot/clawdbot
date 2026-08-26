@@ -133,9 +133,7 @@ function resolveFeishuSendAttachmentMedia(params: Record<string, unknown>): stri
   };
 
   const inspect = (record: Record<string, unknown>, nested = false): void => {
-    const keys = nested
-      ? [...sourceKeys.slice(0, sourceKeys.length - 1), "url", "image"]
-      : sourceKeys;
+    const keys = nested ? [...sourceKeys.slice(0, -1), "url", "image"] : sourceKeys;
     for (const key of keys) {
       const value = read(record, key);
       if (value === undefined) {
