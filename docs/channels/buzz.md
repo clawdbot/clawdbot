@@ -318,6 +318,8 @@ follows live relay-signed roster updates, including role changes. A removal
 invalidates queued messages immediately; cancelled admission is not committed as
 processed. Bounded snapshot refreshes confirm membership-change notifications.
 There is no per-message relay query or Gateway polling.
+Removing a sender does not cancel a room turn already admitted for that sender;
+losing the bot's own Bot role or stopping its connection still fences output.
 
 Startup and reconnect recover eligible messages from the last 24 hours, but
 never from before that room's first activation by this Buzz account. That

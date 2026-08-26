@@ -7,6 +7,7 @@ import {
   createStartAccountContext,
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
@@ -15,6 +16,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { startBuzzBus, type BuzzBus } from "./buzz-bus.js";
 import { createBuzzRelayFixture } from "./buzz-relay.test-harness.js";
 import { startBuzzGatewayAccount } from "./gateway.js";
+import { handleBuzzInbound } from "./inbound.js";
 import { setBuzzRuntime } from "./runtime.js";
 import { resolveBuzzAccount } from "./types.js";
 
@@ -152,6 +154,88 @@ it("keeps removal denied through stale snapshots and accepts a confirmed rejoin"
   }
 });
 
+it("finishes an admitted room turn after its sender is removed", async () => {
+  const fixture = await createBuzzRelayFixture();
+  const runtime = createPluginRuntimeMock();
+  runtime.state.openKeyedStore = (options) => createPluginStateKeyedStoreForTests("buzz", options);
+  setBuzzRuntime(runtime);
+  const dispatched = createDeferred<void>();
+  const continueTurn = createDeferred<void>();
+  const completed = createDeferred<void>();
+  const cfg = {
+    channels: {
+      buzz: {
+        relayUrl: fixture.relayUrl,
+        privateKey: fixture.botPrivateKey,
+        groupPolicy: "open",
+        groups: { [fixture.roomId]: { requireMention: false } },
+      },
+    },
+  } satisfies OpenClawConfig;
+  const account = resolveBuzzAccount({ cfg });
+  vi.mocked(runtime.channel.inbound.dispatch).mockImplementation(async (params) => {
+    dispatched.resolve();
+    await continueTurn.promise;
+    await params.delivery.deliver({ text: "admitted room reply" }, { kind: "final" });
+    return {
+      admission: { kind: "dispatch" },
+      dispatched: true,
+      ctxPayload: params.ctxPayload,
+      routeSessionKey: params.route.sessionKey,
+      dispatchResult: { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } },
+    };
+  });
+  let bus: BuzzBus | undefined;
+  try {
+    bus = await startBuzzBus({
+      accountId: account.accountId,
+      relayUrl: fixture.relayUrl,
+      privateKey: fixture.botPrivateKey,
+      channelIds: [fixture.roomId],
+      onMessage: async (message, activeBus, signal, assertCurrent) => {
+        await handleBuzzInbound({ account, cfg, bus: activeBus, message, signal, assertCurrent });
+        completed.resolve();
+      },
+      onMessageError: completed.reject,
+    });
+    const message = fixture.sendMessage("accepted before removal");
+    await dispatched.promise;
+    const initial = fixture.events.find((event) => event.kind === 39002)!;
+    fixture.broadcast(
+      fixture.signRelay({
+        kind: 39002,
+        created_at: initial.created_at + 1,
+        content: "",
+        tags: initial.tags.filter((tag) => tag[0] !== "p" || tag[1] !== fixture.senderPublicKey),
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(
+        bus?.directory
+          .listGroupMembers({ groupId: fixture.roomId })
+          .some((member) => member.id === fixture.senderPublicKey),
+      ).toBe(false),
+    );
+    continueTurn.resolve();
+    await completed.promise;
+    const replies = fixture.events.filter(
+      (event) => event.pubkey === fixture.botPublicKey && event.kind === 9,
+    );
+    expect(replies).toHaveLength(1);
+    expect(replies[0]).toMatchObject({
+      content: "admitted room reply",
+      tags: expect.arrayContaining([
+        ["h", fixture.roomId],
+        ["e", message.id, "", "reply"],
+      ]),
+    });
+  } finally {
+    continueTurn.resolve();
+    await bus?.close();
+    await fixture.close();
+  }
+});
+
 it("revokes the active bot immediately on a signed role downgrade", async () => {
   const fixture = await createBuzzRelayFixture();
   const fatal: Error[] = [];
@@ -186,6 +270,9 @@ it("revokes the active bot immediately on a signed role downgrade", async () => 
     await vi.waitFor(() => expect(fatal).toHaveLength(1));
     expect(fatal[0]?.message).toContain("no longer has the Bot role");
     expect(turnSignal?.aborted).toBe(true);
+    await expect(
+      bus.sendText({ channelId: fixture.roomId, text: "retired bot reply" }),
+    ).rejects.toThrow("no longer has the Bot role");
   } finally {
     await bus?.close();
     await fixture.close();
