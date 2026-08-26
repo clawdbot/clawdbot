@@ -1,5 +1,4 @@
 // Structured plugin catalog and lifecycle operations shared by Gateway-facing surfaces.
-import path from "node:path";
 import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -43,6 +42,11 @@ import {
 import { commitPluginInstallRecordsWithConfig } from "./install-record-commit.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.js";
 import type { InstallPolicyWarningDetails } from "./install-security-scan.types.js";
+import {
+  requestDeferredPluginInstall,
+  resolvePluginInstallTransaction,
+  type PluginInstallTransaction,
+} from "./install-transaction.js";
 import type { PluginInstallLogger } from "./install-types.js";
 import {
   installPluginFromNpmPackArchive,
@@ -58,6 +62,7 @@ import {
 import { resolveInstalledPluginPackageOwnership } from "./installed-plugin-package-ownership.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
+import { installPluginFromMarketplace } from "./marketplace.js";
 import {
   resolveTrustedOfficialClawHubPackageName,
   resolveTrustedSourceLinkedOfficialClawHubSpec,
@@ -91,7 +96,6 @@ import {
 } from "./status-dependencies-core.js";
 import { setPluginEnabledInConfig } from "./toggle-config.js";
 import { collectClawPluginUninstallWarnings } from "./uninstall-claw-references.js";
-import { isUninstallPathInsideOrEqual } from "./uninstall-config.js";
 import {
   prepareConfigForPendingPluginDirectoryRemovalSet,
   recordPluginPackageUninstallPlan,
@@ -152,6 +156,12 @@ export type ManagedPluginSourceInstallRequest =
   | {
       source: "npm-pack";
       archivePath: string;
+      mode: "install" | "update";
+    }
+  | {
+      source: "marketplace";
+      marketplace: string;
+      plugin: string;
       mode: "install" | "update";
     }
   | { source: "git"; spec: string; mode: "install" | "update" }
@@ -1086,131 +1096,62 @@ function throwInstallFailure(result: {
   });
 }
 
-function installRecordOwnsTarget(
-  record: PluginInstallRecord | undefined,
-  targetDir: string,
-): boolean {
-  return Boolean(
-    record?.installPath && path.resolve(record.installPath) === path.resolve(targetDir),
-  );
-}
-
-async function cleanupFailedManagedPluginInstall(params: {
-  env: NodeJS.ProcessEnv;
-  pluginId: string;
-  install: PluginInstallRecord;
-  targetDir: string;
-  extensionsDir: string;
-}): Promise<string[]> {
-  let installRecords: Record<string, PluginInstallRecord>;
-  try {
-    installRecords = await loadInstalledPluginIndexInstallRecords({ env: params.env });
-  } catch (error) {
-    return [
-      `Could not verify whether the failed plugin install was committed; retained ${params.targetDir}: ${formatErrorMessage(error)}`,
-    ];
-  }
-  if (installRecordOwnsTarget(installRecords[params.pluginId], params.targetDir)) {
-    return [
-      `Plugin install persistence reported an error after ${params.targetDir} was recorded; retained the managed target.`,
-    ];
-  }
-
-  const plan = planPluginUninstall(
-    recordPluginPackageUninstallPlan(
-      {
-        config: {
-          plugins: { installs: { [params.pluginId]: params.install } },
-        },
-        pluginId: params.pluginId,
-        deleteFiles: true,
-        extensionsDir: params.extensionsDir,
-      },
-      { runtimePluginIds: [] },
-    ),
-  );
-  if (!plan.ok) {
-    return [`Could not plan cleanup for failed plugin install: ${plan.error}`];
-  }
-  if (!plan.directoryRemoval) {
-    return [
-      `Could not resolve a managed cleanup target for failed plugin install ${params.pluginId}.`,
-    ];
-  }
-  const plannedTarget = path.resolve(plan.directoryRemoval.target);
-  const installedTarget = path.resolve(params.targetDir);
-  const removesIsolatedNpmProject =
-    plan.directoryRemoval.cleanup?.kind === "npm" &&
-    plannedTarget === path.resolve(plan.directoryRemoval.cleanup.npmRoot) &&
-    isUninstallPathInsideOrEqual(plannedTarget, installedTarget);
-  if (plannedTarget !== installedTarget && !removesIsolatedNpmProject) {
-    return [
-      `Refused cleanup for failed plugin install ${params.pluginId}: planned target does not match the newly installed target.`,
-    ];
-  }
-  try {
-    const cleanup = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
-    return cleanup.warnings;
-  } catch (error) {
-    return [
-      `Failed to remove the newly installed target after plugin persistence failed: ${formatErrorMessage(error)}`,
-    ];
-  }
-}
-
-function throwPersistenceFailureWithCleanupWarnings(error: unknown, warnings: string[]): never {
-  if (warnings.length === 0) {
-    throw error;
-  }
-  const cleanupWarning = [...new Set(warnings)].join("\n");
+function throwPersistenceFailureWithRollbackWarning(
+  error: unknown,
+  rollbackWarning: string,
+): never {
   if (error instanceof ManagedPluginLifecycleError) {
     throw new ManagedPluginLifecycleError(error.message, {
       kind: error.kind,
       code: error.code,
       version: error.version,
-      warning: [error.warning, cleanupWarning].filter(Boolean).join("\n"),
+      warning: [error.warning, rollbackWarning].filter(Boolean).join("\n"),
       installPolicyWarning: error.installPolicyWarning,
       cause: error,
     });
   }
   throw new ManagedPluginLifecycleError(formatErrorMessage(error), {
     kind: "unavailable",
-    warning: cleanupWarning,
+    warning: rollbackWarning,
     cause: error,
   });
 }
 
 async function persistManagedSourceInstall(params: {
-  env: NodeJS.ProcessEnv;
   snapshot: ConfigSnapshotForInstallPersist;
   pluginId: string;
   install: PluginInstallRecord;
-  targetDir: string;
-  extensionsDir: string;
+  installTransaction?: PluginInstallTransaction;
   invalidateRuntimeCache?: boolean;
   runtime?: RuntimeEnv;
   successMessage?: string;
-  cleanupOnPersistenceFailure?: boolean;
 }): Promise<{ config: OpenClawConfig; warnings: string[] }> {
   const warnings: string[] = [];
-  const persist = () =>
-    persistPluginInstall({
+  try {
+    const config = await persistPluginInstall({
       snapshot: params.snapshot,
       pluginId: params.pluginId,
       install: params.install,
+      ...(params.installTransaction ? { installTransaction: params.installTransaction } : {}),
       invalidateRuntimeCache: params.invalidateRuntimeCache,
       runtime: params.runtime,
       persistenceLogger: { warn: (message) => warnings.push(message) },
       ...(params.successMessage ? { successMessage: params.successMessage } : {}),
     });
-  if (!params.cleanupOnPersistenceFailure) {
-    return { config: await persist(), warnings };
-  }
-  try {
-    return { config: await persist(), warnings };
+    return { config, warnings };
   } catch (error) {
-    const cleanupWarnings = await cleanupFailedManagedPluginInstall(params);
-    return throwPersistenceFailureWithCleanupWarnings(error, cleanupWarnings);
+    if (!params.installTransaction) {
+      throw error;
+    }
+    try {
+      await params.installTransaction.rollback();
+    } catch (rollbackError) {
+      throwPersistenceFailureWithRollbackWarning(
+        error,
+        `Failed to roll back the plugin install after persistence failed: ${formatErrorMessage(rollbackError)}`,
+      );
+    }
+    throw error;
   }
 }
 
@@ -1223,7 +1164,6 @@ export async function installManagedPluginSource(params: {
   safetyOverrides?: InstallSafetyOverrides;
   runtime?: RuntimeEnv;
   invalidateRuntimeCache?: boolean;
-  cleanupOnPersistenceFailure?: boolean;
 }): Promise<ManagedPluginSourceInstallResult> {
   const { request } = params;
   const env = params.env ?? process.env;
@@ -1244,18 +1184,17 @@ export async function installManagedPluginSource(params: {
     };
   }
 
-  const common = {
+  const common = requestDeferredPluginInstall({
     ...params.safetyOverrides,
     config: params.snapshot.config,
     extensionsDir,
     logger: params.logger,
-  };
+  });
   const complete = async <T extends SourceInstallerResult>(
     installResult: Promise<T>,
     completed: {
       install: (result: Extract<T, { ok: true }>) => PluginInstallRecord;
       expectedPluginId?: string;
-      targetDir?: string;
       snapshot?: ConfigSnapshotForInstallPersist;
       successMessage?: string;
     },
@@ -1269,27 +1208,18 @@ export async function installManagedPluginSource(params: {
       targetDir: string;
     };
     if (completed.expectedPluginId && installed.pluginId !== completed.expectedPluginId) {
+      await resolvePluginInstallTransaction(installed)?.rollback();
       return {
         ok: false as const,
         error: `official catalog plugin id mismatch: expected ${completed.expectedPluginId}, got ${installed.pluginId}`,
       };
     }
-    const targetDir = completed.targetDir ?? installed.targetDir;
-    // Links point at operator-owned source directories. Every published managed
-    // payload defaults to compensation, but link persistence never deletes source.
-    const cleanupOnPersistenceFailure =
-      request.source === "local" && request.link
-        ? false
-        : (params.cleanupOnPersistenceFailure ?? true);
     const persisted = await persistManagedSourceInstall({
       ...params,
-      cleanupOnPersistenceFailure,
-      env,
       snapshot: completed.snapshot ?? params.snapshot,
       pluginId: installed.pluginId,
       install: completed.install(installed),
-      targetDir,
-      extensionsDir,
+      installTransaction: resolvePluginInstallTransaction(installed),
       successMessage: completed.successMessage,
     });
     return {
@@ -1328,7 +1258,6 @@ export async function installManagedPluginSource(params: {
       }),
       {
         snapshot: linkedSnapshot,
-        targetDir: installPath,
         successMessage: request.successMessage,
         install: (result) => ({
           source: request.recordSource,
@@ -1362,6 +1291,27 @@ export async function installManagedPluginSource(params: {
             : {}),
           ...(result.npmResolution?.shasum ? { npmShasum: result.npmResolution.shasum } : {}),
           ...(result.npmTarballName ? { npmTarballName: result.npmTarballName } : {}),
+        }),
+      },
+    );
+  }
+
+  if (request.source === "marketplace") {
+    return await complete(
+      installPluginFromMarketplace({
+        ...common,
+        marketplace: request.marketplace,
+        plugin: request.plugin,
+        mode: request.mode,
+      }),
+      {
+        install: (result) => ({
+          source: "marketplace",
+          installPath: result.targetDir,
+          version: result.version,
+          marketplaceName: result.marketplaceName,
+          marketplaceSource: result.marketplaceSource,
+          marketplacePlugin: result.marketplacePlugin,
         }),
       },
     );
@@ -1543,7 +1493,6 @@ export async function installManagedPlugin(params: {
             },
           }
         : {}),
-      cleanupOnPersistenceFailure: true,
       invalidateRuntimeCache: false,
       runtime: createSilentRuntime(),
     });

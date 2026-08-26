@@ -21,6 +21,11 @@ import {
   resolveFileNpmSpecToLocalPath,
 } from "./plugins-command-helpers.js";
 
+type PlannedPluginInstallRequest = Exclude<
+  ManagedPluginSourceInstallRequest,
+  { source: "marketplace" }
+>;
+
 type BundledLookup = (params: {
   kind: "pluginId" | "npmSpec";
   value: string;
@@ -30,12 +35,12 @@ type PluginInstallSourcePlan =
   | { ok: false; error: string }
   | {
       ok: true;
-      request: ManagedPluginSourceInstallRequest;
+      request: PlannedPluginInstallRequest;
       acknowledgement?: { sourceClass: NonClawHubInstallSourceClass; spec: string };
     };
 
 function sourcePlan(
-  request: ManagedPluginSourceInstallRequest,
+  request: PlannedPluginInstallRequest,
   raw: string,
   sourceClass?: NonClawHubInstallSourceClass,
 ): PluginInstallSourcePlan {

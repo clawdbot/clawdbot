@@ -13,6 +13,10 @@ import {
   resolvePluginNpmProjectsDir,
 } from "./install-paths.js";
 import {
+  requestDeferredPluginInstall,
+  resolvePluginInstallTransaction,
+} from "./install-transaction.js";
+import {
   hasRetainedManagedNpmInstallMarker,
   markRetainedManagedNpmInstall,
 } from "./managed-npm-retention.js";
@@ -824,6 +828,42 @@ describe("installPluginFromNpmSpec", () => {
     expect(dependencySpec).toMatch(/^file:\.\/_openclaw-pack-archives\/.+\.tgz$/);
     expect(dependencySpec).not.toContain(archivePath);
     expect(stagedArchiveContents).toBe("fixture pack contents");
+  });
+
+  it("returns a rollback transaction for deferred npm-pack installs", async () => {
+    const stateDir = suiteTempRootTracker.makeTempDir();
+    const npmRoot = path.join(stateDir, "npm");
+    const packageName = "npm-pack-deferred-rollback";
+    const archivePath = path.join(stateDir, `${packageName}-1.0.0.tgz`);
+    fs.writeFileSync(archivePath, "fixture pack contents", "utf8");
+    mockNpmViewAndInstallMany([
+      {
+        packageName,
+        version: "1.0.0",
+        pluginId: packageName,
+        npmRoot,
+        integrity: "sha512-deferred-pack",
+        shasum: "deferredpacksha",
+        packArchivePath: archivePath,
+      },
+    ]);
+
+    const result = await installPluginFromNpmPackArchive(
+      requestDeferredPluginInstall({
+        archivePath,
+        npmDir: npmRoot,
+        logger: { info: () => {}, warn: () => {} },
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    const transaction = resolvePluginInstallTransaction(result);
+    expect(transaction).toBeDefined();
+    await transaction?.rollback();
+    expect(fs.existsSync(result.targetDir)).toBe(false);
   });
 
   it("rejects npm pack archive metadata with traversal package names", async () => {

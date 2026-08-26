@@ -5,10 +5,7 @@ import { reportClawHubPluginInstallTelemetry } from "../infra/clawhub-packages.j
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "../plugins/clawhub.js";
-import { resolveDefaultPluginExtensionsDir } from "../plugins/install-paths.js";
-import { persistPluginInstall } from "../plugins/install-persistence.js";
 import { installManagedPluginSource } from "../plugins/management-service.js";
-import { installPluginFromMarketplace } from "../plugins/marketplace.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
 import { defaultRuntime } from "../runtime.js";
@@ -113,13 +110,18 @@ async function runPluginInstallCommandUnlocked(
     ) {
       return runtime.exit(1);
     }
-    const result = await installPluginFromMarketplace({
-      ...safetyOverrides,
-      marketplace: preflight.marketplace,
-      mode: installMode,
-      plugin: raw,
-      extensionsDir: resolveDefaultPluginExtensionsDir(),
+    const result = await installManagedPluginSource({
+      request: {
+        source: "marketplace",
+        marketplace: preflight.marketplace,
+        plugin: raw,
+        mode: installMode,
+      },
+      snapshot,
+      safetyOverrides,
       logger: createPluginInstallLogger(runtime),
+      invalidateRuntimeCache,
+      runtime,
     });
     if (!result.ok) {
       if (!isClawHubBlockedCliFailure(result)) {
@@ -127,21 +129,6 @@ async function runPluginInstallCommandUnlocked(
       }
       return runtime.exit(1);
     }
-
-    await persistPluginInstall({
-      snapshot,
-      pluginId: result.pluginId,
-      install: {
-        source: "marketplace",
-        installPath: result.targetDir,
-        version: result.version,
-        marketplaceName: result.marketplaceName,
-        marketplaceSource: result.marketplaceSource,
-        marketplacePlugin: result.marketplacePlugin,
-      },
-      invalidateRuntimeCache,
-      runtime,
-    });
     return;
   }
 

@@ -23,6 +23,7 @@ import {
 import { discoverOpenClawPlugins } from "./discovery.js";
 import { enablePluginInConfig } from "./enable.js";
 import { commitPluginInstallRecordsWithConfig } from "./install-record-commit.js";
+import type { PluginInstallTransaction } from "./install-transaction.js";
 import type { PluginInstallLogger } from "./install-types.js";
 import {
   loadInstalledPluginIndexInstallRecords,
@@ -484,6 +485,7 @@ export async function persistPluginInstall(params: {
   warningMessage?: string;
   runtime?: RuntimeEnv;
   persistenceLogger?: PluginInstallLogger;
+  installTransaction?: PluginInstallTransaction;
 }): Promise<OpenClawConfig> {
   const runtime = params.runtime ?? defaultRuntime;
   // Terminal diagnostics may contain paths/errors; management receives only producer-authored summaries.
@@ -624,6 +626,7 @@ export async function persistPluginInstall(params: {
       }),
     { command: "install" },
   );
+  await params.installTransaction?.commit();
   if (replacedInstallRemoval) {
     const removalResult = await tracePluginLifecyclePhaseAsync(
       "replaced install cleanup",
