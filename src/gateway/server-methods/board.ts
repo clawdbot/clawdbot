@@ -33,7 +33,13 @@ import {
   resolveBoardWidgetContentKindByPluginKind,
   resolveBoardWidgetContentKindResourceUrls,
 } from "../../plugins/board-widget-content-kinds.js";
+import {
+  capturePluginRegistryLifecycleEpoch,
+  isPluginRegistryLifecycleEpochActive,
+} from "../../plugins/registry-lifecycle.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { isGatewaySubordinateWorkAdmissionClosed } from "../../process/gateway-work-admission.js";
 import {
   readBoardDataBinding,
   runBoardActionVerb,
@@ -90,6 +96,27 @@ function respondBoardError(
     return;
   }
   respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error)));
+}
+
+function captureBoardRequestAuthority() {
+  const scopedPluginRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+  const pluginRegistryEpoch =
+    scopedPluginRegistry && capturePluginRegistryLifecycleEpoch(scopedPluginRegistry);
+  const assertActive = () => {
+    if (
+      isGatewaySubordinateWorkAdmissionClosed() ||
+      (scopedPluginRegistry &&
+        (!pluginRegistryEpoch ||
+          !isPluginRegistryLifecycleEpochActive(scopedPluginRegistry, pluginRegistryEpoch)))
+    ) {
+      throw new Error("board request authority is no longer active");
+    }
+  };
+  assertActive();
+  return {
+    assertActive,
+    pluginRegistry: scopedPluginRegistry ?? getActivePluginRegistry() ?? undefined,
+  };
 }
 
 function resolveBoardSessionKey(
@@ -275,10 +302,12 @@ export function createBoardHandlers(
       validateBoardUpdateParams,
       ({ params: boardParams, respond, context }) => {
         try {
+          const authority = captureBoardRequestAuthority();
           const boardSessionKey = resolveBoardSessionKey(boardParams, context, respond);
           if (!boardSessionKey) {
             return;
           }
+          authority.assertActive();
           const snapshot = store.applyOps(boardSessionKey, boardParams.ops);
           if (boardParams.ops.length > 0) {
             context.broadcast("board.changed", {
@@ -297,6 +326,7 @@ export function createBoardHandlers(
       validateBoardWidgetPutParams,
       async ({ params: requestParams, respond, context }) => {
         try {
+          const authority = captureBoardRequestAuthority();
           const requestedBoardSessionKey = resolveBoardSessionKey(requestParams, context, respond);
           if (!requestedBoardSessionKey) {
             return;
@@ -311,6 +341,7 @@ export function createBoardHandlers(
           let declared = requestDeclared;
           if (requestParams.content.kind === "canvas-doc") {
             const document = await readCanvasDocument(requestParams.content.docId);
+            authority.assertActive();
             if (document.cspSandbox !== "scripts") {
               throw new BoardValidationError(
                 "invalid_operation",
@@ -324,6 +355,7 @@ export function createBoardHandlers(
               viewId: requestParams.content.viewId,
               cfg: context.getRuntimeConfig(),
             });
+            authority.assertActive();
             const { view } = active;
             if (!view.toolCallId) {
               throw new BoardValidationError(
@@ -338,13 +370,16 @@ export function createBoardHandlers(
             } catch {
               // Reconstructed or revoked source leases may be pinned only as read-only content.
             }
+            authority.assertActive();
             const allowedTools = interactive ? await mcpApp.resolveAllowedToolNames(active) : [];
+            authority.assertActive();
             if (interactive) {
               try {
                 await requireMcpAppInteraction(view);
               } catch {
                 interactive = false;
               }
+              authority.assertActive();
             }
             content = {
               kind: "mcp-app",
@@ -359,7 +394,7 @@ export function createBoardHandlers(
             declared = interactive && allowedTools.length > 0 ? { tools: allowedTools } : undefined;
           } else if (requestParams.content.kind === "registered") {
             const registration = resolveBoardWidgetContentKind(
-              getActivePluginRegistry(),
+              authority.pluginRegistry,
               requestParams.content.contentKind,
             );
             if (!registration) {
@@ -427,6 +462,7 @@ export function createBoardHandlers(
             content: materializedContent,
             ...(declared ? { declared } : {}),
           };
+          authority.assertActive();
           let snapshot = store.putWidget(boardParams);
           const widget = snapshot.widgets.find(
             (candidate) => candidate.name === snapshot.resolvedWidgetName,
@@ -438,6 +474,7 @@ export function createBoardHandlers(
               name: snapshot.resolvedWidgetName,
               declared: declared ?? {},
             });
+            authority.assertActive();
             if (decision) {
               snapshot = {
                 ...store.grant(
@@ -467,10 +504,12 @@ export function createBoardHandlers(
       validateBoardWidgetGrantParams,
       ({ params: boardParams, respond, context }) => {
         try {
+          const authority = captureBoardRequestAuthority();
           const boardSessionKey = resolveBoardSessionKey(boardParams, context, respond);
           if (!boardSessionKey) {
             return;
           }
+          authority.assertActive();
           const snapshot = store.grant(
             boardSessionKey,
             boardParams.name,
@@ -551,6 +590,7 @@ export function createBoardHandlers(
       validateBoardEventParams,
       ({ params: boardParams, respond, context }) => {
         try {
+          const authority = captureBoardRequestAuthority();
           const identity =
             "ticket" in boardParams
               ? resolveAuthorizedBoardWidgetView(store, boardParams.ticket)
@@ -574,6 +614,7 @@ export function createBoardHandlers(
           if (!identity) {
             return;
           }
+          authority.assertActive();
           const appended = appendNotice({
             sessionKey: identity.sessionKey,
             widget: identity.name,

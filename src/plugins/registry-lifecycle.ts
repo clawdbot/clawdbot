@@ -6,6 +6,7 @@ const activatedRegistries = new WeakSet<PluginRegistry>();
 const registryEpochs = new WeakMap<PluginRegistry, object>();
 const recordEpochs = new WeakMap<PluginRegistry, WeakMap<PluginRecord, object>>();
 
+export type PluginRegistryLifecycleEpoch = object;
 type PluginRecordLifecycleEpoch = object;
 
 /** Marks a registry retired so late runtime calls can reject stale plugin state. */
@@ -25,6 +26,21 @@ export function markPluginRegistryActive(registry: PluginRegistry | null | undef
     // regain authority merely because the same registry object becomes active.
     registryEpochs.set(registry, Object.freeze({}));
   }
+}
+
+/** Capture the exact activation generation currently owned by a registry. */
+export function capturePluginRegistryLifecycleEpoch(
+  registry: PluginRegistry,
+): PluginRegistryLifecycleEpoch | undefined {
+  return retiredRegistries.has(registry) ? undefined : registryEpochs.get(registry);
+}
+
+/** True only while the exact captured registry activation remains current. */
+export function isPluginRegistryLifecycleEpochActive(
+  registry: PluginRegistry,
+  epoch: PluginRegistryLifecycleEpoch,
+): boolean {
+  return !retiredRegistries.has(registry) && registryEpochs.get(registry) === epoch;
 }
 
 /** Mint the exact record generation used by one registered native channel runtime. */
