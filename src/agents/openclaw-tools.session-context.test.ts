@@ -204,6 +204,12 @@ describe("openclaw session lookup context", () => {
     const list = requireTool(tools, "sessions_list");
     const history = requireTool(tools, "sessions_history");
     const search = requireTool(tools, "sessions_search");
+    setEmbeddedMode(false);
+    const send = requireTool(
+      createTools(accessibleConfig, { sessionConfigSource: "runtime" }),
+      "sessions_send",
+    );
+    setEmbeddedMode(true);
 
     const granted = await list.execute("granted", {});
     expect((granted.details as { sessions: Array<{ agentId: string }> }).sessions).toEqual(
@@ -211,6 +217,13 @@ describe("openclaw session lookup context", () => {
     );
 
     setRuntimeConfigSnapshot(restrictedConfig);
+    await expect(
+      send.execute("revoked-send", {
+        agentId: "main",
+        label: "private",
+        message: "should never be delivered",
+      }),
+    ).resolves.toMatchObject({ details: { status: "forbidden" } });
     const revoked = await list.execute("revoked", {});
     expect((revoked.details as { sessions: Array<{ agentId: string }> }).sessions).toEqual([
       expect.objectContaining({ agentId: "research" }),
@@ -221,7 +234,6 @@ describe("openclaw session lookup context", () => {
     await expect(
       search.execute("revoked-search", { query: "private", sessionKey: "agent:main:main" }),
     ).resolves.toMatchObject({ details: { status: "forbidden" } });
-
     setRuntimeConfigSnapshot(accessibleConfig);
     const restored = await list.execute("restored", {});
     expect((restored.details as { sessions: Array<{ agentId: string }> }).sessions).toEqual(
