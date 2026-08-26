@@ -163,13 +163,11 @@ export function registerNodesCameraCommands(nodes: Command) {
             platform: node.platform,
             deviceId,
           });
-          const results: Array<{
+          const captures: Array<{
             facing: CameraArtifactFacing;
-            path: string;
-            width: number;
-            height: number;
+            payload: ReturnType<typeof parseCameraSnapPayload>;
+            filePath: string;
           }> = [];
-
           for (const target of targets) {
             const invokeParams = buildNodeInvokeParams({
               nodeId,
@@ -189,11 +187,19 @@ export function registerNodesCameraCommands(nodes: Command) {
             const payload = parseCameraSnapPayload(getGatewayInvokePayload(raw), {
               expectedHost: node.remoteIp,
             });
-            const filePath = cameraTempPath({
-              kind: "snap",
+            captures.push({
               facing: target.artifactFacing,
-              ext: payload.format === "jpeg" ? "jpg" : payload.format,
+              payload,
+              filePath: cameraTempPath({
+                kind: "snap",
+                facing: target.artifactFacing,
+                ext: payload.format === "jpeg" ? "jpg" : payload.format,
+              }),
             });
+          }
+
+          const results = [];
+          for (const { facing: artifactFacing, payload, filePath } of captures) {
             await writeCameraPayloadToFile({
               filePath,
               payload,
@@ -201,7 +207,7 @@ export function registerNodesCameraCommands(nodes: Command) {
               invalidPayloadMessage: "invalid camera.snap payload",
             });
             results.push({
-              facing: target.artifactFacing,
+              facing: artifactFacing,
               path: filePath,
               width: payload.width,
               height: payload.height,
