@@ -3,8 +3,8 @@
 // heartbeat-enabled agent, reconverged at startup and config reload.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  heartbeatMonitorAgentId,
-  resolveHeartbeatMonitorSpecs,
+  heartbeatMonitorAddOptions,
+  resolveHeartbeatMonitorPlan,
 } from "../cron/heartbeat-monitor.js";
 import type { CronJob } from "../cron/types.js";
 import type { GatewayCronServiceContract } from "./server-cron-contract.js";
@@ -31,42 +31,21 @@ export async function reconcileHeartbeatMonitorJobs(params: {
     return { ok: false };
   }
 
-  const specs = resolveHeartbeatMonitorSpecs(params.cfg, jobs);
-  const desired = new Set(specs.map((spec) => spec.agentId));
-  for (const spec of specs) {
+  const { changes } = resolveHeartbeatMonitorPlan(params.cfg, jobs);
+  for (const change of changes) {
     try {
-      await params.cron.add(spec.input, {
-        enabledExplicit: true,
-        systemOwned: true,
-        // Scope declarative matching to real monitors: a pre-existing user
-        // job that happens to hold this key is left untouched.
-        matchesExisting: (job) => job.payload.kind === "heartbeat",
-      });
+      if (change.kind === "remove") {
+        await params.cron.remove(change.job.id, { systemOwned: true });
+      } else {
+        await params.cron.add(change.input, heartbeatMonitorAddOptions(change.agentId));
+      }
     } catch (error) {
       ok = false;
       params.logger.warn(
-        { agentId: spec.agentId, err: String(error) },
-        "cron-heartbeat: monitor convergence failed",
-      );
-    }
-  }
-
-  for (const job of jobs) {
-    const agentId = heartbeatMonitorAgentId(job);
-    // Disabled heartbeats retain their stable monitor row (and scratch). Only
-    // agents no longer enrolled in heartbeat are pruned.
-    if (!agentId || desired.has(agentId)) {
-      continue;
-    }
-    // Keep cleanup isolated per agent; a failed removal must not strand later
-    // stale monitors or suppress the existing reconciliation retry.
-    try {
-      await params.cron.remove(job.id, { systemOwned: true });
-    } catch (error) {
-      ok = false;
-      params.logger.warn(
-        { agentId, err: String(error) },
-        "cron-heartbeat: stale monitor cleanup failed",
+        { agentId: change.agentId, err: String(error) },
+        change.kind === "remove"
+          ? "cron-heartbeat: stale monitor cleanup failed"
+          : "cron-heartbeat: monitor convergence failed",
       );
     }
   }

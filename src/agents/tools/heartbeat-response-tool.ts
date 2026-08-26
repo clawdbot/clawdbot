@@ -56,7 +56,7 @@ export function createHeartbeatResponseTool(): AnyAgentTool {
     catalogMode: "direct-only",
     displaySummary: "Accept heartbeat outcome/notify choice.",
     description:
-      "Accept heartbeat result for post-turn handling. `notify=false` no visible send. `notify=true` needs concise notificationText. Scratch is monitor prose only; manage recurring tasks with cron.",
+      "Accept heartbeat result for post-turn handling. `notify=false` no visible send. `notify=true` needs concise notificationText. Scratch is monitor prose only; recurring work belongs in automations.",
     parameters: HeartbeatResponseToolSchema,
     execute: async (_toolCallId, args) => {
       if (!isRecord(args)) {

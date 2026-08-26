@@ -8,10 +8,13 @@ sidebarTitle: "Heartbeat"
 ---
 
 <Note>
-**Heartbeat vs automations?** See [Automation](/automation) for guidance on when to use each.
+**Heartbeat is an automation.** See [Automation](/automation) for guidance on
+choosing the system-owned monitor or an independently scheduled job.
 </Note>
 
-Heartbeat runs **periodic agent turns** in the main session so the model can surface anything that needs attention without spamming you.
+Heartbeat is a system-owned automation that runs **periodic agent turns** in the
+main session so the model can surface anything that needs attention without
+spamming you.
 
 Heartbeat is a scheduled main-session turn - it does **not** create [background task](/automation/tasks) records. Task records are for detached work (ACP runs, subagents, isolated automation jobs).
 

@@ -4,7 +4,6 @@ import path from "node:path";
 import { TextDecoder } from "node:util";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { DEFAULT_HEARTBEAT_FILENAME } from "../agents/workspace.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -19,7 +18,7 @@ import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import type { CronJob } from "../cron/types.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { formatErrorMessage as errorMessage } from "../infra/errors.js";
-import { resolveHeartbeatAgents } from "../infra/heartbeat-runner.js";
+import { resolveHeartbeatAgents } from "../infra/heartbeat-config.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { readRegularFile } from "../infra/regular-file.js";
 import { escapeRegExp } from "../shared/regexp.js";
@@ -27,6 +26,7 @@ import { shortenHomePath } from "../utils.js";
 import { ensureHeartbeatMonitorJobs } from "./doctor-heartbeat-cadence-migration.js";
 
 const HEARTBEAT_SCRATCH_MIGRATION_CHECK_ID = "core/doctor/heartbeat-scratch-migration";
+const LEGACY_HEARTBEAT_FILENAME = "HEARTBEAT.md";
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
 
 type HeartbeatScratchMigrationResult = {
@@ -48,7 +48,7 @@ async function readHeartbeatSource(
   options?: { recoverClaims?: boolean },
 ): Promise<HeartbeatSource | undefined> {
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-  const heartbeatPath = path.join(workspaceDir, DEFAULT_HEARTBEAT_FILENAME);
+  const heartbeatPath = path.join(workspaceDir, LEGACY_HEARTBEAT_FILENAME);
   let sourceStat;
   try {
     sourceStat = await fs.lstat(heartbeatPath);
@@ -105,7 +105,7 @@ async function readHeartbeatSource(
   }
   return {
     path: heartbeatPath,
-    entryKey: path.join(workspaceRealPath, DEFAULT_HEARTBEAT_FILENAME),
+    entryKey: path.join(workspaceRealPath, LEGACY_HEARTBEAT_FILENAME),
     content,
     sha256: hashCronScratchSource(content),
   };
@@ -366,7 +366,7 @@ export async function collectHeartbeatScratchMigrationFindings(
   for (const agent of resolveHeartbeatAgents(cfg)) {
     const heartbeatPath = path.join(
       resolveAgentWorkspaceDir(cfg, agent.agentId),
-      DEFAULT_HEARTBEAT_FILENAME,
+      LEGACY_HEARTBEAT_FILENAME,
     );
     try {
       const source = await readHeartbeatSource(cfg, agent.agentId);

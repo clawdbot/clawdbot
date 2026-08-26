@@ -31,8 +31,7 @@ import {
 } from "../../infra/device-identity.js";
 import { tryReadDiskSpace } from "../../infra/disk-space.js";
 import { getLastHeartbeatEvent } from "../../infra/heartbeat-events.js";
-import { setHeartbeatsEnabled } from "../../infra/heartbeat-runner.js";
-import { requestHeartbeat } from "../../infra/heartbeat-wake.js";
+import { requestHeartbeat, setHeartbeatsEnabled } from "../../infra/heartbeat-wake.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { resolveRuntimeOsLabel } from "../../infra/os-summary.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
@@ -324,7 +323,7 @@ export const systemHandlers: GatewayRequestHandlers = {
           source: "notifications-event",
           intent: "immediate",
           // The dispatcher recognizes "wake" as a payload-bearing run, so an
-          // empty HEARTBEAT.md cannot suppress this queued system event.
+          // empty monitor scratch cannot suppress this queued system event.
           reason: "wake",
           ...(!requestedSessionKey && eventOwnerAgentId ? { agentId: eventOwnerAgentId } : {}),
           sessionKey,

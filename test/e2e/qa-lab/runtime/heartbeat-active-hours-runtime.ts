@@ -148,7 +148,6 @@ export async function runHeartbeatActiveHoursRuntime(options: HeartbeatRuntimeOp
         ? { status: "ran", durationMs: 1 }
         : { status: "skipped", reason: "quiet-hours" };
     },
-    stableSchedulerSeed: "qa-heartbeat-active-hours",
   });
   try {
     await pokeScheduledHeartbeat({

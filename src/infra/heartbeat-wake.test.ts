@@ -231,7 +231,6 @@ describe("heartbeat-wake", () => {
       const scheduled = wake("interval", {
         agentId: "main",
         scheduledEveryMs: 5 * 60_000,
-        scheduledAnchorMs: 42_000,
         coalesceMs: 100,
       });
       const task = {
@@ -255,7 +254,6 @@ describe("heartbeat-wake", () => {
         reason: "heartbeat-task:job-inbox",
         agentId: "main",
         scheduledEveryMs: 5 * 60_000,
-        scheduledAnchorMs: 42_000,
         tasks: [{ jobId: "job-inbox", name: "inbox", prompt: "Check inbox" }],
       });
     },

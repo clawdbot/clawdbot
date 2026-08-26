@@ -1,23 +1,24 @@
 /** Doctor-owned materialization of heartbeat cadence config into cron monitor rows. */
-import { isDeepStrictEqual } from "node:util";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  heartbeatMonitorAgentId,
-  resolveHeartbeatMonitorSpecs,
+  heartbeatMonitorAddOptions,
+  resolveHeartbeatMonitorPlan,
+  type HeartbeatMonitorChange,
+  type HeartbeatMonitorPlan,
 } from "../cron/heartbeat-monitor.js";
 import { CronService } from "../cron/service.js";
 import {
   loadCronJobsStoreWithConfigJobsReadOnly,
   resolveCronJobsStorePathFromConfig,
 } from "../cron/store.js";
-import type { CronJob, CronJobCreate } from "../cron/types.js";
+import type { CronJob } from "../cron/types.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { formatErrorMessage as errorMessage } from "../infra/errors.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.js";
-import { resolveHeartbeatSchedulerSeed } from "../infra/heartbeat-runner.js";
+import { resolveHeartbeatSchedulerSeed } from "../infra/heartbeat-schedule.js";
 import { shortenHomePath } from "../utils.js";
 
 const HEARTBEAT_CADENCE_MIGRATION_CHECK_ID = "core/doctor/heartbeat-cadence-migration";
@@ -25,14 +26,6 @@ const HEARTBEAT_CADENCE_MIGRATION_CHECK_ID = "core/doctor/heartbeat-cadence-migr
 type HeartbeatCadenceMigrationResult = {
   changes: string[];
   warnings: string[];
-};
-
-type HeartbeatMonitorChange =
-  | { kind: "create" | "update"; agentId: string; input: CronJobCreate }
-  | { kind: "remove"; agentId: string; job: CronJob };
-
-type HeartbeatMonitorPlan = {
-  changes: HeartbeatMonitorChange[];
 };
 
 function createDoctorCronService(storePath: string, cfg: OpenClawConfig): CronService {
@@ -51,52 +44,6 @@ function createDoctorCronService(storePath: string, cfg: OpenClawConfig): CronSe
       error: "doctor does not execute automations",
     }),
   });
-}
-
-function declarativeFields(job: CronJob | CronJobCreate) {
-  return {
-    schedule: job.schedule,
-    pacing: job.pacing,
-    trigger: job.trigger,
-    payload: job.payload,
-    delivery: job.delivery,
-    displayName: job.displayName,
-    enabled: job.enabled,
-  };
-}
-
-function resolveHeartbeatMonitorPlan(
-  cfg: OpenClawConfig,
-  jobs: CronJob[],
-  options: { schedulerSeed?: string } = {},
-): HeartbeatMonitorPlan {
-  const specs = resolveHeartbeatMonitorSpecs(cfg, jobs, options);
-  const existingByAgentId = new Map<string, CronJob>();
-  for (const job of jobs) {
-    const agentId = heartbeatMonitorAgentId(job);
-    if (agentId) {
-      existingByAgentId.set(agentId, job);
-    }
-  }
-
-  const desiredAgentIds = new Set(specs.map((spec) => spec.agentId));
-  const changes: HeartbeatMonitorChange[] = [];
-  for (const spec of specs) {
-    const existing = existingByAgentId.get(spec.agentId);
-    if (!existing) {
-      changes.push({ kind: "create", agentId: spec.agentId, input: spec.input });
-      continue;
-    }
-    if (!isDeepStrictEqual(declarativeFields(existing), declarativeFields(spec.input))) {
-      changes.push({ kind: "update", agentId: spec.agentId, input: spec.input });
-    }
-  }
-  for (const [agentId, job] of existingByAgentId) {
-    if (!desiredAgentIds.has(agentId)) {
-      changes.push({ kind: "remove", agentId, job });
-    }
-  }
-  return { changes };
 }
 
 async function loadHeartbeatMonitorPlan(
@@ -185,14 +132,10 @@ export async function ensureHeartbeatMonitorJobs(
   const cron = createDoctorCronService(storePath, cfg);
   const jobs = await cron.list({ includeDisabled: true });
   const schedulerSeed = resolveHeartbeatSchedulerSeed(undefined, { env });
-  const specs = resolveHeartbeatMonitorSpecs(cfg, jobs, { schedulerSeed });
+  const { specs } = resolveHeartbeatMonitorPlan(cfg, jobs, { schedulerSeed });
   const monitors = new Map<string, CronJob>();
   for (const spec of specs) {
-    const result = await cron.add(spec.input, {
-      enabledExplicit: true,
-      systemOwned: true,
-      matchesExisting: (job) => heartbeatMonitorAgentId(job) === spec.agentId,
-    });
+    const result = await cron.add(spec.input, heartbeatMonitorAddOptions(spec.agentId));
     const job = "job" in result ? result.job : result;
     monitors.set(spec.agentId, job);
   }
@@ -243,11 +186,7 @@ export async function maybeMigrateHeartbeatCadenceToCron(params: {
       if (change.kind === "remove") {
         await cron.remove(change.job.id, { systemOwned: true });
       } else {
-        await cron.add(change.input, {
-          enabledExplicit: true,
-          systemOwned: true,
-          matchesExisting: (job) => heartbeatMonitorAgentId(job) === change.agentId,
-        });
+        await cron.add(change.input, heartbeatMonitorAddOptions(change.agentId));
       }
       changes.push(describePlannedChange(change));
     } catch (error) {
