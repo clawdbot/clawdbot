@@ -51,6 +51,7 @@ import {
   resolvePluginSubagentRequestedModelRef,
 } from "./server-plugin-subagent-runtime.js";
 import {
+  createGatewayHooksRuntime,
   hasInProcessGatewayContext,
   openGatewayNodeDuplex,
   projectGatewayRuntimeNodes,
@@ -524,16 +525,7 @@ function createGatewayPluginRuntimeBindings(
         request: (method, params, options) =>
           dispatchTrustedPluginGatewayMethod(method, params, options, resolveBoundGatewayContext),
       },
-      hooks: {
-        dispatchHookAgentTurn: async (params) => {
-          const pluginId = getPluginRuntimeGatewayRequestScope()?.pluginId;
-          const gatewayContext = resolveBoundGatewayContext?.();
-          if (!pluginId || !gatewayContext?.dispatchHookAgentTurn) {
-            throw new Error("Plugin hook runtime requires an active Gateway and plugin identity.");
-          }
-          return await gatewayContext.dispatchHookAgentTurn(pluginId, params);
-        },
-      },
+      hooks: createGatewayHooksRuntime(resolveBoundGatewayContext),
       nodes: createGatewayNodesRuntime(resolveBoundGatewayContext, lifetime.signal),
       subagent: createGatewaySubagentRuntime(resolveBoundGatewayContext, overridePolicies),
     },
