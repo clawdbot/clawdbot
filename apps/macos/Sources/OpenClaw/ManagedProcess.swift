@@ -112,9 +112,17 @@ final class ManagedProcess: @unchecked Sendable {
                         identifier: pid,
                         eventMask: .exit,
                         queue: .global(qos: .userInitiated))
-                    exitSource.setEventHandler { wakeContinuation.yield(.exited) }
+                    exitSource.setEventHandler {
+                        // The leader's exit is the operational liveness boundary; group cleanup
+                        // may continue afterward, but callers must not reuse the dead process.
+                        state.finish()
+                        wakeContinuation.yield(.exited)
+                    }
                     exitSource.resume()
-                    if State.hasExited(pid) { wakeContinuation.yield(.exited) }
+                    if State.hasExited(pid) {
+                        state.finish()
+                        wakeContinuation.yield(.exited)
+                    }
                     var wakeIterator = wakeEvents.makeAsyncIterator()
                     let wakeReason = await wakeIterator.next() ?? .terminate(gracefully: true)
                     exitSource.cancel()
