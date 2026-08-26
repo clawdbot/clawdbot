@@ -153,4 +153,53 @@ describe("UrbitSSEClient connect-fail body cleanup", () => {
       });
     }
   });
+
+  it("delivers no-space data frames across a real HTTP stream to a subscribed handler", async () => {
+    // The SSE spec makes the space after "data:" optional. Prove end-to-end
+    // that a ship emitting `data:{...}` (no space) still reaches the caller.
+    let resolveEvent: ((value: unknown) => void) | undefined;
+    const delivered = new Promise<unknown>((resolve) => {
+      resolveEvent = resolve;
+    });
+    let resolveStreamClosed: (() => void) | undefined;
+    const streamClosed = new Promise<void>((resolve) => {
+      resolveStreamClosed = resolve;
+    });
+    const server = createServer((request, response) => {
+      if (request.method === "GET") {
+        request.socket.once("close", () => resolveStreamClosed?.());
+        response.writeHead(200, { "Content-Type": "text/event-stream" });
+        response.write('id: 1\ndata:{"id":1,"json":{"message":"delivered"}}\n\n');
+        return;
+      }
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.write('{"ok":true');
+    });
+    const baseUrl = await listen(server);
+    const client = new UrbitSSEClient(baseUrl, "urbauth-~zod=proof", {
+      autoReconnect: false,
+      ship: "zod",
+      ssrfPolicy: { allowPrivateNetwork: true },
+      lookupFn: lookupLoopback,
+    });
+
+    try {
+      await client.subscribe({
+        app: "chat",
+        path: "/inbox",
+        event: (value) => resolveEvent?.(value),
+      });
+      await client.connect();
+
+      await expect(delivered).resolves.toEqual({ message: "delivered" });
+      expect(client.streamRelease).toBeTypeOf("function");
+
+      await client.close();
+      await expect(streamClosed).resolves.toBeUndefined();
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
 });
