@@ -1266,6 +1266,7 @@
                     "pages": [
                       "concepts/memory",
                       "concepts/memory-architecture",
+                      "concepts/memory-provenance",
                       "concepts/user-model",
                       "concepts/standing-intents",
                       "concepts/memory-builtin",

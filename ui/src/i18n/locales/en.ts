@@ -1821,6 +1821,18 @@ export const en: TranslationMap = {
         label: "Absolutely",
         description: "Clay on graphite",
       },
+      tide: {
+        label: "Tide",
+        description: "Slate & steel",
+      },
+      beacon: {
+        label: "Beacon",
+        description: "Maximum contrast",
+      },
+      phosphor: {
+        label: "Phosphor",
+        description: "Green on glass",
+      },
     },
     textSizes: {
       small: "Small",

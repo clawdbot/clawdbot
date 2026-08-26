@@ -577,7 +577,10 @@ Built-in memory indexes live in each agent's OpenClaw SQLite database at
 Configure deterministic session exclusions under
 `plugins.entries.memory-core.config.memoryPolicy.excludeSessions`. Excluded
 sessions never enter the dreaming corpus, so the memory pipeline cannot turn
-them into promotion candidates or consolidated entries.
+them into promotion candidates or consolidated entries. For the policy story
+behind these keys — what admission and deletion guarantee and where their
+boundaries are — see
+[Memory provenance and deletion](/concepts/memory-provenance).
 
 | Key                          | Type       | Default | Matches                                   |
 | ---------------------------- | ---------- | ------- | ----------------------------------------- |

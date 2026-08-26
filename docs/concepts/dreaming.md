@@ -69,6 +69,8 @@ Dreaming runs three cooperative phases per sweep, in order: light -> REM -> deep
 
 Dreaming can ingest redacted session transcripts into the dreaming corpus. Only interactive sessions are eligible. Cron, heartbeat, subagent, and unknown sessions stay out of durable candidate ingestion. Personal and sensitive content is redacted before ingestion, and runtime-marked recalled context is removed so recalled snippets cannot be learned again as new memory.
 
+Two operator controls remove whole sessions from ingestion, each with a recorded reason: the [memory admission policy](/concepts/memory-provenance#admission-keeping-sources-out-of-memory) excludes sessions by external-content hook source, channel, or chat type, and [`memory forget`](/cli/memory#memory-forget) durably excludes purged sessions as `forgotten` so a later sweep cannot re-learn what was deleted.
+
 ## Consolidation safety
 
 The deterministic score, recall-count, and query-diversity thresholds remain
