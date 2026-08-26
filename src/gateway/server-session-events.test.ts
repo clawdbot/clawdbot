@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
+import type { SessionMessageSubscriberRegistry } from "./server-chat-state.js";
 
 const sessionRow = vi.hoisted(() => ({
   key: "agent:main:main",
@@ -94,7 +95,7 @@ function fixedStoreRuntimeConfig(ownerAgentId: string, configuredAgentIds: strin
 function createHandler(
   projectSessionActive: boolean,
   executionStarted = true,
-  getSessionMessageSubscribers: SessionMessageSubscribers["get"] = () => new Set<string>(),
+  getSessionMessageSubscribers: SessionMessageSubscriberRegistry["get"] = () => new Set<string>(),
 ) {
   const broadcastToConnIds = vi.fn();
   const handler = createTranscriptUpdateBroadcastHandler({

@@ -176,6 +176,7 @@ describe("collaboration event scope guards", () => {
           profileId: actor.id,
           displayName: null,
           hasAvatar: false,
+          avatarRevision: "1",
           updatedAt: 1,
         };
       }
