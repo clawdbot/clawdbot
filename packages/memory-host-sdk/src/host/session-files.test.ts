@@ -296,28 +296,18 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
         updateMode: "none",
       },
     );
+    const archiveMessage = (content: string) =>
+      JSON.stringify({ type: "message", message: { role: "user", content } });
     const archivePath = path.join(
       sessionsDir,
       `${sessionId}.jsonl.deleted.2026-06-25T12-01-00.000Z`,
     );
-    fsSync.writeFileSync(
-      archivePath,
-      JSON.stringify({
-        type: "message",
-        message: { role: "user", content: "Archived JSONL transcript text" },
-      }),
-    );
+    fsSync.writeFileSync(archivePath, archiveMessage("Archived JSONL transcript text"));
     const resetArchivePath = path.join(
       sessionsDir,
       `${sessionId}.jsonl.reset.2026-06-25T12-02-00.000Z`,
     );
-    fsSync.writeFileSync(
-      resetArchivePath,
-      JSON.stringify({
-        type: "message",
-        message: { role: "user", content: "Retained pre-reset conversation fact" },
-      }),
-    );
+    fsSync.writeFileSync(resetArchivePath, archiveMessage("Retained pre-reset conversation fact"));
 
     expect(fsSync.existsSync(path.join(sessionsDir, `${sessionId}.jsonl`))).toBe(false);
     const entries = await listSessionTranscriptCorpusEntriesForAgent("main");
