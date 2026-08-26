@@ -361,6 +361,13 @@ export function readSessionChangedEvent(payload: unknown): SessionChangedEventIn
   };
 }
 
+// Null source confirms inheritance; omission on a lifecycle event preserves selection.
+const NULLABLE_SESSION_ROW_FIELDS = new Set<string>([
+  "updatedAt",
+  "activeLeafEntryId",
+  "modelOverrideSource",
+]);
+
 export function reconcileSessionChanged(
   result: SessionsListResult | null,
   payload: unknown,
@@ -483,10 +490,10 @@ export function reconcileSessionChanged(
   // typed optional-not-null, so every null tombstone deletes — a hand-kept
   // field list here drifts as new tombstoned fields ship (it already had:
   // toolOverrides/observerDigest/controlOwnerSessionKey/restartRecoveryStatus/
-  // goal leaked null). updatedAt/activeLeafEntryId are the schema's only
-  // legitimately nullable row fields and keep their explicit handling.
+  // goal leaked null). Only the fields below are legitimately nullable in the
+  // schema, where null is the value itself rather than a clear instruction.
   for (const [field, value] of Object.entries(rowFields)) {
-    if (value === null && field !== "updatedAt" && field !== "activeLeafEntryId") {
+    if (value === null && !NULLABLE_SESSION_ROW_FIELDS.has(field)) {
       delete row[field as keyof GatewaySessionRow];
     }
   }

@@ -449,6 +449,26 @@ describe("FeishuConfigSchema TTS overrides", () => {
 });
 
 describe("FeishuConfigSchema actions", () => {
+  it("accepts opt-in stickers at channel and account scope without changing defaults", () => {
+    expect(FeishuConfigSchema.parse({}).actions?.sticker).toBeUndefined();
+    const result = FeishuConfigSchema.parse({
+      actions: { sticker: true },
+      accounts: { work: { actions: { sticker: false } } },
+    });
+    expect(result.actions?.sticker).toBe(true);
+    expect(result.accounts?.work?.actions?.sticker).toBe(false);
+    expect(FeishuConfigSchema.safeParse({ actions: { sticker: "true" } }).success).toBe(false);
+    expect(FeishuChannelConfigSchema.schema).toMatchObject({
+      properties: {
+        actions: { properties: { sticker: { type: "boolean" } } },
+        accounts: {
+          additionalProperties: {
+            properties: { actions: { properties: { sticker: { type: "boolean" } } } },
+          },
+        },
+      },
+    });
+  });
   it("accepts top-level reactions action gate", () => {
     const result = FeishuConfigSchema.parse({
       actions: { reactions: false },

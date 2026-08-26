@@ -1666,7 +1666,6 @@ describe("prepareCliRunContext", () => {
     expect(context.claudeSkillsPluginArgs).toEqual([]);
     expect(context.preparedBackend.backend.sessionMode).toBe("none");
     expect(context.preparedBackend.backend.liveSession).toBeUndefined();
-    expect(context.bootstrapPromptWarningLines).toEqual([]);
     expect(context.systemPromptReport.injectedWorkspaceFiles).toEqual([]);
     expect(context.systemPromptReport.tools.entries).toEqual([]);
   });
@@ -1775,6 +1774,110 @@ describe("prepareCliRunContext", () => {
         sessionId: "cli-session",
       });
     }
+  });
+
+  it("routes bootstrap truncation notices into the system prompt, not the turn prompt", async () => {
+    const { dir } = fixture.session;
+    const agentsPath = path.join(dir, "AGENTS.md");
+    setCliRunnerPrepareTestDeps({
+      resolveBootstrapContextForRun: vi.fn(async () => ({
+        bootstrapFiles: [
+          {
+            name: "AGENTS.md" as const,
+            path: agentsPath,
+            content: "policy ".repeat(100),
+            missing: false,
+          },
+        ],
+        contextFiles: [{ path: agentsPath, content: "policy ".repeat(10) }],
+      })),
+    });
+
+    const context = await fixture.prepare({
+      sessionKey: "agent:main:main",
+      config: createCliBackendConfig(),
+      prompt: "Hello",
+      runId: "run-bootstrap-truncation-notice",
+      trigger: "user",
+    });
+
+    expect(context.systemPrompt).toContain("## Bootstrap Context Notice");
+    expect(context.systemPrompt).toContain("[Bootstrap truncation warning]");
+    expect(context.params.prompt).toBe("Hello");
+    expect(context.params.prompt).not.toContain("[Bootstrap truncation warning]");
+    expect(context.systemPromptReport.bootstrapTruncation).toMatchObject({
+      warningShown: true,
+      truncatedFiles: 1,
+    });
+  });
+
+  it("drifts a resumed first-only session when truncation starts mid-session", async () => {
+    const { dir } = fixture.session;
+    const agentsPath = path.join(dir, "AGENTS.md");
+    const bootstrapContextFor = (injected: string) => ({
+      bootstrapFiles: [
+        {
+          name: "AGENTS.md" as const,
+          path: agentsPath,
+          content: "policy ".repeat(100),
+          missing: false,
+        },
+      ],
+      contextFiles: [{ path: agentsPath, content: injected }],
+    });
+    setRawCliBackendForPrepareTest({
+      id: "test-cli",
+      pluginId: "test",
+      bundleMcp: false,
+      nativeToolMode: "always-on",
+      config: {
+        command: "test-cli",
+        args: ["--print"],
+        systemPromptArg: "--system-prompt",
+        systemPromptWhen: "first",
+        sessionMode: "existing",
+        output: "text",
+        input: "arg",
+      },
+    });
+    setCliRunnerPrepareTestDeps({
+      resolveBootstrapContextForRun: vi.fn(async () => bootstrapContextFor("policy ".repeat(100))),
+    });
+    const firstTurn = await fixture.prepare({
+      sessionKey: "agent:main:main",
+      config: createCliBackendConfig(),
+      prompt: "turn one",
+      runId: "run-truncation-drift-1",
+      trigger: "user",
+      extraSystemPrompt: "stable prompt",
+    });
+    expect(firstTurn.systemPrompt).not.toContain("[Bootstrap truncation warning]");
+    const untruncatedBinding = {
+      sessionId: "cli-session",
+      extraSystemPromptHash: firstTurn.extraSystemPromptHash,
+      cwdHash: hashCliSessionText(dir),
+    };
+
+    // AGENTS.md grows past the bootstrap cap between turns of the same session.
+    setCliRunnerPrepareTestDeps({
+      resolveBootstrapContextForRun: vi.fn(async () => bootstrapContextFor("policy ".repeat(10))),
+    });
+    const secondTurn = await fixture.prepare({
+      sessionKey: "agent:main:main",
+      config: createCliBackendConfig(),
+      prompt: "turn two",
+      runId: "run-truncation-drift-2",
+      trigger: "user",
+      extraSystemPrompt: "stable prompt",
+      cliSessionBinding: untruncatedBinding,
+    });
+
+    expect(secondTurn.systemPrompt).toContain("[Bootstrap truncation warning]");
+    expect(secondTurn.reusableCliSession).toEqual({
+      mode: "reuse-with-drift",
+      sessionId: "cli-session",
+      drift: { reasons: ["system-prompt"] },
+    });
   });
 
   it("applies prompt-build hook context to Claude-style CLI preparation", async () => {

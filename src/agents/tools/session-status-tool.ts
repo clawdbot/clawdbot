@@ -157,6 +157,7 @@ const SessionStatusOutputSchema = Type.Object(
   {
     ok: Type.Literal(true),
     sessionKey: Type.String(),
+    agentId: Type.String(),
     changedModel: Type.Boolean(),
     stateVersion: Type.Integer(),
     statusText: Type.String(),
@@ -1222,6 +1223,7 @@ export function createSessionStatusTool(opts?: {
             details: {
               ok: true,
               sessionKey: scopedResolved.key,
+              agentId,
               changedModel,
               stateVersion,
               ...(stateChanges ? { stateChanges } : {}),

@@ -771,11 +771,13 @@ async function closeBrowserPage(page: Page): Promise<void> {
 
 async function waitForLayoutSettled(page: Page, selector: string): Promise<void> {
   // content-visibility and container queries can defer descendant layout beyond
-  // a fixed rAF pair. Measure the owning geometry until two frames agree.
+  // a fixed rAF pair. Require a short quiet window so a delayed update cannot
+  // land immediately after two coincidentally identical frames.
   await page.evaluate(
-    async ({ maxFrames, selector: targetSelector }) => {
+    async ({ maxFrames, minStableFrames, minStableMs, selector: targetSelector }) => {
       let previousGeometry: string | undefined;
       let stableFrames = 0;
+      let stableSince = performance.now();
       for (let frame = 0; frame < maxFrames; frame += 1) {
         await new Promise<void>((resolve) => {
           requestAnimationFrame(() => resolve());
@@ -790,15 +792,20 @@ async function waitForLayoutSettled(page: Page, selector: string): Promise<void>
             return [rect.x, rect.y, rect.width, rect.height];
           }),
         );
-        stableFrames = geometry === previousGeometry ? stableFrames + 1 : 1;
-        if (stableFrames >= 2) {
+        if (geometry === previousGeometry) {
+          stableFrames += 1;
+        } else {
+          stableFrames = 1;
+          stableSince = performance.now();
+        }
+        if (stableFrames >= minStableFrames && performance.now() - stableSince >= minStableMs) {
           return;
         }
         previousGeometry = geometry;
       }
       throw new Error(`Layout did not stabilize for ${targetSelector} within ${maxFrames} frames`);
     },
-    { maxFrames: 60, selector },
+    { maxFrames: 60, minStableFrames: 4, minStableMs: 50, selector },
   );
 }
 
@@ -879,6 +886,43 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     sharedLayoutContext = null;
     await sharedBrowser?.close();
     sharedBrowser = null;
+  });
+
+  it("waits through delayed layout updates", async () => {
+    const page = await openBrowserPage(320, 568);
+    try {
+      await page.setContent(
+        '<div id="delayed-layout" style="position:absolute;top:0">Layout</div>',
+      );
+      await page.locator("#delayed-layout").evaluate((node) => {
+        const element = node as HTMLElement;
+        const nativeGetBoundingClientRect = element.getBoundingClientRect.bind(element);
+        let scheduled = false;
+        element.getBoundingClientRect = () => {
+          const rect = nativeGetBoundingClientRect();
+          element.dataset.lastObservedTop = String(rect.top);
+          if (!scheduled) {
+            scheduled = true;
+            requestAnimationFrame(() => {
+              requestAnimationFrame(() => {
+                element.style.top = "12px";
+              });
+            });
+          }
+          return rect;
+        };
+      });
+
+      await waitForLayoutSettled(page, "#delayed-layout");
+
+      expect(
+        await page
+          .locator("#delayed-layout")
+          .evaluate((node) => Number((node as HTMLElement).dataset.lastObservedTop)),
+      ).toBe(12);
+    } finally {
+      await closeBrowserPage(page);
+    }
   });
 
   it("keeps transcript search icons compact", async () => {
@@ -1789,15 +1833,11 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             <div class="chat-main">
               <div class="chat-main__conversation-column">
                 <header class="chat-pane__header">Session</header>
-                <div class="chat-topbar-notices" hidden>
-                  <div class="chat-composer-neighbor-card chat-cloud-disk-space-notice">Disk space low</div>
-                </div>
+                <div class="chat-topbar-notices"></div>
                 <div class="chat-main__conversation">
                   <div class="chat-thread" role="log"><div class="chat-thread-inner">Transcript</div></div>
                   <div class="agent-chat__composer-shell">
-                    <div class="agent-chat__composer-overlay" hidden>
-                      <div class="chat-composer-neighbor-card chat-error">Model unavailable</div>
-                    </div>
+                    <div class="agent-chat__composer-overlay"></div>
                     <div class="agent-chat__input">Composer</div>
                   </div>
                 </div>
@@ -1805,6 +1845,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             </div>
           </section>
         </body></html>`);
+        // The card entrance animation moves every measured descendant together.
+        await page.locator(".card.chat").evaluate(async (node) => {
+          await Promise.all(node.getAnimations().map((animation) => animation.finished));
+        });
         await waitForLayoutSettled(page, ".chat-main__conversation, .agent-chat__composer-shell");
 
         const geometry = async () =>
@@ -1823,14 +1867,20 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
               thread: rect(".chat-thread"),
             };
           });
+        expect(await page.locator(".chat-topbar-notices").isVisible()).toBe(false);
+        expect(await page.locator(".agent-chat__composer-overlay").isVisible()).toBe(false);
         const before = await geometry();
-        await page
-          .locator(".chat-topbar-notices")
-          .evaluate((node) => node.removeAttribute("hidden"));
-        await page
-          .locator(".agent-chat__composer-overlay")
-          .evaluate((node) => node.removeAttribute("hidden"));
+        await page.locator(".chat-topbar-notices").evaluate((node) => {
+          node.innerHTML =
+            '<div class="chat-composer-neighbor-card chat-cloud-disk-space-notice">Disk space low</div>';
+        });
+        await page.locator(".agent-chat__composer-overlay").evaluate((node) => {
+          node.innerHTML =
+            '<div class="chat-composer-neighbor-card chat-error">Model unavailable</div>';
+        });
         await waitForLayoutSettled(page, ".chat-main__conversation, .agent-chat__composer-shell");
+        expect(await page.getByText("Disk space low").isVisible()).toBe(true);
+        expect(await page.getByText("Model unavailable").isVisible()).toBe(true);
         const after = await geometry();
 
         for (const key of ["composer", "conversation", "thread"] as const) {

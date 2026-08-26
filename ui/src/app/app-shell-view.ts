@@ -443,7 +443,8 @@ export function renderApplicationShell(host: ShellViewHost) {
     ${renderLazyElementModal(host.lazyCustomElements)}
     ${isOptionalElementDefined(host.commandPaletteElement)
       ? html`<openclaw-command-palette
-          .onNavigate=${(routeId: RouteId) => host.navigate(routeId)}
+          .onNavigate=${(routeId: RouteId, options?: ApplicationNavigationOptions) =>
+            host.navigate(routeId, options)}
           .onSelectSession=${(sessionKey: string) => host.selectChatSession(sessionKey)}
           .onSlashCommand=${(command: string) => host.handleCommandPaletteSlashCommand(command)}
         ></openclaw-command-palette>`

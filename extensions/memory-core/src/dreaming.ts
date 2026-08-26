@@ -758,6 +758,9 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
           phase: "deep",
           snippets: candidates.map((c) => c.snippet).filter(Boolean),
           promotions: applied.appliedCandidates.map((c) => c.snippet).filter(Boolean),
+          sourceEntryKeys: [
+            ...new Set([...candidates, ...applied.appliedCandidates].map((c) => c.key)),
+          ],
         };
         if (!params.subagent) {
           await appendFallbackNarrativeEntry({

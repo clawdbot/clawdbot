@@ -3,6 +3,7 @@ import { coerceNativeSetting, normalizeAllowFromList } from "openclaw/plugin-sdk
 import type {
   DiscordGuildChannelConfig,
   DiscordGuildEntry,
+  OpenClawConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
@@ -12,7 +13,6 @@ import {
 } from "openclaw/plugin-sdk/native-command-config-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ResolvedDiscordAccount } from "./accounts.js";
-import type { OpenClawConfig } from "./runtime-api.js";
 import { isDiscordMutableAllowEntry } from "./security-doctor.js";
 
 function isWildcardEntry(value: unknown): boolean {

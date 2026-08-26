@@ -7,7 +7,7 @@ import {
 } from "node:http";
 import net, { type AddressInfo } from "node:net";
 import { duplexPair, type Duplex } from "node:stream";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { type RawData, WebSocket, WebSocketServer } from "ws";
 import type { PortalTarget } from "./portal-http-proxy.js";
 import { createGatewayPortalService, type GatewayPortalService } from "./portal-service.js";
@@ -97,11 +97,21 @@ async function listenTargetServer(server: Server): Promise<number> {
   return (server.address() as AddressInfo).port;
 }
 
-function createWorkerStream(port: number): Duplex {
+function createWorkerStreamPair() {
   const [gatewayStream, workerStream] = duplexPair({ allowHalfOpen: false });
+  // WebSocket closure delivers EOF to its peer; Node 22's duplexPair does not forward destroy.
+  gatewayStream.once("close", () => workerStream.push(null));
+  workerStream.once("close", () => gatewayStream.push(null));
+  return [gatewayStream, workerStream] as const;
+}
+
+function createWorkerStream(port: number): Duplex {
+  const [gatewayStream, workerStream] = createWorkerStreamPair();
   const appSocket = net.connect({ host: "127.0.0.1", port });
   workerStream.on("error", () => appSocket.destroy());
   appSocket.on("error", () => workerStream.destroy());
+  workerStream.once("close", () => appSocket.destroy());
+  appSocket.once("close", () => workerStream.destroy());
   workerStream.pipe(appSocket).pipe(workerStream);
   return gatewayStream;
 }
@@ -228,7 +238,7 @@ describe("portal HTTP proxy", () => {
       res.statusCode = 200;
       res.end("proxied");
     };
-    const portal = (await portalService().open({ targetPort, title: "App" })).portal;
+    const portal = await portalService().open({ targetPort, title: "App" });
 
     const unauthorized = await httpCall({ port: portal.listenPort });
     expect(unauthorized.status).toBe(401);
@@ -266,8 +276,8 @@ describe("portal HTTP proxy", () => {
       res.end("target-b");
     });
     const service = portalService();
-    const portalA = (await service.open({ targetPort })).portal;
-    const portalB = (await service.open({ targetPort: targetPortB })).portal;
+    const portalA = await service.open({ targetPort });
+    const portalB = await service.open({ targetPort: targetPortB });
     const jar = new Map<string, string>();
 
     expect(
@@ -321,7 +331,7 @@ describe("portal HTTP proxy", () => {
       res.write("hello ");
       res.end("portal");
     };
-    const portal = (await portalService().open({ targetPort })).portal;
+    const portal = await portalService().open({ targetPort });
     const result = await httpCall({
       port: portal.listenPort,
       path: "/asset?q=1",
@@ -367,8 +377,8 @@ describe("portal HTTP proxy", () => {
       res.end("target-b");
     });
     const service = portalService();
-    const portalA = (await service.open({ targetPort })).portal;
-    const portalB = (await service.open({ targetPort: targetPortB })).portal;
+    const portalA = await service.open({ targetPort });
+    const portalB = await service.open({ targetPort: targetPortB });
     const jar = new Map<string, string>();
 
     const initialA = await browserCall(jar, {
@@ -418,7 +428,7 @@ describe("portal HTTP proxy", () => {
       res.end("target-a");
     };
     const service = portalService();
-    const portalA = (await service.open({ targetPort })).portal;
+    const portalA = await service.open({ targetPort });
     const jar = new Map<string, string>();
     await browserCall(jar, {
       port: portalA.listenPort,
@@ -434,7 +444,7 @@ describe("portal HTTP proxy", () => {
       }
       res.end("target-b");
     };
-    const portalB = (await service.open({ targetPort })).portal;
+    const portalB = await service.open({ targetPort });
     expect(portalB.tokenQuery).not.toBe(portalA.tokenQuery);
 
     await browserCall(jar, {
@@ -456,7 +466,7 @@ describe("portal HTTP proxy", () => {
       res.statusCode = 200;
       res.end("proxied");
     };
-    const portal = (await portalService().open({ targetPort })).portal;
+    const portal = await portalService().open({ targetPort });
     const token = portal.tokenQuery.slice("openclaw_portal=".length);
 
     const result = await httpCall({
@@ -485,7 +495,7 @@ describe("portal HTTP proxy", () => {
         res.end();
       });
     };
-    const portal = (await portalService().open({ targetPort })).portal;
+    const portal = await portalService().open({ targetPort });
     const result = await httpCall({
       port: portal.listenPort,
       method: "POST",
@@ -509,7 +519,7 @@ describe("portal HTTP proxy", () => {
     await new Promise<void>((resolve) => {
       unavailableTarget.close(() => resolve());
     });
-    const portal = (await portalService().open({ targetPort: port })).portal;
+    const portal = await portalService().open({ targetPort: port });
 
     const result = await httpCall({
       port: portal.listenPort,
@@ -536,15 +546,13 @@ describe("portal HTTP proxy", () => {
       socket.on("message", (data) => socket.send(data));
     });
     const appPort = await listenTargetServer(appServer);
-    const portal = (
-      await portalService().open({
-        targetPort: remotePort,
-        target: workerTarget(async () => {
-          connectionCount += 1;
-          return createWorkerStream(appPort);
-        }, remotePort),
-      })
-    ).portal;
+    const portal = await portalService().open({
+      targetPort: remotePort,
+      target: workerTarget(async () => {
+        connectionCount += 1;
+        return createWorkerStream(appPort);
+      }, remotePort),
+    });
 
     expect(
       await httpCall({ port: portal.listenPort, path: `/preview?${portal.tokenQuery}` }),
@@ -577,16 +585,14 @@ describe("portal HTTP proxy", () => {
       releaseDial = resolve;
     });
     const remotePort = 4173;
-    const portal = (
-      await portalService().open({
-        targetPort: remotePort,
-        target: workerTarget(async () => {
-          notifyDialStarted();
-          await dialReleased;
-          return createWorkerStream(targetPort);
-        }, remotePort),
-      })
-    ).portal;
+    const portal = await portalService().open({
+      targetPort: remotePort,
+      target: workerTarget(async () => {
+        notifyDialStarted();
+        await dialReleased;
+        return createWorkerStream(targetPort);
+      }, remotePort),
+    });
 
     const response = httpCall({
       port: portal.listenPort,
@@ -598,6 +604,50 @@ describe("portal HTTP proxy", () => {
     expect(await response).toMatchObject({ status: 200, body: "worker /slow" });
   });
 
+  it.each([
+    ["local", "browser"],
+    ["worker", "browser"],
+    ["local", "app"],
+    ["worker", "app"],
+  ] as const)("closes both sides when the %s portal's %s disconnects", async (kind, disconnect) => {
+    let appResponse: ServerResponse | undefined;
+    let appClosed = false;
+    targetHandler = (_req, res) => {
+      appResponse = res;
+      res.once("close", () => {
+        appClosed = true;
+      });
+      res.setHeader("Content-Type", "text/event-stream");
+      res.write("data: ready\n\n");
+    };
+    const portal = await portalService().open({
+      targetPort,
+      ...(kind === "worker"
+        ? {
+            target: workerTarget(async () => createWorkerStream(targetPort), targetPort),
+          }
+        : {}),
+    });
+    const browserResponse = await new Promise<IncomingMessage>((resolve, reject) => {
+      const browserRequest = request(portal.url, (res) => {
+        res.on("error", () => undefined);
+        res.once("data", () => resolve(res));
+      });
+      browserRequest.once("error", reject);
+      browserRequest.end();
+    });
+    try {
+      (disconnect === "browser" ? browserResponse : appResponse)?.destroy();
+      await vi.waitFor(() => {
+        expect(browserResponse.destroyed).toBe(true);
+        expect(appClosed).toBe(true);
+      });
+    } finally {
+      browserResponse.destroy();
+      appResponse?.destroy();
+    }
+  });
+
   it.each(["rejected", "closed", "reset"] as const)(
     "shows the worker retry page for HTTP and upgrades when its node stream is %s",
     async (streamState) => {
@@ -606,7 +656,7 @@ describe("portal HTTP proxy", () => {
         if (streamState === "rejected") {
           throw new Error("Worker node stream unavailable");
         }
-        const [gatewayStream, workerStream] = duplexPair({ allowHalfOpen: false });
+        const [gatewayStream, workerStream] = createWorkerStreamPair();
         if (streamState === "closed") {
           workerStream.end();
         } else {
@@ -614,12 +664,10 @@ describe("portal HTTP proxy", () => {
         }
         return gatewayStream;
       };
-      const portal = (
-        await portalService().open({
-          targetPort: remotePort,
-          target: workerTarget(connect, remotePort),
-        })
-      ).portal;
+      const portal = await portalService().open({
+        targetPort: remotePort,
+        target: workerTarget(connect, remotePort),
+      });
       const cookie = portalAuthCookie(portal);
       const requestHeaders: Record<string, string>[] = [
         { Cookie: cookie },
@@ -647,7 +695,7 @@ describe("portal HTTP proxy", () => {
     });
     try {
       const v6Port = (v6Target.address() as AddressInfo).port;
-      const portal = (await portalService().open({ targetPort: v6Port })).portal;
+      const portal = await portalService().open({ targetPort: v6Port });
       const result = await httpCall({
         port: portal.listenPort,
         path: `/?${portal.tokenQuery}`,
@@ -662,7 +710,7 @@ describe("portal HTTP proxy", () => {
 
   it("splices WebSockets and destroys upgraded sockets and listeners on close", async () => {
     const service = portalService();
-    const portal = (await service.open({ targetPort })).portal;
+    const portal = await service.open({ targetPort });
     targetWebSocketSetCookie = "socket=ready; Domain=target.example; Path=/; HttpOnly";
     let upgradeCookies: string[] | undefined;
     const ws = new WebSocket(
@@ -706,8 +754,8 @@ describe("portal HTTP proxy", () => {
       res.end("target-b");
     });
     const service = portalService();
-    const portalA = (await service.open({ targetPort })).portal;
-    const portalB = (await service.open({ targetPort: targetPortB })).portal;
+    const portalA = await service.open({ targetPort });
+    const portalB = await service.open({ targetPort: targetPortB });
     const jar = new Map<string, string>();
     await browserCall(jar, {
       port: portalA.listenPort,
@@ -739,7 +787,7 @@ describe("portal HTTP proxy", () => {
 
   it("does not forward WebSocket cookies from a closed portal when its target port is reused", async () => {
     const service = portalService();
-    const portalA = (await service.open({ targetPort })).portal;
+    const portalA = await service.open({ targetPort });
     targetWebSocketSetCookie = "socket=portal-a-secret; Path=/; HttpOnly";
     const connectionA = await openWebSocket(
       `ws://127.0.0.1:${portalA.listenPort}/hmr?${portalA.tokenQuery}`,
@@ -749,7 +797,7 @@ describe("portal HTTP proxy", () => {
     await closeWebSocket(connectionA.socket);
     await service.close(portalA.id);
 
-    const portalB = (await service.open({ targetPort })).portal;
+    const portalB = await service.open({ targetPort });
     targetWebSocketSetCookie = "socket=portal-b; Path=/; HttpOnly";
     const connectionB = await openWebSocket(
       `ws://127.0.0.1:${portalB.listenPort}/hmr?${portalB.tokenQuery}`,

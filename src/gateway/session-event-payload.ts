@@ -105,6 +105,7 @@ export function buildGatewaySessionEventFields(params: {
     effectiveResponseUsage: sessionRow.effectiveResponseUsage,
     modelProvider: sessionRow.modelProvider,
     model: sessionRow.model,
+    modelOverrideSource: sessionRow.modelOverrideSource,
     agentRuntime: sessionRow.agentRuntime,
     status: params.status ?? sessionRow.status,
     // Explicit null lets subscribed clients clear the previous run's failure reason.
@@ -161,6 +162,7 @@ export function buildGatewaySessionSnapshot(params: {
   if (params.lifecycle) {
     delete sessionRow.modelProvider;
     delete sessionRow.model;
+    delete sessionRow.modelOverrideSource;
     delete sessionRow.agentRuntime;
     if (sessionRow.totalTokensFresh !== true) {
       delete sessionRow.totalTokens;

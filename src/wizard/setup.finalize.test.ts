@@ -325,40 +325,12 @@ function expectFirstOnboardingInstallPlanCallOmitsToken() {
   expect("token" in firstArg).toBe(false);
 }
 
-type AdvancedFinalizeArgs = {
-  nextConfig?: OpenClawConfig;
-  prompter?: ReturnType<typeof buildWizardPrompter>;
-  runtime?: RuntimeEnv;
-  installDaemon?: boolean;
-};
+type FinalizeArgs = Parameters<typeof finalizeSetupWizard>[0];
 
-function createModelAuthFinalizeArgs(params: {
-  prompter: ReturnType<typeof buildWizardPrompter>;
-  nextConfig?: OpenClawConfig;
-}) {
-  return {
-    flow: "quickstart" as const,
-    opts: {
-      acceptRisk: true,
-      authChoice: "skip" as const,
-      installDaemon: false,
-      skipHealth: true,
-      skipUi: false,
-    },
-    baseConfig: {},
-    nextConfig: params.nextConfig ?? {},
-    workspaceDir: "/tmp",
-    settings: {
-      port: 18789,
-      bind: "loopback" as const,
-      authMode: "token" as const,
-      gatewayToken: undefined,
-      tailscaleMode: "off" as const,
-    },
-    prompter: params.prompter,
-    runtime: createRuntime(),
-  };
-}
+type FinalizeArgsOverrides = Omit<Partial<FinalizeArgs>, "flow" | "opts" | "settings"> & {
+  opts?: Partial<FinalizeArgs["opts"]>;
+  settings?: Partial<FinalizeArgs["settings"]>;
+};
 
 function createLaterPrompter() {
   return buildWizardPrompter({
@@ -380,28 +352,35 @@ function createEnabledFirecrawlSearchConfig(): OpenClawConfig {
   };
 }
 
-function createAdvancedFinalizeArgs(params: AdvancedFinalizeArgs = {}) {
+function createFinalizeArgs(
+  flow: FinalizeArgs["flow"],
+  overrides: FinalizeArgsOverrides = {},
+): FinalizeArgs {
+  const { opts, settings, ...rest } = overrides;
   return {
-    flow: "advanced" as const,
+    flow,
     opts: {
       acceptRisk: true,
-      authChoice: "skip" as const,
-      installDaemon: params.installDaemon ?? false,
+      authChoice: "skip",
+      installDaemon: false,
       skipHealth: true,
-      skipUi: true,
+      skipUi: flow === "advanced",
+      ...opts,
     },
     baseConfig: {},
-    nextConfig: params.nextConfig ?? {},
+    nextConfig: {},
     workspaceDir: "/tmp",
     settings: {
       port: 18789,
-      bind: "loopback" as const,
-      authMode: "token" as const,
+      bind: "loopback",
+      authMode: "token",
       gatewayToken: undefined,
-      tailscaleMode: "off" as const,
+      tailscaleMode: "off",
+      ...settings,
     },
-    prompter: params.prompter ?? createLaterPrompter(),
-    runtime: params.runtime ?? createRuntime(),
+    prompter: createLaterPrompter(),
+    runtime: createRuntime(),
+    ...rest,
   };
 }
 
@@ -553,39 +532,25 @@ describe("finalizeSetupWizard", () => {
     const runtime = createRuntime();
 
     try {
-      await finalizeSetupWizard({
-        flow: "quickstart",
-        opts: {
-          acceptRisk: true,
-          authChoice: "skip",
-          installDaemon: false,
-          skipHealth: true,
-          skipUi: false,
-        },
-        baseConfig: {},
-        nextConfig: {
-          gateway: {
-            auth: {
-              mode: "password",
-              password: {
-                source: "env",
-                provider: "default",
-                id: "OPENCLAW_GATEWAY_PASSWORD",
+      await finalizeSetupWizard(
+        createFinalizeArgs("quickstart", {
+          settings: { authMode: "password" },
+          nextConfig: {
+            gateway: {
+              auth: {
+                mode: "password",
+                password: {
+                  source: "env",
+                  provider: "default",
+                  id: "OPENCLAW_GATEWAY_PASSWORD",
+                },
               },
             },
           },
-        },
-        workspaceDir: "/tmp",
-        settings: {
-          port: 18789,
-          bind: "loopback",
-          authMode: "password",
-          gatewayToken: undefined,
-          tailscaleMode: "off",
-        },
-        prompter,
-        runtime,
-      });
+          prompter,
+          runtime,
+        }),
+      );
     } finally {
       if (previous === undefined) {
         delete process.env.OPENCLAW_GATEWAY_PASSWORD;
@@ -622,7 +587,7 @@ describe("finalizeSetupWizard", () => {
       });
     });
 
-    const finalizing = finalizeSetupWizard(createModelAuthFinalizeArgs({ prompter }));
+    const finalizing = finalizeSetupWizard(createFinalizeArgs("quickstart", { prompter }));
     await vi.waitFor(() => expect(waitForControlUiDocument).toHaveBeenCalledOnce());
     expectNoteTitleNotCalled(prompter, "Control UI");
     expect(prompter.outro).not.toHaveBeenCalled();
@@ -642,7 +607,7 @@ describe("finalizeSetupWizard", () => {
       reason: "Control UI build failed: missing startup.js",
     });
     const prompter = createLaterPrompter();
-    const args = createModelAuthFinalizeArgs({ prompter });
+    const args = createFinalizeArgs("quickstart", { prompter });
     const gatewayToken = ["classic", "token"].join("-");
 
     await finalizeSetupWizard({
@@ -681,17 +646,16 @@ describe("finalizeSetupWizard", () => {
   ])("does not wait for dashboard assets when $name", async ({ skipUi, enabled, reachable }) => {
     probeGatewayReachable.mockResolvedValue({ ok: reachable, detail: "offline" });
     const prompter = createLaterPrompter();
-    const args = createModelAuthFinalizeArgs({
-      prompter,
-      nextConfig: { gateway: { controlUi: { enabled } } },
-    });
     const gatewayToken = ["offline", "token"].join("-");
 
-    await finalizeSetupWizard({
-      ...args,
-      opts: { ...args.opts, skipUi },
-      settings: { ...args.settings, gatewayToken },
-    });
+    await finalizeSetupWizard(
+      createFinalizeArgs("quickstart", {
+        opts: { skipUi },
+        nextConfig: { gateway: { controlUi: { enabled } } },
+        settings: { gatewayToken },
+        prompter,
+      }),
+    );
 
     expect(resolveControlUiHandoffTarget).not.toHaveBeenCalled();
     expect(waitForControlUiDocument).not.toHaveBeenCalled();
@@ -720,18 +684,17 @@ describe("finalizeSetupWizard", () => {
         tls: tlsConfig,
       },
     };
-    const args = createModelAuthFinalizeArgs({ prompter: createLaterPrompter(), nextConfig });
-
-    await finalizeSetupWizard({
-      ...args,
-      baseConfig: { gateway: { controlUi: { basePath: "/dashboard" } } },
-      settings: {
-        ...args.settings,
-        port: 19876,
-        bind: "custom",
-        customBindHost: "10.0.0.5",
-      },
-    });
+    await finalizeSetupWizard(
+      createFinalizeArgs("quickstart", {
+        baseConfig: { gateway: { controlUi: { basePath: "/dashboard" } } },
+        nextConfig,
+        settings: {
+          port: 19876,
+          bind: "custom",
+          customBindHost: "10.0.0.5",
+        },
+      }),
+    );
 
     expect(resolveControlUiHandoffTarget).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -765,27 +728,14 @@ describe("finalizeSetupWizard", () => {
       wsUrl: "ws://127.0.0.1:18789",
     });
     const prompter = createLaterPrompter();
-    const args = createAdvancedFinalizeArgs({
-      nextConfig: {
-        gateway: {
-          bind: "lan",
-        },
-      },
-      prompter,
-    });
-
-    await finalizeSetupWizard({
-      ...args,
-      opts: {
-        ...args.opts,
-        skipHealth: false,
-        skipUi: false,
-      },
-      settings: {
-        ...args.settings,
-        bind: "lan",
-      },
-    });
+    await finalizeSetupWizard(
+      createFinalizeArgs("advanced", {
+        opts: { skipHealth: false, skipUi: false },
+        nextConfig: { gateway: { bind: "lan" } },
+        settings: { bind: "lan" },
+        prompter,
+      }),
+    );
 
     expect(resolveAdvertisedControlUiLinks).toHaveBeenCalledWith(
       expect.objectContaining({ bind: "lan", port: 18789 }),
@@ -799,27 +749,14 @@ describe("finalizeSetupWizard", () => {
 
   it("shows static Windows Firewall guidance for LAN Control UI links without inspection", async () => {
     const prompter = createLaterPrompter();
-    const args = createAdvancedFinalizeArgs({
-      nextConfig: {
-        gateway: {
-          bind: "lan",
-        },
-      },
-      prompter,
-    });
-
-    await finalizeSetupWizard({
-      ...args,
-      opts: {
-        ...args.opts,
-        skipHealth: false,
-        skipUi: false,
-      },
-      settings: {
-        ...args.settings,
-        bind: "lan",
-      },
-    });
+    await finalizeSetupWizard(
+      createFinalizeArgs("advanced", {
+        opts: { skipHealth: false, skipUi: false },
+        nextConfig: { gateway: { bind: "lan" } },
+        settings: { bind: "lan" },
+        prompter,
+      }),
+    );
 
     expect(inspectWindowsGatewayFirewall).not.toHaveBeenCalled();
     expectNoteContains(
@@ -842,28 +779,7 @@ describe("finalizeSetupWizard", () => {
       confirm: vi.fn(async () => false),
     });
 
-    await finalizeSetupWizard({
-      flow: "quickstart",
-      opts: {
-        acceptRisk: true,
-        authChoice: "skip",
-        installDaemon: false,
-        skipHealth: true,
-        skipUi: false,
-      },
-      baseConfig: {},
-      nextConfig: {},
-      workspaceDir: "/tmp",
-      settings: {
-        port: 18789,
-        bind: "loopback",
-        authMode: "token",
-        gatewayToken: undefined,
-        tailscaleMode: "off",
-      },
-      prompter,
-      runtime: createRuntime(),
-    });
+    await finalizeSetupWizard(createFinalizeArgs("quickstart", { prompter }));
 
     expect(runTui).toHaveBeenCalledWith({
       local: true,
@@ -901,7 +817,7 @@ describe("finalizeSetupWizard", () => {
       },
     } satisfies OpenClawConfig;
 
-    await finalizeSetupWizard(createModelAuthFinalizeArgs({ prompter, nextConfig }));
+    await finalizeSetupWizard(createFinalizeArgs("quickstart", { prompter, nextConfig }));
 
     expect(loadModelCatalog).toHaveBeenCalledWith({ config: nextConfig, readOnly: true });
     expect(resolveDefaultModelCatalogFacts).toHaveBeenCalledWith(nextConfig, catalog, {
@@ -926,7 +842,7 @@ describe("finalizeSetupWizard", () => {
     });
 
     await finalizeSetupWizard(
-      createModelAuthFinalizeArgs({
+      createFinalizeArgs("quickstart", {
         prompter,
         nextConfig: {
           agents: {
@@ -964,7 +880,7 @@ describe("finalizeSetupWizard", () => {
       confirm: vi.fn(async () => false),
     });
 
-    await finalizeSetupWizard(createModelAuthFinalizeArgs({ prompter }));
+    await finalizeSetupWizard(createFinalizeArgs("quickstart", { prompter }));
 
     expect(runTui).toHaveBeenCalledWith(expect.objectContaining({ message: undefined }));
     expectNoteTitleNotCalled(prompter, "Model auth missing");
@@ -986,7 +902,7 @@ describe("finalizeSetupWizard", () => {
       confirm: vi.fn(async () => false),
     });
 
-    await finalizeSetupWizard(createModelAuthFinalizeArgs({ prompter }));
+    await finalizeSetupWizard(createFinalizeArgs("quickstart", { prompter }));
 
     expect(runTui).toHaveBeenCalledWith(expect.objectContaining({ message: undefined }));
     expectNoteTitleNotCalled(prompter, "Model auth missing");
@@ -1000,29 +916,9 @@ describe("finalizeSetupWizard", () => {
       confirm: vi.fn(async () => false),
     });
 
-    await finalizeSetupWizard({
-      flow: "quickstart",
-      opts: {
-        acceptRisk: true,
-        authChoice: "skip",
-        installDaemon: false,
-        skipHealth: true,
-        skipUi: false,
-      },
-      baseConfig: {},
-      hadExistingConfig: true,
-      nextConfig: {},
-      workspaceDir: "/tmp",
-      settings: {
-        port: 18789,
-        bind: "loopback",
-        authMode: "token",
-        gatewayToken: undefined,
-        tailscaleMode: "off",
-      },
-      prompter,
-      runtime: createRuntime(),
-    });
+    await finalizeSetupWizard(
+      createFinalizeArgs("quickstart", { hadExistingConfig: true, prompter }),
+    );
 
     expect(runTui).toHaveBeenCalledWith({
       local: true,
@@ -1048,28 +944,7 @@ describe("finalizeSetupWizard", () => {
     });
 
     try {
-      await finalizeSetupWizard({
-        flow: "quickstart",
-        opts: {
-          acceptRisk: true,
-          authChoice: "skip",
-          installDaemon: false,
-          skipHealth: true,
-          skipUi: false,
-        },
-        baseConfig: {},
-        nextConfig: {},
-        workspaceDir: "/tmp",
-        settings: {
-          port: 18789,
-          bind: "loopback",
-          authMode: "token",
-          gatewayToken: undefined,
-          tailscaleMode: "off",
-        },
-        prompter,
-        runtime: createRuntime(),
-      });
+      await finalizeSetupWizard(createFinalizeArgs("quickstart", { prompter }));
 
       expect(runTui).toHaveBeenCalledWith({
         local: true,
@@ -1090,28 +965,7 @@ describe("finalizeSetupWizard", () => {
     probeGatewayReachable.mockResolvedValueOnce({ ok: true });
     const prompter = createLaterPrompter();
 
-    await finalizeSetupWizard({
-      flow: "quickstart",
-      opts: {
-        acceptRisk: true,
-        authChoice: "skip",
-        installDaemon: false,
-        skipHealth: true,
-        skipUi: false,
-      },
-      baseConfig: {},
-      nextConfig: {},
-      workspaceDir: "/tmp",
-      settings: {
-        port: 18789,
-        bind: "loopback",
-        authMode: "token",
-        gatewayToken: undefined,
-        tailscaleMode: "off",
-      },
-      prompter,
-      runtime: createRuntime(),
-    });
+    await finalizeSetupWizard(createFinalizeArgs("quickstart", { prompter }));
 
     expect(prompter.outro).toHaveBeenCalledWith(
       "Onboarding complete. Use the dashboard link above to control OpenClaw.",
@@ -1136,28 +990,13 @@ describe("finalizeSetupWizard", () => {
     const prompter = buildWizardPrompter({ select: select as never });
 
     await expect(
-      finalizeSetupWizard({
-        flow: "advanced",
-        opts: {
-          acceptRisk: true,
-          authChoice: "skip",
-          installDaemon: false,
-          skipHealth: true,
-          skipUi: false,
-        },
-        baseConfig: {},
-        nextConfig: {},
-        workspaceDir: "/tmp",
-        settings: {
-          port: 18789,
-          bind: "loopback",
-          authMode: "token",
-          gatewayToken: "test-token",
-          tailscaleMode: "off",
-        },
-        prompter,
-        runtime: createRuntime(),
-      }),
+      finalizeSetupWizard(
+        createFinalizeArgs("advanced", {
+          opts: { skipUi: false },
+          settings: { gatewayToken: "test-token" },
+          prompter,
+        }),
+      ),
     ).rejects.toThrow("TUI exited with code 1");
 
     expect(restoreTerminalState).toHaveBeenCalledWith("pre-setup tui", {
@@ -1185,39 +1024,26 @@ describe("finalizeSetupWizard", () => {
       },
     });
 
-    await finalizeSetupWizard({
-      flow: "advanced",
-      opts: {
-        acceptRisk: true,
-        authChoice: "skip",
-        installDaemon: true,
-        skipHealth: true,
-        skipUi: true,
-      },
-      baseConfig: {},
-      nextConfig: {
-        gateway: {
-          auth: {
-            mode: "token",
-            token: {
-              source: "env",
-              provider: "default",
-              id: "OPENCLAW_GATEWAY_TOKEN",
+    await finalizeSetupWizard(
+      createFinalizeArgs("advanced", {
+        opts: { installDaemon: true },
+        settings: { gatewayToken: "session-token" },
+        nextConfig: {
+          gateway: {
+            auth: {
+              mode: "token",
+              token: {
+                source: "env",
+                provider: "default",
+                id: "OPENCLAW_GATEWAY_TOKEN",
+              },
             },
           },
         },
-      },
-      workspaceDir: "/tmp",
-      settings: {
-        port: 18789,
-        bind: "loopback",
-        authMode: "token",
-        gatewayToken: "session-token",
-        tailscaleMode: "off",
-      },
-      prompter,
-      runtime,
-    });
+        prompter,
+        runtime,
+      }),
+    );
 
     expect(resolveGatewayInstallToken).toHaveBeenCalledTimes(1);
     expect(buildGatewayInstallPlan).toHaveBeenCalledTimes(1);
@@ -1256,7 +1082,7 @@ describe("finalizeSetupWizard", () => {
     });
 
     const finalizePromise = finalizeSetupWizard(
-      createAdvancedFinalizeArgs({ installDaemon: true, prompter }),
+      createFinalizeArgs("advanced", { opts: { installDaemon: true }, prompter }),
     );
     await vi.waitFor(() => {
       expect(prompter.note).toHaveBeenCalledWith("Gateway install warning", "Gateway service");
@@ -1276,7 +1102,9 @@ describe("finalizeSetupWizard", () => {
       throw new Error("plan failed");
     });
 
-    await finalizeSetupWizard(createAdvancedFinalizeArgs({ installDaemon: true, prompter }));
+    await finalizeSetupWizard(
+      createFinalizeArgs("advanced", { opts: { installDaemon: true }, prompter }),
+    );
 
     expect(prompter.note).toHaveBeenCalledWith("Gateway install warning", "Gateway service");
     expectNoteContains(prompter, "plan failed", "Gateway");
@@ -1287,9 +1115,13 @@ describe("finalizeSetupWizard", () => {
     gatewayServiceInstall.mockRejectedValueOnce(new Error("service install exploded"));
     const prompter = createLaterPrompter();
     const runtime = createRuntime();
-    const args = createAdvancedFinalizeArgs({ installDaemon: true, prompter, runtime });
-
-    await finalizeSetupWizard({ ...args, opts: { ...args.opts, skipHealth: false } });
+    await finalizeSetupWizard(
+      createFinalizeArgs("advanced", {
+        opts: { installDaemon: true, skipHealth: false },
+        prompter,
+        runtime,
+      }),
+    );
 
     expect(waitForGatewayReachable).not.toHaveBeenCalled();
     expect(probeGatewayReachable).not.toHaveBeenCalled();
@@ -1313,9 +1145,12 @@ describe("finalizeSetupWizard", () => {
     waitForGatewayReachable.mockResolvedValue({ ok: false, detail });
     probeGatewayReachable.mockResolvedValue({ ok: false, detail });
     const prompter = createLaterPrompter();
-    const args = createAdvancedFinalizeArgs({ installDaemon: true, prompter });
-
-    await finalizeSetupWizard({ ...args, opts: { ...args.opts, skipHealth: false } });
+    await finalizeSetupWizard(
+      createFinalizeArgs("advanced", {
+        opts: { installDaemon: true, skipHealth: false },
+        prompter,
+      }),
+    );
 
     expectNoteContains(prompter, "managed Mock Platform Service", "Gateway");
     expectNoteContains(prompter, "openclaw gateway status --deep", "Gateway");
@@ -1330,9 +1165,12 @@ describe("finalizeSetupWizard", () => {
       waitForGatewayReachable.mockResolvedValue({ ok: false, detail: "readiness timed out" });
       probeGatewayReachable.mockResolvedValue({ ok: false, detail: "readiness timed out" });
       const prompter = createLaterPrompter();
-      const args = createAdvancedFinalizeArgs({ installDaemon: true, prompter });
-
-      await finalizeSetupWizard({ ...args, opts: { ...args.opts, skipHealth: false } });
+      await finalizeSetupWizard(
+        createFinalizeArgs("advanced", {
+          opts: { installDaemon: true, skipHealth: false },
+          prompter,
+        }),
+      );
 
       expectNoteContains(prompter, "托管的 Mock Platform Service 在设置后仍无法访问", "Gateway");
       expectNoteContains(prompter, "检查服务状态和日志", "Gateway");
@@ -1405,12 +1243,12 @@ describe("finalizeSetupWizard", () => {
           detail: "external gateway is offline",
         });
         const prompter = createLaterPrompter();
-        const args = createAdvancedFinalizeArgs({ prompter });
-
-        await finalizeSetupWizard({
-          ...args,
-          opts: { ...args.opts, skipHealth: false, skipUi: false },
-        });
+        await finalizeSetupWizard(
+          createFinalizeArgs("advanced", {
+            opts: { skipHealth: false, skipUi: false },
+            prompter,
+          }),
+        );
 
         expect(isSystemdUserServiceAvailable).not.toHaveBeenCalled();
         expect(isContainerEnvironment).not.toHaveBeenCalled();
@@ -1554,28 +1392,14 @@ describe("finalizeSetupWizard", () => {
     const runtime = { log: runtimeLog, error: runtimeError, exit: vi.fn() };
     probeGatewayReachable.mockResolvedValue({ ok: true });
 
-    await finalizeSetupWizard({
-      flow: "advanced",
-      opts: {
-        acceptRisk: true,
-        authChoice: "skip",
-        installDaemon: false,
-        skipHealth: true,
-        skipUi: false,
-      },
-      baseConfig: {},
-      nextConfig: {},
-      workspaceDir: "/tmp",
-      settings: {
-        port: 18789,
-        bind: "loopback",
-        authMode: "token",
-        gatewayToken: "session-token",
-        tailscaleMode: "off",
-      },
-      prompter,
-      runtime,
-    });
+    await finalizeSetupWizard(
+      createFinalizeArgs("advanced", {
+        opts: { skipUi: false },
+        settings: { gatewayToken: "session-token" },
+        prompter,
+        runtime,
+      }),
+    );
 
     const terminalOutput = [prompter.note, prompter.outro]
       .flatMap((writer) => vi.mocked(writer).mock.calls.flat())
@@ -1607,28 +1431,9 @@ describe("finalizeSetupWizard", () => {
       progress: vi.fn(() => ({ update: progressUpdate, stop: progressStop })),
     });
 
-    await finalizeSetupWizard({
-      flow: "advanced",
-      opts: {
-        acceptRisk: true,
-        authChoice: "skip",
-        installDaemon: true,
-        skipHealth: true,
-        skipUi: true,
-      },
-      baseConfig: {},
-      nextConfig: {},
-      workspaceDir: "/tmp",
-      settings: {
-        port: 18789,
-        bind: "loopback",
-        authMode: "token",
-        gatewayToken: undefined,
-        tailscaleMode: "off",
-      },
-      prompter,
-      runtime: createRuntime(),
-    });
+    await finalizeSetupWizard(
+      createFinalizeArgs("advanced", { opts: { installDaemon: true }, prompter }),
+    );
 
     expect(gatewayServiceRestart).toHaveBeenCalledTimes(1);
     expect(gatewayServiceInstall).not.toHaveBeenCalled();
@@ -1643,7 +1448,7 @@ describe("finalizeSetupWizard", () => {
     const prompter = createLaterPrompter();
 
     try {
-      await finalizeSetupWizard(createAdvancedFinalizeArgs({ prompter }));
+      await finalizeSetupWizard(createFinalizeArgs("advanced", { prompter }));
     } finally {
       if (previousLocale === undefined) {
         delete process.env.OPENCLAW_LOCALE;
@@ -1666,7 +1471,7 @@ describe("finalizeSetupWizard", () => {
     const prompter = createLaterPrompter();
 
     await finalizeSetupWizard(
-      createAdvancedFinalizeArgs({
+      createFinalizeArgs("advanced", {
         nextConfig: createEnabledFirecrawlSearchConfig(),
         prompter,
       }),
@@ -1697,7 +1502,7 @@ describe("finalizeSetupWizard", () => {
 
     const prompter = createLaterPrompter();
 
-    await finalizeSetupWizard(createAdvancedFinalizeArgs({ prompter }));
+    await finalizeSetupWizard(createFinalizeArgs("advanced", { prompter }));
 
     expectNoteContains(
       prompter,
@@ -1723,7 +1528,7 @@ describe("finalizeSetupWizard", () => {
     const prompter = createLaterPrompter();
 
     await finalizeSetupWizard(
-      createAdvancedFinalizeArgs({
+      createFinalizeArgs("advanced", {
         nextConfig: createEnabledFirecrawlSearchConfig(),
         prompter,
       }),
@@ -1756,7 +1561,7 @@ describe("finalizeSetupWizard", () => {
     const prompter = createLaterPrompter();
 
     await finalizeSetupWizard(
-      createAdvancedFinalizeArgs({
+      createFinalizeArgs("advanced", {
         nextConfig: {
           tools: {
             web: {
@@ -1814,7 +1619,7 @@ describe("finalizeSetupWizard", () => {
     const prompter = createLaterPrompter();
 
     await finalizeSetupWizard(
-      createAdvancedFinalizeArgs({
+      createFinalizeArgs("advanced", {
         nextConfig: {
           tools: { web: { search: { provider: "parallel-free", enabled: true } } },
         },
@@ -1844,35 +1649,21 @@ describe("finalizeSetupWizard", () => {
     vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "env-token");
     const prompter = createLaterPrompter();
 
-    await finalizeSetupWizard({
-      flow: "quickstart",
-      opts: {
-        acceptRisk: true,
-        authChoice: "skip",
-        installDaemon: false,
-        skipHealth: false,
-        skipUi: true,
-      },
-      baseConfig: {},
-      nextConfig: {
-        gateway: {
-          auth: {
-            mode: "token",
-            token: "config-token",
+    await finalizeSetupWizard(
+      createFinalizeArgs("quickstart", {
+        opts: { skipHealth: false, skipUi: true },
+        settings: { gatewayToken: "session-token" },
+        nextConfig: {
+          gateway: {
+            auth: {
+              mode: "token",
+              token: "config-token",
+            },
           },
         },
-      },
-      workspaceDir: "/tmp",
-      settings: {
-        port: 18789,
-        bind: "loopback",
-        authMode: "token",
-        gatewayToken: "session-token",
-        tailscaleMode: "off",
-      },
-      prompter,
-      runtime: createRuntime(),
-    });
+        prompter,
+      }),
+    );
 
     const healthArgs = requireMockArg(healthCommand) as {
       json?: boolean;
@@ -1895,28 +1686,13 @@ describe("finalizeSetupWizard", () => {
     healthCommand.mockRejectedValueOnce(new ExitError(1));
     const prompter = createLaterPrompter();
 
-    await finalizeSetupWizard({
-      flow: "quickstart",
-      opts: {
-        acceptRisk: true,
-        authChoice: "skip",
-        installDaemon: false,
-        skipHealth: false,
-        skipUi: true,
-      },
-      baseConfig: {},
-      nextConfig: {},
-      workspaceDir: "/tmp",
-      settings: {
-        port: 18789,
-        bind: "loopback",
-        authMode: "token",
-        gatewayToken: "session-token",
-        tailscaleMode: "off",
-      },
-      prompter,
-      runtime: createRuntime(),
-    });
+    await finalizeSetupWizard(
+      createFinalizeArgs("quickstart", {
+        opts: { skipHealth: false, skipUi: true },
+        settings: { gatewayToken: "session-token" },
+        prompter,
+      }),
+    );
 
     expect(prompter.outro).toHaveBeenCalledWith(expect.stringContaining("health check failed"));
   });
@@ -1927,7 +1703,7 @@ describe("finalizeSetupWizard", () => {
       isContainerEnvironment.mockReturnValue(true);
       const prompter = createLaterPrompter();
 
-      await finalizeSetupWizard(createAdvancedFinalizeArgs({ prompter }));
+      await finalizeSetupWizard(createFinalizeArgs("advanced", { prompter }));
 
       expectNoteContains(
         prompter,
@@ -1957,35 +1733,21 @@ describe("finalizeSetupWizard", () => {
       startGatewayServer.mockResolvedValueOnce(sessionGateway);
       const prompter = createLaterPrompter();
 
-      const finalizing = finalizeSetupWizard({
-        flow: "quickstart",
-        opts: {
-          acceptRisk: true,
-          authChoice: "skip",
-          installDaemon: undefined,
-          skipHealth: false,
-          skipUi: false,
-        },
-        baseConfig: {},
-        nextConfig: {
-          gateway: {
-            auth: {
-              mode: "token",
-              token: "test-token",
+      const finalizing = finalizeSetupWizard(
+        createFinalizeArgs("quickstart", {
+          opts: { installDaemon: undefined, skipHealth: false },
+          settings: { gatewayToken: "test-token" },
+          nextConfig: {
+            gateway: {
+              auth: {
+                mode: "token",
+                token: "test-token",
+              },
             },
           },
-        },
-        workspaceDir: "/tmp",
-        settings: {
-          port: 18789,
-          bind: "loopback",
-          authMode: "token",
-          gatewayToken: "test-token",
-          tailscaleMode: "off",
-        },
-        prompter,
-        runtime: createRuntime(),
-      });
+          prompter,
+        }),
+      );
 
       await vi.waitFor(() => expect(sessionGateway.close).toHaveBeenCalledOnce());
       expect(resolveTuiShutdownHardExitMs).toHaveBeenCalledWith({ localMode: true });
@@ -2039,7 +1801,7 @@ describe("finalizeSetupWizard", () => {
       startGatewayServer.mockResolvedValueOnce(sessionGateway);
       const prompter = createLaterPrompter();
 
-      void finalizeSetupWizard(createModelAuthFinalizeArgs({ prompter }));
+      void finalizeSetupWizard(createFinalizeArgs("quickstart", { prompter }));
 
       await vi.waitFor(() => expect(sessionGateway.close).toHaveBeenCalledOnce());
       expect(scheduleProcessExitAfterTuiReturn).toHaveBeenCalledOnce();
@@ -2058,35 +1820,21 @@ describe("finalizeSetupWizard", () => {
       const prompter = createLaterPrompter();
 
       await expect(
-        finalizeSetupWizard({
-          flow: "quickstart",
-          opts: {
-            acceptRisk: true,
-            authChoice: "skip",
-            installDaemon: undefined,
-            skipHealth: false,
-            skipUi: false,
-          },
-          baseConfig: {},
-          nextConfig: {
-            gateway: {
-              auth: {
-                mode: "token",
-                token: "test-token",
+        finalizeSetupWizard(
+          createFinalizeArgs("quickstart", {
+            opts: { installDaemon: undefined, skipHealth: false },
+            settings: { gatewayToken: "test-token" },
+            nextConfig: {
+              gateway: {
+                auth: {
+                  mode: "token",
+                  token: "test-token",
+                },
               },
             },
-          },
-          workspaceDir: "/tmp",
-          settings: {
-            port: 18789,
-            bind: "loopback",
-            authMode: "token",
-            gatewayToken: "test-token",
-            tailscaleMode: "off",
-          },
-          prompter,
-          runtime: createRuntime(),
-        }),
+            prompter,
+          }),
+        ),
       ).rejects.toThrow("probe failed");
 
       expect(runTui).not.toHaveBeenCalled();
@@ -2099,39 +1847,25 @@ describe("finalizeSetupWizard", () => {
     resolveSetupSecretInputString.mockResolvedValueOnce("session-password");
     const prompter = createLaterPrompter();
 
-    await finalizeSetupWizard({
-      flow: "quickstart",
-      opts: {
-        acceptRisk: true,
-        authChoice: "skip",
-        installDaemon: false,
-        skipHealth: false,
-        skipUi: true,
-      },
-      baseConfig: {},
-      nextConfig: {
-        gateway: {
-          auth: {
-            mode: "password",
-            password: {
-              source: "env",
-              provider: "default",
-              id: "OPENCLAW_GATEWAY_PASSWORD",
+    await finalizeSetupWizard(
+      createFinalizeArgs("quickstart", {
+        opts: { skipHealth: false, skipUi: true },
+        settings: { authMode: "password" },
+        nextConfig: {
+          gateway: {
+            auth: {
+              mode: "password",
+              password: {
+                source: "env",
+                provider: "default",
+                id: "OPENCLAW_GATEWAY_PASSWORD",
+              },
             },
           },
         },
-      },
-      workspaceDir: "/tmp",
-      settings: {
-        port: 18789,
-        bind: "loopback",
-        authMode: "password",
-        gatewayToken: undefined,
-        tailscaleMode: "off",
-      },
-      prompter,
-      runtime: createRuntime(),
-    });
+        prompter,
+      }),
+    );
 
     const waitArgs = requireMockArg(waitForGatewayReachable) as {
       url?: string;
@@ -2168,28 +1902,14 @@ describe("finalizeSetupWizard", () => {
     const prompter = createLaterPrompter();
     const runtime = createRuntime();
 
-    await finalizeSetupWizard({
-      flow: "quickstart",
-      opts: {
-        acceptRisk: true,
-        authChoice: "skip",
-        installDaemon: false,
-        skipHealth: false,
-        skipUi: false,
-      },
-      baseConfig: {},
-      nextConfig: {},
-      workspaceDir: "/tmp",
-      settings: {
-        port: 18789,
-        bind: "loopback",
-        authMode: "token",
-        gatewayToken: "test-token",
-        tailscaleMode: "off",
-      },
-      prompter,
-      runtime,
-    });
+    await finalizeSetupWizard(
+      createFinalizeArgs("quickstart", {
+        opts: { skipHealth: false },
+        settings: { gatewayToken: "test-token" },
+        prompter,
+        runtime,
+      }),
+    );
 
     expect(runtime.error).not.toHaveBeenCalledWith("health failed");
     expectNoteContains(prompter, "Setup was run without Gateway service install", "Gateway");
@@ -2207,40 +1927,24 @@ describe("finalizeSetupWizard", () => {
       confirm: vi.fn(async () => false),
     });
 
-    await finalizeSetupWizard({
-      flow: "advanced",
-      opts: {
-        acceptRisk: true,
-        authChoice: "skip",
-        installDaemon: false,
-        skipHealth: true,
-        skipUi: true,
-      },
-      baseConfig: {},
-      nextConfig: {
-        tools: {
-          web: {
-            search: {
-              enabled: false,
-              openaiCodex: {
-                enabled: true,
-                mode: "cached",
+    await finalizeSetupWizard(
+      createFinalizeArgs("advanced", {
+        nextConfig: {
+          tools: {
+            web: {
+              search: {
+                enabled: false,
+                openaiCodex: {
+                  enabled: true,
+                  mode: "cached",
+                },
               },
             },
           },
         },
-      },
-      workspaceDir: "/tmp",
-      settings: {
-        port: 18789,
-        bind: "loopback",
-        authMode: "token",
-        gatewayToken: undefined,
-        tailscaleMode: "off",
-      },
-      prompter,
-      runtime: createRuntime(),
-    });
+        prompter,
+      }),
+    );
 
     expect(note.mock.calls.filter((call) => call[1] === "Codex native search")).toEqual([]);
   });

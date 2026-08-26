@@ -95,6 +95,23 @@
   background: linear-gradient(to bottom, var(--chat-surface), transparent);
 }
 
+@media (max-width: 560px) {
+  .chat-main__conversation {
+    --chat-transcript-fade-height: 64px;
+  }
+
+  .chat-main__conversation::before {
+    height: 56px;
+    background: linear-gradient(
+      to bottom,
+      var(--chat-surface) 0,
+      color-mix(in srgb, var(--chat-surface) 72%, transparent) 34%,
+      color-mix(in srgb, var(--chat-surface) 30%, transparent) 72%,
+      transparent 100%
+    );
+  }
+}
+
 openclaw-chat-sidebar-region,
 .sidebar-region__right-runtime {
   display: contents;

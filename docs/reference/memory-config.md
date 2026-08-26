@@ -1,12 +1,13 @@
 ---
-summary: "Built-in memory search providers, retrieval modes, and multimodal indexing"
+summary: "Built-in memory search, admission exclusions, and dreaming configuration"
 title: "Memory configuration reference"
 sidebarTitle: "Memory config"
+doc-schema-version: 1
 read_when:
   - You want to configure memory search providers or embedding models
   - You want to understand hybrid search, MMR, or temporal-decay defaults
   - You want to enable multimodal memory indexing
-  - You need to exclude specific session sources from memory-pipeline ingestion
+  - You need to exclude specific session sources from automatic dreaming ingestion
 ---
 
 This page lists every configuration knob for OpenClaw memory search. For conceptual overviews, see:
@@ -574,35 +575,30 @@ Built-in memory indexes live in each agent's OpenClaw SQLite database at
 
 ## Memory admission policy
 
-Configure deterministic session exclusions under
-`plugins.entries.memory-core.config.memoryPolicy.excludeSessions`. Excluded
-sessions never enter the dreaming corpus, so the memory pipeline cannot turn
-them into promotion candidates or consolidated entries. For the policy story
-behind these keys — what admission and deletion guarantee and where their
-boundaries are — see
-[Memory provenance and deletion](/concepts/memory-provenance).
+Configure session exclusions for **dreaming ingestion and session backfill** under
+`plugins.entries.memory-core.config.memoryPolicy.excludeSessions`. These
+settings do not disable transcript search, restrict workspace writes, or
+erase existing memories. See
+[Memory provenance and deletion](/concepts/memory-provenance) for coverage and
+deletion workflows.
 
-| Key                          | Type       | Default | Matches                                   |
-| ---------------------------- | ---------- | ------- | ----------------------------------------- |
-| `hookExternalContentSources` | `string[]` | `[]`    | External-content hook sources, like Gmail |
-| `channels`                   | `string[]` | `[]`    | Session channel identifiers               |
-| `chatTypes`                  | `string[]` | `[]`    | `"direct"`, `"group"`, or `"channel"`     |
+| Key                          | Type       | Default | Matches                                                    |
+| ---------------------------- | ---------- | ------- | ---------------------------------------------------------- |
+| `hookExternalContentSources` | `string[]` | `[]`    | Recorded external-content hook sources, such as `"gmail"`. |
+| `channels`                   | `string[]` | `[]`    | Recorded channel/plugin identifiers, not room IDs.         |
+| `chatTypes`                  | `string[]` | `[]`    | Recorded chat type: `"direct"`, `"group"`, or `"channel"`. |
 
-Every setting is optional. Empty or omitted arrays preserve the existing
-admission behavior. A session matching any configured exclusion is recorded as
-excluded rather than silently ignored. Sessions previously purged by
-[`openclaw memory forget`](/cli/memory#memory-forget) are also excluded
-regardless of these settings; their recorded exclusion reason is `forgotten`.
-This durable per-agent exclusion prevents later dreaming sweeps, session
-backfills, and transcript reindexing from restoring the purged memory.
+Every setting is optional. Omitted or empty arrays add no exclusions;
+the normal provenance and session-kind gates still apply. Configured strings
+are trimmed, with empty values dropped, then matched exactly and case-sensitively.
+There are no glob patterns, substring matches, or message-content searches.
 
-<Warning>
-This is an ingestion boundary, not a file-write restriction. An agent running
-inside an excluded session can still edit `MEMORY.md`, `USER.md`, or another
-memory file directly during its turn. Such freeform edits do not gain
-entry-level lineage and are not removed automatically by `memory forget`;
-matching observed file writes appear in its `curatedWrites` report instead.
-</Warning>
+Lists combine with **OR**. For example, configuring a hook source and
+`chatTypes: ["group"]` excludes that hook source **and every group session**,
+not just group sessions from that source. Matching uses retained live session
+metadata. Missing metadata does not match a rule. Automatic dreaming separately
+skips retained archives; these lists do not establish whether another memory
+path can read an archived transcript.
 
 ```json5
 {
@@ -613,8 +609,6 @@ matching observed file writes appear in its `curatedWrites` report instead.
           memoryPolicy: {
             excludeSessions: {
               hookExternalContentSources: ["gmail"],
-              channels: ["email"],
-              chatTypes: ["group"],
             },
           },
         },
@@ -624,12 +618,32 @@ matching observed file writes appear in its `curatedWrites` report instead.
 }
 ```
 
-The policy alone prevents future ingestion; it does not erase memories already
-derived from those sources. To preview and remove existing entries and their
-derived artifacts while durably excluding the selected sessions from future
-memory ingestion, session backfill, and transcript indexing, use
-[`openclaw memory forget`](/cli/memory#memory-forget). The source session
-transcripts themselves remain in the session store.
+Automatic ingestion checks these rules before reading the transcript. A
+matched session's ingestion checkpoint records `excludedReason` as
+`hookExternalContentSource:<source>`,
+`channel:<channel>`, or `chatType:<type>`, in that precedence order.
+Removing the rule makes the session eligible for a later sweep, subject to
+the other ingestion gates.
+
+Sessions selected by [`memory forget`](/cli/memory#memory-forget) are checked
+first and receive the reason `forgotten`. Their durable per-agent exclusion
+also applies to session backfill and transcript indexing, and removing a
+configured rule does not undo it. It excludes the selected IDs, not every
+future session from the same source.
+
+<Warning>
+Configured admission rules apply to automatic dreaming ingestion and manual
+`memory session-backfill` previews, REM output, and apply runs. Raw transcript
+indexing does not apply these lists. Direct agent writes and session-memory hooks are also
+outside this policy. Use tool permissions and hook configuration when a
+session must not write memory files at all.
+</Warning>
+
+Adding a rule does not remove an existing corpus, short-term candidate, or
+promoted memory. Preview existing attributable artifacts with
+`memory forget --dry-run`, then review its
+[deletion boundaries](/concepts/memory-provenance#what-deletion-does-not-cover)
+before applying it. Source session transcripts remain in the session store.
 
 ---
 

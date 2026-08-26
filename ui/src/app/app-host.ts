@@ -646,12 +646,12 @@ class OpenClawShell
     if (isSessionRouteId(routeId) && this.activeSessionKey) {
       primaryContext = this.chatTitleContext(context, outboxScopeHost) || primaryContext;
     }
-    const offline = context.gateway.snapshot.phase !== "connected";
+    const gatewayDisconnected = context.gateway.snapshot.phase !== "connected";
     let title = formatDocumentTitle({
       context: primaryContext,
       attentionCount: context.overlays.snapshot.approvalQueue.length,
-      offline,
-      ...(offline && {
+      gatewayDisconnected,
+      ...(gatewayDisconnected && {
         queuedCount: this.outboxStoreRuntime?.summarizeStoredChatOutboxes(outboxScopeHost).total,
       }),
     });

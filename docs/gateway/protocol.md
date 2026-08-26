@@ -651,7 +651,7 @@ methods. Treat this as feature discovery, not a full enumeration of
 
   <Accordion title="Session control">
     - `sessions.list` returns the current session index, including per-row `agentRuntime` metadata when an agent runtime backend is configured. `hasActiveRun` is the authoritative aggregate direct-session activity fact. When projected, `activeRunIds` is the complete exact active set; an empty array proves the session is idle. If aggregate activity is true while the field is omitted, another runtime owner is active but its exact identities are unavailable. Snapshot omission means identities unavailable. On incremental events, omission means no change, `null` is the event-only tombstone that clears cached exact IDs to unavailable, and an array replaces the cache. Clients correlate only exact IDs they own locally or received from requests, history, or events and never select the first list entry as an owner. When cloud-worker placement is enabled or durable recovery state exists, session rows also include a closed `placement` state (`local`, `requested`, `provisioning`, `syncing`, `starting`, `active`, `draining`, `reconciling`, `reclaimed`, or `failed`) plus state-specific environment, owner-epoch, workspace, bundle, ACK-cursor, or recovery fields. Active placements may include an advisory `diskSpace` sample with `status` (`ok`, `warning`, or `critical`), `availableBytes`, `totalBytes`, and `observedAtMs`. An active paired-device placement also includes `runner: { kind: "device", status: "available" | "offline", deviceId? }`; `deviceId` names the paired device hosting the placement (the selected host for `autoDevice` dispatch), and non-device placements omit the field. This availability is process-current, derived from the exact active environment binding and reconnect-scoped node-runner proof, and starts offline after Gateway restart until that runner reconnects. Inventory changes emit `sessions.changed` so clients refresh the canonical row. Rows carry ownership projections — write-once `createdActor`, the mutable `owner` (actor plus `assignedBy`/`assignedAt`), a bounded `participants` list (owner excluded, up to 4 actors), and the full `participantCount`; actor display labels and avatars are resolved from current profiles and agent identities at read time. Pass `creatorId` to filter by immutable `createdActor.id`; pass `ownerId` to filter by the current assignable owner, falling back to `createdActor` when no owner is assigned. The complete `owners` facet is independent of pagination and remains unfiltered by either query, so clients can render the full owner picker. Authenticated callers can pass `involvingMe: true` to keep only sessions the caller owns or has prompted, evaluated against the full participant history (profile-backed human participants only).
-    - `sessions.subscribe` enables session change events for the current WebSocket client. The subscription ends when that client disconnects.
+    - `sessions.subscribe` enables session change events for the current WebSocket client and accepts the same parameters as `sessions.list` to return an initial list in the same response. Empty `{}` parameters return only the subscription acknowledgment. The subscription ends when that client disconnects. See [Session list bootstrap](/gateway/protocol#session-list-bootstrap).
     - `sessions.messages.subscribe` and `sessions.messages.unsubscribe` toggle transcript/message event subscriptions for one session. Pass `includeApprovals: true` to also receive sanitized `session.approval` lifecycle events for approvals whose persisted audience includes that exact session and whose reviewer binding authorizes the subscribing client. The subscribe response then includes a bounded pending `approvalReplay`; it is authoritative when `truncated` is false. The opt-in is per subscribe call, not sticky: re-subscribing to the same session without `includeApprovals: true` removes an existing approval subscription. In addition to normal session-read authority, this opt-in requires `operator.admin`, or `operator.approvals` on a paired device.
     - `sessions.preview` returns bounded transcript previews for specific session keys.
     - `sessions.describe` returns one gateway session row for an exact session key.
@@ -747,6 +747,37 @@ methods. Treat this as feature discovery, not a full enumeration of
 
   </Accordion>
 </AccordionGroup>
+
+### Session list bootstrap
+
+Call `sessions.subscribe` with a non-empty `sessions.list` parameter object, such
+as `{ limit: 60, ownerFirst: true }`, to subscribe and load the initial roster in
+one request. A successful WebSocket response has the payload
+`{ subscribed: true, list }`, where `list` is the normal `SessionsListResult`.
+Calling with `{}` preserves the acknowledgment-only response
+`{ subscribed: true }` and does not read a snapshot.
+List parameters select the snapshot; they do not filter the connection's session
+event subscription.
+
+The Gateway registers the subscription before projecting the list. Clients must
+listen for `sessions.changed` before making the request: events can arrive while
+the snapshot is being built. Reconcile those events with the response and issue
+a trailing `sessions.list` refresh when needed, including when an event only
+invalidates the cached list. Reconnects require a new subscription and snapshot.
+
+Both methods accept `ownerFirst: true` to prepend up to 60 matching viewer-owned
+rows (or `limit`, when smaller) to the normal first page, deduplicated by session key. This applies only
+when `offset` is zero or omitted; later pages use normal pagination. Owned rows
+must pass the same visibility and list filters as the shared page. The Gateway
+resolves the viewer from the authenticated connection; no client-supplied
+identity selects these rows. Without an authenticated viewer identity, or when
+`ownerFirst` is false or omitted, the list uses normal ordering.
+
+The shared page still determines `limitApplied`, `offset`, `nextOffset`,
+`hasMore`, and `totalCount`. Prepended rows can make `sessions.length` and `count`
+exceed the shared page size. Use `nextOffset` to advance and deduplicate rows by
+session key across pages; do not derive the next offset from the displayed row
+count.
 
 ### Common event families
 

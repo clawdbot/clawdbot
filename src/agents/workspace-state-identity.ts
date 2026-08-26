@@ -18,8 +18,11 @@ function normalizeWorkspaceIdentityPath(value: string): string {
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
-function canonicalizeWorkspaceIdentityPath(workspaceDir: string): string {
-  const fallback = normalizeWorkspaceIdentityPath(path.resolve(resolveUserPath(workspaceDir)));
+function canonicalizeWorkspacePath(
+  workspaceDir: string,
+  normalizePath: (value: string) => string,
+): string {
+  const fallback = normalizePath(path.resolve(resolveUserPath(workspaceDir)));
   let candidate = fallback;
   const followedSymlinks = new Set<string>();
 
@@ -28,7 +31,7 @@ function canonicalizeWorkspaceIdentityPath(workspaceDir: string): string {
     let current = candidate;
     while (true) {
       try {
-        return normalizeWorkspaceIdentityPath(
+        return normalizePath(
           path.join(fs.realpathSync.native(current), ...missingSegments.toReversed()),
         );
       } catch {
@@ -37,7 +40,7 @@ function canonicalizeWorkspaceIdentityPath(workspaceDir: string): string {
       }
       try {
         if (fs.lstatSync(current).isSymbolicLink()) {
-          const normalizedLink = normalizeWorkspaceIdentityPath(current);
+          const normalizedLink = normalizePath(current);
           if (followedSymlinks.has(normalizedLink)) {
             return fallback;
           }
@@ -63,6 +66,12 @@ function canonicalizeWorkspaceIdentityPath(workspaceDir: string): string {
   return fallback;
 }
 
+// Filesystem ownership preserves path bytes; NFC state keys are a separate stored
+// contract and can identify distinct directories as equal on Linux.
+export function resolveCanonicalWorkspacePath(workspaceDir: string): string {
+  return canonicalizeWorkspacePath(workspaceDir, path.normalize);
+}
+
 export function createWorkspaceStateIdentity(workspacePath: string): WorkspaceStateIdentity {
   return {
     workspacePath,
@@ -72,10 +81,12 @@ export function createWorkspaceStateIdentity(workspacePath: string): WorkspaceSt
 
 export function resolveWorkspaceStateAliases(workspaceDir: string): WorkspaceStateIdentity[] {
   const lexicalPath = normalizeWorkspaceIdentityPath(path.resolve(resolveUserPath(workspaceDir)));
-  const canonicalPath = canonicalizeWorkspaceIdentityPath(workspaceDir);
+  const canonicalPath = canonicalizeWorkspacePath(workspaceDir, normalizeWorkspaceIdentityPath);
   return [...new Set([lexicalPath, canonicalPath])].map(createWorkspaceStateIdentity);
 }
 
 export function resolveWorkspaceStateIdentity(workspaceDir: string): WorkspaceStateIdentity {
-  return createWorkspaceStateIdentity(canonicalizeWorkspaceIdentityPath(workspaceDir));
+  return createWorkspaceStateIdentity(
+    canonicalizeWorkspacePath(workspaceDir, normalizeWorkspaceIdentityPath),
+  );
 }

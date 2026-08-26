@@ -73,7 +73,19 @@ describe("sidebar layout", () => {
 
   it("collapses the panel after its final tab closes", () => {
     const closed = closeSlot(openSlot({ columns: [] }, "detail"), "detail");
-    expect(closed).toEqual({ columns: [], open: false });
+    expect(closed).toEqual({
+      columns: [
+        {
+          id: "side-panel-column",
+          side: "right",
+          panels: [],
+          activePanelId: "",
+          height: 360,
+          width: 480,
+        },
+      ],
+      open: false,
+    });
   });
 
   it("does not reopen a minimized panel when another tab remains", () => {
@@ -160,6 +172,21 @@ describe("sidebar layout", () => {
 
   it("deduplicates slots and repairs untrusted persisted values", () => {
     expect(normalizeSidebarLayout(null)).toEqual({ columns: [], open: false, expanded: false });
+    expect(normalizeSidebarLayout({ columns: [], open: true })).toEqual({
+      columns: [
+        {
+          id: "side-panel-column",
+          side: "right",
+          panels: [],
+          activePanelId: "",
+          height: 360,
+          width: 480,
+        },
+      ],
+      dock: "right",
+      open: true,
+      expanded: false,
+    });
     expect(
       normalizeSidebarLayout({
         columns: [

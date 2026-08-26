@@ -5458,14 +5458,22 @@ describe("deliverOutboundPayloads", () => {
   it("does not count no-op sendPayload results as delivered", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
     const sendText = vi.fn();
+    const pinDeliveredMessage = vi.fn<OutboundPinDeliveredMessage>();
+    const afterDeliverPayload = vi.fn();
     const sendPayload = installPayloadOutbound(
       { channel: "matrix", messageId: "" },
-      { sendText, sendTextOnlyErrorPayloads: true },
+      { sendText, sendTextOnlyErrorPayloads: true, pinDeliveredMessage, afterDeliverPayload },
     );
 
     const results = await deliverMatrix({
       to: "!room:1",
-      payloads: [{ text: "provider exploded", isError: true }],
+      payloads: [
+        {
+          text: "provider exploded",
+          isError: true,
+          delivery: { pin: { enabled: true, required: true } },
+        },
+      ],
       mirror: {
         sessionKey: "agent:main:main",
         agentId: "main",
@@ -5476,6 +5484,8 @@ describe("deliverOutboundPayloads", () => {
     expect(results).toStrictEqual([]);
     expect(sendPayload).toHaveBeenCalledTimes(1);
     expect(sendText).not.toHaveBeenCalled();
+    expect(pinDeliveredMessage).not.toHaveBeenCalled();
+    expect(afterDeliverPayload).not.toHaveBeenCalled();
     expect(hookMocks.runner.runMessageSent).not.toHaveBeenCalled();
     expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
   });
@@ -5655,13 +5665,22 @@ describe("deliverOutboundPayloads", () => {
   });
 
   it("pins the first delivered media message for multi-media payloads", async () => {
+    hookMocks.runner.hasHooks.mockImplementation((name?: string) => name === "message_sent");
+    const order: string[] = [];
     const sendText = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-text" });
     const sendMedia = vi
       .fn()
       .mockResolvedValueOnce({ channel: "matrix", messageId: "mx-1" })
       .mockResolvedValueOnce({ channel: "matrix", messageId: "mx-2" });
-    const pinDeliveredMessage = vi.fn<OutboundPinDeliveredMessage>();
-    setTestOutbound({ sendText, sendMedia, pinDeliveredMessage });
+    const pinDeliveredMessage = vi.fn<OutboundPinDeliveredMessage>(async () => {
+      order.push("pin");
+    });
+    const afterDeliverPayload = vi.fn<NonNullable<ChannelOutboundAdapter["afterDeliverPayload"]>>(
+      async () => {
+        order.push("after-delivery");
+      },
+    );
+    setTestOutbound({ sendText, sendMedia, pinDeliveredMessage, afterDeliverPayload });
 
     await deliverMatrix({
       to: "!room:1",
@@ -5672,11 +5691,22 @@ describe("deliverOutboundPayloads", () => {
           delivery: { pin: true },
         },
       ],
+      onDeliveredPayload: () => order.push("delivered"),
+      onMessageSentEvent: () => order.push("message-sent-staged"),
     });
 
     expect(sendMedia).toHaveBeenCalledTimes(2);
     const pinOptions = requireMockCallArg(pinDeliveredMessage, "pin delivered message");
     expect(pinOptions?.messageId).toBe("mx-1");
+    expect(order).toEqual(["delivered", "message-sent-staged", "pin", "after-delivery"]);
+    expect(requireMockCallArg(afterDeliverPayload, "after delivered payload").results).toEqual([
+      { channel: "matrix", messageId: "mx-1" },
+      { channel: "matrix", messageId: "mx-2" },
+    ]);
+    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: "mx-2", success: true }),
+      expect.any(Object),
+    );
   });
 
   it.each([
@@ -5710,15 +5740,30 @@ describe("deliverOutboundPayloads", () => {
   });
 
   it("falls back to sendText when plugin outbound omits sendMedia", async () => {
-    const sendText = installTextOutbound({ channel: "matrix", messageId: "mx-1" });
+    const afterDeliverPayload = vi.fn();
+    const onDeliveredPayload = vi.fn();
+    const sendText = installTextOutbound(
+      { channel: "matrix", messageId: "mx-1" },
+      { afterDeliverPayload },
+    );
 
     const results = await deliverMatrix({
       to: "!room:1",
       payloads: [{ text: "caption", mediaUrl: "https://example.com/file.png" }],
+      onDeliveredPayload,
     });
 
     expect(sendText).toHaveBeenCalledTimes(1);
     expect(requireMockCallArg(sendText, "sendText").text).toBe("caption");
+    expect(onDeliveredPayload).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "caption", mediaUrls: [] }),
+    );
+    expect(
+      requireMockCallArg(afterDeliverPayload, "after delivered payload").payload,
+    ).toMatchObject({
+      text: "caption",
+      mediaUrl: "https://example.com/file.png",
+    });
     const warnCall = requireMockCall(logMocks.warn, "warn");
     expect(warnCall[0]).toBe(
       "Plugin outbound adapter does not implement sendMedia; media URLs will be dropped and text fallback will be used",

@@ -22,6 +22,7 @@ import {
   tablePrimaryKeyColumns,
 } from "./openclaw-state-db-schema-helpers.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
+import { FOLDED_SINGLETON_STATE_TABLES_V12 } from "./openclaw-state-db-schema-v12-foldin.js";
 import * as sessionWatchMigration from "./openclaw-state-db-session-watch-migration.js";
 import {
   hasRecognizedRetiredCommitmentsSchema,
@@ -381,6 +382,12 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
     RETIRED_SKILL_CURATOR_TABLES_V11.some((tableName) => tableExists(db, tableName))
   ) {
     migrations.push({ kind: "state-table-retirement-v11", path: pathname });
+  }
+  if (
+    userVersion < 12 &&
+    FOLDED_SINGLETON_STATE_TABLES_V12.some((tableName) => tableExists(db, tableName))
+  ) {
+    migrations.push({ kind: "singleton-state-foldin-v12", path: pathname });
   }
   if (!hasCanonicalAgentDatabasesPrimaryKey(db)) {
     migrations.push({ kind: "agent-databases-composite-primary-key", path: pathname });

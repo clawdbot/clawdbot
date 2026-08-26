@@ -41,8 +41,9 @@ type PortalRuntimeEntry = {
 type GatewayPortalOpenParams = {
   targetPort: number;
   target?: PortalTarget;
-  /** Revalidated inside the serialized operation; reuse must not mutate a live portal for a caller whose authority lapsed. */
+  /** Revalidated before metadata mutation or publication after asynchronous listener startup. */
   assertCurrent?: () => void;
+  /** Ownership transfers to open; unused targets are released even when it rejects or reuses a portal. */
   onClose?: () => Promise<void> | void;
   origin?: string;
   title?: string;
@@ -51,10 +52,7 @@ type GatewayPortalOpenParams = {
 };
 
 export type GatewayPortalService = {
-  /** `created` is false when an already-registered portal was reused; its target and onClose are unchanged. */
-  open: (
-    params: GatewayPortalOpenParams,
-  ) => Promise<{ portal: PortalOpenResult; created: boolean }>;
+  open: (params: GatewayPortalOpenParams) => Promise<PortalOpenResult>;
   list: () => PortalSummary[];
   listWorkerPortals: (environmentId: string, ownerEpoch: number) => PortalSummary[];
   close: (id: string, assertCurrent?: () => void) => Promise<void>;
@@ -174,117 +172,124 @@ export function createGatewayPortalService(params: {
           ? `p${targetPort}`
           : `p${targetPort}-worker-${sha256HexPrefixCore(target.environmentId, 32)}-${target.ownerEpoch}`;
       return await serialize(id, async () => {
-        if (closed) {
-          throw new Error("portals unavailable");
-        }
-        input.assertCurrent?.();
-        const existing = entries.get(id);
-        if (existing) {
-          existing.portal.title = input.title?.trim() || existing.portal.title;
-          if (input.description !== undefined) {
-            existing.portal.description = input.description;
-          }
-          if (input.path !== undefined) {
-            existing.portal.path = input.path;
-          }
-          if (input.origin !== undefined) {
-            existing.portal.origin = input.origin;
-          }
-          return { portal: summarize(existing.portal), created: false };
-        }
-        if (params.httpBindHosts.length === 0) {
-          throw new Error("Gateway listener must start before opening a portal");
-        }
-
-        const portal: PortalEntry = {
-          id,
-          title: input.title?.trim() || `Port ${targetPort}`,
-          ...(input.description ? { description: input.description } : {}),
-          ...(input.path ? { path: input.path } : {}),
-          ...(input.origin ? { origin: input.origin } : {}),
-          target,
-          token: randomBytes(32).toString("hex"),
-          cookieNamespace: randomBytes(16).toString("hex"),
-          listenPort: 0,
-          createdAtMs: Date.now(),
-        };
-        const upgradedSockets = new Set<Duplex>();
-        const handler = (
-          req: import("node:http").IncomingMessage,
-          res: import("node:http").ServerResponse,
-        ) =>
-          handlePortalProxyRequest({ req, res, target: portal, tls: Boolean(params.tlsOptions) });
-        const servers = params.httpBindHosts.map(() =>
-          params.tlsOptions
-            ? createHttpsServer(params.tlsOptions, handler)
-            : createHttpServer(handler),
-        );
-        for (const server of servers) {
-          server.on("upgrade", (req, socket, head) =>
-            handlePortalProxyUpgrade({ req, socket, head, target: portal, upgradedSockets }),
-          );
-        }
-        // Registration precedes every bind so whole-gateway cleanup owns partial startup.
-        params.httpServers.push(...servers);
+        let releaseTarget = input.onClose;
         try {
-          const primaryServer = servers[0];
-          const primaryHost = params.httpBindHosts[0];
-          if (!primaryServer || !primaryHost) {
-            throw new Error("Missing primary portal HTTP server");
+          if (closed) {
+            throw new Error("portals unavailable");
           }
-          for (let attempt = 0; attempt < PORTAL_PORT_ALLOCATION_ATTEMPTS; attempt += 1) {
-            await listenGatewayHttpServer({
-              httpServer: primaryServer,
-              bindHost: primaryHost,
-              port: 0,
-              retryEaddrinuse: false,
-              serviceName: "portal",
-              endpointScheme: params.tlsOptions ? "https" : "http",
-            });
-            const address = primaryServer.address() as AddressInfo | null;
-            if (!address || typeof address === "string") {
-              throw new Error("Portal listener failed to resolve its port");
+          input.assertCurrent?.();
+          const existing = entries.get(id);
+          if (existing) {
+            existing.portal.title = input.title?.trim() || existing.portal.title;
+            if (input.description !== undefined) {
+              existing.portal.description = input.description;
             }
-            if (target.kind === "worker" || address.port !== targetPort) {
-              portal.listenPort = address.port;
-              break;
+            if (input.path !== undefined) {
+              existing.portal.path = input.path;
             }
-            // A proxy cannot share its target port: it would dial itself and fail auth.
-            await closeServers([primaryServer]);
+            if (input.origin !== undefined) {
+              existing.portal.origin = input.origin;
+            }
+            return summarize(existing.portal);
           }
-          if (portal.listenPort === 0) {
-            throw new Error(`Portal listener repeatedly allocated target port ${targetPort}`);
+          if (params.httpBindHosts.length === 0) {
+            throw new Error("Gateway listener must start before opening a portal");
           }
-          for (const [index, host] of params.httpBindHosts.entries()) {
-            if (index === 0) {
-              continue;
-            }
-            const server = servers[index];
-            if (!server) {
-              throw new Error(`Missing portal HTTP server for bind host ${host}`);
-            }
-            await listenGatewayHttpServer({
-              httpServer: server,
-              bindHost: host,
-              port: portal.listenPort,
-              retryEaddrinuse: false,
-              serviceName: "portal",
-              endpointScheme: params.tlsOptions ? "https" : "http",
-            });
+
+          const portal: PortalEntry = {
+            id,
+            title: input.title?.trim() || `Port ${targetPort}`,
+            ...(input.description ? { description: input.description } : {}),
+            ...(input.path ? { path: input.path } : {}),
+            ...(input.origin ? { origin: input.origin } : {}),
+            target,
+            token: randomBytes(32).toString("hex"),
+            cookieNamespace: randomBytes(16).toString("hex"),
+            listenPort: 0,
+            createdAtMs: Date.now(),
+          };
+          const upgradedSockets = new Set<Duplex>();
+          const handler = (
+            req: import("node:http").IncomingMessage,
+            res: import("node:http").ServerResponse,
+          ) =>
+            handlePortalProxyRequest({ req, res, target: portal, tls: Boolean(params.tlsOptions) });
+          const servers = params.httpBindHosts.map(() =>
+            params.tlsOptions
+              ? createHttpsServer(params.tlsOptions, handler)
+              : createHttpServer(handler),
+          );
+          for (const server of servers) {
+            server.on("upgrade", (req, socket, head) =>
+              handlePortalProxyUpgrade({ req, socket, head, target: portal, upgradedSockets }),
+            );
           }
-        } catch (error) {
-          removeServers(params.httpServers, servers);
-          await closeServers(servers);
-          await input.onClose?.();
-          throw error;
+          // Registration precedes every bind so whole-gateway cleanup owns partial startup.
+          params.httpServers.push(...servers);
+          try {
+            const primaryServer = servers[0];
+            const primaryHost = params.httpBindHosts[0];
+            if (!primaryServer || !primaryHost) {
+              throw new Error("Missing primary portal HTTP server");
+            }
+            for (let attempt = 0; attempt < PORTAL_PORT_ALLOCATION_ATTEMPTS; attempt += 1) {
+              await listenGatewayHttpServer({
+                httpServer: primaryServer,
+                bindHost: primaryHost,
+                port: 0,
+                retryEaddrinuse: false,
+                serviceName: "portal",
+                endpointScheme: params.tlsOptions ? "https" : "http",
+              });
+              const address = primaryServer.address() as AddressInfo | null;
+              if (!address || typeof address === "string") {
+                throw new Error("Portal listener failed to resolve its port");
+              }
+              if (target.kind === "worker" || address.port !== targetPort) {
+                portal.listenPort = address.port;
+                break;
+              }
+              // A proxy cannot share its target port: it would dial itself and fail auth.
+              await closeServers([primaryServer]);
+            }
+            if (portal.listenPort === 0) {
+              throw new Error(`Portal listener repeatedly allocated target port ${targetPort}`);
+            }
+            for (const [index, host] of params.httpBindHosts.entries()) {
+              if (index === 0) {
+                continue;
+              }
+              const server = servers[index];
+              if (!server) {
+                throw new Error(`Missing portal HTTP server for bind host ${host}`);
+              }
+              await listenGatewayHttpServer({
+                httpServer: server,
+                bindHost: host,
+                port: portal.listenPort,
+                retryEaddrinuse: false,
+                serviceName: "portal",
+                endpointScheme: params.tlsOptions ? "https" : "http",
+              });
+            }
+            // A queued successor must not discover a portal created by a now-revoked turn.
+            input.assertCurrent?.();
+          } catch (error) {
+            removeServers(params.httpServers, servers);
+            await closeServers(servers);
+            throw error;
+          }
+          entries.set(id, {
+            portal,
+            servers,
+            upgradedSockets,
+            ...(input.onClose ? { onClose: input.onClose } : {}),
+          });
+          releaseTarget = undefined;
+          return summarize(portal);
+        } finally {
+          await releaseTarget?.();
         }
-        entries.set(id, {
-          portal,
-          servers,
-          upgradedSockets,
-          ...(input.onClose ? { onClose: input.onClose } : {}),
-        });
-        return { portal: summarize(portal), created: true };
       });
     },
     list: () => summarizeEntries(entries.values()),

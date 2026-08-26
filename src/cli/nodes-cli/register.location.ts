@@ -41,7 +41,6 @@ export function registerNodesLocationCommands(nodes: Command) {
           if (opts.accuracy !== undefined && desiredAccuracy === undefined) {
             throw new Error("invalid --accuracy (use coarse|balanced|precise)");
           }
-          const nodeId = await resolveCliNodeId(opts, opts.node ?? "");
           const maxAgeMs = parseOptionalNodeNonNegativeInteger(opts.maxAge, "--max-age");
           const timeoutMs = parseOptionalNodePositiveInteger(
             opts.locationTimeout,
@@ -51,6 +50,7 @@ export function registerNodesLocationCommands(nodes: Command) {
             opts.invokeTimeout,
             "--invoke-timeout",
           );
+          const nodeId = await resolveCliNodeId(opts, opts.node ?? "");
 
           const invokeParams: Record<string, unknown> = {
             nodeId,

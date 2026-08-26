@@ -475,6 +475,42 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
   // the control shows whenever either route exists, and it always sits ahead of
   // the primary action rather than standing in for it.
   const voiceControl = props.dictation || props.onToggleVoice ? voiceButton : nothing;
+  const mobileDictationControl = props.dictation
+    ? html`
+        <span class="chat-mobile-dictation-action">
+          ${renderComposerVoiceButton({
+            connected: props.connected,
+            sending: props.sending,
+            isBusy: props.isBusy,
+            dictation: props.dictation,
+            idleLabel: t("chat.composer.dictationCapability"),
+          })}
+        </span>
+      `
+    : nothing;
+  const mobileTalkAction =
+    !hasComposedContent && !props.dictation?.active && props.onToggleVoice
+      ? html`
+          <openclaw-tooltip
+            class="chat-mobile-talk-action"
+            .content=${t("chat.composer.realtimeTalkCapability")}
+          >
+            <button
+              class="chat-send-btn chat-send-btn--talk-mode"
+              type="button"
+              @pointerdown=${props.onPrimaryActionPointerDown}
+              @click=${props.onToggleVoice}
+              ?disabled=${!props.connected || props.sending || props.isBusy}
+              aria-label=${t("chat.composer.realtimeTalkCapability")}
+            >
+              ${icons.audioLines}
+              <span class="agent-chat__control-label"
+                >${t("chat.composer.realtimeTalkCapability")}</span
+              >
+            </button>
+          </openclaw-tooltip>
+        `
+      : nothing;
   // Send holds the trailing edge whatever the draft is. During an active run the
   // same slot shows stop while empty, then becomes the follow-up action as soon
   // as the operator composes content; two competing primary buttons never render.
@@ -512,6 +548,31 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
         props.onPrimaryActionPointerDown,
       )
     : nothing;
+  const desktopPrimaryAction = props.dictation?.active
+    ? dictationSendAction
+    : props.canAbort
+      ? hasComposedContent
+        ? sendAction
+        : abortAction
+      : sendAction;
+  const mobilePrimaryAction = props.dictation?.active
+    ? dictationSendAction
+    : hasComposedContent
+      ? sendAction
+      : props.canAbort
+        ? abortAction
+        : props.onToggleVoice
+          ? mobileTalkAction
+          : sendAction;
+  const primaryActions =
+    mobilePrimaryAction === desktopPrimaryAction
+      ? html`<span class="chat-mobile-primary-action chat-desktop-primary-action"
+          >${desktopPrimaryAction}</span
+        >`
+      : html`
+          <span class="chat-mobile-primary-action">${mobilePrimaryAction}</span>
+          <span class="chat-desktop-primary-action">${desktopPrimaryAction}</span>
+        `;
   return html`
     ${props.voiceActive && props.onToggleVoice
       ? html`
@@ -574,17 +635,8 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
                 </openclaw-tooltip>
               `
             : nothing}
-          ${abortAction}
+          <span class="chat-mobile-primary-action chat-desktop-primary-action">${abortAction}</span>
         `
-      : html`
-          ${voiceControl}
-          ${props.dictation?.active
-            ? dictationSendAction
-            : props.canAbort
-              ? hasComposedContent
-                ? sendAction
-                : abortAction
-              : sendAction}
-        `}
+      : html` ${voiceControl} ${mobileDictationControl} ${primaryActions} `}
   `;
 }

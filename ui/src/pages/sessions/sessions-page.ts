@@ -207,7 +207,6 @@ class SessionsPage extends OpenClawLightDomElement {
       const result = await searchVisibleSessionTranscripts({
         client,
         query,
-        result: this.result,
         listSessions: context.sessions.list,
         listOptions: this.sessionListOptions(context),
         resolveAgentId: (sessionKey) =>
@@ -482,6 +481,8 @@ class SessionsPage extends OpenClawLightDomElement {
       return current;
     }
     this.unsubscribeList?.();
+    // Search hits and pending work belong to the roster query, not just its agent.
+    this.resetTranscriptSearchState(this.transcriptSearchQuery);
     const binding = { sessions, query, key };
     this.listBinding = binding;
     this.appliedListResult = undefined;
