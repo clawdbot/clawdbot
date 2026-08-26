@@ -189,7 +189,7 @@ export async function handleToolExecutionEnd(
   // from any other still-active lifecycle item.
   const codeModeSuspended =
     !isToolError &&
-    isExecToolName(toolName) &&
+    ctx.params.codeModeExecToolNames?.has(toolName) === true &&
     readToolResultDetails(sanitizedResult)?.status === "waiting";
   const terminate =
     result !== null &&

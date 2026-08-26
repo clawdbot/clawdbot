@@ -78,7 +78,8 @@ export function isCodeModeControlTool(tool: object): boolean {
   return codeModeControlTools.has(tool);
 }
 
-function isCodeModeExecTool(tool: AnyAgentTool): boolean {
+/** Return whether a tool is the marked Code Mode `exec` control tool (not a plain shell exec). */
+export function isCodeModeExecTool(tool: AnyAgentTool): boolean {
   return (
     isCodeModeControlTool(tool) && normalizeToolPolicyName(tool.name) === CODE_MODE_EXEC_TOOL_NAME
   );

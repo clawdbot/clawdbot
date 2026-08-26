@@ -346,6 +346,7 @@ type ToolHandlerParams = Pick<
   | "agentId"
   | "coreBuiltinToolNames"
   | "replaySafeToolNames"
+  | "codeModeExecToolNames"
   | "sideEffectToolOwners"
   | "toolResultFormat"
   | "toolProgressDetail"
