@@ -14,7 +14,6 @@ struct StatusMenuHeaderView: View {
     private let isSleeping: Bool
     private let controlChannel = ControlChannel.shared
     private let healthStore = HealthStore.shared
-    private let activityStore = WorkActivityStore.shared
     private let nodesStore = NodesStore.shared
     private let nodeChannelStatus = MacNodeChannelStatusStore.shared
     private let dashboardManager = DashboardManager.shared
@@ -45,10 +44,6 @@ struct StatusMenuHeaderView: View {
 
     private var statusHeading: some View {
         HStack(alignment: .center, spacing: 8) {
-            Circle()
-                .fill(self.statusColor)
-                .frame(width: 8, height: 8)
-
             VStack(alignment: .leading, spacing: 2) {
                 Text(self.statusTitle)
                     .font(.subheadline.weight(.semibold))
@@ -74,24 +69,16 @@ struct StatusMenuHeaderView: View {
         }
     }
 
+    /// A healthy system stays silent: lines appear only for states the
+    /// operator can act on, so the header is stable while nothing is wrong.
     @ViewBuilder
     private var statusSummary: some View {
-        // Unconfigured installs already carry the sessions-section explainer;
-        // a red "Gateway error" line here would shout at a fresh install.
-        if self.state.connectionMode != .unconfigured {
-            self.configuredStatusSummary
-        }
-    }
-
-    private var configuredStatusSummary: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            let health = self.healthStatus
-            let endpoint = self.endpointHost
-            let summary = endpoint.map { "\($0) · \(health.label)" } ?? health.label
-            self.statusLine(label: summary, color: health.color)
-
-            if let macNodeStatus = self.macNodeStatus {
-                self.statusLine(label: macNodeStatus.label, color: macNodeStatus.color)
+        let problems = self.problemLines
+        if !problems.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(problems, id: \.label) { problem in
+                    self.statusLine(label: problem.label, color: problem.color)
+                }
             }
         }
     }
@@ -193,10 +180,12 @@ struct StatusMenuHeaderView: View {
         if self.isSleeping {
             return String(localized: "OpenClaw Sleeping")
         }
-        return DashboardGatewayMenuModel.connectionLabel(
-            mode: self.state.connectionMode,
-            controlState: self.controlChannel.state,
-            entries: self.dashboardManager.gatewayEntries)
+        if self.dashboardManager.gatewayEntries.count >= 2,
+           let primaryName = self.dashboardManager.gatewayEntries.first(where: \.isPrimary)?.name.nonEmpty
+        {
+            return primaryName
+        }
+        return "OpenClaw"
     }
 
     private var connectionModeLabel: String? {
@@ -210,40 +199,17 @@ struct StatusMenuHeaderView: View {
         }
     }
 
-    private var statusColor: Color {
-        if self.state.isPaused { return .orange }
-        if self.isSleeping || self.state.connectionMode == .unconfigured { return .secondary }
-        return self.healthStatus.color
-    }
+    /// Operator-actionable trouble only. Healthy, refreshing, pending, and
+    /// activity states intentionally produce nothing - the menu stays quiet
+    /// and stable instead of narrating routine churn.
+    private var problemLines: [(label: String, color: Color)] {
+        guard self.state.connectionMode != .unconfigured else { return [] }
+        var lines: [(label: String, color: Color)] = []
 
-    private var endpointHost: String? {
-        if let resolved = GatewayConnectivityCoordinator.shared.resolvedHostLabel?.nonEmpty {
-            return resolved
-        }
-        switch self.state.connectionMode {
-        case .unconfigured:
-            return nil
-        case .local:
-            return "127.0.0.1:\(GatewayEnvironment.gatewayPort())"
-        case .remote:
-            if self.state.remoteTransport == .direct,
-               let endpoint = URL(string: self.state.remoteUrl),
-               let host = endpoint.host
-            {
-                return endpoint.port.map { "\(host):\($0)" } ?? host
-            }
-            if let target = CommandResolver.parseSSHTarget(self.state.remoteTarget) {
-                return target.port == 22 ? target.host : "\(target.host):\(target.port)"
-            }
-            return self.state.remoteUrl.nonEmpty ?? self.state.remoteTarget.nonEmpty
-        }
-    }
-
-    private var healthStatus: (label: String, color: Color) {
         if self.state.connectionMode == .local,
            let failure = GatewayProcessManager.shared.lastFailureReason
         {
-            return (failure, .red)
+            lines.append((failure, .red))
         }
         if self.state.connectionMode == .remote {
             let presentation = GatewayConnectionPresentation(state: self.controlChannel.state)
@@ -251,34 +217,25 @@ struct StatusMenuHeaderView: View {
             case .healthy:
                 break
             case .transient:
-                return (presentation.generalSubtitle, .orange)
+                lines.append((presentation.generalSubtitle, .orange))
             case .attention:
-                return (presentation.generalSubtitle, .red)
+                lines.append((presentation.generalSubtitle, .red))
             }
         }
 
-        if let activity = self.activityStore.current {
-            let role = activity.role == .main ? String(localized: "Main") : String(localized: "Other")
-            return ("\(role) · \(activity.label)", activity.role == .main ? .accentColor : .gray)
+        switch self.healthStore.state {
+        case .ok, .unknown:
+            break
+        case .linkingNeeded:
+            lines.append((String(localized: "Login required"), .red))
+        case let .degraded(reason):
+            lines.append((self.healthStore.degradedSummary ?? reason, .orange))
         }
 
-        let health = self.healthStore.state
-        if self.healthStore.isRefreshing {
-            return (String(localized: "Health check running…"), health.tint)
+        if let macNodeStatus = self.macNodeStatus {
+            lines.append(macNodeStatus)
         }
-        let checkAge = self.healthStore.lastSuccess.map {
-            " · " + String(localized: "checked") + " " + age(from: $0)
-        } ?? ""
-        switch health {
-        case .ok:
-            return (String(localized: "Health ok") + checkAge, .green)
-        case .linkingNeeded:
-            return (String(localized: "Health: login required"), .red)
-        case let .degraded(reason):
-            return ((self.healthStore.degradedSummary ?? reason) + checkAge, .orange)
-        case .unknown:
-            return (String(localized: "Health pending"), .secondary)
-        }
+        return lines
     }
 
     private var macNodeStatus: (label: String, color: Color)? {
@@ -323,16 +280,12 @@ struct StatusMenuHeaderView: View {
     }
 
     private func statusLine(label: String, color: Color) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Circle()
-                .fill(color)
-                .frame(width: 6, height: 6)
-            Text(label)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-                .fixedSize(horizontal: false, vertical: true)
-        }
+        Text(label)
+            .font(.caption)
+            .foregroundStyle(color)
+            .lineLimit(2)
+            .fixedSize(horizontal: false, vertical: true)
+            .help(label)
     }
 
     private func pairingRow(_ label: String) -> some View {

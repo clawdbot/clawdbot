@@ -247,8 +247,6 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             _ = self.activityStore.current
             _ = self.activityStore.mainSessionKey
             _ = HealthStore.shared.state
-            _ = HealthStore.shared.isRefreshing
-            _ = HealthStore.shared.lastSuccess
             _ = HealthStore.shared.degradedSummary
             _ = MacNodeChannelStatusStore.shared.state
             _ = self.nodes.nodes

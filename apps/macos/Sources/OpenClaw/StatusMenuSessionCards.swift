@@ -26,7 +26,7 @@ struct StatusSessionCard: View {
                     ProgressView().controlSize(.small)
                 } else {
                     Image(systemName: self.symbolName)
-                        .foregroundStyle(self.row.kind.tint)
+                        .foregroundStyle(.secondary)
                 }
             }
             .frame(width: 16, height: 16)
