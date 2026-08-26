@@ -235,6 +235,7 @@ function prepareParams(input: {
     followSymlinks: input.followSymlinks,
   };
   delete next.preflightOnly;
+  delete next.expectedCanonicalPath;
   if (input.command === "file.fetch") {
     next.maxBytes = readMaxBytes({
       value: input.params.maxBytes,
@@ -903,6 +904,22 @@ async function handleFileTransferInvoke(
       return preflight.result;
     }
     boundCanonicalPath = preflight.canonicalPath;
+  } else if (command === "dir.list") {
+    const preflight = await runPathPreflight({
+      ctx,
+      op,
+      kind: "read",
+      authorization: gate,
+      params: forwardedParams,
+      requestedPath,
+      startedAt,
+    });
+    if (!preflight.ok) {
+      return preflight.result;
+    }
+    boundCanonicalPath = preflight.canonicalPath;
+    // The node must reject target drift before reading directory entries.
+    forwardedParams.expectedCanonicalPath = boundCanonicalPath;
   }
 
   const result = await ctx.invokeNode({ params: forwardedParams });

@@ -55,6 +55,24 @@ describe("handleDirList — fs errors", () => {
 });
 
 describe("handleDirList — happy path", () => {
+  it("binds the canonical target before listing entries", async () => {
+    await fs.writeFile(path.join(tmpRoot, "private.txt"), "secret");
+
+    const preflight = await handleDirList({ path: tmpRoot, preflightOnly: true });
+    expect(preflight).toEqual({ ok: true, path: tmpRoot, preflight: true });
+
+    const changed = await handleDirList({
+      path: tmpRoot,
+      expectedCanonicalPath: path.join(tmpRoot, "other"),
+    });
+    expect(changed).toEqual({
+      ok: false,
+      code: "CANONICAL_PATH_CHANGED",
+      message: "canonical path differs from the authorized target",
+      canonicalPath: tmpRoot,
+    });
+  });
+
   it("lists files and subdirs with metadata, sorted by name", async () => {
     await fs.writeFile(path.join(tmpRoot, "z.txt"), "Z");
     await fs.writeFile(path.join(tmpRoot, "a.png"), "PNG-bytes");

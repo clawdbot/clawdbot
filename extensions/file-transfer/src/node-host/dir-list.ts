@@ -18,6 +18,8 @@ type DirListParams = {
   pageToken?: unknown;
   maxEntries?: unknown;
   followSymlinks?: unknown;
+  preflightOnly?: unknown;
+  expectedCanonicalPath?: unknown;
 };
 
 type DirListEntry = {
@@ -37,12 +39,19 @@ type DirListOk = {
   truncated: boolean;
 };
 
+type DirListPreflightOk = {
+  ok: true;
+  path: string;
+  preflight: true;
+};
+
 type DirListErrCode =
   | "INVALID_PATH"
   | "NOT_FOUND"
   | "PERMISSION_DENIED"
   | "IS_FILE"
   | "SYMLINK_REDIRECT"
+  | "CANONICAL_PATH_CHANGED"
   | "READ_ERROR";
 
 type DirListErr = {
@@ -52,7 +61,7 @@ type DirListErr = {
   canonicalPath?: string;
 };
 
-type DirListResult = DirListOk | DirListErr;
+type DirListResult = DirListOk | DirListPreflightOk | DirListErr;
 
 function clampMaxEntries(input: unknown): number {
   if (typeof input !== "number" || !Number.isFinite(input) || input <= 0) {
@@ -102,6 +111,21 @@ export async function handleDirList(params: DirListParams): Promise<DirListResul
   });
   if (typeof canonical !== "string") {
     return canonical;
+  }
+
+  if (
+    typeof params.expectedCanonicalPath === "string" &&
+    params.expectedCanonicalPath !== canonical
+  ) {
+    return {
+      ok: false,
+      code: "CANONICAL_PATH_CHANGED",
+      message: "canonical path differs from the authorized target",
+      canonicalPath: canonical,
+    };
+  }
+  if (params.preflightOnly === true) {
+    return { ok: true, path: canonical, preflight: true };
   }
 
   const directory = await statRequiredDirectory(canonical, classifyFsError);
