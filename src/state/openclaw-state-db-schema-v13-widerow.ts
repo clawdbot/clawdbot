@@ -114,6 +114,54 @@ export function migrateJsonCanonicalWideRowsV13(
     rebuildJsonCanonicalTable(db, "cron_jobs");
     migrated = true;
   }
+  if (tableExists(db, "workspace_attestations")) {
+    // Order matters: grow the old table first, rebuild to the canonical shape
+    // (relaxing version/updated_at to nullable), then merge attestation data.
+    if (!tableHasColumn(db, "workspace_setup_state", "attested_at_ms")) {
+      db.exec("ALTER TABLE workspace_setup_state ADD COLUMN attested_at_ms INTEGER;");
+      db.exec("ALTER TABLE workspace_setup_state ADD COLUMN attestation_updated_at_ms INTEGER;");
+    }
+    rebuildJsonCanonicalTable(db, "workspace_setup_state");
+    db.exec(`
+      UPDATE workspace_setup_state
+         SET attested_at_ms = (
+               SELECT attested_at_ms FROM workspace_attestations
+                WHERE workspace_attestations.workspace_key = workspace_setup_state.workspace_key
+             ),
+             attestation_updated_at_ms = (
+               SELECT updated_at_ms FROM workspace_attestations
+                WHERE workspace_attestations.workspace_key = workspace_setup_state.workspace_key
+             )
+       WHERE workspace_key IN (SELECT workspace_key FROM workspace_attestations);
+    `);
+    // Attestation-only workspaces keep their hashes when a path alias records
+    // the real workspace path. An orphan without any alias has no recoverable
+    // path; its hashes are re-derived at the next bootstrap attestation, so it
+    // is dropped rather than persisted with a fabricated path.
+    db.exec(`
+      INSERT INTO workspace_setup_state (
+        workspace_key, workspace_path, attested_at_ms, attestation_updated_at_ms
+      )
+      SELECT a.workspace_key,
+             (SELECT alias.workspace_path FROM workspace_path_aliases alias
+               WHERE alias.workspace_key = a.workspace_key LIMIT 1),
+             a.attested_at_ms,
+             a.updated_at_ms
+        FROM workspace_attestations a
+       WHERE a.workspace_key NOT IN (SELECT workspace_key FROM workspace_setup_state)
+         AND EXISTS (
+               SELECT 1 FROM workspace_path_aliases alias
+                WHERE alias.workspace_key = a.workspace_key
+             );
+    `);
+    rebuildJsonCanonicalTable(db, "workspace_generated_bootstrap_hashes");
+    db.exec(`
+      DELETE FROM workspace_generated_bootstrap_hashes
+       WHERE workspace_key NOT IN (SELECT workspace_key FROM workspace_setup_state);
+    `);
+    db.exec("DROP TABLE workspace_attestations;");
+    migrated = true;
+  }
   if (tableExists(db, "installed_plugin_index")) {
     // Fold the singleton index row (revision lived in updated_at_ms) into the KV.
     const row = db

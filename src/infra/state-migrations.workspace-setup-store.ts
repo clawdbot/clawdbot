@@ -32,7 +32,6 @@ type WorkspaceMigrationDatabase = Pick<
   OpenClawStateKyselyDatabase,
   | "workspace_setup_state"
   | "workspace_path_aliases"
-  | "workspace_attestations"
   | "workspace_generated_bootstrap_hashes"
   | "migration_sources"
 >;
@@ -225,6 +224,9 @@ function findMigrationAuthority(params: {
       .where(
         "target_table",
         "=",
+        // "workspace_attestations" is a receipt discriminator, not a live table:
+        // installs that migrated before the v13 merge persisted it, so both
+        // read and write sides keep the historical value.
         params.source.kind === "setup" ? "workspace_setup_state" : "workspace_attestations",
       ),
   ).rows;
@@ -302,11 +304,11 @@ export function canonicalCoversParsedSource(params: {
     const row = executeSqliteQueryTakeFirstSync(
       db,
       kysely
-        .selectFrom("workspace_attestations")
+        .selectFrom("workspace_setup_state")
         .select("attested_at_ms")
         .where("workspace_key", "=", params.source.workspaceKey),
     );
-    if (!row) {
+    if (!row || row.attested_at_ms == null) {
       return false;
     }
     if (row.attested_at_ms > params.parsed.value.attestedAtMs) {
@@ -492,13 +494,17 @@ export function importAndRecordReceipt(params: {
           attestedAtMs: parsedAttestation.attestedAtMs,
           generatedHashes: parsedAttestation.generatedHashes,
         });
-        const existing = executeSqliteQueryTakeFirstSync(
+        const existingRow = executeSqliteQueryTakeFirstSync(
           db,
           kysely
-            .selectFrom("workspace_attestations")
+            .selectFrom("workspace_setup_state")
             .selectAll()
             .where("workspace_key", "=", params.source.workspaceKey),
         );
+        const existing =
+          existingRow && existingRow.attested_at_ms != null
+            ? { attested_at_ms: existingRow.attested_at_ms }
+            : null;
         if (existing) {
           const rows = executeSqliteQuerySync(
             db,
@@ -516,10 +522,10 @@ export function importAndRecordReceipt(params: {
             executeSqliteQuerySync(
               db,
               kysely
-                .updateTable("workspace_attestations")
+                .updateTable("workspace_setup_state")
                 .set({
                   attested_at_ms: parsedAttestation.attestedAtMs,
-                  updated_at_ms: now,
+                  attestation_updated_at_ms: now,
                 })
                 .where("workspace_key", "=", params.source.workspaceKey),
             );
@@ -582,13 +588,26 @@ export function importAndRecordReceipt(params: {
             verifiedFingerprint = incomingFingerprint;
           }
         } else {
+          if (!params.source.workspaceDir) {
+            // Mirrors the setup path: file-discovered legacy sources always carry a dir.
+            throw new Error("legacy workspace attestation has no workspace path");
+          }
           executeSqliteQuerySync(
             db,
-            kysely.insertInto("workspace_attestations").values({
-              workspace_key: params.source.workspaceKey,
-              attested_at_ms: parsedAttestation.attestedAtMs,
-              updated_at_ms: now,
-            }),
+            kysely
+              .insertInto("workspace_setup_state")
+              .values({
+                workspace_key: params.source.workspaceKey,
+                workspace_path: params.source.workspaceDir,
+                attested_at_ms: parsedAttestation.attestedAtMs,
+                attestation_updated_at_ms: now,
+              })
+              .onConflict((conflict) =>
+                conflict.column("workspace_key").doUpdateSet({
+                  attested_at_ms: parsedAttestation.attestedAtMs,
+                  attestation_updated_at_ms: now,
+                }),
+              ),
           );
           const hashes = [...parsedAttestation.generatedHashes.entries()].toSorted(([a], [b]) =>
             a.localeCompare(b),
@@ -609,13 +628,17 @@ export function importAndRecordReceipt(params: {
           resolution = "inserted";
           verifiedFingerprint = incomingFingerprint;
         }
-        const verified = executeSqliteQueryTakeFirstSync(
+        const verifiedRow = executeSqliteQueryTakeFirstSync(
           db,
           kysely
-            .selectFrom("workspace_attestations")
+            .selectFrom("workspace_setup_state")
             .select("attested_at_ms")
             .where("workspace_key", "=", params.source.workspaceKey),
         );
+        const verified =
+          verifiedRow && verifiedRow.attested_at_ms != null
+            ? { attested_at_ms: verifiedRow.attested_at_ms }
+            : null;
         const verifiedHashes = new Map(
           executeSqliteQuerySync(
             db,

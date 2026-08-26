@@ -1459,12 +1459,6 @@ export interface WorkerWorkspaceReconciliations {
   session_id: string;
 }
 
-export interface WorkspaceAttestations {
-  attested_at_ms: number;
-  updated_at_ms: number;
-  workspace_key: string;
-}
-
 export interface WorkspaceGeneratedBootstrapHashes {
   filename: string;
   sha256: string;
@@ -1480,10 +1474,12 @@ export interface WorkspacePathAliases {
 }
 
 export interface WorkspaceSetupState {
+  attestation_updated_at_ms: number | null;
+  attested_at_ms: number | null;
   bootstrap_seeded_at: string | null;
   setup_completed_at: string | null;
-  updated_at: number;
-  version: number;
+  updated_at: number | null;
+  version: number | null;
   workspace_key: string;
   workspace_path: string;
 }
@@ -1624,7 +1620,6 @@ export interface DB {
   worker_turn_tool_authorities: WorkerTurnToolAuthorities;
   worker_workspace_pending_results: WorkerWorkspacePendingResults;
   worker_workspace_reconciliations: WorkerWorkspaceReconciliations;
-  workspace_attestations: WorkspaceAttestations;
   workspace_generated_bootstrap_hashes: WorkspaceGeneratedBootstrapHashes;
   workspace_path_aliases: WorkspacePathAliases;
   workspace_setup_state: WorkspaceSetupState;

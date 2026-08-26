@@ -94,7 +94,7 @@ export type OpenClawStateDatabaseSchemaMigration = {
     | "state-table-retirement-v10"
     | "state-table-retirement-v11"
     | "singleton-state-foldin-v12"
-    | "wide-row-canonical-json-v13"
+    | "state-consolidation-v13"
     | "operator-approvals-system-agent"
     | "session-watch-cursor-provenance-v4"
     | "strict-tables-v3";

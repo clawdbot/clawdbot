@@ -2178,7 +2178,7 @@ describe("openclaw state database", () => {
       legacy.close();
 
       expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toContainEqual({
-        kind: "wide-row-canonical-json-v13",
+        kind: "state-consolidation-v13",
         path: databasePath,
       });
       if (migrationPath === "doctor repair") {
@@ -2520,7 +2520,7 @@ describe("openclaw state database", () => {
       { kind: "state-table-retirement-v10", path: fixture.databasePath },
       { kind: "state-table-retirement-v11", path: fixture.databasePath },
       { kind: "singleton-state-foldin-v12", path: fixture.databasePath },
-      { kind: "wide-row-canonical-json-v13", path: fixture.databasePath },
+      { kind: "state-consolidation-v13", path: fixture.databasePath },
       { kind: "audit-events-v2", path: fixture.databasePath },
       { kind: "strict-tables-v3", path: fixture.databasePath },
     ]);

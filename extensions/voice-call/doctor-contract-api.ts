@@ -150,7 +150,7 @@ function describeVoiceCallSchemaMigration(migration: OpenClawStateDatabaseSchema
       return "retired skill curator tables -> removed tables and indexes";
     case "singleton-state-foldin-v12":
       return "singleton state tables -> shared configuration state";
-    case "wide-row-canonical-json-v13":
+    case "state-consolidation-v13":
       return "cron jobs and subagent runs -> canonical JSON storage";
     case "worker-placement-execution-mode-v8":
       return "cloud worker placements -> execution-mode claims";

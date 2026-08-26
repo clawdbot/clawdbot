@@ -694,10 +694,14 @@ CREATE INDEX IF NOT EXISTS idx_macos_port_guardian_records_port
 CREATE TABLE IF NOT EXISTS workspace_setup_state (
   workspace_key TEXT NOT NULL PRIMARY KEY,
   workspace_path TEXT NOT NULL,
-  version INTEGER NOT NULL,
+  -- NULL setup columns mean an attestation-only row: replaceWorkspaceAttestation
+  -- may record hashes before any setup milestone exists for the workspace.
+  version INTEGER,
   bootstrap_seeded_at TEXT,
   setup_completed_at TEXT,
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER,
+  attested_at_ms INTEGER,
+  attestation_updated_at_ms INTEGER
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_workspace_setup_state_path
@@ -714,21 +718,14 @@ CREATE TABLE IF NOT EXISTS workspace_path_aliases (
 CREATE INDEX IF NOT EXISTS idx_workspace_path_aliases_workspace
   ON workspace_path_aliases(workspace_key);
 
-CREATE TABLE IF NOT EXISTS workspace_attestations (
-  workspace_key TEXT NOT NULL PRIMARY KEY,
-  attested_at_ms INTEGER NOT NULL,
-  updated_at_ms INTEGER NOT NULL
-) STRICT;
 
-CREATE INDEX IF NOT EXISTS idx_workspace_attestations_attested
-  ON workspace_attestations(attested_at_ms DESC, workspace_key);
 
 CREATE TABLE IF NOT EXISTS workspace_generated_bootstrap_hashes (
   workspace_key TEXT NOT NULL,
   filename TEXT NOT NULL,
   sha256 TEXT NOT NULL,
   PRIMARY KEY (workspace_key, filename),
-  FOREIGN KEY (workspace_key) REFERENCES workspace_attestations(workspace_key) ON DELETE CASCADE
+  FOREIGN KEY (workspace_key) REFERENCES workspace_setup_state(workspace_key) ON DELETE CASCADE
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS native_hook_relay_bridges (

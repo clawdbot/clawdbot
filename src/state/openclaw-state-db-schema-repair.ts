@@ -392,9 +392,11 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
   if (
     userVersion < 13 &&
     (tableHasColumn(db, "cron_jobs", "schedule_kind") ||
-      tableHasColumn(db, "subagent_runs", "task"))
+      tableHasColumn(db, "subagent_runs", "task") ||
+      tableExists(db, "workspace_attestations") ||
+      tableExists(db, "installed_plugin_index"))
   ) {
-    migrations.push({ kind: "wide-row-canonical-json-v13", path: pathname });
+    migrations.push({ kind: "state-consolidation-v13", path: pathname });
   }
   if (!hasCanonicalAgentDatabasesPrimaryKey(db)) {
     migrations.push({ kind: "agent-databases-composite-primary-key", path: pathname });

@@ -129,7 +129,7 @@ Version 3 was an unshipped development step folded into version 4.
 | 10      | Six dead tables retired (agent_model_catalogs, android_notification_recent_packages, command_log_entries, diagnostic_stability_bundles, media_blobs, model_capability_cache)                                                                     | Unreleased          |
 | 11      | Legacy skill curator lifecycle table and never-read proposal origin-run projection retired                                                                                                                                                       | Unreleased          |
 | 12      | Thirteen singleton/cache tables retired; durable state folded into config_machine_state                                                                                                                                                          | Unreleased          |
-| 13      | Cron jobs and subagent runs become JSON-canonical; 113 projection columns and four unused indexes removed                                                                                                                                        | Unreleased          |
+| 13      | State consolidation: cron jobs and subagent runs become JSON-canonical (113 projection columns, four unused indexes removed); installed_plugin_index folds into config_machine_state; workspace_attestations merges into workspace_setup_state; gateway origin device tokens become canonical                                                                                                                                        | Unreleased          |
 
 ### State schema 13
 
