@@ -200,7 +200,7 @@ function replayPendingSessionMessageReload(
   state: ChatPageHost,
   payload: ChatEventPayload | undefined,
   presentation: ChatPanePresentation,
-) {
+): boolean {
   const pendingSessionKey = state.pendingSessionMessageReloadSessionKey;
   const payloadSessionKey = payload?.sessionKey?.trim();
   if (
@@ -210,12 +210,13 @@ function replayPendingSessionMessageReload(
     !areUiSessionKeysEquivalent(payloadSessionKey, state.sessionKey) ||
     state.chatRunId
   ) {
-    return;
+    return false;
   }
   state.pendingSessionMessageReloadSessionKey = null;
   void loadChatHistory(state, { deferBranches: !presentation() }).finally(() =>
     state.requestUpdate?.(),
   );
+  return true;
 }
 
 function handleSessionsChangedEvent(
@@ -499,8 +500,13 @@ export function handlePageGatewayEvent(
     if (shouldRefreshPullRequests) {
       void state.refreshSessionPullRequests?.({ refresh: true });
     }
-    replayPendingSessionMessageReload(state, payload, isPresented);
+    const replayedPendingSessionReload = replayPendingSessionMessageReload(
+      state,
+      payload,
+      isPresented,
+    );
     if (
+      !replayedPendingSessionReload &&
       recoveryRunId &&
       recoveryScope &&
       (projectedRunBeforeEvent === undefined || projectedRunBeforeEvent.status === "streaming") &&

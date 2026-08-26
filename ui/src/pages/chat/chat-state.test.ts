@@ -538,16 +538,23 @@ describe("canonical session message recovery", () => {
   });
 
   it.each([
-    { name: "omitted", terminalMessage: undefined, startsActive: true },
-    { name: "null", terminalMessage: null, startsActive: true },
+    { name: "omitted", terminalMessage: undefined, startsActive: true, pendingReload: false },
+    { name: "null", terminalMessage: null, startsActive: true, pendingReload: false },
     {
       name: "omitted for an idle selected session",
       terminalMessage: undefined,
       startsActive: false,
+      pendingReload: false,
+    },
+    {
+      name: "omitted while a session-message reload is pending",
+      terminalMessage: undefined,
+      startsActive: true,
+      pendingReload: true,
     },
   ])(
     "recovers the durable reply when the terminal message is $name",
-    async ({ terminalMessage, startsActive }) => {
+    async ({ terminalMessage, startsActive, pendingReload }) => {
       const runId = "run-with-message-less-terminal";
       const replyText = "The durable reply must appear below Done.";
       const prompt = {
@@ -580,6 +587,7 @@ describe("canonical session message recovery", () => {
         chatStream: null,
         chatStreamSegments: [],
         chatToolMessages: [],
+        pendingSessionMessageReloadSessionKey: pendingReload ? "agent:main:main" : null,
         client: { request } as unknown as GatewayBrowserClient,
       });
 
@@ -606,6 +614,7 @@ describe("canonical session message recovery", () => {
         }),
       );
       await vi.waitFor(() => expect(state.chatLoading).toBe(false));
+      expect(request).toHaveBeenCalledTimes(1);
       await vi.waitFor(() =>
         expect(renderedTranscript(state)).toEqual([
           { role: "user", text: "Finish the dashboard task" },
