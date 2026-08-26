@@ -7,6 +7,7 @@ import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-ru
 import { resolveDefaultAgentId, resolveSessionAgentId } from "openclaw/plugin-sdk/memory-host-core";
 import { getActiveMemorySearchManager } from "openclaw/plugin-sdk/memory-host-search";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
+import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   uniqueStrings,
@@ -903,6 +904,22 @@ function normalizeLookupKey(value: string): string {
   return normalized.endsWith(".md") ? normalized : normalized.replace(/\/+$/, "");
 }
 
+function resolveExactWikiPagePath(lookup: string): string | null {
+  const normalized = normalizeLookupKey(lookup);
+  const segments = normalized.split("/");
+  const [directory, ...pageSegments] = segments;
+  if (
+    !QUERY_DIRS.some((queryDirectory) => queryDirectory === directory) ||
+    pageSegments.length === 0 ||
+    pageSegments.some((segment) => !segment || segment === "." || segment === "..") ||
+    !normalized.endsWith(".md") ||
+    path.posix.basename(normalized) === "index.md"
+  ) {
+    return null;
+  }
+  return normalized;
+}
+
 function buildLookupCandidates(lookup: string): string[] {
   const normalized = normalizeLookupKey(lookup);
   const withExtension = normalized.endsWith(".md") ? normalized : `${normalized}.md`;
@@ -1247,6 +1264,31 @@ function resolveDigestClaimLookup(digest: QueryDigestBundle, lookup: string): st
   return match?.pagePath ?? null;
 }
 
+async function readExactWikiPage(
+  rootDir: string,
+  lookup: string,
+): Promise<QueryableWikiPage | null> {
+  const relativePath = resolveExactWikiPagePath(lookup);
+  if (!relativePath) {
+    return null;
+  }
+  const vault = await fsRoot(rootDir);
+  let raw: string;
+  try {
+    raw = await vault.readText(relativePath);
+  } catch (error) {
+    // Missing/non-page candidates can still resolve through the existing id/title fallback.
+    // Other fs-safe failures stay terminal so a boundary refusal never degrades into a scan.
+    if (error instanceof FsSafeError && (error.code === "not-found" || error.code === "not-file")) {
+      return null;
+    }
+    throw error;
+  }
+  const absolutePath = path.join(rootDir, relativePath);
+  const summary = toWikiPageSummary({ absolutePath, relativePath, raw });
+  return summary ? { ...summary, raw } : null;
+}
+
 export function resolveQueryableWikiPageByLookup(
   pages: QueryableWikiPage[],
   lookup: string,
@@ -1381,17 +1423,25 @@ export async function getMemoryWikiPage(input: {
 
   if (shouldSearchWiki(effectiveConfig)) {
     const canReadPage = createWikiPageVisibilityFilter(params);
-    const digest = await readQueryDigestBundle(effectiveConfig);
+    const exactLookupPage = await readExactWikiPage(effectiveConfig.vault.path, params.lookup);
+    const visibleExactLookupPage =
+      exactLookupPage && canReadPage(exactLookupPage) ? exactLookupPage : null;
+    const exactPage = visibleExactLookupPage
+      ? resolveQueryableWikiPageByLookup([visibleExactLookupPage], params.lookup)
+      : null;
+    const digest = exactPage ? null : await readQueryDigestBundle(effectiveConfig);
     const digestClaimPagePath = digest ? resolveDigestClaimLookup(digest, params.lookup) : null;
     const digestLookupPage = digestClaimPagePath
       ? ((
           await readQueryableWikiPagesByPaths(effectiveConfig.vault.path, [digestClaimPagePath])
         ).find(canReadPage) ?? null)
       : null;
-    const pages = digestLookupPage
-      ? [digestLookupPage]
-      : (await readQueryableWikiPages(effectiveConfig.vault.path)).filter(canReadPage);
-    const page = digestLookupPage ?? resolveQueryableWikiPageByLookup(pages, params.lookup);
+    const pages =
+      exactPage || digestLookupPage
+        ? []
+        : (await readQueryableWikiPages(effectiveConfig.vault.path)).filter(canReadPage);
+    const page =
+      exactPage ?? digestLookupPage ?? resolveQueryableWikiPageByLookup(pages, params.lookup);
     if (page) {
       const parsed = parseWikiMarkdown(page.raw);
       const lines = parsed.body.split(/\r?\n/);

@@ -2,9 +2,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { filterMemorySearchHitsBySessionVisibility } from "@openclaw/memory-core/api.js";
 import type { MemoryReadResult } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { compileMemoryWikiVault } from "./compile.js";
 import type { MemoryWikiPluginConfig } from "./config.js";
@@ -91,6 +92,10 @@ afterAll(async () => {
   if (suiteRoot) {
     await fs.rm(suiteRoot, { recursive: true, force: true });
   }
+});
+
+afterEach(() => {
+  __setFsSafeTestHooksForTest(undefined);
 });
 
 async function createQueryVault(options?: {
@@ -1782,6 +1787,67 @@ describe("searchMemoryWiki", () => {
 });
 
 describe("getMemoryWikiPage", () => {
+  it("reads an exact canonical path without enumerating unrelated pages", async () => {
+    const { rootDir, config } = await createQueryVault({ initialize: true });
+    await fs.writeFile(
+      path.join(rootDir, "sources", "alpha.md"),
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", id: "source.alpha", title: "Alpha Source" },
+        body: "# Alpha Source\n\nExpected page.\n",
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "sources", "unrelated.md"),
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", id: "source.unrelated", title: "Unrelated" },
+        body: "# Unrelated\n\nMust not be read.\n",
+      }),
+      "utf8",
+    );
+    const readdir = vi.spyOn(fs, "readdir");
+
+    await expect(getMemoryWikiPage({ config, lookup: "sources/alpha.md" })).resolves.toMatchObject({
+      path: "sources/alpha.md",
+      content: expect.stringContaining("Expected page."),
+    });
+    expect(readdir).not.toHaveBeenCalled();
+  });
+
+  it("fails closed without scanning when an exact page is swapped during its bounded read", async () => {
+    const { rootDir, config } = await createQueryVault({ initialize: true });
+    const targetPathInput = path.join(rootDir, "sources", "alpha.md");
+    const outsidePath = path.join(suiteRoot, `outside-${caseIndex++}.md`);
+    await fs.writeFile(
+      targetPathInput,
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", id: "source.alpha", title: "Alpha Source" },
+        body: "# Alpha Source\n\nExpected page.\n",
+      }),
+      "utf8",
+    );
+    await fs.writeFile(outsidePath, "outside-vault secret", "utf8");
+    const targetPath = await fs.realpath(targetPathInput);
+    let swapped = false;
+    __setFsSafeTestHooksForTest({
+      beforeOpen: async (filePath) => {
+        if (swapped || path.resolve(filePath) !== path.resolve(targetPath)) {
+          return;
+        }
+        swapped = true;
+        await fs.unlink(targetPath);
+        await fs.symlink(outsidePath, targetPath);
+      },
+    });
+    const readdir = vi.spyOn(fs, "readdir");
+
+    await expect(getMemoryWikiPage({ config, lookup: "sources/alpha.md" })).rejects.toMatchObject({
+      name: "FsSafeError",
+      code: expect.stringMatching(/symlink|path-mismatch/u),
+    });
+    expect(readdir).not.toHaveBeenCalled();
+  });
+
   it("reads wiki pages by relative path and slices line ranges", async () => {
     const { rootDir, config } = await createQueryVault({
       initialize: true,
