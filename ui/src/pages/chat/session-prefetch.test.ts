@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { MAX_CACHED_CHAT_SESSIONS } from "./session-cache.ts";
 import {
   appendChatMessageToCache,
   cacheChatSessionSnapshot,
@@ -319,6 +320,14 @@ describe("recent session prefetch", () => {
       { sessionKey: presentedSessionKey },
       historySnapshot("presented"),
     );
+    for (let index = 1; index < MAX_CACHED_CHAT_SESSIONS; index += 1) {
+      cacheChatSessionSnapshot(
+        cache,
+        snapshotHost,
+        { sessionKey: `agent:main:stale-${index}` },
+        historySnapshot(`stale-${index}`),
+      );
+    }
     await store.flush();
 
     const request = vi.fn(async (_method: string, params: unknown) =>

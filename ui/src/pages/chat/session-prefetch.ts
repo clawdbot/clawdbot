@@ -181,6 +181,17 @@ class SessionPrefetcher {
     if (!this.isCurrent(snapshot)) {
       return;
     }
+    // Refresh presented snapshots through their LRU owner before background writes
+    // so a full cache evicts stale entries instead of visible conversation panes.
+    for (const sessionKey of snapshot.openSessionKeys) {
+      const presented = readChatSessionSnapshot(this.cache, snapshot.snapshotHost, { sessionKey });
+      if (presented && this.cache.size === MAX_CACHED_CHAT_SESSIONS) {
+        this.snapshotStore.write(
+          resolveChatSnapshotKey(snapshot.snapshotHost, { sessionKey }),
+          presented,
+        );
+      }
+    }
     const selection = this.selectCandidates(snapshot);
     if (selection.deferMs !== null) {
       this.schedule(selection.deferMs);
