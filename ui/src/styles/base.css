@@ -674,7 +674,6 @@
   /* Focus — crimson ring */
   --focus: rgba(229, 36, 59, 0.2);
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 70%, transparent);
-  --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 16px var(--accent-glow);
 
   /* Surfaces — true black canvas */
   --bg: #080808;
@@ -684,10 +683,8 @@
   --bg-muted: #1a1a1e;
 
   --card: #111113;
-  --card-foreground: #f0f0f2;
   --card-highlight: rgba(255, 255, 255, 0.03);
   --popover: #141416;
-  --popover-foreground: #f0f0f2;
 
   --panel: #080808;
   --panel-strong: #141416;
@@ -710,7 +707,6 @@
   --input: #1a1a1e;
 
   --secondary: #111113;
-  --secondary-foreground: #f0f0f2;
   --accent-2: #8b1a2b;
   --accent-2-muted: rgba(139, 26, 43, 0.7);
   --accent-2-subtle: rgba(139, 26, 43, 0.12);
@@ -740,22 +736,17 @@
   --accent-subtle: rgba(196, 30, 48, 0.08);
   --accent-glow: rgba(196, 30, 48, 0.12);
   --primary: #c41e30;
-  --primary-foreground: #ffffff;
 
   /* Surfaces — cool white with subtle warmth */
   --bg: #f9f9fb;
   --bg-accent: #f2f2f5;
-  --bg-elevated: #ffffff;
   --bg-hover: #eaeaef;
   --bg-muted: #eaeaef;
   --bg-content: #f2f2f5;
 
-  --card: #ffffff;
   --card-foreground: #18181b;
   --card-highlight: rgba(0, 0, 0, 0.02);
-  --popover: #ffffff;
   --popover-foreground: #18181b;
-  --session-hovercard-surface: var(--card);
   --session-hovercard-progress-surface: color-mix(
     in srgb,
     var(--card) 52%,
@@ -824,8 +815,6 @@
 
   /* Focus — match chocolate accent, slightly higher ring opacity for dark bg visibility */
   --focus: rgba(180, 120, 64, 0.2);
-  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 80%, transparent);
-  --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 16px var(--accent-glow);
 
   /* Surfaces — deep cocoa tones */
   --bg: #1a1210;
@@ -889,22 +878,17 @@
   --accent-subtle: rgba(110, 72, 40, 0.12);
   --accent-glow: rgba(110, 72, 40, 0.16);
   --primary: #6e4828;
-  --primary-foreground: #ffffff;
 
   /* Surfaces — warm parchment tones */
   --bg: #f7f2ec;
   --bg-accent: #f0e8e0;
-  --bg-elevated: #ffffff;
   --bg-hover: #e8ddd2;
   --bg-muted: #e8ddd2;
   --bg-content: #f0e8e0;
 
-  --card: #ffffff;
   --card-foreground: #2c2118;
   --card-highlight: rgba(80, 50, 20, 0.02);
-  --popover: #ffffff;
   --popover-foreground: #2c2118;
-  --session-hovercard-surface: var(--card);
   --session-hovercard-progress-surface: color-mix(
     in srgb,
     var(--card) 48%,
@@ -975,7 +959,6 @@
   /* Focus — clay ring */
   --focus: rgba(217, 119, 87, 0.2);
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 75%, transparent);
-  --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 16px var(--accent-glow);
 
   /* Surfaces — warm graphite, a shade off true neutral */
   --bg: #262624;
@@ -1044,22 +1027,17 @@
   --accent-subtle: rgba(168, 69, 42, 0.1);
   --accent-glow: rgba(168, 69, 42, 0.14);
   --primary: #a8452a;
-  --primary-foreground: #ffffff;
 
   /* Surfaces — ivory paper with a faint warm cast */
   --bg: #faf9f5;
   --bg-accent: #f3f1e9;
-  --bg-elevated: #ffffff;
   --bg-hover: #edeae0;
   --bg-muted: #edeae0;
   --bg-content: #f3f1e9;
 
-  --card: #ffffff;
   --card-foreground: #1f1d1a;
   --card-highlight: rgba(60, 50, 30, 0.02);
-  --popover: #ffffff;
   --popover-foreground: #1f1d1a;
-  --session-hovercard-surface: var(--card);
   --session-hovercard-progress-surface: color-mix(
     in srgb,
     var(--card) 50%,
