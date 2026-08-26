@@ -218,12 +218,12 @@ falls back to the cold `warmup` path — never dead-end a dispatch on a
 missing, stale, or still-pending snapshot. (Fallback contract: product
 behavior per the doctrine, not a compat shim.)
 
-**Image key and staleness.** Record key = hash of (backend provider, region,
-architecture, profile `setup`, `desktop`, machine-class _architecture family_).
-Cross-class reuse within the same architecture is deliberately allowed — a
-snapshot boots on any same-arch instance type; accepted tradeoff noted here so
-it is a decision. A key change (edited setup command, backend switch) simply
-misses the record and cold-provisions; the stale image ages out.
+**Image key and staleness.** Record key = hash of (backend provider, profile
+`setup`, sorted `setupEnv` names, `desktop`, exact machine class). Exact-class
+matching is the accepted conservative decision; cross-class and cross-region
+reuse are future work. A key change (edited setup command, backend switch, or
+machine class) simply misses the record and cold-provisions; the stale image
+ages out.
 
 **Storage.** Plugin KV in the shared state DB (the sanctioned plugin-scratch
 store — no new tables, no sidecar files): one record per image key holding

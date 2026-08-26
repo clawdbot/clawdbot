@@ -6,6 +6,7 @@ import {
   type WorkerProfile,
   type WorkerProvider,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-store-runtime";
 import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -214,7 +215,7 @@ const isTerminalState = (state: string) => DESTROYED_STATES.has(state.toLowerCas
 const isUnusableProvisionState = (state: string) =>
   UNUSABLE_PROVISION_STATES.has(state.toLowerCase());
 
-function crabboxLeaseRunArgs(
+function leaseRunArgs(
   context: LeaseCommandContext,
   forwardedEnvNames: readonly string[] = [],
   envProfilePath?: string,
@@ -316,7 +317,7 @@ async function runProvisionSetupAndWaitReady(
       (names, profilePath, childEnv) =>
         runCrabboxCommand({
           action: "setup",
-          args: crabboxLeaseRunArgs({ ...params, id: params.inspect.id }, names, profilePath),
+          args: leaseRunArgs({ ...params, id: params.inspect.id }, names, profilePath),
           binary: params.binary,
           env: childEnv,
           input: params.setup,
@@ -469,11 +470,16 @@ export function createCrabboxWorkerProvider(
     runCommand,
     warn,
   });
-  const warmImages = createCrabboxWarmImageManager({
-    runCommand,
-    runArgs: crabboxLeaseRunArgs,
-    warn,
-  });
+  const warmImages = createCrabboxWarmImageManager({ runCommand, runArgs: leaseRunArgs, warn });
+  let warmLeases:
+    | ReturnType<typeof createPluginStateSyncKeyedStore<{ machineClass: string }>>
+    | undefined;
+  const openWarmLeases = () =>
+    (warmLeases ??= createPluginStateSyncKeyedStore<{ machineClass: string }>("crabbox", {
+      namespace: "warm-leases",
+      maxEntries: 256,
+      overflowPolicy: "evict-oldest",
+    }));
   const resolveLeaseContext = (
     lease: Parameters<WorkerProvider["inspect"]>[0],
   ): { context: LeaseHeartbeatContext; profile: CrabboxProfile } => {
@@ -665,7 +671,7 @@ export function createCrabboxWorkerProvider(
         // Read node evidence before cleanup destroys its only copy on the leased machine.
         const evidence = await collectCrabboxNodeEnrollmentEvidence({
           ...leaseContext,
-          args: crabboxLeaseRunArgs(leaseContext),
+          args: leaseRunArgs(leaseContext),
           ...(enrollment.signal ? { signal: enrollment.signal } : {}),
         });
         enrollment.signal?.throwIfAborted();
@@ -675,13 +681,15 @@ export function createCrabboxWorkerProvider(
           new Error(`${message}; ${evidence}`, { cause: error }),
         );
       }
+      if (parsed.warmImage) {
+        openWarmLeases().register(leaseId, { machineClass: parsed.class });
+      }
       heartbeats.start({
         binary,
         heartbeatIntervalMs: parsed.heartbeatIntervalMs,
         heartbeatTimeoutMs: parsed.heartbeatTimeoutMs,
         id: leaseId,
         idleTimeout: parsed.idleTimeout,
-        machineClass: parsed.class,
         provider: parsed.provider,
       });
       return {
@@ -714,11 +722,11 @@ export function createCrabboxWorkerProvider(
     async destroy(lease): Promise<void> {
       const { context, profile } = resolveLeaseContext(lease);
       // Fence the provider keepalive before teardown so an in-flight touch cannot reschedule.
-      const heartbeat = heartbeats.stop(context.id);
+      heartbeats.stop(context.id);
       if (profile.warmImage) {
         // Lifecycle profiles omit placement class overrides; only successful
-        // provisioning can attest which class owns this reusable image.
-        const machineClass = heartbeat?.machineClass;
+        // provisioning can durably attest which class owns this reusable image.
+        const machineClass = openWarmLeases().lookup(context.id)?.machineClass;
         await warmImages.capture({
           ...context,
           profile: machineClass ? { ...profile, class: machineClass } : profile,
@@ -730,6 +738,7 @@ export function createCrabboxWorkerProvider(
         runCommand,
         timeoutMs: resolveCrabboxLifecycleTimeoutMs(context.provider),
       });
+      warmLeases?.delete(context.id);
     },
   };
 }

@@ -9,7 +9,6 @@ type HeartbeatContext = {
   heartbeatTimeoutMs: number;
   id: string;
   idleTimeout: string;
-  machineClass?: string;
   provider: string;
 };
 
@@ -102,17 +101,16 @@ export function createCrabboxHeartbeatManager(dependencies: {
     schedule(entry);
   };
 
-  const stop = (leaseId: string): HeartbeatContext | undefined => {
+  const stop = (leaseId: string): void => {
     const entry = entries.get(leaseId);
     if (!entry) {
-      return undefined;
+      return;
     }
     entries.delete(leaseId);
     if (entry.timer) {
       clearTimeout(entry.timer);
     }
     entry.controller?.abort();
-    return entry;
   };
 
   return {

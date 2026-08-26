@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { WorkerProfile, WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
+import { createPluginStateSyncKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -112,6 +113,16 @@ function createWarmProvider(
     },
   });
   return { provider, calls, stateDir, warn };
+}
+
+function openWarmImageStore() {
+  return createPluginStateSyncKeyedStoreForTests<{
+    checkpointId: string;
+    kind: string;
+    state: "pending" | "available";
+    createdAtMs: number;
+    lastUsedAtMs: number;
+  }>("crabbox", { namespace: "warm-images", maxEntries: 128, overflowPolicy: "evict-oldest" });
 }
 
 async function provisionWarmProfile(
@@ -351,6 +362,33 @@ describe("Crabbox profile warm images", () => {
     expect(fork?.[fork.indexOf("--class") + 1]).toBe("fast");
   });
 
+  it("captures the persisted effective machine class after a Gateway restart rearms heartbeat", async () => {
+    const initial = createWarmProvider();
+    const lease = await provisionWarmProfile(initial.provider, PROFILE, OPERATION_ID, "fast");
+    initial.provider.dispose();
+
+    const restarted = createWarmProvider(undefined, initial.stateDir);
+    await restarted.provider.inspect({ leaseId: lease.leaseId, profile: PROFILE });
+    await restarted.provider.destroy({ leaseId: lease.leaseId, profile: PROFILE });
+
+    expect(restarted.calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(1);
+
+    restarted.calls.length = 0;
+    await provisionWarmProfile(restarted.provider, PROFILE, `provision:v2:${"1".repeat(64)}`);
+    expect(restarted.calls.some(({ argv }) => argv[1] === "warmup")).toBe(true);
+    expect(restarted.calls.some(({ argv }) => argv[2] === "fork")).toBe(false);
+
+    restarted.calls.length = 0;
+    await provisionWarmProfile(
+      restarted.provider,
+      PROFILE,
+      `provision:v2:${"2".repeat(64)}`,
+      "fast",
+    );
+    const fork = restarted.calls.find(({ argv }) => argv[2] === "fork")?.argv;
+    expect(fork?.[fork.indexOf("--class") + 1]).toBe("fast");
+  });
+
   it("never snapshots an inspected lease whose effective machine class is unknown", async () => {
     const { provider, calls } = createWarmProvider();
     const lease = { leaseId: LEASE_ID, profile: PROFILE };
@@ -467,6 +505,53 @@ describe("Crabbox profile warm images", () => {
     ]);
     expect(calls.some(({ argv }) => argv[1] === "warmup")).toBe(true);
     expect(calls.some(({ argv }) => argv[2] === "fork")).toBe(false);
+  });
+
+  it("deletes the least-recently-used provider snapshot before admitting a 129th image", async () => {
+    const { provider, calls } = createWarmProvider();
+    const store = openWarmImageStore();
+    const now = Date.now();
+    for (let index = 0; index < 128; index += 1) {
+      store.register(`image-${index}`, {
+        checkpointId: `chk_image_${index}`,
+        kind: "aws-ebs-snapshot",
+        state: "available",
+        createdAtMs: now,
+        lastUsedAtMs: now - (index === 42 ? 1_000 : 0),
+      });
+    }
+
+    await captureWarmImage(provider);
+
+    const deleted = calls.findIndex(({ argv }) => argv[2] === "delete");
+    const created = calls.findIndex(({ argv }) => argv[2] === "create");
+    expect(calls[deleted]?.argv.slice(1)).toEqual(["checkpoint", "delete", "chk_image_42"]);
+    expect(deleted).toBeLessThan(created);
+    expect(store.lookup("image-42")).toBeUndefined();
+    expect(store.lookup("image-0")?.checkpointId).toBe("chk_image_0");
+    expect(store.entries()).toHaveLength(128);
+  });
+
+  it("replaces an abandoned empty reservation after a manager restart", async () => {
+    const initial = createWarmProvider();
+    await captureWarmImage(initial.provider);
+    const store = openWarmImageStore();
+    const [image] = store.entries();
+    if (!image) {
+      throw new Error("Expected a captured warm image");
+    }
+    store.register(image.key, {
+      ...image.value,
+      checkpointId: "",
+      createdAtMs: Date.now() - 360_001,
+    });
+
+    const restarted = createWarmProvider(undefined, initial.stateDir);
+    await captureWarmImage(restarted.provider);
+
+    expect(restarted.calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(1);
+    expect(restarted.calls.some(({ argv }) => argv[2] === "delete")).toBe(false);
+    expect(store.lookup(image.key)?.checkpointId).toBe(CHECKPOINT_ID);
   });
 
   it("reserves one capture when enrolled leases with the same profile stop concurrently", async () => {

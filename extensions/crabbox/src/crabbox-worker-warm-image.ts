@@ -35,6 +35,8 @@ const WARM_IMAGE_COMMAND_TIMEOUT_MS = 60_000;
 // owner, coordinator posts); 60s starves them under coordinator latency and the
 // capture silently degrades to cold-only. Live-measured on AWS 2026-08-26.
 const WARM_IMAGE_CAPTURE_TIMEOUT_MS = 180_000;
+const WARM_IMAGE_CAPTURE_RESERVATION_TIMEOUT_MS = 2 * WARM_IMAGE_CAPTURE_TIMEOUT_MS;
+const WARM_IMAGE_MAX_ENTRIES = 128;
 const CHECKPOINT_ID_PATTERN = /^chk_[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u;
 
 // Enrollment roots its identity, device token, bundles, and node-host workspaces
@@ -124,7 +126,7 @@ export function createCrabboxWarmImageManager(dependencies: {
   const openStore = () =>
     (store ??= createPluginStateSyncKeyedStore<WarmImageRecord>("crabbox", {
       namespace: "warm-images",
-      maxEntries: 128,
+      maxEntries: WARM_IMAGE_MAX_ENTRIES,
       overflowPolicy: "evict-oldest",
     }));
 
@@ -172,9 +174,36 @@ export function createCrabboxWarmImageManager(dependencies: {
         timeoutMs,
       );
     }
-    // Delete the provider snapshot before its index; store eviction alone can
-    // orphan a resource, a residual risk bounded by `crabbox checkpoint prune`.
+    // Delete the provider snapshot before its index; losing the index first
+    // would orphan a billed resource outside warm-image retention cleanup.
     openStore().delete(key);
+  };
+
+  const makeRoomForCapture = async (context: LeaseContext): Promise<boolean> => {
+    const deadline = Date.now() + WARM_IMAGE_COMMAND_TIMEOUT_MS;
+    for (let remainingEntries = WARM_IMAGE_MAX_ENTRIES; remainingEntries > 0; remainingEntries--) {
+      const entries = openStore().entries();
+      if (entries.length < WARM_IMAGE_MAX_ENTRIES) {
+        return true;
+      }
+      const remainingTime = deadline - Date.now();
+      if (remainingTime <= 0) {
+        return false;
+      }
+      // Evicting a live reservation would break its capture's single-flight ownership.
+      const oldest = entries
+        .filter(
+          ({ value }) =>
+            value.checkpointId ||
+            Date.now() - value.createdAtMs >= WARM_IMAGE_CAPTURE_RESERVATION_TIMEOUT_MS,
+        )
+        .toSorted((left, right) => left.value.lastUsedAtMs - right.value.lastUsedAtMs)[0];
+      if (!oldest) {
+        return false;
+      }
+      await deleteImage(context, oldest.key, oldest.value, remainingTime);
+    }
+    return openStore().entries().length < WARM_IMAGE_MAX_ENTRIES;
   };
 
   const collectExpiredImages = async (context: LeaseContext): Promise<void> => {
@@ -269,15 +298,25 @@ export function createCrabboxWarmImageManager(dependencies: {
         await collectExpiredImages(context);
         const existing = openStore().lookup(key);
         if (existing) {
-          if (
-            !existing.checkpointId ||
-            (await verifyImage(context, existing.checkpointId)) !== "missing"
-          ) {
-            return;
+          if (!existing.checkpointId) {
+            const staleBefore = Date.now() - WARM_IMAGE_CAPTURE_RESERVATION_TIMEOUT_MS;
+            if (
+              existing.createdAtMs > staleBefore ||
+              !openStore().deleteIf?.(
+                key,
+                (current) => !current.checkpointId && current.createdAtMs <= staleBefore,
+              )
+            ) {
+              return;
+            }
+          } else {
+            if ((await verifyImage(context, existing.checkpointId)) !== "missing") {
+              return;
+            }
+            await deleteImage(context, key, existing);
           }
-          await deleteImage(context, key, existing);
         }
-        if (!context.eligible) {
+        if (!context.eligible || !(await makeRoomForCapture(context))) {
           return;
         }
         const now = Date.now();
