@@ -1,4 +1,5 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asNonArrayRecord, asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import { t } from "../../../i18n/index.ts";
 import type { MessageContentItem } from "../../../lib/chat/chat-types.ts";
@@ -438,7 +439,7 @@ function crossOriginStructuredSvgAttachment(
 }
 
 export function extractStructuredSvgAttachments(message: unknown): AttachmentItem[] {
-  const content = (message as { content?: unknown } | null)?.content;
+  const content = asNonArrayRecord(message).content;
   if (!Array.isArray(content)) {
     return [];
   }
@@ -455,23 +456,21 @@ export function extractStructuredSvgAttachments(message: unknown): AttachmentIte
     if (!block || typeof block !== "object") {
       continue;
     }
-    const entry = block as Record<string, unknown>;
+    const entry = asNonArrayRecord(block);
     if (entry.type === "image") {
-      const source = entry.source as Record<string, unknown> | undefined;
+      const source = asOptionalRecord(entry.source);
       append(
         crossOriginStructuredSvgAttachment(entry.url, entry.mimeType ?? source?.media_type, entry),
       );
     } else if (entry.type === "image_url") {
-      const imageUrl = entry.image_url as Record<string, unknown> | undefined;
+      const imageUrl = asOptionalRecord(entry.image_url);
       append(crossOriginStructuredSvgAttachment(imageUrl?.url, undefined));
     } else if (entry.type === "input_image") {
       const imageUrl = entry.image_url;
-      const source = entry.source as Record<string, unknown> | undefined;
+      const source = asOptionalRecord(entry.source);
       append(
         crossOriginStructuredSvgAttachment(
-          typeof imageUrl === "string"
-            ? imageUrl
-            : (imageUrl as Record<string, unknown> | undefined)?.url,
+          typeof imageUrl === "string" ? imageUrl : asOptionalRecord(imageUrl)?.url,
           undefined,
         ),
       );
