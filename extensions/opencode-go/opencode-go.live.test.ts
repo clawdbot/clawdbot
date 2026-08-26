@@ -31,7 +31,9 @@ describeLive("OpenCode Go live dynamic catalog", () => {
       .filter((id): id is string => typeof id === "string" && id.trim().length > 0)
       .map((id) => id.trim().toLowerCase())
       .toSorted();
-    const offlineIds = buildStaticOpencodeGoProviderConfig().models.map((model) => model.id);
+    const offlineIds = new Set(
+      buildStaticOpencodeGoProviderConfig().models.map((model) => model.id),
+    );
     const live = await buildOpencodeGoLiveProviderConfig({
       apiKey: OPENCODE_API_KEY,
       discoveryApiKey: OPENCODE_API_KEY,
@@ -43,7 +45,7 @@ describeLive("OpenCode Go live dynamic catalog", () => {
     expect(discoveredIds.length).toBeGreaterThan(0);
     expect(discoveredIds.every((id) => advertisedIds.has(id))).toBe(true);
     expect(new Set(discoveredIds).size).toBe(discoveredIds.length);
-    expect(discoveredIds.some((id) => !offlineIds.includes(id))).toBe(true);
+    expect(discoveredIds.some((id) => !offlineIds.has(id))).toBe(true);
     expect(discoveredIds).not.toContain("hy3-preview");
     expect(trustedRows.find((row) => row.id === "hy3-preview")?.status).toBe("preview");
     if (advertisedIds.has("ox-alpha-free")) {
