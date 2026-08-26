@@ -26,14 +26,14 @@
 // where neither strategy succeeds yet (e.g. a fresh checkout before the CLI
 // is installed), which is worse than a deferred, call-time error.
 
-import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 
 // Resolver type. Returns the resolved version string, or `null` to signal
 // "not resolvable from this source". Throws to signal a hard error.
 // Both null and throw are treated as configuration errors.
-export type ClaudeCodeVersionResolver = () => string | null;
+type ClaudeCodeVersionResolver = () => string | null;
 
 // Process-stable version cache. Populated on first call to resolveClaudeCodeVersion().
 // Cleared by setTestClaudeCodeVersionResolver / resetTestClaudeCodeVersionResolver

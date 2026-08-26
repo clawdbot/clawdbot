@@ -11,7 +11,6 @@ import {
   supportsClaudeNativeXhighEffort,
 } from "@openclaw/llm-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { resolveClaudeCodeVersion } from "./claude-code-version.js";
 import { clampThinkingLevel } from "../model-utils.js";
 import type { AnthropicEffort } from "../provider-options.js";
 import type {
@@ -21,6 +20,7 @@ import type {
   SimpleStreamOptions,
   StopReason,
 } from "../types.js";
+import { resolveClaudeCodeVersion } from "./claude-code-version.js";
 export {
   requiresClaudeDefaultSampling,
   requiresClaudeMandatoryAdaptiveThinking,

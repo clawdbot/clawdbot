@@ -2,12 +2,12 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
+import type { Context, Model } from "../types.js";
+import { streamAnthropic } from "./anthropic.js";
 import {
   resetTestClaudeCodeVersionResolver,
   setTestClaudeCodeVersionResolver,
 } from "./claude-code-version.js";
-import type { Context, Model } from "../types.js";
-import { streamAnthropic } from "./anthropic.js";
 
 // This test environment has no @anthropic-ai/claude-code install and no
 // `claude` binary on PATH, so the real resolver would throw before this

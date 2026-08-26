@@ -1,12 +1,12 @@
 // Anthropic provider tests cover stream events, tools, and message mapping.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
+import type { AssistantMessage, Context, Model, Tool } from "../types.js";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
 import {
   resetTestClaudeCodeVersionResolver,
   setTestClaudeCodeVersionResolver,
 } from "./claude-code-version.js";
-import type { AssistantMessage, Context, Model, Tool } from "../types.js";
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
 
 // This test environment has no @anthropic-ai/claude-code install and no
 // `claude` binary on PATH, so the real resolver would throw. Inject a stable
