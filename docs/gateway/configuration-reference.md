@@ -1084,6 +1084,8 @@ Profile changes require a Gateway restart. With the default `gateway.reload.mode
         agentId: "hooks",
         wakeMode: "now",
         name: "Gmail",
+        // One dispatch per pushed email; templates see the current message.
+        forEach: "messages",
         sessionKey: "hook:gmail:{{messages[0].id}}",
         sessionMode: "persistent",
         messageTemplate: "From: {{messages[0].from}}\nSubject: {{messages[0].subject}}\n{{messages[0].snippet}}",
@@ -1131,6 +1133,7 @@ Validation and safety notes:
 - `match.path` matches sub-path after `/hooks` (e.g. `/hooks/gmail` → `gmail`).
 - `match.source` matches a payload field for generic paths.
 - Templates like `{{messages[0].subject}}` read from the payload.
+- `forEach: "<key>"` fans the mapping out over a top-level payload array: one action per element, with templates/transforms seeing a payload whose array holds only that element. The Gmail preset sets `forEach: "messages"` so batched pushes dispatch one run per email.
 - `transform` can point to a JS/TS module returning a hook action.
   - `transform.module` must be a relative path and stays within `hooks.transformsDir` (absolute paths and traversal are rejected).
   - Keep `hooks.transformsDir` under `~/.openclaw/hooks/transforms`; workspace skill directories are rejected. If `openclaw doctor` reports this path as invalid, move the transform module into the hooks transforms directory or remove `hooks.transformsDir`.
@@ -1148,7 +1151,8 @@ Validation and safety notes:
 
 ### Gmail integration
 
-- The built-in Gmail preset uses `sessionKey: "hook:gmail:{{messages[0].id}}"`.
+- The built-in Gmail preset uses `sessionKey: "hook:gmail:{{messages[0].id}}"` with `forEach: "messages"`, so each email in a batched push gets its own isolated run and session.
+- The Gateway sizes the `/hooks/gmail` request-body limit from `hooks.gmail.maxBytes` (default 20 KB per message) times gog's 100-message batch contract; other hook paths keep the shared 256 KiB limit.
 - This per-message key isolates conversation context, not tools or workspace access. Without a custom mapping that sets `agentId`, the preset uses the default agent.
 - For untrusted inboxes, route Gmail to a dedicated reader agent and restrict that agent with [per-agent sandbox and tool policy](/tools/multi-agent-sandbox-tools). If the reader must notify the main agent, constrain the handoff with [`tools.agentToAgent`](/gateway/config-tools#tools-agenttoagent). See [Prompt injection](/gateway/security#prompt-injection) for the recommended threat model and model tier.
 - The setup wizard configures Gmail transport but does not create the reader agent or required session-key policy. Apply the complete [restricted Gmail reader configuration](/automation/cron-jobs#configure-a-restricted-gmail-reader-recommended) before running setup for untrusted mail.

@@ -27,6 +27,7 @@ import {
   commitHookTransformMappingReload,
   hasHookTemplateExpressions,
   type HookMappingResolved,
+  normalizeHookMatchPath,
   resolveHookMappings,
 } from "./hooks-mapping.js";
 import { resolveAllowedAgentIds } from "./hooks-policy.js";
@@ -41,6 +42,8 @@ export type HooksConfigResolved = {
   basePath: string;
   token: string;
   maxBodyBytes: number;
+  /** Producer-derived per-path body bounds (mapping-owned), keyed by normalized match path. */
+  maxBodyBytesByPath: ReadonlyMap<string, number>;
   mappings: HookMappingResolved[];
   agentPolicy: HookAgentPolicyResolved;
   sessionPolicy: HookSessionPolicyResolved;
@@ -115,6 +118,7 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
     basePath: trimmed,
     token,
     maxBodyBytes: DEFAULT_HOOKS_MAX_BODY_BYTES,
+    maxBodyBytesByPath: resolveHookBodyLimitsByPath(mappings),
     mappings,
     agentPolicy: {
       defaultAgentId,
@@ -132,6 +136,30 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
 
 export function commitHooksConfigReload(): void {
   commitHookTransformMappingReload();
+}
+
+function resolveHookBodyLimitsByPath(mappings: HookMappingResolved[]): ReadonlyMap<string, number> {
+  const byPath = new Map<string, number>();
+  for (const mapping of mappings) {
+    if (!mapping.matchPath || !mapping.maxBodyBytes) {
+      continue;
+    }
+    const current = byPath.get(mapping.matchPath) ?? DEFAULT_HOOKS_MAX_BODY_BYTES;
+    byPath.set(mapping.matchPath, Math.max(current, mapping.maxBodyBytes));
+  }
+  return byPath;
+}
+
+/** Resolve the body byte bound for one hook sub-path (mapping-derived, floored at the default). */
+export function resolveHookPathBodyLimit(
+  hooksConfig: Pick<HooksConfigResolved, "maxBodyBytes" | "maxBodyBytesByPath">,
+  subPath: string,
+): number {
+  const normalized = normalizeHookMatchPath(subPath);
+  if (!normalized) {
+    return hooksConfig.maxBodyBytes;
+  }
+  return hooksConfig.maxBodyBytesByPath.get(normalized) ?? hooksConfig.maxBodyBytes;
 }
 
 function resolveKnownAgentIds(cfg: OpenClawConfig, defaultAgentId?: string): Set<string> {

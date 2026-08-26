@@ -23,16 +23,108 @@ import {
   resolveHookMappings,
 } from "./hooks-mapping.js";
 
+// Legacy single-action view: these tests protect non-fanout mappings, which
+// produce at most one action per request. Fan-out coverage asserts the
+// actions[] shape directly.
+async function applySingleHookMapping(...args: Parameters<typeof applyHookMappings>) {
+  const result = await applyHookMappings(...args);
+  if (!result || !result.ok) {
+    return result;
+  }
+  return { ok: true as const, action: result.actions[0] ?? null };
+}
+
 const baseUrl = new URL("http://127.0.0.1:18789/hooks/gmail");
+
+describe("hook mapping fan-out", () => {
+  const fanOutUrl = new URL("http://127.0.0.1:18789/hooks/gmail");
+
+  function applyGmailPreset(payload: Record<string, unknown>) {
+    const mappings = resolveHookMappings({ presets: ["gmail"] });
+    return applyHookMappings(mappings, { payload, headers: {}, url: fanOutUrl, path: "gmail" });
+  }
+
+  it("renders one action per batched gmail message with per-message session keys", async () => {
+    const result = await applyGmailPreset({
+      messages: [
+        { id: "m1", from: "a@example.com", subject: "One" },
+        { id: "m2", from: "b@example.com", subject: "Two" },
+      ],
+    });
+    expect(result?.ok).toBe(true);
+    if (!result?.ok) {
+      return;
+    }
+    expect(result.fanout).toBe(true);
+    expect(result.dropped).toBe(0);
+    expect(result.actions).toHaveLength(2);
+    const agentActions = result.actions.filter((action) => action.kind === "agent");
+    expect(agentActions.map((action) => action.sessionKey)).toEqual([
+      "hook:gmail:m1",
+      "hook:gmail:m2",
+    ]);
+    expect(agentActions[0]?.message).toContain("a@example.com");
+    expect(agentActions[0]?.message).toContain("One");
+    expect(agentActions[1]?.message).toContain("b@example.com");
+    expect(agentActions[1]?.message).toContain("Two");
+  });
+
+  it("produces no actions for an empty or missing fan-out array", async () => {
+    for (const payload of [{ messages: [] }, {}, { messages: "not-an-array" }]) {
+      const result = await applyGmailPreset(payload as Record<string, unknown>);
+      expect(result).toMatchObject({ ok: true, actions: [], fanout: true, dropped: 0 });
+    }
+  });
+
+  it("attaches the producer-derived body bound to every gmail-path mapping", () => {
+    const mappings = resolveHookMappings({
+      presets: ["gmail"],
+      mappings: [
+        {
+          id: "gmail-safe-reader",
+          match: { path: "gmail" },
+          action: "agent",
+          forEach: "messages",
+          messageTemplate: "{{messages[0].subject}}",
+        },
+        { id: "other", match: { path: "other" }, action: "agent", messageTemplate: "x" },
+      ],
+      gmail: { maxBytes: 10_000 },
+    });
+    const expected = 100 * (10_000 * 3 + 8_192);
+    expect(mappings.find((mapping) => mapping.id === "gmail-safe-reader")?.maxBodyBytes).toBe(
+      expected,
+    );
+    expect(mappings.find((mapping) => mapping.id === "gmail")?.maxBodyBytes).toBe(expected);
+    expect(mappings.find((mapping) => mapping.id === "other")?.maxBodyBytes).toBeUndefined();
+  });
+
+  it("rejects nested forEach paths", () => {
+    expect(() =>
+      resolveHookMappings({
+        mappings: [
+          {
+            id: "nested",
+            match: { path: "gmail" },
+            action: "agent",
+            forEach: "data.messages",
+            messageTemplate: "x",
+          },
+        ],
+      }),
+    ).toThrow(/forEach must be a top-level payload key/);
+  });
+});
 
 describe("hooks mapping", () => {
   const gmailPayload = { messages: [{ subject: "Hello" }] };
 
-  function expectSkippedTransformResult(result: Awaited<ReturnType<typeof applyHookMappings>>) {
+  function expectSkippedTransformResult(
+    result: Awaited<ReturnType<typeof applySingleHookMapping>>,
+  ) {
     expect(result?.ok).toBe(true);
     if (result?.ok) {
       expect(result.action).toBeNull();
-      expect("skipped" in result).toBe(true);
     }
   }
 
@@ -54,7 +146,7 @@ describe("hooks mapping", () => {
 
   async function applyGmailMappings(config: Parameters<typeof resolveHookMappings>[0]) {
     const mappings = resolveHookMappings(config);
-    return applyHookMappings(mappings, {
+    return applySingleHookMapping(mappings, {
       payload: gmailPayload,
       headers: {},
       url: baseUrl,
@@ -68,7 +160,7 @@ describe("hooks mapping", () => {
   }
 
   function expectAgentMessage(
-    result: Awaited<ReturnType<typeof applyHookMappings>> | undefined,
+    result: Awaited<ReturnType<typeof applySingleHookMapping>> | undefined,
     expectedMessage: string,
   ) {
     expect(result?.ok).toBe(true);
@@ -92,7 +184,7 @@ describe("hooks mapping", () => {
         }),
       ],
     });
-    const result = await applyHookMappings(mappings, {
+    const result = await applySingleHookMapping(mappings, {
       payload: params.payload,
       headers: {},
       url: baseUrl,
@@ -126,7 +218,7 @@ describe("hooks mapping", () => {
       { configDir: params.configDir },
     );
 
-    return applyHookMappings(mappings, {
+    return applySingleHookMapping(mappings, {
       payload: {},
       headers: {},
       url: new URL("http://127.0.0.1:18789/hooks/skip"),
@@ -170,7 +262,7 @@ describe("hooks mapping", () => {
       { configDir },
     );
 
-    return applyHookMappings(mappings, {
+    return applySingleHookMapping(mappings, {
       payload: params.payload ?? gmailPayload,
       headers: {},
       url: baseUrl,
@@ -179,7 +271,7 @@ describe("hooks mapping", () => {
   }
 
   function expectAgentSessionKey(
-    result: Awaited<ReturnType<typeof applyHookMappings>>,
+    result: Awaited<ReturnType<typeof applySingleHookMapping>>,
     params: { sessionKey: string; sessionKeySource?: "static" | "templated" },
   ) {
     expect(result?.ok).toBe(true);
@@ -276,7 +368,7 @@ describe("hooks mapping", () => {
       { configDir },
     );
 
-    const result = await applyHookMappings(mappings, {
+    const result = await applySingleHookMapping(mappings, {
       payload: gmailPayload,
       headers: {},
       url: baseUrl,
@@ -339,7 +431,7 @@ describe("hooks mapping", () => {
         },
       ],
     });
-    const result = await applyHookMappings(mappings, {
+    const result = await applySingleHookMapping(mappings, {
       payload: gmailPayload,
       headers: {},
       url: baseUrl,
@@ -372,7 +464,7 @@ describe("hooks mapping", () => {
           },
         ],
       });
-      const result = await applyHookMappings(mappings, {
+      const result = await applySingleHookMapping(mappings, {
         payload: gmailPayload,
         headers: {},
         url: baseUrl,
@@ -430,7 +522,7 @@ describe("hooks mapping", () => {
       { configDir },
     );
 
-    const result = await applyHookMappings(mappings, {
+    const result = await applySingleHookMapping(mappings, {
       payload: { name: "Ada" },
       headers: {},
       url: new URL("http://127.0.0.1:18789/hooks/custom"),
@@ -681,7 +773,7 @@ describe("hooks mapping", () => {
       { configDir },
     );
 
-    const result = await applyHookMappings(mappings, {
+    const result = await applySingleHookMapping(mappings, {
       payload: {},
       headers: {},
       url: new URL("http://127.0.0.1:18789/hooks/skip"),
@@ -782,14 +874,14 @@ describe("hooks mapping", () => {
       { configDir },
     );
 
-    const resultA = await applyHookMappings(mappingsA, {
+    const resultA = await applySingleHookMapping(mappingsA, {
       payload: {},
       headers: {},
       url: new URL("http://127.0.0.1:18789/hooks/testA"),
       path: "testA",
     });
 
-    const resultB = await applyHookMappings(mappingsB, {
+    const resultB = await applySingleHookMapping(mappingsB, {
       payload: {},
       headers: {},
       url: new URL("http://127.0.0.1:18789/hooks/testB"),
@@ -842,13 +934,13 @@ describe("hooks mapping", () => {
       { configDir },
     );
 
-    const resultA = await applyHookMappings(mappings, {
+    const resultA = await applySingleHookMapping(mappings, {
       payload: {},
       headers: {},
       url: new URL("http://127.0.0.1:18789/hooks/testA"),
       path: "testA",
     });
-    const resultB = await applyHookMappings(mappings, {
+    const resultB = await applySingleHookMapping(mappings, {
       payload: {},
       headers: {},
       url: new URL("http://127.0.0.1:18789/hooks/testB"),
@@ -891,7 +983,7 @@ describe("hooks mapping", () => {
         { configDir },
       );
     const applyMappings = (mappings: ReturnType<typeof resolveHookMappings>) =>
-      applyHookMappings(mappings, {
+      applySingleHookMapping(mappings, {
         payload: {},
         headers: {},
         url: new URL("http://127.0.0.1:18789/hooks/reloadable"),
@@ -939,7 +1031,7 @@ describe("hooks mapping", () => {
         { configDir },
       );
     const applyMappings = (mappings: ReturnType<typeof resolveHookMappings>) =>
-      applyHookMappings(mappings, {
+      applySingleHookMapping(mappings, {
         payload: {},
         headers: {},
         url: new URL("http://127.0.0.1:18789/hooks/reloadable"),
@@ -1006,7 +1098,7 @@ describe("hooks mapping", () => {
         { configDir },
       );
     const applyMappings = (mappings: ReturnType<typeof resolveHookMappings>) =>
-      applyHookMappings(mappings, {
+      applySingleHookMapping(mappings, {
         payload: {},
         headers: {},
         url: new URL("http://127.0.0.1:18789/hooks/reloadable"),
@@ -1046,7 +1138,7 @@ describe("hooks mapping", () => {
     const mappings = resolveHookMappings({
       mappings: [{ match: { path: "noop" }, action: "agent" }],
     });
-    const result = await applyHookMappings(mappings, {
+    const result = await applySingleHookMapping(mappings, {
       payload: {},
       headers: {},
       url: new URL("http://127.0.0.1:18789/hooks/noop"),
