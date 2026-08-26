@@ -5,7 +5,7 @@ import {
   createHybridChannelConfigAdapter,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createAllowlistProviderGroupPolicyWarningCollector } from "openclaw/plugin-sdk/channel-policy";
-import type { OpenClawConfig } from "../runtime-api.js";
+import type { MSTeamsConfig, OpenClawConfig } from "../runtime-api.js";
 import { DEFAULT_ACCOUNT_ID } from "../runtime-api.js";
 import {
   inspectMSTeamsAccount,
@@ -13,6 +13,7 @@ import {
   resolveDefaultMSTeamsAccountId,
   resolveMSTeamsAccount,
   resolveMSTeamsAccountConfig,
+  resolveMSTeamsAccountEntryKey,
   type ResolvedMSTeamsAccount,
 } from "./accounts.js";
 
@@ -115,10 +116,61 @@ const msteamsBaseConfigAdapter = createHybridChannelConfigAdapter<
   resolveDefaultTo: (account) => account.defaultTo,
 });
 
+function updateExplicitMSTeamsAccount(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  update: (account: Partial<MSTeamsConfig>) => Partial<MSTeamsConfig> | undefined;
+}): OpenClawConfig | undefined {
+  const channel = params.cfg.channels?.msteams;
+  const accounts = channel?.accounts;
+  const rawKey = resolveMSTeamsAccountEntryKey(accounts, normalizeAccountId(params.accountId));
+  if (!channel || !accounts || !rawKey) {
+    return undefined;
+  }
+  const nextAccounts = { ...accounts };
+  const updated = params.update({ ...accounts[rawKey] });
+  if (updated) {
+    nextAccounts[rawKey] = updated;
+  } else {
+    delete nextAccounts[rawKey];
+  }
+  const deletedDefault =
+    !updated && normalizeAccountId(channel.defaultAccount) === normalizeAccountId(rawKey);
+  const remainingAccountKey = Object.keys(nextAccounts)[0];
+  const hasLegacyDefaultIdentity = Boolean(
+    channel.appId || channel.appPassword || channel.webhook?.port,
+  );
+  const nextDefaultAccount = deletedDefault
+    ? (remainingAccountKey ?? (hasLegacyDefaultIdentity ? DEFAULT_ACCOUNT_ID : undefined))
+    : channel.defaultAccount;
+  return {
+    ...params.cfg,
+    channels: {
+      ...params.cfg.channels,
+      msteams: {
+        ...channel,
+        accounts: Object.keys(nextAccounts).length > 0 ? nextAccounts : undefined,
+        defaultAccount: nextDefaultAccount,
+      },
+    },
+  };
+}
+
 export const msteamsConfigAdapter = {
   ...msteamsBaseConfigAdapter,
+  setAccountEnabled: (params: { cfg: OpenClawConfig; accountId: string; enabled: boolean }) =>
+    updateExplicitMSTeamsAccount({
+      cfg: params.cfg,
+      accountId: params.accountId,
+      update: (account) => ({ ...account, enabled: params.enabled }),
+    }) ?? msteamsBaseConfigAdapter.setAccountEnabled(params),
   deleteAccount: (params: { cfg: OpenClawConfig; accountId: string }) =>
-    params.accountId === DEFAULT_ACCOUNT_ID
+    updateExplicitMSTeamsAccount({
+      cfg: params.cfg,
+      accountId: params.accountId,
+      update: () => undefined,
+    }) ??
+    (normalizeAccountId(params.accountId) === DEFAULT_ACCOUNT_ID
       ? deleteMSTeamsDefaultAccountIdentity(params.cfg)
-      : msteamsBaseConfigAdapter.deleteAccount!(params),
+      : msteamsBaseConfigAdapter.deleteAccount!(params)),
 };

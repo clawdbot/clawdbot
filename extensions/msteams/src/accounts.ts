@@ -71,7 +71,7 @@ function resolveMSTeamsAccountEntry(
   return key ? accounts?.[key] : undefined;
 }
 
-function resolveMSTeamsAccountEntryKey(
+export function resolveMSTeamsAccountEntryKey(
   accounts: Record<string, Partial<MSTeamsConfig>> | undefined,
   accountId: string,
 ): string | undefined {
