@@ -11,6 +11,9 @@ import {
   resolveMemoryDreamingPluginId,
   resolveMemoryDreamingConfig,
   resolveMemoryDreamingWorkspaces,
+  resolveMemoryDeepDreamingConfig,
+  resolveMemoryLightDreamingConfig,
+  resolveMemoryRemDreamingConfig,
 } from "./dreaming.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -119,6 +122,49 @@ describe("memory dreaming host helpers", () => {
     expect(resolved.verboseLogging).toBe(false);
     expect(resolved.storage.separateReports).toBe(false);
     expect(resolved.phases.light.enabled).toBe(false);
+  });
+
+  it("defaults humanReadable to true and propagates it to every phase resolver", () => {
+    expect(resolveMemoryDreamingConfig({ pluginConfig: {} }).humanReadable).toBe(true);
+
+    const phaseResolvers = {
+      light: resolveMemoryLightDreamingConfig,
+      deep: resolveMemoryDeepDreamingConfig,
+      rem: resolveMemoryRemDreamingConfig,
+    };
+    for (const [phase, resolve] of Object.entries(phaseResolvers)) {
+      expect(resolve({ pluginConfig: {} }).humanReadable, `${phase} inherits the default`).toBe(
+        true,
+      );
+      expect(
+        resolve({ pluginConfig: { dreaming: { humanReadable: false } } }).humanReadable,
+        `${phase} receives the opt-out`,
+      ).toBe(false);
+    }
+  });
+
+  it("resolves humanReadable=false for machine-only dreaming", () => {
+    const resolved = resolveMemoryDreamingConfig({
+      pluginConfig: { dreaming: { humanReadable: false } },
+    });
+
+    expect(resolved.humanReadable).toBe(false);
+    // Machine-side settings must be untouched by the output-only switch.
+    expect(resolved.enabled).toBe(true);
+    expect(resolved.phases.deep.enabled).toBe(true);
+    expect(resolved.phases.light.enabled).toBe(true);
+    expect(resolved.phases.rem.enabled).toBe(true);
+  });
+
+  it("coerces a humanReadable string and falls back to the default when invalid", () => {
+    expect(
+      resolveMemoryDreamingConfig({ pluginConfig: { dreaming: { humanReadable: "false" } } })
+        .humanReadable,
+    ).toBe(false);
+    expect(
+      resolveMemoryDreamingConfig({ pluginConfig: { dreaming: { humanReadable: "invalid" } } })
+        .humanReadable,
+    ).toBe(true);
   });
 
   it("lets execution defaults and phase execution override the top-level dreaming model", () => {

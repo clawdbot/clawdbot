@@ -418,6 +418,7 @@ describe("short-term dreaming config", () => {
       maxAgeDays: 30,
       maxPromotedSnippetTokens: constants.DEFAULT_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
       maxPriorEntryLossFraction: constants.DEFAULT_DREAMING_MAX_PRIOR_ENTRY_LOSS_FRACTION,
+      humanReadable: true,
       verboseLogging: false,
       storage: {
         mode: "separate",
@@ -461,6 +462,7 @@ describe("short-term dreaming config", () => {
       maxAgeDays: 30,
       maxPromotedSnippetTokens: 333,
       maxPriorEntryLossFraction: constants.DEFAULT_DREAMING_MAX_PRIOR_ENTRY_LOSS_FRACTION,
+      humanReadable: true,
       verboseLogging: true,
       storage: {
         mode: "separate",
@@ -503,6 +505,7 @@ describe("short-term dreaming config", () => {
       maxAgeDays: 45,
       maxPromotedSnippetTokens: 222,
       maxPriorEntryLossFraction: constants.DEFAULT_DREAMING_MAX_PRIOR_ENTRY_LOSS_FRACTION,
+      humanReadable: true,
       verboseLogging: false,
       storage: {
         mode: "separate",
@@ -541,6 +544,7 @@ describe("short-term dreaming config", () => {
       maxAgeDays: 30,
       maxPromotedSnippetTokens: constants.DEFAULT_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
       maxPriorEntryLossFraction: constants.DEFAULT_DREAMING_MAX_PRIOR_ENTRY_LOSS_FRACTION,
+      humanReadable: true,
       verboseLogging: false,
       storage: {
         mode: "separate",
@@ -583,6 +587,17 @@ describe("short-term dreaming config", () => {
 
     expect(enabled.verboseLogging).toBe(true);
     expect(disabled.verboseLogging).toBe(false);
+  });
+
+  it("carries humanReadable through the promotion config rebuild", () => {
+    // This resolver copies fields one by one, so a dropped flag would silently
+    // leave machine-only deployments with the Dream Diary still enabled.
+    expect(resolveShortTermPromotionDreamingConfig({ pluginConfig: {} }).humanReadable).toBe(true);
+    expect(
+      resolveShortTermPromotionDreamingConfig({
+        pluginConfig: { dreaming: { humanReadable: false } },
+      }).humanReadable,
+    ).toBe(false);
   });
 
   it("falls back to defaults when thresholds are negative", () => {

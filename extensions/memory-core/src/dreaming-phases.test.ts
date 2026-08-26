@@ -574,6 +574,71 @@ describe("memory-core dreaming phases", () => {
     expect(subagent.deleteSession).toHaveBeenNthCalledWith(2, { sessionKey: expectedSessionKey });
   });
 
+  it("runs the light phase without any narrative call when humanReadable is false", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    await writeDailyNote(workspaceDir, [
+      `# ${DREAMING_TEST_DAY}`,
+      "",
+      "- Move backups to S3 Glacier.",
+      "- Keep retention at 365 days.",
+    ]);
+    const testConfig: OpenClawConfig = {
+      ...LIGHT_DREAMING_TEST_CONFIG,
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          userTimezone: "UTC",
+        },
+      },
+      plugins: {
+        entries: {
+          "memory-core": {
+            config: {
+              dreaming: {
+                enabled: true,
+                timezone: "UTC",
+                humanReadable: false,
+                storage: { mode: "inline", separateReports: false },
+                phases: {
+                  light: { enabled: true, limit: 20, lookbackDays: 2 },
+                  rem: { enabled: false, limit: 0, lookbackDays: 2 },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+    const subagent = createMockNarrativeSubagent();
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+    await runDreamingSweepPhases({
+      agentId: "main",
+      workspaceDir,
+      cfg: testConfig,
+      pluginConfig: resolveMemoryDreamingPluginConfig(testConfig),
+      logger,
+      subagent,
+      nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
+    });
+
+    // No diary model call, and no session created that would need cleanup.
+    expect(subagent.run).not.toHaveBeenCalled();
+    expect(subagent.deleteSession).not.toHaveBeenCalled();
+
+    // The machine artifacts of the phase must still be produced.
+    const dailyNote = await fs.readFile(
+      path.join(workspaceDir, "memory", `${DREAMING_TEST_DAY}.md`),
+      "utf-8",
+    );
+    expect(dailyNote).toContain("## Light Sleep");
+    const phaseSignals = await shortTermTesting.readPhaseSignalStore(
+      workspaceDir,
+      new Date("2026-04-05T10:05:00.000Z").toISOString(),
+    );
+    expect(Object.keys(phaseSignals.entries).length).toBeGreaterThan(0);
+  });
+
   it("suppresses cleanup warnings during request-scoped narrative fallback", async () => {
     const workspaceDir = await createDreamingWorkspace();
     await writeDailyNote(workspaceDir, [

@@ -76,4 +76,33 @@ describe("memory-core manifest config schema", () => {
 
     expect(result.ok).toBe(true);
   });
+
+  it("accepts dreaming.humanReadable for machine-only deployments", () => {
+    const result = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: "memory-core.manifest.dreaming-human-readable",
+      value: {
+        dreaming: {
+          enabled: true,
+          humanReadable: false,
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects a non-boolean dreaming.humanReadable", () => {
+    const result = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: "memory-core.manifest.dreaming-human-readable-invalid",
+      value: {
+        dreaming: {
+          humanReadable: "no",
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+  });
 });
