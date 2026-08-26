@@ -10,7 +10,6 @@ import {
   listOpencodeGoModelCatalogEntries,
   normalizeOpencodeGoBaseUrl,
   normalizeOpencodeGoResolvedModel,
-  prepareOpencodeGoModel,
   resolveOpencodeGoModel,
   resolveOpencodeGoStarterModel,
 } from "./provider-catalog.js";
@@ -93,26 +92,6 @@ export default defineSingleProviderPluginEntry({
         : undefined;
     },
     resolveDynamicModel: ({ modelId }) => resolveOpencodeGoModel(modelId),
-    prepareDynamicModel: async (ctx) => {
-      const authProfileId = ctx.authProfileId?.trim();
-      const configuredAuthProvider = authProfileId
-        ? ctx.config?.auth?.profiles?.[authProfileId]?.provider
-        : undefined;
-      const hasOpencodeAuthProfile =
-        authProfileId?.startsWith("opencode:") ||
-        authProfileId?.startsWith("opencode-go:") ||
-        configuredAuthProvider === PROVIDER_ID ||
-        configuredAuthProvider === "opencode";
-      const configured = Boolean(
-        hasOpencodeAuthProfile ||
-        ctx.providerConfig ||
-        ctx.config?.models?.providers?.[PROVIDER_ID] ||
-        ctx.config?.models?.providers?.opencode ||
-        process.env.OPENCODE_API_KEY?.trim() ||
-        process.env.OPENCODE_ZEN_API_KEY?.trim(),
-      );
-      return configured ? await prepareOpencodeGoModel({ modelId: ctx.modelId }) : undefined;
-    },
     catalog: {
       order: "simple",
       run: async (ctx) => {

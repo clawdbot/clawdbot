@@ -43,7 +43,7 @@ describeLive("OpenCode Go live dynamic catalog", () => {
     expect(discoveredIds.length).toBeGreaterThan(0);
     expect(discoveredIds.every((id) => advertisedIds.has(id))).toBe(true);
     expect(new Set(discoveredIds).size).toBe(discoveredIds.length);
-    expect(offlineIds.length).toBeLessThan(discoveredIds.length);
+    expect(discoveredIds.some((id) => !offlineIds.includes(id))).toBe(true);
     expect(discoveredIds).not.toContain("hy3-preview");
     expect(trustedRows.find((row) => row.id === "hy3-preview")?.status).toBe("preview");
     if (advertisedIds.has("ox-alpha-free")) {

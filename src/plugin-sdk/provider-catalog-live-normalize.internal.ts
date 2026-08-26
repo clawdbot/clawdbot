@@ -93,6 +93,18 @@ export function readLiveModelCatalogPositiveSafeIntegerField(
   return undefined;
 }
 
+export function isUpstreamProviderCatalogModel(
+  value: unknown,
+): value is UpstreamProviderCatalogModel {
+  const model = readLiveModelCatalogRecord(value);
+  const limits = readLiveModelCatalogRecord(model?.limit);
+  return Boolean(
+    readLiveModelCatalogStringField(model, "id") &&
+    readLiveModelCatalogPositiveSafeIntegerField(limits, "context") &&
+    readLiveModelCatalogPositiveSafeIntegerField(limits, "output"),
+  );
+}
+
 function readLiveModelPositiveIntegerFromRecords(
   records: readonly (Record<string, unknown> | undefined)[],
   keys: readonly string[],

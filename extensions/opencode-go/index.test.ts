@@ -14,7 +14,6 @@ import manifest from "./openclaw.plugin.json" with { type: "json" };
 import {
   buildOpencodeGoLiveProviderConfig,
   buildStaticOpencodeGoProviderConfig,
-  prepareOpencodeGoModel,
   resolveOpencodeGoStarterModel,
 } from "./provider-catalog.js";
 import opencodeGoProviderDiscovery from "./provider-discovery.js";
@@ -217,12 +216,41 @@ describe("opencode-go provider plugin", () => {
     });
 
     const provider = await registerSingleProviderPlugin(plugin);
-    expect(provider.resolveDynamicModel?.({ modelId: "legacy-model" } as never)).toMatchObject({
-      id: "legacy-model",
-    });
+    expect(provider.resolveDynamicModel?.({ modelId: "legacy-model" } as never)).toBeUndefined();
     const supplemental = await provider.augmentModelCatalog?.({ entries: [] } as never);
     expect(requireCatalogEntry(supplemental, "legacy-model").status).toBe("deprecated");
     expect(requireCatalogEntry(supplemental, "hy3-preview").status).toBe("preview");
+  });
+
+  it("never resolves another account's upstream-only Go model outside its authenticated catalog", async () => {
+    const upstreamModels = {
+      "account-a-only": upstreamModel("account-a-only"),
+      "account-b-only": upstreamModel("account-b-only"),
+    };
+    const accountAFetchGuard = createCatalogFetchGuard({
+      upstreamModels,
+      liveModelIds: ["account-a-only"],
+    });
+    const accountA = await buildOpencodeGoLiveProviderConfig({
+      discoveryApiKey: "account-a-key",
+      fetchGuard: accountAFetchGuard,
+    });
+    expect(accountA.models.map((model) => model.id)).toEqual(["account-a-only"]);
+
+    const accountBFetchGuard = createCatalogFetchGuard({
+      upstreamModels,
+      liveModelIds: ["account-b-only"],
+    });
+    const accountB = await buildOpencodeGoLiveProviderConfig({
+      discoveryApiKey: "account-b-key",
+      fetchGuard: accountBFetchGuard,
+    });
+    expect(accountB.models.map((model) => model.id)).toEqual(["account-b-only"]);
+
+    const provider = await registerSingleProviderPlugin(plugin);
+    expect(provider.resolveDynamicModel?.({ modelId: "account-a-only" } as never)).toBeUndefined();
+    expect(provider.resolveDynamicModel?.({ modelId: "account-b-only" } as never)).toBeUndefined();
+    expect(provider.prepareDynamicModel).toBeUndefined();
   });
 
   it("evicts withdrawn or unsafe upstream models while retaining trusted offline seeds", async () => {
@@ -230,11 +258,14 @@ describe("opencode-go provider plugin", () => {
       upstreamModels: {
         "withdrawn-model": upstreamModel("withdrawn-model"),
       },
-      liveModelIds: [],
+      liveModelIds: ["withdrawn-model"],
     });
     await expect(
-      prepareOpencodeGoModel({ modelId: "withdrawn-model", fetchGuard: originalFetchGuard }),
-    ).resolves.toMatchObject({ id: "withdrawn-model" });
+      buildOpencodeGoLiveProviderConfig({
+        discoveryApiKey: "resolved-opencode-key",
+        fetchGuard: originalFetchGuard,
+      }),
+    ).resolves.toMatchObject({ models: [expect.objectContaining({ id: "withdrawn-model" })] });
 
     clearLiveCatalogCacheForTests();
     const refreshedFetchGuard = createCatalogFetchGuard({
@@ -244,18 +275,20 @@ describe("opencode-go provider plugin", () => {
           provider: { api: "https://attacker.invalid/v1" },
         }),
       },
-      liveModelIds: [],
+      liveModelIds: ["replacement-model", "unsafe-model"],
     });
     await expect(
-      prepareOpencodeGoModel({ modelId: "replacement-model", fetchGuard: refreshedFetchGuard }),
-    ).resolves.toMatchObject({ id: "replacement-model" });
+      buildOpencodeGoLiveProviderConfig({
+        discoveryApiKey: "resolved-opencode-key",
+        fetchGuard: refreshedFetchGuard,
+      }),
+    ).resolves.toMatchObject({ models: [expect.objectContaining({ id: "replacement-model" })] });
 
     const provider = await registerSingleProviderPlugin(plugin);
-    expect(provider.resolveDynamicModel?.({ modelId: "withdrawn-model" } as never)).toBeUndefined();
-    expect(provider.resolveDynamicModel?.({ modelId: "unsafe-model" } as never)).toBeUndefined();
-    expect(provider.resolveDynamicModel?.({ modelId: "hy3-preview" } as never)).toMatchObject({
-      id: "hy3-preview",
-    });
+    const entries = await provider.augmentModelCatalog?.({ entries: [] } as never);
+    expect(entries?.some((entry) => entry.id === "withdrawn-model")).toBe(false);
+    expect(entries?.some((entry) => entry.id === "unsafe-model")).toBe(false);
+    expect(requireCatalogEntry(entries, "hy3-preview").status).toBe("preview");
   });
 
   it("loads model discovery and keeps every promoted row identical to runtime", async () => {
@@ -387,31 +420,6 @@ describe("opencode-go provider plugin", () => {
       fetchMock.mockRestore();
     }
   });
-
-  it.each([{}, { authProfileMode: "api_key", authProfileId: "anthropic:default" }])(
-    "does not fetch for unconfigured or unrelated auth context %#",
-    async (authContext) => {
-      const provider = await registerSingleProviderPlugin(plugin);
-      const fetchMock = vi.spyOn(globalThis, "fetch");
-      vi.stubEnv("OPENCODE_API_KEY", "");
-      vi.stubEnv("OPENCODE_ZEN_API_KEY", "");
-
-      try {
-        await expect(
-          provider.prepareDynamicModel?.({
-            config: {},
-            provider: "opencode-go",
-            modelId: "unconfigured-new-model",
-            ...authContext,
-          } as never),
-        ).resolves.toBeUndefined();
-        expect(fetchMock).not.toHaveBeenCalled();
-      } finally {
-        fetchMock.mockRestore();
-        vi.unstubAllEnvs();
-      }
-    },
-  );
 
   it("keeps the unavailable-upstream preview resolvable but out of advertised catalogs", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
@@ -575,7 +583,6 @@ describe("opencode-go provider plugin", () => {
   ] as const)(
     "maps %s only to supported wire efforts",
     async (modelId, enabledEffort, offEffort, efforts) => {
-      const provider = await registerSingleProviderPlugin(plugin);
       const fetchGuard = createCatalogFetchGuard({
         upstreamModels: {
           [modelId]: upstreamModel(modelId, {
@@ -584,8 +591,11 @@ describe("opencode-go provider plugin", () => {
         },
         liveModelIds: [modelId],
       });
-      await prepareOpencodeGoModel({ modelId, fetchGuard });
-      const model = provider.resolveDynamicModel?.({ modelId } as never);
+      const live = await buildOpencodeGoLiveProviderConfig({
+        discoveryApiKey: "resolved-opencode-key",
+        fetchGuard,
+      });
+      const model = live.models.find((candidate) => candidate.id === modelId);
       if (!model) {
         throw new Error(`expected ${modelId}`);
       }

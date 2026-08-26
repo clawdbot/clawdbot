@@ -101,8 +101,7 @@
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsDeveloperRole": false,
-              "supportsStrictMode": false,
-              "codeMode": "capable"
+              "supportsStrictMode": false
             }
           },
           {
@@ -159,8 +158,7 @@
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsDeveloperRole": false,
-              "supportsStrictMode": false,
-              "codeMode": "capable"
+              "supportsStrictMode": false
             }
           }
         ]

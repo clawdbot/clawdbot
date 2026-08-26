@@ -49,9 +49,10 @@ const OPENCODE_GO_SEED_MODELS = OPENCODE_GO_MANIFEST_PROVIDER.models.map((model)
   // SAFETY: Compatibility normalization preserves the hydrated model's provider, transport, and input shape.
   return normalizeModelCompat(hydrated) as OpencodeGoModelDefinition;
 });
-const OPENCODE_GO_MODEL_BY_ID = new Map(
+const OPENCODE_GO_SEED_MODEL_BY_ID = new Map(
   OPENCODE_GO_SEED_MODELS.map((model) => [model.id.toLowerCase(), model]),
 );
+const OPENCODE_GO_MODEL_BY_ID = new Map(OPENCODE_GO_SEED_MODEL_BY_ID);
 const OPENCODE_GO_SEED_MODEL_STATUS = new Map<string, "deprecated" | "preview">(
   manifest.modelCatalog.providers[PROVIDER_ID].models.flatMap((model) =>
     "status" in model && (model.status === "deprecated" || model.status === "preview")
@@ -104,24 +105,6 @@ function cacheUpstreamOpencodeGoModels(catalog: UpstreamProviderCatalog): void {
   for (const [id, status] of currentStatuses) {
     OPENCODE_GO_MODEL_STATUS.set(id, status);
   }
-}
-
-export async function prepareOpencodeGoModel(params: {
-  modelId: string;
-  fetchGuard?: LiveModelCatalogFetchGuard;
-  signal?: AbortSignal;
-}): Promise<ProviderRuntimeModel | undefined> {
-  const catalog = await getCachedUpstreamProviderCatalog({
-    endpoint: OPENCODE_UPSTREAM_CATALOG_ENDPOINT,
-    providerId: PROVIDER_ID,
-    fetchGuard: params.fetchGuard,
-    signal: params.signal,
-  });
-  if (!catalog) {
-    return undefined;
-  }
-  cacheUpstreamOpencodeGoModels(catalog);
-  return resolveOpencodeGoModel(params.modelId);
 }
 
 type FetchOpencodeGoLiveModelIdsParams = {
@@ -245,7 +228,7 @@ export function listOpencodeGoModelCatalogEntries(): ModelCatalogEntry[] {
 
 export function resolveOpencodeGoModel(modelId: string): ProviderRuntimeModel | undefined {
   const normalizedModelId = modelId.trim().toLowerCase();
-  return OPENCODE_GO_MODEL_BY_ID.get(normalizedModelId);
+  return OPENCODE_GO_SEED_MODEL_BY_ID.get(normalizedModelId);
 }
 
 export function isOpencodeGoKimiNoReasoningModelId(modelId: unknown): boolean {

@@ -9,6 +9,7 @@ import type {
 } from "../plugins/types.js";
 import {
   buildOpenAICompatibleLiveModels,
+  isUpstreamProviderCatalogModel,
   readLiveModelCatalogBooleanField,
   readLiveModelCatalogPositiveSafeIntegerField,
   readLiveModelCatalogRecord,
@@ -255,16 +256,6 @@ async function readLiveModelCatalogJson(
       new Error(`Live model catalog response stalled: no data received for ${chunkTimeoutMs}ms`),
   });
   return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(buffer));
-}
-
-function isUpstreamProviderCatalogModel(value: unknown): value is UpstreamProviderCatalogModel {
-  const model = readLiveModelCatalogRecord(value);
-  const limits = readLiveModelCatalogRecord(model?.limit);
-  return Boolean(
-    readLiveModelCatalogStringField(model, "id") &&
-    readLiveModelCatalogPositiveSafeIntegerField(limits, "context") &&
-    readLiveModelCatalogPositiveSafeIntegerField(limits, "output"),
-  );
 }
 
 /** Loads one provider from a shared public metadata feed only when explicitly requested. */
