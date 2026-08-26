@@ -224,5 +224,4 @@ describe("NewSessionDictationControl", () => {
     expect(insertTranscript).not.toHaveBeenCalled();
     expect(onMessage).not.toHaveBeenCalled();
   });
-
 });
