@@ -428,8 +428,8 @@ describe("Windows startup fallback", () => {
   });
 
   it("rejects denied cmd script access even when Node opens it with backup privileges", async () => {
-    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
-      env.OPENCLAW_STATE_DIR = path.join(env.USERPROFILE, "state & %USERPROFILE%");
+    await withWindowsEnv("openclaw-win-startup-", async ({ env, tmpDir }) => {
+      env.OPENCLAW_STATE_DIR = path.join(tmpDir, "state & %USERPROFILE%");
       const scriptPath = resolveTaskScriptPath(env);
       await fs.mkdir(path.dirname(scriptPath), { recursive: true });
       await fs.writeFile(scriptPath, "@echo off\r\n", "utf8");
@@ -465,8 +465,8 @@ describe("Windows startup fallback", () => {
   });
 
   it("detaches the cmd fallback only after it starts", async () => {
-    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
-      env.OPENCLAW_STATE_DIR = path.join(env.USERPROFILE, "state & %USERPROFILE% !");
+    await withWindowsEnv("openclaw-win-startup-", async ({ env, tmpDir }) => {
+      env.OPENCLAW_STATE_DIR = path.join(tmpDir, "state & %USERPROFILE% !");
       const scriptPath = resolveTaskScriptPath(env);
       await fs.mkdir(path.dirname(scriptPath), { recursive: true });
       await fs.writeFile(scriptPath, "@echo off\r\nrem no parsed command\r\n", "utf8");
