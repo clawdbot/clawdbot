@@ -26,6 +26,7 @@ import {
   hasActiveInlineSlashArgumentPrefix,
   removeInlineSlashSelection,
 } from "./chat-composer-inline-slash.ts";
+import { getSlashArgOptionId, getSlashCommandOptionId } from "./chat-composer-slash-menu-dom.ts";
 
 export type SlashMenuState = {
   slashCommandDispatchConnected: boolean;
@@ -502,27 +503,8 @@ export function handleSlashMenuKeydown(
   return true;
 }
 
-function slashOptionIdSegment(value: string): string {
-  return (
-    value
-      .toLowerCase()
-      .replace(/[^a-z0-9_-]+/gu, "-")
-      .replace(/^-+|-+$/gu, "") || "item"
-  );
-}
-
 function syncComposerMenuScrollEvent(event: Event): void {
   syncComposerMenuScroll(event.currentTarget instanceof Element ? event.currentTarget : undefined);
-}
-function getSlashCommandOptionId(paneId: string, cmd: SlashCommandDef): string {
-  return paneDomId(paneId, `slash-option-command-${slashOptionIdSegment(cmd.name)}`);
-}
-
-function getSlashArgOptionId(paneId: string, commandName: string, arg: string): string {
-  return paneDomId(
-    paneId,
-    `slash-option-arg-${slashOptionIdSegment(commandName)}-${slashOptionIdSegment(arg)}`,
-  );
 }
 
 export function isSlashMenuVisible(state: SlashMenuState): boolean {
