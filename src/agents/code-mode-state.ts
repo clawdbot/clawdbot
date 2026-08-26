@@ -325,10 +325,6 @@ function isPendingBridgeRequestReplaySafe(
   return binding ? runtime.isReplaySafeExactId(binding.id) : false;
 }
 
-function isPendingBridgeRequestSideEffectFree(request: PendingBridgeRequest): boolean {
-  return request.method === "nodes" && (request.args[0] === "list" || request.args[0] === "get");
-}
-
 function enforceSnapshotStateLimits(params: {
   snapshotBytes: Uint8Array;
   config: CodeModeConfig;
@@ -367,7 +363,12 @@ export function createPendingBridgeStates(params: {
     const target = params.catalogProjection.byCallableName.get(String(request.args[0]));
     const yieldRunSignal = target?.name === "sessions_yield" ? params.ctx.abortSignal : undefined;
     const tracksDispatch = request.method !== "sleep";
-    const sideEffectFree = isPendingBridgeRequestSideEffectFree(request);
+    // Exact catalog binding rejects shadowed or untrusted tools before core replay-safety applies.
+    const sideEffectFree =
+      (request.method === "nodes" &&
+        (request.args[0] === "list" || request.args[0] === "get")) ||
+      (request.method === "callValue" &&
+        isPendingBridgeRequestReplaySafe(request, params.runtime, params.catalogProjection));
     if (tracksDispatch) {
       params.bridgeDispatch.started = true;
       if (!sideEffectFree) {
