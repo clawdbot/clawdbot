@@ -742,7 +742,6 @@ describe("collectMissingPackPaths", () => {
         ...requiredBundledPluginPackPaths,
         ...requiredStaticExtensionAssetPaths,
         ...requiredPluginSdkPackPaths,
-        ...packagedPrivatePluginSdkRuntimePaths,
         ...WORKSPACE_TEMPLATE_PACK_PATHS,
         "scripts/prepare-git-hooks.mjs",
         "scripts/preinstall-package-manager-warning.mjs",
