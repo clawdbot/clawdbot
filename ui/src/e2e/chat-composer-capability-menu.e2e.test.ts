@@ -262,7 +262,9 @@ suite.define(() => {
         .poll(() => page.locator(".agent-chat__file-input").getAttribute("data-proxied"))
         .toBe("true");
 
-      await clearOverrides.click();
+      composer = await openMenu(page);
+      const reopenedMenu = composer.locator("wa-dropdown.agent-chat__capability-menu");
+      await reopenedMenu.locator('wa-dropdown-item[value="clear-overrides"]').click();
       await expect.poll(() => latestToolOverrides(gateway)).toEqual(null);
       await expect
         .poll(() => attachTrigger.getAttribute("class"))
@@ -587,7 +589,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       const composer = await openMenu(page);
       const menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
-      const clear = menu.getByRole("menuitem", { name: /4 overrides/ });
+      const clear = menu.locator('wa-dropdown-item[value="clear-overrides"]');
       await expect.poll(() => clear.isDisabled()).toBe(true);
       await expect.poll(() => clear.getAttribute("title")).toContain("operator.admin access");
       await expect.poll(() => webSearchItem(menu).isDisabled()).toBe(true);

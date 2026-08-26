@@ -12,6 +12,7 @@ import {
   type ChatContextWindowControlParams,
   renderContextWindowControl,
 } from "./chat-context-window-control.ts";
+import { renderChatModelCatalogState } from "./chat-model-catalog-state.ts";
 import {
   renderChatModelPickerOption,
   renderChatModelPickerTargetOption,
@@ -236,79 +237,6 @@ function handleModelPickerKeydown(event: KeyboardEvent): void {
   const row = selectableModelRows(details)[Number(event.key) - 1];
   event.preventDefault();
   row?.click();
-}
-
-function renderCatalogState(
-  state: ChatModelCatalogState | undefined,
-  hasOptions: boolean,
-  hasSelectableOptions: boolean,
-  onModelSetup?: () => void,
-  errorLabel = t("chat.modelControls.modelsUnavailable"),
-  retryTarget?: { disabled: boolean; groupId: string; onRetry: (groupId: string) => unknown },
-) {
-  if (!state || (state.status === "ready" && hasSelectableOptions)) {
-    return nothing;
-  }
-  if (state.status === "error" && hasOptions) {
-    return nothing;
-  }
-  const label =
-    state.status === "offline"
-      ? t("common.offline")
-      : state.status === "error"
-        ? errorLabel
-        : state.status === "ready"
-          ? hasOptions
-            ? `${t("modelSetup.failure.auth")}. ${t("modelSetup.failureGuidance.auth")}`
-            : t("chat.modelControls.noModelsAvailable")
-          : t("chat.modelControls.loadingModels");
-  return html`
-    <div
-      class="chat-controls__model-catalog-state ${hasOptions
-        ? ""
-        : "chat-controls__model-catalog-state--empty"}"
-      data-chat-model-catalog-state=${state.status}
-      aria-live="polite"
-    >
-      <span class="chat-controls__model-catalog-state-label">
-        ${state.status === "error" ? icons.alertTriangle : nothing}
-        <span>${label}</span>
-      </span>
-      ${state.status === "error" && retryTarget
-        ? html`
-            <button
-              class="chat-controls__model-catalog-action"
-              data-chat-model-target-retry=${retryTarget.groupId}
-              type="button"
-              ?disabled=${retryTarget.disabled}
-              @click=${(event: MouseEvent) => {
-                event.stopPropagation();
-                retryTarget.onRetry(retryTarget.groupId);
-              }}
-            >
-              ${t("common.retry")}
-            </button>
-          `
-        : nothing}
-      ${state.status === "ready" && !hasSelectableOptions && onModelSetup
-        ? html`
-            <button
-              class="chat-controls__model-catalog-action"
-              data-chat-model-setup="true"
-              type="button"
-              @click=${(event: MouseEvent) => {
-                event.stopPropagation();
-                onModelSetup();
-              }}
-            >
-              ${hasOptions
-                ? t("modelSetup.connectionFailure.action")
-                : t("chat.modelControls.emptyModelsAction")}
-            </button>
-          `
-        : nothing}
-    </div>
-  `;
 }
 
 export function renderChatModelPicker(params: ChatModelPickerParams) {
@@ -575,7 +503,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                       </div>
                     `
                   : nothing}
-                ${renderCatalogState(
+                ${renderChatModelCatalogState(
                   params.modelCatalogState,
                   params.modelOptions.length > 0,
                   hasSelectableModelOptions,
@@ -643,7 +571,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                               </div>
                               ${group.status === "ready"
                                 ? nothing
-                                : renderCatalogState(
+                                : renderChatModelCatalogState(
                                     { hasSnapshot: false, status: group.status },
                                     false,
                                     false,

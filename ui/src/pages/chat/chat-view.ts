@@ -496,17 +496,10 @@ export function renderChat(props: ChatProps) {
     onOpenImage: openImmediateImage,
   });
   const taskSuggestionTray = renderChatTaskSuggestionTray(props);
-  const dockedProgressCard =
-    props.progressCard?.placement === "dock"
-      ? renderSessionProgressCard(props.progressCard.card, "dock", props.onDismissProgressCard)
-      : nothing;
-  // One column owns the conversation's top-right gutter. Both members float over
-  // the transcript, so sharing a stack is what stops the wider suggestion tray
-  // from silently covering the progress card when they appear together.
   const gutterStack =
-    taskSuggestionTray === nothing && dockedProgressCard === nothing
+    taskSuggestionTray === nothing
       ? nothing
-      : html`<div class="chat-gutter-stack">${taskSuggestionTray}${dockedProgressCard}</div>`;
+      : html`<div class="chat-gutter-stack">${taskSuggestionTray}</div>`;
   const scrollToBottomButton =
     props.showNewMessages && props.onScrollToBottom
       ? html`

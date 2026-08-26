@@ -136,7 +136,7 @@ describe("chat pane composer controls", () => {
   });
 
   it("renders a distinct active icon for every permission mode", () => {
-    const icons = new Set<string>();
+    const activeIcons = new Set<string>();
     for (const mode of [undefined, "read-only", "guarded", "workspace", "full"] as const) {
       const container = document.createElement("div");
       render(
@@ -149,9 +149,9 @@ describe("chat pane composer controls", () => {
       );
       const icon = container.querySelector(".chat-controls__permission-icon svg");
       expect(icon).not.toBeNull();
-      icons.add(icon?.outerHTML ?? "");
+      activeIcons.add(icon?.outerHTML ?? "");
     }
-    expect(icons.size).toBe(5);
+    expect(activeIcons.size).toBe(5);
   });
 
   it("patches a keyboard-selected mode, clears to default, and locks full access", async () => {

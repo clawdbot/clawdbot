@@ -260,11 +260,7 @@ export function preserveComposerFocusOnPrimaryAction(
   textarea: HTMLTextAreaElement | null,
 ): void {
   const composerShell = textarea?.closest<HTMLElement>(".agent-chat__composer-shell");
-  if (
-    document.activeElement === textarea &&
-    composerShell &&
-    Number.parseFloat(getComputedStyle(composerShell).marginBottom) === 0
-  ) {
+  if (document.activeElement === textarea && composerShell) {
     event.preventDefault();
   }
 }

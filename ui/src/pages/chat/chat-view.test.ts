@@ -6005,7 +6005,7 @@ describe("chat model controls", () => {
     const { state } = createOpenAiHeaderState();
     const container = renderModelControls(state, {
       modelCatalog: [],
-      modelCatalogState: { hasSnapshot: false, status: "refreshing" },
+      modelCatalogState: { hasSnapshot: false, status: "loading" },
       modelPickerOpen: true,
       modelsLoading: true,
     });

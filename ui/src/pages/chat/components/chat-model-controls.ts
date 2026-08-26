@@ -412,10 +412,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   // control in layout while catalog state is transient (and until an open model
   // menu closes), so a sibling appearing cannot move that anchor mid-interaction.
   const reserveEffortPicker =
-    !hasResolvableModel &&
-    (catalogLoadingWithoutSnapshot ||
-      managedCatalog.status === "refreshing" ||
-       props.modelPickerOpen === true);
+    !hasResolvableModel && (catalogLoadingWithoutSnapshot || props.modelPickerOpen === true);
   const showEffortPicker = hasResolvableModel || reserveEffortPicker;
   return html`
     <div class="chat-controls__session chat-controls__model chat-controls__model-settings">

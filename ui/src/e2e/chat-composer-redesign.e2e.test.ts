@@ -605,8 +605,8 @@ suite.define(() => {
       ]);
       expect(activeMobileSettingsBox?.width).toBeGreaterThanOrEqual(44);
       expect(activeMobileSettingsBox?.height).toBeGreaterThanOrEqual(44);
-      expect(activeMobileStopBox?.width).toBeGreaterThanOrEqual(44);
-      expect(activeMobileStopBox?.height).toBeGreaterThanOrEqual(44);
+      expect(activeMobileStopBox?.width).toBeCloseTo(32, 2);
+      expect(activeMobileStopBox?.height).toBeCloseTo(32, 2);
       await captureMobileState("mobile-composer-active-stop.png");
       await textarea.press("Escape");
       const abortRequest = await gateway.waitForRequest("chat.abort");

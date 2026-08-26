@@ -3363,7 +3363,7 @@ button.chat-pr__diff {
 }
 
 .agent-chat__composer-underlaps {
-  --chat-composer-underlap-row-height: 40px;
+  --chat-composer-underlap-row-height: 44px;
 
   position: relative;
   z-index: 0;
@@ -5369,8 +5369,6 @@ button.chat-pr__diff {
     /* Touch targets, not chrome: the composer's own control rules all read this
        token, so raising it here resizes every button on the surface at once. */
     --chat-composer-control-size: 44px;
-    /* Primary and voice actions keep the desktop 32px silhouette; the chip and
-       menu families below retain their independent 44px touch sizing. */
     --chat-composer-send-size: 32px;
     /* The labelled chips follow, as one family: raising the family tokens keeps
        the session-mode chip the same size as the pickers it sits beside instead
@@ -5566,8 +5564,7 @@ button.chat-pr__diff {
   overflow: hidden;
   background: var(--chat-composer-surface);
   border: 1px solid var(--chat-composer-hairline);
-  border-radius: calc(20px * var(--openclaw-corner-radius-scale));
-  corner-shape: superellipse(1.5);
+  border-radius: var(--menu-radius);
   z-index: 30;
 }
 
@@ -5578,8 +5575,14 @@ button.chat-pr__diff {
 /* Standalone command menus stay compact in base.css. Inside the composer the
    command and skill sheets use the writing surface's exact outer geometry. */
 .agent-chat__input .slash-menu.slash-menu {
-  border-radius: calc(20px * var(--openclaw-corner-radius-scale));
-  corner-shape: superellipse(1.5);
+  border-radius: 20px;
+}
+
+@supports (corner-shape: superellipse(1.5)) {
+  .agent-chat__input .slash-menu.slash-menu {
+    border-radius: calc(20px * var(--openclaw-corner-radius-scale));
+    corner-shape: superellipse(1.5);
+  }
 }
 
 .slash-menu__scroll {

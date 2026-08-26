@@ -1824,7 +1824,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
 
   it.each([
     [800, 4],
-    [390, 3],
+    [390, 0],
   ] as const)("keeps the %spx model picker label-to-chevron gap at %spx", async (width, gap) => {
     const page = await openBrowserPage(width, 800);
     try {
@@ -3376,7 +3376,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           footer: rectFor(".agent-chat__composer-footer"),
           input: rectFor(".agent-chat__input"),
           meta: rectFor(".agent-chat__composer-meta"),
-          overrides: rectFor(".agent-chat__session-overrides-pill"),
           settings: rectFor(".chat-controls__model-trigger"),
           status: rectFor(".agent-chat__composer-run-status"),
           typing: rectFor(".agent-chat__typing-indicator--outside"),
@@ -3384,7 +3383,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       });
 
       expect(layout.controls.scrollWidth).toBeLessThanOrEqual(layout.controls.clientWidth + 1);
-      for (const control of [layout.status, layout.overrides, layout.settings]) {
+      for (const control of [layout.status, layout.settings]) {
         expect(control.x).toBeGreaterThanOrEqual(layout.footer.x - 1);
         expect(control.x + control.width).toBeLessThanOrEqual(
           layout.footer.x + layout.footer.width + 1,
@@ -3399,8 +3398,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       expect(layout.settings.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
       expect(layout.settings.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
       for (const [left, right] of [
-        [layout.status, layout.overrides],
-        [layout.overrides, layout.settings],
+        [layout.status, layout.settings],
         [layout.settings, layout.meta],
       ] as const) {
         expect(rectsOverlap(left, right)).toBe(false);
@@ -3552,8 +3550,8 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           expect(effortTrigger.x).toBeGreaterThanOrEqual(modelTrigger.x + modelTrigger.width - 1);
         }
         if (width <= 768) {
-          expect(send.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
-          expect(send.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
+          expect(send.width).toBeCloseTo(32, 2);
+          expect(send.height).toBeCloseTo(32, 2);
           for (const control of [model, context]) {
             expect(
               Math.abs(control.y + control.height / 2 - (model.y + model.height / 2)),

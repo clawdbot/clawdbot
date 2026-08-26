@@ -18,7 +18,7 @@ const progressCard: ProgressCard = {
 };
 
 describe("renderSessionProgressCard", () => {
-  it.each(["board", "composer", "dock", "hovercard", "rail"] as const)(
+  it.each(["board", "composer", "hovercard", "rail"] as const)(
     "shows the last activity time for %s cards with and without checklist steps",
     (placement) => {
       const container = document.createElement("div");
