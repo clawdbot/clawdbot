@@ -18,7 +18,6 @@ import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../auto-re
 import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
 import { normalizeAgentPlanSteps } from "../channels/streaming.js";
 import { getRuntimeConfig } from "../config/io.js";
-import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
 import {
   type AgentEventPayload,
   type AgentEventRuntimePayload,
@@ -53,14 +52,9 @@ import type {
   ToolEventRecipientRegistry,
 } from "./server-chat-state.js";
 import { hasSessionChangeReceivers } from "./session-change-receivers.js";
+import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
 import {
-  buildGatewaySessionEventRow,
-  projectSessionEventActiveRunIds,
-} from "./session-event-payload.js";
-import {
-  deriveGatewaySessionLifecycleProjectionPatch,
   isRestartRecoveryLifecycleEvent,
-  isStaleLifecycleEventForSession,
   persistGatewaySessionLifecycleEvent,
 } from "./session-lifecycle-state.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
@@ -585,33 +579,6 @@ export function createAgentEventHandler({
       snapshotOptions,
     );
     const { lifecycleRunId, row } = lifecycleSnapshot;
-    const omitUnscopedGlobalGoal = sessionKey === "global" && !agentId;
-    const lifecyclePatch =
-      evt &&
-      !isStaleLifecycleEventForSession({
-        owningSessionId: evt.sessionId,
-        currentSessionId: row?.sessionId,
-        eventRunId: evt.runId,
-        currentRunId: lifecycleRunId,
-        eventStartedAt: evt.data?.startedAt,
-        currentStartedAt: row?.startedAt,
-      })
-        ? deriveGatewaySessionLifecycleProjectionPatch({
-            entry: row
-              ? {
-                  updatedAt: row.updatedAt ?? undefined,
-                  status: row.status,
-                  lastRunError: row.lastRunError,
-                  lastRunId: row.lastRunId,
-                  startedAt: row.startedAt,
-                  endedAt: row.endedAt,
-                  runtimeMs: row.runtimeMs,
-                  abortedLastRun: row.abortedLastRun,
-                }
-              : undefined,
-            event: evt,
-          })
-        : {};
     const activeRunState = includeActiveRunState
       ? resolveSessionActiveRunState?.({
           requestedKey: sessionKey,
@@ -620,95 +587,15 @@ export function createAgentEventHandler({
           ...(agentId ? { agentId } : {}),
         })
       : undefined;
-    // Agent lifecycle broadcasts merge into cached session rows in the UI. Replace
-    // run identities only when the Gateway owns the complete exact set.
-    const activeRunFields = activeRunState
-      ? {
-          hasActiveRun: activeRunState.active,
-          activeRunIds: projectSessionEventActiveRunIds(activeRunState),
-        }
-      : {};
-    const clearsLastRunError =
-      Object.hasOwn(lifecyclePatch, "lastRunError") && lifecyclePatch.lastRunError === undefined;
-    const clearsLastRunId =
-      Object.hasOwn(lifecyclePatch, "lastRunId") && lifecyclePatch.lastRunId === undefined;
-    const projectedRow = row
-      ? lifecycleProjection
-        ? buildGatewaySessionEventRow(row, { lifecycle: true })
-        : row
-      : undefined;
-    const session = projectedRow
-      ? {
-          ...projectedRow,
-          ...lifecyclePatch,
-          ...activeRunFields,
-          // JSON drops undefined values, so starts/successes need tombstones
-          // for terminal fields retained in the subscribed client row.
-          ...(clearsLastRunError ? { lastRunError: null } : {}),
-          ...(clearsLastRunId ? { lastRunId: null } : {}),
-        }
-      : undefined;
-    if (session && omitUnscopedGlobalGoal) {
-      delete session.goal;
-    }
-    const snapshotSource = session ?? lifecyclePatch;
-    return {
-      ...(session ? { session } : {}),
-      updatedAt: snapshotSource.updatedAt,
-      sessionId: row?.sessionId,
-      kind: row?.kind,
-      channel: row?.channel,
-      subject: row?.subject,
-      groupChannel: row?.groupChannel,
-      space: row?.space,
-      chatType: row?.chatType,
-      origin: row?.origin,
-      spawnedBy: row?.spawnedBy,
-      spawnedWorkspaceDir: row?.spawnedWorkspaceDir,
-      spawnedCwd: row?.spawnedCwd,
-      forkedFromParent: sessionEntryForkedFromParent(row ?? undefined) ? true : undefined,
-      spawnDepth: row?.spawnDepth,
-      subagentRole: row?.subagentRole,
-      subagentControlScope: row?.subagentControlScope,
-      label: row?.label,
-      displayName: row?.displayName,
-      deliveryContext: row?.deliveryContext,
-      parentSessionKey: row?.parentSessionKey,
-      childSessions: row?.childSessions,
-      thinkingLevel: row?.thinkingLevel,
-      fastMode: row?.fastMode,
-      toolOverrides: row?.toolOverrides,
-      verboseLevel: row?.verboseLevel,
-      traceLevel: row?.traceLevel,
-      reasoningLevel: row?.reasoningLevel,
-      elevatedLevel: row?.elevatedLevel,
-      sendPolicy: row?.sendPolicy,
-      systemSent: row?.systemSent,
-      inputTokens: row?.inputTokens,
-      outputTokens: row?.outputTokens,
-      lastChannel: row?.lastChannel,
-      lastTo: row?.lastTo,
-      lastAccountId: row?.lastAccountId,
-      lastThreadId: row?.lastThreadId,
-      totalTokens: projectedRow?.totalTokens,
-      totalTokensFresh: projectedRow?.totalTokensFresh,
-      ...(omitUnscopedGlobalGoal ? {} : { goal: row?.goal ?? null }),
-      contextTokens: projectedRow?.contextTokens,
-      estimatedCostUsd: projectedRow?.estimatedCostUsd,
-      responseUsage: row?.responseUsage,
-      // Carry the row-built channel-aware effective mode so the chat snapshot
-      // matches the session-event/list projections.
-      effectiveResponseUsage: row?.effectiveResponseUsage,
-      modelProvider: projectedRow?.modelProvider,
-      model: projectedRow?.model,
-      ...activeRunFields,
-      status: snapshotSource.status,
-      lastRunError: snapshotSource.lastRunError ?? null,
-      startedAt: snapshotSource.startedAt,
-      endedAt: snapshotSource.endedAt,
-      runtimeMs: snapshotSource.runtimeMs,
-      abortedLastRun: snapshotSource.abortedLastRun,
-    };
+    return buildGatewaySessionSnapshot({
+      sessionRow: row,
+      agentId,
+      includeSession: true,
+      lifecycle: lifecycleProjection,
+      event: evt,
+      lifecycleRunId,
+      activeRunState,
+    });
   };
 
   const resolveSessionDeliveryKeys = (sessionKey: string, agentId?: string) => {

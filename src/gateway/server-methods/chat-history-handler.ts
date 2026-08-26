@@ -24,7 +24,7 @@ import {
 import { resolveEffectiveChatHistoryMaxChars } from "../chat-display-projection.js";
 import { resolveClaudeCliBindingSessionId } from "../cli-session-history.js";
 import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
-import { buildGatewaySessionSnapshot } from "../server-session-events.js";
+import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { capArrayByJsonBytes } from "../session-transcript-readers.js";
 import {
@@ -466,8 +466,7 @@ async function handleChatHistoryRequest({
       sessionRow: deltaSessionRow,
       agentId: sessionAgentId,
       includeSession: true,
-      hasActiveRun: activeRunState.active,
-      activeRunIds: activeRunState.runIds,
+      activeRunState,
     });
     let delta: ReturnType<typeof readChatHistoryDelta>;
     try {
