@@ -11,7 +11,10 @@ import {
   materializeControlUiLocaleCatalog,
   readControlUiSourceCatalog,
 } from "./lib/control-ui-i18n-catalog.ts";
-import { CONTROL_UI_LOCALE_ENTRIES } from "./lib/control-ui-i18n-config.ts";
+import {
+  CONTROL_UI_LOCALE_ENTRIES,
+  CONTROL_UI_LOCALE_REFRESH_ENTRIES,
+} from "./lib/control-ui-i18n-config.ts";
 import { syncControlUiRawCopyBaseline } from "./lib/control-ui-i18n-raw-copy.ts";
 import type { TranslationMap } from "./lib/control-ui-i18n-sync-plan.ts";
 import { collectSourceFileContents } from "./lib/source-file-scan-cache.mts";
@@ -325,7 +328,7 @@ export async function verifyRuntimeLocaleConfig() {
       : [];
   const expectedLanguageKeys = [
     "en",
-    ...CONTROL_UI_LOCALE_ENTRIES.map((entry) => entry.languageKey),
+    ...CONTROL_UI_LOCALE_REFRESH_ENTRIES.map((entry) => entry.languageKey),
   ].toSorted((left, right) => left.localeCompare(right));
   if (!compareStringArrays(languageKeys, expectedLanguageKeys)) {
     throw new Error(

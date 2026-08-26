@@ -23,7 +23,7 @@ import {
   materializeControlUiLocaleCatalog,
   readControlUiSourceCatalog,
 } from "./lib/control-ui-i18n-catalog.ts";
-import { CONTROL_UI_LOCALE_ENTRIES } from "./lib/control-ui-i18n-config.ts";
+import { CONTROL_UI_LOCALE_REFRESH_ENTRIES } from "./lib/control-ui-i18n-config.ts";
 import { syncControlUiRawCopyBaseline } from "./lib/control-ui-i18n-raw-copy.ts";
 import {
   compareStringArrays,
@@ -102,7 +102,7 @@ const TRANSLATION_PROVIDER_DEFAULTS: Record<TranslationProvider, Omit<Model, "id
   },
 };
 
-const LOCALE_ENTRIES: readonly LocaleEntry[] = CONTROL_UI_LOCALE_ENTRIES;
+const LOCALE_ENTRIES: readonly LocaleEntry[] = CONTROL_UI_LOCALE_REFRESH_ENTRIES;
 
 const DEFAULT_GLOSSARY: readonly GlossaryEntry[] = [
   { source: "OpenClaw", target: "OpenClaw" },
