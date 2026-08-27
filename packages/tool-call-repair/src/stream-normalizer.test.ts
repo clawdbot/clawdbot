@@ -714,6 +714,52 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
     expect(events.some((event) => String(event.type).startsWith("toolcall_"))).toBe(false);
   });
 
+  it("recognizes a real call in an earlier block when a later block streams its fence first (#122513)", async () => {
+    // codex review: the carried fence-state scan advances in EVENT order, but a partial's
+    // per-block offsets are in CONTENT-INDEX order. A provider can stream block 1 (opening a
+    // fence) before block 0 (a genuine, unfenced call) -- by the time block 0's own delta
+    // arrives, the scan has tracked 8 chars (block 1's "```json\n") while block 0's own
+    // content-order offset is 0. A ">" check misses this direction entirely and lets the fast
+    // path answer from the scan's (wrong, event-order) state, which would treat the call as
+    // fenced and never promote it -- only a "!==" check catches a mismatch in either direction.
+    const candidate = ["[read]", '{"path":"example.txt"}', "[/read]", ""].join("\n");
+    const second = "```json\n";
+    // No text_end/done here: the terminal path always re-parses the whole assembled
+    // message from scratch and would correctly scrub the call regardless of what the
+    // streaming fast path decided, masking exactly the bug this test targets. The
+    // observable difference is in the intermediate streamed text_delta events.
+    const events = await collectNormalizedEvents(
+      [
+        streamTextDelta(second, 1, assistantMessage(textContent("", second))),
+        streamTextDelta(candidate, 0, assistantMessage(textContent(candidate, second))),
+      ],
+      {
+        matcher,
+        createPromotedToolCallEvents: () => [],
+        normalizeTerminalMessage: () => undefined,
+        protectedRangesFenceCompatible: true,
+        resolveProtectedRanges: resolveTestFenceRanges,
+      },
+    );
+
+    // Wrongly "protected" would stream the raw candidate bytes straight out as literal
+    // visible text; correctly recognized as a real, unfenced call, they are buffered as
+    // a pending candidate instead and never appear verbatim in a streamed delta.
+    // Wrongly "protected" would stream the raw candidate bytes straight out as literal
+    // visible text; correctly recognized as a real, unfenced call, they are buffered as
+    // a pending candidate instead and never appear verbatim in a streamed delta.
+    const streamedText = events
+      .map((event) =>
+        typeof event.delta === "string"
+          ? event.delta
+          : typeof event.content === "string"
+            ? event.content
+            : "",
+      )
+      .join("");
+    expect(streamedText).not.toContain('{"path":"example.txt"}');
+  });
+
   it("preserves candidate bytes after bounded protection history overflows", async () => {
     const opening = `\`\`\`text\n${"x".repeat(1_000_000)}`;
     const candidate = ["[read]", '{"path":"example.txt"}', "[/read]"].join("\n");

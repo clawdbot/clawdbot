@@ -490,11 +490,14 @@ function findPotentialCallStart(
 }
 
 /**
- * True when `partial` shows more text preceding `contentIndex` than `trackedLength`
- * accounts for -- an earlier content block that was never streamed as its own delta, so
- * the carried fence-state scan (which only ever sees streamed text) cannot have tracked
- * it. The fast path must not answer for a candidate in this position; only a check
- * against the partial's own authoritative text, or a full parse, can.
+ * True when `partial` shows a different amount of text preceding `contentIndex` than
+ * `trackedLength` accounts for. The carried fence-state scan advances in event order;
+ * `partial`'s own per-block offsets are in content-index order. These normally agree,
+ * but not when a provider interleaves active blocks (an earlier block can stream after
+ * a later one) or when an earlier block was never streamed as its own delta at all --
+ * either way the scan's state does not correspond to "everything that precedes this
+ * block", in either direction, so it must not be trusted for a candidate here. Only a
+ * check against the partial's own authoritative text, or a full parse, can be.
  */
 function hasUntrackedPrecedingContext(
   partial: unknown,
@@ -503,7 +506,7 @@ function hasUntrackedPrecedingContext(
 ): boolean {
   const candidate = extractStandaloneCandidate(partial);
   const part = candidate?.parts.find((entry) => entry.contentIndex === contentIndex);
-  return part !== undefined && part.start > trackedLength;
+  return part !== undefined && part.start !== trackedLength;
 }
 
 function resolvePartialProtectionCheck(params: {
@@ -1392,10 +1395,12 @@ export async function* normalizePlainTextToolCallStreamEvents(
                 // state, so an un-opted-in resolver always takes the full-parse path below
                 // and stays authoritative — the fast path must never silently stand in for it.
                 const carriedScan = authoritative ? protectionScanAtBlockStart : protectionScan;
-                // protectionBlockStart is how much text the scan had tracked when this block
-                // began. If the partial shows more text preceding this block than that, an
-                // earlier block was never streamed as its own delta -- the scan never saw it
-                // and cannot be trusted here, whatever it claims for this block's own content.
+                // protectionBlockStart is how much text the scan had tracked (in event order)
+                // when this block began. If the partial's own content-order offset for this
+                // block disagrees, either an earlier block was never streamed as its own delta
+                // or blocks interleaved out of content-index order -- either way the scan's
+                // state does not correspond to this block's actual preceding text and cannot
+                // be trusted here, whatever it claims for this block's own content.
                 const untrackedPrecedingContext = hasUntrackedPrecedingContext(
                   incomingRecord.partial,
                   eventContentIndex(incomingRecord),
