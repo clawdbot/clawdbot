@@ -224,6 +224,7 @@ function resolveOpenAIResponsesInstructions(
 // endpoint. Build that message on demand so the compact request body can
 // re-embed the same text the streaming path now carries via `instructions`.
 export function buildOpenAIResponsesCompactSystemMessage(model: Model, instructions: string) {
+  // SAFETY: only reached from postOpenAIResponsesCompaction (Responses-API compact endpoint), so model is always OpenAI-mode here.
   const compat = getCompat(model as OpenAIModeModel);
   const supportsDeveloperRole =
     typeof compat.supportsDeveloperRole === "boolean" ? compat.supportsDeveloperRole : undefined;
