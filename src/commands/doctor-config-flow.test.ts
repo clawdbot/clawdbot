@@ -1504,7 +1504,8 @@ vi.mock("./doctor-config-preflight.js", async () => {
           agentRosterIncludeOwned: injected?.agentRosterIncludeOwned === true,
           sourceConfigBeforeMigrations,
           config: effectiveConfig,
-          sourceConfig: effectiveConfig,
+          // The reader resolves source values but leaves legacy repairs to doctor.
+          sourceConfig: injectedEffectiveConfig,
           valid: legacyIssues.length === 0,
           warnings: [],
           legacyIssues,

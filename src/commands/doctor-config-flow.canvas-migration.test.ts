@@ -1,0 +1,141 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { readConfigFileSnapshot } from "../config/config.js";
+import { withTempHome, writeOpenClawConfig } from "../config/test-helpers.js";
+import { runInitialConfigWriteHealth } from "../flows/doctor-health-contribution-runners.config.js";
+import type { DoctorHealthFlowContext } from "../flows/doctor-health-contribution-types.js";
+import type { RuntimeEnv } from "../runtime.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
+import { createDoctorPrompter, type DoctorOptions } from "./doctor-prompter.js";
+
+const note = vi.hoisted(() => vi.fn<(message: string, title?: string) => void>());
+vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
+
+async function repairConfig(configPath: string) {
+  const runtime: RuntimeEnv = { error: vi.fn(), exit: vi.fn(), log: vi.fn() };
+  const options: DoctorOptions = { nonInteractive: true, repair: true };
+  const prompter = createDoctorPrompter({ runtime, options });
+  const configResult = await loadAndMaybeMigrateDoctorConfig({
+    options,
+    confirm: (params) => prompter.confirm(params),
+    runtime,
+    prompter,
+  });
+  const ctx: DoctorHealthFlowContext = {
+    runtime,
+    options,
+    prompter,
+    configResult,
+    cfg: configResult.cfg,
+    cfgForPersistence: structuredClone(configResult.cfg),
+    sourceConfigValid: configResult.sourceConfigValid ?? true,
+    configPath,
+    stateDirExistedAtStart: true,
+    ...(configResult.runWithPluginMetadataSnapshot
+      ? { runWithPluginMetadataSnapshot: configResult.runWithPluginMetadataSnapshot }
+      : {}),
+  };
+  await runInitialConfigWriteHealth(ctx);
+  return JSON.parse(await fs.readFile(configPath, "utf8"));
+}
+
+function writeCanvasConfig(home: string, root: string) {
+  return writeOpenClawConfig(home, {
+    gateway: { mode: "local" },
+    plugins: {
+      entries: {
+        canvas: { enabled: true, config: { host: { enabled: false, root } } },
+      },
+    },
+  });
+}
+
+describe("Canvas document migration through doctor config persistence", () => {
+  afterEach(() => {
+    note.mockClear();
+    closeOpenClawStateDatabaseForTest();
+  });
+
+  // POSIX permissions exercise real read/copy failures; Windows and root ignore chmod(0).
+  it
+    .skipIf(process.platform === "win32" || process.getuid?.() === 0)
+    .each(["partial", "blind", "env-root"] as const)(
+    "retains the root after a %s migration and retires it only after retry",
+    async (failure) => {
+      await withTempHome(async (home) => {
+        const customRoot = path.join(home, "custom-canvas");
+        const documents = path.join(customRoot, "documents");
+        const coreDocuments = path.join(home, ".openclaw", "canvas", "documents");
+        for (const id of ["cv_first", "cv_retry"]) {
+          await fs.mkdir(path.join(documents, id), { recursive: true });
+          await fs.writeFile(path.join(documents, id, "index.html"), id);
+        }
+        const configuredRoot = failure === "env-root" ? "${HOME}/custom-canvas" : customRoot;
+        const configPath = await writeCanvasConfig(home, configuredRoot);
+        const blockedPath =
+          failure === "blind" ? documents : path.join(documents, "cv_retry", "index.html");
+        await fs.chmod(blockedPath, 0);
+        try {
+          const saved = await repairConfig(configPath);
+          expect.soft(saved.plugins.entries.canvas.config?.host?.root).toBe(configuredRoot);
+          const warnings = note.mock.calls
+            .filter(([, title]) => title?.includes("warning"))
+            .map(([message]) => message)
+            .join("\n");
+          expect.soft(warnings).toContain("Canvas");
+          expect.soft(warnings).toContain("openclaw doctor --fix");
+          if (failure === "blind") {
+            expect.soft(warnings).toContain("EACCES");
+          } else {
+            expect.soft(warnings).toContain("cv_retry");
+            await expect(
+              fs.readFile(path.join(coreDocuments, "cv_first", "index.html"), "utf8"),
+            ).resolves.toBe("cv_first");
+            await expect(fs.access(path.join(coreDocuments, "cv_retry"))).rejects.toThrow();
+            expect(await fs.readdir(coreDocuments)).toEqual(["cv_first"]);
+          }
+        } finally {
+          await fs.chmod(blockedPath, failure === "blind" ? 0o700 : 0o600);
+        }
+
+        const saved = await repairConfig(configPath);
+        expect(saved.plugins.entries.canvas.config.host).toEqual({ enabled: false });
+        for (const id of ["cv_first", "cv_retry"]) {
+          await expect(
+            fs.readFile(path.join(coreDocuments, id, "index.html"), "utf8"),
+          ).resolves.toBe(id);
+          await expect(fs.access(path.join(documents, id))).rejects.toThrow();
+        }
+        expect((await readConfigFileSnapshot()).valid).toBe(true);
+      });
+    },
+  );
+
+  it.each(["complete", "empty", "absent", "canonical"] as const)(
+    "retires a %s root without losing canonical documents",
+    async (scenario) => {
+      await withTempHome(async (home) => {
+        const coreRoot = path.join(home, ".openclaw", "canvas");
+        const customRoot = scenario === "canonical" ? coreRoot : path.join(home, "custom-canvas");
+        const documents = path.join(customRoot, "documents");
+        if (scenario !== "absent") {
+          await fs.mkdir(documents, { recursive: true });
+        }
+        if (scenario === "complete" || scenario === "canonical") {
+          await fs.mkdir(path.join(documents, "cv_existing"));
+          await fs.writeFile(path.join(documents, "cv_existing", "index.html"), "existing");
+        }
+        const saved = await repairConfig(await writeCanvasConfig(home, customRoot));
+        expect(saved.plugins.entries.canvas.config.host).toEqual({ enabled: false });
+        expect((await readConfigFileSnapshot()).valid).toBe(true);
+        if (scenario === "complete" || scenario === "canonical") {
+          await expect(
+            fs.readFile(path.join(coreRoot, "documents", "cv_existing", "index.html"), "utf8"),
+          ).resolves.toBe("existing");
+        }
+      });
+    },
+  );
+});

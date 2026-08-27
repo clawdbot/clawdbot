@@ -89,6 +89,17 @@ widgets. Their renderer bundles continue to load from the Gateway's
 The macOS panel does not accept A2UI push/reset commands and does not
 automatically navigate to an A2UI page.
 
+## Migrating documents from a custom root
+
+Run `openclaw doctor --fix` to move documents from the retired
+`plugins.entries.canvas.config.host.root` into the state directory's
+`canvas/documents` folder. Doctor removes the root setting only after no legacy
+documents remain. If directory access or a document copy fails, doctor warns and
+keeps the setting for retry. Fix the reported permissions or target conflict,
+then rerun the command; do not remove the root setting yourself. Hosted routes
+serve only the canonical folder, so remaining legacy documents are unavailable
+until migration completes.
+
 ## Related
 
 - [Show widget](/tools/show-widget)

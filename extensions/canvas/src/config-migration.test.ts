@@ -74,4 +74,11 @@ describe("migrateCanvasHostConfig", () => {
       }),
     ).toBeNull();
   });
+
+  it("retains an unresolved source root for a later resolved repair", () => {
+    const config: OpenClawConfig = {
+      plugins: { entries: { canvas: { config: { host: { root: "${CANVAS_MIGRATION_ROOT}" } } } } },
+    };
+    expect(migrateCanvasHostConfig(config)).toBeNull();
+  });
 });
