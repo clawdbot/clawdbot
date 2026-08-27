@@ -11,11 +11,13 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const ASSERTIONS_SCRIPT = "scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs";
 const BASH_BIN = process.platform === "win32" ? "bash" : "/bin/bash";
 const SWEEP_SCRIPT = "scripts/e2e/lib/kitchen-sink-plugin/sweep.sh";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 // The shim waits for an explicit log-ready marker; this only bounds a broken fixture process.
 const FIXTURE_READY_WAIT_ATTEMPTS = process.env.CI ? 2_000 : 1_000;
 const REQUIRED_FULL_DIAGNOSTIC_CANARIES = [
@@ -679,6 +681,71 @@ grep -q "cli transcript: plugins install demo" "$SCRATCH_ROOT/install_log.log"
     } finally {
       rmSync(parent, { force: true, recursive: true });
     }
+  });
+
+  it("accepts capabilities only for successful kitchen-sink installs", () => {
+    const parent = tempDirs.make("openclaw-kitchen-sink-install-consent-");
+    const scratchRoot = path.join(parent, "scratch");
+    const result = runSweepShell(
+      `
+set -euo pipefail
+export KITCHEN_SINK_SWEEP_SOURCE_ONLY=1
+export KITCHEN_SINK_TMP_DIR="$SCRATCH_ROOT"
+export OPENCLAW_ENTRY=fixture-entry
+export KITCHEN_SINK_LABEL=fixture
+export KITCHEN_SINK_SPEC=fixture-spec
+export KITCHEN_SINK_PREINSTALL_SPEC=preinstall-spec
+export KITCHEN_SINK_ID=fixture-id
+export KITCHEN_SINK_SOURCE=npm
+source scripts/e2e/lib/kitchen-sink-plugin/sweep.sh
+run_kitchen_sink_openclaw_logged() {
+  printf 'success'
+  printf ' <%s>' "$@"
+  printf '\\n'
+}
+run_kitchen_sink_openclaw_capture() {
+  :
+}
+assert_kitchen_sink_cutover_preinstalled() {
+  :
+}
+configure_kitchen_sink_runtime() {
+  :
+}
+assert_kitchen_sink_installed() {
+  :
+}
+assert_kitchen_sink_removed() {
+  :
+}
+remove_kitchen_sink_channel_config() {
+  :
+}
+run_expect_failure() {
+  printf 'failure'
+  printf ' <%s>' "$@"
+  printf '\\n'
+}
+run_success_scenario
+run_failure_scenario
+`,
+      { SCRATCH_ROOT: scratchRoot },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    const successInstalls = result.stdout
+      .split("\n")
+      .filter((line) => line.startsWith("success") && line.includes(" <plugins> <install> "));
+    expect(successInstalls).toHaveLength(2);
+    for (const install of successInstalls) {
+      expect(install).toContain(" <--accept-capabilities>");
+    }
+    const failureInstall = result.stdout
+      .split("\n")
+      .find((line) => line.startsWith("failure") && line.includes(" <plugins> <install> "));
+    expect(failureInstall).toBeDefined();
+    expect(failureInstall).not.toContain(" <--accept-capabilities>");
   });
 
   it("bounds printed kitchen-sink CLI command logs without truncating saved logs", () => {

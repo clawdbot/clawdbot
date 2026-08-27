@@ -242,6 +242,61 @@ describe("plugins Docker assertions", () => {
     }
   });
 
+  it("accepts capabilities for successful plugin fixture installs", () => {
+    const root = autoCleanupTempDirs.make("openclaw-plugin-fixture-install-");
+    const result = runPluginsSweepShell(
+      `
+set -euo pipefail
+export OPENCLAW_PLUGINS_SWEEP_SOURCE_ONLY=1
+export OPENCLAW_PLUGINS_TMP_DIR="$SCRATCH_ROOT"
+source scripts/e2e/lib/plugins/sweep.sh
+run_plugins_openclaw_logged() {
+  printf '<%s>\\n' "$@"
+}
+if ! declare -F run_plugins_fixture_install_logged >/dev/null; then
+  run_plugins_fixture_install_logged() {
+    run_plugins_openclaw_logged "$@"
+  }
+fi
+run_plugins_fixture_install_logged install-fixture plugins install fixture-spec --force
+`,
+      { SCRATCH_ROOT: root },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout.trim().split("\n")).toEqual([
+      "<install-fixture>",
+      "<plugins>",
+      "<install>",
+      "<fixture-spec>",
+      "<--force>",
+      "<--accept-capabilities>",
+    ]);
+  });
+
+  it("accepts capabilities when enabling the unconsented Claude bundle fixture", () => {
+    const script = readFileSync("scripts/e2e/lib/plugins/sweep.sh", "utf8");
+
+    expect(script).toContain(
+      "run_plugins_openclaw_logged enable-claude-bundle plugins enable claude-bundle-e2e --accept-capabilities",
+    );
+  });
+
+  it("accepts capabilities only for the real widening marketplace update", () => {
+    const script = readFileSync("scripts/e2e/lib/plugins/marketplace.sh", "utf8");
+
+    expect(script).toContain(
+      "run_plugins_openclaw_logged update-marketplace-shortcut plugins update marketplace-shortcut --accept-capabilities",
+    );
+    expect(script).toContain(
+      "run_plugins_openclaw_logged update-marketplace-shortcut-dry-run plugins update marketplace-shortcut --dry-run",
+    );
+    expect(script).not.toContain(
+      "update-marketplace-shortcut-dry-run plugins update marketplace-shortcut --dry-run --accept-capabilities",
+    );
+  });
+
   it("cleans the default plugin sweep scratch root", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-sweep-cleanup-"));
     const marker = path.join(root, "scratch-path.txt");

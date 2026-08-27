@@ -170,7 +170,7 @@ node scripts/e2e/lib/release-scenarios/assertions.mjs assert-file-contains "$PLU
 
 clickclack_plugin_dir="$(mktemp -d "$scenario_tmp/clickclack-plugin.XXXXXX")"
 node scripts/e2e/lib/release-user-journey/write-clickclack-plugin.mjs "$clickclack_plugin_dir"
-openclaw plugins install "$clickclack_plugin_dir" --force >"$CLICKCLACK_PLUGIN_INSTALL_LOG" 2>&1
+openclaw plugins install "$clickclack_plugin_dir" --force --accept-capabilities >"$CLICKCLACK_PLUGIN_INSTALL_LOG" 2>&1
 
 openclaw channels status --json >"$STATUS_JSON" 2>"$STATUS_ERR"
 node scripts/e2e/lib/release-user-journey/assertions.mjs assert-channel-configured clickclack "$STATUS_JSON"
