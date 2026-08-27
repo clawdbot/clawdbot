@@ -211,7 +211,12 @@ describe("config cli roster integration", () => {
     );
   });
 
-  it("uses the original numeric roster order when reading a legacy file", async () => {
+  it.each([
+    { name: "retained legacy source", replacement: undefined, editedId: "2" },
+    { name: "replaced object parent", replacement: { ownership: "explicit" }, editedId: "1" },
+    { name: "replaced null parent", replacement: null, editedId: "1" },
+  ])("uses current numeric roster order after $name", async ({ replacement, editedId }) => {
+    const entries = { "1": { name: "first" }, "2": { name: "second" } };
     const raw = JSON.stringify({
       agents: {
         ownership: "explicit",
@@ -225,15 +230,27 @@ describe("config cli roster integration", () => {
       "openclaw-config-cli-roster-source-order-",
       raw,
       async ({ configPath }) => {
-        await runRegisteredConfigCommand([
-          "config",
-          "set",
-          "agents.list[0].name",
-          "changed-second",
-        ]);
+        const args =
+          replacement === undefined
+            ? ["config", "set", "agents.list[0].name", "indexed-change"]
+            : [
+                "config",
+                "set",
+                "--batch-json",
+                JSON.stringify([
+                  { path: "agents", value: replacement },
+                  { path: "agents.entries.1", value: entries["1"] },
+                  { path: "agents.entries.2", value: entries["2"] },
+                  { path: "agents.list[0].name", value: "indexed-change" },
+                ]),
+                "--replace",
+              ];
+        await runRegisteredConfigCommand([...args, "--dry-run"]);
+        expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
+        await runRegisteredConfigCommand(args);
         expect(JSON5.parse(fs.readFileSync(configPath, "utf8")).agents.entries).toEqual({
-          "1": { name: "first" },
-          "2": { name: "changed-second" },
+          ...entries,
+          [editedId]: { name: "indexed-change" },
         });
       },
     );

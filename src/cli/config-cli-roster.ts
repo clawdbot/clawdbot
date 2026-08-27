@@ -33,11 +33,15 @@ export class ConfigMutationAgentRoster {
     const submittedRoster =
       path.length === 1 ? readAgentRosterProperty({ agents: operation.value }) : undefined;
     const kind = path.length === 1 ? submittedRoster?.kind : path[1];
+    const roster = readAgentRosterProperty(this.root);
+    // A removed roster's indexes cannot select entries in its replacement.
+    if (!roster) {
+      this.legacyOrder = undefined;
+    }
     const agents = this.root.agents;
     if ((kind !== "list" && kind !== "entries") || !isRecord(agents)) {
       return;
     }
-    const roster = readAgentRosterProperty(this.root);
     if (kind === "entries") {
       if (path.length <= 2 && !merge) {
         delete agents.list;
