@@ -87,6 +87,43 @@ describe("resolveChannelPreferOverIds", () => {
     ).toEqual(["acmechat-core"]);
   });
 
+  // Codex P2 3868462607. When the catalog entry DOES name its plugin, the owner gate compared
+  // `record.id === pluginId` raw. Manifest ids keep their authored spelling, so a catalog naming
+  // the same plugin lowercased missed the identity arm and hit the `return false` below it, which
+  // discards the declaration without falling through to the channel-id heuristic.
+  it("keeps a catalog declaration whose plugin identity differs only in case", () => {
+    const catalogPath = writeCatalogEntry({
+      plugin: { id: "acmechat" },
+      channel: { id: "acmechat", preferOver: ["acmechat-core"] },
+    });
+
+    expect(
+      resolveChannelPreferOverIds({
+        record: { id: "AcmeChat", channels: ["AcmeChat"] } as unknown as PluginManifestRecord,
+        channelId: "acmechat",
+        env: { OPENCLAW_PLUGIN_CATALOG_PATHS: catalogPath },
+      }),
+    ).toEqual(["acmechat-core"]);
+  });
+
+  // The guard against over-folding: a catalog naming a genuinely DIFFERENT plugin must still be
+  // rejected. Resolving through the plugin-alias resolver would fold legacy ids and hand this
+  // record authority it never had.
+  it("still rejects a catalog declaration naming a different plugin", () => {
+    const catalogPath = writeCatalogEntry({
+      plugin: { id: "zzsomeone-else" },
+      channel: { id: "acmechat", preferOver: ["acmechat-core"] },
+    });
+
+    expect(
+      resolveChannelPreferOverIds({
+        record: { id: "AcmeChat", channels: ["AcmeChat"] } as unknown as PluginManifestRecord,
+        channelId: "acmechat",
+        env: { OPENCLAW_PLUGIN_CATALOG_PATHS: catalogPath },
+      }),
+    ).toEqual([]);
+  });
+
   // Codex review P2 on #123209: channel schema ownership now resolves preferences, and
   // `loadGatewayRuntimeConfigSchema` runs per Control UI config request. Catalog files are
   // process-stable plugin metadata, so re-reading and re-parsing them per build would put

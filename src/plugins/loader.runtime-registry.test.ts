@@ -260,6 +260,33 @@ describe("resolvePluginLoadCacheContext", () => {
     expect(droppedTimeoutKey).toBe(emptyHooksKey);
   });
 
+  // Codex P2 3868659423. `plugins.slots.contextEngine` is an explicit-selection cause that
+  // `isPluginExplicitlySelectedByAlias` reads from the AUTHORED config, and
+  // `plugin-activation-runtime-config.ts` merges only `plugins.allow` and per-entry `enabled` into
+  // the runtime half — so two loads whose effective configs match can differ only in this slot.
+  // The outer key carries the effective config, so without hashing the authored slot the second
+  // load hit the first one's registry and inherited its cede map.
+  it("separates the cache key when only the authored context-engine slot differs", () => {
+    // The effective config is IDENTICAL on both loads -- `plugin-activation-runtime-config.ts`
+    // merges only `plugins.allow` and per-entry `enabled` into the runtime half, so the slot never
+    // reaches it. Only the separately supplied authored config differs.
+    const effectiveConfig: OpenClawConfig = { plugins: { entries: {} } };
+    const selectingFirst = resolvePluginLoadCacheContext({
+      config: effectiveConfig,
+      activationSourceConfig: {
+        plugins: { slots: { contextEngine: "zzcache-engine-a" } },
+      } as OpenClawConfig,
+    }).cacheKey;
+    const selectingSecond = resolvePluginLoadCacheContext({
+      config: effectiveConfig,
+      activationSourceConfig: {
+        plugins: { slots: { contextEngine: "zzcache-engine-b" } },
+      } as OpenClawConfig,
+    }).cacheKey;
+
+    expect(selectingSecond).not.toBe(selectingFirst);
+  });
+
   it("keys concrete runtime bindings by identity", () => {
     const firstNodes = {} as PluginRuntime["nodes"];
     const firstSubagent = {} as PluginRuntime["subagent"];

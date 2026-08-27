@@ -197,6 +197,14 @@ function buildActivationMetadataHash(params: {
         allow: params.activationSource.plugins.allow,
         deny: params.activationSource.plugins.deny,
         memorySlot: params.activationSource.plugins.slots.memory,
+        // The context-engine slot is an explicit-selection cause the same way the memory slot
+        // is (`isPluginExplicitlySelectedByAlias` reads it from the AUTHORED config), but
+        // `plugin-activation-runtime-config.ts` merges only `plugins.allow` and per-entry
+        // `enabled` into the runtime half, so it never reaches the effective config the outer
+        // key carries. Two loads agreeing on that half could differ here and share a cached
+        // registry -- and its cede map. Hashed as authored: normalization leaves slot values
+        // raw, and the loader compares the authored spelling.
+        contextEngineSlot: params.activationSource.plugins.slots.contextEngine,
         entries: pluginEntryStates,
         materialSourceEntries: materialSourceEntryIds,
         channelEnabledStates: sourceChannelEnabledStates,

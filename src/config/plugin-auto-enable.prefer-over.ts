@@ -1,5 +1,8 @@
 import fs from "node:fs";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { normalizeOwnedChannelId } from "../channels/ids.js";
 import { findChatChannelMeta, normalizeChatChannelId } from "../channels/registry.js";
 import { readRegularFileSync } from "../infra/regular-file.js";
@@ -172,7 +175,16 @@ function ownsChannelLevelDeclaration(
     return true;
   }
   const pluginId = catalogIdentity?.pluginId;
-  if (pluginId && record.id === pluginId) {
+  // Case-fold both sides. Manifest ids keep their authored spelling (`manifest.ts` trims but does
+  // not lowercase), while a catalog can name the same plugin lowercased, so raw equality dropped
+  // the identity match and the `return false` below discarded the declaration silently. Folded
+  // with `normalizeOptionalLowercaseString` and NOT the plugin-alias resolver on purpose: that
+  // resolver also folds legacy plugin ids, which would let a catalog entry naming a legacy id
+  // claim replacement authority over a genuinely different installed plugin.
+  if (
+    pluginId &&
+    normalizeOptionalLowercaseString(record.id) === normalizeOptionalLowercaseString(pluginId)
+  ) {
     return true;
   }
   const packageName = catalogIdentity?.packageName;
