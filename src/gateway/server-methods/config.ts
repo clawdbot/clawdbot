@@ -594,6 +594,13 @@ function parseValidateConfigFromRawOrRespond(
   const validatedSubmission = validateSubmittedConfigOrRespond({
     candidate: projectedValidationCandidate,
     sourceConfig: snapshot.sourceConfig,
+    // The submission IS the authored document here: `config.set`/`config.apply` carry a whole
+    // config, not a delta. Passing it makes explicit selection read from what the operator wrote
+    // and persists that, rather than the runtime-shaped projection above. Without it a selection
+    // the runtime half had already materialized was dropped on the way to disk --
+    // `createMergePatch` omits a leaf the runtime half already carries, and
+    // `projectSourceOntoRuntimeShape` walks authored keys only, so nothing reintroduces it.
+    authoredCandidate: coerceConfig(restored.result),
     modelIdNormalizationPolicies,
     respond,
   });
@@ -602,7 +609,7 @@ function parseValidateConfigFromRawOrRespond(
   }
   return {
     config: validatedSubmission.config,
-    writeConfig: validatedSubmission.validationCandidate,
+    writeConfig: validatedSubmission.writeCandidate,
     schema,
     restorationUiHints,
   };
@@ -706,9 +713,9 @@ function validateSubmittedConfigOrRespond(params: {
     // `snapshot.config`, so it carries validation-seeded `plugins.entries.<id>.config` records and
     // other materialized shape the operator never wrote. Persisting that put those seeds in the
     // authored config, where the next validation reads them back as explicit selection, sets the
-    // declared `preferOver` aside, and moves the channel to a different plugin. Callers that pass
-    // an authored counterpart persist it; config.set/apply have none and already submit an
-    // authored candidate.
+    // declared `preferOver` aside, and moves the channel to a different plugin. Every write caller
+    // passes an authored counterpart and persists it: `config.patch` applies its delta to the
+    // authored snapshot, and `config.set`/`config.apply` submit a whole authored config.
     writeCandidate: params.authoredCandidate
       ? prepareCandidate(params.authoredCandidate)
       : validationCandidate,

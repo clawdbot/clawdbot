@@ -665,6 +665,45 @@ describe("request-scoped schema build memoization", () => {
   });
 });
 
+describe("config.set authored submission", () => {
+  // Codex P1 3868462615. `config.set`/`config.apply` build their candidate by merging the
+  // operator's submission onto the RUNTIME-shaped snapshot, then persist that merge. When the
+  // operator hand-writes a selection auto-enable already materialized, `createMergePatch` sees the
+  // leaf already present on the runtime half and omits it, and `projectSourceOntoRuntimeShape`
+  // walks authored keys only, so it is never reintroduced. The write reported ok while the
+  // selection never reached disk -- and the next validation, reading no explicit selection, leaves
+  // the declared replacement in charge.
+  it("keeps an explicit selection the runtime half had already materialized", async () => {
+    const authored = { channels: { zzsel: { token: "t" } } } as unknown as OpenClawConfig;
+    const runtime = {
+      channels: { zzsel: { token: "t" } },
+      plugins: { entries: { "zzsel-plugin": { enabled: true } } },
+    } as unknown as OpenClawConfig;
+    storedConfig = runtime;
+    configWriteMocks.readConfigFileSnapshotForWrite.mockImplementation(async () => {
+      const result = createConfigWriteSnapshot(runtime);
+      result.snapshot.sourceConfig = authored;
+      result.snapshot.resolved = authored;
+      result.snapshot.hash = storedHash;
+      result.snapshot.raw = JSON.stringify(authored);
+      return result;
+    });
+
+    await invokeConfigSet({
+      raw: {
+        channels: { zzsel: { token: "t" } },
+        plugins: { entries: { "zzsel-plugin": { enabled: true } } },
+      },
+      baseHash: storedHash,
+    });
+
+    const written = storedConfig as {
+      plugins?: { entries?: Record<string, { enabled?: boolean }> };
+    };
+    expect(written.plugins?.entries?.["zzsel-plugin"]?.enabled).toBe(true);
+  });
+});
+
 describe("config schema response cache", () => {
   // Tests below publish and clear the process-wide runtime snapshot; drop that module state so
   // later suites keep the unpublished default this file starts from.
