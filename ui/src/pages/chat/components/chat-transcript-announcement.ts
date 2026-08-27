@@ -2,7 +2,11 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import type { coalesceAgentRunFrames } from "../chat-agent-run-grouping.ts";
-import type { TranscriptAnnouncement } from "./chat-transcript-controller.ts";
+
+export type TranscriptAnnouncement = {
+  key: string;
+  text: string;
+};
 
 type ChatRenderItem = ReturnType<typeof coalesceAgentRunFrames>[number];
 const ANNOUNCEMENT_MAX_CHARS = 500;

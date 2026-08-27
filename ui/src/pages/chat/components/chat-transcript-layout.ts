@@ -3,7 +3,10 @@ import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import { styleMap } from "lit/directives/style-map.js";
-import type { TranscriptRow } from "./chat-transcript-controller.ts";
+
+export type TranscriptRow<T = unknown> =
+  | { kind: "item"; key: string; item: T }
+  | { kind: "content"; key: string; content: unknown };
 
 export function renderChatTranscriptLayout<T>({
   rows,

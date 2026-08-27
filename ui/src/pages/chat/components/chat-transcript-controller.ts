@@ -22,7 +22,10 @@ import {
   type ChatScrollToEndOptions,
 } from "../scroll.ts";
 import { SIDEBAR_GEOMETRY_COMMIT_EVENT } from "../sidebar-layout.ts";
-import { TranscriptAnnouncementState } from "./chat-transcript-announcement.ts";
+import {
+  TranscriptAnnouncementState,
+  type TranscriptAnnouncement,
+} from "./chat-transcript-announcement.ts";
 import {
   initialTranscriptRect,
   maxTranscriptScrollOffset,
@@ -34,21 +37,12 @@ import {
   reconcileChatTranscriptInteractionResize,
   resolveChatTranscriptInteractionAnchor,
 } from "./chat-transcript-interaction-anchor.ts";
-import { renderChatTranscriptLayout } from "./chat-transcript-layout.ts";
+import { renderChatTranscriptLayout, type TranscriptRow } from "./chat-transcript-layout.ts";
 import {
   extractTranscriptRange,
   previewTranscriptRowKeys,
   focusedTranscriptRowKey,
 } from "./chat-transcript-range.ts";
-
-export type TranscriptRow<T = unknown> =
-  | { kind: "item"; key: string; item: T }
-  | { kind: "content"; key: string; content: unknown };
-
-export type TranscriptAnnouncement = {
-  key: string;
-  text: string;
-};
 
 export type ChatTranscriptSession = {
   readonly liveAnnouncementText: string;

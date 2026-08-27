@@ -11,8 +11,8 @@ import { renderChatThread } from "./chat-thread.ts";
 import {
   ChatTranscriptController,
   type ChatTranscriptSession,
-  type TranscriptRow,
 } from "./chat-transcript-controller.ts";
+import type { TranscriptRow } from "./chat-transcript-layout.ts";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
