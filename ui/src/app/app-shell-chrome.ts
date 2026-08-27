@@ -102,14 +102,10 @@ export interface ShellChromeHost extends HTMLElement {
 export class ShellChromeOwner {
   private pendingLazyAction = readLazyShellAction();
   private listeners: AbortController | undefined;
-  private navDrawerSwipeOwner: NavDrawerSwipeOwner | null = null;
+  private navDrawerSwipeOwner?: NavDrawerSwipeOwner;
   private readonly navDrawerSwipeOwnerLoad = import("./nav-drawer-swipe.ts").then(
     ({ NavDrawerSwipeOwner }) => {
-      const owner = new NavDrawerSwipeOwner(
-        this.host,
-        () => isMobileNavLayout() && !this.host.navDrawerOpen && !this.host.onboardingMode,
-        () => this.toggleNavigationSurface(),
-      );
+      const owner = new NavDrawerSwipeOwner(this.host, () => this.toggleNavigationSurface());
       this.navDrawerSwipeOwner = owner;
       return owner;
     },
@@ -184,7 +180,6 @@ export class ShellChromeOwner {
     this.listeners?.abort();
     this.listeners = undefined;
     this.navDrawerSwipeOwner?.disconnect();
-    this.navDrawerSwipeOwner = null;
   }
 
   toggleNavigationSurface(trigger?: HTMLElement): void {
@@ -199,15 +194,7 @@ export class ShellChromeOwner {
         host.closeNavDrawer({ restoreFocus: true });
         return;
       }
-      host.navDrawerTrigger = trigger ?? this.visibleNavDrawerToggle() ?? null;
-      void this.navDrawerSwipeOwnerLoad.then(async (owner) => {
-        if (!host.isConnected || host.navDrawerOpen || !isMobileNavLayout()) {
-          return;
-        }
-        host.navDrawerOpen = true;
-        await host.updateComplete;
-        owner.opened();
-      });
+      void this.navDrawerSwipeOwnerLoad.then((owner) => host.isConnected && owner.open(trigger));
       return;
     }
     // A responsive handoff expands this shell without overwriting the desktop preference.
@@ -253,7 +240,7 @@ export class ShellChromeOwner {
     host.navDrawerTrigger = null;
     if (options.restoreFocus) {
       requestAnimationFrame(() => {
-        this.restoreFocusTo(trigger instanceof HTMLElement ? trigger : null);
+        this.restoreFocusTo(trigger);
       });
     }
   }

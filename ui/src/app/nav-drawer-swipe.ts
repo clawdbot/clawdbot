@@ -1,3 +1,5 @@
+import { isMobileNavLayout } from "./mobile-nav-layout.ts";
+
 const MIN_OPEN_DISTANCE_PX = 44;
 const OPEN_RATIO = 0.15;
 const LOCK_DISTANCE_PX = 7;
@@ -15,14 +17,38 @@ type Swipe = {
   backdrop: HTMLElement | null;
 };
 
+type NavDrawerHost = HTMLElement & {
+  readonly onboardingMode: boolean;
+  readonly updateComplete: Promise<boolean>;
+  navDrawerOpen: boolean;
+  navDrawerTrigger: HTMLElement | null;
+};
+
 export class NavDrawerSwipeOwner {
   private swipe: Swipe | null = null;
 
   constructor(
-    private readonly host: HTMLElement,
-    private readonly canStart: () => boolean,
-    private readonly open: () => void,
+    private readonly host: NavDrawerHost,
+    private readonly requestOpen: () => void,
   ) {}
+
+  private canOpen(): boolean {
+    return isMobileNavLayout() && !this.host.navDrawerOpen && !this.host.onboardingMode;
+  }
+
+  open(trigger?: HTMLElement): void {
+    if (!this.canOpen()) {
+      return;
+    }
+    this.host.navDrawerTrigger =
+      trigger ??
+      [
+        ...this.host.querySelectorAll<HTMLElement>(".topbar-nav-toggle, .chat-pane__nav-toggle"),
+      ].find((candidate) => candidate.checkVisibility()) ??
+      null;
+    this.host.navDrawerOpen = true;
+    void this.host.updateComplete.then(() => this.opened());
+  }
 
   connect(): void {
     this.host.addEventListener("touchstart", this.handleStart, { passive: true });
@@ -129,7 +155,7 @@ export class NavDrawerSwipeOwner {
 
   private readonly handleStart = (event: TouchEvent): void => {
     this.reset();
-    if (!this.canStart() || event.touches.length !== 1) {
+    if (!this.canOpen() || event.touches.length !== 1) {
       return;
     }
     const path = event.composedPath();
@@ -205,7 +231,7 @@ export class NavDrawerSwipeOwner {
           (candidate) => candidate.identifier === swipe.identifier,
         )
       : undefined;
-    if (!swipe || !touch || !swipe.lockedHorizontal || !this.canStart()) {
+    if (!swipe || !touch || !swipe.lockedHorizontal || !this.canOpen()) {
       this.reset();
       return;
     }
@@ -214,7 +240,7 @@ export class NavDrawerSwipeOwner {
     const shouldOpen = deltaX >= Math.max(MIN_OPEN_DISTANCE_PX, swipe.drawerWidth * OPEN_RATIO);
     this.swipe = null;
     if (shouldOpen) {
-      this.open();
+      this.requestOpen();
     } else {
       requestAnimationFrame(() => this.reset());
     }
