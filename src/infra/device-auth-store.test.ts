@@ -19,7 +19,6 @@ import {
   storeOriginDeviceToken,
 } from "./device-auth-store.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
-import { requireNodeSqlite } from "./node-sqlite.js";
 
 function createEnv(stateDir: string): NodeJS.ProcessEnv {
   return {

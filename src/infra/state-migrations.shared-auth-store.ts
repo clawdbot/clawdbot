@@ -50,7 +50,7 @@ type SourceAuthDatabase = Pick<
 >;
 type SharedAuthMigrationDatabase = Pick<
   OpenClawStateKyselyDatabase,
-  "config_machine_state" | "config_machine_state" | "migration_runs" | "migration_sources"
+  "config_machine_state" | "migration_runs" | "migration_sources"
 >;
 
 type MigrationStage = "copied" | "ownership-flipped" | "completed";
