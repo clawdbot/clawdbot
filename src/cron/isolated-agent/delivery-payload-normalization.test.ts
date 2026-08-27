@@ -53,7 +53,7 @@ describe("cron canonical speech payload delivery", () => {
     "preserves direct-delivery ownership while normalizing %j",
     (text) => {
       const metadata = {
-        tts: { tagged: true, text: "The report is complete." },
+        tts: { tagged: true as const, text: "The report is complete." },
         channelReplyTransformOwner: {},
         sourceReplyTranscriptMirror: { sessionKey: "agent:main:source" },
       };

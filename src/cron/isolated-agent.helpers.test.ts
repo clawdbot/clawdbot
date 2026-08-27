@@ -376,7 +376,7 @@ describe("resolveCronPayloadOutcome", () => {
       isError: true,
     },
   ])("keeps only speech facts owned by the $name", ({ texts, finalText, speech, isError }) => {
-    const tts = { tagged: true, text: "Authored spoken report" };
+    const tts = { tagged: true as const, text: "Authored spoken report" };
     const payloads = texts.map((text) =>
       setReplyPayloadMetadata<ReplyPayload>(
         { text, ...(isError ? { isError } : {}) },
