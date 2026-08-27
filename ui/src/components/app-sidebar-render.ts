@@ -1,11 +1,12 @@
 import { html, nothing } from "lit";
+import { repeat } from "lit/directives/repeat.js";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import {
   serializeSidebarEntry,
   type NavigationRouteId,
   type SidebarZoneEntry,
 } from "../app-navigation.ts";
-import { activityPersonLocation, isRouteId, isSessionRouteId } from "../app-route-paths.ts";
+import { isRouteId, isSessionRouteId } from "../app-route-paths.ts";
 import { resolveControlUiAuthToken } from "../app/control-ui-auth.ts";
 import { isNativeWebChromeHost } from "../app/native-web-chrome.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
@@ -38,6 +39,7 @@ import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import type { SidebarWorkboardBoard } from "./app-sidebar-workboard.ts";
 import { icons } from "./icons.ts";
 import { redactLoginFailureError } from "./login-gate.ts";
+import { personActivityLink, personActivityRouting } from "./person-activity-link.ts";
 import {
   renderSessionAttentionIcon,
   renderSessionRunSpinner,
@@ -315,29 +317,47 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
       ${collapsed
         ? nothing
         : html`<div class="sidebar-online__list">
-            ${users.map((user) => {
-              const { pathname, search, href } = activityPersonLocation(user.id, host.basePath);
-              return html`<a
-                class="sidebar-online__person ${isPresenceViewerIdle(user)
-                  ? "sidebar-online__person--away"
-                  : ""}"
-                data-online-user-id=${user.id}
-                href=${href}
-                @click=${(event: MouseEvent) => {
-                  if (!shouldHandleNavigationClick(event)) {
-                    return;
-                  }
-                  event.preventDefault();
-                  host.onNavigate?.("activity", { pathname, search });
-                }}
-              >
-                <openclaw-viewer-avatar .user=${user} variant="footer"></openclaw-viewer-avatar>
-                <span class="sidebar-online__person-name">${presenceViewerLabel(user)}</span>
-                <span class="sidebar-online__person-action" aria-hidden="true"
-                  >${icons.chevronRight}</span
-                >
-              </a>`;
-            })}
+            ${repeat(
+              users,
+              (user) => user.id,
+              (user) => {
+                const activity = personActivityLink(
+                  user.id,
+                  personActivityRouting({
+                    basePath: host.basePath,
+                    navigate: (route, options) => host.onNavigate?.(route, options),
+                  }),
+                )!;
+                return html`<div class="sidebar-online__row">
+                  <a
+                    class="sidebar-online__person ${isPresenceViewerIdle(user)
+                      ? "sidebar-online__person--away"
+                      : ""}"
+                    data-online-user-id=${user.id}
+                    href=${activity.href}
+                    @click=${activity.open}
+                  >
+                    <openclaw-viewer-avatar
+                      .user=${user}
+                      .markAsViewer=${false}
+                      variant="footer"
+                      aria-hidden="true"
+                    ></openclaw-viewer-avatar>
+                    <span class="sidebar-online__person-name"
+                      >${presenceViewerLabel(user)}</span
+                    > </a
+                  ><button
+                    class="sidebar-online__details"
+                    type="button"
+                    aria-haspopup="dialog"
+                    aria-expanded="false"
+                    aria-label=${t("presence.card.details", { name: presenceViewerLabel(user) })}
+                  >
+                    <span aria-hidden="true">${icons.chevronRight}</span>
+                  </button>
+                </div>`;
+              },
+            )}
           </div>`}
     </section>
   `;

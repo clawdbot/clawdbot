@@ -78,18 +78,6 @@ describe("sqlite hot query plans", () => {
     });
     expectPlanUsesIndex({
       db: database.db,
-      indexName: "idx_cron_jobs_enabled_next_run",
-      params: ["/state/cron/jobs.json"],
-      sql: `
-        SELECT job_id, next_run_at_ms
-          FROM cron_jobs
-         WHERE store_key = ? AND enabled = 1 AND next_run_at_ms IS NOT NULL
-         ORDER BY next_run_at_ms ASC, job_id
-         LIMIT 25
-      `,
-    });
-    expectPlanUsesIndex({
-      db: database.db,
       indexName: "idx_delivery_queue_pending",
       params: ["outbound", "pending"],
       sql: `

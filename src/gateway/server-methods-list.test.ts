@@ -29,6 +29,10 @@ describe("GATEWAY_EVENTS", () => {
     expect(GATEWAY_EVENTS).toContain("skills.changed");
   });
 
+  it("advertises profile-scoped preference invalidation updates", () => {
+    expect(GATEWAY_EVENTS).toContain("users.prefs.changed");
+  });
+
   it("advertises portal replace-set updates", () => {
     expect(GATEWAY_EVENTS).toContain("portal.changed");
   });
@@ -73,7 +77,7 @@ describe("listGatewayMethods", () => {
   });
 
   it("appends new methods after model probing without shifting older method indices", () => {
-    expect(listGatewayMethods().slice(-65)).toEqual([
+    expect(listGatewayMethods().slice(-66)).toEqual([
       "models.probe",
       "migrations.memory.plan",
       "migrations.memory.apply",
@@ -139,6 +143,7 @@ describe("listGatewayMethods", () => {
       "sessions.github.publish",
       "diagnostics.lanes",
       "session.members.listEvidence",
+      "plugins.inspect",
     ]);
     const methods = listGatewayMethods();
     expect(methods.indexOf("node.pluginSurface.refresh")).toBe(
@@ -261,7 +266,7 @@ describe("listGatewayMethods", () => {
       "exec.approval.get",
     ]);
     expect(methods).toContain("tts.speak");
-    expect(coreMethods.slice(-72)).toEqual([
+    expect(coreMethods.slice(-73)).toEqual([
       "sessions.catalog.continue",
       "sessions.catalog.archive",
       "approval.get",
@@ -334,6 +339,7 @@ describe("listGatewayMethods", () => {
       "sessions.github.publish",
       "diagnostics.lanes",
       "session.members.listEvidence",
+      "plugins.inspect",
     ]);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
     expect(methods.indexOf("approval.resolve")).toBe(methods.indexOf("approval.get") + 1);

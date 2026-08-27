@@ -8,9 +8,15 @@ import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-st
 import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
 import pLimit from "p-limit";
 import { deriveConceptTags } from "./concept-vocabulary.js";
-import { recordMemoryEntryOrigins, type MemoryEntryOrigin } from "./memory-entry-origins.js";
-import { readStore, withShortTermLock, writeStore } from "./short-term-promotion-store.js";
-import type { ShortTermRecallEntry, ShortTermRecallStore } from "./short-term-promotion-types.js";
+import {
+  listMemorySessionTombstones,
+  recordMemoryEntryOrigins,
+  type MemoryEntryOrigin,
+} from "./memory-entry-origins.js";
+import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
+import type { SessionEntryOrigin } from "./session-ingestion.js";
+import { readStore, writeStore } from "./short-term-promotion-store.js";
+import type { ShortTermRecallEntry } from "./short-term-promotion-types.js";
 import {
   buildDailyClaimEntryKey,
   buildClaimHash,
@@ -36,30 +42,20 @@ const SHORT_TERM_SOURCE_FILE_CHECK_CONCURRENCY = 32;
 
 function mergeRecallProvenance(
   existing: MemoryEntryProvenance | undefined,
-  incoming: MemoryEntryProvenance | undefined,
-  nowMs: number,
+  incoming: MemoryEntryProvenance,
 ): MemoryEntryProvenance {
-  // Recorded recalls are memory-source only (workspace files, filtered by the
-  // caller), so a hit that carries no explicit provenance defaults to 'agent'
-  // to match the index provenance trigger. Untrusted only arrives when a hit
-  // explicitly carries it, and then the merge below keeps the taint.
-  const next = incoming ?? {
-    originClass: "agent" as const,
-    sessionKind: "unknown" as const,
-    observedAt: nowMs,
-  };
   if (!existing) {
-    return next;
+    return incoming;
   }
   const priority = ["owner", "agent", "system", "untrusted"] as const;
   const originClass = priority.findLast(
-    (origin) => origin === existing.originClass || origin === next.originClass,
+    (origin) => origin === existing.originClass || origin === incoming.originClass,
   );
   return {
     originClass: originClass ?? "untrusted",
-    sessionKind: existing.sessionKind === next.sessionKind ? next.sessionKind : "unknown",
-    observedAt: Math.max(existing.observedAt, next.observedAt),
-    ...(existing.supersedesKey && existing.supersedesKey === next.supersedesKey
+    sessionKind: existing.sessionKind === incoming.sessionKind ? incoming.sessionKind : "unknown",
+    observedAt: Math.max(existing.observedAt, incoming.observedAt),
+    ...(existing.supersedesKey && existing.supersedesKey === incoming.supersedesKey
       ? { supersedesKey: existing.supersedesKey }
       : {}),
   };
@@ -134,31 +130,19 @@ function buildMemoryRecallSkippedEvent(params: {
   };
 }
 
-async function updateShortTermRecallStore(
-  workspaceDir: string,
-  nowIso: string,
-  update: (store: ShortTermRecallStore) => void | Promise<void>,
-  afterWrite?: () => Promise<void>,
-): Promise<void> {
-  await withShortTermLock(workspaceDir, async () => {
-    const store = await readStore(workspaceDir, nowIso);
-    await update(store);
-    store.updatedAt = nowIso;
-    await writeStore(workspaceDir, store);
-    await afterWrite?.();
-  });
-}
-
 export async function recordShortTermRecalls(params: {
   workspaceDir?: string;
   query: string;
   results: Array<
     MemorySearchResult & {
       identitySnippet?: string;
-      sessionOrigin?: { agentId: string; sessionId: string; sessionKey?: string };
+      sessionOrigin?: SessionEntryOrigin;
+      query?: string;
+      signalCount?: number;
+      dayBucket?: string;
     }
   >;
-  signalType?: "recall" | "daily";
+  signalType?: "recall" | "daily" | "grounded";
   dedupeByQueryPerDay?: boolean;
   dayBucket?: string;
   nowMs?: number;
@@ -172,10 +156,11 @@ export async function recordShortTermRecalls(params: {
   if (!query) {
     return;
   }
+  const signalType = params.signalType ?? "recall";
   const memoryResults = params.results.filter((result) => result.source === "memory");
   const relevant = memoryResults.filter((result) => isShortTermMemoryPath(result.path));
   const skipped = memoryResults.filter((result) => !isShortTermMemoryPath(result.path));
-  if (relevant.length === 0 && skipped.length === 0) {
+  if (relevant.length === 0 && (skipped.length === 0 || signalType === "grounded")) {
     return;
   }
 
@@ -193,175 +178,215 @@ export async function recordShortTermRecalls(params: {
     );
     return;
   }
-  const signalType = params.signalType ?? "recall";
-  const queryHash = hashQuery(query);
-  const origins: MemoryEntryOrigin[] = [];
-  const todayBucket =
-    normalizeIsoDay(params.dayBucket ?? "") ?? formatMemoryDreamingDay(nowMs, params.timezone);
-  await updateShortTermRecallStore(
-    workspaceDir,
-    nowIso,
-    (store) => {
-      for (const result of relevant) {
-        const normalizedPath = normalizeMemoryPath(result.path);
-        const rawSnippet = normalizeSnippet(result.snippet);
-        const snippet = truncateShortTermSnippet(rawSnippet);
-        if (
-          !rawSnippet ||
-          isContaminatedDreamingSnippet(rawSnippet, {
-            allowTranscriptTurnSnippet: isShortTermSessionCorpusPath(normalizedPath),
-          })
-        ) {
-          continue;
-        }
-        const identitySnippet =
-          signalType === "daily"
-            ? normalizeSnippet(result.identitySnippet ?? rawSnippet)
-            : rawSnippet;
-        const claimHash = buildClaimHash(identitySnippet);
-        const nonDailyEntry =
-          signalType === "daily"
-            ? Object.values(store.entries).find(
-                (entry) =>
-                  !entry.key.startsWith("memory:claim:") &&
-                  Math.max(0, Math.floor(entry.recallCount ?? 0)) +
-                    Math.max(0, Math.floor(entry.groundedCount ?? 0)) >
-                    0 &&
-                  entry.claimHash === claimHash,
-              )
-            : undefined;
-        // Interactive/grounded writers retain their path-qualified identity. Do
-        // not create a competing daily aggregate for the same claim; reinforce
-        // the existing authoritative candidate instead.
-        const groundedKey = claimHash
-          ? signalType === "daily"
-            ? // Interactive recall intentionally retains its path/range identity;
-              // only daily ingestion aggregates cross-file recurrence by claim.
-              buildDailyClaimEntryKey(claimHash)
-            : buildEntryKey({
-                path: normalizedPath,
-                startLine: Math.max(1, Math.floor(result.startLine)),
-                endLine: Math.max(1, Math.floor(result.endLine)),
-                source: "memory",
-                claimHash,
-              })
-          : null;
-        const baseKey = buildEntryKey(result);
-        const key =
-          nonDailyEntry?.key ??
-          (signalType === "daily" && groundedKey
-            ? groundedKey
-            : groundedKey && store.entries[groundedKey]
-              ? groundedKey
-              : baseKey);
-        const existing = store.entries[key];
-        const score = clampScore(result.score);
-        const recallDaysBase = existing?.recallDays ?? [];
-        const queryHashesBase = existing?.queryHashes ?? [];
-        const dedupeSignal =
-          Boolean(params.dedupeByQueryPerDay) &&
-          queryHashesBase.includes(queryHash) &&
-          recallDaysBase.includes(todayBucket);
-        const recallCount =
-          signalType === "recall"
-            ? Math.max(0, Math.floor(existing?.recallCount ?? 0) + (dedupeSignal ? 0 : 1))
-            : Math.max(0, Math.floor(existing?.recallCount ?? 0));
-        const dailyCount =
-          signalType === "daily"
-            ? Math.max(0, Math.floor(existing?.dailyCount ?? 0) + (dedupeSignal ? 0 : 1))
-            : Math.max(0, Math.floor(existing?.dailyCount ?? 0));
-        const totalScore = Math.max(0, (existing?.totalScore ?? 0) + (dedupeSignal ? 0 : score));
-        const maxScore = Math.max(existing?.maxScore ?? 0, dedupeSignal ? 0 : score);
-        const queryHashes = mergeQueryHashes(existing?.queryHashes ?? [], queryHash);
-        const recallDays = mergeRecentDistinct(recallDaysBase, todayBucket, MAX_RECALL_DAYS);
-        const conceptTags = deriveConceptTags({ path: normalizedPath, snippet });
-        const provenance = mergeRecallProvenance(existing?.provenance, result.provenance, nowMs);
-        const projectKey = mergeProjectKeyLists(existing?.projectKey, result.projectKey);
-
-        const unchangedRepeatedSignal =
-          (Boolean(params.dedupeByQueryPerDay) || signalType === "daily") &&
-          queryHashesBase.includes(queryHash) &&
-          existing?.snippet === snippet;
-        // This preserves freshness only. dedupeSignal above independently owns
-        // whether counts/scores advance, so changed-file daily ingestion still adds evidence.
-        const lastRecalledAt = unchangedRepeatedSignal
-          ? (existing?.lastRecalledAt ?? nowIso)
-          : nowIso;
-        // Daily claim keys deliberately omit the file path so the same fact in
-        // three distinct day files accumulates three query/day signals and can
-        // clear the default dreaming gates. Keep the first source for citation.
-        const preserveFirstDailySource = signalType === "daily" && existing !== undefined;
-
-        store.entries[key] = {
-          key,
-          path: preserveFirstDailySource ? existing.path : normalizedPath,
-          startLine: preserveFirstDailySource
-            ? existing.startLine
-            : Math.max(1, Math.floor(result.startLine)),
-          endLine: preserveFirstDailySource
-            ? existing.endLine
-            : Math.max(1, Math.floor(result.endLine)),
-          source: "memory",
-          snippet: snippet || existing?.snippet || "",
-          recallCount,
-          dailyCount,
-          groundedCount: Math.max(0, Math.floor(existing?.groundedCount ?? 0)),
-          totalScore,
-          maxScore,
-          firstRecalledAt: existing?.firstRecalledAt ?? nowIso,
-          lastRecalledAt,
-          queryHashes,
-          recallDays,
-          conceptTags: conceptTags.length > 0 ? conceptTags : (existing?.conceptTags ?? []),
-          provenance,
-          claimHash,
-          ...(projectKey ? { projectKey } : {}),
-          ...(existing?.promotedAt ? { promotedAt: existing.promotedAt } : {}),
-        };
-        if (result.sessionOrigin) {
-          origins.push({
-            entryKey: key,
-            agentId: result.sessionOrigin.agentId,
-            sessionId: result.sessionOrigin.sessionId,
-            sessionKey: result.sessionOrigin.sessionKey ?? null,
-            originClass: provenance.originClass,
-            observedAt: provenance.observedAt,
-          });
-        }
+  const sourceSessions = new Map<string, Set<string>>();
+  for (const { sessionOrigin } of relevant) {
+    if (sessionOrigin) {
+      const sessions = sourceSessions.get(sessionOrigin.agentId) ?? new Set<string>();
+      sessions.add(sessionOrigin.sessionId);
+      sourceSessions.set(sessionOrigin.agentId, sessions);
+    }
+  }
+  const todayBucket = formatMemoryDreamingDay(nowMs, params.timezone);
+  await withMemoryWorkspaceLock(workspaceDir, async () => {
+    const store = await readStore(workspaceDir, nowIso);
+    const forgottenByAgent = new Map<string, Set<string>>();
+    for (const [agentId, sessionIds] of sourceSessions) {
+      forgottenByAgent.set(
+        agentId,
+        new Set(
+          listMemorySessionTombstones({ agentId, sessionIds: [...sessionIds] }).map(
+            (entry) => entry.sessionId,
+          ),
+        ),
+      );
+    }
+    // Revalidate after acquiring the shared mutation lock: a purge can finish
+    // while transcript scanning or a previous staging operation is awaited.
+    const admitted = relevant.filter(
+      ({ sessionOrigin }) =>
+        !sessionOrigin ||
+        !forgottenByAgent.get(sessionOrigin.agentId)?.has(sessionOrigin.sessionId),
+    );
+    if (admitted.length === 0) {
+      return;
+    }
+    const origins: MemoryEntryOrigin[] = [];
+    for (const result of admitted) {
+      const normalizedPath = normalizeMemoryPath(result.path);
+      const rawSnippet = normalizeSnippet(result.snippet);
+      const snippet = truncateShortTermSnippet(rawSnippet);
+      if (
+        !rawSnippet ||
+        (signalType === "grounded" &&
+          (!Number.isFinite(result.startLine) || !Number.isFinite(result.endLine))) ||
+        isContaminatedDreamingSnippet(rawSnippet, {
+          allowTranscriptTurnSnippet:
+            signalType !== "grounded" && isShortTermSessionCorpusPath(normalizedPath),
+        })
+      ) {
+        continue;
       }
-    },
-    async () => {
-      for (const agentId of new Set(origins.map((origin) => origin.agentId))) {
-        recordMemoryEntryOrigins({
-          agentId,
-          origins: origins.filter((origin) => origin.agentId === agentId),
+      const identitySnippet =
+        signalType === "daily"
+          ? normalizeSnippet(result.identitySnippet ?? rawSnippet)
+          : rawSnippet;
+      const claimHash = buildClaimHash(identitySnippet);
+      const nonDailyEntry =
+        signalType === "daily"
+          ? Object.values(store.entries).find(
+              (entry) =>
+                !entry.key.startsWith("memory:claim:") &&
+                Math.max(0, Math.floor(entry.recallCount ?? 0)) +
+                  Math.max(0, Math.floor(entry.groundedCount ?? 0)) >
+                  0 &&
+                entry.claimHash === claimHash,
+            )
+          : undefined;
+      // Interactive/grounded writers retain their path-qualified identity.
+      // Daily recurrence reinforces that candidate instead of creating a rival.
+      const claimKey =
+        signalType === "daily"
+          ? buildDailyClaimEntryKey(claimHash)
+          : buildEntryKey({
+              path: normalizedPath,
+              startLine: Math.max(1, Math.floor(result.startLine)),
+              endLine: Math.max(1, Math.floor(result.endLine)),
+              source: "memory",
+              claimHash,
+            });
+      const key =
+        nonDailyEntry?.key ??
+        (signalType !== "recall" || store.entries[claimKey] ? claimKey : buildEntryKey(result));
+      const existing = store.entries[key];
+      const score = clampScore(result.score);
+      const effectiveQuery =
+        signalType === "grounded" ? normalizeSnippet(result.query ?? query) || query : query;
+      const queryHash = hashQuery(effectiveQuery);
+      const dayBucket =
+        normalizeIsoDay(
+          (signalType === "grounded" ? result.dayBucket : undefined) ?? params.dayBucket ?? "",
+        ) ?? todayBucket;
+      const signalCount =
+        signalType === "grounded" ? Math.max(1, Math.floor(result.signalCount ?? 1)) : 1;
+      const recallDaysBase = existing?.recallDays ?? [];
+      const queryHashesBase = existing?.queryHashes ?? [];
+      const dedupeSignal =
+        Boolean(params.dedupeByQueryPerDay) &&
+        queryHashesBase.includes(queryHash) &&
+        recallDaysBase.includes(dayBucket);
+      const addedSignals = dedupeSignal ? 0 : signalCount;
+      const recallCount = Math.max(
+        0,
+        Math.floor(existing?.recallCount ?? 0) + (signalType === "recall" ? addedSignals : 0),
+      );
+      const dailyCount = Math.max(
+        0,
+        Math.floor(existing?.dailyCount ?? 0) + (signalType === "daily" ? addedSignals : 0),
+      );
+      const groundedCount = Math.max(
+        0,
+        Math.floor(existing?.groundedCount ?? 0) + (signalType === "grounded" ? addedSignals : 0),
+      );
+      const totalScore = Math.max(0, (existing?.totalScore ?? 0) + score * addedSignals);
+      const maxScore = Math.max(existing?.maxScore ?? 0, dedupeSignal ? 0 : score);
+      const queryHashes = mergeQueryHashes(existing?.queryHashes ?? [], queryHash);
+      const recallDays = mergeRecentDistinct(recallDaysBase, dayBucket, MAX_RECALL_DAYS);
+      const conceptTags = deriveConceptTags({ path: normalizedPath, snippet });
+      // Workspace-file hits without explicit provenance retain the index's
+      // agent default; source-origin rows keep these facts before trust merges.
+      const sourceProvenance = result.provenance ?? {
+        originClass: "agent" as const,
+        sessionKind: "unknown" as const,
+        observedAt: nowMs,
+      };
+      const provenance = mergeRecallProvenance(existing?.provenance, sourceProvenance);
+      const projectKey = mergeProjectKeyLists(existing?.projectKey, result.projectKey);
+      const unchangedRepeatedSignal =
+        (Boolean(params.dedupeByQueryPerDay) || signalType === "daily") &&
+        queryHashesBase.includes(queryHash) &&
+        existing?.snippet === snippet;
+      // Freshness and signal counting are independent: changed daily content
+      // may add evidence without a repeated query refreshing an old claim.
+      const lastRecalledAt = unchangedRepeatedSignal
+        ? (existing?.lastRecalledAt ?? nowIso)
+        : nowIso;
+      // Daily claim keys omit the file path; retain the first source citation
+      // while observations from distinct days accumulate on the same claim.
+      const preserveFirstDailySource = signalType === "daily" && existing !== undefined;
+      store.entries[key] = {
+        key,
+        path: preserveFirstDailySource ? existing.path : normalizedPath,
+        startLine: preserveFirstDailySource
+          ? existing.startLine
+          : Math.max(1, Math.floor(result.startLine)),
+        endLine: preserveFirstDailySource
+          ? existing.endLine
+          : Math.max(1, Math.floor(result.endLine)),
+        source: "memory",
+        snippet: snippet || existing?.snippet || "",
+        recallCount,
+        dailyCount,
+        groundedCount,
+        totalScore,
+        maxScore,
+        firstRecalledAt: existing?.firstRecalledAt ?? nowIso,
+        lastRecalledAt,
+        queryHashes,
+        recallDays,
+        conceptTags: conceptTags.length > 0 ? conceptTags : (existing?.conceptTags ?? []),
+        provenance,
+        claimHash,
+        ...(projectKey ? { projectKey } : {}),
+        ...(existing?.promotedAt ? { promotedAt: existing.promotedAt } : {}),
+      };
+      if (result.sessionOrigin) {
+        origins.push({
+          entryKey: key,
+          agentId: result.sessionOrigin.agentId,
+          sessionId: result.sessionOrigin.sessionId,
+          sessionKey: result.sessionOrigin.sessionKey ?? null,
+          originClass: sourceProvenance.originClass,
+          observedAt: sourceProvenance.observedAt,
         });
       }
-      await appendMemoryHostEvent(workspaceDir, {
-        type: "memory.recall.recorded",
-        timestamp: nowIso,
-        query,
-        resultCount: relevant.length,
-        results: relevant.map((result) => ({
-          path: normalizeMemoryPath(result.path),
-          startLine: Math.max(1, Math.floor(result.startLine)),
-          endLine: Math.max(1, Math.floor(result.endLine)),
-          score: clampScore(result.score),
-        })),
+    }
+    // Reserve lineage before publishing candidates. A failed provenance write
+    // must not leave durable staged content without its source-session facts.
+    for (const agentId of sourceSessions.keys()) {
+      recordMemoryEntryOrigins({
+        agentId,
+        origins: origins.filter((origin) => origin.agentId === agentId),
       });
-      if (skipped.length > 0) {
-        await appendMemoryHostEvent(
-          workspaceDir,
-          buildMemoryRecallSkippedEvent({
-            timestamp: nowIso,
-            query,
-            eligibleResultCount: relevant.length,
-            skipped,
-          }),
-        );
-      }
-    },
-  );
+    }
+    store.updatedAt = nowIso;
+    await writeStore(workspaceDir, store);
+    if (signalType === "grounded") {
+      return;
+    }
+    await appendMemoryHostEvent(workspaceDir, {
+      type: "memory.recall.recorded",
+      timestamp: nowIso,
+      query,
+      resultCount: admitted.length,
+      results: admitted.map((result) => ({
+        path: normalizeMemoryPath(result.path),
+        startLine: Math.max(1, Math.floor(result.startLine)),
+        endLine: Math.max(1, Math.floor(result.endLine)),
+        score: clampScore(result.score),
+      })),
+    });
+    if (skipped.length > 0) {
+      await appendMemoryHostEvent(
+        workspaceDir,
+        buildMemoryRecallSkippedEvent({
+          timestamp: nowIso,
+          query,
+          eligibleResultCount: admitted.length,
+          skipped,
+        }),
+      );
+    }
+  });
 }
 
 export async function recordGroundedShortTermCandidates(params: {
@@ -377,133 +402,19 @@ export async function recordGroundedShortTermCandidates(params: {
     signalCount?: number;
     dayBucket?: string;
     projectKey?: string;
+    provenance?: MemoryEntryProvenance;
+    sessionOrigin?: SessionEntryOrigin;
   }>;
   dedupeByQueryPerDay?: boolean;
   dayBucket?: string;
   nowMs?: number;
   timezone?: string;
 }): Promise<void> {
-  const workspaceDir = params.workspaceDir?.trim();
-  if (!workspaceDir) {
-    return;
-  }
-  const query = params.query.trim();
-  if (!query) {
-    return;
-  }
-  const relevant = params.items
-    .map((item) => {
-      const rawSnippet = normalizeSnippet(item.snippet);
-      const snippet = truncateShortTermSnippet(rawSnippet);
-      const normalizedPath = normalizeMemoryPath(item.path);
-      if (
-        !rawSnippet ||
-        isContaminatedDreamingSnippet(rawSnippet) ||
-        !normalizedPath ||
-        !isShortTermMemoryPath(normalizedPath) ||
-        !Number.isFinite(item.startLine) ||
-        !Number.isFinite(item.endLine)
-      ) {
-        return null;
-      }
-      return {
-        path: normalizedPath,
-        startLine: Math.max(1, Math.floor(item.startLine)),
-        endLine: Math.max(1, Math.floor(item.endLine)),
-        snippet,
-        identitySnippet: rawSnippet,
-        score: clampScore(item.score),
-        query: normalizeSnippet(item.query ?? query),
-        signalCount: Math.max(1, Math.floor(item.signalCount ?? 1)),
-        dayBucket: normalizeIsoDay(item.dayBucket ?? params.dayBucket ?? ""),
-        projectKey: mergeProjectKeyLists(item.projectKey),
-      };
-    })
-    .filter((item): item is NonNullable<typeof item> => item !== null);
-  if (relevant.length === 0) {
-    return;
-  }
-
-  const nowMs = resolveMemoryCoreNowMs(params.nowMs);
-  const nowIso = resolveMemoryCoreTimestamp(nowMs);
-  const fallbackDayBucket = formatMemoryDreamingDay(nowMs, params.timezone);
-  await updateShortTermRecallStore(workspaceDir, nowIso, (store) => {
-    for (const item of relevant) {
-      const dayBucket = item.dayBucket ?? fallbackDayBucket;
-      const effectiveQuery = item.query || query;
-      if (!effectiveQuery) {
-        continue;
-      }
-      const queryHash = hashQuery(effectiveQuery);
-      const claimHash = buildClaimHash(item.identitySnippet);
-      const key = buildEntryKey({
-        path: item.path,
-        startLine: item.startLine,
-        endLine: item.endLine,
-        source: "memory",
-        claimHash,
-      });
-      const existing = store.entries[key];
-      const recallDaysBase = existing?.recallDays ?? [];
-      const queryHashesBase = existing?.queryHashes ?? [];
-      const dedupeSignal =
-        Boolean(params.dedupeByQueryPerDay) &&
-        queryHashesBase.includes(queryHash) &&
-        recallDaysBase.includes(dayBucket);
-      const groundedCount = Math.max(
-        0,
-        Math.floor(existing?.groundedCount ?? 0) + (dedupeSignal ? 0 : item.signalCount),
-      );
-      const totalScore = Math.max(
-        0,
-        (existing?.totalScore ?? 0) + (dedupeSignal ? 0 : item.score * item.signalCount),
-      );
-      const maxScore = Math.max(existing?.maxScore ?? 0, dedupeSignal ? 0 : item.score);
-      const queryHashes = mergeQueryHashes(existing?.queryHashes ?? [], queryHash);
-      const recallDays = mergeRecentDistinct(recallDaysBase, dayBucket, MAX_RECALL_DAYS);
-      const conceptTags = deriveConceptTags({ path: item.path, snippet: item.snippet });
-      const provenance = mergeRecallProvenance(
-        existing?.provenance,
-        {
-          originClass: "agent",
-          sessionKind: "unknown",
-          observedAt: nowMs,
-        },
-        nowMs,
-      );
-      const projectKey = mergeProjectKeyLists(existing?.projectKey, item.projectKey);
-
-      const unchangedRepeatedSignal =
-        Boolean(params.dedupeByQueryPerDay) &&
-        queryHashesBase.includes(queryHash) &&
-        existing?.snippet === item.snippet;
-      const lastRecalledAt = unchangedRepeatedSignal
-        ? (existing?.lastRecalledAt ?? nowIso)
-        : nowIso;
-
-      store.entries[key] = {
-        key,
-        path: item.path,
-        startLine: item.startLine,
-        endLine: item.endLine,
-        source: "memory",
-        snippet: item.snippet,
-        recallCount: Math.max(0, Math.floor(existing?.recallCount ?? 0)),
-        dailyCount: Math.max(0, Math.floor(existing?.dailyCount ?? 0)),
-        groundedCount,
-        totalScore,
-        maxScore,
-        firstRecalledAt: existing?.firstRecalledAt ?? nowIso,
-        lastRecalledAt,
-        queryHashes,
-        recallDays,
-        conceptTags: conceptTags.length > 0 ? conceptTags : (existing?.conceptTags ?? []),
-        provenance,
-        claimHash,
-        ...(projectKey ? { projectKey } : {}),
-        ...(existing?.promotedAt ? { promotedAt: existing.promotedAt } : {}),
-      };
-    }
+  const { items, ...options } = params;
+  await recordShortTermRecalls({
+    ...options,
+    signalType: "grounded",
+    results: items.map((item) => Object.assign({}, item, { source: "memory" as const })),
   });
 }
 

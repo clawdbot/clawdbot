@@ -26,6 +26,24 @@ const configuredProfile = {
 };
 
 describe("cloud worker settings state", () => {
+  it.each([undefined, ""])("requires an explicit class for an empty draft (%j)", (machineClass) => {
+    const profile = readCloudWorkerProfiles({
+      cloudWorkers: {
+        profiles: {
+          production: {
+            ...configuredProfile,
+            settings: { ...configuredProfile.settings, class: machineClass },
+          },
+        },
+      },
+    })[0];
+    const draft = createCloudWorkerDraft(machineClass === undefined ? undefined : profile);
+    expect(draft.machineClass).toBe("");
+    expect(
+      validateCloudWorkerDraft({ ...draft, id: "new-profile", backend: "hetzner" }, {}, null),
+    ).toBe("machineClass");
+  });
+
   it("distinguishes empty, advertised, and restart-required profiles", () => {
     expect(readCloudWorkerProfiles({})).toEqual([]);
     expect(
@@ -61,7 +79,13 @@ describe("cloud worker settings state", () => {
     ["idleTimeout", { idleTimeout: "0m" }],
     ["binary", { binary: "relative/crabbox" }],
   ] as const)("returns %s for an invalid add draft", (expected, patch) => {
-    const draft = { ...createCloudWorkerDraft(), id: "new-profile", backend: "hetzner", ...patch };
+    const draft = {
+      ...createCloudWorkerDraft(),
+      id: "new-profile",
+      backend: "hetzner",
+      machineClass: "standard",
+      ...patch,
+    };
     expect(validateCloudWorkerDraft(draft, { production: configuredProfile }, null)).toBe(expected);
   });
 
@@ -104,25 +128,38 @@ describe("cloud worker settings state", () => {
     });
   });
 
-  it("preserves forwarded setup environment while its setup command remains configured", () => {
-    const config = { cloudWorkers: { profiles: { production: configuredProfile } } };
-    const draft = createCloudWorkerDraft(readCloudWorkerProfiles(config)[0]);
+  it.each(["standard", "fast", "large", "beast", "custom", "batch/ARM64.v2", "x".repeat(128)])(
+    "preserves class %s and hidden settings when backend and binary change",
+    (machineClass) => {
+      const profile = {
+        ...configuredProfile,
+        settings: { ...configuredProfile.settings, class: machineClass },
+      };
+      const config = { cloudWorkers: { profiles: { production: profile } } };
+      const draft = {
+        ...createCloudWorkerDraft(readCloudWorkerProfiles(config)[0]),
+        backend: "hetzner",
+        binary: "/opt/crabbox-next",
+      };
 
-    expect(buildCloudWorkerUpsertPatch(config, draft, "production")).toMatchObject({
-      patch: {
-        cloudWorkers: {
-          profiles: {
-            production: {
-              settings: {
-                setup: "install-node",
-                setupEnv: ["OPENCLAW_WORKER_ARTIFACT_TOKEN"],
+      expect(buildCloudWorkerUpsertPatch(config, draft, "production")).toEqual({
+        patch: {
+          cloudWorkers: {
+            profiles: {
+              production: {
+                ...profile,
+                settings: {
+                  ...profile.settings,
+                  provider: "hetzner",
+                  binary: "/opt/crabbox-next",
+                },
               },
             },
           },
         },
-      },
-    });
-  });
+      });
+    },
+  );
 
   it.each([undefined, []])("keeps empty setup environment unchanged (%j)", (setupEnv) => {
     const existingSettings = Object.fromEntries(

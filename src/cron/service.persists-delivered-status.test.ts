@@ -732,17 +732,29 @@ describe("CronService persists delivered status", () => {
     }
   });
 
-  it("persists lastDelivered=true when isolated job reports delivered", async () => {
+  it("persists and emits verified mode-none message-tool delivery", async () => {
+    let finishedEvent: { delivered?: boolean; deliveryStatus?: string } | undefined;
     const updated = await runIsolatedJobAndReadState({
-      job: buildAnnounceIsolatedAgentTurnJob("delivered-true"),
+      job: {
+        ...buildIsolatedAgentTurnJob("mode-none-verified-delivery"),
+        delivery: { mode: "none", channel: "forum", to: "123" },
+      },
       delivered: true,
+      delivery: {
+        delivered: true,
+        resolved: { ok: true, channel: "forum", to: "123" },
+        messageToolSentTo: [{ channel: "forum", to: "123" }],
+      },
+      onFinished: (event) => (finishedEvent = event),
     });
+
     expectSuccessfulCronRun(updated);
-    expect(updated?.state.lastDelivered).toBe(true);
-    expect(updated?.state.lastDeliveryStatus).toBe("delivered");
-    expect(updated?.state.lastDeliveryError).toBeUndefined();
-    expect(updated?.state.lastFailureNotificationDelivered).toBeUndefined();
-    expect(updated?.state.lastFailureNotificationDeliveryStatus).toBe("not-requested");
+    expect(updated?.state).toMatchObject({
+      lastDelivered: true,
+      lastDeliveryStatus: "delivered",
+      lastFailureNotificationDeliveryStatus: "not-requested",
+    });
+    expect(finishedEvent).toMatchObject({ delivered: true, deliveryStatus: "delivered" });
   });
 
   it("persists lastDelivered=false when isolated job explicitly reports not delivered", async () => {
@@ -924,20 +936,6 @@ describe("CronService persists delivered status", () => {
     expect(enqueueSystemEvent).toHaveBeenCalled();
 
     cron.stop();
-  });
-
-  it("emits delivered in the finished event", async () => {
-    let capturedEvent: { jobId: string; delivered?: boolean; deliveryStatus?: string } | undefined;
-    await runIsolatedJobAndReadState({
-      job: buildAnnounceIsolatedAgentTurnJob("event-test"),
-      delivered: true,
-      onFinished: (evt) => {
-        capturedEvent = evt;
-      },
-    });
-
-    expect(capturedEvent?.delivered).toBe(true);
-    expect(capturedEvent?.deliveryStatus).toBe("delivered");
   });
 
   it("surfaces a successful run's delivery error on the finished event", async () => {

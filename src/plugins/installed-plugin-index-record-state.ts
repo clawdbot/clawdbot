@@ -10,10 +10,6 @@ import {
   type InstalledPluginIndexStoreOptions,
 } from "./installed-plugin-index-store-path.js";
 
-type InstalledPluginIndexRecordRow = {
-  install_records_json: string;
-};
-
 export function inspectPersistedInstalledPluginIndexInstallRecordsSync(
   options: InstalledPluginIndexStoreOptions = {},
 ): PluginInstallRecordMapState {
@@ -27,26 +23,26 @@ export function inspectPersistedInstalledPluginIndexInstallRecordsSync(
           .prepare(
             `SELECT 1
              FROM sqlite_master
-            WHERE type = 'table' AND name = 'installed_plugin_index'`,
+            WHERE type = 'table' AND name = 'config_machine_state'`,
           )
           .get();
         if (!hasTable) {
           return { status: "missing" };
         }
         const row = db
-          .prepare(
-            `
-            SELECT install_records_json
-              FROM installed_plugin_index
-             WHERE index_key = ?
-          `,
-          )
-          .get("installed-plugin-index") as InstalledPluginIndexRecordRow | undefined;
+          .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
+          // SAFETY: config_machine_state.value_json is TEXT NOT NULL under STRICT.
+          .get("plugins.installedIndex") as { value_json: string } | undefined;
         if (!row) {
           return { status: "missing" };
         }
-        const parsed = safeParseJson(row.install_records_json);
-        return parsed === undefined ? { status: "invalid" } : inspectPluginInstallRecordMap(parsed);
+        const value = safeParseJson(row.value_json) as
+          | { index?: { installRecords?: unknown } }
+          | undefined;
+        const installRecords = value?.index?.installRecords;
+        return installRecords === undefined
+          ? { status: "invalid" }
+          : inspectPluginInstallRecordMap(installRecords);
       }, resolveInstalledPluginIndexStateDatabaseOptions(options)) ?? { status: "missing" }
     );
   } catch (error) {

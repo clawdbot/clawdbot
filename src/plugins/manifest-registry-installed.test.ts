@@ -120,7 +120,7 @@ function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {
   return Object.freeze(value);
 }
 
-function writePackageManifest(rootDir: string, channelLabel: string) {
+function writePackageManifest(rootDir: string, channelLabel: string, selectionDocsPrefix?: string) {
   const packageJsonPath = path.join(rootDir, "package.json");
   fs.writeFileSync(
     packageJsonPath,
@@ -134,6 +134,7 @@ function writePackageManifest(rootDir: string, channelLabel: string) {
         channel: {
           id: "installed",
           label: channelLabel,
+          ...(selectionDocsPrefix !== undefined ? { selectionDocsPrefix } : {}),
         },
       },
     }),
@@ -142,9 +143,12 @@ function writePackageManifest(rootDir: string, channelLabel: string) {
   return packageJsonPath;
 }
 
-function createIndexWithPackageJson(rootDir: string): InstalledPluginIndex {
+function createIndexWithPackageJson(
+  rootDir: string,
+  selectionDocsPrefix?: string,
+): InstalledPluginIndex {
   const index = createIndexWithFileSignatures(rootDir);
-  const packageJsonPath = writePackageManifest(rootDir, "Installed");
+  const packageJsonPath = writePackageManifest(rootDir, "Installed", selectionDocsPrefix);
   const record = index.plugins[0];
   if (!record) {
     throw new Error("expected index record");
@@ -179,6 +183,16 @@ function createIndexWithUnhashedPackageJson(rootDir: string): InstalledPluginInd
 }
 
 describe("loadPluginManifestRegistryForInstalledIndex", () => {
+  const loadRegistry = (index: InstalledPluginIndex) =>
+    loadPluginManifestRegistryForInstalledIndex({
+      index,
+      env: {
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      },
+      includeDisabled: true,
+    });
+
   it("reuses frozen installed-index fingerprints when file signatures are persisted", () => {
     const rootDir = makeTempDir();
     writePlugin(rootDir, "installed", "installed-");
@@ -328,6 +342,38 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     expect(third.plugins[0]?.packageDependencies).toEqual({
       "runtime-dep": "1.0.0",
     });
+  });
+
+  it("preserves empty docs prefixes from package channel metadata", () => {
+    const rootDir = makeTempDir();
+    writePlugin(rootDir, "installed", "installed-");
+
+    const registry = loadRegistry(createIndexWithPackageJson(rootDir, ""));
+
+    expect(registry.plugins[0]?.packageChannel?.selectionDocsPrefix).toBe("");
+  });
+
+  it("preserves empty docs prefixes from persisted installed-index metadata", () => {
+    const rootDir = makeTempDir();
+    writePlugin(rootDir, "installed", "installed-");
+    const index = createIndex(rootDir);
+    const record = expectDefined(index.plugins[0], "index.plugins[0] test invariant");
+
+    const registry = loadRegistry({
+      ...index,
+      plugins: [
+        {
+          ...record,
+          packageChannel: {
+            id: "installed",
+            label: "Installed",
+            selectionDocsPrefix: "",
+          },
+        },
+      ],
+    });
+
+    expect(registry.plugins[0]?.packageChannel?.selectionDocsPrefix).toBe("");
   });
 
   it("reuses installed package json path validation across registry loads", () => {

@@ -22,6 +22,7 @@ import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginSubagentRequesterContext } from "../../plugins/runtime/subagent-requester-context.js";
 import type { RuntimePluginToolGrant } from "../../plugins/runtime/tool-grant.js";
+import type { PluginRuntimeCore } from "../../plugins/runtime/types-core.js";
 import type { SystemAgentOperation } from "../../system-agent/operation-types.js";
 import type { WizardSession } from "../../wizard/session.js";
 import type {
@@ -232,6 +233,11 @@ type GatewaySystemAgentSession = {
 /** Kernel-owned services and state that can be constructed without binding sockets. */
 type GatewayKernelContext = {
   deps: CliDeps;
+  /** Host-bound plugin ingress; the transport owns its shared hook dispatch queue. */
+  dispatchHookAgentTurn?: (
+    pluginId: string,
+    params: Parameters<PluginRuntimeCore["hooks"]["dispatchHookAgentTurn"]>[0],
+  ) => ReturnType<PluginRuntimeCore["hooks"]["dispatchHookAgentTurn"]>;
   configRevisionProjector: GatewayConfigRevisionProjector;
   cron: GatewayCronServiceContract;
   cronStorePath: string;
@@ -326,6 +332,7 @@ type GatewayTransportContext = {
   ensureSandboxHostPort?: () => Promise<number>;
   broadcast: GatewayBroadcastFn;
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
+  getClientConnIds?: (filter?: (client: GatewayClient) => boolean) => ReadonlySet<string>;
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
   nodeSendToAllSubscribed: (event: string, payload: unknown) => void;
   nodeSubscribe: (nodeId: string, sessionKey: string, connId?: string) => void;
@@ -333,6 +340,8 @@ type GatewayTransportContext = {
   nodeUnsubscribeAll: (nodeId: string) => void;
   hasConnectedTalkNode: () => Promise<boolean>;
   isConnectionActive?: (connId: string) => boolean;
+  /** Server-stamped activity from an accepted request on the exact live person connection. */
+  recordClientActivity?: (client: GatewayClient | null) => void;
   hasExecApprovalClients?: (excludeConnId?: string) => boolean;
   getApprovalClientConnIds?: <TPayload>(params?: {
     approvalKind?: "exec" | "plugin" | "system-agent";
@@ -444,6 +453,8 @@ export type GatewayRequestOptions = {
   respond: RespondFn;
   context: GatewayRequestContext;
   methodRegistry?: GatewayMethodRegistryView;
+  /** In-process Gateway lifetime guard composed into durable session mutations. */
+  sessionMutationCommitGuard?: () => void;
   /** In-process caller lifetime; never serialized into a Gateway request frame. */
   signal?: AbortSignal;
 };
@@ -462,6 +473,7 @@ export type GatewayRequestHandlerOptions = {
   isWebchatConnect: (params: ConnectParams | null | undefined) => boolean;
   respond: RespondFn;
   context: GatewayRequestContext;
+  sessionMutationCommitGuard?: () => void;
   sessionMutationAuthorization?: SessionMutationAuthorization;
   /** In-process caller lifetime; absent for ordinary transport requests. */
   signal?: AbortSignal;

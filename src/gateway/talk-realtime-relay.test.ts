@@ -3505,16 +3505,18 @@ describe("talk realtime gateway relay", () => {
       result: { phase: "second" },
       options: { willContinue: true },
     });
+    expect(submitToolResult).toHaveBeenCalledTimes(1);
+
+    firstAccepted.resolve();
+    await firstInterim;
+    expect(submitToolResult).toHaveBeenCalledTimes(2);
+
     const final = submitTalkRealtimeRelayToolResult({
       relaySessionId: session.relaySessionId,
       connId: "conn-1",
       callId: "call-1",
       result: { answer: "done" },
     });
-    expect(submitToolResult).toHaveBeenCalledTimes(1);
-
-    firstAccepted.resolve();
-    await vi.waitFor(() => expect(submitToolResult).toHaveBeenCalledTimes(2));
     expect(submitToolResult).not.toHaveBeenCalledWith("call-1", { answer: "done" }, undefined);
 
     secondAccepted.resolve();
@@ -3693,14 +3695,12 @@ describe("talk realtime gateway relay", () => {
   });
 
   it("supersedes a rejected in-flight final with canonical cancellation", async () => {
-    let rejectFinal: ((error: Error) => void) | undefined;
-    const rejectedFinal = new Promise<void>((_resolve, reject) => {
-      rejectFinal = reject;
-    });
+    const rejectedFinal = createDeferred();
+    const cancellationAccepted = createDeferred();
     const submitToolResult = vi
       .fn<RealtimeVoiceBridge["submitToolResult"]>()
-      .mockReturnValueOnce(rejectedFinal)
-      .mockReturnValueOnce(undefined);
+      .mockReturnValueOnce(rejectedFinal.promise)
+      .mockReturnValueOnce(cancellationAccepted.promise);
     const provider = createIdleRelayProvider();
     provider.createBridge = () =>
       makeRelayTransport({
@@ -3726,9 +3726,20 @@ describe("talk realtime gateway relay", () => {
       result: { error: "aborted" },
     });
 
-    rejectFinal?.(new Error("stale final rejected"));
+    rejectedFinal.reject(new Error("stale final rejected"));
     await expect(staleFinal).rejects.toThrow("stale final rejected");
-    await cancellation;
+    await vi.waitFor(() => expect(submitToolResult).toHaveBeenCalledTimes(2));
+
+    const duplicate = submitTalkRealtimeRelayToolResult({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      callId: "call-1",
+      result: { error: "duplicate aborted" },
+    });
+    expect(submitToolResult).toHaveBeenCalledTimes(2);
+
+    cancellationAccepted.resolve();
+    await Promise.all([cancellation, duplicate]);
     expect(submitToolResult.mock.calls.map((call) => call[1])).toEqual([
       { answer: "stale" },
       {

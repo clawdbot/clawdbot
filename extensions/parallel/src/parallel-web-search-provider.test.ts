@@ -143,7 +143,7 @@ describe("parallel web search provider", () => {
     const countParam = (paidTool({}).parameters as ToolParameters).properties.count;
     expect(countParam).toMatchObject({ type: "integer", minimum: 1, maximum: 40 });
   });
-  it("keeps the lightweight contract surface aligned with provider metadata", () => {
+  it("keeps the contract export aligned with provider metadata", () => {
     const provider = createParallelWebSearchProvider();
     const contractProvider = createContractParallelWebSearchProvider();
     const applied = expectDefined(
@@ -166,7 +166,8 @@ describe("parallel web search provider", () => {
     expect(Object.fromEntries(keys.map((key) => [key, contractProvider[key]]))).toEqual(
       Object.fromEntries(keys.map((key) => [key, provider[key]])),
     );
-    expect(contractProvider.createTool({ config: {}, searchConfig: {} })).toBeNull();
+    expect(contractProvider.createTool({ config: {}, searchConfig: {} })).not.toBeNull();
+    expect(endpointMockState.calls).toHaveLength(0);
     expect(expectDefined(applied.plugins?.entries?.parallel, "contract plugin entry").enabled).toBe(
       true,
     );

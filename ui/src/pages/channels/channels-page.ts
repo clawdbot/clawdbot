@@ -17,6 +17,7 @@ import { t } from "../../i18n/index.ts";
 import { resolveChannelPairingAuthSignature } from "../../lib/channels/index.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
+import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import {
   GatewayPageController,
   type GatewayPageChange,
@@ -567,7 +568,7 @@ class ChannelsPage extends OpenClawLightDomElement {
     this.setPairingFilter(channel, accountId);
     void this.updateComplete.then(() => {
       this.renderRoot.querySelector("#channels-pairing-requests")?.scrollIntoView({
-        behavior: "smooth",
+        behavior: resolveScrollBehavior(),
         block: "start",
       });
     });

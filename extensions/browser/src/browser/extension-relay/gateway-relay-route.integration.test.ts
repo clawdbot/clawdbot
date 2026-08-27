@@ -7,7 +7,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
+import { withEnvAsync, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket, type RawData } from "ws";
 import { parsePairingString } from "../../../chrome-extension/modules/relay-core.js";
@@ -51,10 +51,41 @@ afterEach(async () => {
 });
 
 describe.sequential("local Gateway extension relay wakeup", () => {
+  it.each([
+    { name: "disabled Browser", enabled: false, driver: "extension" as const },
+    { name: "no extension profiles", enabled: true, driver: "openclaw" as const },
+  ])("leaves the relay key absent with $name", async ({ enabled, driver }) => {
+    await withTempDir("openclaw-relay-service-", async (dir) => {
+      const stateDir = await fs.realpath(dir);
+      const credentials = path.join(stateDir, "credentials");
+      const config = {
+        gateway: { auth: { mode: "token" as const, token: "gateway-integration-test" } },
+        browser: { enabled, profiles: { chrome: { driver, cdpPort: 18799 } } },
+      };
+      setRuntimeConfigSnapshot(config, config);
+      await withEnvAsync(
+        { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_OAUTH_DIR: credentials },
+        async () => {
+          try {
+            const state = await startBrowserControlServiceFromConfig();
+            expect(state !== null).toBe(enabled);
+            await expect(
+              fs.stat(path.join(credentials, "browser-extension-relay.secret")),
+            ).rejects.toMatchObject({ code: "ENOENT" });
+          } finally {
+            await stopBrowserControlService();
+          }
+        },
+      );
+    });
+  });
+
   it.each([false, true])(
     "authenticates the extension while a browser request is already waiting: %s",
     async (browserRequestAlreadyWaiting) => {
-      const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-relay-wakeup-"));
+      const stateDir = await fs.realpath(
+        await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-relay-wakeup-")),
+      );
       try {
         const gatewayPort = await getFreePort();
         let relayPort = await getFreePort();
@@ -84,6 +115,7 @@ describe.sequential("local Gateway extension relay wakeup", () => {
         await withEnvAsync(
           {
             OPENCLAW_STATE_DIR: stateDir,
+            OPENCLAW_OAUTH_DIR: path.join(stateDir, "credentials"),
             OPENCLAW_GATEWAY_PORT: String(gatewayPort),
           },
           async () => {
@@ -106,7 +138,6 @@ describe.sequential("local Gateway extension relay wakeup", () => {
               const pairing = await buildBrowserExtensionPairing({
                 cfg: config,
                 localTransport: "gateway",
-                ensureToken: async () => RELAY_KEY,
               });
               expect(pairing).toMatchObject({ relayPort, topology: "local" });
               const parsed = parsePairingString(pairing.pairingString);

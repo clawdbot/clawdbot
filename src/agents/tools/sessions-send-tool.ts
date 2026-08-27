@@ -80,12 +80,10 @@ import {
 import { runWithScopedSessionAccess } from "./scoped-session-access.js";
 import {
   createSessionVisibilityRowChecker,
-  createAgentToAgentPolicy,
   formatSessionToolAccessDenial,
   isExpectedSessionLookupMiss,
   recordSessionToolActionFact,
   resolveDisplaySessionKey,
-  resolveEffectiveSessionToolsVisibility,
   resolveSessionReference,
   resolveSessionToolAccess,
   resolveSessionToolContext,
@@ -509,8 +507,16 @@ export function createSessionsSendTool(opts?: {
       const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
       const message = readToolStringParam(params, "message", { required: true });
       const timeoutSeconds = readNonNegativeIntegerParam(params, "timeoutSeconds") ?? 30;
-      const { cfg, mainKey, alias, effectiveRequesterKey, mainSessionKey, restrictToSpawned } =
-        resolveSessionToolContext(opts);
+      const {
+        cfg,
+        mainKey,
+        alias,
+        effectiveRequesterKey,
+        mainSessionKey,
+        restrictToSpawned,
+        sessionVisibility,
+        a2aPolicy,
+      } = resolveSessionToolContext(opts);
       let requesterAgentId: string;
       try {
         requesterAgentId = resolveSessionAgentId({
@@ -525,12 +531,6 @@ export function createSessionsSendTool(opts?: {
           error: formatErrorMessage(err),
         });
       }
-
-      const a2aPolicy = createAgentToAgentPolicy(cfg);
-      const sessionVisibility = resolveEffectiveSessionToolsVisibility({
-        cfg,
-        sandboxed: opts?.sandboxed === true,
-      });
 
       const sessionKeyParam = readToolStringParam(params, "sessionKey");
       const labelParam = normalizeOptionalString(readToolStringParam(params, "label"));

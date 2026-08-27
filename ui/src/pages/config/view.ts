@@ -16,6 +16,7 @@ import { renderAppearanceSection } from "./view-appearance.ts";
 import { computeRawDiff, formatConfigDiffPath, renderRawDiffValue } from "./view-diff.ts";
 import {
   CATEGORISED_KEYS,
+  getChannelConfigGroups,
   getSectionIcon,
   SECTION_CATEGORIES,
   type SectionCategory,
@@ -188,8 +189,30 @@ export function renderConfig(props: ConfigProps) {
       ? { id: "other", label: t("configView.categories.other"), sections: extraSections }
       : null;
 
-  // Config subsections are always rendered as a single page per section.
-  const effectiveSubsection = null;
+  const channelSchema = props.activeSection === "channels" ? schemaProps.channels : undefined;
+  const channelGroups = channelSchema ? getChannelConfigGroups(channelSchema, props.uiHints) : [];
+  const channelGroup =
+    channelGroups.find((group) => group.key === props.activeSubsection) ?? channelGroups[0];
+  // Keep the original field paths and values: Other is navigation, not a config namespace.
+  const formSchema =
+    channelSchema && channelGroup
+      ? {
+          ...analysis.schema,
+          properties: {
+            ...schemaProps,
+            channels: {
+              ...channelSchema,
+              properties: Object.fromEntries(
+                Object.entries(channelSchema.properties ?? {}).filter(([key]) =>
+                  channelGroup.keys.includes(key),
+                ),
+              ),
+              required: channelSchema.required?.filter((key) => channelGroup.keys.includes(key)),
+              additionalProperties: false,
+            },
+          },
+        }
+      : analysis.schema;
   const topTabs = [
     ...(showRootTab
       ? [{ key: null as string | null, label: props.navRootLabel ?? t("nav.settings") }]
@@ -368,7 +391,8 @@ export function renderConfig(props: ConfigProps) {
     : nothing;
   const showToolbar = showModeToggle || showSectionTabs;
   const showValidityWarning = validity === "invalid" && !viewState.validityDismissed;
-  const showLead = showToolbar || settingsLayout === "accordion" || showValidityWarning;
+  const showLead =
+    showToolbar || settingsLayout === "accordion" || showValidityWarning || Boolean(channelGroup);
 
   const lead = html`<div class="config-lead">
     ${showToolbar
@@ -403,6 +427,30 @@ export function renderConfig(props: ConfigProps) {
         </div>`
       : nothing}
     ${settingsLayout === "accordion" ? renderAccordionNav() : nothing}
+    ${channelGroup && formMode === "form"
+      ? html`<div class="config-toolbar">
+          <label class="field">
+            <span>${t("configView.channelSettings")}</span>
+            <select
+              class="settings-select"
+              .value=${channelGroup.key ?? ""}
+              @change=${(event: Event) => {
+                // SAFETY: This handler is bound directly to the native select above.
+                const select = event.currentTarget as HTMLSelectElement;
+                props.onSubsectionChange(select.value || null);
+                resetContentScroll(event.currentTarget);
+              }}
+            >
+              ${channelGroups.map(
+                (group) =>
+                  html`<option value=${group.key ?? ""} ?selected=${group.key === channelGroup.key}>
+                    ${group.label}
+                  </option>`,
+              )}
+            </select>
+          </label>
+        </div>`
+      : nothing}
     ${showValidityWarning
       ? html`<div class="config-validity-warning">
           <svg
@@ -475,7 +523,7 @@ export function renderConfig(props: ConfigProps) {
                       <span>${t("configView.loadingSchema")}</span>
                     </div>`
                   : renderConfigForm({
-                      schema: analysis.schema,
+                      schema: formSchema,
                       uiHints: props.uiHints,
                       value: props.formValue,
                       embedded: props.embeddedEditor === true,
@@ -485,7 +533,7 @@ export function renderConfig(props: ConfigProps) {
                       onPatch: props.onFormPatch,
                       onRemove: props.onFormRemove,
                       activeSection: props.activeSection,
-                      activeSubsection: effectiveSubsection,
+                      activeSubsection: null,
                       showAdvanced: effectiveShowAdvanced,
                       forceAdvancedSection: props.forceAdvancedSection,
                       onShowAdvanced: () => props.setShowAdvancedSettings(true),

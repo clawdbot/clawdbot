@@ -58,24 +58,32 @@ function makeClient(
   };
 }
 
-describe("skills event scope guards", () => {
-  it("delivers skill invalidations only to read-capable operators", () => {
-    const pairing = makeClient("pairing", "operator", ["operator.pairing"]);
-    const node = makeClient("node", "node", ["operator.read"]);
-    const read = makeClient("read", "operator", ["operator.read"]);
-    const write = makeClient("write", "operator", ["operator.write"]);
-    const admin = makeClient("admin", "operator", ["operator.admin"]);
-    const clients = new Set([pairing, node, read, write, admin].map((entry) => entry.client));
-    const { broadcast } = createGatewayBroadcaster({ clients });
+describe("read-capable operator event scope guards", () => {
+  it.each(["skills.changed", "users.prefs.changed"] as const)(
+    "delivers %s only to read-capable operators",
+    (event) => {
+      const pairing = makeClient("pairing", "operator", ["operator.pairing"]);
+      const node = makeClient("node", "node", ["operator.read"]);
+      const read = makeClient("read", "operator", ["operator.read"]);
+      const write = makeClient("write", "operator", ["operator.write"]);
+      const admin = makeClient("admin", "operator", ["operator.admin"]);
+      const clients = new Set([pairing, node, read, write, admin].map((entry) => entry.client));
+      const { broadcast } = createGatewayBroadcaster({ clients });
 
-    broadcast("skills.changed", { reason: "remote-node" });
+      broadcast(
+        event,
+        event === "users.prefs.changed"
+          ? { profileId: "profile-1", keys: ["ui.accent"] }
+          : { reason: "remote-node" },
+      );
 
-    expect(pairing.socket.events).toEqual([]);
-    expect(node.socket.events).toEqual([]);
-    expect(read.socket.events).toEqual(["skills.changed"]);
-    expect(write.socket.events).toEqual(["skills.changed"]);
-    expect(admin.socket.events).toEqual(["skills.changed"]);
-  });
+      expect(pairing.socket.events).toEqual([]);
+      expect(node.socket.events).toEqual([]);
+      expect(read.socket.events).toEqual([event]);
+      expect(write.socket.events).toEqual([event]);
+      expect(admin.socket.events).toEqual([event]);
+    },
+  );
 });
 
 describe("device setup event scope guards", () => {

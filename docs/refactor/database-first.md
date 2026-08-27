@@ -151,8 +151,9 @@ without exceptions outside doctor/import/export/debug boundaries.
   Doctor owns their validated import and verified removal.
 - Inferred commitments: retired. Extraction, delivery, runtime storage access,
   and the CLI are removed. The schema 7 migration discards canonical commitment
-  rows. Legacy `commitments.json` stays untouched and inert pending an accepted
-  retention decision.
+  rows. Explicit Doctor repair also validates and irreversibly discards the
+  exact version 1 `commitments/commitments.json` store without importing,
+  archiving, or exporting it. Unknown or unsafe files remain unchanged.
 - Doctor migration: `migrating`, intentionally. Doctor imports legacy JSON,
   JSONL, and retired sidecar stores into SQLite, records migration runs/sources,
   and removes successful sources.
@@ -202,7 +203,7 @@ without exceptions outside doctor/import/export/debug boundaries.
 - No active session files.
 - No fake JSONL test fixtures except doctor legacy migration tests.
 - No raw SQLite access where Kysely is expected.
-- No new file-era runtime stores. The current global schema is version `9`, and
+- No new file-era runtime stores. The current global schema is version `13`, and
   the current per-agent schema is version `17`; older supported databases move
   through the bounded forward migrations listed in
   [Database schemas](/reference/database-schemas).
@@ -309,23 +310,22 @@ The branch already has a real shared SQLite base:
 - Runtime stores derive selected and inserted row types from those generated
   Kysely `DB` interfaces instead of shadowing SQLite row shapes by hand. Raw SQL
   remains limited to schema application, pragmas, and migration-only DDL.
-- The global SQLite schema is at `user_version = 9`. The per-agent schema is at
+- The global SQLite schema is at `user_version = 13`. The per-agent schema is at
   version `17`; their openers apply bounded forward migrations from supported
   older schemas. File-to-database import remains in Doctor code.
 - Relational ownership is enforced where the ownership boundary is canonical:
   source migration rows cascade from `migration_runs`, task delivery state
   cascades from `task_runs`, and transcript identity rows cascade from
   transcript events.
-- Current shared tables include `agent_databases`,
-  `auth_profile_stores`, `auth_profile_state`,
+- Current shared tables include `config_machine_state`, `agent_databases`,
   `plugin_state_entries`, `plugin_blob_entries`,
   `skill_uploads`, `capture_sessions`, `capture_events`, `capture_blobs`,
   `sandbox_registry_entries`, `cron_jobs`,
   `delivery_queue_entries`,
-  `workspace_setup_state`, `workspace_path_aliases`, `workspace_attestations`,
+  `workspace_setup_state`, `workspace_path_aliases`,
   `workspace_generated_bootstrap_hashes`, `native_hook_relay_bridges`,
   `current_conversation_bindings`, `plugin_binding_approvals`,
-  `tui_last_sessions`, `acp_sessions`, `acp_replay_sessions`,
+  `acp_sessions`, `acp_replay_sessions`,
   `acp_replay_events`, `task_runs`, `task_delivery_state`, `flow_runs`,
   `subagent_runs`, `migration_runs`, and `backup_runs`.
 - Arbitrary plugin-owned state does not get host-owned typed tables. Installed
@@ -348,7 +348,7 @@ The branch already has a real shared SQLite base:
   site.
 - Global and per-agent databases record a `schema_meta` row with database role,
   schema version, timestamps, and agent id for agent databases. The global DB
-  currently uses `user_version = 9`; per-agent DBs use version `17`.
+  currently uses `user_version = 13`; per-agent DBs use version `17`.
 - Per-agent session identity now has a canonical `sessions` root table keyed by
   `session_id`, with `session_key`, `session_scope`, `account_id`,
   `primary_conversation_id`, timestamps, display fields, model metadata,
@@ -425,8 +425,9 @@ The branch already has a real shared SQLite base:
   account, session, retry, error, platform-send, and recovery state onto the
   replay JSON. `entry_json` keeps the replay payloads, hooks, and formatting
   payload, but typed columns are authoritative for hot queue routing/state.
-- TUI last-session restore pointers now live in typed shared
-  `tui_last_sessions` rows keyed by the hashed TUI connection/session scope.
+- TUI last-session restore pointers now live in shared `config_machine_state`
+  rows under `tui.lastSession.<scopeKey>`, keyed by the hashed TUI
+  connection/session scope.
   Runtime reads and writes only SQLite, atomically upserts each scope, and
   excludes heartbeat sessions. `openclaw doctor --fix` strictly validates the
   old TUI JSON file, keeps newer SQLite rows, verifies the canonical result,
@@ -441,8 +442,8 @@ The branch already has a real shared SQLite base:
   legacy path resolver lives in the doctor migration module.
 - Secret target metadata now talks about stores instead of pretending every
   credential target is a config file. `openclaw.json` remains the config store;
-  auth-profile targets use typed SQLite `auth_profile_stores` rows with
-  provider-shaped credentials kept as JSON payloads.
+  shared auth-profile snapshots use the `authProfiles.store` and
+  `authProfiles.state` keys in `config_machine_state`.
 - Secret audit no longer scans retired per-agent `auth.json` files. Doctor owns
   warning about, importing, and removing that legacy file.
 - Legacy auth profile path helpers now live in doctor legacy code. Core auth
@@ -463,9 +464,9 @@ The branch already has a real shared SQLite base:
   define VFS, tool-artifact, or run-artifact tables.
 - Workspace bootstrap completion, attestation recency, and generated bootstrap
   hashes now live in typed shared `workspace_setup_state`,
-  `workspace_path_aliases`, `workspace_attestations`, and
-  `workspace_generated_bootstrap_hashes` rows keyed by canonical workspace
-  identity. Persisted lexical and real-path aliases keep vanished-workspace
+  `workspace_path_aliases`, and `workspace_generated_bootstrap_hashes` rows
+  keyed by canonical workspace identity. Attestation timestamps are owned by
+  `workspace_setup_state`. Persisted lexical and real-path aliases keep vanished-workspace
   protection stable after a configured symlink disappears; repointed aliases
   fail closed. Runtime no longer reads or writes
   `openclaw-workspace-state.json`, `.openclaw/workspace-state.json`, state-dir
@@ -480,7 +481,7 @@ The branch already has a real shared SQLite base:
   `device_identities` and `device_auth_tokens` rows. Gateway startup may import
   a valid retired primary identity under the startup migration lease; invalid
   canonical identity repair remains Doctor-only. Gateway-origin-scoped tokens
-  use the lazy additive `gateway_origin_device_tokens` table.
+  use the canonical `gateway_origin_device_tokens` table.
 - GitHub Copilot token exchange cache uses the shared SQLite plugin-state table
   under `github-copilot/token-cache/default`. It is provider-owned cache state,
   so it intentionally does not add a host schema table.
@@ -521,12 +522,14 @@ The branch already has a real shared SQLite base:
 - Non-doctor commands do not auto-run legacy config repair. For example,
   `openclaw update --channel` now fails on invalid legacy config and asks the
   user to run doctor, rather than silently importing doctor migration code.
-- Web push, APNs, Voice Wake, update checks, and config health now use typed shared SQLite
-  tables for subscriptions, VAPID keys, node registrations, trigger rows,
-  routing rows, update-notification state, and config health entries instead of
-  whole opaque JSON blobs. Web Push and APNs writes upsert only the affected
-  primary-key row; config health reconciles by config path. Their runtime
-  modules remain separate from Doctor-only legacy JSON import helpers.
+- Web push, APNs, and config health use typed shared SQLite tables for
+  subscriptions, node registrations, and config health entries. VAPID keys,
+  Voice Wake, and update checks use owner-managed `config_machine_state` values
+  under `webPush.vapidKeys`, `voicewake.triggers`, `voicewake.routing`, and
+  `update.checkState`.
+  Web Push and APNs writes upsert only the affected primary-key row; config
+  health reconciles by config path. Their runtime modules remain separate from
+  Doctor-only legacy JSON import helpers.
 - APNs runtime reads and writes only `apns_registrations`. Explicit
   `openclaw doctor --fix` strictly imports the retired
   `push/apns-registrations.json`, preserves existing canonical rows, verifies
@@ -534,7 +537,8 @@ The branch already has a real shared SQLite base:
   Receipt-backed retries perform cleanup only, while
   `apns_registration_tombstones` cover invalidations before first repair, so
   stale relay grants or device tokens cannot resurrect.
-- Node-host config now uses a typed singleton row in the shared SQLite database.
+- Node-host config now uses the `nodeHost.config` machine-state key in the shared
+  SQLite database.
   Runtime fails closed while the old `node.json` file or an interrupted claim
   remains; explicit `openclaw doctor --fix` strictly imports and removes it
   before normal runtime use.
@@ -1118,9 +1122,12 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
 - Shared schema version 7 validates and removes the exact retired `commitments`
   table and discards its inert rows. Unknown same-named tables or indexes are
   preserved and the migration is refused. Runtime no longer reads or writes
-  commitment state. Doctor leaves the legacy `commitments.json` source untouched.
-- Web Push subscriptions and the generated VAPID identity now use typed shared
-  `web_push_subscriptions` and `web_push_vapid_keys` rows. Runtime registration,
+  commitment state. Explicit Doctor repair validates and discards only the exact
+  version 1 `commitments/commitments.json` source, records a migration receipt,
+  and leaves malformed, changed, linked, or otherwise unsafe files untouched.
+- Web Push subscriptions use typed shared `web_push_subscriptions` rows, and
+  generated VAPID identity uses the `webPush.vapidKeys` machine-state key.
+  Runtime registration,
   expiry cleanup, and first-use key generation use row-level SQLite
   transactions. Explicit Doctor repair validates both retired JSON stores,
   claims them before the SQLite write, imports them atomically, rejects
@@ -1291,10 +1298,10 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
 - Hermes secret migration plans and applies imported API-key profiles directly
   into the SQLite auth-profile store. It no longer writes or verifies
   `auth-profiles.json` as an intermediate target.
-- User-facing auth docs now describe
-  `state/openclaw.sqlite#table/auth_profile_stores/<agentDir>` instead of
-  telling users to inspect or copy `auth-profiles.json`; legacy OAuth/auth JSON
-  names remain documented only as doctor-import inputs.
+- User-facing auth docs distinguish shared auth snapshots in
+  `config_machine_state` under `authProfiles.store` and `authProfiles.state`
+  from the per-agent `auth_profile_store` and `auth_profile_state` tables.
+  Legacy OAuth/auth JSON names remain documented only as doctor-import inputs.
 - MCP OAuth sessions now use versioned `mcp_oauth_stores` rows in shared
   `state/openclaw.sqlite`. SDK-owned token, client-registration, and discovery
   objects remain one validated JSON payload so dependency extension fields
@@ -1311,13 +1318,13 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
 - PI model discovery now passes canonical credentials into in-memory
   `pi-coding-agent` auth storage. It no longer creates, scrubs, or writes
   per-agent `auth.json` during discovery.
-- Voice Wake trigger and routing settings now use typed shared SQLite tables
-  instead of `settings/voicewake.json`, `settings/voicewake-routing.json`, or
-  opaque generic rows; doctor imports the legacy JSON files and removes them after a
-  successful migration.
-- Update-check state now uses a typed shared `update_check_state` row instead of
-  `update-check.json` or an opaque generic blob; doctor imports
-  the legacy JSON file and removes it after a successful migration.
+- Voice Wake trigger and routing settings now use `config_machine_state` keys
+  `voicewake.triggers` and `voicewake.routing` instead of
+  `settings/voicewake.json` or `settings/voicewake-routing.json`; doctor
+  imports the legacy JSON files and removes them after a successful migration.
+- Update-check state now uses the `config_machine_state` key
+  `update.checkState` instead of `update-check.json`; doctor imports the legacy
+  JSON file and removes it after a successful migration.
 - Config health state now uses typed shared `config_health_entries` rows instead
   of `logs/config-health.json` or an opaque generic blob; doctor
   imports the legacy JSON file and removes it after a successful migration.
@@ -1345,9 +1352,9 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   state objects rather than file-shaped lockfile/origin abstractions. Doctor
   imports the legacy sidecars from configured agent workspaces and removes them
   after a clean import.
-- The installed plugin index now reads and writes the typed shared SQLite
-  `installed_plugin_index` singleton row instead of `plugins/installs.json`; the
-  legacy JSON file is only a doctor migration input and is removed after import.
+- The installed plugin index now reads and writes `config_machine_state` under
+  `plugins.installedIndex` instead of `plugins/installs.json`; the legacy JSON
+  file is only a doctor migration input and is removed after import.
 - The legacy `plugins/installs.json` path helper now lives in doctor legacy
   code. Runtime plugin-index modules expose only SQLite-backed persistence
   options, not a JSON file path.
@@ -1481,9 +1488,9 @@ create` validates the written archive by default; `--no-verify` is the
 
 ## Target Schema Shape
 
-Keep schemas explicit. Host-owned runtime state uses typed tables. Plugin-owned
-opaque state uses `plugin_state_entries` / `plugin_blob_entries`; there is no
-generic host `kv` table.
+Keep schemas explicit. Host-owned relational state uses typed tables;
+owner-managed singleton and workspace snapshots use `config_machine_state`.
+Plugin-owned opaque state uses `plugin_state_entries` / `plugin_blob_entries`.
 
 Global database:
 
@@ -1491,47 +1498,49 @@ Global database:
 state_leases(scope, lease_key, owner, expires_at, heartbeat_at, payload_json, created_at, updated_at)
 exec_approvals_config(config_key, raw_json, socket_path, has_socket_token, default_security, default_ask, default_ask_fallback, auto_allow_skills, agent_count, allowlist_count, updated_at_ms)
 schema_meta(meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
+config_machine_state(state_key, value_json, updated_at_ms)
 agent_databases(agent_id, path, schema_version, last_seen_at, size_bytes)
 task_runs(...)
 task_delivery_state(...)
 flow_runs(...)
-subagent_runs(run_id, child_session_key, requester_session_key, controller_session_key, created_at, ended_at, cleanup_handled, payload_json)
+subagent_runs(run_id, child_session_key, controller_session_key, requester_session_key, created_at, payload_json)
 current_conversation_bindings(binding_key, binding_id, target_agent_id, target_session_id, target_session_key, channel, account_id, conversation_kind, parent_conversation_id, conversation_id, target_kind, status, bound_at, expires_at, metadata_json, updated_at)
 plugin_binding_approvals(plugin_root, channel, account_id, plugin_id, plugin_name, approved_at)
-tui_last_sessions(scope_key, session_key, updated_at)
 plugin_state_entries(plugin_id, namespace, entry_key, value_json, created_at, expires_at)
 plugin_blob_entries(plugin_id, namespace, entry_key, metadata_json, blob, created_at, expires_at)
 skill_uploads(upload_id, kind, slug, force, size_bytes, sha256, actual_sha256, received_bytes, archive_blob, created_at, expires_at, committed, committed_at, idempotency_key_hash)
 skill_upload_chunks(upload_id, byte_offset, size_bytes, chunk_blob)
 web_push_subscriptions(endpoint_hash, subscription_id, endpoint, p256dh, auth, created_at_ms, updated_at_ms)
-web_push_vapid_keys(key_id, public_key, private_key, subject, updated_at_ms)
 apns_registrations(node_id, transport, token, relay_handle, send_grant, installation_id, relay_origin, topic, environment, distribution, token_debug_suffix, updated_at_ms)
 apns_registration_tombstones(node_id, deleted_at_ms)
-node_host_config(config_key, version, node_id, token, display_name, gateway_host, gateway_port, gateway_tls, gateway_tls_fingerprint, gateway_context_path, updated_at_ms)
 device_identities(identity_key, device_id, public_key_pem, private_key_pem, created_at_ms, updated_at_ms)
 device_auth_tokens(device_id, role, token, scopes_json, updated_at_ms)
 macos_port_guardian_records(pid, port, command, mode, timestamp)
-workspace_setup_state(workspace_key, workspace_path, version, bootstrap_seeded_at, setup_completed_at, updated_at)
+workspace_setup_state(workspace_key, workspace_path, version, bootstrap_seeded_at, setup_completed_at, updated_at, attested_at_ms, attestation_updated_at_ms)
 workspace_path_aliases(alias_key, alias_path, workspace_key, workspace_path, updated_at_ms)
-workspace_attestations(workspace_key, attested_at_ms, updated_at_ms)
 workspace_generated_bootstrap_hashes(workspace_key, filename, sha256)
 native_hook_relay_bridges(relay_id, pid, hostname, port, token, expires_at_ms, updated_at_ms)
 managed_outgoing_image_records(attachment_id, session_key, agent_id, message_id, created_at, updated_at, retention_class, alt, original_media_id, original_media_subdir, original_content_type, original_width, original_height, original_size_bytes, original_filename, record_json, cleanup_pending)
 gateway_restart_sentinel(sentinel_key, version, kind, status, ts, session_key, thread_id, delivery_channel, delivery_to, delivery_account_id, message, continuation_json, doctor_hint, stats_json, payload_json, updated_at_ms)
 channel_pairing_requests(channel_key, account_id, request_id, code, created_at, last_seen_at, meta_json)
 channel_pairing_allow_entries(channel_key, account_id, entry, sort_order, updated_at)
-voicewake_triggers(config_key, position, trigger, updated_at_ms)
-voicewake_routing_config(config_key, version, default_target_mode, default_target_agent_id, default_target_session_key, updated_at_ms)
-voicewake_routing_routes(config_key, position, trigger, target_mode, target_agent_id, target_session_key, updated_at_ms)
-update_check_state(state_key, last_checked_at, last_notified_version, last_notified_tag, last_available_version, last_available_tag, auto_install_id, auto_first_seen_version, auto_first_seen_tag, auto_first_seen_at, auto_last_attempt_version, auto_last_attempt_at, auto_last_success_version, auto_last_success_at, updated_at_ms)
 config_health_entries(config_path, last_known_good_json, last_promoted_good_json, last_observed_suspicious_signature, updated_at_ms)
 sandbox_registry_entries(registry_kind, container_name, session_key, backend_id, runtime_label, image, created_at_ms, last_used_at_ms, config_label_kind, config_hash, cdp_port, no_vnc_port, entry_json, updated_at)
-cron_jobs(store_key, job_id, name, description, enabled, delete_after_run, created_at_ms, agent_id, session_key, schedule_kind, schedule_expr, schedule_tz, every_ms, anchor_ms, at, stagger_ms, session_target, wake_mode, payload_kind, payload_message, payload_model, payload_fallbacks_json, payload_thinking, payload_timeout_seconds, payload_allow_unsafe_external_content, payload_external_content_source_json, payload_light_context, payload_tools_allow_json, delivery_mode, delivery_channel, delivery_to, delivery_thread_id, delivery_account_id, delivery_best_effort, failure_delivery_mode, failure_delivery_channel, failure_delivery_to, failure_delivery_account_id, failure_alert_disabled, failure_alert_after, failure_alert_channel, failure_alert_to, failure_alert_cooldown_ms, failure_alert_include_skipped, failure_alert_mode, failure_alert_account_id, next_run_at_ms, running_at_ms, last_run_at_ms, last_run_status, last_error, last_duration_ms, consecutive_errors, consecutive_skipped, schedule_error_count, last_delivery_status, last_delivery_error, last_delivered, last_failure_alert_at_ms, job_json, state_json, runtime_updated_at_ms, schedule_identity, sort_order, updated_at)
+cron_jobs(store_key, job_id, declaration_key, owner_agent_id, name, description, enabled, agent_id, payload_kind, job_json, state_json, runtime_updated_at_ms, schedule_identity, sort_order, updated_at)
 delivery_queue_entries(queue_name, id, status, entry_kind, session_key, channel, target, account_id, retry_count, last_attempt_at, last_error, recovery_state, platform_send_started_at, entry_json, enqueued_at, updated_at, failed_at)
 migration_runs(id, started_at, finished_at, status, report_json)
 migration_sources(source_key, migration_kind, source_path, target_table, source_sha256, source_size_bytes, source_record_count, last_run_id, status, imported_at, removed_source, report_json)
 backup_runs(id, created_at, archive_path, status, manifest_json)
 ```
+
+`config_machine_state` owns the `authProfiles.store`, `authProfiles.state`,
+`plugins.installedIndex`, `skills.curatorState`, `update.checkState`,
+`clawhub.promotionsFeed`, `modelCatalog.remote`, `voicewake.triggers`,
+`voicewake.routing`, `onboarding.recommendations.<workspaceKey>`,
+`tui.lastSession.<scopeKey>`, `sidebar.sectionOrder`, `nodeHost.config`, and
+`webPush.vapidKeys` snapshots. Secret-excluding Git backups omit the
+`authProfiles.`, `nodeHost.`, and `webPush.vapidKeys` key prefixes without
+dropping other machine state.
 
 Agent database:
 
@@ -1630,7 +1639,8 @@ Move these into the global database:
   cache, installed plugin index, and app-server bindings. Android device auth
   remains app-local in `SecurePrefs`.
 - Shared schema version 7 discards retired commitment rows and removes their
-  table. The legacy `commitments.json` source stays inert and untouched.
+  table. Explicit Doctor repair discards the exact retired version 1
+  `commitments/commitments.json` source without import, archive, or export.
 - Device/node pairing and bootstrap records now use typed SQLite tables
 - Device-pair notification subscribers and delivered-request markers now use the
   shared SQLite plugin-state table instead of `device-pair-notify.json`.
@@ -1946,7 +1956,7 @@ manifest asset from the verified extracted payload.
 
 1. Add database registry APIs.
    - Resolve global DB and per-agent DB paths.
-   - The global schema now uses `user_version = 9`; per-agent DBs use version
+   - The global schema now uses `user_version = 13`; per-agent DBs use version
      `17`, with bounded forward migrations from supported older versions.
    - Add close/checkpoint/integrity helpers used by tests, backup, and doctor.
 
@@ -2223,7 +2233,7 @@ Add a repo check that fails new runtime writes to legacy state paths:
 - `identity/device.json`
 - `identity/device-auth.json` (retired; Doctor-only import into `device_auth_tokens`)
 - `push/web-push-subscriptions.json` (retired; Doctor-only import into `web_push_subscriptions`)
-- `push/vapid-keys.json` (retired; Doctor-only import into `web_push_vapid_keys`)
+- `push/vapid-keys.json` (retired; Doctor-only import into `webPush.vapidKeys`)
 - `push/apns-registrations.json` (retired; Doctor-only import into `apns_registrations`)
 - `process-leases.json`
 - `gateway-instance-id`

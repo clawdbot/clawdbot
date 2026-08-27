@@ -9,6 +9,7 @@ import {
 import { CONTROL_UI_LOCALE_ENTRIES } from "../../scripts/lib/control-ui-i18n-config.ts";
 import { flattenTranslations } from "../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import { registerActivityEnglish } from "../src/i18n/locales/en-activity.ts";
+import { registerPluginConsentEnglish } from "../src/i18n/locales/en-plugin-consent.ts";
 import { registerSessionPlacementEnglish } from "../src/i18n/locales/en-session-placement.ts";
 import { en } from "../src/i18n/locales/en.ts";
 
@@ -24,6 +25,7 @@ const sourceCatalog = mergeControlUiTranslationMaps(
   en,
   registerActivityEnglish.catalog,
   registerSessionPlacementEnglish.catalog,
+  registerPluginConsentEnglish.catalog,
 );
 
 export function controlUiLocaleModulesPlugin(): Plugin {

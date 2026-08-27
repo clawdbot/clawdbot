@@ -2,7 +2,13 @@ import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { decodeResumeHandoff } from "../../../src/shared/resume-handoff.js";
-import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import type { ChatPaneElement } from "../pages/chat/route-draft-focus-handoff.ts";
+import {
+  controlUiSessionPath,
+  controlUiSessionUrl,
+  installMockGateway,
+  waitForControlUiRoute,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -96,6 +102,16 @@ suite.define(() => {
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         const activePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
+        await expect
+          .poll(() => activePane.evaluate((pane) => (pane as ChatPaneElement).sessionKey))
+          .toBe(sessionKey);
+        await waitForControlUiRoute(page, {
+          routeId: "chat",
+          pathname: controlUiSessionPath(sessionKey, basePath),
+          pathnamePrefix: `${basePath}/chat/`,
+          search: "",
+          hash: "",
+        });
         await activePane.getByText("Ready for terminal continuation.").waitFor({ timeout: 10_000 });
 
         const menuTrigger = activePane.getByRole("button", {
@@ -173,6 +189,12 @@ suite.define(() => {
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         const activePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
+        // Mock history also renders in the retained boot pane. Wait for this session's pane
+        // before Playwright resolves a control that can stay mounted beneath its replacement.
+        await expect
+          .poll(() => activePane.evaluate((pane) => (pane as ChatPaneElement).sessionKey))
+          .toBe(sessionKey);
+        await waitForControlUiRoute(page, { routeId: "chat" });
         await activePane
           .getByRole("paragraph")
           .filter({ hasText: /^Mobile session menu proof\.$/ })

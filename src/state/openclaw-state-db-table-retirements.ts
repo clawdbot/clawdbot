@@ -11,6 +11,9 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 
 const stateDbLog = createSubsystemLogger("state/db");
+export const logRetiredStateTableMigration = (message: string) => stateDbLog.info(message);
+
+export const RETIRED_COMMITMENTS_SCHEMA_VERSION = 7;
 
 export const RETIRED_DEAD_STATE_TABLES_V10 = [
   "agent_model_catalogs",
@@ -289,7 +292,7 @@ function assertVirtualTablesUsable(db: DatabaseSync, phase: "before" | "after"):
 }
 
 function migrateRetiredCommitmentsSchema(db: DatabaseSync, previousVersion: number): boolean {
-  if (previousVersion >= 7) {
+  if (previousVersion >= RETIRED_COMMITMENTS_SCHEMA_VERSION) {
     return false;
   }
   if (!tableExists(db, "commitments")) {
@@ -376,7 +379,7 @@ export function runRetiredStateTableMigrations(
 ): string[] {
   const applied: string[] = [];
   if (migrateRetiredCommitmentsSchema(db, previousVersion)) {
-    applied.push("Retired shared state commitments table and indexes");
+    applied.push("Discarded retired shared-state commitments rows, table, and indexes");
   }
   if (migrateRetiredDeadStateTablesV10(db, previousVersion)) {
     applied.push("Retired six dead shared-state tables (v10)");

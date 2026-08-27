@@ -3629,7 +3629,7 @@ describe("agentLoop thinking state", () => {
       name: "disables reasoning after leaving Fable",
       initialModel: { ...model, id: "claude-fable-5", thinkingLevelMap: { off: "low" } },
       nextModel: model,
-      expected: ["low", undefined],
+      expected: ["low", "off"],
     },
     {
       name: "uses Fable's low fallback after entering Fable",

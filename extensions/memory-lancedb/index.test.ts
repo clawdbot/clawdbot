@@ -251,6 +251,19 @@ function materializeRegisteredTool(
     : toolOrFactory;
 }
 
+function registeredTool(
+  registerTool: ReturnType<typeof vi.fn>,
+  name: string,
+  context: Record<string, unknown> = {},
+) {
+  const factory = registerTool.mock.calls.find(([, options]) => options?.name === name)?.[0];
+  const tool = materializeRegisteredTool(factory, context);
+  if (!tool) {
+    throw new Error(`expected ${name} tool registration`);
+  }
+  return tool;
+}
+
 function createAgentScopedSchemaMock() {
   return vi.fn(async () => ({ fields: [{ name: "agentId" }] }));
 }
@@ -260,6 +273,43 @@ function createAgentScopedVectorQuery(limit: ReturnType<typeof vi.fn>) {
   return {
     ...scopedQuery,
     where: vi.fn(() => scopedQuery),
+  };
+}
+
+function createStandardMemoryTableHarness(
+  options: {
+    toArray?: ReturnType<typeof vi.fn>;
+    limit?: ReturnType<typeof vi.fn>;
+    vectorSearch?: ReturnType<typeof vi.fn>;
+    countRows?: ReturnType<typeof vi.fn>;
+    add?: ReturnType<typeof vi.fn>;
+    deleteRows?: ReturnType<typeof vi.fn>;
+  } = {},
+) {
+  const toArray = options.toArray ?? vi.fn(async () => []);
+  const limit = options.limit ?? vi.fn(() => ({ toArray }));
+  const vectorSearch = options.vectorSearch ?? vi.fn(() => createAgentScopedVectorQuery(limit));
+  const countRows = options.countRows ?? vi.fn(async () => 0);
+  const add = options.add ?? vi.fn(async () => undefined);
+  const deleteRows = options.deleteRows ?? vi.fn(async () => undefined);
+  const openTable = vi.fn(async () => ({
+    schema: createAgentScopedSchemaMock(),
+    vectorSearch,
+    countRows,
+    add,
+    delete: deleteRows,
+  }));
+  const connect = vi.fn(async () => ({
+    tableNames: vi.fn(async () => ["memories"]),
+    openTable,
+  }));
+  const module = { connect };
+  return {
+    add,
+    limit,
+    loadLanceDbModule: vi.fn(async () => module),
+    module,
+    vectorSearch,
   };
 }
 
@@ -369,6 +419,19 @@ describe("memory plugin e2e", () => {
     }) as MemoryPluginTestConfig | undefined;
   }
 
+  function createPluginConfig(overrides: Partial<MemoryPluginTestConfig> = {}) {
+    return {
+      embedding: {
+        apiKey: OPENAI_API_KEY,
+        model: "text-embedding-3-small",
+      },
+      dbPath: getDbPath(),
+      autoCapture: false,
+      autoRecall: false,
+      ...overrides,
+    } satisfies MemoryPluginTestConfig;
+  }
+
   function setupMemoryHookHarness(options: {
     autoCapture: boolean;
     autoRecall: boolean;
@@ -379,32 +442,14 @@ describe("memory plugin e2e", () => {
       data: [{ embedding: [0.1, 0.2, 0.3] }],
     }));
     const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
-    const add = vi.fn(async () => undefined);
     const toArray = vi.fn(async () => options.searchResults ?? []);
-    const limit = vi.fn(() => ({ toArray }));
-    const vectorSearch = vi.fn(() => createAgentScopedVectorQuery(limit));
-    const openTable = vi.fn(async () => ({
-      schema: createAgentScopedSchemaMock(),
-      vectorSearch,
-      countRows: vi.fn(async () => 0),
-      add,
-      delete: vi.fn(async () => undefined),
-    }));
-    const loadLanceDbModule = vi.fn(async () => ({
-      connect: vi.fn(async () => ({
-        tableNames: vi.fn(async () => ["memories"]),
-        openTable,
-      })),
-    }));
-    const pluginConfig: MemoryPluginTestConfig = {
-      embedding: {
-        apiKey: OPENAI_API_KEY,
-        model: "text-embedding-3-small",
-      },
-      dbPath: getDbPath(),
+    const { add, loadLanceDbModule, vectorSearch } = createStandardMemoryTableHarness({
+      toArray,
+    });
+    const pluginConfig = createPluginConfig({
       autoCapture: options.autoCapture,
       autoRecall: options.autoRecall,
-    };
+    });
     let configFile: Record<string, unknown> = {
       plugins: { entries: { "memory-lancedb": { config: pluginConfig } } },
     };
@@ -537,12 +582,7 @@ describe("memory plugin e2e", () => {
 
   test("registers as disabled instead of throwing when inspected without config", () => {
     const registerService = vi.fn();
-    const logger = {
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-      debug: vi.fn(),
-    };
+    const logger = createTestLogger();
     const mockApi = createMemoryPluginApi(getDbPath(), {
       pluginConfig: {},
       logger,
@@ -565,15 +605,10 @@ describe("memory plugin e2e", () => {
   test("registers auto-recall on before_prompt_build instead of the legacy hook", () => {
     const on = vi.fn();
     const mockApi = createMemoryPluginApi(getDbPath(), {
-      pluginConfig: {
-        embedding: {
-          apiKey: OPENAI_API_KEY,
-          model: "text-embedding-3-small",
-        },
-        dbPath: getDbPath(),
+      pluginConfig: createPluginConfig({
         autoCapture: false,
         autoRecall: true,
-      },
+      }),
       on,
     });
 
@@ -701,7 +736,7 @@ describe("memory plugin e2e", () => {
       provider: {
         id: "openai",
         model: options.model,
-        embedQuery,
+        embed: embedQuery,
         embedBatch: vi.fn(async () => [[0.1, 0.2, 0.3]]),
         close: closeProvider,
       },
@@ -796,6 +831,7 @@ describe("memory plugin e2e", () => {
       expect(closeProvider).toHaveBeenCalledTimes(2);
       expect(createProvider).toHaveBeenCalledOnce();
       expect(embedQuery).toHaveBeenCalledWith("project memory", {
+        inputType: "query",
         signal: expect.any(AbortSignal),
       });
     } finally {
@@ -812,7 +848,7 @@ describe("memory plugin e2e", () => {
         provider: {
           id: "openai",
           model: options.model ?? "text-embedding-3-small",
-          embedQuery: vi.fn(async (text: string) => {
+          embed: vi.fn(async (text: string) => {
             requests.push({ agentDir, text });
             return [0.1, 0.2, 0.3];
           }),
@@ -944,18 +980,7 @@ describe("memory plugin e2e", () => {
       data: [{ embedding: [0.1, 0.2, 0.3] }],
     }));
     const toArray = vi.fn(async () => []);
-    const loadLanceDbModule = vi.fn(async () => ({
-      connect: vi.fn(async () => ({
-        tableNames: vi.fn(async () => ["memories"]),
-        openTable: vi.fn(async () => ({
-          schema: createAgentScopedSchemaMock(),
-          vectorSearch: vi.fn(() => createAgentScopedVectorQuery(vi.fn(() => ({ toArray })))),
-          countRows: vi.fn(async () => 0),
-          add: vi.fn(async () => undefined),
-          delete: vi.fn(async () => undefined),
-        })),
-      })),
-    }));
+    const { loadLanceDbModule } = createStandardMemoryTableHarness({ toArray });
 
     await withMockedOpenAiMemoryPlugin({
       ensureGlobalUndiciEnvProxyDispatcher: vi.fn(),
@@ -1054,40 +1079,17 @@ describe("memory plugin e2e", () => {
     }));
     const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
     const toArray = vi.fn(async () => []);
-    const limit = vi.fn(() => ({ toArray }));
-    const vectorSearch = vi.fn(() => createAgentScopedVectorQuery(limit));
-    const loadLanceDbModule = vi.fn(async () => ({
-      connect: vi.fn(async () => ({
-        tableNames: vi.fn(async () => ["memories"]),
-        openTable: vi.fn(async () => ({
-          schema: createAgentScopedSchemaMock(),
-          vectorSearch,
-          countRows: vi.fn(async () => 0),
-          add: vi.fn(async () => undefined),
-          delete: vi.fn(async () => undefined),
-        })),
-      })),
-    }));
+    const { limit, loadLanceDbModule } = createStandardMemoryTableHarness({ toArray });
 
     await withMockedOpenAiMemoryPlugin({
       ensureGlobalUndiciEnvProxyDispatcher,
       embeddingsCreate,
       loadLanceDbModule,
       run: async () => {
-        const registeredTools: any[] = [];
-        const mockApi = createMemoryPluginApi(getDbPath(), {
-          registerTool: (tool: any, opts: any) => {
-            registeredTools.push({ tool, opts });
-          },
-        });
+        const mockApi = createMemoryPluginApi(getDbPath());
 
         registerTestPlugin(memoryPlugin, mockApi);
-        const recallTool = materializeRegisteredTool(
-          registeredTools.find((t) => t.opts?.name === "memory_recall")?.tool,
-        );
-        if (!recallTool) {
-          throw new Error("memory_recall tool was not registered");
-        }
+        const recallTool = registeredTool(mockApi.registerTool, "memory_recall");
 
         await recallTool.execute("test-call-string-limit", {
           query: "project memory",
@@ -1143,37 +1145,18 @@ describe("memory plugin e2e", () => {
         _distance: 0.2,
       },
     ]);
-    const limit = vi.fn(() => ({ toArray }));
-    const vectorSearch = vi.fn(() => createAgentScopedVectorQuery(limit));
-    const loadLanceDbModule = vi.fn(async () => ({
-      connect: vi.fn(async () => ({
-        tableNames: vi.fn(async () => ["memories"]),
-        openTable: vi.fn(async () => ({
-          schema: createAgentScopedSchemaMock(),
-          vectorSearch,
-          countRows: vi.fn(async () => 0),
-          add: vi.fn(async () => undefined),
-          delete: vi.fn(async () => undefined),
-        })),
-      })),
-    }));
+    const { limit, loadLanceDbModule } = createStandardMemoryTableHarness({ toArray });
 
     await withMockedOpenAiMemoryPlugin({
       ensureGlobalUndiciEnvProxyDispatcher,
       embeddingsCreate,
       loadLanceDbModule,
       run: async () => {
-        const registeredTools: any[] = [];
-        const pluginConfig = {
-          embedding: {
-            apiKey: OPENAI_API_KEY,
-            model: "text-embedding-3-small",
-          },
-          dbPath: getDbPath(),
+        const pluginConfig = createPluginConfig({
           autoCapture: false,
           autoRecall: false,
           recallMaxChars: 1000,
-        };
+        });
         const mockApi = createMemoryPluginApi(getDbPath(), {
           pluginConfig,
           runtime: {
@@ -1189,18 +1172,10 @@ describe("memory plugin e2e", () => {
               }),
             },
           },
-          registerTool: (tool: any, opts: any) => {
-            registeredTools.push({ tool, opts });
-          },
         });
 
         registerTestPlugin(memoryPlugin, mockApi);
-        const recallTool = materializeRegisteredTool(
-          registeredTools.find((t) => t.opts?.name === "memory_recall")?.tool,
-        );
-        if (!recallTool) {
-          throw new Error("memory_recall tool was not registered");
-        }
+        const recallTool = registeredTool(mockApi.registerTool, "memory_recall");
 
         const result = await recallTool.execute("test-call-untrusted-recall", {
           query: "stored instructions",
@@ -1274,27 +1249,13 @@ describe("memory plugin e2e", () => {
         openAiPost: post,
         loadLanceDbModule,
         run: async () => {
-          const registeredTools: any[] = [];
-          const logger = {
-            info: vi.fn(),
-            warn: vi.fn(),
-            error: vi.fn(),
-            debug: vi.fn(),
-          };
+          const logger = createTestLogger();
           const mockApi = createMemoryPluginApi(getDbPath(), {
             logger,
-            registerTool: (tool: any, opts: any) => {
-              registeredTools.push({ tool, opts });
-            },
           });
 
           registerTestPlugin(memoryPlugin, mockApi);
-          const recallTool = materializeRegisteredTool(
-            registeredTools.find((t) => t.opts?.name === "memory_recall")?.tool,
-          );
-          if (!recallTool) {
-            throw new Error("memory_recall tool was not registered");
-          }
+          const recallTool = registeredTool(mockApi.registerTool, "memory_recall");
 
           const resultPromise = recallTool.execute("timeout-call", { query: "project memory" });
           await vi.advanceTimersByTimeAsync(15_000);
@@ -1379,15 +1340,10 @@ describe("memory plugin e2e", () => {
   test("keeps before_prompt_build registered but inert when auto-recall is disabled", async () => {
     const on = vi.fn();
     const mockApi = createMemoryPluginApi(getDbPath(), {
-      pluginConfig: {
-        embedding: {
-          apiKey: OPENAI_API_KEY,
-          model: "text-embedding-3-small",
-        },
-        dbPath: getDbPath(),
+      pluginConfig: createPluginConfig({
         autoCapture: true,
         autoRecall: false,
-      },
+      }),
       on,
     });
 
@@ -1409,15 +1365,10 @@ describe("memory plugin e2e", () => {
   test("keeps agent_end registered but inert when auto-capture is disabled", async () => {
     const on = vi.fn();
     const mockApi = createMemoryPluginApi(getDbPath(), {
-      pluginConfig: {
-        embedding: {
-          apiKey: OPENAI_API_KEY,
-          model: "text-embedding-3-small",
-        },
-        dbPath: getDbPath(),
+      pluginConfig: createPluginConfig({
         autoCapture: false,
         autoRecall: true,
-      },
+      }),
       on,
     });
 
@@ -1452,15 +1403,10 @@ describe("memory plugin e2e", () => {
       run: async () => {
         const on = vi.fn();
         const mockApi = createMemoryPluginApi(getDbPath(), {
-          pluginConfig: {
-            embedding: {
-              apiKey: OPENAI_API_KEY,
-              model: "text-embedding-3-small",
-            },
-            dbPath: getDbPath(),
+          pluginConfig: createPluginConfig({
             autoCapture: false,
             autoRecall: true,
-          },
+          }),
           on,
         });
 
@@ -1507,21 +1453,9 @@ describe("memory plugin e2e", () => {
         _distance: 0.1,
       },
     ]);
-    const limit = vi.fn(() => ({ toArray }));
-    const vectorSearch = vi.fn(() => createAgentScopedVectorQuery(limit));
-    const openTable = vi.fn(async () => ({
-      schema: createAgentScopedSchemaMock(),
-      vectorSearch,
-      countRows: vi.fn(async () => 0),
-      add: vi.fn(async () => undefined),
-      delete: vi.fn(async () => undefined),
-    }));
-    const loadLanceDbModule = vi.fn(async () => ({
-      connect: vi.fn(async () => ({
-        tableNames: vi.fn(async () => ["memories"]),
-        openTable,
-      })),
-    }));
+    const { limit, loadLanceDbModule, vectorSearch } = createStandardMemoryTableHarness({
+      toArray,
+    });
 
     await withMockedOpenAiMemoryPlugin({
       ensureGlobalUndiciEnvProxyDispatcher,
@@ -1529,23 +1463,13 @@ describe("memory plugin e2e", () => {
       loadLanceDbModule,
       run: async () => {
         const on = vi.fn();
-        const logger = {
-          info: vi.fn(),
-          warn: vi.fn(),
-          error: vi.fn(),
-          debug: vi.fn(),
-        };
+        const logger = createTestLogger();
         const mockApi = createMemoryPluginApi(getDbPath(), {
-          pluginConfig: {
-            embedding: {
-              apiKey: OPENAI_API_KEY,
-              model: "text-embedding-3-small",
-            },
-            dbPath: getDbPath(),
+          pluginConfig: createPluginConfig({
             autoCapture: false,
             autoRecall: true,
             recallMaxChars: 120,
-          },
+          }),
           logger,
           on,
         });
@@ -1616,18 +1540,7 @@ describe("memory plugin e2e", () => {
     const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
     const toArray = vi.fn(() => new Promise(() => {}));
     const limit = vi.fn(() => ({ toArray }));
-    const loadLanceDbModule = vi.fn(async () => ({
-      connect: vi.fn(async () => ({
-        tableNames: vi.fn(async () => ["memories"]),
-        openTable: vi.fn(async () => ({
-          schema: createAgentScopedSchemaMock(),
-          vectorSearch: vi.fn(() => createAgentScopedVectorQuery(limit)),
-          countRows: vi.fn(async () => 0),
-          add: vi.fn(async () => undefined),
-          delete: vi.fn(async () => undefined),
-        })),
-      })),
-    }));
+    const { loadLanceDbModule } = createStandardMemoryTableHarness({ limit });
 
     try {
       await withMockedOpenAiMemoryPlugin({
@@ -1636,27 +1549,13 @@ describe("memory plugin e2e", () => {
         loadLanceDbModule,
         run: async () => {
           const on = vi.fn();
-          const registeredTools: any[] = [];
-          const logger = {
-            info: vi.fn(),
-            warn: vi.fn(),
-            error: vi.fn(),
-            debug: vi.fn(),
-          };
+          const logger = createTestLogger();
           const mockApi = createMemoryPluginApi(getDbPath(), {
-            pluginConfig: {
-              embedding: {
-                apiKey: OPENAI_API_KEY,
-                model: "text-embedding-3-small",
-              },
-              dbPath: getDbPath(),
+            pluginConfig: createPluginConfig({
               autoCapture: false,
               autoRecall: true,
-            },
+            }),
             logger,
-            registerTool: (tool: any, opts: any) => {
-              registeredTools.push({ tool, opts });
-            },
             on,
           });
 
@@ -1696,12 +1595,7 @@ describe("memory plugin e2e", () => {
             "memory-lancedb: auto-recall skipped during recall cooldown: auto-recall timed out after 15s",
           );
 
-          const recallTool = materializeRegisteredTool(
-            registeredTools.find((tool) => tool.opts?.name === "memory_recall")?.tool,
-          );
-          if (!recallTool) {
-            throw new Error("memory_recall tool was not registered");
-          }
+          const recallTool = registeredTool(mockApi.registerTool, "memory_recall");
           const toolResult = await recallTool.execute("cooldown-call", { query: "editor" });
           expect(toolResult.details).toMatchObject({
             count: 0,
@@ -2322,23 +2216,8 @@ describe("memory plugin e2e", () => {
         data: [{ embedding: [0.1, 0.2, 0.3] }],
       }));
     const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
-    const add = vi.fn(async () => undefined);
     const toArray = vi.fn(async () => overrides?.searchResults ?? []);
-    const limit = vi.fn(() => ({ toArray }));
-    const vectorSearch = vi.fn(() => createAgentScopedVectorQuery(limit));
-    const openTable = vi.fn(async () => ({
-      schema: createAgentScopedSchemaMock(),
-      vectorSearch,
-      countRows: vi.fn(async () => 0),
-      add,
-      delete: vi.fn(async () => undefined),
-    }));
-    const loadLanceDbModule = vi.fn(async () => ({
-      connect: vi.fn(async () => ({
-        tableNames: vi.fn(async () => ["memories"]),
-        openTable,
-      })),
-    }));
+    const { add, loadLanceDbModule } = createStandardMemoryTableHarness({ toArray });
 
     installOpenAiMemoryModuleMocks({
       ensureGlobalUndiciEnvProxyDispatcher,
@@ -2347,22 +2226,12 @@ describe("memory plugin e2e", () => {
     });
 
     const on = vi.fn();
-    const logger = {
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-      debug: vi.fn(),
-    };
+    const logger = createTestLogger();
     const mockApi = createMemoryPluginApi(getDbPath(), {
-      pluginConfig: {
-        embedding: {
-          apiKey: OPENAI_API_KEY,
-          model: "text-embedding-3-small",
-        },
-        dbPath: getDbPath(),
+      pluginConfig: createPluginConfig({
         autoCapture: true,
         autoRecall: false,
-      },
+      }),
       logger,
       on,
     });
@@ -2665,18 +2534,7 @@ describe("memory plugin e2e", () => {
     const toArray = vi.fn(async () => []);
     const limit = vi.fn(() => ({ toArray }));
     const vectorSearch = vi.fn((_vector?: number[]) => createAgentScopedVectorQuery(limit));
-    const loadLanceDbModule = vi.fn(async () => ({
-      connect: vi.fn(async () => ({
-        tableNames: vi.fn(async () => ["memories"]),
-        openTable: vi.fn(async () => ({
-          schema: createAgentScopedSchemaMock(),
-          vectorSearch,
-          countRows: vi.fn(async () => 0),
-          add: vi.fn(async () => undefined),
-          delete: vi.fn(async () => undefined),
-        })),
-      })),
-    }));
+    const { loadLanceDbModule } = createStandardMemoryTableHarness({ limit, vectorSearch });
 
     const post = vi.fn((_path: string, opts: { body?: unknown }) =>
       invokeEmbeddingCreate(embeddingsCreate, opts.body),
@@ -2688,30 +2546,20 @@ describe("memory plugin e2e", () => {
     });
 
     try {
-      const registeredTools: any[] = [];
       const mockApi = createMemoryPluginApi(getDbPath(), {
-        pluginConfig: {
+        pluginConfig: createPluginConfig({
           embedding: {
             apiKey: OPENAI_API_KEY,
             model: "text-embedding-3-small",
             dimensions: 1024,
           },
-          dbPath: getDbPath(),
           autoCapture: false,
           autoRecall: false,
-        },
-        registerTool: (tool: any, opts: any) => {
-          registeredTools.push({ tool, opts });
-        },
+        }),
       });
 
       registerTestPlugin(memoryPlugin, mockApi);
-      const recallTool = materializeRegisteredTool(
-        registeredTools.find((t) => t.opts?.name === "memory_recall")?.tool,
-      );
-      if (!recallTool) {
-        throw new Error("memory_recall tool was not registered");
-      }
+      const recallTool = registeredTool(mockApi.registerTool, "memory_recall");
       await recallTool.execute("test-call-dims", { query: "hello dimensions" });
 
       expect(loadLanceDbModule).toHaveBeenCalledTimes(1);
@@ -2753,23 +2601,11 @@ describe("memory plugin e2e", () => {
     }));
     const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
     const toArray = vi.fn(async () => []);
-    const limit = vi.fn(() => ({ toArray }));
-    const vectorSearch = vi.fn(() => createAgentScopedVectorQuery(limit));
+    const { module } = createStandardMemoryTableHarness({ toArray });
     const loadLanceDbModule = vi
       .fn()
       .mockRejectedValueOnce(new Error("temporary LanceDB install failure"))
-      .mockResolvedValueOnce({
-        connect: vi.fn(async () => ({
-          tableNames: vi.fn(async () => ["memories"]),
-          openTable: vi.fn(async () => ({
-            schema: createAgentScopedSchemaMock(),
-            vectorSearch,
-            countRows: vi.fn(async () => 0),
-            add: vi.fn(async () => undefined),
-            delete: vi.fn(async () => undefined),
-          })),
-        })),
-      });
+      .mockResolvedValueOnce(module);
 
     installOpenAiMemoryModuleMocks({
       ensureGlobalUndiciEnvProxyDispatcher,
@@ -2778,20 +2614,10 @@ describe("memory plugin e2e", () => {
     });
 
     try {
-      const registeredTools: any[] = [];
-      const mockApi = createMemoryPluginApi(getDbPath(), {
-        registerTool: (tool: any, opts: any) => {
-          registeredTools.push({ tool, opts });
-        },
-      });
+      const mockApi = createMemoryPluginApi(getDbPath());
 
       registerTestPlugin(memoryPlugin, mockApi);
-      const recallTool = materializeRegisteredTool(
-        registeredTools.find((t) => t.opts?.name === "memory_recall")?.tool,
-      );
-      if (!recallTool) {
-        throw new Error("memory_recall tool was not registered");
-      }
+      const recallTool = registeredTool(mockApi.registerTool, "memory_recall");
 
       await expect(recallTool.execute("test-call-retry-1", { query: "hello" })).rejects.toThrow(
         "temporary LanceDB install failure",
@@ -3124,38 +2950,18 @@ describe("memory plugin e2e", () => {
     const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
     const add = vi.fn(async () => undefined);
     const toArray = vi.fn(async (): Promise<Record<string, unknown>[]> => []);
-    const limit = vi.fn(() => ({ toArray }));
-    const vectorSearch = vi.fn(() => createAgentScopedVectorQuery(limit));
-    const openTable = vi.fn(async () => ({
-      schema: createAgentScopedSchemaMock(),
-      vectorSearch,
-      add,
-      countRows: vi.fn(async () => 0),
-      delete: vi.fn(async () => undefined),
-    }));
-    const loadLanceDbModule = vi.fn(async () => ({
-      connect: vi.fn(async () => ({
-        tableNames: vi.fn(async () => ["memories"]),
-        openTable,
-      })),
-    }));
+    const { loadLanceDbModule } = createStandardMemoryTableHarness({ add, toArray });
 
     await withMockedOpenAiMemoryPlugin({
       ensureGlobalUndiciEnvProxyDispatcher,
       embeddingsCreate,
       loadLanceDbModule,
       run: async () => {
-        const registeredTools: any[] = [];
-        const pluginConfig = {
-          embedding: {
-            apiKey: OPENAI_API_KEY,
-            model: "text-embedding-3-small",
-          },
-          dbPath: getDbPath(),
+        const pluginConfig = createPluginConfig({
           autoCapture: false,
           autoRecall: false,
           captureMaxChars: 1000,
-        };
+        });
         const mockApi = createMemoryPluginApi(getDbPath(), {
           pluginConfig,
           runtime: {
@@ -3171,24 +2977,15 @@ describe("memory plugin e2e", () => {
               }),
             },
           },
-          registerTool: (tool: any, opts: any) => {
-            registeredTools.push({ tool, opts });
-          },
         });
 
         registerTestPlugin(memoryPlugin, mockApi);
-        const storeTool = materializeRegisteredTool(
-          registeredTools.find((t) => t.opts?.name === "memory_store")?.tool,
-        );
-        if (!storeTool) {
-          throw new Error("memory_store tool was not registered");
-        }
+        const storeTool = registeredTool(mockApi.registerTool, "memory_store");
         expect(storeTool.description).toContain("does not guarantee semantic recall");
 
-        const incognitoStoreTool = materializeRegisteredTool(
-          registeredTools.find((t) => t.opts?.name === "memory_store")?.tool,
-          { sessionKey: "agent:main:internal-session-effects:incognito-memory-test" },
-        );
+        const incognitoStoreTool = registeredTool(mockApi.registerTool, "memory_store", {
+          sessionKey: "agent:main:internal-session-effects:incognito-memory-test",
+        });
         const incognitoRejected = await incognitoStoreTool.execute("test-call-incognito", {
           text: "The user prefers concise replies",
         });
@@ -3348,23 +3145,15 @@ describe("memory plugin e2e", () => {
         })),
       }),
       run: async () => {
-        const registeredTools: any[] = [];
         const mockApi = createMemoryPluginApi(getDbPath(), {
-          pluginConfig: {
-            embedding: { apiKey: OPENAI_API_KEY, model: "text-embedding-3-small" },
-            dbPath: getDbPath(),
+          pluginConfig: createPluginConfig({
             autoCapture: false,
             autoRecall: false,
             recallMaxChars: 100,
-          },
-          registerTool: (tool: any, opts: any) => {
-            registeredTools.push({ tool, opts });
-          },
+          }),
         });
         registerTestPlugin(memoryPlugin, mockApi);
-        const forgetTool = materializeRegisteredTool(
-          registeredTools.find((entry) => entry.opts?.name === "memory_forget")?.tool,
-        );
+        const forgetTool = registeredTool(mockApi.registerTool, "memory_forget");
         expectToolExecute(forgetTool, "memory_forget");
 
         const directAbsent = await forgetTool.execute("forget-direct-absent", { memoryId });
@@ -3483,18 +3272,13 @@ describe("memory plugin e2e", () => {
     const embeddingsCreate = vi.fn(async () => ({
       data: [{ embedding: [0.1, 0.2, 0.3] }],
     }));
-    const loadLanceDbModule = vi.fn(async () => ({
-      connect: vi.fn(async () => ({
-        tableNames: vi.fn(async () => ["memories"]),
-        openTable: vi.fn(async () => ({
-          schema: createAgentScopedSchemaMock(),
-          vectorSearch,
-          countRows: vi.fn(async () => 2),
-          add: vi.fn(async () => undefined),
-          delete: vi.fn(async () => undefined),
-        })),
-      })),
-    }));
+    const countRows = vi.fn(async () => 2);
+    const { loadLanceDbModule } = createStandardMemoryTableHarness({
+      toArray,
+      limit: limitFn,
+      vectorSearch,
+      countRows,
+    });
     installOpenAiMemoryModuleMocks({
       ensureGlobalUndiciEnvProxyDispatcher: vi.fn(),
       embeddingsCreate,
@@ -3502,20 +3286,10 @@ describe("memory plugin e2e", () => {
     });
 
     try {
-      const registeredTools: any[] = [];
-      const mockApi = createMemoryPluginApi(getDbPath(), {
-        registerTool: (tool: any, opts: any) => {
-          registeredTools.push({ tool, opts });
-        },
-      });
+      const mockApi = createMemoryPluginApi(getDbPath());
 
       registerTestPlugin(memoryPlugin, mockApi);
-      const forgetTool = materializeRegisteredTool(
-        registeredTools.find((t) => t.opts?.name === "memory_forget")?.tool,
-      );
-      if (!forgetTool) {
-        throw new Error("expected memory_forget tool registration");
-      }
+      const forgetTool = registeredTool(mockApi.registerTool, "memory_forget");
       expectToolExecute(forgetTool);
 
       const result = await forgetTool.execute("test-call-full-ids", { query: "user preference" });

@@ -5,7 +5,10 @@
       "status": "completed",
       "targetVersion": 17,
       "table": "state_leases",
-      "indexes": ["idx_agent_state_leases_expiry", "idx_agent_state_leases_owner"],
+      "indexes": [
+        "idx_agent_state_leases_expiry",
+        "idx_agent_state_leases_owner"
+      ],
       "note": "Removed from the canonical per-agent schema in version 17."
     },
     {
@@ -13,7 +16,9 @@
       "status": "completed",
       "targetVersion": 10,
       "table": "agent_model_catalogs",
-      "indexes": ["idx_agent_model_catalogs_agent_dir"],
+      "indexes": [
+        "idx_agent_model_catalogs_agent_dir"
+      ],
       "note": "Rebuildable model-catalog cache contents were dropped in state schema 10."
     },
     {
@@ -21,7 +26,9 @@
       "status": "completed",
       "targetVersion": 10,
       "table": "android_notification_recent_packages",
-      "indexes": ["idx_android_notification_recent_packages_order"],
+      "indexes": [
+        "idx_android_notification_recent_packages_order"
+      ],
       "note": "Never had a shipped writer; retired in state schema 10."
     },
     {
@@ -29,7 +36,10 @@
       "status": "completed",
       "targetVersion": 10,
       "table": "command_log_entries",
-      "indexes": ["idx_command_log_entries_timestamp", "idx_command_log_entries_session"],
+      "indexes": [
+        "idx_command_log_entries_timestamp",
+        "idx_command_log_entries_session"
+      ],
       "note": "Never had a shipped writer; retired in state schema 10."
     },
     {
@@ -37,7 +47,9 @@
       "status": "completed",
       "targetVersion": 10,
       "table": "diagnostic_stability_bundles",
-      "indexes": ["idx_diagnostic_stability_bundles_created"],
+      "indexes": [
+        "idx_diagnostic_stability_bundles_created"
+      ],
       "note": "Never had a shipped writer; retired in state schema 10."
     },
     {
@@ -45,7 +57,9 @@
       "status": "completed",
       "targetVersion": 10,
       "table": "media_blobs",
-      "indexes": ["idx_media_blobs_created"],
+      "indexes": [
+        "idx_media_blobs_created"
+      ],
       "note": "Never had a shipped writer; retired in state schema 10."
     },
     {
@@ -53,7 +67,9 @@
       "status": "completed",
       "targetVersion": 10,
       "table": "model_capability_cache",
-      "indexes": ["idx_model_capability_cache_provider_updated"],
+      "indexes": [
+        "idx_model_capability_cache_provider_updated"
+      ],
       "note": "Never had a shipped writer; retired in state schema 10."
     },
     {
@@ -61,7 +77,10 @@
       "status": "completed",
       "targetVersion": 11,
       "table": "skill_lifecycle",
-      "indexes": ["idx_skill_lifecycle_key", "idx_skill_lifecycle_state"],
+      "indexes": [
+        "idx_skill_lifecycle_key",
+        "idx_skill_lifecycle_state"
+      ],
       "note": "Legacy age-based skill curation was replaced by weekly collection review."
     },
     {
@@ -71,6 +90,152 @@
       "table": "skill_workshop_proposal_origin_runs",
       "indexes": [],
       "note": "Proposal origin runs were a never-read projection of authoritative record_json."
+    },
+    {
+      "database": "state",
+      "status": "completed",
+      "targetVersion": 12,
+      "table": "clawhub_promotions_feed_state",
+      "indexes": [],
+      "note": "Folded into config_machine_state key clawhub.promotionsFeed."
+    },
+    {
+      "database": "state",
+      "status": "completed",
+      "targetVersion": 12,
+      "table": "cron_store_epochs",
+      "indexes": [],
+      "note": "Retired write-only cron store epoch bookkeeping in state schema 12."
+    },
+    {
+      "database": "state",
+      "status": "completed",
+      "targetVersion": 12,
+      "table": "model_catalog_remote",
+      "indexes": [],
+      "note": "Folded into config_machine_state key modelCatalog.remote."
+    },
+    {
+      "database": "state",
+      "status": "completed",
+      "targetVersion": 12,
+      "table": "node_host_config",
+      "indexes": [],
+      "note": "Folded into secret-excluded config_machine_state key nodeHost.config."
+    },
+    {
+      "database": "state",
+      "status": "completed",
+      "targetVersion": 12,
+      "table": "onboarding_recommendations",
+      "indexes": [],
+      "note": "Folded into config_machine_state keys onboarding.recommendations.<workspaceKey>."
+    },
+    {
+      "database": "state",
+      "status": "completed",
+      "targetVersion": 12,
+      "table": "sidebar_sections",
+      "indexes": [],
+      "note": "Folded into config_machine_state key sidebar.sectionOrder."
+    },
+    {
+      "database": "state",
+      "status": "completed",
+      "targetVersion": 12,
+      "table": "skill_curator_state",
+      "indexes": [],
+      "note": "Folded into config_machine_state key skills.curatorState."
+    },
+    {
+      "database": "state",
+      "status": "completed",
+      "targetVersion": 12,
+      "table": "tui_last_sessions",
+      "indexes": [
+        "idx_tui_last_sessions_session_key"
+      ],
+      "note": "Dropped rebuildable last-session pointers; new pointers use tui.lastSession.<scopeKey>."
+    },
+    {
+      "database": "state",
+      "status": "completed",
+      "targetVersion": 12,
+      "table": "update_check_state",
+      "indexes": [],
+      "note": "Folded into config_machine_state key update.checkState."
+    },
+    {
+      "database": "state",
+      "status": "completed",
+      "targetVersion": 12,
+      "table": "voicewake_routing_config",
+      "indexes": [],
+      "note": "Folded into config_machine_state key voicewake.routing."
+    },
+    {
+      "database": "state",
+      "status": "completed",
+      "targetVersion": 12,
+      "table": "voicewake_routing_routes",
+      "indexes": [
+        "idx_voicewake_routing_routes_trigger"
+      ],
+      "note": "Folded into config_machine_state key voicewake.routing."
+    },
+    {
+      "database": "state",
+      "status": "completed",
+      "targetVersion": 12,
+      "table": "voicewake_triggers",
+      "indexes": [
+        "idx_voicewake_triggers_trigger"
+      ],
+      "note": "Folded into config_machine_state key voicewake.triggers."
+    },
+    {
+      "database": "state",
+      "status": "completed",
+      "targetVersion": 12,
+      "table": "web_push_vapid_keys",
+      "indexes": [],
+      "note": "Folded into secret-excluded config_machine_state key webPush.vapidKeys."
+    },
+    {
+      "database": "state",
+      "status": "completed",
+      "targetVersion": 13,
+      "table": "installed_plugin_index",
+      "indexes": [
+        "idx_installed_plugin_index_generated"
+      ],
+      "note": "Folded into config_machine_state key plugins.installedIndex (revision inside the value) in state schema 13."
+    },
+    {
+      "database": "state",
+      "status": "completed",
+      "targetVersion": 13,
+      "table": "workspace_attestations",
+      "indexes": [
+        "idx_workspace_attestations_attested"
+      ],
+      "note": "Merged into workspace_setup_state (nullable attested_at_ms/attestation_updated_at_ms) in state schema 13."
+    },
+    {
+      "database": "state",
+      "status": "completed",
+      "targetVersion": 13,
+      "table": "auth_profile_stores",
+      "indexes": [],
+      "note": "Shared auth store folded into config_machine_state key authProfiles.store (secret prefix redaction) in state schema 13."
+    },
+    {
+      "database": "state",
+      "status": "completed",
+      "targetVersion": 13,
+      "table": "auth_profile_state",
+      "indexes": [],
+      "note": "Shared auth runtime state folded into config_machine_state key authProfiles.state in state schema 13; the agent-DB table of the same name is unaffected."
     }
   ]
 }

@@ -402,6 +402,30 @@ describe("session accessor seam", () => {
     ).toEqual(transcriptTimes);
   });
 
+  it("retains email hook transcript provenance using the existing untrusted storage class", async () => {
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:email-hook",
+      storePath,
+    };
+    await upsertSessionEntryCore(scope, {
+      sessionId: "email-hook-session",
+      updatedAt: 10,
+      hookExternalContentSource: "email",
+    });
+    await appendTranscriptMessage(
+      { ...scope, sessionId: "email-hook-session" },
+      { message: { role: "assistant", content: "email transcript" } },
+    );
+
+    expect(listSessionTranscriptInstances({ agentId: "main", storePath })).toEqual([
+      expect.objectContaining({
+        entry: expect.objectContaining({ hookExternalContentSource: "webhook" }),
+        provenanceKnown: true,
+      }),
+    ]);
+  });
+
   it("marks transcript-only rows as unknown provenance", async () => {
     const scope = {
       agentId: "main",

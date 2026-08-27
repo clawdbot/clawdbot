@@ -67,14 +67,10 @@ import {
 import { renderPanelRefreshStatus } from "./panel-refresh-status.ts";
 import { SessionOrganizerController } from "./session-organizer-controller.ts";
 import { SidebarMenusController } from "./sidebar-menus-controller.ts";
+import { SidebarPeopleController } from "./sidebar-people-controller.ts";
 // The shared loader retries transient chunk failures online; a deploy-pruned
 // chunk still stays off until reload when that retry fails, by design.
-const sidebarChromeImport = createIdleImport(() =>
-  Promise.all([
-    customElements.get("openclaw-lobster-pet") ? undefined : import("./lobster-pet.ts"),
-    customElements.get("openclaw-viewer-facepile") ? undefined : import("./viewer-facepile.ts"),
-  ]),
-);
+const lobsterPetImport = createIdleImport(() => import("./lobster-pet.runtime.ts"));
 
 class AppSidebar extends AppSidebarSessionNavigationElement implements SessionListHost {
   @state() override sidebarNarrationLines: ReadonlyMap<string, string> = new Map();
@@ -82,6 +78,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
 
   override readonly sessionOrganizer = new SessionOrganizerController(this);
   override readonly sidebarMenus = new SidebarMenusController(this);
+  private readonly people = new SidebarPeopleController(this);
 
   sessionGroupDefaults(name: string) {
     if (this.context?.sessions.groupsStatus() !== "ready") {
@@ -209,6 +206,11 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     );
   }
 
+  override dismissTransientMenus(): boolean {
+    const hadPersonCard = this.people.dismiss();
+    return super.dismissTransientMenus() || hadPersonCard;
+  }
+
   override disconnectedCallback() {
     window.removeEventListener("openclaw:native-gateways-changed", this.nativeGatewaysChanged);
     window.removeEventListener(
@@ -333,7 +335,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     );
     // The decorative pet's large module stays out of startup and upgrades in place.
     // Its first visit is at least 15 seconds after load, so idle loading cannot miss one.
-    sidebarChromeImport.schedule();
+    lobsterPetImport.schedule();
     this.catalogRendererImport.schedule();
   }
 

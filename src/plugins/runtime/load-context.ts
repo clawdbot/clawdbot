@@ -21,6 +21,7 @@ import {
   resolvePluginMetadataSnapshot,
 } from "../plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugin-metadata-snapshot.types.js";
+import type { PluginRegistry } from "../registry-types.js";
 import type { PluginLogger } from "../types.js";
 
 const log = createSubsystemLogger("plugins");
@@ -139,6 +140,27 @@ export type PluginRuntimeLoadContext = {
   installRecords?: Record<string, PluginInstallRecord>;
   preferBuiltPluginArtifacts?: boolean;
 };
+
+// Source and built consumers must read the same facts from the owning registry.
+const pluginRuntimeLoadContext = Symbol.for("openclaw.pluginRuntimeLoadContext");
+type RuntimeContextRegistry = PluginRegistry & {
+  [pluginRuntimeLoadContext]?: PluginRuntimeLoadContext;
+};
+
+export function setPluginRuntimeLoadContext(
+  registry: PluginRegistry,
+  context: PluginRuntimeLoadContext,
+): void {
+  // SAFETY: Internal registries are extensible; this module owns the optional symbol slot.
+  (registry as RuntimeContextRegistry)[pluginRuntimeLoadContext] = context;
+}
+
+/** Reads load facts carried by an exact lifecycle-owned registry. */
+export const getPluginRuntimeLoadContext = (
+  registry: PluginRegistry | undefined,
+): PluginRuntimeLoadContext | undefined =>
+  // SAFETY: Only the setter above writes this optional registry-owned symbol slot.
+  (registry as RuntimeContextRegistry | undefined)?.[pluginRuntimeLoadContext];
 
 /** Runtime load option values that can be passed directly to plugin loading. */
 type PluginRuntimeResolvedLoadValues = Pick<

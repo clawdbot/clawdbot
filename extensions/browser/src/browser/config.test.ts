@@ -2,8 +2,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withEnv, withTempDir } from "openclaw/plugin-sdk/test-env";
+import { describe, expect, it, vi } from "vitest";
 import type { BrowserConfig, BrowserProfileConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
 import {
@@ -15,55 +15,6 @@ import {
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 
 const BROWSER_HEADLESS_ENV_KEY = "OPENCLAW_BROWSER_HEADLESS";
-
-// Isolate the extension relay secret (read from stateDir/credentials) so the
-// extension-token assertions do not pick up a developer's real secret file.
-let isolatedStateDir = "";
-let openClawState: OpenClawTestState;
-beforeEach(async () => {
-  openClawState = await createOpenClawTestState({
-    layout: "state-only",
-    prefix: "openclaw-cfg-",
-  });
-  isolatedStateDir = openClawState.stateDir;
-});
-afterEach(async () => {
-  await openClawState.cleanup();
-});
-
-/** Write a relay secret into the isolated state dir's credentials directory. */
-function writeRelaySecret(token: string): void {
-  const dir = path.join(isolatedStateDir, "credentials");
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, "browser-extension-relay.secret"), `${token}\n`);
-}
-
-function withEnv<T>(env: Record<string, string | undefined>, fn: () => T): T {
-  const snapshot = new Map<string, string | undefined>();
-  for (const [key] of Object.entries(env)) {
-    snapshot.set(key, process.env[key]);
-  }
-
-  try {
-    for (const key of Object.keys(env)) {
-      const value = env[key];
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-    return fn();
-  } finally {
-    for (const [key, value] of snapshot) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-  }
-}
 
 function resolveRequiredProfile(config: BrowserConfig, profileName: string) {
   const profile = resolveProfile(resolveBrowserConfig(config), profileName);
@@ -125,8 +76,7 @@ describe("browser config", () => {
     // Relay port sits just below the CDP allocation range (controlPort + 8).
     expect(chrome?.cdpPort).toBe(resolved.extensionRelayDefaultPort);
     expect(resolved.extensionRelayDefaultPort).toBe(resolved.controlPort + 8);
-    // No host-local relay secret exists yet (isolated state dir), so the relay
-    // cdpUrl carries no Basic credentials until pairing/startup creates one.
+    // Only a running relay supplies the process-local Basic credential.
     expect(chrome?.cdpUrl).toBe(`http://127.0.0.1:${resolved.extensionRelayDefaultPort}`);
     expect(chrome?.cdpIsLoopback).toBe(true);
   });
@@ -202,11 +152,28 @@ describe("browser config", () => {
     expect(() => resolveBrowserConfig({ profiles })).toThrow(/extension.*relay.*port/i);
   });
 
-  it("keeps the host-local relay key out of the extension cdpUrl", () => {
-    const relayKey = "a".repeat(64);
-    writeRelaySecret(relayKey);
+  it.each([
+    { name: "empty", content: "" },
+    { name: "malformed", content: "not-a-relay-key\n" },
+    { name: "valid", content: `${"a1".repeat(32)}\n` },
+  ])("normalizes config independently of a $name relay secret", async ({ content }) => {
+    await withTempDir("openclaw-config-relay-", async (dir) => {
+      const stateDir = fs.realpathSync(dir);
+      const credentials = path.join(stateDir, "credentials");
+      fs.mkdirSync(credentials, { mode: 0o700 });
+      const secretPath = path.join(credentials, "browser-extension-relay.secret");
+      withEnv({ OPENCLAW_STATE_DIR: stateDir, OPENCLAW_OAUTH_DIR: credentials }, () => {
+        const withoutSecret = resolveBrowserConfig(undefined);
+        fs.writeFileSync(secretPath, content, { flag: "wx", mode: 0o600 });
+        expect(resolveBrowserConfig(undefined)).toEqual(withoutSecret);
+        expect(fs.readFileSync(secretPath, "utf8")).toBe(content);
+      });
+    });
+  });
+
+  it("keeps the lifecycle's host-local relay key out of the extension cdpUrl", () => {
     const resolved = resolveBrowserConfig(undefined);
-    expect(resolved.extensionRelayToken).toBe(relayKey);
+    resolved.extensionRelayToken = "a1".repeat(32);
     const chrome = resolveProfile(resolved, "chrome");
     expect(chrome?.cdpUrl).toBe(`http://127.0.0.1:${resolved.extensionRelayDefaultPort}`);
 

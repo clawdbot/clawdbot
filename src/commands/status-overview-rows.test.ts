@@ -15,6 +15,42 @@ function findRowValue(rows: Array<{ Item: string; Value: string }>, item: string
 }
 
 describe("status-overview-rows", () => {
+  it.each(["default", "all"])("preserves service inspection failures in %s output", (mode) => {
+    const params = createStatusCommandOverviewRowsParams();
+    const service = {
+      label: "LaunchAgent",
+      installed: false,
+      loadedText: "unknown",
+      loadState: { status: "unknown" as const, detail: "permission denied token=fixture" },
+    };
+    const surface = {
+      ...params.surface,
+      gatewayService: service,
+      nodeService: {
+        ...service,
+        loadedText: "not loaded",
+        loadState: { status: "not-loaded" as const },
+        runtime: { status: "unknown", detail: "system domain permission denied token=fixture" },
+      },
+    };
+    const rows =
+      mode === "default"
+        ? buildStatusCommandOverviewRows({ ...params, surface })
+        : buildStatusAllOverviewRows({
+            ...params,
+            surface,
+            configPath: "/tmp/openclaw.json",
+            secretDiagnosticsCount: 0,
+          });
+
+    expect(findRowValue(rows, "Gateway service")).toBe(
+      "LaunchAgent unknown (inspection failed: permission denied token=***)",
+    );
+    expect(findRowValue(rows, "Node service")).toBe(
+      "LaunchAgent not loaded (inspection failed: system domain permission denied token=***) · unknown",
+    );
+  });
+
   it("builds command overview rows from the shared surface", () => {
     const rows = buildStatusCommandOverviewRows(createStatusCommandOverviewRowsParams());
 

@@ -82,7 +82,9 @@ describe("session workspace path actions", () => {
     await vi.waitFor(() => expect(copy!.getAttribute("aria-label")).toBe(testCase.feedback));
 
     expect(writeText).toHaveBeenCalledWith(testCase.path);
-    expect(copy!.dataset[testCase.failed ? "error" : "copied"]).toBe("1");
+    const feedback = copy!.parentElement?.querySelector<HTMLElement>('[role="status"]');
+    expect(feedback?.textContent).toBe(testCase.feedback);
+    expect(feedback?.hidden).toBe(false);
     expect(rowClick).not.toHaveBeenCalled();
     expect(onOpenFile).not.toHaveBeenCalled();
 

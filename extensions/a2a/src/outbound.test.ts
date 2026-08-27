@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { sendA2aChannelText } from "./outbound.js";
 import type { A2aCoreConfig, A2aPeerConfig } from "./types.js";
 
@@ -28,8 +29,38 @@ function parseA2aRequestBody(body: BodyInit | null | undefined): Record<string, 
   return JSON.parse(body) as Record<string, unknown>;
 }
 
-afterEach(() => {
-  vi.restoreAllMocks();
+const guardedFetch = ssrfRuntime.fetchWithSsrFGuard;
+const releases: { release: Mock<() => Promise<void>>; cleanup: () => Promise<void> }[] = [];
+let completedReleases = 0;
+
+beforeEach(() => {
+  releases.length = 0;
+  completedReleases = 0;
+  vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockImplementation(async (params) => {
+    const result = await guardedFetch(params);
+    const release = vi.fn(async () => {
+      await result.release();
+      completedReleases += 1;
+    });
+    releases.push({ release, cleanup: result.release });
+    return { ...result, release };
+  });
+});
+
+afterEach(async () => {
+  try {
+    for (const { release } of releases) {
+      expect(release).toHaveBeenCalledOnce();
+    }
+    expect(completedReleases).toBe(releases.length);
+  } finally {
+    try {
+      // Failed lifecycle assertions must still dispose the real guard timers.
+      await Promise.all(releases.map(({ cleanup }) => cleanup()));
+    } finally {
+      vi.restoreAllMocks();
+    }
+  }
 });
 
 describe("A2A outbound channel delivery", () => {
@@ -91,12 +122,13 @@ describe("A2A outbound channel delivery", () => {
           error: { code: -32601, message: "Method not found" },
         }),
       )
-      .mockResolvedValueOnce(
-        createA2aJsonResponse({
+      .mockImplementationOnce(async () => {
+        expect(completedReleases).toBe(1);
+        return createA2aJsonResponse({
           jsonrpc: "2.0",
           result: { task: { id: "legacy-task-1" } },
-        }),
-      );
+        });
+      });
     const cfg = createA2aOutboundConfig({
       token: "inbound-token",
       url: "https://hermes.example/a2a/v1",
@@ -182,7 +214,9 @@ describe("A2A outbound channel delivery", () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(createA2aJsonResponse({}, { status: 503 }))
-      .mockResolvedValueOnce(createA2aJsonResponse({ error: { code: "invalid" } }));
+      .mockResolvedValueOnce(createA2aJsonResponse({ error: { code: "invalid" } }))
+      .mockResolvedValueOnce(new Response("{invalid JSON"))
+      .mockResolvedValueOnce(createA2aJsonResponse({}));
 
     await expect(sendA2aChannelText({ cfg, to: "hermes", text: "hello" })).rejects.toThrow(
       "HTTP 503",
@@ -190,6 +224,12 @@ describe("A2A outbound channel delivery", () => {
     await expect(sendA2aChannelText({ cfg, to: "hermes", text: "hello" })).rejects.toThrow(
       "invalid A2A JSON-RPC response",
     );
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await expect(sendA2aChannelText({ cfg, to: "hermes", text: "hello" })).rejects.toThrow(
+      SyntaxError,
+    );
+    await expect(sendA2aChannelText({ cfg, to: "hermes", text: "hello" })).rejects.toThrow(
+      "A2A response without a result",
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 });

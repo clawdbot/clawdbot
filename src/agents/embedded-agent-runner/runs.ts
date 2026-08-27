@@ -46,6 +46,7 @@ import { resolveSessionPlacementForcedTerminalSettlement } from "../session-plac
 import {
   ACTIVE_EMBEDDED_RUNS,
   ACTIVE_EMBEDDED_RUNS_BY_RUN_ID,
+  ACTIVE_EMBEDDED_RUN_REGISTRATIONS,
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE,
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY,
   ACTIVE_EMBEDDED_RUN_SNAPSHOTS,
@@ -786,18 +787,7 @@ export function resolveEmbeddedAgentRunProgressState(
     replyPhase !== "completed" &&
     replyPhase !== "failed" &&
     replyPhase !== "aborted";
-  const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
-  let handleInProgress = handle !== undefined;
-  if (handle?.isAborted) {
-    try {
-      if (handle.isAborted()) {
-        handleInProgress = false;
-      }
-    } catch {
-      // A failed optional status probe cannot prove that live work has ended.
-      handleInProgress = true;
-    }
-  }
+  const handleInProgress = isEmbeddedRunHandleInProgress(ACTIVE_EMBEDDED_RUNS.get(sessionId));
   // Reply operations and embedded handles are independent lifecycle owners.
   // A retained terminal owner must not hide a newer live owner for the session.
   if (
@@ -850,6 +840,102 @@ export function resolveActiveEmbeddedRunHandleSessionId(sessionKey: string): str
     return undefined;
   }
   return ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(normalizedSessionKey);
+}
+
+function isEmbeddedRunHandleInProgress(
+  handle: EmbeddedAgentQueueHandle | undefined,
+): handle is EmbeddedAgentQueueHandle {
+  if (!handle) {
+    return false;
+  }
+  if (handle.isAborted) {
+    try {
+      if (handle.isAborted()) {
+        return false;
+      }
+    } catch {
+      // A failed optional status probe cannot prove that live work has ended.
+    }
+  }
+  return true;
+}
+
+export type ActiveEmbeddedRunOwner = {
+  runId: string;
+  sessionId: string;
+  sessionKey?: string;
+  startedAtMs?: number;
+  abort: () => boolean;
+};
+
+function projectActiveEmbeddedRunOwner(
+  registration: { sessionId: string; sessionKey?: string },
+  handle: EmbeddedAgentQueueHandle,
+): ActiveEmbeddedRunOwner | undefined {
+  const runId = handle.runId;
+  if (!runId || !isEmbeddedRunHandleInProgress(handle)) {
+    return undefined;
+  }
+  return {
+    runId,
+    ...registration,
+    ...(handle.startedAtMs === undefined ? {} : { startedAtMs: handle.startedAtMs }),
+    // A recovered run ID is correlation only. Recheck the captured owner before
+    // Stop so a stale UI action cannot abort replacement work in the session.
+    abort: () => {
+      if (
+        ACTIVE_EMBEDDED_RUNS.get(registration.sessionId) !== handle ||
+        ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(runId) !== handle ||
+        !isEmbeddedRunHandleAbortable(runId, handle)
+      ) {
+        return false;
+      }
+      try {
+        if (handle.cancel) {
+          handle.cancel("user_abort");
+        } else {
+          handle.abort();
+        }
+        return true;
+      } catch {
+        return false;
+      }
+    },
+  };
+}
+
+export function resolveActiveEmbeddedRunOwner(
+  sessionId: string,
+): ActiveEmbeddedRunOwner | undefined {
+  const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
+  const registration = handle ? ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle) : undefined;
+  return handle && registration ? projectActiveEmbeddedRunOwner(registration, handle) : undefined;
+}
+
+export function resolveActiveEmbeddedRunOwnerByRunId(
+  runId: string,
+): ActiveEmbeddedRunOwner | undefined {
+  const normalizedRunId = runId.trim();
+  const handle = normalizedRunId ? ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(normalizedRunId) : undefined;
+  if (!handle) {
+    return undefined;
+  }
+  const registration = ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle);
+  return registration && ACTIVE_EMBEDDED_RUNS.get(registration.sessionId) === handle
+    ? projectActiveEmbeddedRunOwner(registration, handle)
+    : undefined;
+}
+
+export function isActiveEmbeddedRunId(runId: string): boolean {
+  const normalizedRunId = runId.trim();
+  const handle = normalizedRunId ? ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(normalizedRunId) : undefined;
+  const registration = handle ? ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle) : undefined;
+  return Boolean(
+    handle &&
+    registration &&
+    ACTIVE_EMBEDDED_RUNS.get(registration.sessionId) === handle &&
+    isEmbeddedRunHandleInProgress(handle),
+  );
 }
 
 export function resolveActiveEmbeddedRunHandleSessionIdBySessionFile(
@@ -1186,6 +1272,10 @@ export function setActiveEmbeddedRun(
   }
   clearEmbeddedRunAbandonment({ sessionId, sessionKey, sessionFile });
   ACTIVE_EMBEDDED_RUNS.set(sessionId, handle);
+  ACTIVE_EMBEDDED_RUN_REGISTRATIONS.set(handle, {
+    sessionId,
+    ...(sessionKey ? { sessionKey } : {}),
+  });
   const forcedTerminalSettlement = resolveSessionPlacementForcedTerminalSettlement();
   if (forcedTerminalSettlement) {
     EMBEDDED_RUN_FORCED_TERMINAL_SETTLEMENTS.set(handle, forcedTerminalSettlement);

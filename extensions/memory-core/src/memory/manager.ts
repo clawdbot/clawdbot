@@ -1,5 +1,4 @@
 // Memory Core plugin module implements the concrete memory index manager.
-import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import {
   createSubsystemLogger,
@@ -24,6 +23,7 @@ import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js
 import type { EmbeddingProvider, EmbeddingProviderRequest } from "./embeddings.js";
 import { awaitPendingManagerWork } from "./manager-async-state.js";
 import { MEMORY_BATCH_FAILURE_LIMIT } from "./manager-batch-state.js";
+import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { closeMemoryDatabase } from "./manager-db.js";
 import {
   clearMemoryEmbeddingProbeCache,
@@ -110,16 +110,8 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
   protected batchFailureLastError?: string;
   protected batchFailureLastProvider?: string;
   protected batchFailureLock: Promise<void> = Promise.resolve();
-  protected db: DatabaseSync;
+  protected publishedDatabase: MemoryIndexDatabase;
   protected readonly cache: { enabled: boolean; maxEntries?: number };
-  protected readonly vector: {
-    enabled: boolean;
-    available: boolean | null;
-    semanticAvailable?: boolean;
-    extensionPath?: string;
-    loadError?: string;
-    dims?: number;
-  };
   protected indexIdentityDirty = false;
   protected sessionWarm = new Set<string>();
   private syncing: Promise<void> | null = null;
@@ -218,7 +210,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     for (const source of effectiveSettings.sources) {
       this.sources.add(source);
     }
-    this.db = this.openDatabase();
+    this.publishedDatabase = new MemoryIndexDatabase(this.openDatabase());
     try {
       this.providerKey = this.computeProviderKey();
       this.cache = {
@@ -227,11 +219,8 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       };
       this.fts.enabled = effectiveSettings.query.hybrid.enabled;
       this.ensureSchema();
-      this.vector = {
-        enabled: effectiveSettings.store.vector.enabled,
-        available: null,
-        extensionPath: effectiveSettings.store.vector.extensionPath,
-      };
+      this.vector.enabled = effectiveSettings.store.vector.enabled;
+      this.vector.extensionPath = effectiveSettings.store.vector.extensionPath;
       const meta = this.readMeta();
       if (meta?.vectorDims) {
         this.vector.dims = meta.vectorDims;
@@ -285,6 +274,10 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
   }
 
   async sync(params?: MemorySyncParams): Promise<void> {
+    return await this.withPublishedDatabase(() => this.syncPublished(params));
+  }
+
+  private async syncPublished(params?: MemorySyncParams): Promise<void> {
     if (this.closing || this.closed) {
       return;
     }
@@ -449,6 +442,10 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
   }
 
   status(): MemoryProviderStatus {
+    return this.withPublishedDatabase(() => this.publishedStatus());
+  }
+
+  private publishedStatus(): MemoryProviderStatus {
     if (this.embeddingBootstrapFailure) {
       this.refreshKeywordFallbackIndexIdentity();
     } else {
@@ -570,7 +567,9 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       await existingClose;
       return;
     }
-    const closeOperation = this.closeTeardownComplete ? this.retryFailedClose() : this.closeOnce();
+    const closeOperation = this.withPublishedDatabase(() =>
+      this.closeTeardownComplete ? this.retryFailedClose() : this.closeOnce(),
+    );
     this.closePromise = closeOperation;
     try {
       await closeOperation;

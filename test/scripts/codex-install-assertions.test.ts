@@ -18,7 +18,7 @@ const CODEX_ON_DEMAND_ASSERTIONS_SCRIPT = "scripts/e2e/lib/codex-on-demand/asser
 const CODEX_NPM_PLUGIN_LIVE_ASSERTIONS_SCRIPT =
   "scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs";
 const DISABLE_EXPERIMENTAL_WARNING = "--disable-warning=ExperimentalWarning";
-const CODEX_VERSION = "0.149.1";
+const CODEX_VERSION = "0.150.1";
 const tempDirs: string[] = [];
 const tmpFixtureFiles = [
   "/tmp/openclaw-codex-agent.err",
@@ -57,19 +57,20 @@ function writeAuthProfileStoreSqlite(stateDir: string) {
   const db = new DatabaseSync(databasePath);
   try {
     db.exec(`
-      CREATE TABLE IF NOT EXISTS auth_profile_stores (
-        store_key TEXT NOT NULL PRIMARY KEY,
-        store_json TEXT NOT NULL,
-        updated_at INTEGER NOT NULL
+      PRAGMA user_version = 13;
+      CREATE TABLE IF NOT EXISTS config_machine_state (
+        state_key TEXT NOT NULL PRIMARY KEY,
+        value_json TEXT NOT NULL,
+        updated_at_ms INTEGER NOT NULL
       );
     `);
     db.prepare(
       `
-        INSERT INTO auth_profile_stores (store_key, store_json, updated_at)
+        INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
         VALUES (?, ?, ?)
       `,
     ).run(
-      "shared",
+      "authProfiles.store",
       JSON.stringify({
         version: 1,
         profiles: {

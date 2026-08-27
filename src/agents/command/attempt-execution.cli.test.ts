@@ -33,6 +33,7 @@ import { clearRuntimeAuthProfileStoreSnapshots } from "../auth-profiles/runtime-
 import { saveAuthProfileStore } from "../auth-profiles/store.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import { createCronCreatorAuthorityCapability } from "../cron-creator-authority-context.js";
+import type { RunEmbeddedAgentInternalParams } from "../embedded-agent-runner/run/internal-params.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { FailoverError } from "../failover-error.js";
 import type { ModelFallbackAttemptProvenance } from "../model-fallback.types.js";
@@ -3664,6 +3665,40 @@ describe("CLI attempt execution", () => {
     });
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { reportedId: "openai:configured", source: "user" },
+    { reportedId: "openai:rotated", source: "auto" },
+    { reportedId: undefined, source: undefined },
+  ] as const)(
+    "reports successful maintenance auth $reportedId without artifact capture",
+    async ({ reportedId, source }) => {
+      const onSuccessfulAuthProfile = vi.fn();
+      runEmbeddedAgentMock.mockImplementationOnce(
+        async (params: RunEmbeddedAgentInternalParams) => {
+          expect(params.onSuccessfulAuthBinding).toBeUndefined();
+          params.onSuccessfulAuthProfile?.(reportedId);
+          return { meta: { durationMs: 1 } } satisfies EmbeddedAgentRunResult;
+        },
+      );
+
+      await runStoredAttempt({
+        sessionEntry: makeSessionEntry("maintenance-auth", {
+          authProfileOverride: "openai:stale",
+          authProfileOverrideSource: "auto",
+        }),
+        sessionKey: "agent:main:direct:maintenance-auth",
+        modelOverride: "gpt-5.6-luna",
+        configuredAuthProfileId: "openai:configured",
+        onSuccessfulAuthProfile,
+      });
+
+      expect(onSuccessfulAuthProfile).toHaveBeenCalledExactlyOnceWith({
+        authProfileId: reportedId,
+        authProfileIdSource: source,
+      });
+    },
+  );
 
   it("replaces a stale automatic session profile with the configured model profile", async () => {
     const embeddedArg = await runOpenClawEmbeddedAttemptForTest({

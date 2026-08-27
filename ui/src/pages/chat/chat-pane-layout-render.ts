@@ -1,7 +1,7 @@
 import { html, nothing } from "lit";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { isDesktopPanelAvailable } from "../../app/app-shell-chrome.ts";
+import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
 import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
 import {
   availableSidebarSlots,
@@ -85,6 +85,8 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       ${board.face === "dashboard" ? header : nothing}${this.renderBoardPrimary(board, chat)}
     </div>`;
     const discussion = this.buildSessionDiscussionPanel(state, state.sessionKey.trim());
+    const discussionState = this.sessionDiscussionStates.get(state.sessionKey.trim());
+    const discussionAvailable = discussionState === "available" || discussionState === "open";
     const desktopAvailable = isDesktopPanelAvailable(this.context.gateway.snapshot);
     const companionThread = this.sessionCompanionThreads.view(state.sessionKey, currentAgentId);
     const browserPresented =
@@ -128,6 +130,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       pendingQuestion: companionThread.pendingQuestion,
       onClearCompanion: () => void this.clearSessionCompanion(),
       discussion,
+      discussionAvailable,
       discussionOpenUrl: discussion?.openUrl ?? null,
       discussionSourceGeneration: this.connectionGeneration,
     });

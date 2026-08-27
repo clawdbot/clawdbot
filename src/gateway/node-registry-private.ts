@@ -4,25 +4,27 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 import {
   isPrivateNodeInvokeCommand,
+  NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
   NODE_WORKER_PRIVATE_COMMANDS,
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
 } from "../infra/node-commands.js";
 import {
   NODE_WORKER_BUNDLE_RETENTION_VERSION,
   NODE_WORKER_BUNDLE_STATUS_VERSION,
+  NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
   type NodeRunnerInventoryIssue,
   type NodeRunnerInventoryDeclaration,
   type NodeWorkerCapacitySnapshot,
 } from "../infra/node-runner-inventory.js";
 import type { NodeWorkerBundleStatus } from "../shared/node-list-types.js";
+import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
 import { sameWorkerProtocolFeatures } from "../worker/worker-build-identity.js";
 import { NODE_INVOKE_PAIRING_CHANGED_ABORT } from "./node-registry-private-token.js";
-import type {
-  NodeInvokeStreamController,
-  PendingInvoke,
-  PendingSystemRunEvent,
-} from "./node-registry.invoke-stream.js";
-import { normalizeSystemRunTimeoutMs } from "./node-registry.system-run.js";
+import type { NodeInvokeStreamController, PendingInvoke } from "./node-registry.invoke-stream.js";
+import {
+  normalizeSystemRunInvokeParams,
+  resolvePendingSystemRunEvent,
+} from "./node-registry.system-run.js";
 import {
   createNodeRunnerStatePublisher,
   resolveNodeRunnerInventoryIssue,
@@ -149,55 +151,12 @@ type NodeRegistryPrivateState = {
 
 const NODE_REGISTRY_PRIVATE_STATES = new WeakMap<object, NodeRegistryPrivateState>();
 
-function resolvePendingSystemRunEvent(params: {
-  command: string;
-  params?: unknown;
-}): PendingSystemRunEvent | undefined {
-  if (params.command !== "system.run" || !params.params || typeof params.params !== "object") {
-    return undefined;
-  }
-  const obj = params.params as Record<string, unknown>;
-  const runId = normalizeOptionalString(obj.runId) ?? "";
-  if (!runId) {
-    return undefined;
-  }
-  const timeoutMs = normalizeSystemRunTimeoutMs(obj.timeoutMs);
-  const sessionKey = normalizeOptionalString(obj.sessionKey) ?? "";
-  return {
-    runId,
-    ...(sessionKey ? { sessionKey } : {}),
-    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-  };
-}
-
-function normalizeSystemRunInvokeParams(params: { command: string; params?: unknown }): unknown {
-  if (
-    params.command !== "system.run" ||
-    !params.params ||
-    typeof params.params !== "object" ||
-    Array.isArray(params.params)
-  ) {
-    return params.params;
-  }
-  const obj = params.params as Record<string, unknown>;
-  const normalized: Record<string, unknown> = {
-    ...obj,
-    runId: normalizeOptionalString(obj.runId) || randomUUID(),
-  };
-  const timeoutMs = normalizeSystemRunTimeoutMs(obj.timeoutMs);
-  if (timeoutMs === undefined) {
-    delete normalized.timeoutMs;
-  } else {
-    normalized.timeoutMs = timeoutMs;
-  }
-  return normalized;
-}
-
 function isWorkerSupervisorProofCurrent(
   state: NodeRegistryPrivateState,
   proof: NodeWorkerSupervisorNodeProof,
   requireLaunchEligibility: boolean,
   requiredCommands: readonly string[] = [],
+  requireEnvironmentSession = false,
 ): boolean {
   const node = state.context.getNode(proof.nodeId);
   if (!node || node.client.invalidated === true || node.connId !== proof.connId) {
@@ -211,6 +170,8 @@ function isWorkerSupervisorProofCurrent(
     current.clientMode === proof.clientMode &&
     current.protocolFeature === proof.protocolFeature &&
     (!requireLaunchEligibility || current.workerHost.capacity.available > 0) &&
+    (!requireEnvironmentSession ||
+      current.workerHost.environmentSession === NODE_WORKER_ENVIRONMENT_SESSION_VERSION) &&
     requiredCommands.every((command) => current.commands.includes(command))
   );
 }
@@ -287,6 +248,11 @@ async function invokeNodeRegistryCore(
   params: NodeInvokeParams,
   allowPrivateCommand: boolean,
 ): Promise<NodeInvokeResult> {
+  let timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 30_000, 0);
+  // Explicit budgets include pairing and serialization; omitted budgets retain
+  // the post-dispatch default, and zero keeps long-lived invokes unbounded.
+  const deadlineAtMs =
+    Number.isFinite(params.timeoutMs) && timeoutMs > 0 ? Date.now() + timeoutMs : undefined;
   if (isPrivateNodeInvokeCommand(params.command) && !allowPrivateCommand) {
     return {
       ok: false,
@@ -326,7 +292,14 @@ async function invokeNodeRegistryCore(
     };
   }
   if (expectedPairingGeneration && state.context.hasCurrentPairingStateResolver) {
-    const resolution = await state.context.resolvePairingLease(node);
+    const pairingNode = node;
+    const resolution = await awaitWithinDeadline(
+      () => state.context.resolvePairingLease(pairingNode),
+      deadlineAtMs,
+    );
+    if (resolution === ABSOLUTE_DEADLINE_EXPIRED) {
+      return { ok: false, error: { code: "TIMEOUT", message: "node invoke timed out" } };
+    }
     if (resolution.status === "unavailable") {
       return {
         ok: false,
@@ -347,21 +320,11 @@ async function invokeNodeRegistryCore(
       };
     }
   }
-  if (params.isDispatchAuthorized?.() === false) {
-    return {
-      ok: false,
-      error: {
-        code: "APPROVAL_AUTHORITY_CLOSED",
-        message: "runtime authority closed before node dispatch",
-      },
-    };
-  }
   const requestId = randomUUID();
   const invokeParams = normalizeSystemRunInvokeParams({
     command: params.command,
     params: params.params,
   });
-  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 30_000, 0);
   const payload = {
     id: requestId,
     nodeId: params.nodeId,
@@ -376,6 +339,24 @@ async function invokeNodeRegistryCore(
     command: params.command,
     params: invokeParams,
   });
+  // Serialization can consume the budget or close caller-owned authority.
+  // Revalidate both before arming pending state and handing off to transport.
+  if (params.isDispatchAuthorized?.() === false) {
+    return {
+      ok: false,
+      error: {
+        code: "APPROVAL_AUTHORITY_CLOSED",
+        message: "runtime authority closed before node dispatch",
+      },
+    };
+  }
+  if (deadlineAtMs !== undefined) {
+    timeoutMs = Math.max(0, deadlineAtMs - Date.now());
+    if (timeoutMs === 0) {
+      return { ok: false, error: { code: "TIMEOUT", message: "node invoke timed out" } };
+    }
+    payload.timeoutMs = timeoutMs;
+  }
   const result = new Promise<NodeInvokeResult>((resolve, reject) => {
     const pending: PendingInvoke = {
       nodeId: params.nodeId,
@@ -509,7 +490,10 @@ export function registerNodeRegistryPrivateRuntime(
         isWorkerSupervisorProofCurrent(
           state,
           params.node,
-          params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
+          false,
+          [],
+          params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND ||
+            params.command === NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
         );
       if (!isProofCurrent()) {
         return {

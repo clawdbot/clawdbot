@@ -40,7 +40,7 @@ import type { ProviderUsageDisplayProps } from "../../lib/provider-quota-summary
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import type { UiSessionDefaultsHost } from "../../lib/sessions/session-key.ts";
 import { getChatHistoryLoadState, retryChatHistoryLoad } from "./chat-history.ts";
-import type { ChatRunStartupStatus } from "./chat-run-startup.ts";
+import { chatStartupStatusLabel, type ChatRunStartupStatus } from "./chat-run-startup.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import {
   type ChatPlacementStartupNoticeProps,
@@ -109,6 +109,7 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     compactionStatus?: CompactionStatus | null;
     fallbackStatus?: FallbackStatus | null;
     progressCard?: ProgressCard | null;
+    progressCardHasActiveRun?: boolean;
     onDismissProgressCard?: (card: ProgressCard) => void;
     gatewayQuestionPrompts?: readonly QuestionPrompt[];
     onGatewayQuestionChange?: () => void;
@@ -226,7 +227,6 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     onSlashIntent?: () => void | Promise<void>;
     onSlashCommand?: (command: string) => void;
     onSend: ChatComposerProps["onSend"];
-    onCompact?: () => void | Promise<void>;
     onOpenSessionCheckpoints?: () => void | Promise<void>;
     onToggleRealtimeTalk?: () => void;
     onToggleRealtimeCamera?: () => void;
@@ -320,20 +320,24 @@ export function renderChat(props: ChatProps) {
     ? (item: ImageLightboxItem) => openImage?.(item, props.onRequestOpenImage?.())
     : undefined;
   const attachmentDropHandlers = createChatAttachmentDropHandlers({ ...props, canCompose });
+  const placementStartup =
+    props.placementStartup?.phase === "failed" ? null : props.placementStartup;
+  // Placement is visible work, but does not own an abortable model run yet.
+  const runWorking = Boolean(placementStartup) || isChatRunWorking(props);
   let chatSection: HTMLElement | null = null;
   const thread = renderChatThread(
     {
       paneId: props.paneId,
       sessionKey: props.sessionKey,
       announceTranscript: props.announceTranscript,
-      loading: props.loading,
+      loading: props.loading && !placementStartup,
       historyLoading: props.historyPagination?.loading,
       messages: props.messages,
       toolMessages: props.toolMessages,
       guardianNotices: props.guardianNotices,
       streamSegments: props.streamSegments,
       stream: props.stream,
-      streamStartedAt: props.streamStartedAt,
+      streamStartedAt: placementStartup?.startedAt ?? props.streamStartedAt,
       runId: props.runId,
       runOutputTokens: props.runOutputTokens,
       runStatus: props.runStatus,
@@ -342,8 +346,8 @@ export function renderChat(props: ChatProps) {
       showToolCalls: props.showToolCalls,
       persistCommentary: props.persistCommentary,
       runActive: Boolean(props.canAbort),
-      runWorking: isChatRunWorking(props),
-      startupStatus: props.startupStatus,
+      runWorking,
+      startupLabel: chatStartupStatusLabel(props.startupStatus, placementStartup),
       waitingApproval: props.waitingApproval,
       questionPrompts: props.gatewayQuestionPrompts,
       sessions: props.sessions,
@@ -429,6 +433,7 @@ export function renderChat(props: ChatProps) {
     compactionStatus: props.compactionStatus,
     fallbackStatus: props.fallbackStatus,
     progressCard: props.progressCard,
+    progressCardHasActiveRun: props.progressCardHasActiveRun,
     onDismissProgressCard: props.onDismissProgressCard,
     gatewayQuestionPrompts: props.gatewayQuestionPrompts,
     messages: props.messages,
@@ -479,7 +484,6 @@ export function renderChat(props: ChatProps) {
     onSlashIntent: props.onSlashIntent,
     onSlashCommand: props.onSlashCommand,
     onSend: props.onSend,
-    onCompact: props.suggestionComposer ? undefined : props.onCompact,
     onToggleRealtimeTalk: props.suggestionComposer ? undefined : props.onToggleRealtimeTalk,
     onToggleRealtimeCamera: props.onToggleRealtimeCamera,
     onSwitchRealtimeCamera: props.onSwitchRealtimeCamera,
@@ -547,6 +551,7 @@ export function renderChat(props: ChatProps) {
     historyLoadState?.phase === "failed" &&
     historyLoadState.sessionKey === props.sessionKey;
   const transcriptEmpty =
+    !runWorking &&
     props.messages.length === 0 &&
     props.toolMessages.length === 0 &&
     props.streamSegments.length === 0 &&

@@ -105,6 +105,10 @@ export type LegacyStateDetection = {
     sourcePath: string;
     hasLegacy: boolean;
   };
+  commitments?: {
+    sourcePath: string;
+    hasLegacy: boolean;
+  };
   auditLogs: LegacyAuditLogsDetection;
   acpReplayLedger: {
     sourcePath: string;

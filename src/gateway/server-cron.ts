@@ -37,6 +37,7 @@ import {
 import { runCronCommandJob } from "../cron/command-runner.js";
 import { resolveCronStoredDeliveryContext } from "../cron/delivery-context.js";
 import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/delivery.js";
+import { reconcileHeartbeatMonitorJobs } from "../cron/heartbeat-monitor.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { retryTransientDirectCronDelivery } from "../cron/isolated-agent/delivery-dispatch-policy.js";
 import { resolveCronJobBoundSessionKeys } from "../cron/job-session-bindings.js";
@@ -103,7 +104,6 @@ import {
   runWithScheduledGatewayContext,
 } from "./scheduled-run-gateway-context.js";
 import type { GatewayCronServiceContract } from "./server-cron-contract.js";
-import { reconcileHeartbeatMonitorJobs } from "./server-cron-heartbeat-jobs.js";
 import {
   dispatchGatewayCronFinishedNotifications,
   sendGatewayCronWebhook,
@@ -130,7 +130,6 @@ export type GatewayCronState = {
   // the proxy silently omit reconcileHeartbeatJobs, turning every
   // restart-heartbeat reload into a permanent no-op until gateway restart.
   reconcileExitWatchers: () => Promise<void>;
-  stopExitWatchers: () => void;
   reconcileStreamWatchers: () => Promise<void>;
   stopStreamWatchers: () => Promise<void>;
   reconcileHeartbeatJobs: (cfg?: OpenClawConfig) => Promise<void>;
@@ -363,6 +362,7 @@ function toPluginCronJob(job: CronJob): PluginHookGatewayCronJob {
       lastDelivered: job.state.lastDelivered,
       lastDeliveryStatus: job.state.lastDeliveryStatus,
       lastDeliveryError: job.state.lastDeliveryError,
+      deliverySuppressionReason: job.state.deliverySuppressionReason,
       lastFailureNotificationDelivered: job.state.lastFailureNotificationDelivered,
       lastFailureNotificationDeliveryStatus: job.state.lastFailureNotificationDeliveryStatus,
       lastFailureNotificationDeliveryError: job.state.lastFailureNotificationDeliveryError,
@@ -1112,6 +1112,7 @@ export function buildGatewayCronService(params: {
           "delivered",
           "deliveryStatus",
           "deliveryError",
+          "deliverySuppressionReason",
           "sessionId",
           "sessionKey",
           "runId",
@@ -1627,7 +1628,6 @@ export function buildGatewayCronService(params: {
       },
     }),
     reconcileExitWatchers,
-    stopExitWatchers,
     reconcileStreamWatchers,
     stopStreamWatchers,
     reconcileHeartbeatJobs,

@@ -1,9 +1,9 @@
+import type { ActionGate } from "openclaw/plugin-sdk/channel-actions";
 // Discord tests cover runtime.presence plugin behavior.
 import type { DiscordActionConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayPlugin } from "../internal/gateway.js";
 import { clearGateways, registerGateway } from "../monitor/gateway-registry.js";
-import type { ActionGate } from "../runtime-api.js";
 import { handleDiscordAction } from "./runtime.js";
 import { handleDiscordPresenceAction } from "./runtime.presence.js";
 

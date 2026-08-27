@@ -15,6 +15,7 @@ export type RunPluginInstallCommandParams = {
   raw: string;
   allowInstallPolicyWarningPrompt: boolean;
   opts: InstallSafetyOverrides & {
+    acceptCapabilities?: boolean;
     acknowledgeClawHubRisk?: boolean;
     acknowledgeInstallPolicyWarning?: boolean;
     expectedIntegrity?: string;

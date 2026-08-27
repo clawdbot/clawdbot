@@ -18,7 +18,7 @@ import type { CodexSessionCatalogControlFactory } from "./src/session-catalog-ty
 // New runtime identity uses the `openai` provider.
 const DEFAULT_CODEX_HARNESS_PROVIDER_IDS = new Set(["codex", "openai"]);
 const SHARED_CODEX_APP_SERVER_CLIENT_DISPOSER = Symbol.for("openclaw.codexAppServerClientDisposer");
-// Audited against @openai/codex 0.149.1 (rust-v0.149.1). These exact denies
+// Audited against @openai/codex 0.150.1 (rust-v0.150.1). These exact denies
 // either have no Codex-native equivalent or are enforced by the harness. Keep
 // the list positive and conservative: an omitted tool isolates the native surface.
 const CODEX_TOOL_POLICY_SAFE_DENY_NAMES = [
@@ -318,8 +318,14 @@ export function createCodexAppServerAgentHarness(
         pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
       });
     },
+    withSessionDeletion: async (params, run) => {
+      const { withCodexAppServerSessionDeletion } =
+        await import("./src/app-server/session-retirement.js");
+      params.assertCurrent();
+      return withCodexAppServerSessionDeletion(options.bindingStore, params, run);
+    },
     reset: async (params) => {
-      if (params.sessionId) {
+      if (params.sessionId && params.reason !== "deleted") {
         const [
           { reclaimCurrentCodexSessionGeneration, sessionBindingIdentity },
           { retireCodexAppServerSessionGeneration },
@@ -336,7 +342,7 @@ export function createCodexAppServerAgentHarness(
           retireCodexAppServerSessionGeneration({
             bindingStore: options.bindingStore,
             identity,
-            mode: params.reason === "deleted" ? "retire" : "reset",
+            mode: "reset",
           });
         let reset = await resetGeneration();
         if (reset === "conflict") {

@@ -1,117 +1,17 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { finalizeEvent, getPublicKey, verifyEvent, type Event, type Filter } from "nostr-tools";
+import { finalizeEvent, getPublicKey, verifyEvent, type Event } from "nostr-tools";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const relayMocks = vi.hoisted(() => ({
-  connect: vi.fn<() => Promise<void>>(),
-  auth: vi.fn<() => Promise<string>>(),
-  publish: vi.fn<(event: Event) => Promise<string>>(),
-  send: vi.fn<(message: string) => Promise<void>>(),
-  close: vi.fn(),
-  connected: true,
-  stallProfileQueryEose: false,
-  stallRoomEoseChannelId: undefined as string | undefined,
-  membershipEvents: [] as Event[],
-  roomMetadataEvents: [] as Event[],
-  profileEvents: [] as Event[],
-  roomHistoryEvents: [] as Event[],
-  beforeRoomHistoryEvent: undefined as ((event: Event) => void) | undefined,
-  subscriptions: [] as Array<{
-    filter: Filter;
-    filters: Filter[];
-    handlers: {
-      onevent: (event: Event) => void;
-      oneose?: () => void;
-      onclose: (reason: string) => void;
-    };
-    close: ReturnType<typeof vi.fn>;
-  }>,
-}));
-
 vi.mock("nostr-tools", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("nostr-tools")>();
-  return {
-    ...actual,
-    Relay: class {
-      onauth?: (template: unknown) => Promise<unknown>;
-      idleSince: number | undefined;
-      ongoingOperations = 0;
-      get connected() {
-        return relayMocks.connected;
-      }
-      connect = relayMocks.connect;
-      auth = relayMocks.auth;
-      publish = relayMocks.publish;
-      send = relayMocks.send;
-      close = relayMocks.close;
-      scheduleIdleClose = vi.fn();
-
-      prepareSubscription(
-        filters: Filter[],
-        handlers: {
-          onevent: (event: Event) => void;
-          oneose?: () => void;
-          onclose: (reason: string) => void;
-        },
-      ) {
-        const filter = filters[0] ?? {};
-        const close = vi.fn();
-        relayMocks.subscriptions.push({ filter, filters, handlers, close });
-        if (filter.kinds?.includes(39002)) {
-          for (const event of relayMocks.membershipEvents) {
-            handlers.onevent(event);
-          }
-          handlers.oneose?.();
-        } else if (filter.kinds?.includes(40099) || filter.kinds?.includes(9002)) {
-          const roomId = filter["#h"]?.[0];
-          for (const currentFilter of filters) {
-            for (const event of relayMocks.roomHistoryEvents) {
-              const eventRoomId = event.tags.find((tag) => tag[0] === "h")?.[1];
-              if (
-                currentFilter.kinds?.includes(event.kind) &&
-                currentFilter["#h"]?.includes(eventRoomId ?? "")
-              ) {
-                relayMocks.beforeRoomHistoryEvent?.(event);
-                handlers.onevent(event);
-              }
-            }
-          }
-          if (roomId !== relayMocks.stallRoomEoseChannelId) {
-            handlers.oneose?.();
-          }
-        } else if (filter.kinds?.includes(39000)) {
-          for (const event of relayMocks.roomMetadataEvents) {
-            const roomId = event.tags.find((tag) => tag[0] === "d")?.[1];
-            if (!filter["#d"] || (roomId && filter["#d"]?.includes(roomId))) {
-              handlers.onevent(event);
-            }
-          }
-          handlers.oneose?.();
-        } else if (filter.kinds?.includes(0)) {
-          for (const event of relayMocks.profileEvents) {
-            if (!filter.authors || filter.authors.includes(event.pubkey)) {
-              handlers.onevent(event);
-            }
-          }
-          const isProfileSyncQuery = filters.some((entry) => entry.kinds?.includes(10_100));
-          if (!isProfileSyncQuery || !relayMocks.stallProfileQueryEose) {
-            handlers.oneose?.();
-          }
-        }
-        return {
-          id: `sub:${relayMocks.subscriptions.length}`,
-          close,
-          closed: false,
-        };
-      }
-    },
-  };
+  const { mockBuzzRelay } = await import("./buzz-bus.test-helpers.js");
+  return { ...(await importOriginal<typeof import("nostr-tools")>()), ...mockBuzzRelay() };
 });
 
 import { sendBuzzTextOneShot, startBuzzBus, type BuzzBus } from "./buzz-bus.js";
+import { relayMocks } from "./buzz-bus.test-helpers.js";
 import { handleBuzzInbound } from "./inbound.js";
 import {
   BUZZ_DIFF_MESSAGE_KIND,
@@ -422,8 +322,16 @@ describe("Buzz bus lifecycle", () => {
       },
     };
     const bus = await startTestBus({
-      onMessage: async (message, activeBus, signal) =>
-        await handleBuzzInbound({ account, cfg: {}, bus: activeBus, message, signal }),
+      onMessage: async (message, activeBus, signal, assertCurrent) =>
+        await handleBuzzInbound({
+          account,
+          cfg: {},
+          bus: activeBus,
+          message,
+          signal,
+          assertCurrent,
+          historyMap: new Map(),
+        }),
     });
 
     try {
@@ -573,13 +481,7 @@ describe("Buzz bus lifecycle", () => {
       sig: "e".repeat(128),
       tags: [["h", CHANNEL_ID]],
     }));
-    let releaseMessages: (() => void) | undefined;
-    const messageGate = new Promise<void>((resolve) => {
-      releaseMessages = resolve;
-    });
-    const onMessage = vi.fn(async () => {
-      await messageGate;
-    });
+    const onMessage = vi.fn(async () => {});
     const onFatalError = vi.fn();
 
     const bus = await startTestBus({
@@ -594,20 +496,11 @@ describe("Buzz bus lifecycle", () => {
         }),
       );
     });
-    await vi.waitFor(() => expect(onMessage).toHaveBeenCalledTimes(8));
+    expect(onFatalError).toHaveBeenCalledOnce();
+    expect(onMessage).not.toHaveBeenCalled();
     expect(relayMocks.close).not.toHaveBeenCalled();
 
-    let closed = false;
-    const close = bus.close().then(() => {
-      closed = true;
-    });
-    await Promise.resolve();
-    expect(closed).toBe(false);
-    expect(relayMocks.close).not.toHaveBeenCalled();
-
-    releaseMessages?.();
-    await Promise.all(onMessage.mock.results.map((result) => result.value));
-    await close;
+    await bus.close();
     expect(relayMocks.close).toHaveBeenCalledOnce();
   });
 
@@ -649,6 +542,91 @@ describe("Buzz bus lifecycle", () => {
     expect(dispatchSignal?.aborted).toBe(true);
     expect(relayMocks.close).toHaveBeenCalledOnce();
   });
+
+  it.each(["queue", "dedupe claim"] as const)(
+    "rejects revoked membership across the %s",
+    async (boundary) => {
+      relayMocks.auth.mockResolvedValue("ok");
+      const remainingSecret = Uint8Array.from(Buffer.from("02".repeat(32), "hex"));
+      const remainingPublicKey = getPublicKey(remainingSecret);
+      relayMocks.membershipEvents[0]!.tags.push(["p", remainingPublicKey, "", "member"]);
+      let releaseRunning: () => void = () => {};
+      const running = new Promise<void>((resolve) => {
+        releaseRunning = resolve;
+      });
+      const handled: string[] = [];
+      const onMessageError = vi.fn();
+      const bus = await startTestBus({
+        onMessage: async (message) => {
+          handled.push(message.text);
+          if (message.text.startsWith("running-")) {
+            await running;
+          }
+        },
+        onMessageError,
+      });
+      const subscription = relayMocks.subscriptions.find((entry) =>
+        subscriptionIncludesKind(entry, 9),
+      );
+      try {
+        const runningCount = boundary === "queue" ? 8 : 0;
+        for (let index = 0; index < runningCount; index += 1) {
+          subscription?.handlers.onevent(
+            signSenderEvent({
+              kind: 9,
+              created_at: 1_700_000_000 + index,
+              content: `running-${index}`,
+              tags: [["h", CHANNEL_ID]],
+            }),
+          );
+        }
+        await vi.waitFor(() => expect(handled).toHaveLength(runningCount));
+        subscription?.handlers.onevent(
+          signSenderEvent({
+            kind: 9,
+            created_at: 1_700_000_010,
+            content: "queued-before-removal",
+            tags: [["h", CHANNEL_ID]],
+          }),
+        );
+        const removeSender = () =>
+          subscription?.handlers.onevent({
+            id: "remove-queued-sender",
+            kind: 40_099,
+            pubkey: RELAY_PUBLIC_KEY,
+            created_at: 1_700_000_011,
+            content: JSON.stringify({ type: "member_removed", target: SENDER_PUBLIC_KEY }),
+            sig: "e".repeat(128),
+            tags: [["h", CHANNEL_ID]],
+          });
+        if (boundary === "dedupe claim") {
+          queueMicrotask(removeSender);
+        } else {
+          removeSender();
+        }
+        subscription?.handlers.onevent(
+          finalizeEvent(
+            {
+              kind: 9,
+              created_at: 1_700_000_012,
+              content: "remaining-member",
+              tags: [["h", CHANNEL_ID]],
+            },
+            remainingSecret,
+          ),
+        );
+        releaseRunning();
+        await vi.waitFor(() => expect(handled).toContain("remaining-member"));
+        expect(handled).not.toContain("queued-before-removal");
+        expect(onMessageError).toHaveBeenCalledWith(
+          expect.objectContaining({ message: expect.stringContaining("no longer a room member") }),
+        );
+      } finally {
+        releaseRunning();
+        await bus.close();
+      }
+    },
+  );
 
   it("leaves room subscription shutdown to the relay", async () => {
     relayMocks.auth.mockResolvedValue("ok");
@@ -1035,9 +1013,7 @@ describe("Buzz bus lifecycle", () => {
       expect.objectContaining({ message: "Timed out loading current Buzz profile" }),
     );
     expect(relayMocks.close).toHaveBeenCalledOnce();
-    expect(onProfileError).toHaveBeenCalledWith(
-      expect.objectContaining({ message: "Timed out loading current Buzz profile" }),
-    );
+    expect(onProfileError).not.toHaveBeenCalled();
 
     await bus.close();
   });

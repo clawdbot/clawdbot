@@ -1,8 +1,8 @@
 import type { RouteLocation, RouterHistory } from "@openclaw/uirouter";
 import { sameRouteLocation, type RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { readSessionDefaults } from "../../app/gateway-store.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import { readSessionDefaults } from "../../lib/sessions/session-key.ts";
 
 export function isDefaultChatLanding(
   location: RouteLocation,
@@ -67,7 +67,7 @@ export async function startModelSetupFirstRunRedirectAfterLocation(params: {
       }
       return;
     }
-    const defaults = snapshot.hello ? readSessionDefaults(snapshot.hello) : undefined;
+    const defaults = readSessionDefaults(snapshot);
     const selectedAgentId = context.agentSelection.state.selectedId?.trim() || null;
     if (
       canCallGatewayMethod(snapshot, "openclaw.setup.detect", "operator.admin") &&

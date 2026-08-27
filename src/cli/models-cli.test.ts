@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   modelsStatusCommand: vi.fn().mockResolvedValue(undefined),
   modelsSetCommand: vi.fn().mockResolvedValue(undefined),
   modelsSetImageCommand: vi.fn().mockResolvedValue(undefined),
+  modelsRefreshCommand: vi.fn().mockResolvedValue(undefined),
   noopAsync: vi.fn(async () => undefined),
   modelsAliasesAddCommand: vi.fn().mockResolvedValue(undefined),
   modelsAliasesListCommand: vi.fn().mockResolvedValue(undefined),
@@ -42,6 +43,7 @@ const {
   modelsAuthPasteApiKeyCommand,
   modelsAuthPasteTokenCommand,
   modelsAuthSetupTokenCommand,
+  modelsRefreshCommand,
   modelsScanCommand,
   modelsSetCommand,
   modelsSetImageCommand,
@@ -77,17 +79,11 @@ vi.mock("../commands/models/aliases.js", () => ({
   modelsAliasesListCommand: mocks.modelsAliasesListCommand,
   modelsAliasesRemoveCommand: mocks.modelsAliasesRemoveCommand,
 }));
-vi.mock("../commands/models/fallbacks.js", () => ({
-  modelsFallbacksAddCommand: mocks.noopAsync,
-  modelsFallbacksClearCommand: mocks.noopAsync,
-  modelsFallbacksListCommand: mocks.noopAsync,
-  modelsFallbacksRemoveCommand: mocks.noopAsync,
-}));
-vi.mock("../commands/models/image-fallbacks.js", () => ({
-  modelsImageFallbacksAddCommand: mocks.noopAsync,
-  modelsImageFallbacksClearCommand: mocks.noopAsync,
-  modelsImageFallbacksListCommand: mocks.noopAsync,
-  modelsImageFallbacksRemoveCommand: mocks.noopAsync,
+vi.mock("../commands/models/fallbacks-shared.js", () => ({
+  addFallbackCommand: mocks.noopAsync,
+  clearFallbacksCommand: mocks.noopAsync,
+  listFallbacksCommand: mocks.noopAsync,
+  removeFallbackCommand: mocks.noopAsync,
 }));
 vi.mock("../commands/models/scan.js", () => ({
   modelsScanCommand: mocks.modelsScanCommand,
@@ -98,6 +94,9 @@ vi.mock("../commands/models/set.js", () => ({
 vi.mock("../commands/models/set-image.js", () => ({
   modelsSetImageCommand: mocks.modelsSetImageCommand,
 }));
+vi.mock("../commands/models/refresh.js", () => ({
+  modelsRefreshCommand: mocks.modelsRefreshCommand,
+}));
 
 describe("models cli", () => {
   beforeEach(() => {
@@ -105,6 +104,7 @@ describe("models cli", () => {
     modelsAliasesAddCommand.mockClear();
     modelsAliasesListCommand.mockClear();
     modelsAliasesRemoveCommand.mockClear();
+    modelsRefreshCommand.mockClear();
     modelsScanCommand.mockClear();
     modelsAuthAddCommand.mockClear();
     modelsAuthListCommand.mockClear();
@@ -551,59 +551,62 @@ describe("models cli", () => {
     expectCommandOptions(modelsAuthListCommand, { agent: "poe", json: true });
   });
 
-  it.each([
+  const globalModelCommands = [
     {
       label: "set",
-      args: ["models", "--agent", "poe", "set", "anthropic/claude-sonnet-4-6"],
+      args: ["set", "anthropic/claude-sonnet-4-6"],
       command: modelsSetCommand,
     },
     {
       label: "set-image",
-      args: ["models", "--agent", "poe", "set-image", "openai/gpt-image-1"],
+      args: ["set-image", "openai/gpt-image-1"],
       command: modelsSetImageCommand,
     },
     {
       label: "aliases list",
-      args: ["models", "--agent", "poe", "aliases", "list"],
+      args: ["aliases", "list"],
       command: modelsAliasesListCommand,
     },
     {
       label: "aliases add",
-      args: ["models", "--agent", "poe", "aliases", "add", "zzz", "soraka/grok-4.6"],
+      args: ["aliases", "add", "zzz", "soraka/grok-4.6"],
       command: modelsAliasesAddCommand,
     },
     {
       label: "aliases remove",
-      args: ["models", "--agent", "poe", "aliases", "remove", "zzz"],
+      args: ["aliases", "remove", "zzz"],
       command: modelsAliasesRemoveCommand,
     },
     {
       label: "scan",
-      args: ["models", "--agent", "poe", "scan", "--no-probe", "--no-input"],
+      args: ["scan", "--no-probe", "--no-input"],
       command: modelsScanCommand,
     },
-  ])("rejects parent --agent for models $label", async ({ args, command }) => {
-    await expect(runModelsCommand(args)).rejects.toThrow("does not support --agent");
+    {
+      label: "refresh",
+      args: ["refresh"],
+      command: modelsRefreshCommand,
+    },
+  ];
 
+  it.each(
+    globalModelCommands.flatMap(({ label, args, command }) =>
+      ["poe", ""].map((agent) => ({ label, args, command, agent })),
+    ),
+  )("rejects parent --agent '$agent' for models $label", async ({ args, command, agent }) => {
+    await expect(runModelsCommand(["models", "--agent", agent, ...args])).rejects.toThrow(
+      "does not support --agent",
+    );
     expect(command).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      label: "aliases list",
-      args: ["models", "aliases", "list"],
-      command: modelsAliasesListCommand,
+  it.each(globalModelCommands)(
+    "still runs models $label without --agent",
+    async ({ args, command }) => {
+      await runModelsCommand(["models", ...args]);
+      expect(command).toHaveBeenCalledOnce();
     },
-    {
-      label: "scan",
-      args: ["models", "scan", "--no-probe", "--no-input"],
-      command: modelsScanCommand,
-    },
-  ])("still runs models $label without --agent", async ({ args, command }) => {
-    await runModelsCommand(args);
-
-    expect(command).toHaveBeenCalled();
-  });
+  );
 
   it("shows help for models auth without error exit", async () => {
     const program = new Command();

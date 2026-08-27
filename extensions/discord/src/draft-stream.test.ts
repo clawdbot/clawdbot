@@ -1,5 +1,6 @@
 // Discord tests cover draft stream plugin behavior.
 import { MessageFlags, Routes } from "discord-api-types/v10";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { createDiscordDraftStream } from "./draft-stream.js";
 
@@ -66,7 +67,7 @@ describe("createDiscordDraftStream", () => {
     stream.update("working");
     await stream.flush();
     await stream.retarget("thread-1");
-    await stream.cleanupRetargeted();
+    await stream.cleanupPendingMessages();
 
     expect(rest.delete).toHaveBeenNthCalledWith(1, "/channels/parent/messages/parent-draft");
     expect(rest.delete).toHaveBeenNthCalledWith(2, "/channels/parent/messages/parent-draft");
@@ -93,7 +94,7 @@ describe("createDiscordDraftStream", () => {
     await expect(stream.retarget("thread-1")).rejects.toThrow("retarget replacement failed");
     expect(rest.delete).not.toHaveBeenCalled();
 
-    await stream.cleanupRetargeted();
+    await stream.cleanupPendingMessages();
     expect(rest.delete).toHaveBeenCalledWith("/channels/parent/messages/parent-draft");
   });
 
@@ -180,7 +181,7 @@ describe("createDiscordDraftStream", () => {
     await stream.deleteCurrentMessage();
     stream.update("tool progress");
     await stream.flush();
-    await stream.cleanupRetargeted();
+    await stream.cleanupPendingMessages();
 
     expect(rest.delete).toHaveBeenNthCalledWith(1, Routes.channelMessage("c1", "m1"));
     expect(rest.delete).toHaveBeenNthCalledWith(2, Routes.channelMessage("c1", "m1"));
@@ -188,6 +189,34 @@ describe("createDiscordDraftStream", () => {
     expect(stream.messageId()).toBe("m2");
     expect(warn).toHaveBeenCalledWith("discord stream preview cleanup failed: transient");
   });
+
+  it.each(["clear", "deleteCurrentMessage"] as const)(
+    "%s claims a preview once and preserves its replacement during deletion",
+    async (method) => {
+      const deleteStarted = createDeferred<void>();
+      const finishDelete = createDeferred<void>();
+      const remove = vi.fn(async () => {
+        deleteStarted.resolve();
+        await finishDelete.promise;
+        return undefined;
+      });
+      const { rest, stream } = createCurrentPreviewHarness(remove);
+
+      stream.update("original preview");
+      await stream.flush();
+      const deleting = stream[method]();
+      await deleteStarted.promise;
+      await stream[method]();
+      stream.forceNewMessage();
+      stream.update("replacement preview");
+      await stream.flush();
+      finishDelete.resolve();
+      await deleting;
+
+      expect(rest.delete).toHaveBeenCalledExactlyOnceWith(Routes.channelMessage("c1", "m1"));
+      expect(stream.messageId()).toBe("m2");
+    },
+  );
 
   it("suppresses mentions in preview creates and edits", async () => {
     const rest = {

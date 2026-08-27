@@ -23,6 +23,7 @@ import { ensureProfileForEmail, setAvatar, setDisplayName } from "../state/user-
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import { SSE_CONTENT_TYPE } from "./http-common.js";
 import { hasExplicitAcceptableMediaRange } from "./http-media-range.js";
+import * as sessionHistoryState from "./session-history-state.js";
 import { SessionHistorySseState } from "./session-history-state.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
@@ -1242,6 +1243,62 @@ describe("session history HTTP endpoints", () => {
     });
   });
 
+  test("keeps repeated assistant replies from separate hidden user turns in REST and SSE history", async () => {
+    const storePath = await createSessionStoreFile();
+    const sessionId = "sess-hidden-turn-replies";
+    const sessionKey = "agent:main:main";
+    await writeSessionStore({
+      entries: { main: { sessionId, updatedAt: Date.now() } },
+      storePath,
+    });
+    const assistantMessage = (text: string, model: string) =>
+      makeTranscriptAssistantMessage({ text, provider: "openclaw", model });
+    await replaceTranscriptEvents({ agentId: AGENT_ID, sessionId, sessionKey, storePath }, [
+      { type: "session", version: 1, id: sessionId },
+      { message: assistantMessage("First reply.", "acp-runtime") },
+      { message: { role: "user", content: "" } },
+      { message: assistantMessage("First reply.", "gateway-injected") },
+      { message: assistantMessage("Second reply.", "acp-runtime") },
+      { message: { role: "user", content: HEARTBEAT_PROMPT } },
+      { message: assistantMessage("Second reply.", "gateway-injected") },
+      { message: assistantMessage("Third reply.", "acp-runtime") },
+      { message: { role: "user", content: HEARTBEAT_PROMPT } },
+      { message: { role: "assistant", content: "HEARTBEAT_OK" } },
+      { message: assistantMessage("Third reply.", "gateway-injected") },
+    ]);
+
+    const expectedRows = [
+      "1:assistant:First reply.",
+      "3:assistant:First reply.",
+      "4:assistant:Second reply.",
+      "6:assistant:Second reply.",
+      "7:assistant:Third reply.",
+      "10:assistant:Third reply.",
+    ];
+    await withGatewayHarness(async (harness) => {
+      const history = await readSessionHistoryBody(harness.port, sessionKey);
+      expect(history.messages?.map(sessionHistoryRowIdentity)).toEqual(expectedRows);
+      expect(history.messages?.map((message) => message["__openclaw"]?.turnBoundary)).toEqual([
+        undefined,
+        undefined,
+        undefined,
+        true,
+        undefined,
+        true,
+      ]);
+
+      const stream = await openSessionHistorySse(harness.port, sessionKey);
+      try {
+        const event = await readSseEvent(stream.reader, stream.streamState);
+        expect(event.event).toBe("history");
+        const streamedHistory = event.data as SessionHistoryBody;
+        expect(streamedHistory.messages?.map(sessionHistoryRowIdentity)).toEqual(expectedRows);
+      } finally {
+        await stream.reader.cancel();
+      }
+    });
+  });
+
   test.each([
     { name: "all-silent tail", heartbeatBoundary: false, silentMessages: 40 },
     { name: "heartbeat context boundary", heartbeatBoundary: true, silentMessages: 39 },
@@ -1549,6 +1606,56 @@ describe("session history HTTP endpoints", () => {
         seq: 2,
         id: appendedId,
       });
+    });
+  });
+
+  test.each([
+    { name: "complete", query: undefined },
+    { name: "bounded", query: "?limit=2" },
+  ])("includes updates committed while opening $name SSE history", async ({ query }) => {
+    const sessionKey = "agent:main:main";
+    const { storePath } = await seedSession({ text: "first message" });
+
+    await withGatewayHarness(async (harness) => {
+      const readSnapshot = sessionHistoryState.readSessionHistoryRawSnapshotAsync;
+      const snapshotSpy = vi
+        .spyOn(sessionHistoryState, "readSessionHistoryRawSnapshotAsync")
+        .mockImplementationOnce(async (params) => {
+          const snapshot = await readSnapshot(params);
+          await appendVisibleAssistantMessage({
+            sessionKey,
+            text: "committed during startup",
+            storePath,
+          });
+          return snapshot;
+        });
+      try {
+        const stream = await openSessionHistorySse(harness.port, sessionKey, { query });
+        try {
+          await expectHistoryEventTexts(stream, ["first message", "committed during startup"]);
+          const thirdId = await appendVisibleAssistantMessage({
+            sessionKey,
+            text: "live after startup",
+            storePath,
+          });
+          if (query) {
+            await expectHistoryEventTexts(stream, [
+              "committed during startup",
+              "live after startup",
+            ]);
+          } else {
+            await expectMessageEventMatch(stream, {
+              text: "live after startup",
+              seq: 3,
+              id: thirdId,
+            });
+          }
+        } finally {
+          await stream.reader.cancel();
+        }
+      } finally {
+        snapshotSpy.mockRestore();
+      }
     });
   });
 

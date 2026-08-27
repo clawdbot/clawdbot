@@ -18,7 +18,11 @@ import type { PluginOrigin } from "./plugin-origin.types.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import { resetPluginRuntimeStateForTest } from "./runtime.js";
 import { listPluginServiceHealthFailures } from "./service-health.js";
-import { startPluginServices, type PluginServicesHandle } from "./services.js";
+import {
+  PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS,
+  startPluginServices,
+  type PluginServicesHandle,
+} from "./services.js";
 import type { OpenClawPluginService, OpenClawPluginServiceContext } from "./types.js";
 
 const mockedLogger = vi.hoisted(() => ({
@@ -245,6 +249,58 @@ describe("plugin service replacement", () => {
     } finally {
       releaseCleanup?.();
       await stopping;
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds failed-start cleanup with the replacement stop timeout", async () => {
+    vi.useFakeTimers();
+    const broadcastPluginEvent = vi.fn();
+    const siblingStart = vi.fn();
+    let context: OpenClawPluginServiceContext | undefined;
+    const registry = createRegistry([
+      {
+        id: "failed-start-hung-stop",
+        start: (ctx) => {
+          context = ctx;
+          throw new Error("startup rejected");
+        },
+        stop: () => new Promise<void>(() => {}),
+      },
+      { id: "sibling", start: siblingStart },
+    ]);
+    let starting: Promise<PluginServicesHandle> | undefined;
+    let settled = false;
+
+    try {
+      starting = startPluginServices({
+        registry,
+        config: createServiceConfig(),
+        broadcastPluginEvent,
+      }).then((handle) => {
+        settled = true;
+        return handle;
+      });
+      await vi.advanceTimersByTimeAsync(PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS);
+
+      expect(settled).toBe(true);
+      const handle = await starting;
+      expect(siblingStart).toHaveBeenCalledOnce();
+      expect(mockedLogger.error).toHaveBeenCalledWith(
+        expect.stringContaining("plugin service failed (failed-start-hung-stop"),
+      );
+      expect(mockedLogger.warn).toHaveBeenCalledWith(
+        expect.stringContaining("plugin service stop failed (failed-start-hung-stop)"),
+      );
+      expect(() => context?.gatewayEvents?.emit("late", {}, { scope: "operator.read" })).toThrow(
+        "no longer active",
+      );
+      expect(broadcastPluginEvent).not.toHaveBeenCalled();
+      await handle.stop();
+    } finally {
+      if (settled) {
+        await starting;
+      }
       vi.useRealTimers();
     }
   });

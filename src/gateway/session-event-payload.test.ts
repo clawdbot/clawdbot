@@ -162,3 +162,39 @@ it("preserves active run id ownership across omitted, liveness, and exact states
     session: { hasActiveRun: true, activeRunIds: ["run-1"] },
   });
 });
+
+it.each(["user", "auto", null] as const)(
+  "carries model override source %s into session change events",
+  (source) => {
+    expect(
+      buildGatewaySessionEventFields({
+        sessionRow: {
+          key: "agent:main:pinned",
+          kind: "direct",
+          updatedAt: 1,
+          modelOverrideSource: source,
+        },
+      }).modelOverrideSource,
+    ).toBe(source);
+  },
+);
+
+it.each(["user", "auto", null] as const)(
+  "does not mix lifecycle snapshots with model source %s",
+  (modelOverrideSource) => {
+    const snapshot = buildGatewaySessionSnapshot({
+      sessionRow: {
+        key: "agent:main:pinned",
+        kind: "direct",
+        updatedAt: 1,
+        model: "model-a",
+        modelProvider: "provider",
+        modelOverrideSource,
+      },
+      lifecycle: true,
+      includeSession: true,
+    });
+    expect(snapshot.modelOverrideSource).toBeUndefined();
+    expect(snapshot.session).not.toHaveProperty("modelOverrideSource");
+  },
+);

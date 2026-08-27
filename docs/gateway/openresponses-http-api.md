@@ -10,7 +10,9 @@ The Gateway can serve an OpenResponses-compatible `POST /v1/responses` endpoint.
 
 Requests run as a normal Gateway agent run (same codepath as `openclaw agent`), so routing, permissions, and config match your Gateway.
 
-Enable or disable with `gateway.http.endpoints.responses.enabled`. When enabled, the same compatibility surface also serves `GET /v1/models`, `GET /v1/models/{id}`, `POST /v1/embeddings`, and `POST /v1/chat/completions`.
+Enable or disable with `gateway.http.endpoints.responses.enabled`. When enabled, the same compatibility surface also serves `GET /v1/models`, `GET /v1/models/{id}`, and `POST /v1/embeddings`.
+
+`POST /v1/chat/completions` is enabled separately with `gateway.http.endpoints.chatCompletions.enabled`. See [OpenAI Chat Completions](/gateway/openai-http-api).
 
 ## Authentication, security, and routing
 

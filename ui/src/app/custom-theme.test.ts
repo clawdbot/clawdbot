@@ -1,15 +1,12 @@
 // @vitest-environment node
 // Control UI tests cover custom theme behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { importCustomThemeFromUrl } from "../pages/config/custom-theme-import.ts";
 import {
   createImportedCustomThemeFixture as createImportedTheme,
   createTweakcnThemePayload as createTweakcnPayload,
 } from "../test-helpers/custom-theme.ts";
-import {
-  importCustomThemeFromUrl,
-  parseImportedCustomTheme,
-  syncCustomThemeStyleTag,
-} from "./custom-theme.ts";
+import { parseImportedCustomTheme, syncCustomThemeStyleTag } from "./custom-theme.ts";
 import type { ImportedCustomTheme } from "./custom-theme.ts";
 
 afterEach(() => {

@@ -40,19 +40,18 @@ const VALID_THEME_NAMES = new Set<ThemeName>([
 ]);
 
 const THEME_FONT_STYLESHEET_ID = "openclaw-theme-fonts";
-/* Themes that ship their own faces. The stylesheet is fetched only while such a
-   theme is active, so every other theme pays nothing for fonts it never paints.
-   Loading with the app bundle (not the first-paint boot script) costs one
-   font-display: swap on a cold load and keeps the theme->asset mapping in one
-   place. Values are bundle-relative asset names: the href is resolved against
-   the configured Control UI mount, and the stylesheet's own url() references
-   are relative to it, so both levels follow a non-root base path. */
-const THEME_FONT_STYLESHEETS: Partial<Record<ThemeName, ControlUiFontStylesheet>> = {
-  absolutely: "fonts/absolutely.css",
-  beacon: "fonts/beacon.css",
-  phosphor: "fonts/phosphor.css",
-};
+/* Every built-in family ships its own faces from fonts/<theme>.css; imported
+   custom themes stay on the system stack. The stylesheet is fetched only while
+   its theme is active, so no theme pays for another theme's fonts. Loading
+   with the app bundle (not the first-paint boot script) costs one
+   font-display: swap on a cold load. The href is resolved against the
+   configured Control UI mount, and the stylesheet's own url() references are
+   relative to it, so both levels follow a non-root base path. */
+function themeFontStylesheet(theme: ThemeName): ControlUiFontStylesheet | undefined {
+  return theme === "custom" ? undefined : `fonts/${theme}.css`;
+}
 type ControlUiFontStylesheet = `fonts/${string}.css`;
+
 const VALID_THEME_MODES = new Set<ThemeMode>(["system", "light", "dark"]);
 
 function prefersLightScheme(): boolean {
@@ -87,25 +86,8 @@ export function resolveTheme(theme: ThemeName, mode: ThemeMode): ResolvedTheme {
   if (theme === "claw") {
     return resolvedMode === "light" ? "light" : "dark";
   }
-  if (theme === "knot") {
-    return resolvedMode === "light" ? "openknot-light" : "openknot";
-  }
-  if (theme === "dash") {
-    return resolvedMode === "light" ? "dash-light" : "dash";
-  }
-  if (theme === "absolutely") {
-    return resolvedMode === "light" ? "absolutely-light" : "absolutely";
-  }
-  if (theme === "tide") {
-    return resolvedMode === "light" ? "tide-light" : "tide";
-  }
-  if (theme === "beacon") {
-    return resolvedMode === "light" ? "beacon-light" : "beacon";
-  }
-  if (theme === "phosphor") {
-    return resolvedMode === "light" ? "phosphor-light" : "phosphor";
-  }
-  return resolvedMode === "light" ? "custom-light" : "custom";
+  const family = theme === "knot" ? "openknot" : theme;
+  return resolvedMode === "light" ? `${family}-light` : family;
 }
 
 /** Loads (or drops) the webfont stylesheet a theme declares. Idempotent. */
@@ -113,7 +95,7 @@ export function syncThemeFontStylesheet(theme: ThemeName): void {
   if (typeof document === "undefined") {
     return;
   }
-  const asset = THEME_FONT_STYLESHEETS[theme];
+  const asset = themeFontStylesheet(theme);
   const existing = document.getElementById(THEME_FONT_STYLESHEET_ID);
   if (!asset) {
     existing?.remove();
@@ -131,4 +113,40 @@ export function syncThemeFontStylesheet(theme: ThemeName): void {
   link.rel = "stylesheet";
   link.href = href;
   document.head.append(link);
+}
+
+/** Publish theme colors only after their stylesheet is available. */
+export function syncThemePaletteStylesheet(theme: ThemeName, ready: () => void): void {
+  if (typeof document === "undefined" || theme === "claw" || theme === "custom") {
+    ready();
+    return;
+  }
+  // Retain the six built-in families once visited. Their exclusive selectors
+  // leave the previous theme intact during loading and make repeat switches synchronous.
+  const id = `openclaw-theme-palette-${theme}`;
+  const existing = document.getElementById(id);
+  if (existing instanceof HTMLLinkElement && existing.sheet) {
+    ready();
+    return;
+  }
+  const link = existing instanceof HTMLLinkElement ? existing : document.createElement("link");
+  const finish = (event: Event) => {
+    link.removeEventListener("load", finish);
+    link.removeEventListener("error", finish);
+    if (event.type === "error") {
+      // Failed assets must not strand startup; normal CSS defaults stay readable.
+      // Remove the failed link so a later selection can retry rather than wait forever.
+      console.error(`Theme palette failed to load; reload to retry: ${link.href}`);
+      link.remove();
+    }
+    ready();
+  };
+  link.addEventListener("load", finish);
+  link.addEventListener("error", finish);
+  if (!existing) {
+    link.id = id;
+    link.rel = "stylesheet";
+    link.href = inferControlUiPublicAssetPath(`themes/${theme}.css`);
+    document.head.append(link);
+  }
 }

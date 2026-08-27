@@ -29,6 +29,10 @@ openclaw connect <join-url> --service --session-host
 
 The device holds an outbound connection to the Gateway, advertises worker slots (one per CPU core by default, tunable with `nodeHost.workerRuns.capacity`), and can optionally run each hosted session in a Docker-compatible container (`nodeHost.workerRuns.isolation: "container"`). A device that goes offline keeps its active placement — the session waits for it to reconnect rather than losing work.
 
+The node host reconnects after transient transport loss. A worker child has a bounded 120-second admission window. If that window expires **before the turn starts**, the Gateway can launch another child, up to five attempts total (about ten minutes plus backoff), within the original turn timeout. Launch retries use exponential backoff with jitter; each attempt keeps its own terminal result and reason in the node launch journal. Credential and build rejections are terminal, and work that already started is never replayed by this policy.
+
+If a journal-terminal worker has released its turn claim but teardown stalls, stuck-session recovery records the turn failure after a 30-second cleanup grace, on the next diagnostic cycle. Live workers and turns that still hold their claims are unaffected. On Gateway restart, orphan workspace cleanup for failed placements runs in the background after readiness; ownership fencing and pending workspace-result recovery still run before readiness.
+
 See [Nodes](/nodes) for pairing, capacity, isolation, and offline behavior, and [Connect](/cli/connect) for the CLI.
 
 ## Cloud workers: rented machines through Crabbox

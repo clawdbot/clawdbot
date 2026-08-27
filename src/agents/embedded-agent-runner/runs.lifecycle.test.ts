@@ -15,6 +15,8 @@ import {
   isEmbeddedAgentRunHandleActive,
   isEmbeddedRunAbandoned,
   markActiveEmbeddedRunAbandoned,
+  resolveActiveEmbeddedRunOwner,
+  resolveActiveEmbeddedRunOwnerByRunId,
   resolveActiveEmbeddedRunHandleSessionId,
   resolveActiveEmbeddedRunHandleSessionIdBySessionFile,
   setActiveEmbeddedRun,
@@ -29,11 +31,13 @@ function createRunHandle(
   overrides: {
     abort?: () => void;
     isAbortable?: boolean;
+    isAborted?: () => boolean;
     isCompacting?: boolean;
     isStreaming?: boolean;
     isStopped?: () => boolean;
     messageInjection?: RunHandle["messageInjection"];
     runId?: string;
+    startedAtMs?: number;
     queueMessage?: RunHandle["queueMessage"];
     supportsQueueMessageImages?: boolean;
     supportsTranscriptCommitWait?: boolean;
@@ -44,10 +48,12 @@ function createRunHandle(
   const abort = overrides.abort ?? (() => {});
   return {
     runId: overrides.runId,
+    startedAtMs: overrides.startedAtMs,
     queueMessage: overrides.queueMessage ?? (async () => {}),
     ...(overrides.messageInjection ? { messageInjection: overrides.messageInjection } : {}),
     isStreaming: () => overrides.isStreaming ?? true,
     ...(overrides.isStopped ? { isStopped: overrides.isStopped } : {}),
+    ...(overrides.isAborted ? { isAborted: overrides.isAborted } : {}),
     ...(overrides.isAbortable !== undefined
       ? { isAbortable: () => overrides.isAbortable !== false }
       : {}),
@@ -335,5 +341,36 @@ describe("embedded-agent runner run lifecycle", () => {
 
     clearActiveEmbeddedRun("session-snapshot", handle);
     expect(getActiveEmbeddedRunSnapshot("session-snapshot")).toBeUndefined();
+  });
+
+  it("projects one active run identity from either registry key", () => {
+    const handle = createRunHandle({
+      runId: "run-recovery",
+      startedAtMs: 1_700_000_000_000,
+    });
+    setActiveEmbeddedRun("session-recovery", handle, "agent:main:main");
+
+    const expected = {
+      runId: "run-recovery",
+      sessionId: "session-recovery",
+      sessionKey: "agent:main:main",
+      startedAtMs: 1_700_000_000_000,
+    };
+    expect(resolveActiveEmbeddedRunOwner("session-recovery")).toMatchObject(expected);
+    expect(resolveActiveEmbeddedRunOwnerByRunId("run-recovery")).toMatchObject(expected);
+  });
+
+  it("rejects a stale recovered Stop after the session owner changes", () => {
+    const firstAbort = vi.fn();
+    const secondAbort = vi.fn();
+    const first = createRunHandle({ runId: "run-first", abort: firstAbort });
+    const second = createRunHandle({ runId: "run-second", abort: secondAbort });
+    setActiveEmbeddedRun("session-recovery", first, "agent:main:main");
+    const identity = resolveActiveEmbeddedRunOwnerByRunId("run-first");
+    setActiveEmbeddedRun("session-recovery", second, "agent:main:main");
+
+    expect(identity?.abort()).toBe(false);
+    expect(firstAbort).not.toHaveBeenCalled();
+    expect(secondAbort).not.toHaveBeenCalled();
   });
 });

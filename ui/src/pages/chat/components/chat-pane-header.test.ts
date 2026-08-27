@@ -404,12 +404,20 @@ describe("chat pane header", () => {
   it("leads with the project, then a separator, then the session title", () => {
     const { container } = mountHeader();
     const crumbs = container.querySelector(".chat-pane__crumbs");
-    const segments = [...(crumbs?.children ?? [])].map((child) => child.className);
-    expect(segments).toEqual([
-      "chat-pane__workspace-menu",
-      "chat-pane__crumb-sep",
-      "chat-pane__session-title chat-pane__session-title-button",
+    expect([...(crumbs?.children ?? [])].map((child) => child.className)).toEqual([
+      "chat-pane__project-row",
+      "chat-pane__session-trail",
     ]);
+    expect(
+      [...(crumbs?.querySelector(".chat-pane__project-row")?.children ?? [])].map(
+        (child) => child.className,
+      ),
+    ).toEqual(["chat-pane__workspace-menu"]);
+    expect(
+      [...(crumbs?.querySelector(".chat-pane__session-trail")?.children ?? [])].map(
+        (child) => child.className,
+      ),
+    ).toEqual(["chat-pane__crumb-sep", "chat-pane__session-title chat-pane__session-title-button"]);
     expect(crumbs?.querySelector(".chat-pane__crumb-sep")?.textContent).toBe("/");
     expect(crumbs?.querySelector(".chat-pane__crumb-sep")?.getAttribute("aria-hidden")).toBe(
       "true",
@@ -421,8 +429,11 @@ describe("chat pane header", () => {
     const { container, props } = mountHeader({ parentSession });
     const crumbs = container.querySelector(".chat-pane__crumbs");
 
-    expect([...(crumbs?.children ?? [])].map((child) => child.className)).toEqual([
-      "chat-pane__workspace-menu",
+    expect(
+      [...(crumbs?.querySelector(".chat-pane__session-trail")?.children ?? [])].map(
+        (child) => child.className,
+      ),
+    ).toEqual([
       "chat-pane__crumb-sep",
       "chat-pane__parent-session",
       "chat-pane__crumb-sep",
@@ -437,9 +448,9 @@ describe("chat pane header", () => {
   it("drops the separator when the session has no project segment", () => {
     const { container } = mountHeader({ workspaceLabel: null, workspaceRoot: null });
     expect(container.querySelector(".chat-pane__crumb-sep")).toBeNull();
-    expect(container.querySelector(".chat-pane__crumbs")?.firstElementChild?.className).toContain(
-      "chat-pane__session-title",
-    );
+    const crumbs = container.querySelector(".chat-pane__crumbs");
+    expect(crumbs?.firstElementChild?.className).toBe("chat-pane__session-trail");
+    expect(crumbs?.querySelector(".chat-pane__session-title")).not.toBeNull();
   });
 
   it("keeps the rename input inside the trail so the project stays visible", () => {

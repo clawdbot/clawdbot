@@ -292,6 +292,65 @@ describe("status.command-sections", () => {
     ]);
   });
 
+  it.each([
+    { account: {}, status: "ok(OK)", detail: "healthy" },
+    {
+      account: { probe: { ok: false, error: "sync rejected" } },
+      status: "warn(WARN)",
+      detail: "failed (unknown) - sync rejected",
+    },
+    {
+      account: { healthState: "blocked" },
+      status: "warn(WARN)",
+      detail: "blocked",
+    },
+    {
+      account: { healthState: "unknown" },
+      status: "warn(WARN)",
+      detail: "unknown",
+    },
+    {
+      account: { statusState: "unstable" },
+      status: "warn(WARN)",
+      detail: "auth stabilizing",
+    },
+    {
+      account: { configured: false },
+      status: "muted(OFF)",
+      detail: "not configured",
+    },
+  ])("classifies the real channel health detail $detail", ({ account, status, detail }) => {
+    const health: HealthSummary = {
+      ok: true,
+      ts: 0,
+      durationMs: 42,
+      heartbeatSeconds: 60,
+      defaultAgentId: "main",
+      agents: [],
+      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+      channels: {
+        whatsapp: {
+          accountId: "default",
+          configured: true,
+          linked: true,
+          healthState: "healthy",
+          ...account,
+        },
+      },
+      channelOrder: ["whatsapp"],
+      channelLabels: { whatsapp: "WhatsApp" },
+    };
+    const rows = buildStatusHealthRows({
+      health,
+      formatHealthChannelLines,
+      ok: (value) => `ok(${value})`,
+      warn: (value) => `warn(${value})`,
+      muted: (value) => `muted(${value})`,
+    });
+
+    expect(rows).toContainEqual({ Item: "WhatsApp", Status: status, Detail: detail });
+  });
+
   it("marks activated plugin service failures as warnings in deep health rows", () => {
     const health: HealthSummary = {
       ok: true,

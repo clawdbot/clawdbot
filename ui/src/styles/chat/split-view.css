@@ -196,6 +196,13 @@ openclaw-chat-pane {
   gap: 6px;
 }
 
+/* These groups become the two mobile identity rows. They stay transparent to
+   the desktop flex trail so its existing one-line geometry is unchanged. */
+.chat-pane__project-row,
+.chat-pane__session-trail {
+  display: contents;
+}
+
 /* Renaming needs the row's spare width, which the trail must pass through:
    without this the input is trapped inside a shrink-only container. */
 .chat-pane__crumbs:has(.chat-pane__session-title-input) {
@@ -329,6 +336,10 @@ openclaw-chat-pane {
    unconditionally would cost every normal full-color icon, so if it ever
    matters in practice the escape hatch is a plate applied conditionally, not a
    blanket effect here. */
+.chat-pane__workspace-chip .workspace-icon-fallback {
+  display: contents;
+}
+
 .chat-pane__workspace-chip .workspace-icon {
   width: 14px;
   height: 14px;
@@ -745,7 +756,7 @@ openclaw-chat-pane {
 
   /* The project name is gone at this width, so the separator would trail an
      icon-only pill and read as punctuation with nothing on its left. */
-  .chat-pane__workspace-menu + .chat-pane__crumb-sep {
+  .chat-pane__project-row + .chat-pane__session-trail > .chat-pane__crumb-sep:first-child {
     display: none;
   }
 

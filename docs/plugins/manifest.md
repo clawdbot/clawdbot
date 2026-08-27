@@ -516,6 +516,8 @@ The manifest row is the canonical help text. Register the same command at runtim
 
 Use `commandAliases` when a plugin owns a runtime command name that users may mistakenly put in `plugins.allow` or try to run as a root CLI command. OpenClaw uses this metadata for diagnostics without importing plugin runtime code.
 
+If a plugin fails to load, invoking its declared `runtime-slash` command in chat returns the plugin name, a short failure reason, and recovery guidance (`openclaw doctor` and gateway logs). Unknown commands and commands belonging to intentionally disabled plugins keep their normal handling; manifest ownership alone does not make a command executable.
+
 ```json
 {
   "commandAliases": [
@@ -1122,6 +1124,8 @@ Suppression fields:
 `upstreamModel` marks a row that serves the same upstream model as a row in another bundled catalog under a different name, for example a subscription endpoint next to the vendor's API endpoint. It is authoring metadata: normalization drops it, and a contract test uses it to keep capability flags such as `compat.codeMode` from drifting between catalogs that ship the same model. Most rows need no marker, because matching ignores a leading vendor namespace and casing: `moonshotai/kimi-k3` and `zai-org/GLM-5.2` already match the first-party `kimi-k3` and `glm-5.2` rows. Reach for `upstreamModel` only when the vendor's own names genuinely differ. See [Code mode](/tools/code-mode#models-shipped-by-more-than-one-provider).
 
 Do not put runtime-only data in `modelCatalog`. Use `static` only when manifest rows are complete enough for provider-filtered list and picker surfaces to skip registry/runtime discovery. Use `refreshable` when manifest rows are useful listable seeds or supplements but a refresh/cache can add more rows later; refreshable rows are not authoritative by themselves. Use `runtime` when OpenClaw must load provider runtime to know the list.
+
+Capabilities belong to the declared API and base URL, not only the provider/model id. When model listing enriches a cached row, it uses manifest capabilities only for a matching route; a custom endpoint must supply its own limits and capabilities.
 
 ## modelIdNormalization reference
 

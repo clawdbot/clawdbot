@@ -67,6 +67,7 @@ export function hashSystemAgentOperation(operation: SystemAgentOperation): strin
 /** Result markers shared with out-of-process hosts (CLI MCP runs). */
 const SYSTEM_AGENT_NEEDS_APPROVAL_PREFIX = "needs-approval:";
 const SYSTEM_AGENT_APPROVAL_MISMATCH_PREFIX = "approval-mismatch:";
+const SYSTEM_AGENT_PROPOSAL_CONFLICT_PREFIX = "proposal-conflict:";
 const SYSTEM_AGENT_DIRECTIVE_PREFIX = "directive:";
 const SYSTEM_AGENT_APPROVED_OPERATION_PREFIX = `${SYSTEM_AGENT_DIRECTIVE_PREFIX}approved-operation:`;
 
@@ -150,6 +151,11 @@ export function resolveSystemAgentProposalTransition(params: {
   }
   if (params.resultText.startsWith(SYSTEM_AGENT_APPROVAL_MISMATCH_PREFIX)) {
     return { proposal: undefined };
+  }
+  if (params.resultText.startsWith(SYSTEM_AGENT_PROPOSAL_CONFLICT_PREFIX)) {
+    // The already-staged proposal was kept as-is; this rejected call must not
+    // overwrite the mirrored operation with the one that was just refused.
+    return null;
   }
   if (params.resultText.startsWith(SYSTEM_AGENT_NEEDS_APPROVAL_PREFIX)) {
     const markerLine = params.resultText.split("\n", 1)[0] ?? "";
@@ -464,6 +470,16 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
             }
             return textResult(
               `${SYSTEM_AGENT_APPROVAL_MISMATCH_PREFIX} this call is not the operation the user approved. The approval is void; describe the new change and get a fresh yes before retrying.`,
+              { needsApproval: true },
+            );
+          }
+          const stagedProposal = options.proposalRef?.current;
+          if (stagedProposal !== undefined && stagedProposal !== operationHash) {
+            // A second unarmed persistent call must never silently replace the
+            // first: the model's response would then report both changes as
+            // staged while only the last-written one is ever applied.
+            return textResult(
+              `${SYSTEM_AGENT_PROPOSAL_CONFLICT_PREFIX}${stagedProposal}\nA different operation is already staged and awaiting the user's approval. It was NOT replaced. Tell the user only the first change is pending; get it approved (or explicitly declined) before proposing this one.`,
               { needsApproval: true },
             );
           }

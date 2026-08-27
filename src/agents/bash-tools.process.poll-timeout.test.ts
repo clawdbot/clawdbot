@@ -438,6 +438,45 @@ test("process poll accepts string timeout values", async () => {
   });
 });
 
+test("terminal polls compact tiny stream chunks and never reopen frozen output", async () => {
+  const sessionId = "sess-compact-terminal";
+  const { processTool, session } = createProcessSessionHarness(sessionId);
+  session.maxOutputChars = 3_000;
+  session.pendingMaxOutputChars = 1_000;
+  for (let index = 0; index < 2_000; index += 1) {
+    appendOutput(session, "stdout", "o");
+    appendOutput(session, "stderr", "e");
+  }
+  markExited(session, 0, null, "completed");
+
+  // Retention must release thousands of chunk objects, not just cap their text.
+  expect(session.pendingOutput).toBe("oe".repeat(1_000));
+  expect(session.pendingStdoutChars).toBe(0);
+  expect(session.pendingStderrChars).toBe(0);
+  const terminal = await pollSession(processTool, "compact-first", sessionId);
+  expect(terminal.content[0]).toMatchObject({
+    text:
+      "oe".repeat(1_000) +
+      "\n\n[earlier output was discarded at the retention cap and cannot be recovered]" +
+      "\n\n[earlier output is omitted from this poll; use action=log with offset and limit to inspect retained output]" +
+      "\n\nProcess exited with code 0.",
+  });
+  appendOutput(session, "stderr", "late".repeat(1_000));
+  const repeated = await pollSession(processTool, "compact-second", sessionId);
+  expect(repeated.content[0]).toMatchObject({
+    text: "(no new output)\n\n[earlier output was discarded at the retention cap and cannot be recovered]\n\nProcess exited with code 0.",
+  });
+  expect(session.totalOutputChars).toBe(4_000);
+  expect(session.pendingOutput).toBe("");
+  expect(session.pendingOutputDropped).toBe(false);
+  const log = await processTool.execute("compact-log", { action: "log", sessionId });
+  expect(log.content[0]).toMatchObject({
+    text:
+      "oe".repeat(1_500) +
+      "\n\n[earlier output was discarded at the retention cap and cannot be recovered]",
+  });
+});
+
 test("process poll warns when the session times out while poll is waiting", async () => {
   vi.useFakeTimers();
   try {
@@ -526,7 +565,7 @@ test.each([
         type: "text",
         text: expect.stringContaining(`Process exited with ${expectedExit}.`),
       });
-      expect(getFinishedSession(sessionId)?.status).toBe(ownerStatus);
+      expect(getFinishedSession(sessionId)?.terminalStatus).toBe(ownerStatus);
 
       const retainedPoll = await pollSession(processTool, "toolcall-terminal-retained", sessionId);
       expect(retainedPoll.details).toMatchObject({ status: ownerStatus });

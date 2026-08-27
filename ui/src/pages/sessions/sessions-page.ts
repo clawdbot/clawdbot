@@ -207,7 +207,6 @@ class SessionsPage extends OpenClawLightDomElement {
       const result = await searchVisibleSessionTranscripts({
         client,
         query,
-        result: this.result,
         listSessions: context.sessions.list,
         listOptions: this.sessionListOptions(context),
         resolveAgentId: (sessionKey) =>
@@ -482,6 +481,8 @@ class SessionsPage extends OpenClawLightDomElement {
       return current;
     }
     this.unsubscribeList?.();
+    // Search hits and pending work belong to the roster query, not just its agent.
+    this.resetTranscriptSearchState(this.transcriptSearchQuery);
     const binding = { sessions, query, key };
     this.listBinding = binding;
     this.appliedListResult = undefined;
@@ -1511,8 +1512,7 @@ class SessionsPage extends OpenClawLightDomElement {
 
   override render() {
     const context = this.context;
-    const personGroupingAvailable =
-      context?.gateway.snapshot.hello?.policy?.hasMultipleSessionSharingIdentities === true;
+    const personGroupingAvailable = (this.result?.owners?.length ?? 0) > 1;
     if (!context) {
       return html``;
     }
@@ -1563,7 +1563,7 @@ class SessionsPage extends OpenClawLightDomElement {
           sortColumn: this.sortColumn,
           sortDir: this.sortDir,
           // Same reconnect resilience as the sidebar: the stored Person
-          // preference survives a temporarily hidden identity capability.
+          // preference survives a temporarily unavailable owner roster.
           groupBy: personGroupingAvailable || this.groupBy !== "person" ? this.groupBy : "none",
           personGroupingAvailable,
           knownCategories: this.knownCategories(),

@@ -6,6 +6,7 @@ read_when:
   - You want to promote recalled short-term memory into `MEMORY.md`
   - You need to delete provenance-tracked memories derived from specific sessions or participants
 title: "Memory"
+doc-schema-version: 1
 ---
 
 # `openclaw memory`
@@ -43,6 +44,9 @@ default agent's heartbeat firing to trigger reconciliation. See
 [Dreaming](/concepts/dreaming) for scheduling details.
 
 Status also lists any extra search paths from `memory.search.extraPaths`.
+For providers that discover their default model at initialization, plain status
+defers model identity checks until that model is known. Use `--deep` to initialize
+the provider and verify the model and provider settings against the existing index.
 
 ## `memory index`
 
@@ -84,75 +88,141 @@ absent.
 
 ## `memory forget`
 
-Delete provenance-tracked durable memory entries derived from selected
-sessions, together with their indexed and short-term copies. The concepts
-behind this command — recorded lineage, admission policy, and the deletion
-guarantees and boundaries — are explained in
-[Memory provenance and deletion](/concepts/memory-provenance). Select sessions
-by ID or session key, their external-content hook source, or a participant's
-actor ID:
-
-```bash
-openclaw memory forget --session <id-or-key> [--session <id-or-key> ...]
-openclaw memory forget --hook-source gmail [--since 2026-01-01]
-openclaw memory forget --participant <actor-id> [--agent <id>] [--dry-run] [--json]
-```
-
-`--session`, `--hook-source`, and `--participant` are repeatable. At least one
-selector is required. `--agent` selects one agent and otherwise defaults to the
-default agent. Explicit session IDs and keys match both live sessions and
-retained archived sessions. An unknown explicit value is still treated as an
-exact session ID, purged where matching artifacts exist, and durably excluded
-from future memory ingestion. The report identifies each selected session as
-`live`, `archived`, or `unresolved`. Hook-source and participant selectors only
-match sessions whose corresponding metadata still exists; archived sessions do
-not retain those facts, so select them by ID or key instead. `--since <date>`
-filters live sessions by their creation time and archived sessions by their
-archive creation time; unresolved explicit IDs have no timestamp and remain
-selected.
-
-Run with `--dry-run` before deleting. It computes the same complete report as
-the real purge without changing memory files, SQLite indexes, plugin state, or
-durable deletion records. `--json` prints that report as machine-readable JSON.
-
-A purge removes matching pipeline-promoted entries, session-corpus lines,
-selected-session transcript index chunks, full-text and vector index records,
-embedding-cache entries, short-term recall, seen-hash scopes, dreaming rewrite
-backups, and recorded origins. It also clears stale index records for internal
-dreaming-narrative, cron, or heartbeat sessions. An entry derived from both
-selected and unselected sessions is deleted whole and reported as a
-mixed-lineage entry; dreaming can regenerate supported facts from surviving
-sessions later. Entries without recorded origins remain searchable and are not
-deleted by an unrelated selector; the report lists them as untargetable.
-
-A real purge records each selected session as forgotten in the agent's SQLite
-database. Future dreaming sweeps record that session as excluded with reason
-`forgotten`; `memory session-backfill` and transcript indexing, including
-`memory index --force`, also reject it. Repeating the purge is safe and does
-not undo this exclusion.
-
-Dream diaries and other workspace memory files can quote source-session corpus
-lines without retaining a session reference. The purge removes any whole line
-containing an exact purged corpus-line snippet from files such as
-`memory/dreaming/**/*.md` and `DREAMS.md`, as well as matching dreaming
-backups. `artifacts.memoryLines` reports the number of these additional removed
-memory-file lines. Model-paraphrased prose that does not contain the exact
-source text cannot be attributed reliably and is not removed automatically.
-
-Direct agent edits to memory files are tracked at the file level, not per
-entry. When such a write happened during a selected session, `curatedWrites`
-lists its `relativePath` and `observedAt` without modifying the file. Evidence
-comes from native write-observer records and the selected sessions' live or
-archived transcripts, including writes performed by external agent harnesses.
-Review those files separately: a freeform edit cannot be attributed to
-individual lines safely enough for automatic deletion.
+Remove identifiable memory artifacts derived from selected sessions and record
+those sessions as forgotten in one agent's store. See
+[Memory provenance and deletion](/concepts/memory-provenance) for the
+relationship between lineage, admission policy, and deletion coverage.
 
 <Warning>
-`memory forget` removes selected-session transcript chunks from the memory
-index and permanently prevents their memory-pipeline readmission, but does not
-delete the original source session transcripts. The report identifies the
-selected sessions so you can remove transcript data separately through its
-owning session-management workflow when required.
+This command deletes immediately unless `--dry-run` is set. There is no
+confirmation prompt or `--apply` flag. Source session transcripts are retained.
+</Warning>
+
+Start with a preview:
+
+```bash
+openclaw memory forget --agent <agent-id> --session <id-or-key> --dry-run --json
+openclaw memory forget --agent <agent-id> --hook-source gmail --dry-run --json
+openclaw memory forget --agent <agent-id> --participant <actor-id> --dry-run --json
+```
+
+After checking the report, repeat the intended command without `--dry-run`.
+
+| Flag                       | Effect                                                                                                         |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `--agent <id>`             | Select one agent. Defaults to the default agent, not all agents.                                               |
+| `--session <id-or-key>`    | Select by session ID or key; repeatable.                                                                       |
+| `--hook-source <source>`   | Select live sessions with this recorded external-content hook source; repeatable.                              |
+| `--participant <actor-id>` | Select live sessions with this recorded participant actor ID; repeatable.                                      |
+| `--since <date>`           | Include sessions created on or after the date. Use an ISO timestamp with a timezone for an unambiguous cutoff. |
+| `--dry-run`                | Compute a report without changing memory files, indexes, plugin state, or forgotten-session records.           |
+| `--json`                   | Print the full report as JSON.                                                                                 |
+
+### Session selection
+
+At least one selector is required. Repeated values and different selector
+types combine with **OR**: a session matching any selector is selected, subject
+to `--since`. Selectors match recorded identifiers, not names or text in
+messages. A participant selector selects the whole session, including other
+participants' contributions.
+
+Explicit IDs and keys resolve against live sessions and retained archives.
+The report labels each result `live`, `archived`, or `unresolved`. An
+unresolved explicit value is recorded literally as a session ID for future
+exclusion; it does not prove that the requested session was found. IDs match
+exactly and case-sensitively, including when matching retained archive names.
+An abbreviation does not select a longer session ID.
+
+Hook-source and participant selectors require live metadata; archived-only
+records do not retain those facts. Select those archives by full ID or key.
+`--since` uses the live session's creation time or the archive's creation time,
+not individual message timestamps. Unresolved explicit IDs have no timestamp
+and remain selected.
+
+### Read the report
+
+| Field                              | Meaning                                                                                                                                              |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agentId`, `dryRun`                | Store selected and whether this was a preview.                                                                                                       |
+| `sessionIds`, `sessionResolutions` | Selected IDs and how each resolved; a resolution may also include `sessionKey`.                                                                      |
+| `entryKeys`                        | Entry keys with at least one origin in the selected sessions.                                                                                        |
+| `mixedLineageEntryKeys`            | Selected entries that also have unselected origins; they are removed whole.                                                                          |
+| `untargetableEntryKeys`            | Promotion markers found without origin rows in this agent's store. This does not enumerate unmarked prose.                                           |
+| `curatedWrites`                    | Files to review, with `relativePath` and `observedAt` (Unix milliseconds). Includes supported recorded write attempts, which may not have succeeded. |
+| `artifacts`                        | Counts of matching files, entries, lines, and store rows described below.                                                                            |
+| `refusals`                         | Reserved report list; currently empty. An empty list does not establish complete deletion coverage.                                                  |
+
+Preview and apply use the same matching logic, but each reads current state;
+a preview is not an immutable plan or a lock on subsequent writes. Apply
+coordinates with the memory plugin's staging and file mutations. Indexing
+discards stale results instead of restoring purged chunks or cached embeddings;
+rerun an index command that reports a source change. Direct agent edits and
+external writers do not share that lock, so pause them during a sensitive
+cleanup. Rerun the preview afterward. An empty selection or zero counts do not
+prove that no related data remains.
+
+### Artifacts removed
+
+The purge removes matching promotion-marker entries and session-reference
+sections from scanned memory files, selected session-corpus lines, and
+selected-session transcript index chunks. It clears associated full-text and
+vector rows, cached embeddings, matching short-term state, ingestion seen-hash
+scopes, and origin rows. Matching content is scrubbed from dreaming rewrite
+backups, rather than deleting every backup.
+
+It also clears stale index records for internal dreaming-narrative, cron, or
+heartbeat sessions when the selection is nonempty. Index cleanup can therefore
+include more than the selected sessions, and all chunks from a changed memory
+file may be invalidated for later reindexing.
+
+The `artifacts` counters are:
+
+- `memoryFiles`, `memoryEntries`, `memoryLines`: changed memory files,
+  removed marked entries or session-reference sections, and extra whole lines
+  containing exact selected corpus snippets.
+- `sessionCorpusFiles`, `sessionCorpusLines`: changed corpus files and
+  removed corpus lines.
+- `indexChunks`, `indexSources`, `ftsRows`, `vectorRows`,
+  `embeddingCacheRows`: removed index and cache records.
+- `shortTermEntries`, `seenHashScopes`, `backups`, `originRows`: removed
+  short-term entries and deduplication scopes, rewritten backup records, and
+  deleted source-origin rows.
+
+Entries with mixed lineage are deleted whole; the command does not rewrite
+them to preserve only unselected contributions. Surviving sources may support
+new entries later, but regeneration is not guaranteed.
+
+### Readmission and retained data
+
+A real purge records the selected session IDs as forgotten in the agent's
+SQLite database before removing artifacts. Automatic dreaming ingestion,
+`memory session-backfill`, and transcript indexing, including
+`memory index --force`, check those records. Automatic ingestion records the
+reason `forgotten`. Repeating the purge does not remove the exclusion, and
+removing an admission-policy rule does not undo it. Future sessions with new
+IDs are not excluded by a previous purge.
+
+Exact corpus quotations in dream diaries such as `DREAMS.md` and
+`memory/dreaming/**/*.md` can be removed as whole lines. Untracked paraphrases
+cannot be reliably attributed and remain.
+
+A `curatedWrites` record alone does not delete a file or its freeform edits.
+The latest file-level write-observer record and supported `write`, `edit`,
+and `apply_patch` calls in retained transcripts identify files to review.
+This is not a complete audit of shell writes or external editors. A reported
+file may still be changed by the separate marker, session-reference, or
+exact-quotation cleanup.
+
+<Warning>
+Entries staged before source-session tracking may lack origin rows and remain
+after a purge; review them separately. Current session backfill preserves
+origins, but does not reconstruct missing historical lineage.
+`untargetableEntryKeys` does not enumerate every untracked candidate or memory.
+
+Source transcripts, retained archives, other agents' indexes, exports, and
+external backups also require separate review. In particular,
+[session deletion](/cli/sessions#delete-sessions) ordinarily retains a
+deleted-transcript archive; it is not an erasure of every conversation copy.
 </Warning>
 
 ## `memory promote`
@@ -231,8 +301,12 @@ openclaw memory rem-backfill --rollback [--rollback-short-term] [--json]
 
 ## `memory session-backfill`
 
-Distill retained session history through the same provenance and short-term
-staging pipeline used by dreaming. The default is a read-only preview, ordered
+Distill retained session history into grounded short-term candidates. It shares
+transcript trust classification, admission policy, and corpus storage with
+dreaming. Staged candidates retain every contributing session's origin so
+`memory forget` can select them later. Configured exclusions apply in preview,
+REM, and apply modes; forgotten sessions remain excluded in every mode.
+The default is a read-only preview, ordered
 from the oldest unprocessed day to the newest.
 
 ```bash

@@ -549,7 +549,11 @@ async function activateSystemdService(params: { env: GatewayServiceEnv }) {
 
   const runAfterReloadRetry = async (action: "enable" | "restart") => {
     const result = await execSystemctlUser(params.env, [action, unitName]);
-    if (result.code === 0 || !isSystemdUnitMissingDetail(readSystemctlDetail(result))) {
+    if (
+      result.code === 0 ||
+      result.termination !== "exit" ||
+      !isSystemdUnitMissingDetail(readSystemctlDetail(result))
+    ) {
       return result;
     }
     const retryReload = await reloadSystemd();

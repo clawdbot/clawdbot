@@ -4,6 +4,7 @@ import type {
   CronListParams,
   CronRunLogEntry as ProtocolCronRunLogEntry,
   CronRunsParams,
+  SessionsFilesListResult as ProtocolSessionsFilesListResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { AgentsListResult as ProtocolAgentsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import type { ChannelsStatusResult } from "../../../packages/gateway-protocol/src/schema/channels.js";
@@ -23,6 +24,12 @@ import type {
   SessionsPatchResultBase,
 } from "../../../src/shared/session-types.js";
 export type {
+  AgentsFileEntry as AgentFileEntry,
+  AgentsFilesListResult,
+  AgentsFilesGetResult,
+  AgentsFilesSetResult,
+  SessionsFilesGetResult as SessionWorkspaceGetResult,
+  SessionsFilesSetResult as SessionWorkspaceSetResult,
   CronJob,
   CronRunLogEntry,
   UpdateAvailable,
@@ -302,70 +309,6 @@ export type AgentIdentityResult = {
   emoji?: string;
 };
 
-export type AgentFileEntry = {
-  name: string;
-  path: string;
-  missing: boolean;
-  // Absence is a normal workspace state (optional profile files, MEMORY.md before
-  // anything is written); the editor offers these for creation instead of flagging them.
-  expectedAbsent?: boolean;
-  size?: number;
-  updatedAtMs?: number;
-  content?: string;
-};
-
-export type AgentsFilesListResult = {
-  agentId: string;
-  workspace: string;
-  files: AgentFileEntry[];
-};
-
-export type AgentsFilesGetResult = {
-  agentId: string;
-  workspace: string;
-  file: AgentFileEntry;
-};
-
-export type AgentsFilesSetResult = {
-  ok: true;
-  agentId: string;
-  workspace: string;
-  file: AgentFileEntry;
-};
-
-type SessionWorkspaceFileEntry = {
-  path: string;
-  workspacePath?: string;
-  name: string;
-  kind: "modified" | "read";
-  missing: boolean;
-  size?: number;
-  updatedAtMs?: number;
-  content?: string;
-  /** sha256 hex of the file bytes; the CAS token for sessions.files.set. */
-  hash?: string;
-  mimeType?: string;
-  contentEncoding?: "utf8" | "base64";
-  previewKind?: "text" | "image" | "unsupported";
-};
-
-type SessionWorkspaceBrowserEntry = {
-  path: string;
-  name: string;
-  kind: "file" | "directory";
-  sessionKind?: "modified" | "read" | "mixed";
-  size?: number;
-  updatedAtMs?: number;
-};
-
-type SessionWorkspaceBrowserResult = {
-  path: string;
-  parentPath?: string;
-  search?: string;
-  entries: SessionWorkspaceBrowserEntry[];
-  truncated?: boolean;
-};
-
 type SessionWorkspaceArtifactEntry = {
   id: string;
   type: string;
@@ -378,25 +321,9 @@ type SessionWorkspaceArtifactEntry = {
   };
 };
 
-export type SessionWorkspaceListResult = {
-  sessionKey: string;
-  root?: string;
-  gitCheckout?: boolean;
-  files: SessionWorkspaceFileEntry[];
-  browser?: SessionWorkspaceBrowserResult;
+// The workspace view joins file results with separately fetched artifacts.
+export type SessionWorkspaceListResult = ProtocolSessionsFilesListResult & {
   artifacts?: SessionWorkspaceArtifactEntry[];
-};
-
-export type SessionWorkspaceGetResult = {
-  sessionKey: string;
-  root?: string;
-  file: SessionWorkspaceFileEntry;
-};
-
-export type SessionWorkspaceSetResult = {
-  sessionKey: string;
-  root?: string;
-  file: SessionWorkspaceFileEntry;
 };
 
 export type ArtifactDownloadResult = {

@@ -99,6 +99,9 @@ export function buildSessionListParams(options: SessionListOptions = {}): Record
   const spawnedBy = options.spawnedBy?.trim();
   const search = options.search?.trim();
   const ownerId = options.ownerId?.trim();
+  if (options.ownerFirst === true) {
+    params.ownerFirst = true;
+  }
   if (options.involvingMe === true) {
     params.involvingMe = true;
   }

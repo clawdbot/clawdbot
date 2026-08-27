@@ -601,16 +601,15 @@ async function writeLegacyCronArraySnapshot(storePath: string, jobs: CronJob[]) 
 }
 
 function insertCronJobRow(storePath: string, job: CronJob) {
+  const { state, ...jobConfig } = job;
   runOpenClawStateWriteTransaction(({ db }) => {
     db.prepare(
       `INSERT INTO cron_jobs (
-        store_key, job_id, declaration_key, name, description, enabled, created_at_ms, schedule_kind,
-        at, every_ms, anchor_ms, schedule_expr, session_target, wake_mode, payload_kind,
-        payload_message, delivery_mode, delivery_to, job_json, state_json, updated_at
+        store_key, job_id, declaration_key, name, description, enabled, payload_kind,
+        job_json, state_json, updated_at
       ) VALUES (
-        $storeKey, $jobId, $declarationKey, $name, $description, $enabled, $createdAtMs, $scheduleKind,
-        $at, $everyMs, $anchorMs, $scheduleExpr, $sessionTarget, $wakeMode, $payloadKind,
-        $payloadMessage, $deliveryMode, $deliveryTo, $jobJson, $stateJson, $updatedAt
+        $storeKey, $jobId, $declarationKey, $name, $description, $enabled, $payloadKind,
+        $jobJson, $stateJson, $updatedAt
       )`,
     ).run({
       $storeKey: path.resolve(storePath),
@@ -619,20 +618,9 @@ function insertCronJobRow(storePath: string, job: CronJob) {
       $name: job.name,
       $description: job.description ?? null,
       $enabled: job.enabled ? 1 : 0,
-      $createdAtMs: job.createdAtMs,
-      $scheduleKind: job.schedule.kind,
-      $at: job.schedule.kind === "at" ? job.schedule.at : null,
-      $everyMs: job.schedule.kind === "every" ? job.schedule.everyMs : null,
-      $anchorMs: job.schedule.kind === "every" ? (job.schedule.anchorMs ?? null) : null,
-      $scheduleExpr: job.schedule.kind === "cron" ? job.schedule.expr : null,
-      $sessionTarget: job.sessionTarget,
-      $wakeMode: job.wakeMode,
       $payloadKind: job.payload.kind,
-      $payloadMessage: "message" in job.payload ? job.payload.message : null,
-      $deliveryMode: job.delivery ? (job.delivery.mode ?? "announce") : null,
-      $deliveryTo: job.delivery?.to ?? null,
-      $jobJson: JSON.stringify(job),
-      $stateJson: JSON.stringify(job.state),
+      $jobJson: JSON.stringify(jobConfig),
+      $stateJson: JSON.stringify(state),
       $updatedAt: job.updatedAtMs,
     });
   });

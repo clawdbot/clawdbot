@@ -52,7 +52,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Core npm package
 
-58 plugins
+59 plugins
 
 - **[a2a](/plugins/reference/a2a)** (`@openclaw/a2a`) - included in OpenClaw. A2A v1.0 Agent-to-Agent protocol channel plugin.
 
@@ -101,6 +101,8 @@ Each entry lists the package, distribution route, and description.
 - **[google](/plugins/reference/google)** (`@openclaw/google-plugin`) - included in OpenClaw. Adds Google, Google Gemini CLI, Google Vertex model provider support to OpenClaw.
 
 - **[huggingface](/plugins/reference/huggingface)** (`@openclaw/huggingface-provider`) - included in OpenClaw. Adds Hugging Face model provider support to OpenClaw.
+
+- **[imap](/plugins/reference/imap)** (`@openclaw/imap`) - included in OpenClaw. Watch IMAP mailboxes and dispatch authenticated incoming email to isolated agent sessions.
 
 - **[linux-node](/plugins/reference/linux-node)** (`@openclaw/linux-node`) - included in OpenClaw. Desktop notifications, camera capture, and location for Linux node hosts.
 
@@ -172,7 +174,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Official external packages
 
-90 plugins
+91 plugins
 
 - **[acpx](/plugins/reference/acpx)** (`@openclaw/acpx`) - npm; ClawHub. OpenClaw ACP runtime backend with plugin-owned session and transport management.
 
@@ -207,6 +209,8 @@ Each entry lists the package, distribution route, and description.
 - **[comfy](/plugins/reference/comfy)** (`@openclaw/comfy-provider`) - npm; ClawHub: `clawhub:@openclaw/comfy-provider`. Adds ComfyUI model provider support to OpenClaw.
 
 - **[copilot](/plugins/reference/copilot)** (`@openclaw/copilot`) - npm; ClawHub: `clawhub:@openclaw/copilot`. Registers the GitHub Copilot agent runtime.
+
+- **[daytona](/plugins/reference/daytona)** (`@openclaw/daytona-sandbox`) - npm; ClawHub. OpenClaw sandbox backend that runs agent exec and file tools inside Daytona cloud sandboxes over the Daytona toolbox API.
 
 - **[deepinfra](/plugins/reference/deepinfra)** (`@openclaw/deepinfra-provider`) - npm; ClawHub: `clawhub:@openclaw/deepinfra-provider`. Adds DeepInfra model provider support to OpenClaw.
 

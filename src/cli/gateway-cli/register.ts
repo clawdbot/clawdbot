@@ -21,8 +21,12 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { addGatewayServiceCommands } from "../daemon-cli/register-service-commands.js";
 import { formatCliJsonFailure, rethrowExpectedCliError } from "../failure-output.js";
-import { parseGatewayPortOption } from "../gateway-port-option.js";
-import { addGatewayClientOptions, callGatewayFromCliWithTransport } from "../gateway-rpc.js";
+import {
+  addGatewayClientOptions,
+  callGatewayFromCliWithTransport,
+  resolveGatewayRpcOptions,
+  resolveGatewayRpcOptionsWithLocalPort,
+} from "../gateway-rpc.js";
 import { formatHelpExamples } from "../help-format.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
 import { setCommandJsonMode } from "../program/json-mode.js";
@@ -177,37 +181,6 @@ function parseDaysOption(raw: unknown, fallback = 30): number {
     throw new Error(`Invalid --days. Use a positive integer, e.g. --days 30. Received: "${raw}".`);
   }
   return fallback;
-}
-
-function resolveGatewayRpcOptions<T extends { token?: string; password?: string }>(
-  opts: T,
-  command?: Command,
-): T {
-  const parentToken = inheritOptionFromParent<string>(command, "token");
-  const parentPassword = inheritOptionFromParent<string>(command, "password");
-  return {
-    ...opts,
-    token: opts.token ?? parentToken,
-    password: opts.password ?? parentPassword,
-  };
-}
-
-function resolveGatewayRpcOptionsWithLocalPort(
-  opts: GatewayRpcOpts & { port?: unknown },
-  command?: Command,
-): GatewayRpcOpts {
-  const rpcOpts = resolveGatewayRpcOptions(opts, command);
-  const port = parseGatewayPortOption(opts.port ?? inheritOptionFromParent(command, "port"));
-  if (port === undefined) {
-    return rpcOpts;
-  }
-  if (typeof opts.url === "string" && opts.url.trim()) {
-    throw new Error("Use either --url or --port, not both.");
-  }
-  return {
-    ...rpcOpts,
-    localPortOverride: port,
-  };
 }
 
 async function renderCostUsageSummaryAsync(

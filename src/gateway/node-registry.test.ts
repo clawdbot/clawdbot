@@ -10,9 +10,12 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { getCurrentActiveNodeContext, setActiveNodeContext } from "../infra/active-node-context.js";
 import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import {
+  NODE_MCP_TOOLS_CALL_COMMAND,
+  NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
   NODE_WORKER_PRIVATE_COMMANDS,
   NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
@@ -225,6 +228,20 @@ function registerNode(registry: NodeRegistry, opts: Parameters<typeof makeClient
   const frames: string[] = [];
   registerNodeSession(registry, makeClient("conn-1", "node-1", frames, opts), {});
   return frames;
+}
+
+function registerPairingWait() {
+  const pairing = createDeferred<{ identity: string; generation: string }>();
+  const registry = createNodeRegistry({ resolveCurrentPairingState: () => pairing.promise });
+  const frames: string[] = [];
+  registerNodeSession(registry, makeClient("conn-1", "node-1", frames), {
+    pairingGeneration: "generation-a",
+  });
+  return {
+    registry,
+    frames,
+    release: () => pairing.resolve({ identity: "identity-a", generation: "generation-a" }),
+  };
 }
 
 function startStreamingNodeInvoke(
@@ -735,7 +752,7 @@ describe("gateway/node-registry", () => {
     });
   });
 
-  it("keeps status proof current across capacity changes while fencing launches", async () => {
+  it("keeps capacity admission separate from negotiated environment turn reuse", async () => {
     const frames: string[] = [];
     const { nodeRegistry, nodeWorkerSupervisorTransport } = createPrivateNodeRegistryRuntime();
     registerNodeSession(
@@ -809,6 +826,37 @@ describe("gateway/node-registry", () => {
       ok: false,
       error: { code: "PRIVATE_DIALECT_UNAVAILABLE" },
     });
+
+    updateNodeRunnerInventory({
+      registry: nodeRegistry,
+      nodeId: "node-1",
+      connId: "conn-1",
+      declaration: {
+        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+        workerHost: { enabled: true, capacity: { total: 2, available: 0 }, environmentSession: 1 },
+      },
+    });
+    expect(nodeWorkerSupervisorTransport.isCurrent(proof, true)).toBe(false);
+    for (const command of [
+      NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
+      NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
+    ] as const) {
+      const invocation = nodeWorkerSupervisorTransport.invoke({
+        node: proof,
+        command,
+        isDispatchAuthorized: () => true,
+      });
+      await vi.waitFor(() => expect(frames.at(-1)).toContain(command));
+      const dispatched = JSON.parse(frames.at(-1) ?? "{}") as { payload: { id: string } };
+      nodeRegistry.handleInvokeResult({
+        id: dispatched.payload.id,
+        nodeId: "node-1",
+        connId: "conn-1",
+        ok: true,
+        payloadJSON: "null",
+      });
+      await expect(invocation).resolves.toMatchObject({ ok: true });
+    }
   });
 
   it("fences retained proofs when runner consent is disabled", async () => {
@@ -1905,6 +1953,169 @@ describe("gateway/node-registry", () => {
       vi.useRealTimers();
     }
   });
+
+  it.each(["browser.proxy", NODE_MCP_TOOLS_CALL_COMMAND, "demo.echo", "system.run"])(
+    "bounds stalled pairing without dispatching an expired %s command",
+    async (command) => {
+      vi.useFakeTimers();
+      const { registry, frames, release } = registerPairingWait();
+      const onDispatchReady = vi.fn();
+      let result: Awaited<ReturnType<NodeRegistry["invoke"]>> | undefined;
+      const invoke = registry.invoke({
+        nodeId: "node-1",
+        command,
+        timeoutMs: 100,
+        onDispatchReady,
+      });
+      void invoke.then((value) => {
+        result = value;
+      });
+      try {
+        await vi.advanceTimersByTimeAsync(100);
+        expect(result).toEqual({
+          ok: false,
+          error: { code: "TIMEOUT", message: "node invoke timed out" },
+        });
+        expect(vi.getTimerCount()).toBe(0);
+        release();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(frames).toEqual([]);
+        expect(onDispatchReady).not.toHaveBeenCalled();
+        expect(registry.get("node-1")?.connId).toBe("conn-1");
+      } finally {
+        release();
+        await vi.advanceTimersByTimeAsync(100);
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("shares the invoke budget across pairing, serialization, and the pending response", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const { registry, frames, release } = registerPairingWait();
+    const onDispatchReady = vi.fn();
+    const runParams = { runId: "run-budget", timeoutMs: 5_000 };
+    try {
+      const invoke = registry.invoke({
+        nodeId: "node-1",
+        command: "system.run",
+        timeoutMs: 100,
+        params: {
+          ...runParams,
+          toJSON() {
+            vi.setSystemTime(Date.now() + 10);
+            return runParams;
+          },
+        },
+        onDispatchReady,
+      });
+      await vi.advanceTimersByTimeAsync(60);
+      release();
+      await vi.advanceTimersByTimeAsync(0);
+      const request = JSON.parse(frames[0] ?? "{}");
+      expect(request.payload.timeoutMs).toBe(30);
+      expect(JSON.parse(request.payload.paramsJSON).timeoutMs).toBe(5_000);
+      expect(onDispatchReady).toHaveBeenCalledExactlyOnceWith(request.payload.id);
+      await vi.advanceTimersByTimeAsync(30);
+      await expect(invoke).resolves.toMatchObject({ ok: false, error: { code: "TIMEOUT" } });
+      expect(
+        registry.handleInvokeResult({
+          id: request.payload.id,
+          nodeId: "node-1",
+          connId: "conn-1",
+          ok: true,
+        }),
+      ).toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      release();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["deadline", "authority", "abort"])(
+    "does not dispatch when serialization closes the %s",
+    async (closed) => {
+      vi.useFakeTimers();
+      const registry = createNodeRegistry();
+      const frames = registerNode(registry);
+      const controller = new AbortController();
+      let authorityActive = true;
+      const onDispatchReady = vi.fn();
+      try {
+        const result = await registry.invoke({
+          nodeId: "node-1",
+          command: "browser.proxy",
+          timeoutMs: 100,
+          signal: controller.signal,
+          isDispatchAuthorized: () => authorityActive,
+          onDispatchReady,
+          params: {
+            toJSON() {
+              if (closed === "deadline") {
+                vi.setSystemTime(Date.now() + 100);
+              }
+              if (closed === "authority") {
+                authorityActive = false;
+              }
+              if (closed === "abort") {
+                controller.abort();
+              }
+              return {};
+            },
+          },
+        });
+        expect(result).toMatchObject({
+          ok: false,
+          error: {
+            code:
+              closed === "deadline"
+                ? "TIMEOUT"
+                : closed === "authority"
+                  ? "APPROVAL_AUTHORITY_CLOSED"
+                  : "ABORTED",
+          },
+        });
+        expect(frames).toEqual([]);
+        expect(onDispatchReady).not.toHaveBeenCalled();
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each([undefined, Number.NaN, Number.POSITIVE_INFINITY, 0, -1, 0.5])(
+    "preserves the post-pairing timeout contract for %s",
+    async (timeoutMs) => {
+      vi.useFakeTimers();
+      const { registry, frames, release } = registerPairingWait();
+      try {
+        const invoke = registry.invoke({ nodeId: "node-1", command: "demo.echo", timeoutMs });
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(frames).toEqual([]);
+        release();
+        await vi.advanceTimersByTimeAsync(0);
+        const request = JSON.parse(frames[0] ?? "{}");
+        const fallback = timeoutMs === undefined || !Number.isFinite(timeoutMs);
+        expect(request.payload.timeoutMs).toBe(fallback ? 30_000 : 0);
+        expect(
+          registry.handleInvokeResult({
+            id: request.payload.id,
+            nodeId: "node-1",
+            connId: "conn-1",
+            ok: true,
+          }),
+        ).toBe(true);
+        await expect(invoke).resolves.toMatchObject({ ok: true });
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        release();
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("keeps zero-timeout invokes pending until the node responds", async () => {
     vi.useFakeTimers();

@@ -13,6 +13,7 @@ import {
   handleMarkdownTableInteraction,
   releaseMarkdownTables,
 } from "../../components/markdown-tables.ts";
+import { renderPanelRefreshStatus } from "../../components/panel-refresh-status.ts";
 import "../../components/openclaw-mascot.ts";
 import { t } from "../../i18n/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
@@ -265,6 +266,12 @@ class CustodianSurface extends OpenClawLightDomElement {
                 <span>${t("custodian.connectionChanged")}</span>
               </div>`
             : nothing}
+          ${renderPanelRefreshStatus({
+            status: store.transcript.status,
+            onRetry: () => void store.refreshTranscriptIfIdle(),
+            retryDisabled: !store.canRefreshTranscript(),
+            className: "custodian__transcript-status",
+          })}
           ${store.error &&
           !(store.abandonedTurnOutcomeUnknown && store.error === t("custodian.connectionChanged"))
             ? html`<div class="custodian__error" role="alert">

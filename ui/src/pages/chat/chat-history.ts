@@ -58,7 +58,11 @@ import {
   recordControlUiPerformanceEvent,
   roundedControlUiDurationMs,
 } from "./performance.ts";
-import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
+import {
+  reconcileChatRunFromSessionRow,
+  reconcileChatRunLifecycle,
+  setChatRunError,
+} from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
 import {
@@ -352,6 +356,7 @@ export type ChatHistoryResult = {
     runId: string;
     text?: string;
     startedAt?: number;
+    sessionAbortable?: boolean;
     events?: Array<{
       runId: string;
       seq: number;
@@ -361,6 +366,7 @@ export type ChatHistoryResult = {
       agentId?: string;
       data: Record<string, unknown>;
     }>;
+    plan?: { steps: Array<{ step: string; status: string }>; explanation?: string };
   };
 };
 
@@ -468,7 +474,7 @@ function mergeInFlightAssistantTails(
   return cumulativeLiveTail;
 }
 
-function applyInFlightRunSnapshot(params: {
+function applyHistoryRunSnapshot(params: {
   state: ChatState;
   run: ChatHistoryResult["inFlightRun"];
   sessionInfo: GatewaySessionRow | undefined;
@@ -490,6 +496,30 @@ function applyInFlightRunSnapshot(params: {
   } = params;
   const inFlightRunId = run?.runId?.trim();
   if (!inFlightRunId || !run) {
+    const terminalRunId = sessionInfo?.lastRunId;
+    if (
+      terminalRunId &&
+      sessionInfo.lastRunError &&
+      (sessionInfo.status === "failed" || sessionInfo.status === "timeout") &&
+      !isSessionRunActive(sessionInfo) &&
+      (!state.chatRunId || state.chatRunId === terminalRunId) &&
+      runProjectionsUnchanged(previousRunProjections, runProjectionsBeforeApply)
+    ) {
+      // A create-time failure can precede the pane subscription. Recover its
+      // durable terminal through the same reducer; newer live runs win the race
+      // and an existing full diagnostic wins over the bounded session summary.
+      const projection = reduceChatSessionProjection(state, {
+        type: "runTerminal",
+        runId: terminalRunId,
+        status: sessionInfo.status === "timeout" ? "timeout" : "error",
+        errorMessage: sessionInfo.lastRunError,
+      });
+      setChatRunError(
+        state,
+        projection.runs[terminalRunId]?.errorMessage ?? sessionInfo.lastRunError,
+      );
+      reconcileChatRunFromSessionRow(state, sessionInfo, { publishRunStatus: false });
+    }
     return;
   }
   const projectedInFlightRun = currentRunProjections[inFlightRunId];
@@ -513,6 +543,8 @@ function applyInFlightRunSnapshot(params: {
     // Their identity fences ABA races where a run starts and finishes while
     // history is pending; deltas from this same live run must still merge.
     state.chatRunId = inFlightRunId;
+    state.chatRunError = null;
+    state.chatRunSessionAbortable = run?.sessionAbortable === true;
   }
   if (!inFlightRunIsActive || state.chatRunId !== inFlightRunId) {
     return;
@@ -973,6 +1005,7 @@ export async function syncSelectedSessionMessageSubscription(
 
 type LoadChatHistoryOptions = {
   deferBranches?: boolean;
+  supersedeInFlight?: boolean;
   startup?: boolean;
 };
 
@@ -1590,6 +1623,7 @@ export async function loadChatHistory(
   // Live events replace the rendered array while their snapshot is pending;
   // only stable session and connection ownership may start another request.
   if (
+    opts.supersedeInFlight !== true &&
     inFlight.phase === "in-flight" &&
     inFlight.key === requestKey &&
     inFlight.client === client &&
@@ -1830,7 +1864,7 @@ async function loadChatHistoryUncached(
       state.chatQueueModeOverride = response.sessionInfo.queueMode;
       state.chatEffectiveQueueMode = response.sessionInfo.effectiveQueueMode;
       const currentRunProjections = readChatRunProjections(state, sessionKey, requestAgentId);
-      applyInFlightRunSnapshot({
+      applyHistoryRunSnapshot({
         state,
         run: response.inFlightRun,
         sessionInfo: response.sessionInfo,
@@ -2016,7 +2050,7 @@ async function loadChatHistoryUncached(
       }
     }
 
-    applyInFlightRunSnapshot({
+    applyHistoryRunSnapshot({
       state,
       run: res.inFlightRun,
       sessionInfo: res.sessionInfo,

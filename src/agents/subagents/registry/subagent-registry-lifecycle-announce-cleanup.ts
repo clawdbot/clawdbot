@@ -568,11 +568,32 @@ export const startSubagentAnnounceCleanupFlow = (
             if (!childSessionEffectsAllowed()) {
               return false;
             }
-            // Announce owns delete submission; fence late yields at the
-            // exact handoff instead of when cleanup merely starts.
-            entry.deleteCleanupDispatchedAt ??= Date.now();
-            params.persist(runId);
-            return true;
+            const previousDelivery = entry.delivery
+              ? { ...entry.delivery, payload: entry.delivery.payload }
+              : undefined;
+            const previousDeleteCleanupDispatchedAt = entry.deleteCleanupDispatchedAt;
+            try {
+              if (
+                entry.completion?.required === true &&
+                entry.delivery?.status !== "delivered" &&
+                entry.delivery?.status !== "failed" &&
+                entry.delivery?.status !== "discarded" &&
+                entry.delivery?.status !== "not_required"
+              ) {
+                const delivery = ensureDeliveryState(entry);
+                delivery.createdAt ??= Date.now();
+                delivery.payload = loadPendingFinalDeliveryPayload(entry);
+              }
+              // Announce owns delete submission; fence late yields at the
+              // exact handoff instead of when cleanup merely starts.
+              entry.deleteCleanupDispatchedAt ??= Date.now();
+              params.persistOrThrow(runId);
+              return true;
+            } catch (error) {
+              entry.delivery = previousDelivery;
+              entry.deleteCleanupDispatchedAt = previousDeleteCleanupDispatchedAt;
+              throw error;
+            }
           }
         : undefined,
     onDeliveryResult: (delivery) => {

@@ -12,6 +12,7 @@ import { extractModelCompat } from "../../../plugins/provider-model-compat.js";
 import { getPluginToolMeta } from "../../../plugins/tools.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { createOpenClawCodingTools } from "../../agent-tools.js";
+import { createSkillInstructionDeliveryCache } from "../../agent-tools.read.js";
 import { getChannelAgentToolMeta } from "../../channel-tools.js";
 import type { CodeModeSkill } from "../../code-mode-skills.js";
 import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
@@ -140,6 +141,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
   // Compaction summaries omit screenshot image blocks. Frames are bound to this
   // generation so retained tool-result text cannot authorize stale coordinates.
   const computerContextEpoch: ComputerContextEpoch = { value: 0 };
+  const skillInstructionDeliveryCache = createSkillInstructionDeliveryCache();
   const toolSearchCatalogRef =
     toolSearchControlsEnabledForRun || codeModeControlsEnabledForRun
       ? createToolSearchCatalogRef()
@@ -339,6 +341,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
           hasRepliedRef: attempt.hasRepliedRef,
           modelHasVision: attempt.model.input?.includes("image") ?? false,
           computerContextEpoch,
+          skillInstructionDeliveryCache,
           registerRunCleanup: (cleanup) => runCleanups.push(cleanup),
           requireExplicitMessageTarget:
             attempt.requireExplicitMessageTarget ?? isSubagentSessionKey(attempt.sessionKey),
@@ -394,6 +397,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
     codeModeControlsEnabledForRun,
     codeModeSkills,
     computerContextEpoch,
+    skillInstructionDeliveryCache,
     cronCreatorToolAllowlist,
     cronCreatorToolAllowlistCaptureRef,
     effectiveToolsAllow,

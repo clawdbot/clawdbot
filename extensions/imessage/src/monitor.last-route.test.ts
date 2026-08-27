@@ -327,6 +327,7 @@ describe("iMessage monitor last-route updates", () => {
           | "is_from_me"
           | "is_group"
           | "created_at"
+          | "destination_caller_id"
         >
       >,
   ): IMessagePayload {
@@ -341,6 +342,7 @@ describe("iMessage monitor last-route updates", () => {
       text: message.text,
       is_group: message.is_group ?? false,
       created_at: message.created_at ?? new Date().toISOString(),
+      destination_caller_id: message.destination_caller_id,
     };
   }
 
@@ -682,6 +684,42 @@ describe("iMessage monitor last-route updates", () => {
       ],
     };
   }
+
+  it("delivers eight self-chat turns without counting their paired rows as echo loops", async () => {
+    const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() };
+    const texts = Array.from({ length: 8 }, (_, index) => `self-chat message ${index + 1}`);
+    const createdAt = new Date().toISOString();
+    await runMessageCase({
+      messages: texts.flatMap((text, index) =>
+        [true, false].map((isFromMe) =>
+          createInboundMessage({
+            id: index * 2 + (isFromMe ? 1 : 2),
+            guid: `self-chat-${index}-${isFromMe}`,
+            text,
+            chat_identifier: DEFAULT_SENDER,
+            is_from_me: isFromMe,
+            created_at: createdAt,
+            destination_caller_id: DEFAULT_SENDER,
+          }),
+        ),
+      ),
+      afterNotify: async () => {
+        await vi.waitFor(() => {
+          expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(texts.length);
+        });
+      },
+      monitor: { runtime },
+    });
+    expect(
+      dispatchReplyWithBufferedBlockDispatcherMock.mock.calls.map(
+        ([params]) => params.ctx.BodyForAgent,
+      ),
+    ).toEqual(texts);
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(
+      runtime.log.mock.calls.some(([message]) => String(message).includes("rate limiter tripped")),
+    ).toBe(false);
+  });
 
   it("waits for configured ACP target readiness before dispatching an authorized message", async () => {
     let releaseReadiness: ((value: { ok: true }) => void) | undefined;

@@ -16,7 +16,8 @@ import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-co
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { augmentModelCatalogWithProviderPlugins } from "../plugins/provider-runtime.runtime.js";
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import { createLazyPromise } from "../shared/lazy-promise.js";
+import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { modelSupportsInput as modelCatalogEntrySupportsInput } from "./model-catalog-lookup.js";
 import { assignProviderModelOrder, compareModelCatalogEntries } from "./model-catalog-order.js";
 import type {
@@ -82,20 +83,10 @@ type ManifestModelCatalogCacheEntry = {
   rows: ModelCatalogEntry[];
 };
 let manifestModelCatalogCache = new WeakMap<OpenClawConfig, ManifestModelCatalogCacheEntry>();
-const modelSuppressionLoader = createLazyImportLoader(
-  () => import("./model-suppression.runtime.js"),
-);
-const providerApiKeyResolverLoader = createLazyImportLoader(
+const loadModelSuppression = createLazyPromise(() => import("./model-suppression.js"));
+const loadProviderApiKeyResolver = createLazyPromise(
   () => import("./models-config.providers.secrets.js"),
 );
-
-function loadModelSuppression() {
-  return modelSuppressionLoader.load();
-}
-
-function loadProviderApiKeyResolver() {
-  return providerApiKeyResolverLoader.load();
-}
 
 export function resetModelCatalogBuilderCacheForTest() {
   manifestModelCatalogCache = new WeakMap();
@@ -408,14 +399,13 @@ export function loadManifestModelCatalog(params: {
   if (cached?.snapshot === resolvedSnapshot) {
     return cached.rows;
   }
+  const plugins = resolveEligibleManifestCatalogPlugins(resolvedSnapshot, params.config);
   const plan = planEffectiveModelCatalogRows({
-    registry: {
-      plugins: resolveEligibleManifestCatalogPlugins(resolvedSnapshot, params.config),
-    },
+    registry: { plugins },
     config: params.config,
   });
   const providerOrderByKey = new Map<string, number>();
-  for (const plugin of resolveEligibleManifestCatalogPlugins(resolvedSnapshot, params.config)) {
+  for (const plugin of plugins) {
     for (const [provider, providerCatalog] of Object.entries(
       plugin.modelCatalog?.providers ?? {},
     )) {
@@ -428,53 +418,10 @@ export function loadManifestModelCatalog(params: {
     }
   }
   const rows = plan.rows.map((row) => {
-    const entry: ModelCatalogEntry = {
-      id: row.id,
-      name: row.name,
-      provider: row.provider,
-      api: row.api,
-      status: row.status,
-    };
+    const entry = modelCatalogRowToEntry(row);
     const providerOrder = providerOrderByKey.get(catalogEntryDedupeKey(row.provider, row.id));
     if (providerOrder !== undefined) {
       entry.providerOrder = providerOrder;
-    }
-    if (row.baseUrl) {
-      entry.baseUrl = row.baseUrl;
-    }
-    const contextWindow = row.contextWindow ?? row.contextTokens;
-    if (contextWindow) {
-      entry.contextWindow = contextWindow;
-    }
-    if (row.contextWindows?.length) {
-      entry.contextWindows = row.contextWindows.map((option) => ({ ...option }));
-    }
-    if (row.contextWindowDefault) {
-      entry.contextWindowDefault = row.contextWindowDefault;
-    }
-    if (row.contextTokens) {
-      entry.contextTokens = row.contextTokens;
-    }
-    if (typeof row.reasoning === "boolean") {
-      entry.reasoning = row.reasoning;
-    }
-    if (row.thinkingLevelMap) {
-      entry.thinkingLevelMap = { ...row.thinkingLevelMap };
-    }
-    if (row.input?.length) {
-      entry.input = [...row.input];
-    }
-    if (row.compat) {
-      entry.compat = row.compat;
-    }
-    if (row.statusReason) {
-      entry.statusReason = row.statusReason;
-    }
-    if (row.replaces?.length) {
-      entry.replaces = [...row.replaces];
-    }
-    if (row.replacedBy) {
-      entry.replacedBy = row.replacedBy;
     }
     return entry;
   });
@@ -511,7 +458,7 @@ export async function buildPreparedModelCatalogSnapshot(
       manifestPlugins ??= manifestMetadataSnapshot.plugins;
       return manifestPlugins;
     };
-    const { buildShouldSuppressBuiltInModel } = await loadModelSuppression();
+    const { buildShouldSuppressBuiltInModelCore } = await loadModelSuppression();
     logStage("catalog-deps-ready");
     const entries = params.modelRegistry.getAll() as DiscoveredModel[];
     const declaredManifestModels = loadManifestModelCatalog({
@@ -521,7 +468,7 @@ export async function buildPreparedModelCatalogSnapshot(
     });
     logStage("registry-read", `entries=${entries.length}`);
 
-    const shouldSuppressBuiltInModel = buildShouldSuppressBuiltInModel({ config: cfg });
+    const shouldSuppressBuiltInModel = buildShouldSuppressBuiltInModelCore({ config: cfg });
     logStage("suppress-resolver-ready");
 
     for (const entry of entries) {

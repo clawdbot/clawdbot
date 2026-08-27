@@ -417,10 +417,13 @@ export async function waitForSessionTranscriptProjection(
 ): Promise<void> {
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const databaseOptions = toDatabaseOptions(resolved);
-  const database = openOpenClawAgentDatabase(databaseOptions);
+  // openclaw-agent-db.ts cache rule: LRU eviction closes idle handles across polling awaits.
   while (
     isSessionTranscriptIndexReconcileRunning(databaseOptions) &&
-    sessionTranscriptIndexNeedsReconcile(database.db, resolved.sessionId)
+    sessionTranscriptIndexNeedsReconcile(
+      openOpenClawAgentDatabase(databaseOptions).db,
+      resolved.sessionId,
+    )
   ) {
     await delay(PROJECTION_READY_POLL_MS);
   }

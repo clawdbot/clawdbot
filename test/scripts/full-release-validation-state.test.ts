@@ -361,10 +361,19 @@ describe("release decision policy", () => {
 });
 
 describe("release state artifacts", () => {
+  const FAILED_JOB = {
+    conclusion: "failure",
+    name: "test",
+    status: "completed",
+    url: "https://example.invalid/jobs/test",
+  };
+
   function artifact(
     mode: "decision" | "drain",
     parentRunAttempt = 2,
     sealedPlan = executionPlan({ rerunGroup: "ci" }),
+    childOverrides: Record<string, unknown> = {},
+    options: Record<string, any> = {},
   ) {
     const plannedChild = sealedPlan.children.find(
       (entry: Record<string, any>) => entry.key === "normalCi",
@@ -376,11 +385,22 @@ describe("release state artifacts", () => {
         createdAt: "2026-08-21T00:00:00Z",
         status: "completed",
         updatedAt: "2026-08-21T00:01:00Z",
+        ...childOverrides,
       }),
     ];
-    return buildReleaseStateArtifact({
+    const cancellation = options.cancellation ?? {};
+    const decision = classifyReleaseSnapshot({
+      cancelled: cancellation.requested === true,
       children,
-      decision: { activeRunIds: [], blockers: [], errors: [], state: "passed" },
+      extraBlockers: options.extraBlockers,
+      extraErrors: options.extraErrors,
+      releaseProfile: "stable",
+      workflowRef: "release-ci/tooling",
+    });
+    return buildReleaseStateArtifact({
+      cancellation,
+      children,
+      decision,
       executionPlan: sealedPlan,
       expected: {
         parentRunAttempt,
@@ -395,20 +415,94 @@ describe("release state artifacts", () => {
     });
   }
 
+  function stateArtifact(
+    mode: "decision" | "drain",
+    state: string,
+    sealedPlan = executionPlan({ rerunGroup: "ci" }),
+  ) {
+    const active = { conclusion: "", status: "in_progress" };
+    if (state === "qualifying") {
+      return artifact(mode, 2, sealedPlan, active);
+    }
+    if (state === "blocked_diagnostics_running") {
+      return artifact(mode, 2, sealedPlan, { ...active, jobs: [FAILED_JOB] });
+    }
+    if (state === "blocked_complete") {
+      return artifact(mode, 2, sealedPlan, { conclusion: "failure", jobs: [FAILED_JOB] });
+    }
+    if (state === "orchestration_error") {
+      return artifact(
+        mode,
+        2,
+        sealedPlan,
+        {},
+        {
+          extraErrors: [{ child: "<collector>", kind: "api_error", message: `${mode} error` }],
+        },
+      );
+    }
+    if (state === "cancelled_with_children") {
+      return artifact(mode, 2, sealedPlan, active, {
+        cancellation: { cancelledRunIds: [], requested: true },
+        extraErrors: [
+          {
+            child: "<collector>",
+            kind: "collector_cancelled",
+            message: `${mode} collector received a termination signal`,
+          },
+        ],
+      });
+    }
+    return artifact(mode, 2, sealedPlan);
+  }
+
+  function blockedArtifacts(sealedPlan = executionPlan({ rerunGroup: "ci" })) {
+    return {
+      decision: artifact("decision", 2, sealedPlan, {
+        conclusion: "",
+        jobs: [FAILED_JOB],
+        status: "in_progress",
+      }),
+      drain: artifact("drain", 2, sealedPlan, {
+        conclusion: "failure",
+        jobs: [FAILED_JOB],
+      }),
+      sealedPlan,
+    };
+  }
+
+  function stateExpected(maxParentRunAttempt = 2) {
+    return {
+      maxParentRunAttempt,
+      parentRunId: "77",
+      releaseProfile: "stable",
+      rerunGroup: "ci",
+      targetSha: TARGET_SHA,
+      workflowRef: "release-ci/tooling",
+      workflowSha: SHA,
+    };
+  }
+
+  function selectPair(
+    sealedPlan: Record<string, any>,
+    decision: Record<string, any>,
+    drain: Record<string, any>,
+  ) {
+    return selectReleaseStateArtifacts(
+      sealedPlan,
+      [{ name: "full-release-decision-77-2", payload: decision }],
+      [{ name: "full-release-diagnostics-77-2", payload: drain }],
+      stateExpected(),
+    );
+  }
+
   it("uses one policy for decision, drain, and final verification", () => {
     expect(
       verifyReleaseStateArtifacts(
         executionPlan({ rerunGroup: "ci" }),
         artifact("decision"),
         artifact("drain"),
-        {
-          parentRunAttempt: 2,
-          parentRunId: "77",
-          releaseProfile: "stable",
-          rerunGroup: "ci",
-          targetSha: TARGET_SHA,
-          workflowSha: SHA,
-        },
+        { ...stateExpected(), parentRunAttempt: 2 },
       ),
     ).toMatchObject({ decision: { state: "passed" }, drain: { state: "passed" } });
   });
@@ -422,17 +516,365 @@ describe("release state artifacts", () => {
         { name: "full-release-decision-77-2", payload: artifact("decision", 2, sealedPlan) },
       ],
       [{ name: "full-release-diagnostics-77-1", payload: artifact("drain", 1, sealedPlan) }],
-      {
-        maxParentRunAttempt: 3,
-        parentRunId: "77",
-        releaseProfile: "stable",
-        rerunGroup: "ci",
-        targetSha: TARGET_SHA,
-        workflowRef: "release-ci/tooling",
-        workflowSha: SHA,
-      },
+      stateExpected(3),
     );
     expect(selected.sourceAttempts).toEqual({ decision: 2, drain: 1, executionPlan: 1 });
+  });
+
+  it("selects a blocked decision with its completed diagnostic drain", () => {
+    const { decision, sealedPlan } = blockedArtifacts();
+    const drain = artifact("drain", 2, sealedPlan, {
+      conclusion: "failure",
+      jobs: [
+        FAILED_JOB,
+        { ...FAILED_JOB, name: "terminal diagnostic", url: "https://example.invalid/jobs/drain" },
+      ],
+    });
+    const selected = selectPair(sealedPlan, decision, drain);
+    expect(selected).toMatchObject({
+      decision: { activeRunIds: ["101"], state: "blocked_diagnostics_running" },
+      drain: { activeRunIds: [], blockers: [{ job: "test" }, { job: "terminal diagnostic" }] },
+    });
+  });
+
+  it("selects a terminal blocked pair when workflow evidence refines to failed jobs", () => {
+    const sealedPlan = executionPlan({ rerunGroup: "ci" });
+    const decision = artifact("decision", 2, sealedPlan, {
+      conclusion: "failure",
+      jobs: [],
+    });
+    const drain = stateArtifact("drain", "blocked_complete", sealedPlan);
+    expect(selectPair(sealedPlan, decision, drain).drain.blockers).toContainEqual(
+      expect.objectContaining({ job: "test", kind: "job_failure" }),
+    );
+  });
+
+  it.each([
+    ["blocked_diagnostics_running", "orchestration_error"],
+    ["blocked_complete", "orchestration_error"],
+    ["passed", "orchestration_error"],
+    ["orchestration_error", "passed"],
+    ["orchestration_error", "blocked_complete"],
+    ["orchestration_error", "orchestration_error"],
+  ])("selects recovery evidence from %s to %s", (from, to) => {
+    const sealedPlan = executionPlan({ rerunGroup: "ci" });
+    expect(
+      selectPair(
+        sealedPlan,
+        stateArtifact("decision", from, sealedPlan),
+        stateArtifact("drain", to, sealedPlan),
+      ),
+    ).toMatchObject({ decision: { state: from }, drain: { state: to } });
+  });
+
+  it("selects a fail-fast cancellation bound to its active blocked child", () => {
+    const { decision, drain, sealedPlan } = blockedArtifacts();
+    decision.cancellation = { cancelledRunIds: ["101"], requested: false };
+    expect(selectPair(sealedPlan, decision, drain).decision.cancellation).toEqual({
+      cancelledRunIds: ["101"],
+      requested: false,
+    });
+  });
+
+  it.each([
+    ["cancelled_with_children", "passed"],
+    ["passed", "cancelled_with_children"],
+  ])("selects signal cancellation recovery evidence from %s to %s", (from, to) => {
+    const sealedPlan = executionPlan({ rerunGroup: "ci" });
+    expect(
+      selectPair(
+        sealedPlan,
+        stateArtifact("decision", from, sealedPlan),
+        stateArtifact("drain", to, sealedPlan),
+      ),
+    ).toMatchObject({ decision: { state: from }, drain: { state: to } });
+  });
+
+  it("selects a cancellation request that races with child completion", () => {
+    const sealedPlan = executionPlan({ rerunGroup: "ci" });
+    const decision = artifact(
+      "decision",
+      2,
+      sealedPlan,
+      {},
+      {
+        cancellation: { requested: true },
+        extraErrors: [
+          {
+            child: "<collector>",
+            kind: "collector_cancelled",
+            message: "decision collector received a termination signal",
+          },
+        ],
+      },
+    );
+    const drain = stateArtifact("drain", "passed", sealedPlan);
+    expect(selectPair(sealedPlan, decision, drain).decision.state).toBe("orchestration_error");
+    expect(() => verifyReleaseStateArtifacts(sealedPlan, decision, drain, stateExpected())).toThrow(
+      "Full Release Validation state: orchestration_error",
+    );
+  });
+
+  it("rejects a forged passed state with an unproven cancellation request", () => {
+    const sealedPlan = executionPlan({ rerunGroup: "ci" });
+    const decision = artifact("decision", 2, sealedPlan);
+    const drain = artifact("drain", 2, sealedPlan);
+    decision.cancellation = { cancelledRunIds: [], requested: true };
+    expect(() => selectPair(sealedPlan, decision, drain)).toThrow("cancellation differs");
+    expect(() => verifyReleaseStateArtifacts(sealedPlan, decision, drain, stateExpected())).toThrow(
+      "cancellation differs",
+    );
+  });
+
+  it("selects reuse-validation blocker recovery without authorizing publication", () => {
+    const sealedPlan = executionPlan({ rerunGroup: "ci" });
+    const decision = artifact(
+      "decision",
+      2,
+      sealedPlan,
+      {},
+      {
+        extraBlockers: [
+          {
+            child: "<evidence>",
+            kind: "reused_evidence_invalid",
+            message: "reuse validation failed",
+          },
+        ],
+      },
+    );
+    const drain = stateArtifact("drain", "passed", sealedPlan);
+    expect(selectPair(sealedPlan, decision, drain).decision.state).toBe("blocked_complete");
+    expect(() => verifyReleaseStateArtifacts(sealedPlan, decision, drain, stateExpected())).toThrow(
+      "Full Release Validation state: blocked_complete\n- Blocker: reuse validation failed",
+    );
+  });
+
+  it.each(["reused_evidence_invalid", "provenance_mismatch"])(
+    "selects active %s recovery without authorizing publication",
+    (kind) => {
+      const sealedPlan = executionPlan({ rerunGroup: "ci" });
+      const decision = artifact(
+        "decision",
+        2,
+        sealedPlan,
+        { conclusion: "", status: "in_progress" },
+        { extraBlockers: [{ child: "<evidence>", kind, message: "evidence failed" }] },
+      );
+      const drain = stateArtifact("drain", "passed", sealedPlan);
+      expect(selectPair(sealedPlan, decision, drain).decision.state).toBe(
+        "blocked_diagnostics_running",
+      );
+      expect(() =>
+        verifyReleaseStateArtifacts(sealedPlan, decision, drain, stateExpected()),
+      ).toThrow(
+        "Full Release Validation state: blocked_diagnostics_running\n- Blocker: evidence failed",
+      );
+    },
+  );
+
+  it("rejects evidence recovery mixed with a child-run blocker", () => {
+    const sealedPlan = executionPlan({ rerunGroup: "ci" });
+    const decision = artifact(
+      "decision",
+      2,
+      sealedPlan,
+      { conclusion: "", jobs: [FAILED_JOB], status: "in_progress" },
+      {
+        extraBlockers: [
+          { child: "<evidence>", kind: "reused_evidence_invalid", message: "evidence failed" },
+        ],
+      },
+    );
+    expect(() =>
+      selectPair(sealedPlan, decision, stateArtifact("drain", "passed", sealedPlan)),
+    ).toThrow("transition is invalid");
+  });
+
+  it("rejects blocked artifacts for publication with the terminal drain blocker", () => {
+    const { decision, drain, sealedPlan } = blockedArtifacts();
+    expect(() => verifyReleaseStateArtifacts(sealedPlan, decision, drain, stateExpected())).toThrow(
+      "Full Release Validation state: blocked_complete\n- Blocker: test (failure)",
+    );
+  });
+
+  it("reports the decision error when a recovered drain passed", () => {
+    const sealedPlan = executionPlan({ rerunGroup: "ci" });
+    expect(() =>
+      verifyReleaseStateArtifacts(
+        sealedPlan,
+        stateArtifact("decision", "orchestration_error", sealedPlan),
+        stateArtifact("drain", "passed", sealedPlan),
+        stateExpected(),
+      ),
+    ).toThrow("Full Release Validation state: orchestration_error\n- Collector error:");
+  });
+
+  it("does not authorize selected signal cancellation evidence", () => {
+    const sealedPlan = executionPlan({ rerunGroup: "ci" });
+    expect(() =>
+      verifyReleaseStateArtifacts(
+        sealedPlan,
+        stateArtifact("decision", "cancelled_with_children", sealedPlan),
+        stateArtifact("drain", "passed", sealedPlan),
+        stateExpected(),
+      ),
+    ).toThrow("Full Release Validation state: cancelled_with_children");
+  });
+
+  it.each([
+    {
+      name: "removed decision blocker",
+      mutate: (pair: ReturnType<typeof blockedArtifacts>) => {
+        pair.drain = artifact("drain", 2, pair.sealedPlan, {
+          conclusion: "failure",
+          jobs: [],
+        });
+      },
+      reason: "changed or removed",
+    },
+    {
+      name: "changed decision blocker",
+      mutate: (pair: ReturnType<typeof blockedArtifacts>) => {
+        pair.drain = artifact("drain", 2, pair.sealedPlan, {
+          conclusion: "failure",
+          jobs: [{ ...FAILED_JOB, name: "different test" }],
+        });
+      },
+      reason: "changed or removed",
+    },
+    {
+      name: "child provenance drift",
+      mutate: (pair: ReturnType<typeof blockedArtifacts>) => {
+        pair.drain.children.normalCi!.displayTitle = "nearby title";
+      },
+      reason: "provenance differs",
+    },
+    {
+      name: "active drain",
+      mutate: (pair: ReturnType<typeof blockedArtifacts>) => {
+        pair.drain = artifact("drain", 2, pair.sealedPlan, {
+          conclusion: "",
+          jobs: [FAILED_JOB],
+          status: "in_progress",
+        });
+      },
+      reason: "transition is invalid",
+    },
+    {
+      name: "signal cancellation without active children",
+      mutate: (pair: ReturnType<typeof blockedArtifacts>) => {
+        pair.drain.cancellation = { cancelledRunIds: ["101"], requested: true };
+      },
+      reason: "cancellation differs",
+    },
+    {
+      name: "falsely classified drain",
+      mutate: (pair: ReturnType<typeof blockedArtifacts>) => {
+        pair.drain.state = "passed";
+      },
+      reason: "differs from canonical release policy",
+    },
+  ])("rejects a blocked transition with $name", ({ mutate, reason }) => {
+    const pair = blockedArtifacts();
+    mutate(pair);
+    const { decision, drain, sealedPlan } = pair;
+    expect(() => selectPair(sealedPlan, decision, drain)).toThrow(reason);
+  });
+
+  it.each([
+    ["qualifying", "passed"],
+    ["passed", "blocked_complete"],
+    ["blocked_complete", "passed"],
+    ["blocked_diagnostics_running", "passed"],
+    ["blocked_diagnostics_running", "blocked_diagnostics_running"],
+    ["orchestration_error", "blocked_diagnostics_running"],
+    ["cancelled_with_children", "blocked_diagnostics_running"],
+  ])("rejects contradictory evidence from %s to %s", (from, to) => {
+    const sealedPlan = executionPlan({ rerunGroup: "ci" });
+    expect(() =>
+      selectPair(
+        sealedPlan,
+        stateArtifact("decision", from, sealedPlan),
+        stateArtifact("drain", to, sealedPlan),
+      ),
+    ).toThrow("transition is invalid");
+  });
+
+  it.each([
+    {
+      name: "unplanned signal cancellation ID",
+      cancelledRunIds: ["999"],
+      state: "cancelled_with_children",
+    },
+    {
+      name: "fail-fast cancellation without a blocker",
+      cancelledRunIds: ["101"],
+      state: "qualifying",
+    },
+    {
+      name: "duplicate fail-fast cancellation ID",
+      cancelledRunIds: ["101", "101"],
+      state: "blocked_diagnostics_running",
+    },
+    {
+      name: "nonnumeric fail-fast cancellation ID",
+      cancelledRunIds: ["01"],
+      state: "blocked_diagnostics_running",
+    },
+  ])("rejects $name", ({ cancelledRunIds, state }) => {
+    const sealedPlan = executionPlan({ rerunGroup: "ci" });
+    const decision = stateArtifact("decision", state, sealedPlan);
+    decision.cancellation = {
+      cancelledRunIds,
+      requested: state === "cancelled_with_children",
+    };
+    expect(() =>
+      selectPair(sealedPlan, decision, stateArtifact("drain", "passed", sealedPlan)),
+    ).toThrow("cancellation differs");
+  });
+
+  it("accepts runtime-only blockers and errors as conservative evidence", () => {
+    const sealedPlan = executionPlan({ rerunGroup: "ci" });
+    const decision = artifact(
+      "decision",
+      2,
+      sealedPlan,
+      {},
+      {
+        extraBlockers: [
+          { child: "<evidence>", kind: "provenance_mismatch", message: "reuse drift" },
+        ],
+        extraErrors: [{ child: "<collector>", kind: "api_error", message: "collector failed" }],
+      },
+    );
+    expect(
+      selectPair(sealedPlan, decision, stateArtifact("drain", "passed", sealedPlan)),
+    ).toMatchObject({
+      decision: {
+        blockers: [expect.objectContaining({ kind: "provenance_mismatch" })],
+        errors: [expect.objectContaining({ kind: "api_error" })],
+        state: "orchestration_error",
+      },
+    });
+  });
+
+  it("fails closed when bounded runtime errors displace baseline child errors", () => {
+    const sealedPlan = executionPlan({ rerunGroup: "ci" });
+    const childErrors = Array.from({ length: 25 }, (_, index) => ({
+      child: "normalCi",
+      kind: "api_error",
+      message: `child error ${index}`,
+    }));
+    const extraErrors = Array.from({ length: 5 }, (_, index) => ({
+      child: "<collector>",
+      kind: "api_error",
+      message: `collector error ${index}`,
+    }));
+    const decision = artifact("decision", 2, sealedPlan, { errors: childErrors }, { extraErrors });
+    expect(() =>
+      selectPair(sealedPlan, decision, stateArtifact("drain", "passed", sealedPlan)),
+    ).toThrow("omits baseline errors");
   });
 
   function selectFromFilesystem(layout: "asymmetric" | "multi" | "single") {
@@ -574,31 +1016,23 @@ describe("release state artifacts", () => {
         drain.children.normalCi.conclusion = "failure";
       },
       name: "failed child hidden behind passed state",
-      reason: "canonical terminal release policy",
+      reason: "omits baseline blockers",
     },
     {
       mutate: (drain: Record<string, any>) => {
         drain.children.normalCi.errors = [{ kind: "api_error", message: "hidden" }];
       },
       name: "hidden child collector error",
-      reason: "contains collector errors",
+      reason: "omits baseline errors",
     },
   ])("rejects a malformed passed drain with $name", ({ mutate, reason }) => {
     const sealedPlan = executionPlan({ rerunGroup: "ci" });
     const decision = artifact("decision", 2, sealedPlan);
     const drain = structuredClone(artifact("drain", 2, sealedPlan));
     mutate(drain);
-    expect(() =>
-      verifyReleaseStateArtifacts(sealedPlan, decision, drain, {
-        maxParentRunAttempt: 2,
-        parentRunId: "77",
-        releaseProfile: "stable",
-        rerunGroup: "ci",
-        targetSha: TARGET_SHA,
-        workflowRef: "release-ci/tooling",
-        workflowSha: SHA,
-      }),
-    ).toThrow(reason);
+    expect(() => verifyReleaseStateArtifacts(sealedPlan, decision, drain, stateExpected())).toThrow(
+      reason,
+    );
   });
 
   it("uses state-specific operator guidance", () => {

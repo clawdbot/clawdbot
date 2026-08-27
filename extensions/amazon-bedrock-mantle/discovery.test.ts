@@ -87,12 +87,10 @@ function modelDiscoveryResponse(body: unknown, init?: ResponseInit): Response {
 }
 
 describe("bedrock mantle discovery", () => {
-  const originalEnv = process.env;
   let testRegionIndex = 0;
   let testRegion = "";
 
   beforeEach(() => {
-    process.env = { ...originalEnv };
     vi.restoreAllMocks();
     discoveryDebugSpy.mockClear();
     discoveryLoggerState.debugEnabled = true;
@@ -101,7 +99,6 @@ describe("bedrock mantle discovery", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
-    process.env = originalEnv;
   });
 
   // ---------------------------------------------------------------------------
@@ -630,6 +627,23 @@ describe("bedrock mantle discovery", () => {
 
     expect(models).toStrictEqual([]);
     expect(json).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid UTF-8 model discovery responses", async () => {
+    const prefix = new TextEncoder().encode('{"data":[{"id":"anthropic.');
+    const suffix = new TextEncoder().encode('.model","object":"model"}]}');
+    const invalidBody = new Uint8Array([...prefix, 0xff, ...suffix]);
+    const mockFetch = vi.fn<typeof fetch>(
+      async () => new Response(invalidBody, { headers: { "content-type": "application/json" } }),
+    );
+
+    const models = await discoverMantleModels({
+      region: testRegion,
+      bearerToken: "test-token",
+      fetchFn: mockFetch,
+    });
+
+    expect(models).toStrictEqual([]);
   });
 
   // ---------------------------------------------------------------------------

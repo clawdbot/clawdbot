@@ -26,6 +26,9 @@
           "enabled": {
             "type": "boolean"
           },
+          "responsePrefix": {
+            "type": "string"
+          },
           "markdown": {
             "type": "object",
             "properties": {
@@ -197,6 +200,11 @@
                 }
               ]
             }
+          },
+          "historyLimit": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 20
           },
           "groups": {
             "type": "object",

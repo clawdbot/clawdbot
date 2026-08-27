@@ -426,7 +426,9 @@ export function createGatewayHttpServer(opts: {
         }),
       );
       addAdmittedStage(scopedRequestPath.startsWith("/__openclaw__/board/"), async () =>
-        (await getBoardHttpModule()).handleBoardHttpRequest(req, res),
+        (await getBoardHttpModule()).handleBoardHttpRequest(req, res, {
+          resolveGatewayContext: opts.getGatewayRequestContext?.()?.resolveGatewayContext,
+        }),
       );
       const userProfileAvatarRoute = parseControlUiUserAvatarPath(
         scopedRequestPath,

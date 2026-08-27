@@ -779,6 +779,7 @@ enum class GatewayMethod(
   SessionsGithubPublish("sessions.github.publish"),
   DiagnosticsLanes("diagnostics.lanes"),
   SessionMembersListEvidence("session.members.listEvidence"),
+  PluginsInspect("plugins.inspect"),
 }
 
 enum class GatewayEvent(
@@ -821,6 +822,7 @@ enum class GatewayEvent(
   DevicePairResolved("device.pair.resolved"),
   DevicePairSetupCompleted("device.pair.setup.completed"),
   DevicePairSetupDeliveryUncertain("device.pair.setup.deliveryUncertain"),
+  UsersPrefsChanged("users.prefs.changed"),
   SkillsChanged("skills.changed"),
   VoicewakeChanged("voicewake.changed"),
   VoicewakeRoutingChanged("voicewake.routing.changed"),

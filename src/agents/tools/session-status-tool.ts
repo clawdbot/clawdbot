@@ -12,7 +12,6 @@ import type {
   ThinkLevel,
   VerboseLevel,
 } from "../../auto-reply/thinking.js";
-import { getRuntimeConfig } from "../../config/config.js";
 import {
   patchSessionEntryWithKey,
   resolveSessionStorePathCore,
@@ -68,7 +67,7 @@ import {
   resolveThinkingDefaultWithRuntimeCatalog,
 } from "../model-selection.js";
 import { createModelVisibilityPolicy } from "../model-visibility-policy.js";
-import { loadPreparedModelCatalog } from "../prepared-model-catalog.js";
+import { loadPublishedPreparedModelCatalog } from "../prepared-model-catalog.js";
 import { resolveSessionModelIdentityRef } from "../session-model-ref.js";
 import {
   describeSessionStatusTool,
@@ -95,13 +94,11 @@ import {
   resolveStoreScopedRequesterKey,
 } from "./session-status-session-resolve.js";
 import {
-  createAgentToAgentPolicy,
   formatSessionToolAccessDenial,
   resolveCurrentSessionClientAlias,
-  resolveEffectiveSessionToolsVisibility,
-  resolveSandboxedSessionToolContext,
   resolveSessionReference,
   resolveSessionToolAccess,
+  resolveSessionToolContext,
   resolveVisibleSessionReference,
   shouldResolveSessionIdInput,
 } from "./sessions-helpers.js";
@@ -160,6 +157,7 @@ const SessionStatusOutputSchema = Type.Object(
   {
     ok: Type.Literal(true),
     sessionKey: Type.String(),
+    agentId: Type.String(),
     changedModel: Type.Boolean(),
     stateVersion: Type.Integer(),
     statusText: Type.String(),
@@ -502,7 +500,7 @@ async function resolveModelOverride(params: {
     agentId: params.agentId,
     defaultProvider: currentProvider,
   });
-  const catalog = await loadPreparedModelCatalog({
+  const catalog = await loadPublishedPreparedModelCatalog({
     config: params.cfg,
     agentId: params.agentId,
     agentDir: params.agentDir,
@@ -597,15 +595,16 @@ export function createSessionStatusTool(opts?: {
       const params = args as Record<string, unknown>;
       const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
       const changesSince = readNonNegativeIntegerParam(params, "changesSince");
-      const cfg = opts?.config ?? getRuntimeConfig();
-      const { mainKey, alias, effectiveRequesterKey, mainSessionKey, restrictToSpawned } =
-        resolveSandboxedSessionToolContext({
-          cfg,
-          agentSessionKey: opts?.agentSessionKey,
-          requesterAgentId: opts?.requesterAgentIdOverride,
-          sandboxed: opts?.sandboxed,
-        });
-      const a2aPolicy = createAgentToAgentPolicy(cfg);
+      const {
+        cfg,
+        mainKey,
+        alias,
+        effectiveRequesterKey,
+        mainSessionKey,
+        restrictToSpawned,
+        sessionVisibility,
+        a2aPolicy,
+      } = resolveSessionToolContext(opts);
       const requesterAgentId = resolveSessionAgentIds({
         config: cfg,
         sessionKey: opts?.agentSessionKey ?? effectiveRequesterKey,
@@ -650,10 +649,6 @@ export function createSessionStatusTool(opts?: {
         }
         return trimmed;
       };
-      const sessionVisibility = resolveEffectiveSessionToolsVisibility({
-        cfg,
-        sandboxed: opts?.sandboxed === true,
-      });
       const accessByTarget = new Map<
         string,
         Awaited<ReturnType<typeof resolveSessionToolAccess>>
@@ -1130,7 +1125,7 @@ export function createSessionStatusTool(opts?: {
             config: cfg,
           });
           // Tool status may read persisted/configured facts, but must not start provider discovery.
-          const thinkingCatalog = await loadPreparedModelCatalog({
+          const thinkingCatalog = await loadPublishedPreparedModelCatalog({
             config: cfg,
             agentId,
             agentDir: selectedAgentDir,
@@ -1163,7 +1158,7 @@ export function createSessionStatusTool(opts?: {
                 provider: providerForCard,
                 model: defaultModelForCard,
                 loadRuntimeCatalog: () =>
-                  loadPreparedModelCatalog({
+                  loadPublishedPreparedModelCatalog({
                     config: cfg,
                     agentId,
                     agentDir: selectedAgentDir,
@@ -1228,6 +1223,7 @@ export function createSessionStatusTool(opts?: {
             details: {
               ok: true,
               sessionKey: scopedResolved.key,
+              agentId,
               changedModel,
               stateVersion,
               ...(stateChanges ? { stateChanges } : {}),

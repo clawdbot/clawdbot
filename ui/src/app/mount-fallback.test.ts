@@ -100,7 +100,7 @@ describe("Control UI mount fallback", () => {
       "Absolutely dark",
       { theme: "absolutely", themeMode: "dark" },
       "absolutely",
-      "rgb(38, 38, 36)",
+      "rgb(28, 28, 26)",
     ],
     [
       "Absolutely light",

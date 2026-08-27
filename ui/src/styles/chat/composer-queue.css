@@ -2,7 +2,9 @@
    queue visibly subordinate; only its protected bottom space may underlap. */
 .agent-chat__composer-shell {
   --chat-queue-divider: color-mix(in srgb, var(--text-strong) 6%, transparent);
+  --chat-stack-icon-size: 14px;
   --chat-stack-leading-inset: 13px;
+  --chat-stack-trailing-control-size: 24px;
   --chat-stack-trailing-inset: 8px;
 }
 
@@ -122,14 +124,14 @@
 
   position: relative;
   display: grid;
-  grid-template-columns: 24px 20px minmax(0, 1fr) auto;
+  grid-template-columns: var(--chat-stack-icon-size) 20px minmax(0, 1fr) auto;
   align-items: center;
   column-gap: 8px;
   box-sizing: border-box;
   min-width: 0;
   width: 100%;
   min-height: var(--chat-queue-row-height);
-  padding: 6px var(--chat-stack-trailing-inset);
+  padding: 6px var(--chat-stack-trailing-inset) 6px var(--chat-stack-leading-inset);
   border-bottom: 1px solid var(--chat-queue-divider);
   background: var(--chat-queue-row-surface);
   color: var(--muted);
@@ -152,7 +154,7 @@
 }
 
 .chat-queue__item--no-avatar {
-  grid-template-columns: 24px minmax(0, 1fr) auto;
+  grid-template-columns: var(--chat-stack-icon-size) minmax(0, 1fr) auto;
 }
 
 .chat-queue__item--no-avatar .chat-queue__copy,
@@ -273,6 +275,7 @@
   flex-shrink: 0;
   width: 24px;
   height: 28px;
+  margin-inline: calc((var(--chat-stack-icon-size) - 24px) / 2);
   color: var(--muted);
   grid-column: 1;
 }
@@ -536,13 +539,13 @@
 
 @media (max-width: 560px) {
   .chat-queue__item {
-    grid-template-columns: 22px 18px minmax(0, 1fr) auto;
+    grid-template-columns: var(--chat-stack-icon-size) 18px minmax(0, 1fr) auto;
     column-gap: 6px;
-    padding-inline: 6px;
+    padding-inline: var(--chat-stack-leading-inset) var(--chat-stack-trailing-inset);
   }
 
   .chat-queue__item--no-avatar {
-    grid-template-columns: 22px minmax(0, 1fr) auto;
+    grid-template-columns: var(--chat-stack-icon-size) minmax(0, 1fr) auto;
   }
 
   .chat-queue__retry span {

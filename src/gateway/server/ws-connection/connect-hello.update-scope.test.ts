@@ -84,6 +84,7 @@ import { sendGatewayHello } from "./connect-hello.js";
 function makeContext(role: "operator" | "node", scopes: string[]) {
   return {
     handler: {
+      getClient: () => null,
       connId: `conn-${role}`,
       bootId: "gateway-boot-a",
       gatewayMethods: [],
@@ -161,6 +162,7 @@ describe("sendGatewayHello update detail scope", () => {
     await sendGatewayHello(context as never, makeState(role, scopes) as never, {});
 
     expect(buildGatewaySnapshotMock).toHaveBeenCalledWith({
+      client: null,
       includeSensitive: false,
       includeUpdateDetails: false,
     });
@@ -172,6 +174,7 @@ describe("sendGatewayHello update detail scope", () => {
     await sendGatewayHello(context as never, makeState("operator", ["operator.read"]) as never, {});
 
     expect(buildGatewaySnapshotMock).toHaveBeenCalledWith({
+      client: null,
       includeSensitive: false,
       includeUpdateDetails: true,
     });
@@ -223,6 +226,7 @@ describe("sendGatewayHello update detail scope", () => {
     await sendGatewayHello(context as never, state as never, {});
 
     expect(buildGatewaySnapshotMock).toHaveBeenCalledWith({
+      client: null,
       includeSensitive: false,
       includeUpdateDetails: false,
     });

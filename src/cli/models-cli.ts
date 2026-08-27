@@ -21,10 +21,7 @@ const loadModelsStatusCommands = createModuleLoader(
 );
 const loadModelsAliasesCommands = createModuleLoader(() => import("../commands/models/aliases.js"));
 const loadModelsFallbacksCommands = createModuleLoader(
-  () => import("../commands/models/fallbacks.js"),
-);
-const loadModelsImageFallbacksCommands = createModuleLoader(
-  () => import("../commands/models/image-fallbacks.js"),
+  () => import("../commands/models/fallbacks-shared.js"),
 );
 const loadModelsAuthCommands = createModuleLoader(() => import("../commands/models/auth.js"));
 const loadModelsAuthOrderCommands = createModuleLoader(
@@ -131,10 +128,12 @@ export function registerModelsCli(program: Command) {
     .command("refresh")
     .description("Refresh the hosted model catalog")
     .option("--json", "Output JSON", false)
-    .action(async (opts) => {
-      await withModelsRuntime(async ({ defaultRuntime }) => {
+    .action(async (opts, command: Command) => {
+      const runtime = await loadModelsRuntime();
+      runtime.rejectAgentScopedModelCommand(command, "refresh");
+      await runtime.runModelsCommand(async () => {
         const { modelsRefreshCommand } = await import("../commands/models/refresh.js");
-        await modelsRefreshCommand({ json: hasJsonOutput(opts) }, defaultRuntime);
+        await modelsRefreshCommand({ json: hasJsonOutput(opts) }, runtime.defaultRuntime);
       });
     });
 
@@ -216,34 +215,25 @@ export function registerModelsCli(program: Command) {
       modelType: "model",
       noun: "fallback",
       article: "a",
-      load: async () => {
-        const commands = await loadModelsFallbacksCommands();
-        return {
-          list: commands.modelsFallbacksListCommand,
-          add: commands.modelsFallbacksAddCommand,
-          remove: commands.modelsFallbacksRemoveCommand,
-          clear: commands.modelsFallbacksClearCommand,
-        };
-      },
+      key: "model",
+      label: "Fallbacks",
+      notFoundLabel: "Fallback",
+      clearedMessage: "Fallback list cleared.",
     },
     {
       name: "image-fallbacks",
       modelType: "image model",
       noun: "image fallback",
       article: "an",
-      load: async () => {
-        const commands = await loadModelsImageFallbacksCommands();
-        return {
-          list: commands.modelsImageFallbacksListCommand,
-          add: commands.modelsImageFallbacksAddCommand,
-          remove: commands.modelsImageFallbacksRemoveCommand,
-          clear: commands.modelsImageFallbacksClearCommand,
-        };
-      },
+      key: "imageModel",
+      label: "Image fallbacks",
+      notFoundLabel: "Image fallback",
+      clearedMessage: "Image fallback list cleared.",
     },
   ] as const;
 
-  for (const { name, modelType, noun, article, load } of fallbackGroups) {
+  for (const params of fallbackGroups) {
+    const { name, modelType, noun, article } = params;
     const group = models.command(name).description(`Manage ${modelType} fallback list`);
 
     group
@@ -253,20 +243,27 @@ export function registerModelsCli(program: Command) {
       .option("--plain", "Plain output", false)
       .action(async (opts) => {
         await withModelsRuntime(async ({ defaultRuntime }) => {
-          const commands = await load();
-          await commands.list({ ...opts, json: hasJsonOutput(opts) }, defaultRuntime);
+          const { listFallbacksCommand } = await loadModelsFallbacksCommands();
+          await listFallbacksCommand(
+            params,
+            { ...opts, json: hasJsonOutput(opts) },
+            defaultRuntime,
+          );
         });
       });
 
-    for (const action of ["add", "remove"] as const) {
+    for (const [action, handler] of [
+      ["add", "addFallbackCommand"],
+      ["remove", "removeFallbackCommand"],
+    ] as const) {
       group
         .command(action)
         .description(`${action === "add" ? "Add" : "Remove"} ${article} ${noun} model`)
         .argument("<model>", "Model id or alias")
         .action(async (model: string) => {
           await withModelsRuntime(async ({ defaultRuntime }) => {
-            const commands = await load();
-            await commands[action](model, defaultRuntime);
+            const commands = await loadModelsFallbacksCommands();
+            await commands[handler](params, model, defaultRuntime);
           });
         });
     }
@@ -276,8 +273,8 @@ export function registerModelsCli(program: Command) {
       .description(`Clear all ${noun} models`)
       .action(async () => {
         await withModelsRuntime(async ({ defaultRuntime }) => {
-          const commands = await load();
-          await commands.clear(defaultRuntime);
+          const { clearFallbacksCommand } = await loadModelsFallbacksCommands();
+          await clearFallbacksCommand(params, defaultRuntime);
         });
       });
   }

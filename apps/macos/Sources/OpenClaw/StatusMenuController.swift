@@ -107,12 +107,17 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
 
     func menuDidClose(_ menu: NSMenu) {
         guard menu === self.menu else { return }
+        StatusMenuHighlightDelegate.shared.menu(menu, willHighlight: nil)
         self.isMenuOpen = false
         self.sessions.cancelPreviewTasks()
         self.summaries.menuDidClose()
         // Leaving the menu attached makes subsequent left clicks open AppKit's menu.
         self.statusItem?.menu = nil
         self.statusItem?.button?.highlight(self.isChatWindowVisible)
+    }
+
+    func menu(_ menu: NSMenu, willHighlight item: NSMenuItem?) {
+        StatusMenuHighlightDelegate.shared.menu(menu, willHighlight: item)
     }
 
     /// Accessibility/keyboard activation path; pointer clicks are consumed by the
@@ -218,7 +223,6 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             isPaused: self.state.isPaused,
             connection: connection,
             quickChatEnabled: self.state.quickChatEnabled,
-            canvasEnabled: self.state.canvasEnabled,
             voiceWakeSupported: voiceWakeSupported,
             debugEnabled: self.state.debugPaneEnabled,
             updateReady: self.updater.isAvailable && self.updater.updateStatus.isUpdateReady,
@@ -247,8 +251,6 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             _ = self.activityStore.current
             _ = self.activityStore.mainSessionKey
             _ = HealthStore.shared.state
-            _ = HealthStore.shared.isRefreshing
-            _ = HealthStore.shared.lastSuccess
             _ = HealthStore.shared.degradedSummary
             _ = MacNodeChannelStatusStore.shared.state
             _ = self.nodes.nodes
@@ -343,15 +345,25 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
 
     private func scheduleDebugMenuOpen() {
         #if DEBUG
+        // launchctl setenv races `open`; arguments are reliable for captures.
+        let arguments = CommandLine.arguments
         let environment = ProcessInfo.processInfo.environment
-        if environment["OPENCLAW_DEBUG_OPEN_MENU"] == "1" {
+        func flag(_ env: String, _ arg: String) -> Bool {
+            environment[env] == "1" || arguments.contains(arg)
+        }
+        // Screenshot/demo helper: seed synthetic menu content so UI proof
+        // captures show populated rows without a configured gateway.
+        if flag("OPENCLAW_DEBUG_MENU_FIXTURES", "--debug-menu-fixtures") {
+            CronJobsStore.shared.seedDebugFixtureJobs()
+        }
+        if flag("OPENCLAW_DEBUG_OPEN_MENU", "--debug-open-menu") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                 guard let self, let button = self.statusItem?.button else { return }
                 self.statusItem?.menu = self.menu
                 button.performClick(nil)
             }
         }
-        if environment["OPENCLAW_DEBUG_PROBE_RIGHTCLICK"] == "1" {
+        if flag("OPENCLAW_DEBUG_PROBE_RIGHTCLICK", "--debug-probe-rightclick") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                 guard let self, let button = self.statusItem?.button,
                       let window = button.window else { return }

@@ -127,16 +127,17 @@ function dateBucketId(updatedAt: number | null | undefined, now: number): string
   if (typeof updatedAt !== "number" || !Number.isFinite(updatedAt) || updatedAt <= 0) {
     return UNGROUPED_ID;
   }
-  const startOfToday = new Date(now);
-  startOfToday.setHours(0, 0, 0, 0);
-  const dayMs = 24 * 60 * 60 * 1000;
-  if (updatedAt >= startOfToday.getTime()) {
+  const today = new Date(now);
+  // Calendar midnights can be 23 or 25 hours apart across daylight-saving changes.
+  const startOfDay = (daysAgo: number) =>
+    new Date(today.getFullYear(), today.getMonth(), today.getDate() - daysAgo).getTime();
+  if (updatedAt >= startOfDay(0)) {
     return "today";
   }
-  if (updatedAt >= startOfToday.getTime() - dayMs) {
+  if (updatedAt >= startOfDay(1)) {
     return "yesterday";
   }
-  if (updatedAt >= startOfToday.getTime() - 6 * dayMs) {
+  if (updatedAt >= startOfDay(6)) {
     return "week";
   }
   return "older";

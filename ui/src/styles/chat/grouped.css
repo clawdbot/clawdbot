@@ -545,6 +545,43 @@
   margin: 0 auto;
 }
 
+.chat-notice__collapse {
+  width: min(560px, 100%);
+  margin: 0 auto;
+}
+
+.chat-notice__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  user-select: none;
+  list-style: none;
+}
+
+.chat-notice__toggle::-webkit-details-marker {
+  display: none;
+}
+
+.chat-notice__toggle::before {
+  content: "▸";
+  flex-shrink: 0;
+  transition: transform 150ms ease;
+}
+
+.chat-notice__collapse[open] > .chat-notice__toggle::before {
+  transform: rotate(90deg);
+}
+
+.chat-notice__toggle:hover {
+  color: var(--text);
+}
+
+.chat-notice__collapse .chat-notice__body {
+  margin-top: 7px;
+  text-align: start;
+}
+
 .chat-notice--danger {
   width: min(560px, calc(100% - 32px));
   margin: 14px auto;
@@ -861,6 +898,13 @@ img.chat-avatar.chat-avatar--logo {
   color: var(--muted);
 }
 
+.chat-group:has([data-copy-feedback]:not([hidden])) {
+  --chat-footer-disclosure-opacity: 1;
+  --chat-footer-disclosure-pointer-events: auto;
+  --chat-footer-detail-position: static;
+  --chat-persistent-footer-opacity: 1;
+}
+
 .chat-copy-btn__icon {
   display: inline-flex;
   width: 14px;
@@ -876,30 +920,27 @@ img.chat-avatar.chat-avatar--logo {
   transition: opacity 150ms ease;
 }
 
-.chat-copy-btn__icon-check {
+.chat-copy-btn__icon-check,
+.chat-copy-btn[data-copy-state="copied"] .chat-copy-btn__icon-copy {
   opacity: 0;
 }
 
-.chat-copy-btn[data-copied="1"] .chat-copy-btn__icon-copy {
-  opacity: 0;
-}
-
-.chat-copy-btn[data-copied="1"] .chat-copy-btn__icon-check {
+.chat-copy-btn[data-copy-state="copied"] .chat-copy-btn__icon-check {
   opacity: 1;
 }
 
-.chat-copy-btn[data-copying="1"] {
+.chat-copy-btn[data-copy-state="copying"] {
   opacity: 0;
   pointer-events: none;
 }
 
-.chat-copy-btn[data-error="1"] {
+.chat-copy-btn[data-copy-state="error"] {
   border-color: var(--danger-subtle);
   background: var(--danger-subtle);
   color: var(--danger);
 }
 
-.chat-copy-btn[data-copied="1"] {
+.chat-copy-btn[data-copy-state="copied"] {
   border-color: var(--ok-subtle);
   background: var(--ok-subtle);
   color: var(--ok);

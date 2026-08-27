@@ -47,17 +47,19 @@ struct ContextRingView: View {
     static let compactThreshold = 0.90
 
     let percentUsed: Double
+    @Environment(\.menuItemHighlighted) private var isHighlighted
 
     var body: some View {
         let style = ContextRingStyle(ratio: self.percentUsed / 100)
+        let fillColor = self.isHighlighted ? MenuItemHighlightColors.palette(true).secondary : style.fillColor
 
         HStack(spacing: 4) {
             ZStack {
                 Circle()
-                    .stroke(style.fillColor.opacity(0.22), lineWidth: 2.5)
+                    .stroke(fillColor.opacity(0.22), lineWidth: 2.5)
                 Circle()
                     .trim(from: 0, to: min(max(style.ratio, 0), 1))
-                    .stroke(style.fillColor, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                    .stroke(fillColor, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
                     .rotationEffect(.degrees(-90))
             }
             .frame(width: 13, height: 13)
@@ -66,7 +68,7 @@ struct ContextRingView: View {
             if style.showsLabel {
                 Text("\(style.percent)%")
                     .font(.caption2.monospacedDigit())
-                    .foregroundStyle(style.fillColor)
+                    .foregroundStyle(fillColor)
             }
         }
         .accessibilityElement(children: .ignore)

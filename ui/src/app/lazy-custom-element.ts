@@ -72,7 +72,8 @@ export class LazyCustomElementRequestController {
   constructor(
     private readonly host: UpdatingHost,
     private readonly onClose?: () => void,
-    private readonly retryStale = retryStaleChunkReloadWhenReachable,
+    private readonly retryStale = (canReload: () => boolean) =>
+      retryStaleChunkReloadWhenReachable({ canReload }),
   ) {}
 
   get visibleState(): LazyCustomElementRequestState | undefined {
@@ -142,7 +143,8 @@ export class LazyCustomElementRequestController {
     } satisfies LazyCustomElementRequest;
     this.current = retryRequest;
     this.host.requestUpdate();
-    void (request.stale ? this.retryStale() : Promise.resolve(false)).then((reloading) => {
+    const canReload = () => this.current === retryRequest;
+    void (request.stale ? this.retryStale(canReload) : Promise.resolve(false)).then((reloading) => {
       if (!reloading && this.current === retryRequest) {
         this.load(retryRequest);
       }

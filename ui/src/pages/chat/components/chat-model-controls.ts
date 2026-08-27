@@ -186,6 +186,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     currentOverride,
     defaultModel,
     defaultLabel,
+    modelOverrideSource,
     options: selectOptions,
   } = resolveChatModelSelectState({
     agentDefaultModel: props.agentDefaultModel,
@@ -276,7 +277,6 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     }
     return pickerOption;
   });
-  const explicitOverride = props.modelOverrides?.[props.sessionKey];
   const currentCatalogEntry = resolveChatModelCatalogEntry(currentOverride, props.modelCatalog);
   if (
     currentOverride &&
@@ -303,10 +303,8 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
       ),
     });
   }
-  const pickerValue =
-    !explicitOverride && currentOverride.trim().toLowerCase() === defaultModel.trim().toLowerCase()
-      ? ""
-      : currentOverride;
+  // A persisted pin can match a changed default; equality cannot establish inheritance.
+  const pickerValue = modelOverrideSource === null ? "" : currentOverride;
   const activeModelOption =
     pickerValue === ""
       ? modelOptions.find((option) => option.isDefault)
@@ -398,16 +396,6 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     commonDisabled ||
     effortMutationDisabled ||
     (thinking.options.length === 0 && (!showFastMode || fastMode.disabled));
-  const effortLabel = thinking.selection.displayLabel.replace(/^Inherited:\s*/u, "");
-  const showReasoning = thinking.options.length > 0;
-  const mobileSecondary =
-    showReasoning || (showFastMode && fastMode.supported)
-      ? {
-          disabled: effortDisabled,
-          label: showReasoning ? t("chat.modelControls.effort") : t("chat.modelControls.fastMode"),
-          value: showReasoning ? effortLabel : fastMode.label,
-        }
-      : undefined;
   // Floating UI deliberately tracks a live anchor. Keep the eventual effort
   // control in layout while catalog state is transient (and until an open model
   // menu closes), so a sibling appearing cannot move that anchor mid-interaction.
@@ -432,13 +420,13 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
         defaultModelLabel: formatPickerModelLabel(pickerDefaultLabel),
         disabled: modelDisabled,
         disabledReason: props.modelMutationDisabledReason,
-        mobileSecondary,
         modelCatalogState: managedCatalog,
         open: props.modelPickerOpen,
         modelSelectionLocked: props.modelSelectionLocked === true,
         modelOptions,
         targetGroups: props.modelPickerTargetGroups,
         selectedModelValue: pickerValue,
+        sessionModelPinned: modelOverrideSource === "user",
         sessionKey: props.sessionKey,
         triggerModelLabel: formatPickerModelLabel(committedModelLabel),
         triggerStatusLabel: catalogTriggerStatus,

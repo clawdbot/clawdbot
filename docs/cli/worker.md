@@ -28,11 +28,27 @@ scheduled-owner identity never enter the worker envelope.
 The credential is never accepted through command-line arguments, and this page
 intentionally provides no credential or hand-authored envelope example.
 
+The node supervisor uses a private managed entry point that can admit successive
+turns into the same environment while background processes remain. Each turn
+still receives a fresh bounded envelope, Gateway connection, and tool authority.
+The standalone command above remains a single-turn entry point.
+
 Admission fails closed if the envelope is invalid, the credential is rejected,
 the bundle or protocol features do not match, or the session and owner epoch are
 no longer current. Missing, duplicate, or unknown tool names also invalidate the
 envelope. Operators should start workers through the cloud worker
 orchestrator rather than invoke this entry point directly.
+
+If admission exhausts its 120-second retry budget, the terminal error includes
+the attempt count, Gateway host and port (or local socket path), and last failure.
+`connect failed` means the WebSocket did not open; check reachability and TLS.
+`no hello within deadline` means it opened but the Gateway did not complete worker
+admission. A retryable admission rejection retains its reason. These bounded,
+credential-redacted details appear in the node launch journal and turn error.
+
+Container launches revalidate the pinned daemon identity before creating each
+container. This check allows 30 seconds for a busy daemon; a timeout still fails
+the launch and names the command. A changed daemon identity remains a hard failure.
 
 ## Runtime boundary
 
@@ -50,6 +66,10 @@ The process runs the normal embedded agent loop with a restricted backend:
 Worker mode does not start channels, Gateway HTTP surfaces, or plugin auto-start
 beyond the assigned session toolset. It uses a throwaway state directory and has
 no standing provider or forge credentials.
+
+The worker loads workspace `AGENTS.md` through the bounded bootstrap loader and
+appends Gateway-supplied system instructions as literal text. It does not discover
+`SYSTEM.md` or `APPEND_SYSTEM.md` from the workspace or agent state directory.
 
 Worker-to-worker session dispatch is not exposed in this mode. Placement and
 dispatch remain gateway-owned: an operator can dispatch an existing local,
