@@ -42,7 +42,7 @@ suite.define(() => {
             duration: style?.animationDuration ?? "",
             focused: element === document.activeElement,
             name: style?.animationName ?? "",
-            value: element.value,
+            value: element instanceof HTMLTextAreaElement ? element.value : "",
           };
         });
         cueStyle = {
