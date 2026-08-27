@@ -119,7 +119,6 @@ describe("dead config keys", () => {
     "memory.qmd",
     "memory.search.qmd",
     "agents.entries.test.memory.search.qmd",
-    "memory.search.cache.maxEntries",
     "agents.defaults.runRetries",
     "agents.entries.test.memory.search.chunking",
     "agents.entries.test.runRetries",

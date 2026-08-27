@@ -843,6 +843,7 @@ export const MemorySearchSchema = z
     cache: z
       .object({
         enabled: z.boolean().optional(),
+        maxEntries: z.number().int().positive().optional(),
       })
       .strict()
       .optional(),

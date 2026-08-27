@@ -128,7 +128,7 @@ const DEFAULT_MMR_LAMBDA = 0.7;
 const DEFAULT_TEMPORAL_DECAY_ENABLED = true;
 const DEFAULT_TEMPORAL_DECAY_HALF_LIFE_DAYS = 30;
 const DEFAULT_CACHE_ENABLED = true;
-const DEFAULT_CACHE_MAX_ENTRIES = undefined;
+const DEFAULT_CACHE_MAX_ENTRIES: number | undefined = undefined;
 const DEFAULT_SOURCES: Array<"memory" | "sessions"> = ["memory"];
 export const DEFAULT_MEMORY_EMBEDDING_PROVIDER = "openai";
 const DEFAULT_REMOTE_BATCH_POLL_INTERVAL_MS = 2_000;
@@ -293,7 +293,8 @@ function mergeConfig(
   };
   const cache = {
     enabled: overrides?.cache?.enabled ?? defaults?.cache?.enabled ?? DEFAULT_CACHE_ENABLED,
-    maxEntries: DEFAULT_CACHE_MAX_ENTRIES,
+    maxEntries:
+      overrides?.cache?.maxEntries ?? defaults?.cache?.maxEntries ?? DEFAULT_CACHE_MAX_ENTRIES,
   };
 
   const minScore = clampNumber(query.minScore, 0, 1);

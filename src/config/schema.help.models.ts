@@ -250,6 +250,8 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
     "Minimum relevance score threshold for including memory results in final recall output. Increase to reduce weak/noisy matches, or lower when you need more permissive retrieval.",
   "memory.search.cache.enabled":
     "Caches computed chunk embeddings in SQLite so reindexing and incremental updates run faster (default: true). Keep this enabled unless investigating cache correctness or minimizing disk usage.",
+  "memory.search.cache.maxEntries":
+    "Caps how many embedding cache rows are kept, evicting the least recently updated ones once the cap is exceeded (default: unlimited). Set this when the cache grows past the disk you want to spend on it.",
   memory: "Built-in memory configuration (global).",
   "memory.citations":
     'Controls citation visibility in replies: "auto" shows citations when useful, "on" always shows them, and "off" hides them. Keep "auto" for a balanced signal-to-noise default.',

@@ -98,5 +98,7 @@ export type MemorySearchConfig = {
   cache?: {
     /** Cache chunk embeddings in SQLite (default: true). */
     enabled?: boolean;
+    /** Cap on cached embedding rows; oldest are evicted past it (default: unlimited). */
+    maxEntries?: number;
   };
 };

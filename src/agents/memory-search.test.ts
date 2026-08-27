@@ -536,6 +536,25 @@ describe("memory search config", () => {
     expect(resolveMemorySearchSyncConfig(cfg, "main")).toStrictEqual(expected.sync);
   });
 
+  it("honors memory.search.cache.maxEntries so the cache prune can run", () => {
+    // Regression: maxEntries was hardcoded to the default, so the resolved value
+    // was always undefined and pruneEmbeddingCacheIfNeeded() returned early on
+    // every install, letting memory_embedding_cache grow without bound.
+    const withCap = asConfig({
+      memory: {
+        search: {
+          provider: "openai",
+          cache: { maxEntries: 5_000 },
+        },
+      },
+      agents: { defaults: {} },
+    });
+    expect(resolveMemorySearchConfig(withCap, "main")?.cache).toStrictEqual({
+      enabled: true,
+      maxEntries: 5_000,
+    });
+  });
+
   it("merges defaults and overrides", () => {
     const cfg = asConfig({
       memory: {

@@ -509,6 +509,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "memory.search.query.maxResults": "Memory Search Max Results",
   "memory.search.query.minScore": "Memory Search Min Score",
   "memory.search.cache.enabled": "Memory Search Embedding Cache",
+  "memory.search.cache.maxEntries": "Embedding Cache Max Entries",
   memory: "Memory",
   "memory.citations": "Memory Citations Mode",
   auth: "Auth",
