@@ -3691,6 +3691,9 @@ EOF
     expect(script).toContain(
       'git -C "$repo_dir" ls-remote --exit-code --tags origin "refs/tags/${ref}" "refs/tags/${ref}^{}"',
     );
+    expect(script).toContain(
+      'run_quiet_step "Checking out ${ref}" git -C "$repo_dir" checkout --detach "refs/tags/${ref}"',
+    );
     expect(script).toContain('git -C "$repo_dir" rebase origin/main');
     expect(script).not.toContain('git -C "$repo_dir" pull --rebase --no-tags || true');
 
@@ -3702,6 +3705,41 @@ EOF
     expect(tagFetchIndex).toBeGreaterThan(-1);
     expect(branchCheckIndex).toBeLessThan(tagFetchIndex);
     expect(script).toContain('git_install_lockfile_flag "$repo_dir" "$git_ref" "$GIT_REF_KIND"');
+  });
+
+  it("checks out a fetched tag through its fully qualified ref", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      ref=v2026.5.12
+      checked_out=""
+      git() {
+        if [[ "$1" == "-C" && "$3" == "ls-remote" && "$5" == "--heads" ]]; then
+          return 2
+        fi
+        if [[ "$1" == "-C" && "$3" == "ls-remote" && "$5" == "--tags" ]]; then
+          return 0
+        fi
+        if [[ "$1" == "-C" && "$3" == "rev-parse" && "$6" == "refs/tags/$ref^{commit}" ]]; then
+          return 0
+        fi
+        if [[ "$1" == "-C" && "$3" == "checkout" ]]; then
+          checked_out="$5"
+          [[ "$5" == "refs/tags/$ref" ]]
+          return
+        fi
+        return 0
+      }
+      run_quiet_step() {
+        shift
+        "$@"
+      }
+      checkout_git_openclaw_ref /repo "$ref"
+      printf 'checkout=%s\n' "$checked_out"
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("checkout=refs/tags/v2026.5.12");
   });
 
   it("uses non-frozen lockfile installs only for moving git refs", () => {

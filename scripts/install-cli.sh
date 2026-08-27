@@ -1078,7 +1078,7 @@ checkout_git_openclaw_ref() {
   fi
 
   if git -C "$repo_dir" rev-parse --verify --quiet "refs/tags/${ref}^{commit}" >/dev/null; then
-    git -C "$repo_dir" checkout --detach "$ref"
+    git -C "$repo_dir" checkout --detach "refs/tags/${ref}"
     GIT_REF_KIND="immutable"
     return 0
   fi
