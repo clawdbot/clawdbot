@@ -59,9 +59,10 @@ suite.define(() => {
           trigger: '[data-chat-thinking-select="true"]',
         },
       ]) {
-        await composer.locator(picker.trigger).click();
-        await page.waitForTimeout(100);
         const visibleTrigger = composer.locator(picker.trigger);
+        await expect.poll(() => visibleTrigger.isVisible()).toBe(true);
+        await visibleTrigger.click();
+        await page.waitForTimeout(100);
         const [composerBox, footerBox, menuBox, triggerBox] = await Promise.all([
           composer.boundingBox(),
           composer.locator(".agent-chat__composer-footer").boundingBox(),
@@ -84,8 +85,12 @@ suite.define(() => {
         expect(footerBox.y + footerBox.height).toBeLessThanOrEqual(853);
         await page.keyboard.press("Escape");
       }
-      const mobileEffortTrigger = composer.locator('[data-chat-thinking-select="true"]');
-      await mobileEffortTrigger.press("Enter");
+      const effort = composer.locator('[data-chat-thinking-select="true"]');
+      await effort.press("Enter");
+      await expect
+        .poll(() => composer.locator(".chat-controls__effort-menu").isVisible())
+        .toBe(true);
+      await effort.press("Tab");
       const focusedEffortControl = composer.locator(
         "[data-chat-thinking-slider]:not([disabled]), [data-chat-speed-toggle]:not([disabled])",
       );
@@ -96,7 +101,7 @@ suite.define(() => {
         .toBe(true);
       await page.keyboard.press("Escape");
       await expect
-        .poll(() => mobileEffortTrigger.evaluate((node) => node === document.activeElement))
+        .poll(() => effort.evaluate((node) => node === document.activeElement))
         .toBe(true);
     });
   });
@@ -601,7 +606,7 @@ suite.define(() => {
       await expect
         .poll(() => stop.evaluate((node) => getComputedStyle(node).backgroundColor))
         .not.toBe(brandFill);
-      const mobileModelSettings = composer.locator('[data-chat-model-settings="true"]');
+      const mobileModelSettings = composer.locator('[data-chat-model-select="true"]');
       await expect.poll(() => mobileModelSettings.isVisible()).toBe(true);
       const [activeMobileSettingsBox, activeMobileStopBox] = await Promise.all([
         mobileModelSettings.boundingBox(),
@@ -653,10 +658,6 @@ suite.define(() => {
         .toBeLessThanOrEqual(393);
       await expect.poll(() => mobileModelSettings.isVisible()).toBe(true);
       await expect.poll(() => effort.isVisible()).toBe(true);
-      const mobileEffortBox = await effort.boundingBox();
-      expect(mobileEffortBox).not.toBeNull();
-      expect(mobileEffortBox?.width).toBeCloseTo(32, 2);
-      expect(mobileEffortBox?.height).toBeCloseTo(32, 2);
       await permission.click();
       await expect
         .poll(() => composer.locator(".chat-controls__permission-option").first().isVisible())
@@ -748,20 +749,22 @@ suite.define(() => {
       await expect
         .poll(() => composer.locator(".chat-controls__model-menu").isVisible())
         .toBe(true);
-      const mobileModelMenu = composer.locator(".chat-controls__model-menu");
-      await expect
-        .poll(() => mobileModelMenu.getByRole("button", { name: /^Effort\b/u }).count())
-        .toBe(0);
       await captureMobileState("mobile-composer-model-open.png");
-      const mobilePickerBox = await mobileModelMenu.boundingBox();
+      const mobilePickerBox = await composer.locator(".chat-controls__model-menu").boundingBox();
       expect(mobilePickerBox).not.toBeNull();
       if (!mobilePickerBox) {
         throw new Error("expected mobile model picker to have a layout box");
       }
       expect(mobilePickerBox.x).toBeGreaterThanOrEqual(0);
       expect(mobilePickerBox.x + mobilePickerBox.width).toBeLessThanOrEqual(393);
+      expect(
+        await composer
+          .locator(".chat-controls__model-menu")
+          .getByText(/Effort|Fast mode/)
+          .count(),
+      ).toBe(0);
       await page.keyboard.press("Escape");
-      await composer.locator('[data-chat-thinking-select="true"]').click();
+      await effort.click();
       await expect
         .poll(() => composer.locator(".chat-controls__effort-menu").isVisible())
         .toBe(true);

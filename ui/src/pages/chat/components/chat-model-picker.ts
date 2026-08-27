@@ -349,7 +349,6 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
       highlightModelRow(menu, row);
     }
   };
-  const settingsLabel = `${t("chat.selectors.model")}: ${triggerTitle}`;
   return html`
     <details
       class="chat-controls__inline-select chat-controls__model-picker"
@@ -378,11 +377,10 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
           ? "chat-controls__model-trigger--loading"
           : ""} ${params.disabled ? "chat-controls__inline-select-trigger--disabled" : ""}"
         data-chat-model-select="true"
-        data-chat-model-settings="true"
         data-chat-model-locked=${params.modelSelectionLocked ? "true" : "false"}
         data-chat-select-value=${params.selectedModelValue}
         data-chat-model-tools=${modelToolsUnavailable ? "unavailable" : "available"}
-        aria-label=${settingsLabel}
+        aria-label=${`${t("chat.selectors.model")}: ${triggerTitle}`}
         aria-busy=${params.triggerLoading ? "true" : "false"}
         aria-disabled=${params.disabled ? "true" : "false"}
         title=${params.disabledReason ?? triggerTitle}
@@ -394,9 +392,6 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
           (event.currentTarget as HTMLElement).focus({ preventScroll: true });
         }}
       >
-        <span class="chat-controls__model-settings-icon" aria-hidden="true"
-          >${icons.slidersHorizontal}</span
-        >
         ${modelToolsUnavailable
           ? html`
               <openclaw-tooltip .content=${t("chat.modelControls.chatOnlyHelp")}>
