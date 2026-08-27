@@ -69,12 +69,13 @@ openclaw onboard --auth-choice nvidia-api-key --nvidia-api-key "nvapi-..."
 When an NVIDIA API key is configured, setup and model-selection paths fetch
 NVIDIA's public featured-model catalog from
 `https://assets.ngc.nvidia.com/products/api-catalog/featured-models.json` and
-cache the result for 24 hours (first 32 entries, imported as free text-input
-rows). New or republished featured models from build.nvidia.com therefore appear
-in setup and model-selection surfaces after the cache refreshes, without waiting
-for an OpenClaw release. A fresh NVIDIA catalog overrides bundled retirement
-metadata. When the live feed is available, its first model is preselected during
-NVIDIA setup.
+cache the result for 24 hours (first 32 entries, imported as free rows). Known
+models retain their bundled reasoning, image, and compatibility capabilities;
+unfamiliar models default to text input. New or republished featured models from
+build.nvidia.com therefore appear in setup and model-selection surfaces after
+the cache refreshes, without waiting for an OpenClaw release. A fresh NVIDIA
+catalog overrides bundled retirement metadata. When the live feed is available,
+its first model is preselected during NVIDIA setup.
 
 The fetch uses a fixed HTTPS host policy for `assets.ngc.nvidia.com`. If no
 NVIDIA API key is configured, or if the feed is unavailable or malformed,

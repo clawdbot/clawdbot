@@ -250,6 +250,90 @@ describe("nvidia provider catalog", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    { surface: "live", build: buildLiveNvidiaProvider },
+    { surface: "selectable live", build: buildSelectableLiveNvidiaProvider },
+  ])("preserves bundled capabilities in the $surface featured catalog", async ({ build }) => {
+    mockFeaturedCatalogResponse({
+      "featured-models": [
+        {
+          model: "nemotron-3-ultra-550b-a55b",
+          "model-name": "Featured Ultra",
+          context: 524_288,
+          "max-output": 4_096,
+        },
+        {
+          model: "minimaxai/minimax-m3",
+          "model-name": "Featured MiniMax",
+          context: 196_608,
+          "max-output": 8_192,
+        },
+        {
+          model: "z-ai/glm-5.2",
+          "model-name": "Featured GLM",
+          context: 202_752,
+          "max-output": 8_192,
+        },
+        {
+          model: "qwen/qwen3.5-397b-a17b",
+          "model-name": "Republished Qwen",
+          context: 131_072,
+          "max-output": 16_384,
+        },
+        {
+          model: "new-vendor/new-model",
+          "model-name": "New Model",
+          context: 65_536,
+          "max-output": 4_096,
+        },
+      ],
+    });
+
+    const provider = await build();
+
+    expect(provider.models).toMatchObject([
+      {
+        id: "nvidia/nemotron-3-ultra-550b-a55b",
+        name: "Featured Ultra",
+        reasoning: true,
+        input: ["text"],
+        contextWindow: 524_288,
+        maxTokens: 4_096,
+        params: {
+          chat_template_kwargs: {
+            enable_thinking: false,
+            force_nonempty_content: true,
+          },
+        },
+      },
+      {
+        id: "minimaxai/minimax-m3",
+        reasoning: true,
+        input: ["text", "image"],
+      },
+      {
+        id: "z-ai/glm-5.2",
+        reasoning: true,
+        compat: { requiresStringContent: true, codeMode: "capable" },
+      },
+      {
+        id: "qwen/qwen3.5-397b-a17b",
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 131_072,
+        maxTokens: 16_384,
+      },
+      {
+        id: "new-vendor/new-model",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        compat: { requiresStringContent: true },
+      },
+    ]);
+    expect(provider.models[3]).not.toHaveProperty("status");
+  });
+
   it("falls back to the bundled catalog when the featured catalog is unavailable", async () => {
     mockFeaturedCatalogResponse({ error: "unavailable" }, 503);
 

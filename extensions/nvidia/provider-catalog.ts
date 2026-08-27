@@ -24,12 +24,6 @@ const FEATURED_MODEL_MAX_ID_LENGTH = 200;
 const FEATURED_MODEL_MAX_NAME_LENGTH = 200;
 const FEATURED_MODEL_MAX_CONTEXT_WINDOW = 10_000_000;
 const FEATURED_MODEL_MAX_OUTPUT_TOKENS = 1_000_000;
-const FEATURED_MODEL_COST = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-} as const;
 const NVIDIA_ULTRA_DEFAULT_PARAMS = {
   chat_template_kwargs: {
     enable_thinking: false,
@@ -146,9 +140,10 @@ async function loadNvidiaFeaturedModels(): Promise<ModelDefinitionConfig[] | nul
 }
 
 function parseNvidiaFeaturedModels(rows: readonly unknown[]): ModelDefinitionConfig[] | null {
+  const bundledModels = new Map(buildNvidiaProvider().models.map((model) => [model.id, model]));
   const models = rows
     .slice(0, FEATURED_MODEL_MAX_ROWS)
-    .map(parseNvidiaFeaturedModel)
+    .map((row) => parseNvidiaFeaturedModel(row, bundledModels))
     .filter((model) => model !== null);
   return models.length > 0 ? models : null;
 }
@@ -176,7 +171,10 @@ function filterSelectableNvidiaModels(models: ModelDefinitionConfig[]): ModelDef
   return models.filter((model) => !DEPRECATED_NVIDIA_MODEL_IDS.has(model.id));
 }
 
-function parseNvidiaFeaturedModel(row: unknown): ModelDefinitionConfig | null {
+function parseNvidiaFeaturedModel(
+  row: unknown,
+  bundledModels: ReadonlyMap<string, ModelDefinitionConfig>,
+): ModelDefinitionConfig | null {
   if (!row || typeof row !== "object") {
     return null;
   }
@@ -194,15 +192,17 @@ function parseNvidiaFeaturedModel(row: unknown): ModelDefinitionConfig | null {
   if (!id || !name) {
     return null;
   }
+  const bundled = bundledModels.get(id);
   return {
     id,
     name,
-    reasoning: false,
-    input: ["text"],
+    reasoning: bundled?.reasoning ?? false,
+    input: bundled?.input ?? ["text"],
     contextWindow: entry.context,
     maxTokens: entry["max-output"],
-    cost: { ...FEATURED_MODEL_COST },
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     compat: {
+      ...bundled?.compat,
       requiresStringContent: true,
     },
   };
