@@ -4,9 +4,8 @@
 // Drawn in the smooth OpenClaw lobster style (see the dreams scene and
 // icons.lobster). Look and personality are seeded per session + page load so
 // every new session hatches a slightly different lobster.
-import "../styles/lobster-pet.css";
 import { expectDefined } from "@openclaw/normalization-core";
-import { LitElement, nothing } from "lit";
+import { LitElement, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import { isLobsterDay } from "../../../src/shared/lobster-day.js";
 import { patchSettings } from "../app/settings.ts";
@@ -20,24 +19,6 @@ import {
 import * as lobsterLook from "./lobster-pet-look.ts";
 import * as plans from "./lobster-pet-plans.ts";
 import { LobsterLedgeTraffic } from "./lobster-pet-traffic.ts";
-
-export {
-  lobsterPetSeed,
-  resolveLobsterPetMode,
-  resolveLobsterRunOutcome,
-  type LobsterPetLook,
-  type LobsterPetMode,
-  type LobsterRunOutcome,
-} from "./lobster-pet-contract.ts";
-export {
-  LOBSTER_PET_PALETTES,
-  canonicalLobsterLook,
-  createLobsterPetLook,
-  lobsterLookStyle,
-  renderLobsterSvg,
-} from "./lobster-pet-look.ts";
-export { lobsterPaletteName } from "./lobster-pet-lore.ts";
-export { moonPhaseFraction } from "./lobster-pet-moon.ts";
 
 class LobsterPet extends LitElement {
   override createRenderRoot() {
@@ -157,7 +138,7 @@ class LobsterPet extends LitElement {
     );
   }
 
-  override willUpdate(changed: Map<PropertyKey, unknown>) {
+  override willUpdate(changed: PropertyValues<this>) {
     const seedChanged = this.look === null || changed.has("seed");
     if (seedChanged) {
       this.look = lobsterLook.createLobsterPetLook(this.seed);
@@ -196,7 +177,7 @@ class LobsterPet extends LitElement {
       this.outcomePresenceOwner = null;
       this.trackVigil();
     } else if (changed.has("mode")) {
-      const previousMode = changed.get("mode") as contract.LobsterPetMode | undefined;
+      const previousMode = changed.get("mode");
       const finished = previousMode === "busy" && this.mode === "idle";
       const presenceOwner = finished && this.vigil ? "vigil" : null;
       this.trackVigil();
