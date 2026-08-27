@@ -6,14 +6,27 @@ import {
   createChannelApiRetryRunner,
 } from "openclaw/plugin-sdk/retry-runtime";
 
-function isRetryableLinePushError(error: unknown): boolean {
-  const candidates = collectErrorGraphCandidates(error, (candidate) => [
-    candidate.cause,
-    candidate.error,
-  ]);
-  const httpError = candidates.find(
+/** The LINE HTTP response carried by an error graph, when the request reached LINE. */
+export function findLineHttpError(error: unknown): HTTPFetchError | undefined {
+  return collectErrorGraphCandidates(error, (candidate) => [candidate.cause, candidate.error]).find(
     (candidate): candidate is HTTPFetchError => candidate instanceof HTTPFetchError,
   );
+}
+
+/**
+ * LINE answered with a client error, so it rejected the request and sent nothing.
+ *
+ * Narrower than the in-request policy below: a rate limit or a request timeout
+ * can still succeed on a later delivery attempt, so they stay ambiguous even
+ * though neither is worth replaying inside the same send.
+ */
+export function isLineDefinitiveRejection(error: unknown): boolean {
+  const status = findLineHttpError(error)?.status;
+  return status !== undefined && status >= 400 && status < 500 && status !== 408 && status !== 429;
+}
+
+function isRetryableLinePushError(error: unknown): boolean {
+  const httpError = findLineHttpError(error);
   if (httpError) {
     // LINE documents server errors and transport failures as the retriable
     // outcomes; every 4xx (429 included) answers "retries don't change the result".
@@ -21,7 +34,7 @@ function isRetryableLinePushError(error: unknown): boolean {
   }
   // A transport failure never reached a LINE response, so the retry key decides
   // whether the earlier attempt already landed.
-  return candidates.some(
+  return collectErrorGraphCandidates(error, (candidate) => [candidate.cause, candidate.error]).some(
     (candidate) => classifyTransientNetworkErrorCode(extractErrorCode(candidate)) !== undefined,
   );
 }

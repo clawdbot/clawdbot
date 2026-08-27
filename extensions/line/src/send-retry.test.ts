@@ -3,6 +3,7 @@ import { HTTPFetchError } from "@line/bot-sdk";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { isLineDefinitiveRejection } from "./send-retry.js";
 
 const {
   requireRuntimeConfigMock,
@@ -198,5 +199,36 @@ describe("LINE push retries", () => {
     ).rejects.toMatchObject({ status: 500 });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(retryKeysOf(fetchMock)).toEqual([null]);
+  });
+});
+
+describe("isLineDefinitiveRejection", () => {
+  const httpError = (status: number) =>
+    new HTTPFetchError(`${status} - provider answered`, {
+      status,
+      statusText: "provider answered",
+      headers: new Headers(),
+      body: "provider body",
+    });
+
+  it.each([
+    { label: "a rejected payload", error: httpError(400), definitive: true },
+    { label: "a forbidden recipient", error: httpError(403), definitive: true },
+    { label: "an unknown recipient", error: httpError(404), definitive: true },
+    { label: "a request timeout", error: httpError(408), definitive: false },
+    { label: "a rate limit", error: httpError(429), definitive: false },
+    { label: "an upstream failure", error: httpError(503), definitive: false },
+    {
+      label: "a transport failure that never reached LINE",
+      error: new Error("fetch failed"),
+      definitive: false,
+    },
+    {
+      label: "a rejected payload behind an SDK wrapper",
+      error: new Error("send failed", { cause: httpError(400) }),
+      definitive: true,
+    },
+  ])("treats $label as definitive=$definitive", ({ error, definitive }) => {
+    expect(isLineDefinitiveRejection(error)).toBe(definitive);
   });
 });

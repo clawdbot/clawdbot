@@ -12,6 +12,7 @@ import {
   createEmptyChannelResult,
 } from "openclaw/plugin-sdk/channel-send-result";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveOutboundMediaUrls } from "openclaw/plugin-sdk/reply-payload";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
@@ -29,6 +30,7 @@ import {
 } from "./rich-messages.js";
 import { getLineRuntime } from "./runtime.js";
 import { createLineSendReceipt } from "./send-receipt.js";
+import { isLineDefinitiveRejection } from "./send-retry.js";
 import type { LineChannelData, LineSendResult, ResolvedLineAccount } from "./types.js";
 
 const loadLineOutboundRuntime = createLazyRuntimeModule(() => import("./outbound.runtime.js"));
@@ -67,7 +69,20 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
     const recordResult = async (
       resultPromise: Promise<LineSendResult>,
     ): Promise<LineSendResult> => {
-      const result = await resultPromise;
+      let result: LineSendResult;
+      try {
+        result = await resultPromise;
+      } catch (error) {
+        // Nothing has been accepted yet for this payload, so a LINE client error
+        // proves the whole delivery was rejected rather than left ambiguous.
+        // Once a send has landed the failure is partial and keeps its own shape.
+        throw lastResult === null && isLineDefinitiveRejection(error)
+          ? new PlatformMessageNotDispatchedError(
+              error instanceof Error ? error.message : "LINE rejected the message",
+              { cause: error, retryable: false },
+            )
+          : error;
+      }
       lastResult = result;
       try {
         await onDeliveryResult?.(createEmptyChannelResult("line", { ...result }));

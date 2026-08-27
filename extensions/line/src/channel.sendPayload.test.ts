@@ -1,4 +1,5 @@
 // Line tests cover channel.sendPayload plugin behavior.
+import { HTTPFetchError } from "@line/bot-sdk";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import {
@@ -864,6 +865,29 @@ describe("line outbound sendPayload", () => {
     expect(ssrfMocks.resolvePinnedHostnameWithPolicy).toHaveBeenCalledWith("example.com", {
       policy: { allowPrivateNetwork: false },
     });
+  });
+
+  it("reports a LINE rejection of the first send as a definitive non-dispatch", async () => {
+    const { runtime, mocks } = createRuntime();
+    mocks.pushMessageLine.mockRejectedValueOnce(
+      new HTTPFetchError("400 - Bad Request", {
+        status: 400,
+        statusText: "Bad Request",
+        headers: new Headers(),
+        body: "invalid message",
+      }),
+    );
+    setLineRuntime(runtime);
+
+    await expect(
+      lineOutboundAdapter.sendPayload!({
+        to: "line:user:U123",
+        text: "hello",
+        payload: { text: "hello" },
+        accountId: "default",
+        cfg: { channels: { line: {} } } as OpenClawConfig,
+      }),
+    ).rejects.toMatchObject({ name: "PlatformMessageNotDispatchedError", retryable: false });
   });
 
   it("rejects insecure generic media before quick-reply batch sends", async () => {
