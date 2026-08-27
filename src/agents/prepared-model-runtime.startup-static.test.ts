@@ -526,11 +526,11 @@ describe("prepared model runtime Gateway catalog mode", () => {
       source: "test",
     });
     mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
-    mocks.modelRegistry.find.mockImplementation((provider, modelId) =>
-      provider === "registry-only" && modelId === "MIXED"
+    mocks.modelRegistry.find.mockImplementation((registryProvider, registryModelId) =>
+      registryProvider === "registry-only" && registryModelId === "MIXED"
         ? {
-            provider,
-            id: modelId,
+            provider: registryProvider,
+            id: registryModelId,
             name: "Exact-case registry model",
             api: "openai-responses",
             baseUrl: "https://registry.invalid/v1",
