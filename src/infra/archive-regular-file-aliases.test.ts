@@ -145,11 +145,11 @@ describe("extractArchiveInPrivateDestinationWithRegularFileAliases", () => {
 
   it("joins a stalled extraction merge before rejecting at the shared deadline", async () => {
     const fixture = await createArchiveCase();
-    let releaseMerge = () => undefined;
+    let releaseMerge: () => void = () => undefined;
     const mergeReleased = new Promise<void>((resolve) => {
       releaseMerge = resolve;
     });
-    let reportMergeStarted = () => undefined;
+    let reportMergeStarted: () => void = () => undefined;
     const mergeStarted = new Promise<void>((resolve) => {
       reportMergeStarted = resolve;
     });
