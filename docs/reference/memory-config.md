@@ -188,6 +188,24 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
   Extra HTTP headers owned by the remote destination. Provider defaults are merged only for the provider's configured destination.
 </ParamField>
 
+Some OpenAI-compatible embedding servers cap how many `input` items they accept per request (for example DashScope `text-embedding-v4` accepts at most 10). When the embedding provider resolves to a configured `models.providers.<id>` entry, set that provider's `params.maxBatchItems` to the server's item limit; larger batches are split into sequential requests of at most that many inputs, and result order is preserved.
+
+```json5
+{
+  models: {
+    providers: {
+      dashscope: {
+        api: "openai-completions",
+        baseUrl: "https://dashscope.example.com/compatible-mode/v1",
+        params: { maxBatchItems: 10 },
+        models: [],
+      },
+    },
+  },
+  memory: { search: { provider: "dashscope", model: "text-embedding-v4" } },
+}
+```
+
 ```json5
 {
   memory: {
