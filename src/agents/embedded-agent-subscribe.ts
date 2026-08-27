@@ -282,7 +282,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       total: usageTotals.total || derivedTotal || undefined,
     };
   };
-  const getLastAssistantUsage = () => normalizeUsage(lastAssistantUsage ?? state.retryUsage);
+  const getLastAssistantUsage = () => normalizeUsage(lastAssistantUsage);
   const incrementCompactionCount = () => {
     compactionCount += 1;
   };
@@ -450,8 +450,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.deterministicApprovalPromptSent = false;
     state.lastDeliveredBlockReplyText = undefined;
     state.toolExecutionSinceLastBlockReply = false;
-    // Keep prior usage only until the retry records its own call; later
-    // post-call failures must retain that newer call.
+    // Keep prior usage until the retry records its own call or terminal error.
     currentAttemptAssistant = undefined;
     state.retryUsage = lastAssistantUsage ?? state.retryUsage;
     lastAssistantUsage = undefined;
@@ -470,6 +469,8 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       // Context-engine projection may later replace or mutate transcript
       // objects. Final delivery needs the model event owned by this run.
       currentAttemptAssistant = structuredClone(msg) as AssistantMessage;
+      lastAssistantUsage ??= msg.stopReason === "error" ? state.retryUsage : undefined;
+      state.retryUsage = undefined;
     }
   };
 
