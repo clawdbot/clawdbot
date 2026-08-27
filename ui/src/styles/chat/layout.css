@@ -7113,7 +7113,7 @@ button.chat-pr__diff {
         max(var(--chat-mobile-edge-inset, 4px), var(--safe-area-right, 0px))
     );
     margin: var(--chat-composer-top-margin, 0px)
-      max(var(--chat-mobile-edge-inset, 4px), var(--safe-area-right, 0px)) 0;
+      max(var(--chat-mobile-edge-inset, 4px), var(--safe-area-right, 0px)) 14px;
     margin-left: max(var(--chat-mobile-edge-inset, 4px), var(--safe-area-left, 0px));
     gap: 6px;
   }

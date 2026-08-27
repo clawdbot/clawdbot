@@ -195,9 +195,9 @@ suite.define(() => {
         await composer.waitFor();
         const margins = await composer.evaluate((element) => {
           const style = getComputedStyle(element);
-          return { left: style.marginLeft, right: style.marginRight };
+          return { bottom: style.marginBottom, left: style.marginLeft, right: style.marginRight };
         });
-        expect(margins).toEqual({ left: "4px", right: "4px" });
+        expect(margins).toEqual({ bottom: "14px", left: "4px", right: "4px" });
       } finally {
         await suite.closeBrowserContext(context);
       }
