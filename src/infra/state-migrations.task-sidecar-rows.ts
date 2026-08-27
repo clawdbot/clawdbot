@@ -109,6 +109,68 @@ function normalizeLegacyTaskRow(row: Record<string, unknown>): SqliteBindRow {
   };
 }
 
+function legacyTaskSelectColumns(columns: Set<string>): string[] {
+  return [
+    "task_id",
+    "runtime",
+    pickLegacyColumn(columns, "task_kind"),
+    pickLegacyColumn(columns, "source_id"),
+    pickLegacyColumn(columns, "requester_session_key"),
+    pickLegacyColumn(columns, "owner_key"),
+    pickLegacyColumn(columns, "scope_kind"),
+    pickLegacyColumn(columns, "child_session_key"),
+    pickLegacyColumn(columns, "parent_flow_id"),
+    pickLegacyColumn(columns, "parent_task_id"),
+    pickLegacyColumn(columns, "agent_id"),
+    pickLegacyColumn(columns, "requester_agent_id"),
+    pickLegacyColumn(columns, "run_id"),
+    pickLegacyColumn(columns, "label"),
+    "task",
+    "status",
+    "delivery_status",
+    "notify_policy",
+    "created_at",
+    pickLegacyColumn(columns, "started_at"),
+    pickLegacyColumn(columns, "ended_at"),
+    pickLegacyColumn(columns, "last_event_at"),
+    pickLegacyColumn(columns, "cleanup_after"),
+    pickLegacyColumn(columns, "error"),
+    pickLegacyColumn(columns, "progress_summary"),
+    pickLegacyColumn(columns, "terminal_summary"),
+    pickLegacyColumn(columns, "terminal_outcome"),
+    pickLegacyColumn(columns, "detail_json"),
+  ];
+}
+
+/**
+ * Reads and normalizes every legacy task row in one pass. When provided,
+ * onSettledReconciling observes each reconciling cron row at the exact moment
+ * it is settled, so callers see a consistent snapshot instead of issuing a
+ * second query over a database that may have changed in between.
+ */
+function readNormalizedLegacyTaskRows(
+  db: DatabaseSync,
+  columns: Set<string>,
+  onSettledReconciling?: (taskId: string) => void,
+): SqliteBindRow[] {
+  const selectColumns = legacyTaskSelectColumns(columns);
+  return db
+    .prepare(
+      `SELECT ${selectColumns.join(", ")} FROM task_runs ORDER BY created_at ASC, task_id ASC`,
+    )
+    .all()
+    .map((row) => {
+      const raw = row as Record<string, unknown>;
+      if (onSettledReconciling && isUnresumableCronReconcilingRow(raw)) {
+        const taskId = legacyStringValue(raw.task_id);
+        if (taskId) {
+          onSettledReconciling(taskId);
+        }
+      }
+      return normalizeLegacyTaskRow(raw);
+    });
+}
+
 function readLegacyTaskRows(sourcePath: string): SqliteBindRow[] {
   const db = openNodeSqliteDatabase(sourcePath, { readOnly: true });
   try {
@@ -116,42 +178,7 @@ function readLegacyTaskRows(sourcePath: string): SqliteBindRow[] {
     if (columns.size === 0) {
       return [];
     }
-    const selectColumns = [
-      "task_id",
-      "runtime",
-      pickLegacyColumn(columns, "task_kind"),
-      pickLegacyColumn(columns, "source_id"),
-      pickLegacyColumn(columns, "requester_session_key"),
-      pickLegacyColumn(columns, "owner_key"),
-      pickLegacyColumn(columns, "scope_kind"),
-      pickLegacyColumn(columns, "child_session_key"),
-      pickLegacyColumn(columns, "parent_flow_id"),
-      pickLegacyColumn(columns, "parent_task_id"),
-      pickLegacyColumn(columns, "agent_id"),
-      pickLegacyColumn(columns, "requester_agent_id"),
-      pickLegacyColumn(columns, "run_id"),
-      pickLegacyColumn(columns, "label"),
-      "task",
-      "status",
-      "delivery_status",
-      "notify_policy",
-      "created_at",
-      pickLegacyColumn(columns, "started_at"),
-      pickLegacyColumn(columns, "ended_at"),
-      pickLegacyColumn(columns, "last_event_at"),
-      pickLegacyColumn(columns, "cleanup_after"),
-      pickLegacyColumn(columns, "error"),
-      pickLegacyColumn(columns, "progress_summary"),
-      pickLegacyColumn(columns, "terminal_summary"),
-      pickLegacyColumn(columns, "terminal_outcome"),
-      pickLegacyColumn(columns, "detail_json"),
-    ];
-    return db
-      .prepare(
-        `SELECT ${selectColumns.join(", ")} FROM task_runs ORDER BY created_at ASC, task_id ASC`,
-      )
-      .all()
-      .map((row) => normalizeLegacyTaskRow(row as Record<string, unknown>));
+    return readNormalizedLegacyTaskRows(db, columns);
   } finally {
     db.close();
   }
@@ -159,8 +186,8 @@ function readLegacyTaskRows(sourcePath: string): SqliteBindRow[] {
 
 /**
  * Reads normalized task rows plus the ids this migration settles as lost.
- * The settled set is captured from the raw rows so delivery-state skipping
- * can stay scoped to rows reconciled here instead of every lost row.
+ * Both results come from the same single-pass snapshot so delivery-state
+ * skipping stays scoped to rows reconciled here without re-reading the db.
  */
 export function readLegacyTaskRowsWithSettlements(sourcePath: string): {
   rows: SqliteBindRow[];
@@ -173,17 +200,10 @@ export function readLegacyTaskRowsWithSettlements(sourcePath: string): {
     if (columns.size === 0) {
       return { rows: [], settledLostTaskIds };
     }
-    const rawReconciling = db
-      .prepare(`SELECT task_id FROM task_runs WHERE runtime = 'cron' AND status = 'reconciling'`)
-      // SAFETY: the SELECT projects only the TEXT task_id column read below.
-      .all() as Array<Record<string, unknown>>;
-    for (const raw of rawReconciling) {
-      const taskId = legacyStringValue(raw.task_id);
-      if (taskId) {
-        settledLostTaskIds.add(taskId);
-      }
-    }
-    return { rows: readLegacyTaskRows(sourcePath), settledLostTaskIds };
+    const rows = readNormalizedLegacyTaskRows(db, columns, (taskId) =>
+      settledLostTaskIds.add(taskId),
+    );
+    return { rows, settledLostTaskIds };
   } finally {
     db.close();
   }
