@@ -122,6 +122,20 @@
   padding: 0;
 }
 
+/* Keep heading copy independent from taller header actions. Without this
+   grouping, a button row pushes the description away from its heading. */
+.settings-section__copy {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.settings-section__header:has(.settings-section__copy) {
+  align-items: flex-start;
+}
+
 .settings-section__heading {
   margin: 0;
   font-size: var(--control-ui-text-xs);
@@ -137,6 +151,10 @@
   font-size: var(--control-ui-text-sm);
   line-height: 1.5;
   color: var(--muted);
+}
+
+.settings-section__copy > .settings-section__desc {
+  margin: 0;
 }
 
 /* Control-height header actions overhang the one-line heading; keep the
@@ -760,6 +778,16 @@ textarea.settings-input {
 @media (max-width: 640px) {
   .settings-page {
     padding-inline: var(--space-3);
+  }
+
+  .settings-section__header:has(.settings-section__copy) {
+    align-items: stretch;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .settings-section__header:has(.settings-section__copy) .settings-section__actions {
+    align-self: flex-end;
   }
 
   .settings-row {

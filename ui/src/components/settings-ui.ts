@@ -107,10 +107,13 @@ export function renderSettingsPageHeader(props: SettingsPageHeaderProps): Templa
 
 /** Section = plain text heading + one group surface containing rows. */
 export function renderSettingsSection(props: SettingsSectionProps, rows: unknown): TemplateResult {
-  const heading =
-    props.title || props.actions
+  const description = props.description
+    ? html`<p class="settings-section__desc">${props.description}</p>`
+    : nothing;
+  const copy =
+    props.title || props.description
       ? html`
-          <div class="settings-section__header">
+          <div class="settings-section__copy">
             ${props.title
               ? html`
                   <h2 class="settings-section__heading">
@@ -120,19 +123,25 @@ export function renderSettingsSection(props: SettingsSectionProps, rows: unknown
                   </h2>
                 `
               : nothing}
+            ${description}
+          </div>
+        `
+      : nothing;
+  const header =
+    copy || props.actions
+      ? html`
+          <div class="settings-section__header">
+            ${copy}
             ${props.actions
               ? html`<div class="settings-section__actions">${props.actions}</div>`
               : nothing}
           </div>
         `
       : nothing;
-  const description = props.description
-    ? html`<p class="settings-section__desc">${props.description}</p>`
-    : nothing;
   const groupClass = props.danger ? "settings-group settings-group--danger" : "settings-group";
   return html`
     <section class="settings-section">
-      ${heading}${description}
+      ${header}
       <div class=${groupClass}>${rows}</div>
     </section>
   `;

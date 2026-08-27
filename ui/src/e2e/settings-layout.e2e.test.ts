@@ -54,6 +54,18 @@ const sectionAlignmentRoutes = [
   "updates",
 ] as const;
 
+const actionSectionCases = [
+  { route: "mcp", heading: "Configured servers" },
+  { route: "model-providers", heading: "Default models" },
+] as const;
+
+const responsiveViewports = [
+  { width: 390, height: 844 },
+  { width: 768, height: 1024 },
+  { width: 1366, height: 768 },
+  { width: 1440, height: 900 },
+] as const;
+
 suite.define(() => {
   it("keeps settings introductions, section headings, and Learn more links on one layout system", async () => {
     const context = await suite.browser.newContext({
@@ -125,6 +137,81 @@ suite.define(() => {
           expect(
             await link.evaluate((element) => getComputedStyle(element).textDecorationLine),
           ).toBe("none");
+        }
+      }
+
+      for (const viewport of responsiveViewports) {
+        await page.setViewportSize(viewport);
+        for (const sectionCase of actionSectionCases) {
+          await page.goto(`${suite.server.baseUrl}settings/${sectionCase.route}`);
+          await waitForControlUiRoute(page, {
+            pathname: `/settings/${sectionCase.route}`,
+            routeId: sectionCase.route,
+          });
+          const heading = page.getByRole("heading", {
+            name: sectionCase.heading,
+            exact: true,
+          });
+          const section = page.locator(".settings-section").filter({ has: heading });
+          const description = section.locator(".settings-section__desc");
+          const actions = section.locator(".settings-section__actions");
+          const group = section.locator(":scope > .settings-group");
+          await Promise.all([
+            heading.waitFor(),
+            description.waitFor(),
+            actions.waitFor(),
+            group.waitFor(),
+          ]);
+          await expect
+            .poll(async () => {
+              const [sectionBox, headingBox, descriptionBox, actionsBox, groupBox] =
+                await Promise.all([
+                  section.boundingBox(),
+                  heading.boundingBox(),
+                  description.boundingBox(),
+                  actions.boundingBox(),
+                  group.boundingBox(),
+                ]);
+              if (!sectionBox || !headingBox || !descriptionBox || !actionsBox || !groupBox) {
+                return null;
+              }
+              return {
+                actionPlacement:
+                  viewport.width <= 640
+                    ? Math.round(actionsBox.y - descriptionBox.y - descriptionBox.height)
+                    : Math.round(actionsBox.y - headingBox.y),
+                actionRightInset: Math.round(
+                  sectionBox.x + sectionBox.width - actionsBox.x - actionsBox.width,
+                ),
+                copyGap: Math.round(descriptionBox.y - headingBox.y - headingBox.height),
+                groupClearance: Math.round(
+                  groupBox.y -
+                    Math.max(
+                      descriptionBox.y + descriptionBox.height,
+                      actionsBox.y + actionsBox.height,
+                    ),
+                ),
+                overlapsAction:
+                  descriptionBox.x < actionsBox.x + actionsBox.width &&
+                  descriptionBox.x + descriptionBox.width > actionsBox.x &&
+                  descriptionBox.y < actionsBox.y + actionsBox.height &&
+                  descriptionBox.y + descriptionBox.height > actionsBox.y,
+              };
+            })
+            .toEqual({
+              actionPlacement: viewport.width <= 640 ? 8 : 0,
+              actionRightInset: 0,
+              copyGap: 4,
+              groupClearance: 12,
+              overlapsAction: false,
+            });
+
+          if (proofEnabled && viewport.width === 1440) {
+            await section.screenshot({
+              animations: "disabled",
+              path: path.join(proofDir, `action-${sectionCase.route}.png`),
+            });
+          }
         }
       }
     } finally {
