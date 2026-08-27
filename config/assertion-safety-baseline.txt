@@ -2605,11 +2605,10 @@ src/commands/gateway-status/helpers.ts	11
 src/commands/message-format.ts	21
 src/commands/message.ts	4
 src/commands/models/fallbacks-shared.ts	2
-src/commands/models/list.errors.ts	1
 src/commands/models/list.model-projection.ts	1
 src/commands/models/list.persisted-catalog.ts	2
 src/commands/models/list.probe.ts	2
-src/commands/models/list.registry.ts	4
+src/commands/models/list.registry.ts	3
 src/commands/models/list.rows.ts	3
 src/commands/models/list.status-command.ts	1
 src/commands/models/shared.ts	3

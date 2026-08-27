@@ -1,4 +1,5 @@
 // Model list row tests cover rendered row construction for model listing output.
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { ModelRow } from "./list.types.js";
@@ -132,6 +133,7 @@ describe("appendPreparedModelCatalogRows", () => {
         cfg: {},
         agentDir: "/tmp/openclaw-agent",
         authIndex: { evaluateModelAuth },
+        canonicalizeProvider: normalizeProviderId,
         configuredByKey: new Map(),
         discoveredKeys: new Set(),
         filter: { provider: "openai" },
@@ -180,6 +182,7 @@ describe("appendPreparedModelCatalogRows", () => {
         cfg: {},
         agentDir: "/tmp/openclaw-agent",
         authIndex: { evaluateModelAuth },
+        canonicalizeProvider: normalizeProviderId,
         configuredByKey: new Map(),
         discoveredKeys: new Set(),
         filter: { provider: "nvidia" },
@@ -220,6 +223,7 @@ describe("appendPreparedModelCatalogRows", () => {
         cfg: {},
         agentDir: "/tmp/openclaw-agent",
         authIndex: { evaluateModelAuth: () => authEvaluation(true) },
+        canonicalizeProvider: normalizeProviderId,
         configuredByKey: new Map(),
         discoveredKeys: new Set<string>(),
         filter: { provider: "ollama", local: true },
@@ -266,6 +270,7 @@ describe("appendPreparedModelCatalogRows", () => {
         authIndex: {
           evaluateModelAuth: () => authEvaluation(true),
         },
+        canonicalizeProvider: normalizeProviderId,
         configuredByKey: new Map(),
         discoveredKeys: new Set(),
         filter: { provider: "anthropic" },
@@ -311,6 +316,7 @@ describe("appendDiscoveredRows", () => {
         cfg: {},
         agentDir: "/tmp/openclaw-agent",
         authIndex: { evaluateModelAuth: () => authEvaluation(undefined) },
+        canonicalizeProvider: normalizeProviderId,
         configuredByKey: new Map(),
         discoveredKeys: new Set(["openai/gpt-5.5"]),
         availableKeys: new Set(["openai/gpt-5.5"]),
@@ -369,6 +375,7 @@ describe("appendDiscoveredRows", () => {
             selectedRoute,
           }),
         },
+        canonicalizeProvider: normalizeProviderId,
         configuredByKey: new Map(),
         discoveredKeys: new Set(["openai/gpt-5.5"]),
         filter: { provider: "openai", local: false },
@@ -412,6 +419,7 @@ describe("appendDiscoveredRows", () => {
             routeResolution: { kind: "indeterminate", defaultRuntimeId: "codex" },
           }),
         },
+        canonicalizeProvider: normalizeProviderId,
         configuredByKey: new Map(),
         discoveredKeys: new Set(["openai/gpt-5.5"]),
         filter: { provider: "openai", local: false },
@@ -469,6 +477,7 @@ describe("appendConfiguredRows", () => {
           evaluateModelAuth: () => ({ availability: undefined, routeResolution: null }),
         },
         availableKeys: new Set(["openai/gpt-5.5"]),
+        canonicalizeProvider: normalizeProviderId,
         configuredByKey: new Map(),
         discoveredKeys: new Set(["openai/gpt-5.5"]),
         filter: { provider: "openai", local: false },
@@ -510,6 +519,7 @@ describe("appendConfiguredRows", () => {
         cfg: {},
         agentDir: "/tmp/openclaw-agent",
         authIndex: { evaluateModelAuth },
+        canonicalizeProvider: normalizeProviderId,
         configuredByKey: new Map(),
         discoveredKeys: new Set<string>(),
         filter: {},
@@ -558,6 +568,7 @@ describe("prepared provider catalog projection", () => {
         authIndex: {
           evaluateModelAuth: () => authEvaluation(false),
         },
+        canonicalizeProvider: normalizeProviderId,
         configuredByKey: new Map(),
         discoveredKeys: new Set(),
         filter: { provider: "openai", local: false },
@@ -608,6 +619,7 @@ describe("prepared provider catalog projection", () => {
         authIndex: {
           evaluateModelAuth,
         },
+        canonicalizeProvider: normalizeProviderId,
         configuredByKey: new Map([
           [
             "openai/gpt-5.5",
@@ -666,6 +678,7 @@ describe("prepared provider catalog projection", () => {
         authIndex: {
           evaluateModelAuth: () => authEvaluation(undefined),
         },
+        canonicalizeProvider: normalizeProviderId,
         configuredByKey: new Map(),
         discoveredKeys: new Set(["openai/gpt-5.5"]),
         availableKeys: new Set(["openai/gpt-5.5"]),
@@ -701,6 +714,7 @@ describe("prepared provider catalog projection", () => {
         authIndex: {
           evaluateModelAuth: () => authEvaluation(true),
         },
+        canonicalizeProvider: normalizeProviderId,
         configuredByKey: new Map(),
         discoveredKeys: new Set(["anthropic/claude-sonnet-4-6"]),
         availableKeys: new Set(),
@@ -736,6 +750,7 @@ describe("prepared provider catalog projection", () => {
         authIndex: {
           evaluateModelAuth: () => authEvaluation(undefined),
         },
+        canonicalizeProvider: normalizeProviderId,
         configuredByKey: new Map(),
         discoveredKeys: new Set(),
         filter: { provider: "openai", local: false },
@@ -781,6 +796,7 @@ describe("appendConfiguredProviderRows", () => {
         },
         agentDir: "/tmp/openclaw-agent",
         authIndex,
+        canonicalizeProvider: normalizeProviderId,
         configuredByKey: new Map(),
         discoveredKeys: new Set(),
         filter: { provider: "openai", local: false },
@@ -829,6 +845,7 @@ describe("appendConfiguredProviderRows", () => {
         },
         agentDir: "/tmp/openclaw-agent",
         authIndex,
+        canonicalizeProvider: normalizeProviderId,
         configuredByKey: new Map(),
         discoveredKeys: new Set(),
         filter: { provider: "anthropic", local: false },
@@ -877,6 +894,7 @@ describe("appendConfiguredProviderRows", () => {
           evaluateModelAuth,
         },
         availableKeys: new Set(["openai/gpt-5.6"]),
+        canonicalizeProvider: normalizeProviderId,
         configuredByKey: new Map(),
         discoveredKeys: new Set(["openai/gpt-5.6"]),
         filter: { provider: "openai", local: false },
@@ -933,6 +951,7 @@ describe("appendConfiguredProviderRows", () => {
         authIndex: {
           evaluateModelAuth,
         },
+        canonicalizeProvider: normalizeProviderId,
         configuredByKey: new Map(),
         discoveredKeys: new Set(),
         filter: { provider: "openai", local: false },
@@ -963,6 +982,7 @@ describe("appendAuthenticatedCatalogRows", () => {
         authIndex: {
           evaluateModelAuth: () => ({ availability: true, routeResolution: null }),
         },
+        canonicalizeProvider: normalizeProviderId,
         configuredByKey: new Map(),
         discoveredKeys: new Set(),
         filter: {},
@@ -1011,6 +1031,7 @@ describe("appendAuthenticatedCatalogRows", () => {
             routeResolution: null,
           }),
         },
+        canonicalizeProvider: normalizeProviderId,
         configuredByKey: new Map(),
         discoveredKeys: new Set(),
         filter: { provider: "local-openai", local: false },
@@ -1060,6 +1081,7 @@ describe("appendAuthenticatedCatalogRows", () => {
         authIndex: {
           evaluateModelAuth: () => ({ availability: undefined, routeResolution: null }),
         },
+        canonicalizeProvider: normalizeProviderId,
         configuredByKey: new Map(),
         discoveredKeys: new Set(),
         filter: { provider: "remote-provider", local: false },
