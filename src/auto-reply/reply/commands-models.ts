@@ -9,6 +9,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
+import { listAppServerRuntimeModelBackendBindings } from "../../agents/app-server-runtime-bindings.js";
 import { listCliRuntimeModelBackendBindings } from "../../agents/cli-backends.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
@@ -364,13 +365,11 @@ export async function buildModelsProviderData(
 
   const runtimeChoicesByProvider = new Map<string, ModelsRuntimeChoice[]>();
   const runtimeBindings = [
-    { provider: "openai", runtime: "codex", cli: false },
-    // Anthropic gets the same runtime-chooser shape as openai: the
-    // claude-bridge harness (extensions/claude) is the parallel of the
-    // codex app-server harness — picking it routes anthropic turns
-    // through @zeroaltitude/openclaw-claude-bridge instead of the
-    // direct provider runtime.
-    { provider: "anthropic", runtime: "claude-bridge", cli: false },
+    ...listAppServerRuntimeModelBackendBindings().map((binding) => ({
+      provider: binding.provider,
+      runtime: binding.runtime,
+      cli: false,
+    })),
     ...listCliRuntimeModelBackendBindings().map((binding) => ({
       provider: binding.provider,
       runtime: binding.runtime,
