@@ -564,29 +564,18 @@ describe("web search provider config", () => {
 });
 
 describe("web search provider auto-detection", () => {
-  const savedEnv = { ...process.env };
-
   beforeEach(() => {
-    delete process.env.BRAVE_API_KEY;
-    delete process.env.FIRECRAWL_API_KEY;
-    delete process.env.GEMINI_API_KEY;
-    delete process.env.KIMI_API_KEY;
-    delete process.env.MINIMAX_API_KEY;
-    delete process.env.MINIMAX_CODE_PLAN_KEY;
-    delete process.env.MINIMAX_CODING_API_KEY;
-    delete process.env.MINIMAX_OAUTH_TOKEN;
-    delete process.env.MOONSHOT_API_KEY;
-    delete process.env.PERPLEXITY_API_KEY;
-    delete process.env.OPENROUTER_API_KEY;
-    delete process.env.SEARXNG_BASE_URL;
-    delete process.env.TAVILY_API_KEY;
-    delete process.env.XAI_API_KEY;
-    delete process.env.KIMI_API_KEY;
-    delete process.env.MOONSHOT_API_KEY;
+    for (const provider of mockWebSearchProviders) {
+      for (const envVar of provider.envVars) {
+        vi.stubEnv(envVar, undefined);
+      }
+    }
   });
 
   afterEach(() => {
-    process.env = { ...savedEnv };
+    // Preserve Node's native env object: later workers in this shared fork
+    // must inherit fixture env changes, including OPENCLAW_STATE_DIR.
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 

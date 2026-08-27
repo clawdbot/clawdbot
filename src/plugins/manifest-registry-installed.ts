@@ -2,7 +2,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import {
   resolveChannelSetupFieldCliAttributeName,
@@ -400,12 +403,15 @@ function normalizePersistedPackageChannel(value: unknown): PluginPackageChannel 
     "docsLabel",
     "blurb",
     "systemImage",
-    "selectionDocsPrefix",
   ] as const) {
     const normalized = normalizeOptionalString(value[key]);
     if (normalized) {
       channel[key] = normalized;
     }
+  }
+  const selectionDocsPrefix = readStringValue(value.selectionDocsPrefix);
+  if (selectionDocsPrefix !== undefined) {
+    channel.selectionDocsPrefix = selectionDocsPrefix;
   }
   if (typeof value.order === "number" && Number.isFinite(value.order)) {
     channel.order = value.order;

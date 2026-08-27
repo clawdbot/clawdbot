@@ -451,6 +451,8 @@ export type GatewayRequestOptions = {
   respond: RespondFn;
   context: GatewayRequestContext;
   methodRegistry?: GatewayMethodRegistryView;
+  /** In-process Gateway lifetime guard composed into durable session mutations. */
+  sessionMutationCommitGuard?: () => void;
   /** In-process caller lifetime; never serialized into a Gateway request frame. */
   signal?: AbortSignal;
 };
@@ -469,6 +471,7 @@ export type GatewayRequestHandlerOptions = {
   isWebchatConnect: (params: ConnectParams | null | undefined) => boolean;
   respond: RespondFn;
   context: GatewayRequestContext;
+  sessionMutationCommitGuard?: () => void;
   sessionMutationAuthorization?: SessionMutationAuthorization;
   /** In-process caller lifetime; absent for ordinary transport requests. */
   signal?: AbortSignal;
