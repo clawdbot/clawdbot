@@ -2,7 +2,7 @@
  * Baseten model catalog, compat metadata, and live row projection.
  */
 import {
-  buildManifestModelDefinition,
+  buildManifestModelProviderConfig,
   readManifestProviderDefaultModelRef,
 } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type {
@@ -108,16 +108,13 @@ export function buildBasetenModelCompat(modelId: string): ModelCompatConfig {
 
 /** Builds the network-free fallback catalog. */
 export function buildStaticBasetenModels(): ModelDefinitionConfig[] {
-  return BASETEN_MODEL_CATALOG.map(
-    buildManifestModelDefinition({
-      providerId: "baseten",
-      catalog: BASETEN_MANIFEST_CATALOG,
-      decorate: (normalized) => ({
-        ...normalized,
-        compat: buildBasetenModelCompat(normalized.id),
-      }),
-    }),
-  );
+  return buildManifestModelProviderConfig({
+    providerId: "baseten",
+    catalog: BASETEN_MANIFEST_CATALOG,
+  }).models.map((normalized) => ({
+    ...normalized,
+    compat: buildBasetenModelCompat(normalized.id),
+  }));
 }
 
 type BasetenLiveModelRow = {
