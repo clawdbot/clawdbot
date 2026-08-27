@@ -258,7 +258,11 @@ function validateConfigObjectWithPluginsBase(
         issuePath = "plugins.load.paths";
       }
       const pluginLabel = diag.pluginId ? `plugin ${diag.pluginId}` : "plugin";
-      const issue = { path: issuePath, message: `${pluginLabel}: ${diag.message}` };
+      const sourceHint =
+        diag.code === "duplicate-plugin-id" && diag.source
+          ? ` — overridden copy at ${diag.source}`
+          : "";
+      const issue = { path: issuePath, message: `${pluginLabel}: ${diag.message}${sourceHint}` };
       if (diag.level === "error" && (explicitPath || !diag.pluginId)) {
         issues.push(issue);
       } else {
@@ -323,7 +327,7 @@ function validateConfigObjectWithPluginsBase(
     const info = ensureRegistry();
     info.overriddenPluginIds ??= new Set(
       info.registry.diagnostics
-        .filter((diag) => diag.message.includes("duplicate plugin id detected"))
+        .filter((diag) => diag.code === "duplicate-plugin-id")
         .map((diag) => diag.pluginId)
         .filter((pluginId): pluginId is string => typeof pluginId === "string" && pluginId !== ""),
     );

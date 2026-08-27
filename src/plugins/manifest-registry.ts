@@ -1289,6 +1289,7 @@ export function loadPluginManifestRegistryCore(
         level: "warn",
         pluginId: effectivePluginId,
         source: overriddenCandidate.source,
+        code: "duplicate-plugin-id",
         message:
           winnerCandidate.origin === "config"
             ? `duplicate plugin id resolved by explicit config-selected plugin; ${overriddenCandidate.origin} plugin will be overridden by config plugin (${winnerCandidate.source})`
