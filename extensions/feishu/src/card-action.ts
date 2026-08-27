@@ -18,6 +18,8 @@ import {
 } from "./card-ux-approval.js";
 import { normalizeFeishuChatType, resolveFeishuChatType } from "./chat-type.js";
 import { createFeishuClient } from "./client.js";
+import { handleFeishuPollVoteAction } from "./poll-vote-action.js";
+import { FEISHU_POLL_VOTE_ACTION } from "./polls.js";
 import { sendCardFeishu, sendMessageFeishu } from "./send.js";
 
 export type FeishuCardActionEvent = {
@@ -424,6 +426,21 @@ export async function handleFeishuCardAction(params: {
           text: "Cancelled.",
           accountId,
         });
+        completeFeishuCardAction(event.token, account.accountId);
+        return;
+      }
+
+      if (envelope.a === FEISHU_POLL_VOTE_ACTION) {
+        const voteOutcome = await handleFeishuPollVoteAction({
+          cfg,
+          event,
+          envelope,
+          accountId,
+          log,
+        });
+        if (voteOutcome === "ignored") {
+          log(`feishu[${account.accountId}]: rejected poll vote from ${event.operator.open_id}`);
+        }
         completeFeishuCardAction(event.token, account.accountId);
         return;
       }

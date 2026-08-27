@@ -472,6 +472,7 @@ function describeFeishuMessageTool({
     "member-info",
     "channel-info",
     "channel-list",
+    "poll",
   ]);
   if (enabledAccounts.some((account) => isFeishuActionEnabled(account, "reactions"))) {
     actions.add("react");
@@ -1082,7 +1083,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       },
       capabilities: {
         chatTypes: ["direct", "channel"],
-        polls: false,
+        polls: true,
         threads: true,
         media: true,
         tts: {
@@ -2079,6 +2080,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
         },
         sendText: { resolve: (runtime) => runtime.feishuOutbound.sendText },
         sendMedia: { resolve: (runtime) => runtime.feishuOutbound.sendMedia },
+        sendPoll: { resolve: (runtime) => runtime.feishuOutbound.sendPoll },
       }),
     },
   });
