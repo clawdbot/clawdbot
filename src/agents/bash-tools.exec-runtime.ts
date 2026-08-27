@@ -31,7 +31,6 @@ import { isSubagentSessionKey } from "../sessions/session-key-utils.js";
  * approval messaging constants, environment safety, and exit outcome shaping.
  */
 import { formatFencedCodeBlock } from "../shared/markdown-code.js";
-import { ToolAuthorizationError } from "./tools/common.js";
 import {
   normalizeDeliveryContext,
   type DeliveryContext,
@@ -59,6 +58,7 @@ import type { AgentToolResult } from "./runtime/index.js";
 import { createSessionSlug } from "./session-slug.js";
 import { maybeWrapCommandWithShellSnapshot } from "./shell-snapshot.js";
 import { createStreamingBinaryOutputSanitizer, getShellConfig } from "./shell-utils.js";
+import { ToolAuthorizationError } from "./tools/common.js";
 export { applyPathPrepend, normalizePathPrepend } from "../infra/path-prepend.js";
 
 export { execSchema } from "./bash-tools.schemas.js";
