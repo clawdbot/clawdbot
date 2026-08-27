@@ -507,17 +507,23 @@ function findPotentialCallStart(
  * only this rarer case pays for materializing it, and its cost is bounded by the
  * (typically small, fixed) preceding-block size, not by however large the current
  * block's own growing content is.
+ *
+ * `partial` is optional on every event, so a delta can arrive with none at all -- that
+ * proves nothing either way, and returns `undefined` rather than `false`, so a caller
+ * caching the verdict for reuse across a block's later deltas knows not to lock in
+ * "trusted" from an absence of data; a later delta in the same block that does carry a
+ * partial (interleaved content, or simply the first one to include it) still gets checked.
  */
 function hasUntrackedPrecedingContext(
   partial: unknown,
   contentIndex: number,
   trackedLength: number,
   trackedPrefix: () => string,
-): boolean {
+): boolean | undefined {
   const candidate = extractStandaloneCandidate(partial);
   const part = candidate?.parts.find((entry) => entry.contentIndex === contentIndex);
   if (!candidate || !part) {
-    return false;
+    return undefined;
   }
   if (part.start !== trackedLength) {
     return true;
@@ -1439,19 +1445,30 @@ export async function* normalizePlainTextToolCallStreamEvents(
                 // or blocks interleaved out of content-index order -- either way the scan's
                 // state does not correspond to this block's actual preceding text and cannot
                 // be trusted here, whatever it claims for this block's own content. The
-                // preceding text a block sees never changes across its own deltas, so this is
-                // derived once per block (protectionBlockPrefixTrusted, reset in
-                // beginProtectionBlock) instead of re-materializing and re-comparing it for
-                // every candidate the current block's own growing content turns up.
+                // preceding text a block sees never changes across its own deltas, so a
+                // confirmed verdict is derived once per block (protectionBlockPrefixTrusted,
+                // reset in beginProtectionBlock) instead of re-materializing and re-comparing
+                // it for every candidate the current block's own growing content turns up. A
+                // delta with no partial at all proves nothing, so it is never cached as
+                // "trusted" -- the next candidate in this block gets a fresh chance to confirm
+                // it from a partial that does arrive, rather than locking in a default.
                 if (protectionBlockPrefixTrusted === undefined) {
-                  protectionBlockPrefixTrusted = !hasUntrackedPrecedingContext(
+                  const untracked = hasUntrackedPrecedingContext(
                     incomingRecord.partial,
                     eventContentIndex(incomingRecord),
                     protectionBlockStart,
                     () => materializeBoundedPrefix(protectionBlockStart),
                   );
+                  if (untracked !== undefined) {
+                    protectionBlockPrefixTrusted = !untracked;
+                  }
                 }
-                const untrackedPrecedingContext = !protectionBlockPrefixTrusted;
+                // No partial ever seen for this block is not evidence against the scan --
+                // there is nothing to contradict it with, so the scan (built only from what
+                // this normalizer itself advanced, in order) stays the sole source of truth
+                // and is trusted by default. Only an explicit mismatch, once confirmed and
+                // cached above, flips this to distrust.
+                const untrackedPrecedingContext = protectionBlockPrefixTrusted === false;
                 let isProtectedAt: ((offset: number) => boolean) | undefined =
                   !untrackedPrecedingContext && options.protectedRangesFenceCompatible
                     ? resolveProtectionFastPath(carriedScan, incoming)

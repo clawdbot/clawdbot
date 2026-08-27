@@ -801,6 +801,54 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
     expect(streamedText).toContain('{"path":"example.txt"}');
   });
 
+  it("does not cache trust from a candidate with no partial at all (#122513)", async () => {
+    // codex review: a candidate delta can arrive with no partial at all (partial is
+    // optional on every event type). hasUntrackedPrecedingContext has nothing to compare
+    // in that case and returns "no data", which must not be cached as "trusted" for the
+    // rest of the block -- a LATER candidate in the same block, one that does carry a
+    // partial revealing a genuine event-order/content-order mismatch, must still get its
+    // own fresh check rather than inheriting a default that was never actually confirmed.
+    const block1 = "```\n";
+    // A complete, well-formed call with no partial: resolves immediately, so a second,
+    // separate candidate can start afterward in the same block.
+    const firstCall = "[read]\n{}\n[/read]\n";
+    const secondCandidate = ["```", "[read]", '{"path":"x"}', "[/read]", "```", ""].join("\n");
+    const events = await collectNormalizedEvents(
+      [
+        streamTextDelta(block1, 1),
+        streamTextDelta(firstCall, 0),
+        streamTextDelta(
+          secondCandidate,
+          0,
+          assistantMessage(textContent(`~~~\n${firstCall}${secondCandidate}`, block1)),
+        ),
+      ],
+      {
+        matcher,
+        createPromotedToolCallEvents: () => [],
+        normalizeTerminalMessage: () => undefined,
+        protectedRangesFenceCompatible: true,
+        resolveProtectedRanges: resolveTestFenceRanges,
+      },
+    );
+
+    // Wrongly caching "trusted" from the no-partial first call would leave the second
+    // candidate evaluated against the (wrong) event-order fence state, buffering it as a
+    // pending candidate that nothing here ever resolves -- it silently vanishes from the
+    // output. Correctly re-checked, it is recognized as still protected and streams out
+    // as literal visible text.
+    const streamedText = events
+      .map((event) =>
+        typeof event.delta === "string"
+          ? event.delta
+          : typeof event.content === "string"
+            ? event.content
+            : "",
+      )
+      .join("");
+    expect(streamedText).toContain('{"path":"x"}');
+  });
+
   it("preserves candidate bytes after bounded protection history overflows", async () => {
     const opening = `\`\`\`text\n${"x".repeat(1_000_000)}`;
     const candidate = ["[read]", '{"path":"example.txt"}', "[/read]"].join("\n");
