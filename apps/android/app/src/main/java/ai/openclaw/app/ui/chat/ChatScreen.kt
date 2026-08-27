@@ -1916,7 +1916,7 @@ private fun FullChatSpeechIndicator(
           when (phase) {
             MessageSpeechPhase.Preparing -> nativeString("Preparing audio…")
             MessageSpeechPhase.Speaking -> nativeString("Speaking…")
-            MessageSpeechPhase.Failed -> nativeString("Audio error") + " · " + nativeString("Retry")
+            MessageSpeechPhase.Failed -> nativeString("Audio error · Retry")
           },
         style = ClawTheme.type.caption,
         color = ClawTheme.colors.textMuted,
