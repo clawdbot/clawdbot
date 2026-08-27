@@ -10,7 +10,7 @@ import {
   PLUGIN_COMMAND_DISPATCH,
   type PluginCommandReplyOptions,
 } from "./plugin-command-dispatch-contract.js";
-import { matchRegisteredPluginCommand } from "./plugin-command-matcher.js";
+import { matchRegisteredPluginCommand, parsePluginInvocation } from "./plugin-command-matcher.js";
 import {
   pluginCommandSupportsChannel,
   projectPluginCommandNativeMetadata,
@@ -277,10 +277,14 @@ export function matchPluginCommandInvocation(
     aliasScope: { kind: "provider", provider },
   });
   if (!match) {
-    const owner = resolveManifestCommandAliasOwnerInRegistry({
-      command: commandBody.trim().match(/^\/\s*([^\s]+)/)?.[1],
-      registry: state.registry,
-    });
+    const owner = parsePluginInvocation(commandBody)
+      ?.keys.map((key) =>
+        resolveManifestCommandAliasOwnerInRegistry({
+          command: key.slice(1),
+          registry: state.registry,
+        }),
+      )
+      .find((candidate) => candidate !== undefined);
     const plugin =
       owner?.kind === "runtime-slash"
         ? state.registry.plugins.find((entry) => entry.id === owner.pluginId)

@@ -95,13 +95,14 @@ function buildPluginParams(
 }
 
 async function withDeclaredCommandPlugin(
-  options: { enabled?: boolean; fails?: boolean },
+  options: { enabled?: boolean; fails?: boolean; alias?: string },
   run: (cfg: OpenClawConfig) => Promise<void>,
 ) {
   const tempDir = await fs.realpath(
     await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-command-availability-")),
   );
   const pluginId = "recovery-controls";
+  const alias = options.alias ?? "recover";
   const pluginFile = path.join(tempDir, "index.cjs");
   const cfg: OpenClawConfig = {
     agents: { defaults: { workspace: tempDir } },
@@ -119,7 +120,7 @@ async function withDeclaredCommandPlugin(
         id: pluginId,
         configSchema: { type: "object", additionalProperties: false, properties: {} },
         commandAliases: [
-          { name: "recover", kind: "runtime-slash", cliCommand: "plugins" },
+          { name: alias, kind: "runtime-slash", cliCommand: "plugins" },
           { name: "legacy-recover" },
         ],
       }),
@@ -130,7 +131,7 @@ async function withDeclaredCommandPlugin(
         ${
           options.fails === false
             ? ""
-            : `api.registerCommand({ name: "recover", description: "Recovery controls", acceptsArgs: true, handler: () => ({ text: "must be rolled back" }) });
+            : `api.registerCommand({ name: ${JSON.stringify(alias)}, description: "Recovery controls", acceptsArgs: true, handler: () => ({ text: "must be rolled back" }) });
         throw new Error("fixture registration failed\\n    at private loader frame");`
         }
       } };`,
@@ -166,8 +167,12 @@ describe("handlePluginCommand", () => {
   });
   afterEach(() => resetPluginRuntimeStateForTest());
 
-  it("replies when a declared slash command was rolled back after register failed", async () => {
-    await withDeclaredCommandPlugin({}, async (cfg) => {
+  it.each([
+    { alias: "recover", command: "/recover stop" },
+    { alias: "recover-controls", command: "/recover_controls stop" },
+    { alias: "recover_controls", command: "/recover-controls stop" },
+  ])("replies for $command after registering $alias failed", async ({ alias, command }) => {
+    await withDeclaredCommandPlugin({ alias }, async (cfg) => {
       expect(registry.plugins.find((plugin) => plugin.id === "recovery-controls")).toMatchObject({
         status: "error",
         failurePhase: "register",
@@ -175,7 +180,7 @@ describe("handlePluginCommand", () => {
       });
       expect(registry.commands).toHaveLength(0);
 
-      const result = await handlePluginCommand(buildPluginParams("/recover stop", cfg), true);
+      const result = await handlePluginCommand(buildPluginParams(command, cfg), true);
 
       expect(result?.shouldContinue).toBe(false);
       expect(result?.reply?.text).toContain('Plugin "recovery-controls" failed to load');
