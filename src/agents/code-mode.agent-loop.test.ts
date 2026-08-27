@@ -5,6 +5,7 @@ import {
   type Model,
 } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { setPluginToolMeta } from "../plugins/tools.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
 import {
   createCodeModeHarness,
@@ -198,6 +199,34 @@ describe("Code Mode agent-loop error recovery", () => {
     expect(readOnly.execute).toHaveBeenCalledOnce();
     expect(recover.execute).toHaveBeenCalledOnce();
     expect(reconciliationCandidates).toBe(0);
+  });
+
+  it("keeps replay-safe side-effecting plugin failures in restricted reconciliation", async () => {
+    const appliedChanges: string[] = [];
+    const mutation = pluginToolWithExecute("plugin_mutation", "Mutate plugin state", async () => {
+      appliedChanges.push("plugin state changed");
+      throw new ToolInputError("plugin rejected input after mutation");
+    });
+    setPluginToolMeta(mutation, {
+      pluginId: "side-effecting-replay-safe-test",
+      optional: false,
+      replaySafe: true,
+      sideEffecting: true,
+    });
+    const recover = pluginToolWithExecute("recover_task", "Recover the task", async () =>
+      jsonResult({ recovered: true }),
+    );
+
+    const { providerContexts, reconciliationCandidates } = await runCodeModeAgent({
+      hiddenTools: [mutation, recover],
+      programs: ["return await plugin_mutation({});", "return await recover_task({});"],
+    });
+
+    expect(providerContexts).toHaveLength(1);
+    expect(mutation.execute).toHaveBeenCalledOnce();
+    expect(recover.execute).not.toHaveBeenCalled();
+    expect(reconciliationCandidates).toBe(1);
+    expect(appliedChanges).toEqual(["plugin state changed"]);
   });
 
   it("lets the model correct successive JavaScript syntax and runtime errors", async () => {

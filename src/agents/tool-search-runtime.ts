@@ -596,7 +596,9 @@ export class ToolSearchRuntime {
     }
     const pluginMeta = getPluginToolMeta(entry.tool as Parameters<typeof getPluginToolMeta>[0]);
     if (pluginMeta) {
-      return pluginMeta.mcp ? false : pluginMeta.replaySafe === true;
+      return pluginMeta.mcp
+        ? false
+        : pluginMeta.replaySafe === true && pluginMeta.sideEffecting !== true;
     }
     if (getChannelAgentToolMeta(entry.tool as never)) {
       return false;
