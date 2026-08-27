@@ -247,6 +247,8 @@ export type MediaUnderstandingProviderAuthContext = {
   config?: OpenClawConfig;
   provider: string;
   providerConfig?: ModelProviderConfig;
+  /** Final per-entry endpoint after model and request overrides; use it for credential trust decisions. */
+  effectiveBaseUrl?: string;
 };
 
 export type MediaUnderstandingProviderAuthResult =

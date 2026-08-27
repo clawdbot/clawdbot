@@ -145,6 +145,7 @@ describe("scripts/test-live-shard", () => {
       "extensions/meta/meta.live.test.ts",
       "extensions/microsoft/microsoft.live.test.ts",
       "extensions/mistral/mistral.live.test.ts",
+      "extensions/nvidia/nvidia-speech.live.test.ts",
     ]);
     expect(selectLiveShardFiles("native-live-extensions-moonshot", allFiles)).toEqual([
       "extensions/moonshot/moonshot.live.test.ts",

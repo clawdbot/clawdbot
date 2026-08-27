@@ -38,6 +38,7 @@ export {
   postTranscriptionRequest,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
+  resolveProviderHttpRequestConfigWithOriginTrust,
   resolveAudioTranscriptionUploadFileName,
   requireTranscriptionText,
   sanitizeConfiguredModelProviderRequest,

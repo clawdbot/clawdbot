@@ -165,7 +165,7 @@ describe("talk transcription gateway relay", () => {
       transcriptionSessionId: session.transcriptionSessionId,
       connId: "conn-1",
     });
-    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(10_000);
 
     expect(sttSession.sendAudio).toHaveBeenCalledWith(Buffer.from("audio-in"));
     expect(sttSession.close).toHaveBeenCalledOnce();
@@ -297,7 +297,7 @@ describe("talk transcription gateway relay", () => {
       expect(
         events.some((event) => isRecord(event.payload) && event.payload.type === "close"),
       ).toBe(false);
-      await vi.advanceTimersByTimeAsync(4_000);
+      await vi.advanceTimersByTimeAsync(9_000);
       const terminalEvents = events
         .map((event) => {
           const payload = requireGatewayRecord(event.payload, "transcription relay event");
@@ -355,7 +355,7 @@ describe("talk transcription gateway relay", () => {
       "first provider transcript",
       "second provider transcript",
     ]);
-    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(10_000);
     expect(findPayloadByType(events, "close").reason).toBe("completed");
   });
 
@@ -387,7 +387,7 @@ describe("talk transcription gateway relay", () => {
       connId: "conn-1",
     });
 
-    await vi.advanceTimersByTimeAsync(4_999);
+    await vi.advanceTimersByTimeAsync(9_999);
     expect(events.some((event) => isRecord(event.payload) && event.payload.type === "close")).toBe(
       false,
     );
@@ -396,6 +396,31 @@ describe("talk transcription gateway relay", () => {
     const close = findPayloadByType(events, "close");
     expect(close.reason).toBe("completed");
     expect(sttSession.close).toHaveBeenCalledOnce();
+  });
+
+  it("forwards a late provider final throughout the browser finalization window", async () => {
+    vi.useFakeTimers();
+    let request: RealtimeTranscriptionSessionCreateRequest | undefined;
+    const sttSession = createSttSessionMock();
+    const { events, session } = await createStartedRelaySession(sttSession, {}, (value) => {
+      request = value;
+    });
+
+    sendTalkTranscriptionRelayAudio({
+      transcriptionSessionId: session.transcriptionSessionId,
+      connId: "conn-1",
+      audioBase64: "AQI=",
+    });
+    stopTalkTranscriptionRelaySession({
+      transcriptionSessionId: session.transcriptionSessionId,
+      connId: "conn-1",
+    });
+
+    await vi.advanceTimersByTimeAsync(8_000);
+    request?.onTranscript?.("late provider final");
+    expect(findPayloadByTalkEventType(events, "transcript.done").text).toBe("late provider final");
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(findPayloadByType(events, "close").reason).toBe("completed");
   });
 
   it("preserves partial activity between provider finals while graceful draining continues", async () => {
@@ -433,7 +458,7 @@ describe("talk transcription gateway relay", () => {
     expect(events.some((event) => isRecord(event.payload) && event.payload.type === "close")).toBe(
       false,
     );
-    await vi.advanceTimersByTimeAsync(3_400);
+    await vi.advanceTimersByTimeAsync(8_400);
     expect(findPayloadByType(events, "close").reason).toBe("completed");
   });
 
@@ -471,7 +496,7 @@ describe("talk transcription gateway relay", () => {
     expect(findPayloadByTalkEventType(events, "transcript.done").text).toBe(
       "final provider transcript",
     );
-    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(10_000);
     expect(findPayloadByType(events, "close").reason).toBe("completed");
   });
 

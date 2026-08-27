@@ -495,6 +495,7 @@ async function resolveProviderExecutionAuth(params: {
   provider?: MediaUnderstandingProvider;
   cfg: OpenClawConfig;
   entry: MediaUnderstandingModelConfig;
+  config?: MediaUnderstandingConfig;
   agentDir?: string;
   workspaceDir?: string;
 }): Promise<ProviderExecutionAuth> {
@@ -523,6 +524,7 @@ async function resolveProviderExecutionAuth(params: {
       config: params.cfg,
       provider: params.providerId,
       providerConfig,
+      effectiveBaseUrl: params.entry.baseUrl ?? params.config?.baseUrl ?? providerConfig?.baseUrl,
     };
     const providerAuth = params.provider?.resolveAuth?.(context);
     if (!providerAuth) {
@@ -615,6 +617,7 @@ async function resolveProviderExecutionContext(params: {
     provider: params.provider,
     cfg: params.cfg,
     entry: params.entry,
+    config: params.config,
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
   });
