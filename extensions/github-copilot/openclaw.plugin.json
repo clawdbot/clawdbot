@@ -239,6 +239,8 @@
             "status": "deprecated",
             "replacedBy": "gpt-5.6-luna",
             "reasoning": true,
+            "thinkingLevelMap": { "minimal": "low", "xhigh": "xhigh", "max": null },
+            "compat": { "supportedReasoningEfforts": ["none", "low", "medium", "high", "xhigh"] },
             "input": ["text", "image"],
             "contextWindow": 400000,
             "contextTokens": 272000,
