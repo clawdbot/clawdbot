@@ -3312,7 +3312,7 @@ describe("update-cli", () => {
       },
     } as OpenClawConfig;
     vi.mocked(readConfigFileSnapshot).mockResolvedValue(configSnapshot(config));
-    loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce({
+    loadInstalledPluginIndexInstallRecords.mockResolvedValue({
       demo: {
         source: "npm",
         spec: "@openclaw/demo@1.0.0",
@@ -6574,7 +6574,7 @@ describe("update-cli", () => {
     const sourceConfig = {
       plugins: {},
     } as OpenClawConfig;
-    loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce(pluginInstallRecords);
+    loadInstalledPluginIndexInstallRecords.mockResolvedValue(pluginInstallRecords);
     vi.mocked(readConfigFileSnapshot).mockResolvedValue({
       ...baseSnapshot,
       sourceConfig,
@@ -7654,6 +7654,7 @@ describe("update-cli", () => {
       hash: "post-doctor",
     });
     vi.mocked(readConfigFileSnapshot)
+      .mockResolvedValueOnce(preDoctorSnapshot)
       .mockResolvedValueOnce(preDoctorSnapshot)
       .mockResolvedValueOnce(preDoctorSnapshot)
       .mockResolvedValueOnce(postDoctorSnapshot)
