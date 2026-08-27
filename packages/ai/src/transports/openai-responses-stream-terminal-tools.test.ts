@@ -17,6 +17,71 @@ const added = (slot: number, overrides: Record<string, unknown> = {}) => ({
 });
 
 describe("Responses terminal tool completion", () => {
+  it("does not repeat an anonymous unindexed call after its item-done event", async () => {
+    const anonymous = { id: undefined, call_id: undefined };
+    const result = await runFixture([
+      { ...added(0, anonymous), output_index: undefined },
+      { type: "response.output_item.done", item: tool(0, anonymous) },
+      completed("resp_anonymous_done", [tool(0, anonymous)]),
+    ]);
+    expect(result.error).toBeNull();
+    expect(result.content).toHaveLength(1);
+    expect(result.events.filter((event) => event.type === "toolcall_end")).toEqual([
+      { type: "toolcall_end", contentIndex: 0 },
+    ]);
+  });
+
+  it("rejects an anonymous call with no stream or terminal position without completing it", async () => {
+    const anonymous = { id: undefined, call_id: undefined };
+    const result = await runFixture([
+      { ...added(0, anonymous), output_index: undefined },
+      { type: "response.output_item.done", item: tool(0, anonymous) },
+      completed("resp_no_position", []),
+    ]);
+    expect(result.error).toBe("Responses stream completed with unresolved tool calls");
+    expect(result.events.filter((event) => event.type === "toolcall_end")).toEqual([]);
+  });
+
+  it.each(["indexed", "identified"])(
+    "retains a known %s owner when its done event omits identity",
+    async (identity) => {
+      const anonymous = { id: undefined, call_id: undefined };
+      const result = await runFixture([
+        identity === "indexed" ? added(0, anonymous) : { ...added(0), output_index: undefined },
+        { type: "response.output_item.done", item: tool(0, anonymous) },
+        completed("resp_known_owner", []),
+      ]);
+      expect(result.error).toBeNull();
+      expect(result.events.filter((event) => event.type === "toolcall_end")).toEqual([
+        { type: "toolcall_end", contentIndex: 0 },
+      ]);
+    },
+  );
+
+  it("rejects an anonymous unindexed done-only call without silently dropping it", async () => {
+    const item = tool(0, { id: undefined, call_id: undefined });
+    const result = await runFixture([
+      { type: "response.output_item.done", item },
+      completed("resp_done_only", [item]),
+    ]);
+    expect(result.error).toBe("Responses stream completed tool call without an output identity");
+    expect(result.content).toHaveLength(0);
+    expect(result.events.filter((event) => event.type === "toolcall_end")).toEqual([]);
+  });
+
+  it("does not publish anonymous unindexed completions before ambiguous terminal matching", async () => {
+    const anonymous = { id: undefined, call_id: undefined };
+    const result = await runFixture([
+      { ...added(0, anonymous), output_index: undefined },
+      { type: "response.output_item.done", item: tool(0, anonymous) },
+      { ...added(1, anonymous), output_index: undefined },
+      { type: "response.output_item.done", item: tool(1, anonymous) },
+      completed("resp_ambiguous_done", [tool(0), tool(1)]),
+    ]);
+    expect(result.error).not.toBeNull();
+    expect(result.events.filter((event) => event.type === "toolcall_end")).toEqual([]);
+  });
+
   it.each(["indexed", "rotated", "unindexed", "anonymous"])(
     "completes a %s call exactly once when its item-done event is missing",
     async (identity) => {

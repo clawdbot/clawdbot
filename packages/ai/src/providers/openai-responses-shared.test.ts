@@ -2065,10 +2065,12 @@ describe("processResponsesStream", () => {
         responseEvents([
           {
             type: "response.output_item.added",
+            output_index: 0,
             item: { type: "function_call", name: "computer", arguments: "" },
           },
           {
             type: "response.output_item.done",
+            output_index: 0,
             item: { type: "function_call", name: "computer", arguments: "{}" },
           },
           { type: "response.completed", response: { id: "resp_idless", status: "completed" } },

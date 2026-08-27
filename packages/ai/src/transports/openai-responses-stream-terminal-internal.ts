@@ -204,7 +204,7 @@ export function createResponsesTerminalController(params: {
     return index;
   };
   const emitToolCallCompletion = (
-    item: Extract<ResponseOutputItem, { type: "function_call" }>,
+    item: { type: "function_call"; id?: string; call_id?: string },
     outputIndex: number | undefined,
     started: { block: ToolCall; contentIndex: number } | undefined,
     validated: Pick<ToolCall, "name" | "arguments">,

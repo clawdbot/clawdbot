@@ -4,6 +4,7 @@ export type ResponsesToolCallIdentity = { itemId?: string; callId?: string };
 
 export type ResponsesToolCallState = ResponsesToolCallIdentity & {
   argumentStreamReliable: boolean;
+  outputIndex?: number;
 };
 
 type ResponsesToolCallEvent = {
@@ -95,6 +96,7 @@ export function createResponsesToolCallTracker<TState extends ResponsesToolCallS
       if (indexedCalls.has(outputIndex)) {
         throw new Error(`Responses stream reused active tool-call output index ${outputIndex}`);
       }
+      state.outputIndex = outputIndex;
       indexedCalls.set(outputIndex, state);
     },
 
@@ -120,6 +122,7 @@ export function createResponsesToolCallTracker<TState extends ResponsesToolCallS
         const unindexed = resolveCompatible(unindexedCalls, identity, allowUnmatchedIdentity);
         if (unindexed) {
           unindexedCalls.delete(unindexed);
+          unindexed.outputIndex = outputIndex;
           indexedCalls.set(outputIndex, unindexed);
         }
         return unindexed;

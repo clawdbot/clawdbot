@@ -195,6 +195,20 @@ export async function processResponsesStream<TApi extends Api>(
     streamingToolCall: StreamingToolCallState | undefined,
     validated: Pick<ToolCall, "name" | "arguments">,
   ): void => {
+    const identity = {
+      type: item.type,
+      id: item.id || streamingToolCall?.itemId,
+      call_id: item.call_id || streamingToolCall?.callId,
+    };
+    const finalOutputIndex = outputIndex ?? streamingToolCall?.outputIndex;
+    // A wholly anonymous, unindexed done event cannot be deduplicated. Keep
+    // its active owner until the terminal snapshot supplies an output position.
+    if (finalOutputIndex === undefined && !identity.id && !identity.call_id) {
+      if (!streamingToolCall) {
+        throw new Error("Responses stream completed tool call without an output identity");
+      }
+      return;
+    }
     if (streamingToolCall) {
       streamingToolCalls.forget(streamingToolCall);
       for (const slot of outputSlots.values()) {
@@ -203,7 +217,7 @@ export async function processResponsesStream<TApi extends Api>(
         }
       }
     }
-    terminal.emitToolCallCompletion(item, outputIndex, streamingToolCall, validated);
+    terminal.emitToolCallCompletion(identity, finalOutputIndex, streamingToolCall, validated);
   };
   const prepareTerminalToolCalls = (items: ResponseOutputItem[]) => {
     const prepared = new Map<number, () => void>();
@@ -627,7 +641,6 @@ export async function processResponsesStream<TApi extends Api>(
           if (!streamingToolCall && streamingToolCalls.hasActive()) {
             continue;
           }
-          const streamedArguments = streamingToolCall?.block.partialJson ?? "";
           const completedArguments =
             typeof item.arguments === "string" ? item.arguments : undefined;
           if (
@@ -637,14 +650,9 @@ export async function processResponsesStream<TApi extends Api>(
           ) {
             continue;
           }
-          const finalArguments =
-            completedArguments !== undefined &&
-            (completedArguments.length > 0 || !streamedArguments)
-              ? completedArguments
-              : streamedArguments;
           const validated = resolveCompletedResponsesToolCall(item, {
             name: streamingToolCall?.block.name,
-            arguments: finalArguments,
+            arguments: completedArguments || streamingToolCall?.block.partialJson || "",
           });
 
           finalizeToolCall(item, readResponsesOutputIndex(event), streamingToolCall, validated);
