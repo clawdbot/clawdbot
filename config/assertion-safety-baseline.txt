@@ -2804,7 +2804,7 @@ src/cron/stagger.ts	1
 src/cron/store.ts	1
 src/cron/store/delivery-codec.ts	2
 src/cron/store/quarantine.ts	1
-src/cron/store/row-codec.ts	6
+src/cron/store/row-codec.ts	4
 src/cron/store/transaction-hooks.ts	1
 src/cron/task-run-detail.ts	2
 src/cron/task-run-history.ts	1

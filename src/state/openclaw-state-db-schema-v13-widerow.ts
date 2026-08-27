@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { safeParseJson } from "@openclaw/normalization-core";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
 import { repairLegacySubagentRetainedResults } from "./openclaw-state-db-legacy-backfills.js";
@@ -40,27 +41,39 @@ function reprojectLegacyCronJson(db: DatabaseSync): void {
     ) {
       throw new Error("OpenClaw v12 cron job row is not canonical");
     }
-    const job = asNullableRecord(JSON.parse(row.job_json));
-    const state = asNullableRecord(JSON.parse(row.state_json));
+    const job = asNullableRecord(safeParseJson(row.job_json));
+    const state = asNullableRecord(safeParseJson(row.state_json));
     if (!job || !state) {
-      throw new Error("OpenClaw v12 cron job JSON is not canonical");
+      continue;
     }
     let changed = false;
-    for (const [columnName, fieldName] of FAILURE_DESTINATION_COLUMNS) {
-      const value = row[columnName];
-      if (typeof value !== "string") {
-        continue;
+    const delivery = asNullableRecord(job.delivery);
+    const destination = asNullableRecord(delivery?.failureDestination);
+    if (
+      (!Object.hasOwn(job, "delivery") || delivery !== null) &&
+      (!delivery || !Object.hasOwn(delivery, "failureDestination") || destination !== null)
+    ) {
+      const nextDelivery = delivery ?? {};
+      const nextDestination = destination ?? {};
+      for (const [columnName, fieldName] of FAILURE_DESTINATION_COLUMNS) {
+        const value = row[columnName];
+        if (typeof value !== "string" || Object.hasOwn(nextDestination, fieldName)) {
+          continue;
+        }
+        nextDestination[fieldName] = value === "" ? null : value;
+        changed = true;
       }
-      const delivery = asNullableRecord(job.delivery) ?? {};
-      const destination = asNullableRecord(delivery.failureDestination) ?? {};
-      destination[fieldName] = value === "" ? null : value;
-      delivery.failureDestination = destination;
-      job.delivery = delivery;
-      changed = true;
+      if (changed) {
+        nextDelivery.failureDestination = nextDestination;
+        job.delivery = nextDelivery;
+      }
     }
-    const normalizedLastRunStatus = row.last_run_status ?? state.lastRunStatus ?? state.lastStatus;
-    if (normalizedLastRunStatus != null && state.lastRunStatus !== normalizedLastRunStatus) {
-      state.lastRunStatus = normalizedLastRunStatus;
+    const hasLegacyStatus = Object.hasOwn(state, "lastStatus");
+    if (
+      !Object.hasOwn(state, "lastRunStatus") &&
+      (hasLegacyStatus || typeof row.last_run_status === "string")
+    ) {
+      state.lastRunStatus = hasLegacyStatus ? state.lastStatus : row.last_run_status;
       changed = true;
     }
     if (changed) {
@@ -188,7 +201,7 @@ export function migrateJsonCanonicalWideRowsV13(
     const workspaceDirColumn = tableHasColumn(db, "installed_plugin_index", "workspace_dir")
       ? "workspace_dir"
       : "NULL AS workspace_dir";
-    const row = db
+    const rawRow = db
       .prepare(
         `SELECT version, warning, host_contract_version, compat_registry_version,
                 migration_version, policy_hash, generated_at_ms, ${workspaceDirColumn},
@@ -198,6 +211,15 @@ export function migrateJsonCanonicalWideRowsV13(
           WHERE index_key = 'installed-plugin-index'`,
       )
       .get();
+    const installRecords = asNullableRecord(
+      safeParseJson(String(rawRow?.install_records_json ?? "")),
+    );
+    const plugins = safeParseJson(String(rawRow?.plugins_json ?? ""));
+    const diagnostics = safeParseJson(String(rawRow?.diagnostics_json ?? ""));
+    const row =
+      rawRow && installRecords && Array.isArray(plugins) && Array.isArray(diagnostics)
+        ? rawRow
+        : undefined;
     if (row) {
       const index = {
         version: Number(row.version),
@@ -211,9 +233,9 @@ export function migrateJsonCanonicalWideRowsV13(
         ...(typeof row.refresh_reason === "string" && row.refresh_reason
           ? { refreshReason: row.refresh_reason }
           : {}),
-        installRecords: JSON.parse(String(row.install_records_json)) as unknown,
-        plugins: JSON.parse(String(row.plugins_json)) as unknown,
-        diagnostics: JSON.parse(String(row.diagnostics_json)) as unknown,
+        installRecords,
+        plugins,
+        diagnostics,
       };
       db.prepare(
         `INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)

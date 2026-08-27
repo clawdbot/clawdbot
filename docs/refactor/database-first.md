@@ -310,20 +310,19 @@ The branch already has a real shared SQLite base:
 - Runtime stores derive selected and inserted row types from those generated
   Kysely `DB` interfaces instead of shadowing SQLite row shapes by hand. Raw SQL
   remains limited to schema application, pragmas, and migration-only DDL.
-- The global SQLite schema is at `user_version = 12`. The per-agent schema is at
+- The global SQLite schema is at `user_version = 13`. The per-agent schema is at
   version `17`; their openers apply bounded forward migrations from supported
   older schemas. File-to-database import remains in Doctor code.
 - Relational ownership is enforced where the ownership boundary is canonical:
   source migration rows cascade from `migration_runs`, task delivery state
   cascades from `task_runs`, and transcript identity rows cascade from
   transcript events.
-- Current shared tables include `agent_databases`,
-  `auth_profile_stores`, `auth_profile_state`,
+- Current shared tables include `config_machine_state`, `agent_databases`,
   `plugin_state_entries`, `plugin_blob_entries`,
   `skill_uploads`, `capture_sessions`, `capture_events`, `capture_blobs`,
   `sandbox_registry_entries`, `cron_jobs`,
   `delivery_queue_entries`,
-  `workspace_setup_state`, `workspace_path_aliases`, `workspace_attestations`,
+  `workspace_setup_state`, `workspace_path_aliases`,
   `workspace_generated_bootstrap_hashes`, `native_hook_relay_bridges`,
   `current_conversation_bindings`, `plugin_binding_approvals`,
   `acp_sessions`, `acp_replay_sessions`,
@@ -443,8 +442,8 @@ The branch already has a real shared SQLite base:
   legacy path resolver lives in the doctor migration module.
 - Secret target metadata now talks about stores instead of pretending every
   credential target is a config file. `openclaw.json` remains the config store;
-  auth-profile targets use typed SQLite `auth_profile_stores` rows with
-  provider-shaped credentials kept as JSON payloads.
+  shared auth-profile snapshots use the `authProfiles.store` and
+  `authProfiles.state` keys in `config_machine_state`.
 - Secret audit no longer scans retired per-agent `auth.json` files. Doctor owns
   warning about, importing, and removing that legacy file.
 - Legacy auth profile path helpers now live in doctor legacy code. Core auth
@@ -465,9 +464,9 @@ The branch already has a real shared SQLite base:
   define VFS, tool-artifact, or run-artifact tables.
 - Workspace bootstrap completion, attestation recency, and generated bootstrap
   hashes now live in typed shared `workspace_setup_state`,
-  `workspace_path_aliases`, `workspace_attestations`, and
-  `workspace_generated_bootstrap_hashes` rows keyed by canonical workspace
-  identity. Persisted lexical and real-path aliases keep vanished-workspace
+  `workspace_path_aliases`, and `workspace_generated_bootstrap_hashes` rows
+  keyed by canonical workspace identity. Attestation timestamps are owned by
+  `workspace_setup_state`. Persisted lexical and real-path aliases keep vanished-workspace
   protection stable after a configured symlink disappears; repointed aliases
   fail closed. Runtime no longer reads or writes
   `openclaw-workspace-state.json`, `.openclaw/workspace-state.json`, state-dir
@@ -1504,7 +1503,7 @@ agent_databases(agent_id, path, schema_version, last_seen_at, size_bytes)
 task_runs(...)
 task_delivery_state(...)
 flow_runs(...)
-subagent_runs(run_id, child_session_key, requester_session_key, controller_session_key, created_at, ended_at, cleanup_handled, payload_json)
+subagent_runs(run_id, child_session_key, controller_session_key, requester_session_key, created_at, payload_json)
 current_conversation_bindings(binding_key, binding_id, target_agent_id, target_session_id, target_session_key, channel, account_id, conversation_kind, parent_conversation_id, conversation_id, target_kind, status, bound_at, expires_at, metadata_json, updated_at)
 plugin_binding_approvals(plugin_root, channel, account_id, plugin_id, plugin_name, approved_at)
 plugin_state_entries(plugin_id, namespace, entry_key, value_json, created_at, expires_at)
@@ -1517,9 +1516,8 @@ apns_registration_tombstones(node_id, deleted_at_ms)
 device_identities(identity_key, device_id, public_key_pem, private_key_pem, created_at_ms, updated_at_ms)
 device_auth_tokens(device_id, role, token, scopes_json, updated_at_ms)
 macos_port_guardian_records(pid, port, command, mode, timestamp)
-workspace_setup_state(workspace_key, workspace_path, version, bootstrap_seeded_at, setup_completed_at, updated_at)
+workspace_setup_state(workspace_key, workspace_path, version, bootstrap_seeded_at, setup_completed_at, updated_at, attested_at_ms, attestation_updated_at_ms)
 workspace_path_aliases(alias_key, alias_path, workspace_key, workspace_path, updated_at_ms)
-workspace_attestations(workspace_key, attested_at_ms, updated_at_ms)
 workspace_generated_bootstrap_hashes(workspace_key, filename, sha256)
 native_hook_relay_bridges(relay_id, pid, hostname, port, token, expires_at_ms, updated_at_ms)
 managed_outgoing_image_records(attachment_id, session_key, agent_id, message_id, created_at, updated_at, retention_class, alt, original_media_id, original_media_subdir, original_content_type, original_width, original_height, original_size_bytes, original_filename, record_json, cleanup_pending)
@@ -1528,14 +1526,15 @@ channel_pairing_requests(channel_key, account_id, request_id, code, created_at, 
 channel_pairing_allow_entries(channel_key, account_id, entry, sort_order, updated_at)
 config_health_entries(config_path, last_known_good_json, last_promoted_good_json, last_observed_suspicious_signature, updated_at_ms)
 sandbox_registry_entries(registry_kind, container_name, session_key, backend_id, runtime_label, image, created_at_ms, last_used_at_ms, config_label_kind, config_hash, cdp_port, no_vnc_port, entry_json, updated_at)
-cron_jobs(store_key, job_id, name, description, enabled, delete_after_run, created_at_ms, agent_id, session_key, schedule_kind, schedule_expr, schedule_tz, every_ms, anchor_ms, at, stagger_ms, session_target, wake_mode, payload_kind, payload_message, payload_model, payload_fallbacks_json, payload_thinking, payload_timeout_seconds, payload_allow_unsafe_external_content, payload_external_content_source_json, payload_light_context, payload_tools_allow_json, delivery_mode, delivery_channel, delivery_to, delivery_thread_id, delivery_account_id, delivery_best_effort, failure_delivery_mode, failure_delivery_channel, failure_delivery_to, failure_delivery_account_id, failure_alert_disabled, failure_alert_after, failure_alert_channel, failure_alert_to, failure_alert_cooldown_ms, failure_alert_include_skipped, failure_alert_mode, failure_alert_account_id, next_run_at_ms, running_at_ms, last_run_at_ms, last_run_status, last_error, last_duration_ms, consecutive_errors, consecutive_skipped, schedule_error_count, last_delivery_status, last_delivery_error, last_delivered, last_failure_alert_at_ms, job_json, state_json, runtime_updated_at_ms, schedule_identity, sort_order, updated_at)
+cron_jobs(store_key, job_id, declaration_key, owner_agent_id, name, description, enabled, agent_id, payload_kind, job_json, state_json, runtime_updated_at_ms, schedule_identity, sort_order, updated_at)
 delivery_queue_entries(queue_name, id, status, entry_kind, session_key, channel, target, account_id, retry_count, last_attempt_at, last_error, recovery_state, platform_send_started_at, entry_json, enqueued_at, updated_at, failed_at)
 migration_runs(id, started_at, finished_at, status, report_json)
 migration_sources(source_key, migration_kind, source_path, target_table, source_sha256, source_size_bytes, source_record_count, last_run_id, status, imported_at, removed_source, report_json)
 backup_runs(id, created_at, archive_path, status, manifest_json)
 ```
 
-`config_machine_state` owns the `skills.curatorState`, `update.checkState`,
+`config_machine_state` owns the `authProfiles.store`, `authProfiles.state`,
+`plugins.installedIndex`, `skills.curatorState`, `update.checkState`,
 `clawhub.promotionsFeed`, `modelCatalog.remote`, `voicewake.triggers`,
 `voicewake.routing`, `onboarding.recommendations.<workspaceKey>`,
 `tui.lastSession.<scopeKey>`, `sidebar.sectionOrder`, `nodeHost.config`, and

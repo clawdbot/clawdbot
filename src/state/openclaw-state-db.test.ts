@@ -8,7 +8,9 @@ import type { DatabaseSync } from "node:sqlite";
 import { gunzipSync } from "node:zlib";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import { saveCronStore } from "../cron/store.js";
 import { loadedCronStoreFromRows, loadCronRows } from "../cron/store/row-codec.js";
+import type { CronStoredJob } from "../cron/types.js";
 import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
 import {
   countFailedDeliveryQueueEntries,
@@ -2104,7 +2106,7 @@ describe("openclaw state database", () => {
         delivery: {
           mode: "announce",
           channel: "telegram",
-          failureDestination: { channel: "discord", to: "https://example.invalid/failure" },
+          failureDestination: { channel: "slack", to: null },
         },
       };
       const storeKey = path.join(stateDir, "cron", "jobs.json");
@@ -2132,7 +2134,7 @@ describe("openclaw state database", () => {
           job.agentId,
           job.payload.kind,
           JSON.stringify(job),
-          JSON.stringify({ lastStatus: "ok" }),
+          JSON.stringify({ lastStatus: "error" }),
           job.updatedAtMs,
           "every:60000",
           4,
@@ -2144,7 +2146,7 @@ describe("openclaw state database", () => {
           job.payload.message,
           job.delivery.mode,
           job.delivery.channel,
-          "",
+          "announce",
           "discord",
           "https://example.invalid/failure",
           "",
@@ -2327,12 +2329,15 @@ describe("openclaw state database", () => {
         sort_order: 4,
       });
       expect(JSON.parse(row.job_json).delivery.failureDestination).toEqual({
-        mode: null,
-        channel: "discord",
-        to: "https://example.invalid/failure",
+        mode: "announce",
+        channel: "slack",
+        to: null,
         accountId: null,
       });
-      expect(JSON.parse(row.state_json)).toEqual({ lastStatus: "ok", lastRunStatus: "ok" });
+      expect(JSON.parse(row.state_json)).toEqual({
+        lastStatus: "error",
+        lastRunStatus: "error",
+      });
       expect(loadedCronStoreFromRows(loadCronRows(migrated.db, storeKey)).store.jobs).toEqual([
         {
           ...job,
@@ -2341,13 +2346,13 @@ describe("openclaw state database", () => {
           delivery: {
             ...job.delivery,
             failureDestination: {
-              mode: undefined,
-              channel: "discord",
-              to: "https://example.invalid/failure",
+              mode: "announce",
+              channel: "slack",
+              to: undefined,
               accountId: undefined,
             },
           },
-          state: { lastStatus: "ok", lastRunStatus: "ok" },
+          state: { lastStatus: "error", lastRunStatus: "error" },
         },
       ]);
       expect(
@@ -2462,6 +2467,433 @@ describe("openclaw state database", () => {
       expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([]);
     },
   );
+
+  it.each(["runtime open", "doctor repair"] as const)(
+    "preserves malformed cron JSON for quarantine through the v13 %s",
+    (migrationPath) => {
+      const stateDir = createTempStateDir();
+      const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+      const databasePath = materializeCurrentStateDatabase(stateDir);
+      const { DatabaseSync } = requireNodeSqlite();
+      const legacy = new DatabaseSync(databasePath);
+      legacy.exec(STATE_SCHEMA_13_TO_12_DOWNGRADE_SQL);
+      const insert = legacy.prepare(
+        `INSERT INTO cron_jobs (
+           store_key, job_id, name, enabled, created_at_ms, schedule_kind, schedule_expr,
+           session_target, wake_mode, payload_kind, payload_message, job_json, state_json,
+           sort_order, updated_at
+         ) VALUES (?, ?, ?, 1, 1, 'cron', '0 6 * * *', 'main', 'now',
+                   'systemEvent', 'tick', ?, ?, ?, 1)`,
+      );
+      const storeKey = path.join(stateDir, "cron", "jobs.json");
+      insert.run(storeKey, "malformed-job", "Malformed job", "{", "{}", 0);
+      insert.run(
+        storeKey,
+        "malformed-state",
+        "Malformed state",
+        '{"id":"malformed-state"}',
+        "[]",
+        1,
+      );
+      legacy.close();
+
+      if (migrationPath === "doctor repair") {
+        expect(repairOpenClawStateDatabaseSchema(options).changes).toContain(
+          "Consolidated shared state tables (v13)",
+        );
+      }
+      const migrated = openOpenClawStateDatabase(options);
+      expect(
+        migrated.db
+          .prepare("SELECT job_id, job_json, state_json FROM cron_jobs ORDER BY sort_order, job_id")
+          .all(),
+      ).toEqual([
+        { job_id: "malformed-job", job_json: "{", state_json: "{}" },
+        { job_id: "malformed-state", job_json: '{"id":"malformed-state"}', state_json: "[]" },
+      ]);
+      expect(migrated.db.prepare("PRAGMA integrity_check").get()).toEqual({
+        integrity_check: "ok",
+      });
+      expect(migrated.db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+      closeOpenClawStateDatabaseForTest();
+      expect(
+        openOpenClawStateDatabase(options)
+          .db.prepare("SELECT COUNT(*) AS count FROM cron_jobs")
+          .get(),
+      ).toEqual({ count: 2 });
+      expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([]);
+    },
+  );
+
+  it.each(
+    (["runtime open", "doctor repair"] as const).flatMap((migrationPath) => [
+      [migrationPath, "install_records_json", "[]"],
+      [migrationPath, "plugins_json", "{}"],
+      [migrationPath, "diagnostics_json", "{"],
+    ]) as Array<
+      readonly [
+        "runtime open" | "doctor repair",
+        "install_records_json" | "plugins_json" | "diagnostics_json",
+        string,
+      ]
+    >,
+  )(
+    "drops an invalid plugin-index cache during v13 %s when %s is invalid",
+    (migrationPath, column, value) => {
+      const stateDir = createTempStateDir();
+      const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+      const databasePath = materializeCurrentStateDatabase(stateDir);
+      const { DatabaseSync } = requireNodeSqlite();
+      const legacy = new DatabaseSync(databasePath);
+      legacy.exec(STATE_SCHEMA_13_TO_12_DOWNGRADE_SQL);
+      const values = {
+        install_records_json: "{}",
+        plugins_json: "[]",
+        diagnostics_json: "[]",
+        [column]: value,
+      };
+      legacy
+        .prepare(
+          `INSERT INTO installed_plugin_index (
+           index_key, version, host_contract_version, compat_registry_version,
+           migration_version, policy_hash, generated_at_ms, install_records_json,
+           plugins_json, diagnostics_json, updated_at_ms
+         ) VALUES ('installed-plugin-index', 1, 'host', 'compat', 1, 'policy', 10, ?, ?, ?, 11)`,
+        )
+        .run(values.install_records_json, values.plugins_json, values.diagnostics_json);
+      legacy.close();
+
+      if (migrationPath === "doctor repair") {
+        repairOpenClawStateDatabaseSchema(options);
+      }
+      const migrated = openOpenClawStateDatabase(options);
+      expect(
+        migrated.db
+          .prepare("SELECT name FROM sqlite_schema WHERE name = 'installed_plugin_index'")
+          .get(),
+      ).toBeUndefined();
+      expect(
+        migrated.db
+          .prepare(
+            "SELECT value_json FROM config_machine_state WHERE state_key = 'plugins.installedIndex'",
+          )
+          .get(),
+      ).toBeUndefined();
+      expect(migrated.db.prepare("PRAGMA integrity_check").get()).toEqual({
+        integrity_check: "ok",
+      });
+      closeOpenClawStateDatabaseForTest();
+      expect(readSqliteNumberPragma(openOpenClawStateDatabase(options).db, "user_version")).toBe(
+        13,
+      );
+    },
+  );
+
+  it("reprojects canonical cron JSON into the complete v12 downgrade contract", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", applyEnv: true, prefix: "openclaw-v13-downgrade-" },
+      async ({ stateDir }) => {
+        materializeCurrentStateDatabase(stateDir);
+        const storePath = path.join(stateDir, "cron", "jobs.json");
+        const base = {
+          enabled: true,
+          createdAtMs: 100,
+          updatedAtMs: 200,
+          sessionTarget: "main" as const,
+          wakeMode: "now" as const,
+          state: {},
+        };
+        const jobs = [
+          {
+            ...base,
+            id: "at-system-event",
+            name: "At system event",
+            deleteAfterRun: false,
+            schedule: { kind: "at", at: "2026-08-27T12:00:00.000Z" },
+            payload: { kind: "systemEvent", text: "tick", toolsAllow: [] },
+            failureAlert: false,
+          },
+          {
+            ...base,
+            id: "every-agent-turn",
+            name: "Every agent turn",
+            displayName: "Every display",
+            owner: { agentId: "owner-agent", sessionKey: "agent:owner:main" },
+            agentId: "worker",
+            sessionKey: "agent:worker:cron",
+            schedule: { kind: "every", everyMs: 60_000, anchorMs: 1_000 },
+            sessionTarget: "isolated",
+            payload: {
+              kind: "agentTurn",
+              message: "hello",
+              model: "openai/gpt-5.6-luna",
+              fallbacks: ["anthropic/claude-sonnet-4-6"],
+              thinking: "medium",
+              timeoutSeconds: 30,
+              allowUnsafeExternalContent: false,
+              externalContentSource: "webhook",
+              lightContext: false,
+              toolsAllow: ["read"],
+              toolsAllowIsDefault: false,
+            },
+            delivery: {
+              mode: "announce",
+              channel: "telegram",
+              to: "chat",
+              threadId: 42,
+              accountId: "account",
+              bestEffort: false,
+              completionDestination: { mode: "webhook", to: "https://example.invalid/done" },
+              failureDestination: {
+                mode: undefined,
+                channel: "discord",
+                to: undefined,
+                accountId: "ops",
+              },
+            },
+            failureAlert: {},
+            state: {
+              nextRunAtMs: 300,
+              runningAtMs: 301,
+              lastRunAtMs: 302,
+              lastRunStatus: "ok",
+              lastError: "old error",
+              lastDurationMs: 303,
+              consecutiveErrors: 0,
+              consecutiveSkipped: 2,
+              scheduleErrorCount: 1,
+              lastDeliveryStatus: "delivered",
+              lastDeliveryError: "old delivery error",
+              lastDelivered: false,
+              lastFailureAlertAtMs: 304,
+            },
+          },
+          {
+            ...base,
+            id: "cron-command",
+            name: "Cron command",
+            schedule: { kind: "cron", expr: "0 6 * * *", tz: "UTC", staggerMs: 500 },
+            trigger: { script: "return true", once: false },
+            payload: {
+              kind: "command",
+              argv: ["echo", "hello"],
+              cwd: "/tmp",
+              env: { LANG: "C" },
+              input: "stdin",
+              timeoutSeconds: 10,
+              noOutputTimeoutSeconds: 5,
+              outputMaxBytes: 1024,
+            },
+          },
+          {
+            ...base,
+            id: "exit-script",
+            name: "Exit script",
+            schedule: { kind: "on-exit", command: "sleep 1", cwd: "/tmp" },
+            payload: { kind: "script", script: "return 1", timeoutSeconds: 11, toolBudget: 3 },
+          },
+          {
+            ...base,
+            id: "stream-heartbeat",
+            name: "Stream heartbeat",
+            schedule: { kind: "stream", command: ["tail", "-f", "events.log"] },
+            payload: { kind: "heartbeat" },
+          },
+        ] satisfies CronStoredJob[];
+        await saveCronStore(storePath, { version: 1, jobs });
+        closeOpenClawStateDatabaseForTest();
+
+        const { DatabaseSync } = requireNodeSqlite();
+        const databasePath = resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir });
+        const db = new DatabaseSync(databasePath);
+        const canonicalRows = db
+          .prepare("SELECT job_id, job_json, state_json FROM cron_jobs ORDER BY sort_order")
+          .all();
+        const authoritySchemaStart = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
+          "CREATE TABLE IF NOT EXISTS cron_job_runtime_authorities (",
+        );
+        const authoritySchemaEnd = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
+          "\n) STRICT;",
+          authoritySchemaStart,
+        );
+        db.exec(OPENCLAW_STATE_SCHEMA_SQL.slice(authoritySchemaStart, authoritySchemaEnd + 10));
+        db.prepare(
+          `INSERT INTO cron_job_runtime_authorities (
+             store_key, job_id, authority_json, authority_input_fingerprint, recovery_required
+           ) VALUES (?, ?, '{}', 'fingerprint', 0)`,
+        ).run(path.resolve(storePath), "every-agent-turn");
+        db.exec(STATE_SCHEMA_13_TO_12_DOWNGRADE_SQL);
+
+        expect(
+          db
+            .prepare(
+              `SELECT schedule_kind, schedule_expr, schedule_tz, every_ms, anchor_ms, at,
+                    stagger_ms, payload_kind, payload_message, failure_alert_disabled
+               FROM cron_jobs ORDER BY sort_order`,
+            )
+            .all(),
+        ).toMatchObject([
+          {
+            schedule_kind: "at",
+            at: "2026-08-27T12:00:00.000Z",
+            payload_kind: "systemEvent",
+            payload_message: "tick",
+            failure_alert_disabled: 1,
+          },
+          {
+            schedule_kind: "every",
+            every_ms: 60_000,
+            anchor_ms: 1_000,
+            payload_kind: "agentTurn",
+            payload_message: "hello",
+            failure_alert_disabled: 0,
+          },
+          {
+            schedule_kind: "cron",
+            schedule_expr: "0 6 * * *",
+            schedule_tz: "UTC",
+            stagger_ms: 500,
+            payload_kind: "command",
+          },
+          {
+            schedule_kind: "on-exit",
+            schedule_expr: "sleep 1",
+            schedule_tz: "/tmp",
+            payload_kind: "script",
+          },
+          { schedule_kind: "stream", payload_kind: "heartbeat" },
+        ]);
+        const every = db.prepare("SELECT * FROM cron_jobs WHERE job_id = 'every-agent-turn'").get();
+        expect(every).toMatchObject({
+          display_name: "Every display",
+          owner_agent_id: "owner-agent",
+          owner_session_key: "agent:owner:main",
+          agent_id: "worker",
+          session_key: "agent:worker:cron",
+          payload_model: "openai/gpt-5.6-luna",
+          payload_fallbacks_json: '["anthropic/claude-sonnet-4-6"]',
+          payload_timeout_seconds: 30,
+          payload_allow_unsafe_external_content: 0,
+          payload_external_content_source_json: '"webhook"',
+          payload_light_context: 0,
+          payload_tools_allow_json: '["read"]',
+          payload_tools_allow_is_default: 0,
+          delivery_thread_id: "42",
+          delivery_thread_id_type: "number",
+          delivery_best_effort: 0,
+          failure_delivery_mode: "",
+          failure_delivery_channel: "discord",
+          failure_delivery_to: "",
+          failure_delivery_account_id: "ops",
+          next_run_at_ms: 300,
+          running_at_ms: 301,
+          last_run_at_ms: 302,
+          last_run_status: "ok",
+          last_delivered: 0,
+        });
+        expect(
+          JSON.parse(
+            (
+              db
+                .prepare("SELECT payload_message FROM cron_jobs WHERE job_id = 'cron-command'")
+                .get() as { payload_message: string }
+            ).payload_message,
+          ),
+        ).toEqual({
+          argv: ["echo", "hello"],
+          cwd: "/tmp",
+          env: { LANG: "C" },
+          input: "stdin",
+          noOutputTimeoutSeconds: 5,
+          outputMaxBytes: 1024,
+        });
+        expect(
+          db
+            .prepare("SELECT job_id, job_json, state_json FROM cron_jobs ORDER BY sort_order")
+            .all(),
+        ).toEqual(canonicalRows);
+        expect(
+          db
+            .prepare(
+              `SELECT name FROM sqlite_schema
+              WHERE type = 'index' AND name LIKE 'idx_cron_jobs_%' ORDER BY name`,
+            )
+            .all(),
+        ).toEqual([
+          { name: "idx_cron_jobs_agent_session" },
+          { name: "idx_cron_jobs_enabled_next_run" },
+          { name: "idx_cron_jobs_store_order" },
+          { name: "idx_cron_jobs_store_updated" },
+        ]);
+        expect(
+          db
+            .prepare(
+              "SELECT authority_input_fingerprint FROM cron_job_runtime_authorities WHERE job_id = 'every-agent-turn'",
+            )
+            .get(),
+        ).toEqual({ authority_input_fingerprint: "fingerprint" });
+        expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+        expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+        db.close();
+
+        const migrated = openOpenClawStateDatabase({
+          env: { OPENCLAW_STATE_DIR: stateDir },
+        });
+        expect(
+          loadedCronStoreFromRows(
+            loadCronRows(migrated.db, path.resolve(storePath)),
+          ).store.jobs.map((job) => job.id),
+        ).toEqual(jobs.map((job) => job.id));
+        closeOpenClawStateDatabaseForTest();
+        expect(
+          readSqliteNumberPragma(
+            openOpenClawStateDatabase({
+              env: { OPENCLAW_STATE_DIR: stateDir },
+            }).db,
+            "user_version",
+          ),
+        ).toBe(13);
+      },
+    );
+  });
+
+  it("refuses to downgrade malformed canonical cron JSON", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", applyEnv: true, prefix: "openclaw-v13-downgrade-invalid-" },
+      async ({ stateDir }) => {
+        materializeCurrentStateDatabase(stateDir);
+        const storePath = path.join(stateDir, "cron", "jobs.json");
+        await saveCronStore(storePath, {
+          version: 1,
+          jobs: [
+            {
+              id: "malformed-downgrade",
+              name: "Malformed downgrade",
+              enabled: true,
+              createdAtMs: 1,
+              updatedAtMs: 1,
+              schedule: { kind: "cron", expr: "0 6 * * *" },
+              sessionTarget: "main",
+              wakeMode: "now",
+              payload: { kind: "systemEvent", text: "tick" },
+              state: {},
+            },
+          ],
+        });
+        closeOpenClawStateDatabaseForTest();
+        const { DatabaseSync } = requireNodeSqlite();
+        const db = new DatabaseSync(
+          resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir }),
+        );
+        db.prepare("UPDATE cron_jobs SET state_json = '[]'").run();
+        expect(() => db.exec(STATE_SCHEMA_13_TO_12_DOWNGRADE_SQL)).toThrow(/CHECK constraint/);
+        db.exec("ROLLBACK");
+        expect(readSqliteNumberPragma(db, "user_version")).toBe(13);
+        expect(db.prepare("SELECT state_json FROM cron_jobs").get()).toEqual({ state_json: "[]" });
+        db.close();
+      },
+    );
+  });
 
   it("keeps a pre-existing authProfiles.store KV value over the v13 auth import", () => {
     const stateDir = createTempStateDir();

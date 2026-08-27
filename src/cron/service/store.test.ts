@@ -166,6 +166,42 @@ describe("cron service store seam coverage", () => {
     await expectPathMissing(storePath.replace(/\.json$/, "-quarantine.json"));
   });
 
+  it("quarantines malformed job and state JSON with exact recovery bytes", async () => {
+    const { storePath } = await makeStorePath();
+    const malformedJob = createReloadCronJob({ id: "malformed-job-json" });
+    const malformedState = createReloadCronJob({ id: "malformed-state-json" });
+    const surviving = createReloadCronJob({ id: "surviving-json-row" });
+    await saveCronStore(storePath, {
+      version: 1,
+      jobs: [malformedJob, malformedState, surviving],
+    });
+    const db = openOpenClawStateDatabase().db;
+    const stateRow = db
+      .prepare("SELECT job_json FROM cron_jobs WHERE job_id = ?")
+      .get(malformedState.id) as { job_json: string };
+    db.prepare("UPDATE cron_jobs SET job_json = ? WHERE job_id = ?").run("{", malformedJob.id);
+    db.prepare("UPDATE cron_jobs SET state_json = ? WHERE job_id = ?").run("[]", malformedState.id);
+    const state = createStoreTestState(storePath);
+
+    await ensureLoaded(state, { skipRecompute: true });
+
+    expect(state.store?.jobs.map((job) => job.id)).toEqual([surviving.id]);
+    expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual([surviving.id]);
+    expect(cronStoreModule.loadCronQuarantinedJobs(storePath)).toEqual([
+      expect.objectContaining({
+        sourceIndex: 0,
+        reason: "invalid-payload",
+        raw: { jobId: malformedJob.id, jobJson: "{", stateJson: "{}" },
+      }),
+      expect.objectContaining({
+        sourceIndex: 1,
+        reason: "invalid-state",
+        job: expect.objectContaining({ id: malformedState.id }),
+        raw: { jobId: malformedState.id, jobJson: stateRow.job_json, stateJson: "[]" },
+      }),
+    ]);
+  });
+
   it("quarantines persisted every schedules that cannot produce valid Date timestamps", async () => {
     const { storePath } = await makeStorePath();
     const invalidInterval = createReloadCronJob({

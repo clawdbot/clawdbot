@@ -1,11 +1,6 @@
 /** Converts cron jobs between public store shape and normalized SQLite rows. */
 import type { DatabaseSync } from "node:sqlite";
-import { safeParseJson } from "@openclaw/normalization-core";
-import {
-  asOptionalObjectRecord,
-  asRecord,
-  isRecord,
-} from "@openclaw/normalization-core/record-coerce";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
@@ -106,17 +101,14 @@ export function assertCronStoreCanPersist(store: CronStoreFile): void {
   }
 }
 
-function stateFromRow(row: CronJobRow): CronJobState {
-  return asRecord(safeParseJson(row.state_json)) as CronJobState;
-}
-
 function decodeCronJobConfig(jobJson: Record<string, unknown>): Record<string, unknown> {
   const delivery = deliveryFromJson(jobJson.delivery);
   return delivery ? { ...jobJson, delivery } : jobJson;
 }
 
 function rowToCronJob(row: CronJobRow, jobJson: Record<string, unknown>): CronStoredJob | null {
-  if (getInvalidPersistedCronJobReason(jobJson)) {
+  const state = tryParseJsonObject(row.state_json);
+  if (!state || getInvalidPersistedCronJobReason(jobJson)) {
     return null;
   }
   const createdAtMs =
@@ -135,7 +127,7 @@ function rowToCronJob(row: CronJobRow, jobJson: Record<string, unknown>): CronSt
     createdAtMs,
     updatedAtMs:
       normalizeNumber(row.runtime_updated_at_ms) ?? normalizeNumber(row.updated_at) ?? createdAtMs,
-    state: stateFromRow(row),
+    state,
   } as CronStoredJob;
 }
 
@@ -146,7 +138,7 @@ export function projectCronJobThroughStorageCodec(job: CronStoredJob): CronStore
     throw new Error(`cannot project invalid cron job ${job.id}`);
   }
   const row = bindCronJobRow("config-revision", normalized, 0) as CronJobRow;
-  const projected = rowToCronJob(row, asOptionalObjectRecord(safeParseJson(row.job_json)) ?? {});
+  const projected = rowToCronJob(row, tryParseJsonObject(row.job_json) ?? {});
   if (!projected) {
     throw new Error(`cannot project cron job ${job.id} through storage codecs`);
   }
@@ -357,14 +349,23 @@ export function loadedCronStoreFromRows(rows: CronJobRow[]): LoadedCronStore {
   const invalidConfigRows: LoadedCronStore["invalidConfigRows"] = [];
 
   for (const [index, row] of rows.entries()) {
-    const parsedJobJson = asOptionalObjectRecord(safeParseJson(row.job_json));
-    const jobJson = parsedJobJson ?? {};
-    const job = rowToCronJob(row, jobJson);
-    const configJob = decodeCronJobConfig(parsedJobJson ?? {});
+    const parsedJobJson = tryParseJsonObject(row.job_json);
+    const parsedStateJson = tryParseJsonObject(row.state_json);
+    if (!parsedJobJson || !parsedStateJson) {
+      invalidConfigRows.push({
+        sourceIndex: index,
+        reason: parsedJobJson ? "invalid-state" : "invalid-payload",
+        ...(parsedJobJson ? { job: decodeCronJobConfig(parsedJobJson) } : {}),
+        raw: { jobId: row.job_id, jobJson: row.job_json, stateJson: row.state_json },
+      });
+      continue;
+    }
+    const job = rowToCronJob(row, parsedJobJson);
+    const configJob = decodeCronJobConfig(parsedJobJson);
     const runtimeEntry = {
       updatedAtMs: normalizeNumber(row.runtime_updated_at_ms) ?? normalizeNumber(row.updated_at),
       scheduleIdentity: row.schedule_identity ?? undefined,
-      state: stateFromRow(row) as Record<string, unknown>,
+      state: parsedStateJson,
     };
 
     if (!job) {
