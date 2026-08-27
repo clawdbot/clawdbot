@@ -403,24 +403,18 @@ async function activateSetupInferenceUnredacted(
       stagedRoute.modelLabel,
       requestedAgentId,
     );
-    // OpenClaw executes through the reserved agent id but reuses the default
-    // route's agent directory. Only a submitted key stays in the isolated store.
-    if (testPlan.runner === "embedded" && stagedRoute.runner === "embedded") {
-      testPlan = {
-        ...testPlan,
-        executionConfig: stagedExecutionRoute.runConfig,
-        agentDir: hasPreparedAuthProfiles ? testAgentDir : stagedRoute.agentDir,
-        ...(stagedRoute.agentHarnessRuntimeOverride
-          ? { agentHarnessRuntimeOverride: stagedRoute.agentHarnessRuntimeOverride }
-          : {}),
-      };
-    } else {
-      testPlan = {
-        ...testPlan,
-        executionConfig: stagedExecutionRoute.runConfig,
-        ...(!hasPreparedAuthProfiles ? { agentDir: stagedRoute.agentDir } : {}),
-      };
-    }
+    // Prepared credentials stay in the isolated test store; existing routes use
+    // the default agent's store while execution keeps the reserved agent id.
+    testPlan = {
+      ...testPlan,
+      executionConfig: stagedExecutionRoute.runConfig,
+      agentDir: hasPreparedAuthProfiles ? testAgentDir : stagedRoute.agentDir,
+      ...(testPlan.runner === "embedded" &&
+      stagedRoute.runner === "embedded" &&
+      stagedRoute.agentHarnessRuntimeOverride
+        ? { agentHarnessRuntimeOverride: stagedRoute.agentHarnessRuntimeOverride }
+        : {}),
+    };
 
     if (hasPreparedAuthProfiles && plan.manualAuth) {
       const staged = await persistManualAuthProfiles({
