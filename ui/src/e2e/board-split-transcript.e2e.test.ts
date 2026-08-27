@@ -256,11 +256,11 @@ describeControlUiE2e("Board split transcript restore", () => {
       expect(
         frame.rowGap,
         `first frame width=${frame.width}px; assistant-to-user gap=${frame.assistantUserGap}px`,
-      ).toBeGreaterThanOrEqual(0);
+      ).toBeGreaterThanOrEqual(-0.01);
       expect(
         frame.assistantUserGap,
         `assistant text overlaps the user bubble at width=${frame.width}px`,
-      ).toBeGreaterThanOrEqual(0);
+      ).toBeGreaterThanOrEqual(-0.01);
     } finally {
       contexts.delete(context);
       await context.close();

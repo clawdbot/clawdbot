@@ -26,7 +26,7 @@ openclaw-new-session-page {
   z-index: 45;
 }
 
-.new-session-page__incognito-rail .new-session-page__draft-tooltip {
+.new-session-page__draft-toggle {
   display: none;
 }
 
@@ -77,10 +77,6 @@ html.openclaw-native-macos .new-session-page__incognito-rail {
     display: flex;
     align-items: center;
     gap: 8px;
-  }
-
-  .new-session-page__incognito-rail .new-session-page__draft-tooltip {
-    display: inline-flex;
   }
 
   .new-session-page__draft-toggle {

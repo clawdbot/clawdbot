@@ -324,8 +324,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: var(--chat-stack-trailing-control-size);
+  height: var(--chat-stack-trailing-control-size);
   padding: 0;
   color: var(--muted);
   background: none;
@@ -471,9 +471,7 @@
   width: 100%;
   min-width: 0;
   min-height: 42px;
-  /* The chevron is 18px while queue/goal actions occupy 24px. The 3px
-     compensation keeps all trailing centers on one vertical stack column. */
-  padding: 8px calc(var(--chat-stack-trailing-inset) + 3px) 8px var(--chat-stack-leading-inset);
+  padding: 8px var(--chat-stack-trailing-inset) 8px var(--chat-stack-leading-inset);
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -543,8 +541,8 @@
 
 .session-progress-card__summary-chevron {
   display: grid;
-  width: 18px;
-  height: 18px;
+  width: var(--chat-stack-trailing-control-size);
+  height: var(--chat-stack-trailing-control-size);
   place-items: center;
   color: var(--muted);
   transition:
