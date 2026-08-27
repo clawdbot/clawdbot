@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 /** Creates and seeds the attempt-local trajectory recorder. */
 import type { SessionSystemPromptReport } from "../../../config/sessions/types.js";
 import { buildTrajectoryRunMetadata } from "../../../trajectory/metadata.js";
@@ -6,6 +7,18 @@ import type { AgentSession } from "../../sessions/index.js";
 import { resolveAttemptStreamAuthProfileId } from "./attempt-run-decisions.js";
 import { resolveAttemptTrajectorySessionFile } from "./attempt-transcript-helpers.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
+
+/**
+ * Pseudonymizes the auth profile id for trajectory persistence: raw ids are
+ * credentials-adjacent, so only a stable sha256 prefix is recorded — enough
+ * for audit cross-referencing against config, without exposing the plaintext.
+ */
+function pseudonymizeAuthProfileId(authProfileId: string | undefined): string | undefined {
+  if (!authProfileId) {
+    return undefined;
+  }
+  return createHash("sha256").update(authProfileId.trim()).digest("hex").slice(0, 16);
+}
 
 export async function prepareEmbeddedAttemptTrajectory(input: {
   activeSession: Pick<AgentSession, "sessionId">;
@@ -56,7 +69,7 @@ export async function prepareEmbeddedAttemptTrajectory(input: {
   });
   recorder?.recordEvent("session.started", {
     trigger: attempt.trigger,
-    authProfileId: resolveAttemptStreamAuthProfileId(attempt),
+    authProfileId: pseudonymizeAuthProfileId(resolveAttemptStreamAuthProfileId(attempt)),
     sessionFile: attempt.sessionFile,
     workspaceDir: input.effectiveWorkspace,
     agentId: input.sessionAgentId,

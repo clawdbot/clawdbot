@@ -116,7 +116,7 @@ describe("prepareEmbeddedAttemptTrajectory", () => {
     expect(recorder.recordEvent).toHaveBeenNthCalledWith(
       1,
       "session.started",
-      expect.objectContaining({ authProfileId: "profile-42" }),
+      expect.objectContaining({ authProfileId: expect.stringMatching(/^[a-f0-9]{16}$/) }),
     );
   });
 
