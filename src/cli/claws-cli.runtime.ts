@@ -303,6 +303,7 @@ export async function runClawsAddCommand(
   const basePlanContext = {
     ...(opts.agentId ? { agentId: opts.agentId } : {}),
     ...(opts.workspace ? { workspace: opts.workspace } : {}),
+    ...(opts.adoptExistingWorkspace ? { adoptExistingWorkspace: true } : {}),
     existingAgentIds,
     existingWorkspacePaths,
     existingMcpServers: listedMcpServers.mcpServers,

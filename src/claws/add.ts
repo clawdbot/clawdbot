@@ -44,6 +44,7 @@ import {
   type PersistedClawPackageRef,
 } from "./provenance.js";
 import { CLAW_OUTPUT_STABILITY, type ClawAddPlan } from "./types.js";
+import { planAdoptsWorkspace } from "./workspace-origin.js";
 import {
   ClawWorkspaceWriteError,
   createClawWorkspaceFiles,
@@ -213,6 +214,7 @@ export async function applyClawAddPlan(
 
   const workspace = resolve(resolveUserPath(plan.agent.workspace));
   const workspacePhaseRecorded = statusAtLeast(installRecord.status, "workspace_ready");
+  const workspaceAdoption = planAdoptsWorkspace(plan);
   let workspaceState: Stats | undefined;
   try {
     assertWorkspacePathUnchanged(workspace);
@@ -238,7 +240,7 @@ export async function applyClawAddPlan(
     );
   }
 
-  if (!workspacePhaseRecorded && workspaceState) {
+  if (!workspacePhaseRecorded && workspaceState && !workspaceAdoption) {
     markInstallStatus(plan.agent.finalId, "partial", ["pending", "partial"], options);
     return partialResult({
       plan,
@@ -262,6 +264,31 @@ export async function applyClawAddPlan(
 
   let workspaceCreated = workspaceState?.isDirectory() ?? false;
   let configCommitted = statusAtLeast(installRecord.status, "config_committed");
+  if (workspaceAdoption && (!workspaceCreated || !workspacePhaseRecorded)) {
+    const adoptedState = await lstat(workspace).catch(() => undefined);
+    if (!adoptedState?.isDirectory()) {
+      clearUnownedInstallRecord(plan.agent.finalId, ["pending", "partial"], options);
+      throw new ClawAddMutationError(
+        "workspace_collision",
+        `Adoptable workspace ${JSON.stringify(workspace)} is no longer an existing directory.`,
+      );
+    }
+    workspaceCreated = true;
+    if (!workspacePhaseRecorded) {
+      try {
+        markInstallStatus(
+          plan.agent.finalId,
+          "workspace_ready",
+          ["pending", "partial", "workspace_ready"],
+          options,
+        );
+      } catch (error) {
+        clearUnownedInstallRecord(plan.agent.finalId, ["pending", "partial"], options);
+        throw new ClawAddMutationError("provenance_failed", (error as Error).message);
+      }
+    }
+  }
+
   const installPackages = options.installPackages ?? installClawPackages;
   let packages: PersistedClawPackageRef[] = [];
   const preserveRecordedPhaseOrMarkPartial = (): ClawInstallStatus => {
@@ -417,6 +444,55 @@ export async function applyClawAddPlan(
     });
   }
 
+  // Workspace ownership must be complete before the agent becomes routable. Besides writing new
+  // files, this reopens every adopted destination through the safe-file contract and records its
+  // exact digest; a failure therefore leaves only retryable provenance, never an enabled agent.
+  const createFiles = options.createWorkspaceFiles ?? createClawWorkspaceFiles;
+  let workspaceFiles: PersistedClawWorkspaceFile[] = [];
+  try {
+    workspaceFiles = await createFiles(plan, options);
+  } catch (error) {
+    const workspaceError =
+      error instanceof ClawWorkspaceWriteError
+        ? error
+        : new ClawWorkspaceWriteError(
+            [
+              {
+                level: "error",
+                code: "workspace_file_io_error",
+                phase: "mutation",
+                path: "$.workspace",
+                message: error instanceof Error ? error.message : String(error),
+              },
+            ],
+            workspaceFiles,
+          );
+    const installStatus: ClawInstallStatus = configCommitted
+      ? "config_committed"
+      : "workspace_ready";
+    markInstallStatus(
+      plan.agent.finalId,
+      installStatus,
+      configCommitted ? ["config_committed"] : ["workspace_ready"],
+      options,
+    );
+    return partialResult({
+      plan,
+      installRecord,
+      workspaceCreated,
+      configCommitted,
+      workspaceFiles: workspaceError.createdFiles,
+      packages,
+      installStatus,
+      error: {
+        code: "workspace_files_failed",
+        message: workspaceError.message,
+        diagnostics: workspaceError.diagnostics,
+      },
+      nowMs: options.nowMs,
+    });
+  }
+
   try {
     const commit: ConfigCommit =
       options.commitConfig ??
@@ -506,7 +582,7 @@ export async function applyClawAddPlan(
     );
   } catch (error) {
     let installStatus: ClawInstallStatus = "workspace_ready";
-    if (!configCommitted) {
+    if (!configCommitted && !workspaceAdoption) {
       const removedWorkspace = await rmdir(workspace)
         .then(() => true)
         .catch(() => false);
@@ -521,6 +597,7 @@ export async function applyClawAddPlan(
       installRecord,
       workspaceCreated,
       configCommitted,
+      workspaceFiles,
       packages,
       installStatus,
       error: {
@@ -529,55 +606,6 @@ export async function applyClawAddPlan(
       },
       nowMs: options.nowMs,
     });
-  }
-
-  const createFiles = options.createWorkspaceFiles ?? createClawWorkspaceFiles;
-  let workspaceFiles: PersistedClawWorkspaceFile[] = [];
-  try {
-    workspaceFiles = await createFiles(plan, options);
-  } catch (error) {
-    const workspaceError =
-      error instanceof ClawWorkspaceWriteError
-        ? error
-        : new ClawWorkspaceWriteError(
-            [
-              {
-                level: "error",
-                code: "workspace_file_io_error",
-                phase: "mutation",
-                path: "$.workspace",
-                message: coerceErrorMessage(error),
-              },
-            ],
-            workspaceFiles,
-          );
-    markInstallStatus(plan.agent.finalId, "config_committed", ["config_committed"], options);
-    return {
-      schemaVersion: CLAW_ADD_RESULT_SCHEMA_VERSION,
-      stability: CLAW_OUTPUT_STABILITY,
-      dryRun: false,
-      mutationAllowed: true,
-      planIntegrity: plan.planIntegrity,
-      status: "partial",
-      claw: plan.claw,
-      agent: plan.agent,
-      workspaceCreated,
-      configCommitted,
-      workspaceFiles: workspaceError.createdFiles,
-      packages,
-      mcpServers: [],
-      cronJobs: [],
-      installRecord: {
-        ...installRecord,
-        status: "config_committed",
-        updatedAtMs: options.nowMs ?? Date.now(),
-      },
-      error: {
-        code: "workspace_files_failed",
-        message: workspaceError.message,
-        diagnostics: workspaceError.diagnostics,
-      },
-    };
   }
 
   let cronJobs: PersistedClawCronRef[] = [];
