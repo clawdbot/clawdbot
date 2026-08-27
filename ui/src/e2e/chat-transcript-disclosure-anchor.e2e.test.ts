@@ -187,6 +187,9 @@ suite.define(() => {
             // a wheel event or a changed offset.
             await page.mouse.click(track!.x + track!.width - 3, track!.y + 20);
             await page.locator(".chat-scroll-to-bottom").waitFor({ state: "visible" });
+            // Chromium can commit its last canceled animation offset after the
+            // pointer action returns. Capture the reader before releasing text.
+            await waitForChatScrollIdle(page);
           }
           const interruptedOffset = await thread.evaluate((element) => element.scrollTop);
           if (interruption === "wheel") {

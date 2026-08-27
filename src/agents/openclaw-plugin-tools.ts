@@ -15,6 +15,7 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeRegistryScope,
 } from "../plugins/runtime/gateway-request-scope.js";
+import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import type { OpenClawPluginToolDelivery } from "../plugins/tool-types.js";
 import { resolvePluginTools } from "../plugins/tools.js";
 import type { OpenClawPluginToolContext } from "../plugins/types.js";
@@ -31,7 +32,6 @@ import {
   resolveOpenClawPluginToolInputs,
   type OpenClawPluginToolOptions,
 } from "./openclaw-tools.plugin-context.js";
-import { getPreparedPluginRuntimeLoadContext } from "./prepared-model-runtime.plugin-context.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
 import { resolveAgentRuntimeToolConfig } from "./tool-runtime-config.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -307,7 +307,7 @@ export function resolveOpenClawPluginToolsForOptions(params: {
     ...(preparedModelRuntime
       ? {
           preparedRuntime: {
-            loadContext: getPreparedPluginRuntimeLoadContext(preparedModelRuntime.pluginRegistry),
+            loadContext: getPluginRuntimeLoadContext(preparedModelRuntime.pluginRegistry),
             metadataSnapshot: preparedModelRuntime.metadataSnapshot,
             registry: preparedModelRuntime.pluginRegistry,
           },

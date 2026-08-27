@@ -10,6 +10,7 @@ import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   classifyAgentRunTerminalOutcome,
 } from "../agents/agent-run-terminal-outcome.js";
+import { isActiveEmbeddedRunId } from "../agents/embedded-agent-runner/runs.js";
 import { isTimeoutError, resolveFailoverReasonFromError } from "../agents/failover-error.js";
 import type { FailoverReason } from "../agents/failover/signal.js";
 import { resolveToolSearchCodeDisplayTarget } from "../agents/tool-display-common.js";
@@ -1312,6 +1313,9 @@ export function createAgentEventHandler({
     const isAborted =
       isChatAbortMarkerCurrent(chatRunState.runs.get(clientRunId)?.abortMarker, chatLink) ||
       isChatAbortMarkerCurrent(chatRunState.runs.get(evt.runId)?.abortMarker, chatLink);
+    const recordsEmbeddedProgress = !chatLink && isActiveEmbeddedRunId(evt.runId);
+    const recordsInFlightProgress =
+      (Boolean(chatLink) && isControlUiVisible) || recordsEmbeddedProgress;
 
     const restartRecoveryState = restartRecoverySessionKey
       ? resolveRestartRecoveryLifecycleState(restartRecoverySessionKey, restartRecoveryAgentId, evt)
@@ -1414,8 +1418,7 @@ export function createAgentEventHandler({
       };
     }
     if (
-      chatLink &&
-      isControlUiVisible &&
+      recordsInFlightProgress &&
       !isAborted &&
       ((isToolEvent && !suppressHeartbeatToolEvents) ||
         isItemEvent ||
@@ -1429,7 +1432,11 @@ export function createAgentEventHandler({
       // Persist the client-facing identity after run/session remapping. Route
       // changes discard transient UI rows, so history replay must use the same
       // payload identity as live delivery or tool results cannot reconcile.
-      chatRunState.recordProgressEvent(clientRunId, agentPayload);
+      chatRunState.recordProgressEvent(
+        clientRunId,
+        agentPayload,
+        recordsEmbeddedProgress ? "summary" : "full",
+      );
     }
     if (evt.stream === "run_status") {
       const phase = readChatRunStartupPhase(evt.data?.phase);

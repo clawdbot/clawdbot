@@ -293,17 +293,19 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
           if (element !== this.scrollElement) {
             return;
           }
-          const previousOffset = instance.scrollOffset;
           callback(offset, scrolling);
-          // Core must observe the user's offset before replaying skipped sizes;
-          // otherwise its old destination can compensate the viewport back down.
-          if (
-            this.endScrollBehavior === "smooth" &&
-            (!scrolling || offset < (previousOffset ?? offset))
-          ) {
-            this.cancelScroll();
-          } else if (!scrolling) {
-            this.endScrollBehavior = null;
+          // Idle can arrive between smooth retargets. Completion needs the
+          // restore path's 1px precision, not the 8px UI-follow boundary.
+          // The input listeners above own reader takeover.
+          const settledAtEnd =
+            !scrolling &&
+            Math.abs((maxTranscriptScrollOffset(element) ?? 0) - (element?.scrollTop ?? 0)) <= 1;
+          if (settledAtEnd && this.pendingScrollOffset === null) {
+            if (this.endScrollBehavior === "smooth") {
+              this.cancelScroll();
+            } else {
+              this.endScrollBehavior = null;
+            }
           }
         });
         return () => {

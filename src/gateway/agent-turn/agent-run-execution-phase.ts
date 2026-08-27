@@ -23,6 +23,7 @@ import {
 } from "../../auto-reply/reply/source-turn-id.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isAbortError } from "../../infra/abort-signal.js";
 import { formatErrorMessageWithCode } from "../../infra/errors.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
@@ -125,32 +126,35 @@ export function startAgentRunExecution(params: {
     await yieldAfterAgentAcceptedAck();
     let dispatched = false;
     let pendingRecovery: MainSessionRecoveryPendingTarget | undefined;
+    const finishUndispatchedAbort = async () => {
+      pendingRecovery = await prepared.restoreAdmittedRestartRecoveryInterrupted?.();
+      const stopReason = resolveAbortedAgentStopReason(prepared.activeRunAbort.entry);
+      setAbortedAgentDedupeEntries({
+        dedupe: params.context.dedupe,
+        keys: params.agentDedupeKeys,
+        agentId: params.activeSessionAgentId,
+        runId: params.runId,
+        stopReason,
+      });
+      params.io.emitFinal(
+        [
+          true,
+          {
+            runId: params.runId,
+            status: "timeout" as const,
+            summary: "aborted",
+            stopReason,
+            timeoutPhase: "queue" as const,
+            providerStarted: false,
+          },
+          undefined,
+        ],
+        { runId: params.runId },
+      );
+    };
     try {
       if (prepared.activeRunAbort.controller.signal.aborted) {
-        pendingRecovery = await prepared.restoreAdmittedRestartRecoveryInterrupted?.();
-        const stopReason = resolveAbortedAgentStopReason(prepared.activeRunAbort.entry);
-        setAbortedAgentDedupeEntries({
-          dedupe: params.context.dedupe,
-          keys: params.agentDedupeKeys,
-          agentId: params.activeSessionAgentId,
-          runId: params.runId,
-          stopReason,
-        });
-        params.io.emitFinal(
-          [
-            true,
-            {
-              runId: params.runId,
-              status: "timeout" as const,
-              summary: "aborted",
-              stopReason,
-              timeoutPhase: "queue" as const,
-              providerStarted: false,
-            },
-            undefined,
-          ],
-          { runId: params.runId },
-        );
+        await finishUndispatchedAbort();
         return;
       }
 
@@ -210,6 +214,7 @@ export function startAgentRunExecution(params: {
         : params.agentId;
       const replyDispatchRuntime = await loadPublishedGatewayReplyDispatchRuntime({
         agentId: params.activeSessionAgentId,
+        abortSignal: prepared.activeRunAbort.controller.signal,
       });
       if (!replyDispatchRuntime?.pluginGeneration) {
         throw new Error(
@@ -464,6 +469,10 @@ export function startAgentRunExecution(params: {
       );
       dispatched = true;
     } catch (err) {
+      if (prepared.activeRunAbort.controller.signal.aborted && isAbortError(err)) {
+        await finishUndispatchedAbort();
+        return;
+      }
       const renderedErr = formatErrorMessageWithCode(err);
       const error = errorShape(ErrorCodes.UNAVAILABLE, renderedErr);
       const payload = {

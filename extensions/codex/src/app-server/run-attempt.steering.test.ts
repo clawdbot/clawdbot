@@ -151,6 +151,27 @@ describe("runCodexAppServerAttempt steering", () => {
     });
   });
 
+  it("threads the core run start time onto the active-turn handle", async () => {
+    const { waitForMethod, completeTurn } = createStartedThreadHarness();
+    const startedAtMs = 1_750_000_000_000;
+    const params = { ...createSteeringParams(), startedAtMs };
+    activeRunRegistrationMocks.setActiveEmbeddedRun.mockClear();
+    const run = runCodexAppServerAttempt(params);
+    await waitForMethod("turn/start");
+
+    let handle: { startedAtMs?: number } | undefined;
+    await vi.waitFor(() => {
+      handle = activeRunRegistrationMocks.setActiveEmbeddedRun.mock.calls.findLast(
+        (call) => call[0] === params.sessionId,
+      )?.[1] as typeof handle;
+      expect(handle).toBeDefined();
+    }, fastWait);
+    expect(handle?.startedAtMs).toBe(startedAtMs);
+
+    await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+  });
+
   it("exposes pending-question cancellation for queued image fallback", async () => {
     const harness = createStartedThreadHarness();
     const params = createSteeringParams();
