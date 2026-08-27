@@ -150,6 +150,10 @@ describe("msteams doctor state migration", () => {
 
   it("imports legacy polls and vote buckets into plugin state", async () => {
     const filePath = path.join(stateDir, "msteams-polls.json");
+    const legacyBucket = selectMSTeamsPollVoteBucket("poll-legacy", "user-legacy");
+    const sameBucketVoter = Array.from({ length: 1000 }, (_, index) => `collision-${index}`).find(
+      (id) => selectMSTeamsPollVoteBucket("poll-legacy", id) === legacyBucket,
+    )!;
     const poll: MSTeamsPoll = {
       id: "poll-legacy",
       question: "Lunch?",
@@ -159,6 +163,7 @@ describe("msteams doctor state migration", () => {
       votes: {
         "user-legacy": ["0"],
         "user-new": ["1"],
+        [sameBucketVoter]: ["0"],
       },
     };
     await fs.writeFile(
@@ -175,7 +180,6 @@ describe("msteams doctor state migration", () => {
       namespace: MSTEAMS_POLL_VOTE_BUCKETS_NAMESPACE,
       maxEntries: 32_032,
     });
-    const legacyBucket = selectMSTeamsPollVoteBucket("poll-legacy", "user-legacy");
     await voteBucketStore.register(buildMSTeamsPollVoteBucketKey("poll-legacy", legacyBucket), {
       pollId: "poll-legacy",
       bucket: legacyBucket,
@@ -184,13 +188,14 @@ describe("msteams doctor state migration", () => {
     });
 
     const migration = migrationById("msteams-polls-json-to-plugin-state");
-    const result = await migration.migrateLegacyState({
+    const params = {
       config: {},
       env,
       stateDir,
       oauthDir: path.join(stateDir, "oauth"),
       context,
-    });
+    };
+    const result = await migration.migrateLegacyState(params);
 
     expect(result.warnings).toEqual([]);
     expect(result.changes).toEqual([
@@ -209,7 +214,7 @@ describe("msteams doctor state migration", () => {
     await expect(
       voteBucketStore.lookup(buildMSTeamsPollVoteBucketKey("poll-legacy", legacyBucket)),
     ).resolves.toMatchObject({
-      votes: { "user-legacy": ["1"] },
+      votes: { "user-legacy": ["1"], [sameBucketVoter]: ["0"] },
     });
     await expect(
       voteBucketStore.lookup(buildMSTeamsPollVoteBucketKey("poll-legacy", newBucket)),
@@ -217,6 +222,19 @@ describe("msteams doctor state migration", () => {
       votes: { "user-new": ["1"] },
     });
     await expect(fs.access(`${filePath}.migrated`)).resolves.toBeUndefined();
+    const source = await fs.readFile(`${filePath}.migrated`, "utf8");
+    const beforeRerun = await voteBucketStore.entries();
+    await fs.writeFile(filePath, source);
+    const rerun = await migration.migrateLegacyState(params);
+    expect(rerun.warnings).toEqual([]);
+    expect(rerun.changes).toContainEqual(
+      expect.stringContaining("Removed already-archived Microsoft Teams poll legacy source"),
+    );
+    expect((await voteBucketStore.entries()).map(({ key, value }) => ({ key, value }))).toEqual(
+      beforeRerun.map(({ key, value }) => ({ key, value })),
+    );
+    await expect(fs.readFile(`${filePath}.migrated`, "utf8")).resolves.toBe(source);
+    await expect(migration.detectLegacyState(params)).resolves.toBeNull();
   });
 
   it("imports legacy SSO tokens into the existing plugin-state token namespace", async () => {
