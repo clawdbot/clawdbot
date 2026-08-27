@@ -9,11 +9,7 @@
  */
 import crypto from "node:crypto";
 import path from "node:path";
-import {
-  createSecretFileAtomic,
-  readSecretFile,
-  tryReadSecretFileSync,
-} from "openclaw/plugin-sdk/secret-file";
+import { createSecretFileAtomic, tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file";
 import { resolveOAuthDir } from "openclaw/plugin-sdk/state-paths";
 
 const RELAY_SECRET_FILE = "browser-extension-relay.secret";
@@ -53,44 +49,38 @@ export async function ensureExtensionRelayToken(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<string> {
   const secretPath = resolveExtensionRelaySecretPath(env);
-  const existing = readExtensionRelayToken(env);
-  if (existing) {
-    return existing;
-  }
-  const token = crypto.randomBytes(32).toString("hex");
-  try {
-    await createSecretFileAtomic({
-      rootDir: path.dirname(secretPath),
-      filePath: secretPath,
-      content: `${token}\n`,
-    });
-    return token;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "secret-exists") {
-      throw err;
-    }
-    // Another process created it first; its exclusive async write may still be
-    // finishing after the final name appears, so adopt it with a bounded reread.
-    for (let attempt = 0; attempt < RELAY_SECRET_REREAD_ATTEMPTS; attempt += 1) {
-      try {
-        const winner = normalizeToken(
-          await readSecretFile(secretPath, "browser extension relay secret"),
-        );
-        if (winner) {
-          return winner;
-        }
-      } catch {
-        // Retry only inside the bounded first-writer handoff window.
+  let createError: unknown;
+  for (let attempt = 0; attempt < RELAY_SECRET_REREAD_ATTEMPTS; attempt += 1) {
+    try {
+      const winner = readExtensionRelayToken(env);
+      if (winner) {
+        return winner;
       }
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, RELAY_SECRET_REREAD_DELAY_MS);
-      });
+    } catch {
+      // An exclusive writer can expose an empty final file before ensure starts;
+      // even the first read belongs inside this bounded handoff.
     }
-    throw new Error("extension relay secret exists but is unreadable/malformed", { cause: err });
+    if (attempt === 0) {
+      const token = crypto.randomBytes(32).toString("hex");
+      try {
+        await createSecretFileAtomic({
+          rootDir: path.dirname(secretPath),
+          filePath: secretPath,
+          content: `${token}\n`,
+        });
+        return token;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "secret-exists") {
+          throw err;
+        }
+        createError = err;
+      }
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, RELAY_SECRET_REREAD_DELAY_MS);
+    });
   }
-}
-
-/** Resolve the relay token for config (read-only; null until first ensured). */
-export function resolveExtensionRelayToken(env: NodeJS.ProcessEnv = process.env): string | null {
-  return readExtensionRelayToken(env);
+  throw new Error("extension relay secret exists but is unreadable/malformed", {
+    cause: createError,
+  });
 }
