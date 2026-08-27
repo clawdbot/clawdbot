@@ -70,6 +70,7 @@ function redactTranscriptStructuredFieldValue(
     const uuidMatch = value.match(UUID_PREFIX_RE);
     if (uuidMatch) {
       const uuidPart = uuidMatch[1];
+      if (!uuidPart) return value;
       const suffix = value.slice(uuidPart.length);
       const redactedSuffix = suffix
         ? redactSensitiveFieldValue(key, suffix, redactTranscriptOptions(cfg))
