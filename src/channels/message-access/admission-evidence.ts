@@ -675,18 +675,14 @@ export function consumeChannelAdmissionEvidence(
   const everyDecisionEnforced = contributions.every(
     (item) => item.decision?.participantAware && item.decision.outcomeAffecting,
   );
-  const identifierAuthentication = contributions.every(
+  const identifierAuthentication = contributions.some(
     (item) => item.decision?.identifierAuthentication === "affected",
   )
     ? "affected"
-    : contributions.every((item) => item.decision?.identifierAuthentication === "not-evaluated")
-      ? "not-evaluated"
-      : contributions.every(
-            (item) =>
-              item.decision?.identifierAuthentication === "affected" ||
-              item.decision?.identifierAuthentication === "evaluated",
-          )
-        ? "evaluated"
+    : contributions.some((item) => item.decision?.identifierAuthentication === "evaluated")
+      ? "evaluated"
+      : contributions.every((item) => item.decision?.identifierAuthentication === "not-evaluated")
+        ? "not-evaluated"
         : "unknown";
   return freezeConsumed({
     ingressState: "present",
