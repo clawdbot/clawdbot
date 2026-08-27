@@ -1,7 +1,7 @@
+import { execFileSync } from "node:child_process";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
-import { hasTopLevelShellControlOperator, splitShellArgs } from "../../../src/utils/shell-argv.js";
 import { registerQaLabCli } from "./cli.js";
 import { findQaScenarioMatches, renderQaScenarioMatchesMarkdownReport } from "./coverage-report.js";
 import { defaultQaModelForMode, type QaProviderMode } from "./model-selection.js";
@@ -15,13 +15,24 @@ vi.mock("openclaw/plugin-sdk/qa-runner-runtime", () => ({
   listQaRunnerCliContributions: () => [],
 }));
 
+function captureReportedArgv(command: string): string[] {
+  // Previews use POSIX quoting; Windows test hosts need Git Bash's sh on PATH.
+  // Capture the shell-expanded arguments without starting pnpm or a QA provider.
+  const argv = execFileSync("sh", ["-c", `pnpm() { printf '%s\\0' pnpm "$@"; }\n${command}`], {
+    encoding: "utf8",
+    timeout: 5_000,
+  }).split("\0");
+  expect(argv.pop()).toBe("");
+  return argv;
+}
+
 function selectReportedCommands(scenarios: QaSeedScenarioWithSource[]) {
   const matches = scenarios.flatMap((scenario) => findQaScenarioMatches([scenario], scenario.id));
   const report = renderQaScenarioMatchesMarkdownReport({ query: "selected scenarios", matches });
   const commands = [...report.matchAll(/`(pnpm openclaw qa suite[^`]+)`/gu)];
   expect(commands.length).toBeGreaterThan(0);
   return commands.map(([, command]) => {
-    const argv = expectDefined(splitShellArgs(command!), "generated shell arguments");
+    const argv = captureReportedArgv(command!);
     expect(argv.slice(0, 4)).toEqual(["pnpm", "openclaw", "qa", "suite"]);
     const program = new Command();
     registerQaLabCli(program);
@@ -117,8 +128,7 @@ describe("QA coverage command selection", () => {
     });
     const command = expectDefined(report.match(/`(pnpm openclaw qa suite[^`]+)`/u)?.[1], "command");
 
-    expect(hasTopLevelShellControlOperator(command)).toBe(false);
-    expect(splitShellArgs(command)).toEqual([
+    expect(captureReportedArgv(command)).toEqual([
       "pnpm",
       "openclaw",
       "qa",
