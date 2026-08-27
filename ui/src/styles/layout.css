@@ -1878,7 +1878,7 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-child-session-toggle--running {
-  color: var(--run);
+  color: var(--accent);
 }
 
 .sidebar-child-session-toggle--failed {
@@ -1906,22 +1906,6 @@ openclaw-settings-save-indicator:empty {
 
 .sidebar-recent-session__link:hover {
   text-decoration: none;
-}
-
-.sidebar-board-glyph {
-  display: inline-flex;
-  flex: 0 0 auto;
-  color: color-mix(in srgb, var(--accent) 76%, var(--muted));
-}
-
-.sidebar-board-glyph svg {
-  width: 12px;
-  height: 12px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.7px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .viewer-facepile {

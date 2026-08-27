@@ -164,8 +164,8 @@ openclaw-session-owner-chip {
   position: absolute;
   inset: -2px;
   box-sizing: border-box;
-  border: 1.5px solid color-mix(in srgb, var(--run) 28%, transparent);
-  border-top-color: var(--run);
+  border: 1.5px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  border-top-color: var(--accent);
   border-radius: var(--radius-full);
   pointer-events: none;
 }
@@ -5797,8 +5797,8 @@ td.data-table-key-col {
   width: 12px;
   height: 12px;
   flex: 0 0 auto;
-  border: 1.5px solid color-mix(in srgb, var(--run) 28%, transparent);
-  border-top-color: var(--run);
+  border: 1.5px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  border-top-color: var(--accent);
   border-radius: var(--radius-full);
 }
 
@@ -5817,7 +5817,7 @@ td.data-table-key-col {
   .session-run-spinner,
   .session-glyph__ring {
     animation: none;
-    border-color: var(--run);
+    border-color: var(--accent);
   }
 }
 
