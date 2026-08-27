@@ -626,7 +626,16 @@ export function renderApplicationShell(host: ShellViewHost) {
         })}
         ${pageActionsBlocked && gatewaySnapshot.phase !== "reload-required"
           ? html`<div class="connection-action-block" role="status" aria-live="polite">
-              ${t("connection.actionsUnavailable")}
+              <span class="connection-action-block__icon" aria-hidden="true"
+                >${icons.globeOff}</span
+              >
+              <span class="connection-action-block__text">
+                ${t(
+                  settingsTakeover
+                    ? "connection.settingsChangesUnavailable"
+                    : "connection.actionsUnavailable",
+                )}
+              </span>
             </div>`
           : nothing}
         <openclaw-router-outlet
