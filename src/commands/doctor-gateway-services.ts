@@ -271,34 +271,24 @@ async function readWindowsGatewayRuntimeForUpdateRepair(params: {
   return await params.service.readRuntime(params.env).catch(() => null);
 }
 
-async function suppressRunningSystemdExecStartRepairs(params: {
-  command: GatewayServiceCommandConfig;
-  issues: { code: string }[];
-}): Promise<boolean> {
-  if (process.platform !== "linux") {
-    return false;
+async function resolveSystemdServiceRewriteBlock(
+  command: GatewayServiceCommandConfig,
+  issues: { code: string }[],
+): Promise<string | undefined> {
+  if (process.platform !== "linux" || !issues.some(isExecStartRepairIssue)) {
+    return undefined;
   }
-  if (!params.issues.some(isExecStartRepairIssue)) {
-    return false;
+  const unitName = resolveSystemdUnitNameFromServicePath(command.sourcePath);
+  const scope = resolveSystemdScopeFromServicePath(command.sourcePath);
+  const active = await isSystemdUnitActive(process.env, unitName, scope);
+  if (!active.ok) {
+    return `Could not determine whether gateway service ${unitName} is active: ${active.error}. Leaving supervisor metadata unchanged. Check \`systemctl${scope === "user" ? " --user" : ""} status ${unitName}\` and rerun doctor.`;
   }
-  const unitName = resolveSystemdUnitNameFromServicePath(params.command.sourcePath);
-  const scope = resolveSystemdScopeFromServicePath(params.command.sourcePath);
-  if (!(await isSystemdUnitActive(process.env, unitName, scope))) {
-    return false;
+  if (!active.value) {
+    return undefined;
   }
-  const before = params.issues.length;
-  params.issues.splice(
-    0,
-    params.issues.length,
-    ...params.issues.filter((issue) => !isExecStartRepairIssue(issue)),
-  );
-  if (params.issues.length !== before) {
-    note(
-      `Gateway service ${unitName} is running; skipped command/entrypoint rewrites for this doctor pass.`,
-      "Gateway service config",
-    );
-  }
-  return true;
+  issues.splice(0, issues.length, ...issues.filter((issue) => !isExecStartRepairIssue(issue)));
+  return `Gateway service ${unitName} is running; skipped command/entrypoint rewrites and leaving supervisor metadata unchanged. Stop the service first or use \`openclaw gateway install --force\` when you want to replace the active launcher.`;
 }
 
 async function filterInactiveExtraGatewayServices(
@@ -313,7 +303,8 @@ async function filterInactiveExtraGatewayServices(
       activeOrLegacy.push(svc);
       continue;
     }
-    if (await isSystemdUnitActive(process.env, svc.label, svc.scope)) {
+    const active = await isSystemdUnitActive(process.env, svc.label, svc.scope);
+    if (!active.ok || active.value) {
       activeOrLegacy.push(svc);
     }
   }
@@ -655,10 +646,10 @@ export async function maybeRepairGatewayServiceConfig(
     });
   }
 
-  const serviceRewriteBlocked = await suppressRunningSystemdExecStartRepairs({
-    command,
-    issues: audit.issues,
-  });
+  const serviceRewriteBlock = await resolveSystemdServiceRewriteBlock(command, audit.issues);
+  if (serviceRewriteBlock) {
+    note(serviceRewriteBlock, "Gateway service config");
+  }
 
   const hasEntrypointMismatch = audit.issues.some(
     (issue) => issue.code === SERVICE_AUDIT_CODES.gatewayEntrypointMismatch,
@@ -704,11 +695,7 @@ export async function maybeRepairGatewayServiceConfig(
     return cfg;
   }
 
-  if (serviceRewriteBlocked) {
-    note(
-      "Gateway service is running; leaving supervisor metadata unchanged. Stop the service first or use `openclaw gateway install --force` when you want to replace the active launcher.",
-      "Gateway service config",
-    );
+  if (serviceRewriteBlock) {
     return cfg;
   }
 
@@ -1067,7 +1054,7 @@ export async function maybeResolveDuelingSystemdGatewayScopes(
   if (!systemOwnsGateway) {
     note(
       [
-        "The system-scope unit is not both running and enabled at boot, so the",
+        "Could not verify the system-scope unit is both running and enabled at boot, so the",
         "user-scope unit may be your working gateway. Not removing anything",
         "automatically.",
         "If the system-scope unit is the one you want, activate it and re-run doctor:",
@@ -1081,7 +1068,7 @@ export async function maybeResolveDuelingSystemdGatewayScopes(
   }
   note(
     [
-      "The system-scope unit is the active or boot-enabled supervisor and is",
+      "The system-scope unit is the active and boot-enabled supervisor and is",
       "treated as authoritative; the user-scope unit is the redundant leftover.",
     ].join("\n"),
     "System-scope unit owns the gateway",

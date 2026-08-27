@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 // Systemd tests cover Linux service install, start, stop, and status behavior.
 import { expectDefined } from "@openclaw/normalization-core";
+import { err as resultErr, ok } from "@openclaw/normalization-core/result";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildGatewayInstallPlan } from "../commands/daemon-install-helpers.js";
 import type { ExecResult } from "./exec-file.js";
@@ -787,25 +788,46 @@ describe("isSystemdUnitActive", () => {
     assertNoSystemSystemdOwnershipMock.mockResolvedValue();
   });
 
+  describe.each(["user", "system"] as const)("%s activity queries", (scope) => {
+    it.each([
+      ["bus failure", { code: 1 }, "Failed to connect to bus: Permission denied"],
+      ["unexpected exit", { code: 2 }, "Unexpected query failure"],
+      ["launch error", { code: "ENOENT" }, "Command failed during launch (ENOENT)"],
+      ["signal", { code: 1, termination: "signal" }, "Command was terminated by SIGTERM"],
+      ["timeout", { code: 3, termination: "timeout" }, "Command timed out"],
+    ] satisfies [string, Pick<ExecFileError, "code" | "termination">, string][])(
+      "keeps failed activity probes distinguishable from inactive units: %s",
+      async (_, options, detail) => {
+        execFileMock.mockImplementation(
+          execFileResult(createExecFileError(detail, options), "", detail),
+        );
+
+        await expect(
+          isSystemdUnitActive({ HOME: TEST_MANAGED_HOME }, GATEWAY_SERVICE, scope),
+        ).resolves.toEqual(resultErr(detail));
+      },
+    );
+  });
+
   it("checks user-scoped units through the user systemd manager", async () => {
     execFileMock.mockImplementationOnce(
       systemctlUserSuccess("is-active", "--quiet", GATEWAY_SERVICE),
     );
 
-    await expect(isSystemdUnitActive({ HOME: TEST_MANAGED_HOME }, GATEWAY_SERVICE)).resolves.toBe(
-      true,
-    );
+    await expect(
+      isSystemdUnitActive({ HOME: TEST_MANAGED_HOME }, GATEWAY_SERVICE),
+    ).resolves.toEqual(ok(true));
   });
 
-  it("checks system-scoped units without the user manager", async () => {
+  it.each([3, 4])("recognizes non-active system-scoped units (exit %i)", async (code) => {
     execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
       expect(args).toEqual(["is-active", "--quiet", GATEWAY_SERVICE]);
-      cb(createExecFileError("inactive", { code: 3 }), "", "");
+      cb(createExecFileError("not active", { code }), "", "");
     });
 
     await expect(
       isSystemdUnitActive({ HOME: TEST_MANAGED_HOME }, GATEWAY_SERVICE, "system"),
-    ).resolves.toBe(false);
+    ).resolves.toEqual(ok(false));
   });
 });
 
@@ -3320,12 +3342,21 @@ describe("isSystemUnitActiveAndEnabled", () => {
     await expect(isSystemUnitActiveAndEnabled({}, GATEWAY_SERVICE)).resolves.toBe(false);
   });
 
-  it("returns false when systemctl is unavailable", async () => {
-    execFileMock.mockImplementation(
-      execFileResult(createExecFileError("spawn systemctl ENOENT", { code: "ENOENT" }), "", ""),
-    );
-    await expect(isSystemUnitActiveAndEnabled({}, GATEWAY_SERVICE)).resolves.toBe(false);
-  });
+  it.each([
+    ["unavailable", { code: "ENOENT" }],
+    ["bus query failed", { code: 1 }],
+    ["terminated", { code: 1, termination: "signal" }],
+    ["timed out", { code: 3, termination: "timeout" }],
+  ] satisfies [string, Pick<ExecFileError, "code" | "termination">][])(
+    "does not adopt the system unit when its activity is unknown: %s",
+    async (detail, options) => {
+      execFileMock.mockImplementation(
+        execFileResult(createExecFileError(detail, options), "", detail),
+      );
+      await expect(isSystemUnitActiveAndEnabled({}, GATEWAY_SERVICE)).resolves.toBe(false);
+      expect(execFileMock).toHaveBeenCalledTimes(1);
+    },
+  );
 
   // systemctl(1) Table 3: these all exit 0 but none survive a reboot as an
   // enabled unit, so none may authorize deleting the user-scope unit.

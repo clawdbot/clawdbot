@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 // Doctor gateway service tests cover service audit diagnostics and duplicate gateway service reporting.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -49,7 +50,9 @@ const mocks = vi.hoisted(() => ({
   needsNodeRuntimeMigration: vi.fn(() => false),
   renderSystemNodeWarning: vi.fn().mockReturnValue(undefined),
   resolveSystemNodeInfo: vi.fn().mockResolvedValue(null),
-  isSystemdUnitActive: vi.fn().mockResolvedValue(false),
+  isSystemdUnitActive: vi
+    .fn<typeof import("../daemon/systemd-exec.js").isSystemdUnitActive>()
+    .mockResolvedValue({ ok: true, value: false }),
   uninstallLegacySystemdUnits: vi.fn().mockResolvedValue([]),
   readWindowsProcessArgsSync: vi.fn(),
   readWindowsStartupFallbackRuntimeForUpdate: vi.fn(),
@@ -433,7 +436,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
     mocks.needsNodeRuntimeMigration.mockReturnValue(false);
     mocks.renderSystemNodeWarning.mockReturnValue(undefined);
     mocks.resolveSystemNodeInfo.mockResolvedValue(null);
-    mocks.isSystemdUnitActive.mockResolvedValue(false);
+    mocks.isSystemdUnitActive.mockResolvedValue(ok(false));
     mocks.readWindowsProcessArgsSync.mockReturnValue(["node", "openclaw.mjs", "update"]);
     mocks.resolveGatewayAuthTokenForService.mockImplementation(async (cfg: OpenClawConfig, env) => {
       const configToken =
@@ -1053,7 +1056,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
       ...createGatewayCommand("/opt/new-openclaw/dist/index.js"),
       workingDirectory: "/tmp",
     });
-    mocks.isSystemdUnitActive.mockResolvedValue(true);
+    mocks.isSystemdUnitActive.mockResolvedValue(ok(true));
 
     await runRepair({ gateway: {} });
 
@@ -1144,7 +1147,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
       ...createGatewayCommand("/opt/new-openclaw/dist/index.js"),
       workingDirectory: "/tmp",
     });
-    mocks.isSystemdUnitActive.mockResolvedValue(false);
+    mocks.isSystemdUnitActive.mockResolvedValue(ok(false));
 
     await runRepair({ gateway: {} });
 
@@ -1157,46 +1160,69 @@ describe("maybeRepairGatewayServiceConfig", () => {
     expect(mocks.stage).not.toHaveBeenCalled();
   });
 
-  it("leaves all service metadata unchanged when an active unit has command drift plus other issues", async () => {
-    mockProcessPlatform("linux");
-    mocks.readCommand.mockResolvedValue({
-      programArguments: ["/usr/bin/openclaw", "run"],
-      environment: {},
-      sourcePath: "/home/test/.config/systemd/user/openclaw-gateway.service",
-    });
-    mocks.auditGatewayServiceConfig.mockResolvedValue({
-      ok: false,
-      issues: [
-        {
-          code: "gateway-command-missing",
-          message: "Service command does not include the gateway subcommand",
-          level: "aggressive",
-        },
-        {
-          code: "gateway-port-mismatch",
-          message: "Gateway service port does not match current gateway config.",
-          detail: "18789 -> 18888",
-          level: "recommended",
-        },
-      ],
-    });
-    mocks.buildGatewayInstallPlan.mockResolvedValue({
-      programArguments: gatewayProgramArguments,
-      workingDirectory: "/tmp",
-      environment: {},
-    });
-    mocks.isSystemdUnitActive.mockResolvedValue(true);
+  it.each([
+    ["active", ok(true)],
+    ["bus query failed", err("Failed to connect to bus: Permission denied")],
+    ["timed out", err("Command timed out")],
+  ] satisfies [string, Result<boolean, string>][])(
+    "leaves service metadata unchanged when unit activity is %s and command drift accompanies other issues",
+    async (_, active) => {
+      mockProcessPlatform("linux");
+      mocks.readCommand.mockResolvedValue({
+        programArguments: ["/usr/bin/openclaw", "run"],
+        environment: {},
+        sourcePath: "/home/test/.config/systemd/user/openclaw-gateway.service",
+      });
+      mocks.auditGatewayServiceConfig.mockResolvedValue({
+        ok: false,
+        issues: [
+          {
+            code: "gateway-command-missing",
+            message: "Service command does not include the gateway subcommand",
+            level: "aggressive",
+          },
+          {
+            code: "gateway-port-mismatch",
+            message: "Gateway service port does not match current gateway config.",
+            detail: "18789 -> 18888",
+            level: "recommended",
+          },
+        ],
+      });
+      mocks.buildGatewayInstallPlan.mockResolvedValue({
+        programArguments: gatewayProgramArguments,
+        workingDirectory: "/tmp",
+        environment: {},
+      });
+      mocks.isSystemdUnitActive.mockResolvedValue(active);
 
-    await runRepair({ gateway: { port: 18888 } });
+      await runRepair({ gateway: { port: 18888 } });
 
-    expectNoteContaining(
-      "Gateway service port does not match current gateway config.",
-      "Gateway service config",
-    );
-    expectNoteContaining("leaving supervisor metadata unchanged", "Gateway service config");
-    expect(mocks.install).not.toHaveBeenCalled();
-    expect(mocks.stage).not.toHaveBeenCalled();
-  });
+      expectNoteContaining(
+        "Gateway service port does not match current gateway config.",
+        "Gateway service config",
+      );
+      expectNoteContaining("supervisor metadata unchanged", "Gateway service config");
+      if (active.ok) {
+        expectNoteContaining(
+          "is running; skipped command/entrypoint rewrites",
+          "Gateway service config",
+        );
+        expectNoNoteContaining("Service command does not include", "Gateway service config");
+      } else {
+        expectNoteContaining("Service command does not include", "Gateway service config");
+        expectNoteContaining(active.error, "Gateway service config");
+        expectNoteContaining(
+          "systemctl --user status openclaw-gateway.service",
+          "Gateway service config",
+        );
+        expectNoNoteContaining("is running;", "Gateway service config");
+      }
+      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+      expect(mocks.install).not.toHaveBeenCalled();
+      expect(mocks.stage).not.toHaveBeenCalled();
+    },
+  );
 
   it("skips entrypoint rewrite in non-interactive fix mode", async () => {
     setupGatewayEntrypointRepairScenario({
@@ -1944,7 +1970,7 @@ describe("maybeScanExtraGatewayServices", () => {
     mocks.isContainerEnvironment.mockReturnValue(false);
     mocks.findExtraGatewayServices.mockResolvedValue([]);
     mocks.renderGatewayServiceCleanupHints.mockReturnValue([]);
-    mocks.isSystemdUnitActive.mockResolvedValue(false);
+    mocks.isSystemdUnitActive.mockResolvedValue(ok(false));
     mocks.uninstallLegacySystemdUnits.mockResolvedValue([]);
     mocks.execLaunchctl.mockReset().mockResolvedValue(launchctlResult());
   });
@@ -1954,51 +1980,45 @@ describe("maybeScanExtraGatewayServices", () => {
     mockProcessPlatform(originalPlatform);
   });
 
-  it("ignores inactive non-legacy Linux gateway-like services", async () => {
-    mockProcessPlatform("linux");
-    mocks.findExtraGatewayServices.mockResolvedValue([
-      {
-        platform: "linux",
+  it.each([
+    ["inactive", ok(false), "user", false],
+    ["active", ok(true), "system", true],
+    ["unknown", err("Failed to connect to bus: Permission denied"), "system", true],
+  ] satisfies [string, Result<boolean, string>, "user" | "system", boolean][])(
+    "reports non-legacy Linux gateway-like services with %s activity only when appropriate",
+    async (_, active, scope, reported) => {
+      mockProcessPlatform("linux");
+      const { renderGatewayServiceCleanupHints } =
+        await vi.importActual<typeof import("../daemon/inspect.js")>("../daemon/inspect.js");
+      mocks.renderGatewayServiceCleanupHints.mockImplementation(renderGatewayServiceCleanupHints);
+      const unitPath = `${scope === "user" ? "/home/test/.config/systemd/user" : "/etc/systemd/system"}/custom-gateway.service`;
+      const service = {
+        platform: "linux" as const,
         label: "custom-gateway.service",
-        detail: "unit: /home/test/.config/systemd/user/custom-gateway.service",
-        scope: "user",
+        detail: `unit: ${unitPath}`,
+        scope,
         legacy: false,
-      },
-    ]);
-    mocks.isSystemdUnitActive.mockResolvedValue(false);
+      };
+      mocks.findExtraGatewayServices.mockResolvedValue([service]);
+      mocks.isSystemdUnitActive.mockResolvedValue(active);
 
-    await maybeScanExtraGatewayServices({ deep: false }, makeDoctorIo(), makeDoctorPrompts());
+      await maybeScanExtraGatewayServices({ deep: false }, makeDoctorIo(), makeDoctorPrompts());
 
-    expect(mocks.isSystemdUnitActive).toHaveBeenCalledWith(
-      process.env,
-      "custom-gateway.service",
-      "user",
-    );
-    expectNoNoteContaining("custom-gateway.service", "Other gateway-like services detected");
-  });
-
-  it("reports active non-legacy Linux gateway-like services", async () => {
-    mockProcessPlatform("linux");
-    mocks.findExtraGatewayServices.mockResolvedValue([
-      {
-        platform: "linux",
-        label: "custom-gateway.service",
-        detail: "unit: /etc/systemd/system/custom-gateway.service",
-        scope: "system",
-        legacy: false,
-      },
-    ]);
-    mocks.isSystemdUnitActive.mockResolvedValue(true);
-
-    await maybeScanExtraGatewayServices({ deep: true }, makeDoctorIo(), makeDoctorPrompts());
-
-    expect(mocks.isSystemdUnitActive).toHaveBeenCalledWith(
-      process.env,
-      "custom-gateway.service",
-      "system",
-    );
-    expectNoteContaining("custom-gateway.service", "Other gateway-like services detected");
-  });
+      expect(mocks.isSystemdUnitActive).toHaveBeenCalledWith(
+        process.env,
+        "custom-gateway.service",
+        scope,
+      );
+      if (reported) {
+        expectNoteContaining("custom-gateway.service", "Other gateway-like services detected");
+        expect(mocks.renderGatewayServiceCleanupHints).toHaveBeenCalledWith([service]);
+        expectNoteContaining(`${scope === "system" ? "sudo " : ""}rm ${unitPath}`, "Cleanup hints");
+      } else {
+        expectNoNoteContaining("custom-gateway.service", "Other gateway-like services detected");
+      }
+      expect(mocks.uninstallLegacySystemdUnits).not.toHaveBeenCalled();
+    },
+  );
 
   it("renders cleanup hints only for the detected extra macOS gateway", async () => {
     mockProcessPlatform("darwin");
@@ -2504,7 +2524,9 @@ describe("maybeResolveDuelingSystemdGatewayScopes", () => {
     expect(prompter.confirmRuntimeRepair).not.toHaveBeenCalled();
     expect(mocks.uninstallUserSystemdGatewayUnit).not.toHaveBeenCalled();
     expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("not both running and enabled at boot"),
+      expect.stringContaining(
+        "Could not verify the system-scope unit is both running and enabled at boot",
+      ),
       "Gateway cleanup needs an owner decision",
     );
   });

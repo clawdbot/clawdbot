@@ -2,6 +2,7 @@
 import * as fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { escapeRegExp } from "../shared/regexp.js";
 import { execFileUtf8, type ExecResult } from "./exec-file.js";
@@ -333,14 +334,18 @@ export async function isSystemdUnitActive(
   env: GatewayServiceEnv,
   unitName: string,
   scope: SystemdUnitScope = "user",
-): Promise<boolean> {
+): Promise<Result<boolean, string>> {
   const normalizedUnit = unitName.trim();
   if (!normalizedUnit) {
-    return false;
+    return ok(false);
   }
   const args = ["is-active", "--quiet", normalizedUnit];
   const res = scope === "system" ? await execSystemctl(args) : await execSystemctlUser(env, args);
-  return res.code === 0;
+  // is-active uses 3 for not-active and 4 for missing; query failures exit 1.
+  if (res.termination === "exit" && [0, 3, 4].includes(res.code)) {
+    return ok(res.code === 0);
+  }
+  return err(readSystemctlDetail(res) || `systemctl is-active exited with code ${res.code}`);
 }
 
 export async function assertSystemdAvailable(
