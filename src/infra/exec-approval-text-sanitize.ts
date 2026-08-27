@@ -201,7 +201,7 @@ export function sanitizeExecApprovalWarningTextWithStatus(
 }
 
 /** Neutralizes channel markup and mention triggers in approval display text. */
-export function escapeChannelMarkupForDisplay(value: string): string {
+function escapeChannelMarkupForDisplay(value: string): string {
   // Approval titles/descriptions render as Slack mrkdwn and similar surfaces.
   // Replace trigger characters with fullwidth lookalikes so untrusted runtime
   // text cannot inject formatting, links, or @-mentions into operator cards.

@@ -136,4 +136,37 @@ describe("handleAcpSteerAction permission bridge", () => {
     expect(hostCapabilityMocks.close).toHaveBeenCalledOnce();
     expect(admissionMocks.close).toHaveBeenCalledOnce();
   });
+
+  it("forwards the command abort signal so a cancelled steer cannot honor a later approval", async () => {
+    const { handleAcpSteerAction } = await import("./lifecycle.js");
+    const controller = new AbortController();
+    let approvalResolved: string | undefined;
+
+    // Model the real ordering: the harness asks for permission mid-turn, the
+    // operator clicks allow only after the command was cancelled.
+    managerMocks.runTurn.mockImplementation(async (input: { signal?: AbortSignal }) => {
+      controller.abort();
+      approvalResolved = input.signal?.aborted ? "rejected-by-cancellation" : "allowed";
+    });
+
+    const params = buildCommandTestParams(" /acp steer child run ls", {} as OpenClawConfig, {
+      Provider: "slack",
+      Surface: "slack",
+      OriginatingChannel: "slack",
+      OriginatingTo: "channel:C123",
+      To: "channel:C123",
+      AccountId: "workspace-1",
+    });
+    params.sessionKey = "agent:main:slack:channel:C123";
+    params.commandInvocationSignal = controller.signal;
+
+    await handleAcpSteerAction(params, ["--session", "child", "run", "ls"]);
+
+    expect(managerMocks.runTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ signal: controller.signal }),
+    );
+    expect(approvalResolved).toBe("rejected-by-cancellation");
+    expect(hostCapabilityMocks.close).toHaveBeenCalledOnce();
+    expect(admissionMocks.close).toHaveBeenCalledOnce();
+  });
 });

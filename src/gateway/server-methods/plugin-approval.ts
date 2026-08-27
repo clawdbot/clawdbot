@@ -11,7 +11,6 @@ import { sanitizeApprovalScope, type ApprovalScope } from "../../infra/approval-
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import {
   sanitizeExecApprovalDisplayText,
-  sanitizeExecApprovalWarningText,
   sanitizePluginApprovalChannelDisplayText,
   sanitizePluginApprovalChannelWarningText,
 } from "../../infra/exec-approval-text-sanitize.js";

@@ -8,7 +8,7 @@ import type { AgentHarnessHostCapabilities } from "../../agents/harness/host-cap
 import {
   sanitizeExecApprovalDisplayText,
   sanitizeExecApprovalWarningText,
-} from "../../infra/exec-approval-command-display.js";
+} from "../../infra/exec-approval-text-sanitize.js";
 
 const ACP_PERMISSION_TIMEOUT_MS = 600_000;
 const ACP_PERMISSION_TRANSPORT_TIMEOUT_MS = ACP_PERMISSION_TIMEOUT_MS + 5_000;
@@ -51,17 +51,53 @@ function approvalDisplay(request: AcpPermissionRequest, cwd: string | undefined)
   };
 }
 
+type AcpPermissionOptionKind = AcpPermissionRequest["options"][number]["kind"];
+type AcpApprovalDecision = NonNullable<
+  NonNullable<Parameters<AcpApprovalHost["requestApproval"]>[0]["allowedDecisions"]>[number]
+>;
+
+/**
+ * ACP decisions carry only an outcome, so the harness resolves it against the
+ * offered options and falls back across persistence (allow_once -> allow_always,
+ * reject_once -> reject_always). Returning an outcome whose exact kind was not
+ * offered would therefore grant persistence the operator never selected.
+ */
+function offeredOptionKinds(request: AcpPermissionRequest): Set<AcpPermissionOptionKind> {
+  return new Set(request.options.map((option) => option.kind));
+}
+
+/**
+ * Mirrors the harness capabilities the same way the Codex app-server bridge
+ * derives its decisions. `reject_always` is intentionally absent: OpenClaw has no
+ * persistent-denial decision, so labeling it "deny" would hide a standing block
+ * the operator did not ask for and cannot inspect from OpenClaw.
+ */
+function offeredDecisions(offeredKinds: Set<AcpPermissionOptionKind>): AcpApprovalDecision[] {
+  const decisions: AcpApprovalDecision[] = [];
+  if (offeredKinds.has("allow_once")) {
+    decisions.push("allow-once");
+  }
+  if (offeredKinds.has("allow_always")) {
+    decisions.push("allow-always");
+  }
+  if (offeredKinds.has("reject_once")) {
+    decisions.push("deny");
+  }
+  return decisions;
+}
+
 function mapApprovalDecision(
   decision: "allow-once" | "allow-always" | "deny" | null | undefined,
+  offeredKinds: Set<AcpPermissionOptionKind>,
 ): AcpPermissionDecision {
   if (decision === "allow-once") {
-    return { outcome: "allow_once" };
+    return offeredKinds.has("allow_once") ? { outcome: "allow_once" } : { outcome: "cancel" };
   }
   if (decision === "allow-always") {
-    return { outcome: "allow_always" };
+    return offeredKinds.has("allow_always") ? { outcome: "allow_always" } : { outcome: "cancel" };
   }
   if (decision === "deny") {
-    return { outcome: "reject_once" };
+    return offeredKinds.has("reject_once") ? { outcome: "reject_once" } : { outcome: "cancel" };
   }
   return { outcome: "cancel" };
 }
@@ -79,6 +115,13 @@ export function createAcpPermissionHandler(params: {
     if (context.signal.aborted) {
       return { outcome: "cancel" };
     }
+    const offeredKinds = offeredOptionKinds(request);
+    const allowedDecisions = offeredDecisions(offeredKinds);
+    // Nothing the operator could choose maps onto an offered option, so there is
+    // no honest prompt to show.
+    if (allowedDecisions.length === 0) {
+      return { outcome: "cancel" };
+    }
     try {
       params.host.assertActive();
       const display = approvalDisplay(request, params.cwd);
@@ -88,7 +131,7 @@ export function createAcpPermissionHandler(params: {
         severity: display.kind === "think" || display.kind === "other" ? "info" : "warning",
         toolName: `acp:${display.kind}`,
         toolCallId: request.toolCall.toolCallId,
-        allowedDecisions: ["allow-once", "deny"],
+        allowedDecisions,
         timeoutMs: ACP_PERMISSION_TIMEOUT_MS,
         transportTimeoutMs: ACP_PERMISSION_TRANSPORT_TIMEOUT_MS,
       });
@@ -96,7 +139,7 @@ export function createAcpPermissionHandler(params: {
         return { outcome: "cancel" };
       }
       if (requested?.decision) {
-        return mapApprovalDecision(requested.decision);
+        return mapApprovalDecision(requested.decision, offeredKinds);
       }
       if (!requested?.id) {
         return { outcome: "cancel" };
@@ -109,7 +152,7 @@ export function createAcpPermissionHandler(params: {
       });
       return context.signal.aborted
         ? { outcome: "cancel" }
-        : mapApprovalDecision(resolved?.decision);
+        : mapApprovalDecision(resolved?.decision, offeredKinds);
     } catch {
       return { outcome: "cancel" };
     }

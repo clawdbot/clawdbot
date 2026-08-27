@@ -455,6 +455,10 @@ async function runAcpSteer(params: {
       text: params.instruction,
       mode: "steer",
       requestId: params.requestId,
+      // The permission handler receives the manager's combined turn signal, so the
+      // command abort signal must reach runTurn or a cancelled steer could still
+      // resolve a pending approval into a harness side effect.
+      ...(params.abortSignal ? { signal: params.abortSignal } : {}),
       onPermissionRequest,
       onEvent: (event) => {
         if (event.type !== "text_delta") {

@@ -245,13 +245,19 @@ permission prompts. With `permissionMode: "approve-reads"` and an explicit
   approval owned by the originating chat turn.
 - The ACP request remains pending until the operator decides, the 10-minute
   timeout expires, or the owning turn is cancelled.
-- `allow-once` selects the ACP `allow_once` option. `deny` selects a reject
-  option. A missing route, timeout, cancellation, or unsupported option fails
-  closed.
+- The offered decisions mirror the options the harness advertised on the request:
+  `allow-once` for `allow_once`, `allow-always` for `allow_always`, and `deny`
+  for `reject_once`.
+- Each decision selects that exact ACP option. A decision is never resolved onto
+  a more persistent option than the operator chose, so a request that offers no
+  matching option fails closed instead.
+- A missing route, timeout, cancellation, or unsupported option fails closed.
 
-ACPX offers only `allow-once` and `deny` because generic plugin approvals do not
-persist harness trust. `permissionMode: "approve-all"` remains an explicit
-no-prompt option.
+`reject_always` is never offered, because OpenClaw has no persistent-denial
+decision and labeling it `deny` would create a standing block the operator did
+not ask for. `allow-always` is durable only where the harness persists it;
+OpenClaw records the decision for audit but does not store harness trust.
+`permissionMode: "approve-all"` remains an explicit no-prompt option.
 
 Approval delivery uses `approvals.plugin`, not `approvals.exec` or
 channel-specific exec approval settings. For Slack delivery, enable plugin

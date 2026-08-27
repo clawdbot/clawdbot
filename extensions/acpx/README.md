@@ -26,7 +26,8 @@ The default `permissionMode: "approve-reads"` auto-approves ACP reads. Absent
 existing ACPX installs. Set `nonInteractivePermissions: "plugin"` explicitly to
 route write, execute, and other side-effect prompts through OpenClaw plugin
 approvals. The originating chat can then resolve the pending ACP request with
-native approval buttons or `/approve <id> allow-once|deny`.
+native approval buttons or `/approve <id> allow-once|allow-always|deny`, limited
+to the decisions the harness advertised for that request.
 
 Enable and route `approvals.plugin` for the target channel. Host exec approvals
 and channel exec approvers are separate and do not authorize ACPX plugin

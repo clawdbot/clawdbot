@@ -342,9 +342,10 @@ plugin approvals; then set `permissionMode=approve-reads` and
 `nonInteractivePermissions=plugin`.
 </Warning>
 
-Plugin-routed ACP requests offer `allow-once` and `deny`, wait for up to 10
-minutes, and fail closed on timeout, cancellation, missing delivery routes, or
-Gateway restart. The pending request inherits the parent chat and actual thread
+Plugin-routed ACP requests offer the decisions the harness advertised for that
+request (`allow-once`, `allow-always`, and `deny`), wait for up to 10 minutes,
+and fail closed on timeout, cancellation, missing delivery routes, or Gateway
+restart. The pending request inherits the parent chat and actual thread
 identifier so a Slack button or `/approve <id> allow-once` resumes the same ACP
 permission RPC. See
 [Plugin permission requests](/plugins/plugin-permission-requests#acp-harness-permissions)
