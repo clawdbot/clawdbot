@@ -2,6 +2,7 @@
 import { buildCopilotIdeHeaders } from "openclaw/plugin-sdk/provider-auth";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {
+  buildUsageErrorSnapshot,
   buildUsageHttpErrorSnapshot,
   fetchJson,
   clampPercent,
@@ -46,7 +47,16 @@ export async function fetchCopilotUsage(
     });
   }
 
-  const payload = await readProviderJsonResponse<unknown>(res, "github-copilot-usage");
+  let payload: unknown;
+  try {
+    payload = await readProviderJsonResponse<unknown>(res, "github-copilot-usage");
+  } catch (error) {
+    // Keep bounded-reader failures visible while normalizing malformed provider JSON.
+    if (error instanceof Error && error.message.endsWith(": malformed JSON response")) {
+      return buildUsageErrorSnapshot("github-copilot", "Malformed usage response");
+    }
+    throw error;
+  }
   const data = isRecord(payload) ? (payload as CopilotUsageResponse) : {};
   const windows: UsageWindow[] = [];
 
