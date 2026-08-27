@@ -364,6 +364,24 @@ describe("runCronIsolatedAgentTurn toolsAllow passthrough", () => {
   );
 
   it(
+    "keeps a structured command prompt with wildcard shell access runnable",
+    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
+    async () => {
+      const params = makeParamsWithToolsAllow(["exec*"]);
+      (params.job as { payload: { message: string } }).payload.message = [
+        "Command to run:",
+        "- command: python3 scripts/check_mail.py",
+      ].join("\n");
+
+      const result = await runCronIsolatedAgentTurn(params);
+
+      expect(result.status).toBe("ok");
+      expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+      expect(requireEmbeddedAgentCall().toolsAllow).toEqual(["exec*"]);
+    },
+  );
+
+  it(
     "does not reject an explanatory prompt that only mentions a command",
     { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
     async () => {

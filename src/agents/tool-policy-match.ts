@@ -7,7 +7,10 @@ import type { SandboxToolPolicy } from "./sandbox/types.js";
 import { readToolAllowlistIntersection } from "./tool-policy-shared.js";
 import { expandToolGroups, normalizeToolPolicyName } from "./tool-policy.js";
 
-function makeToolPolicyMatcher(policy: SandboxToolPolicy) {
+function makeToolPolicyMatcher(
+  policy: SandboxToolPolicy,
+  options: { writeAllowsApplyPatch: boolean },
+) {
   const deny = compileGlobPatterns({
     raw: expandToolGroups(policy.deny ?? []),
     normalize: normalizeToolPolicyName,
@@ -27,9 +30,13 @@ function makeToolPolicyMatcher(policy: SandboxToolPolicy) {
     if (matchesAnyGlobPattern(normalized, allow)) {
       return true;
     }
-    // `apply_patch` is the concrete write tool, so a broad write allowlist entry
-    // should cover it even though its tool name is more specific.
-    if (normalized === "apply_patch" && matchesAnyGlobPattern("write", allow)) {
+    // Sandbox config historically treats `write` as covering `apply_patch`.
+    // Per-run caps disable that compatibility so explicit tool grants stay exact.
+    if (
+      options.writeAllowsApplyPatch &&
+      normalized === "apply_patch" &&
+      matchesAnyGlobPattern("write", allow)
+    ) {
       return true;
     }
     return false;
@@ -41,7 +48,7 @@ export function isToolAllowedByPolicyName(name: string, policy?: SandboxToolPoli
   if (!policy) {
     return true;
   }
-  return makeToolPolicyMatcher(policy)(name);
+  return makeToolPolicyMatcher(policy, { writeAllowsApplyPatch: true })(name);
 }
 
 /** Runtime caps deny empty lists and preserve every independently merged restriction. */
@@ -49,7 +56,9 @@ export function isRuntimeToolAllowed(name: string, toolsAllow?: string[]): boole
   return (
     toolsAllow === undefined ||
     (readToolAllowlistIntersection(toolsAllow) ?? [toolsAllow]).every(
-      (allow) => allow.length > 0 && isToolAllowedByPolicyName(name, { allow }),
+      (allow) =>
+        allow.length > 0 &&
+        makeToolPolicyMatcher({ allow }, { writeAllowsApplyPatch: false })(name),
     )
   );
 }
