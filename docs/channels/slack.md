@@ -1880,26 +1880,30 @@ Config path:
 - `channels.slack.execApprovals.target` (`dm` | `channel` | `both`, default: `dm`)
 - `agentFilter`, `sessionFilter`
 
-Slack auto-enables native exec approvals when `enabled` is unset or `"auto"` and at least one
-exec approver resolves. Slack can also handle native plugin approvals through this native-client
-path when Slack plugin approvers resolve and the request matches the native-client filters. Set
-`enabled: false` to disable Slack as a native approval client explicitly. Set `enabled: true` to
-force native approvals on when approvers resolve. Disabling Slack exec approvals does not disable
-native Slack plugin approval delivery that is enabled through `approvals.plugin`; plugin approval
-delivery uses Slack plugin approvers instead.
+Slack native exec approvals require `enabled: true` or `"auto"` and at least one
+resolved exec approver. Leaving `enabled` unset or setting it to `false` disables
+native exec approval delivery. Slack can also handle native plugin approvals
+through this native-client path when Slack plugin approvers resolve and the
+request matches its filters. Disabling Slack exec approvals does not disable
+native plugin approval delivery enabled through `approvals.plugin`, which uses
+Slack plugin approvers instead.
 
-Default behavior with no explicit Slack exec approval config:
+Minimal Slack-native configuration using command owners as approvers:
 
 ```json5
 {
+  channels: {
+    slack: {
+      execApprovals: { enabled: "auto" },
+    },
+  },
   commands: {
     ownerAllowFrom: ["slack:U12345678"],
   },
 }
 ```
 
-Explicit Slack-native config is only needed when you want to override approvers, add filters, or
-opt into origin-chat delivery:
+To override approvers, add filters, or opt into origin-chat delivery:
 
 ```json5
 {

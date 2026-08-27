@@ -130,6 +130,8 @@ export type GetReplyOptions = {
     runId: string,
     executionIdentityToken?: ExecutionIdentityAdmissionToken,
   ) => void;
+  /** Reports the terminal agent-run classification to the shared dispatch owner. */
+  onAgentRunTerminalOutcome?: (outcome: "completed" | "failed") => void;
   /**
    * Canonical adoption lifecycle (adopted / deferred / abandoned / settled + pre-adoption abort).
    */

@@ -396,16 +396,6 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     commonDisabled ||
     effortMutationDisabled ||
     (thinking.options.length === 0 && (!showFastMode || fastMode.disabled));
-  const effortLabel = thinking.selection.displayLabel.replace(/^Inherited:\s*/u, "");
-  const showReasoning = thinking.options.length > 0;
-  const mobileSecondary =
-    showReasoning || (showFastMode && fastMode.supported)
-      ? {
-          disabled: effortDisabled,
-          label: showReasoning ? t("chat.modelControls.effort") : t("chat.modelControls.fastMode"),
-          value: showReasoning ? effortLabel : fastMode.label,
-        }
-      : undefined;
   // Floating UI deliberately tracks a live anchor. Keep the eventual effort
   // control in layout while catalog state is transient (and until an open model
   // menu closes), so a sibling appearing cannot move that anchor mid-interaction.
@@ -430,7 +420,6 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
         defaultModelLabel: formatPickerModelLabel(pickerDefaultLabel),
         disabled: modelDisabled,
         disabledReason: props.modelMutationDisabledReason,
-        mobileSecondary,
         modelCatalogState: managedCatalog,
         open: props.modelPickerOpen,
         modelSelectionLocked: props.modelSelectionLocked === true,

@@ -301,34 +301,19 @@ function readOptionalCodeString(value: unknown, label: string): string | undefin
   return SAFE_REASON_CODE.test(code) ? code : undefined;
 }
 
-function assignOptionalNumber(target: object, key: string, value: unknown, label: string): void {
-  const parsed = readOptionalNumber(value, label);
-  if (parsed !== undefined) {
-    (target as Record<string, unknown>)[key] = parsed;
-  }
-}
-
-function assignOptionalPositiveInteger(
-  target: object,
-  key: string,
-  value: unknown,
+function assignOptionalFields<T extends object>(
+  target: T,
+  source: Record<string, unknown>,
   label: string,
+  fields: readonly (keyof T & string)[],
+  read: (value: unknown, label: string) => string | number | undefined,
 ): void {
-  const parsed = readOptionalPositiveInteger(value, label);
-  if (parsed !== undefined) {
-    (target as Record<string, unknown>)[key] = parsed;
-  }
-}
-
-function assignOptionalCodeString(
-  target: object,
-  key: string,
-  value: unknown,
-  label: string,
-): void {
-  const parsed = readOptionalCodeString(value, label);
-  if (parsed !== undefined) {
-    (target as Record<string, unknown>)[key] = parsed;
+  // The fixed order preserves serialized fields and the first failing validation label.
+  for (const key of fields) {
+    const parsed = read(source[key], `${label}.${key}`);
+    if (parsed !== undefined) {
+      (target as Record<string, unknown>)[key] = parsed;
+    }
   }
 }
 
@@ -349,53 +334,21 @@ function readHeapStatistics(value: unknown): DiagnosticHeapStatisticsSummary | u
   }
   const source = readObject(value, "evidence.memoryPressure.heapStatistics");
   const result = {} as DiagnosticHeapStatisticsSummary;
-  assignOptionalPositiveInteger(
+  assignOptionalFields(
     result,
-    "totalHeapSizeBytes",
-    source.totalHeapSizeBytes,
-    "evidence.memoryPressure.heapStatistics.totalHeapSizeBytes",
-  );
-  assignOptionalPositiveInteger(
-    result,
-    "totalHeapSizeExecutableBytes",
-    source.totalHeapSizeExecutableBytes,
-    "evidence.memoryPressure.heapStatistics.totalHeapSizeExecutableBytes",
-  );
-  assignOptionalPositiveInteger(
-    result,
-    "totalPhysicalSizeBytes",
-    source.totalPhysicalSizeBytes,
-    "evidence.memoryPressure.heapStatistics.totalPhysicalSizeBytes",
-  );
-  assignOptionalPositiveInteger(
-    result,
-    "totalAvailableSizeBytes",
-    source.totalAvailableSizeBytes,
-    "evidence.memoryPressure.heapStatistics.totalAvailableSizeBytes",
-  );
-  assignOptionalPositiveInteger(
-    result,
-    "usedHeapSizeBytes",
-    source.usedHeapSizeBytes,
-    "evidence.memoryPressure.heapStatistics.usedHeapSizeBytes",
-  );
-  assignOptionalPositiveInteger(
-    result,
-    "heapSizeLimitBytes",
-    source.heapSizeLimitBytes,
-    "evidence.memoryPressure.heapStatistics.heapSizeLimitBytes",
-  );
-  assignOptionalPositiveInteger(
-    result,
-    "mallocedMemoryBytes",
-    source.mallocedMemoryBytes,
-    "evidence.memoryPressure.heapStatistics.mallocedMemoryBytes",
-  );
-  assignOptionalPositiveInteger(
-    result,
-    "externalMemoryBytes",
-    source.externalMemoryBytes,
-    "evidence.memoryPressure.heapStatistics.externalMemoryBytes",
+    source,
+    "evidence.memoryPressure.heapStatistics",
+    [
+      "totalHeapSizeBytes",
+      "totalHeapSizeExecutableBytes",
+      "totalPhysicalSizeBytes",
+      "totalAvailableSizeBytes",
+      "usedHeapSizeBytes",
+      "heapSizeLimitBytes",
+      "mallocedMemoryBytes",
+      "externalMemoryBytes",
+    ],
+    readOptionalPositiveInteger,
   );
   return Object.keys(result).length > 0 ? result : undefined;
 }
@@ -555,29 +508,20 @@ function readMemoryPressureEvidence(
   const cgroup = readCgroupMemorySummary(pressure.cgroup);
   const activeResources = readActiveResources(pressure.activeResources);
   const topSessionFiles = readSessionFiles(pressure.topSessionFiles);
-  return {
+  const result: DiagnosticMemoryPressureBundleEvidence = {
     level,
     reason,
     memory: readMemoryUsage(pressure.memory, "evidence.memoryPressure.memory"),
-    ...(pressure.thresholdBytes !== undefined
-      ? {
-          thresholdBytes: readRequiredNumber(
-            pressure.thresholdBytes,
-            "evidence.memoryPressure.thresholdBytes",
-          ),
-        }
-      : {}),
-    ...(pressure.rssGrowthBytes !== undefined
-      ? {
-          rssGrowthBytes: readRequiredNumber(
-            pressure.rssGrowthBytes,
-            "evidence.memoryPressure.rssGrowthBytes",
-          ),
-        }
-      : {}),
-    ...(pressure.windowMs !== undefined
-      ? { windowMs: readRequiredNumber(pressure.windowMs, "evidence.memoryPressure.windowMs") }
-      : {}),
+  };
+  assignOptionalFields(
+    result,
+    pressure,
+    "evidence.memoryPressure",
+    ["thresholdBytes", "rssGrowthBytes", "windowMs"],
+    readOptionalNumber,
+  );
+  return {
+    ...result,
     ...(heapStatistics ? { heapStatistics } : {}),
     ...(heapSpaces ? { heapSpaces } : {}),
     ...(cgroup ? { cgroup } : {}),
@@ -676,97 +620,63 @@ function readStabilityEventRecord(
     ) as DiagnosticStabilitySnapshot["events"][number]["type"],
   };
 
-  assignOptionalCodeString(sanitized, "channel", record.channel, `${label}.channel`);
-  assignOptionalCodeString(sanitized, "pluginId", record.pluginId, `${label}.pluginId`);
-  assignOptionalCodeString(sanitized, "source", record.source, `${label}.source`);
-  assignOptionalCodeString(sanitized, "surface", record.surface, `${label}.surface`);
-  assignOptionalCodeString(sanitized, "action", record.action, `${label}.action`);
-  assignOptionalCodeString(sanitized, "reason", record.reason, `${label}.reason`);
-  assignOptionalCodeString(sanitized, "outcome", record.outcome, `${label}.outcome`);
-  assignOptionalCodeString(sanitized, "level", record.level, `${label}.level`);
-  assignOptionalCodeString(sanitized, "phase", record.phase, `${label}.phase`);
-  assignOptionalCodeString(sanitized, "approvalId", record.approvalId, `${label}.approvalId`);
-  assignOptionalCodeString(sanitized, "detector", record.detector, `${label}.detector`);
-  assignOptionalCodeString(sanitized, "toolName", record.toolName, `${label}.toolName`);
-  assignOptionalCodeString(
+  assignOptionalFields(
     sanitized,
-    "activeWorkKind",
-    record.activeWorkKind,
-    `${label}.activeWorkKind`,
+    record,
+    label,
+    [
+      "channel",
+      "pluginId",
+      "source",
+      "surface",
+      "action",
+      "reason",
+      "outcome",
+      "level",
+      "phase",
+      "approvalId",
+      "detector",
+      "toolName",
+      "activeWorkKind",
+      "pairedToolName",
+      "provider",
+      "model",
+    ],
+    readOptionalCodeString,
   );
-  assignOptionalCodeString(
-    sanitized,
-    "pairedToolName",
-    record.pairedToolName,
-    `${label}.pairedToolName`,
-  );
-  assignOptionalCodeString(sanitized, "provider", record.provider, `${label}.provider`);
-  assignOptionalCodeString(sanitized, "model", record.model, `${label}.model`);
 
-  assignOptionalNumber(sanitized, "durationMs", record.durationMs, `${label}.durationMs`);
-  assignOptionalNumber(sanitized, "requestBytes", record.requestBytes, `${label}.requestBytes`);
-  assignOptionalNumber(sanitized, "responseBytes", record.responseBytes, `${label}.responseBytes`);
-  assignOptionalNumber(
+  assignOptionalFields(
     sanitized,
-    "timeToFirstByteMs",
-    record.timeToFirstByteMs,
-    `${label}.timeToFirstByteMs`,
-  );
-  assignOptionalNumber(sanitized, "costUsd", record.costUsd, `${label}.costUsd`);
-  assignOptionalNumber(sanitized, "count", record.count, `${label}.count`);
-  assignOptionalNumber(sanitized, "bytes", record.bytes, `${label}.bytes`);
-  assignOptionalNumber(sanitized, "limitBytes", record.limitBytes, `${label}.limitBytes`);
-  assignOptionalNumber(
-    sanitized,
-    "thresholdBytes",
-    record.thresholdBytes,
-    `${label}.thresholdBytes`,
-  );
-  assignOptionalNumber(
-    sanitized,
-    "rssGrowthBytes",
-    record.rssGrowthBytes,
-    `${label}.rssGrowthBytes`,
-  );
-  assignOptionalNumber(sanitized, "windowMs", record.windowMs, `${label}.windowMs`);
-  assignOptionalNumber(sanitized, "ageMs", record.ageMs, `${label}.ageMs`);
-  assignOptionalNumber(sanitized, "queueDepth", record.queueDepth, `${label}.queueDepth`);
-  assignOptionalNumber(sanitized, "queueSize", record.queueSize, `${label}.queueSize`);
-  assignOptionalNumber(sanitized, "queueLength", record.queueLength, `${label}.queueLength`);
-  assignOptionalNumber(sanitized, "waitMs", record.waitMs, `${label}.waitMs`);
-  assignOptionalNumber(sanitized, "active", record.active, `${label}.active`);
-  assignOptionalNumber(sanitized, "waiting", record.waiting, `${label}.waiting`);
-  assignOptionalNumber(sanitized, "queued", record.queued, `${label}.queued`);
-  assignOptionalNumber(sanitized, "droppedEvents", record.droppedEvents, `${label}.droppedEvents`);
-  assignOptionalNumber(
-    sanitized,
-    "droppedTrustedEvents",
-    record.droppedTrustedEvents,
-    `${label}.droppedTrustedEvents`,
-  );
-  assignOptionalNumber(
-    sanitized,
-    "droppedUntrustedEvents",
-    record.droppedUntrustedEvents,
-    `${label}.droppedUntrustedEvents`,
-  );
-  assignOptionalNumber(
-    sanitized,
-    "droppedPriorityEvents",
-    record.droppedPriorityEvents,
-    `${label}.droppedPriorityEvents`,
-  );
-  assignOptionalNumber(
-    sanitized,
-    "maxQueueLength",
-    record.maxQueueLength,
-    `${label}.maxQueueLength`,
-  );
-  assignOptionalNumber(
-    sanitized,
-    "drainBatchSize",
-    record.drainBatchSize,
-    `${label}.drainBatchSize`,
+    record,
+    label,
+    [
+      "durationMs",
+      "requestBytes",
+      "responseBytes",
+      "timeToFirstByteMs",
+      "costUsd",
+      "count",
+      "bytes",
+      "limitBytes",
+      "thresholdBytes",
+      "rssGrowthBytes",
+      "windowMs",
+      "ageMs",
+      "queueDepth",
+      "queueSize",
+      "queueLength",
+      "waitMs",
+      "active",
+      "waiting",
+      "queued",
+      "droppedEvents",
+      "droppedTrustedEvents",
+      "droppedUntrustedEvents",
+      "droppedPriorityEvents",
+      "maxQueueLength",
+      "drainBatchSize",
+    ],
+    readOptionalNumber,
   );
 
   if (record.webhooks !== undefined) {
@@ -782,37 +692,25 @@ function readStabilityEventRecord(
   }
   if (record.usage !== undefined) {
     const usage = readObject(record.usage, `${label}.usage`);
-    sanitized.usage = {
-      ...(usage.input !== undefined
-        ? { input: readRequiredNumber(usage.input, `${label}.usage.input`) }
-        : {}),
-      ...(usage.output !== undefined
-        ? { output: readRequiredNumber(usage.output, `${label}.usage.output`) }
-        : {}),
-      ...(usage.cacheRead !== undefined
-        ? { cacheRead: readRequiredNumber(usage.cacheRead, `${label}.usage.cacheRead`) }
-        : {}),
-      ...(usage.cacheWrite !== undefined
-        ? { cacheWrite: readRequiredNumber(usage.cacheWrite, `${label}.usage.cacheWrite`) }
-        : {}),
-      ...(usage.promptTokens !== undefined
-        ? { promptTokens: readRequiredNumber(usage.promptTokens, `${label}.usage.promptTokens`) }
-        : {}),
-      ...(usage.total !== undefined
-        ? { total: readRequiredNumber(usage.total, `${label}.usage.total`) }
-        : {}),
-    };
+    sanitized.usage = {};
+    assignOptionalFields(
+      sanitized.usage,
+      usage,
+      `${label}.usage`,
+      ["input", "output", "cacheRead", "cacheWrite", "promptTokens", "total"],
+      readOptionalNumber,
+    );
   }
   if (record.context !== undefined) {
     const context = readObject(record.context, `${label}.context`);
-    sanitized.context = {
-      ...(context.limit !== undefined
-        ? { limit: readRequiredNumber(context.limit, `${label}.context.limit`) }
-        : {}),
-      ...(context.used !== undefined
-        ? { used: readRequiredNumber(context.used, `${label}.context.used`) }
-        : {}),
-    };
+    sanitized.context = {};
+    assignOptionalFields(
+      sanitized.context,
+      context,
+      `${label}.context`,
+      ["limit", "used"],
+      readOptionalNumber,
+    );
   }
 
   return sanitized;

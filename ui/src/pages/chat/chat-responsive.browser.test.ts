@@ -471,12 +471,10 @@ function composerControlsHtml() {
       <div class="chat-composer-model-control">
         <div class="chat-controls__session chat-controls__model chat-controls__model-settings">
           <details class="chat-controls__inline-select chat-controls__model-picker">
-          <summary class="chat-controls__inline-select-trigger chat-controls__model-trigger" data-chat-composer-model="true" data-chat-model-settings="true" aria-label="Chat model: GPT-5.6 Luna; Chat thinking level: Medium">
-            <span class="chat-controls__model-settings-icon">${iconSvg()}</span>
+          <summary class="chat-controls__inline-select-trigger chat-controls__model-trigger" data-chat-composer-model="true" aria-label="Chat model: GPT-5.6 Luna">
             <span class="chat-controls__inline-select-label">GPT-5.6 Luna</span>
           </summary>
           <div class="chat-controls__inline-select-menu chat-controls__model-menu">
-            <button class="chat-controls__inline-select-option chat-controls__mobile-effort-option">Effort <span>Medium</span></button>
             <div class="chat-controls__model-search-wrap"><input class="chat-controls__model-search" placeholder="Search models" /></div>
             <div class="chat-controls__model-options">
               <button class="chat-controls__inline-select-option chat-controls__model-option chat-controls__inline-select-option--selected">Default model</button>
@@ -1781,11 +1779,8 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
-  it.each([
-    [800, 4],
-    [390, 0],
-  ] as const)("keeps the %spx model picker label-to-chevron gap at %spx", async (width, gap) => {
-    const page = await openBrowserPage(width, 800);
+  it("keeps the desktop model picker label-to-chevron gap at 4px", async () => {
+    const page = await openBrowserPage(800, 800);
     try {
       await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
         <div class="agent-chat__composer-shell">
@@ -1810,7 +1805,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           .getBoundingClientRect();
         return chevron.left - label.right;
       });
-      expect(measuredGap).toBeCloseTo(gap, 0);
+      expect(measuredGap).toBeCloseTo(4, 0);
     } finally {
       await closeBrowserPage(page);
     }

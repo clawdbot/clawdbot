@@ -94,6 +94,8 @@ Use another supported backend, such as the AWS profile in [Configuration](/gatew
 
 Manage profiles in the Control UI under **Settings → Connections → Cloud workers**, or edit `cloudWorkers.profiles` directly in `openclaw.json` — both write the same config keys. The settings page lists each profile's backend, class, lifetime, and idle-stop in plain language, and shows whether it is advertised to `environments.list` or waiting on a Gateway restart. With no profiles configured it explains the feature, links back to this page, and starts the add flow.
 
+**Machine class** is a required text field. Enter a class accepted by the selected Crabbox backend and binary; the provider determines its effective sizing. Changing the backend or binary leaves the class unchanged, so verify that it is accepted before saving.
+
 Add a profile under `cloudWorkers.profiles` in `openclaw.json`:
 
 ```json
