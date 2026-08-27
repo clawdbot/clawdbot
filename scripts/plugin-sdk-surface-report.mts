@@ -323,7 +323,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: identifier authentication input type for external channel plugins.
       // +1: shared channel-account logout config cleanup.
       // +1: descriptor-based allowFrom authentication classifier for channel security audits.
-      4365,
+      // +1: downstream strength mappers need canonical ordering instead of duplicate rank tables.
+      4366,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -423,7 +424,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: canonical session-model selection and auxiliary runtime-auth preparation.
       // +1: shared channel-account logout config cleanup.
       // +1: descriptor-based allowFrom authentication classifier for channel security audits.
-      2589,
+      // +1: downstream strength mappers need canonical ordering instead of duplicate rank tables.
+      2590,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -442,8 +444,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       //     (voice-call/matrix runtime-doctor repair names, WhatsApp ack policy,
       //     Slack progress-draft render) so installed plugins survive upgrade (#124041 class).
       // -18: retire the expired August compatibility exports and messaging-targets subpath.
-      // +7: continuation compatibility exports retained by shipped barrels.
-      1141,
+      // +2: net continuation compatibility exports retained after upstream barrel cleanup.
+      1136,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

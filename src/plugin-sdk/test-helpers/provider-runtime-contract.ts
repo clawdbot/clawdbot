@@ -1,5 +1,6 @@
 // Provider runtime contract helpers define reusable runtime tests for provider plugins.
 import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPluginMetadataSnapshot } from "../../config/plugin-auto-enable.test-helpers.js";
 import type { ProviderRuntimeModel } from "../plugin-entry.js";
@@ -285,6 +286,56 @@ export function describeGithubCopilotProviderRuntimeContract(
       ]);
       const createManifestModel = createManifestModelFactory("github-copilot", manifestCatalog);
 
+      async function resolveStaticModel(modelId: string, discoveryEnabled = false) {
+        const { createBundledStaticCatalogModelResolver } =
+          await import("../../agents/embedded-agent-runner/model.static-catalog.js");
+        const config = {
+          models: { catalogRefresh: { enabled: false } },
+          plugins: {
+            entries: {
+              "github-copilot": { config: { discovery: { enabled: discoveryEnabled } } },
+            },
+          },
+        };
+        const metadataSnapshot = createPluginMetadataSnapshot({
+          config,
+          manifestRegistry: {
+            diagnostics: [],
+            plugins: [
+              {
+                id: "github-copilot",
+                origin: "bundled",
+                providers: ["github-copilot"],
+                channels: [],
+                cliBackends: [],
+                skills: [],
+                hooks: [],
+                rootDir: "/fixtures/github-copilot",
+                source: "/fixtures/github-copilot/index.js",
+                manifestPath: "/fixtures/github-copilot/openclaw.plugin.json",
+                modelCatalog: normalizeModelCatalog(
+                  {
+                    providers: { "github-copilot": manifestCatalog },
+                    discovery: { "github-copilot": "runtime" },
+                  },
+                  { ownedProviders: new Set(["github-copilot"]) },
+                ),
+              },
+            ],
+          },
+        });
+        const resolveModel = createBundledStaticCatalogModelResolver({
+          cfg: config,
+          env: {},
+          metadataSnapshot,
+          includeRuntimeDiscovery: true,
+        });
+        return {
+          config,
+          model: expectDefined(resolveModel({ provider: "github-copilot", modelId }), modelId),
+        };
+      }
+
       it.each([
         ["gemini-3.6-flash", "openai-completions", false],
         ["gemini-3.1-pro-preview", "openai-completions", false],
@@ -296,53 +347,10 @@ export function describeGithubCopilotProviderRuntimeContract(
       ] as const)(
         "routes static %s through %s with discovery enabled=%s",
         async (modelId, api, discoveryEnabled) => {
-          const { createBundledStaticCatalogModelResolver } =
-            await import("../../agents/embedded-agent-runner/model.static-catalog.js");
-          const config = {
-            models: { catalogRefresh: { enabled: false } },
-            plugins: {
-              entries: {
-                "github-copilot": { config: { discovery: { enabled: discoveryEnabled } } },
-              },
-            },
-          };
-          const metadataSnapshot = createPluginMetadataSnapshot({
-            config,
-            manifestRegistry: {
-              diagnostics: [],
-              plugins: [
-                {
-                  id: "github-copilot",
-                  origin: "bundled",
-                  providers: ["github-copilot"],
-                  channels: [],
-                  cliBackends: [],
-                  skills: [],
-                  hooks: [],
-                  rootDir: "/fixtures/github-copilot",
-                  source: "/fixtures/github-copilot/index.js",
-                  manifestPath: "/fixtures/github-copilot/openclaw.plugin.json",
-                  modelCatalog: normalizeModelCatalog(
-                    {
-                      providers: { "github-copilot": manifestCatalog },
-                      discovery: { "github-copilot": "runtime" },
-                    },
-                    { ownedProviders: new Set(["github-copilot"]) },
-                  ),
-                },
-              ],
-            },
-          });
-          const resolveModel = createBundledStaticCatalogModelResolver({
-            cfg: config,
-            env: {},
-            metadataSnapshot,
-            includeRuntimeDiscovery: true,
-          });
-          const model = resolveModel({ provider: "github-copilot", modelId });
-          expect(model?.api).toBe(api);
+          const { config, model } = await resolveStaticModel(modelId, discoveryEnabled);
+          expect(model.api).toBe(api);
           if (api === "openai-completions") {
-            expect(model?.compat).toMatchObject({
+            expect(model.compat).toMatchObject({
               supportsStore: false,
               supportsDeveloperRole: false,
               supportsUsageInStreaming: false,
@@ -365,14 +373,78 @@ export function describeGithubCopilotProviderRuntimeContract(
               modelId,
               modelRegistry: {
                 find: () => model,
-                getAll: () => (model ? [model] : []),
-                getAvailable: () => (model ? [model] : []),
+                getAll: () => [model],
+                getAvailable: () => [],
                 hasConfiguredAuth: () => false,
               },
             }),
           ).toBeUndefined();
         },
       );
+
+      it.each([
+        ["minimal", "low"],
+        ["xhigh", "xhigh"],
+      ] as const)("sends static GPT-5.4 mini %s thinking as %s", async (level, effort) => {
+        const { createApiRegistry, createLlmRuntime } = await import("@openclaw/ai");
+        const { streamOpenAIResponses, streamSimpleOpenAIResponses } =
+          await import("@openclaw/ai/internal/openai");
+        const { config, model } = await resolveStaticModel("gpt-5.4-mini");
+        const provider = requireProviderContractProvider("github-copilot");
+        const profile = provider.resolveThinkingProfile?.({
+          provider: model.provider,
+          modelId: model.id,
+          api: model.api,
+          compat: model.compat,
+        });
+        const registry = createApiRegistry();
+        registry.registerApiProvider({
+          api: "openai-responses",
+          stream: streamOpenAIResponses,
+          streamSimple: streamSimpleOpenAIResponses,
+        });
+        const stream = expectDefined(
+          provider.wrapStreamFn?.({
+            config,
+            provider: model.provider,
+            modelId: model.id,
+            model,
+            streamFn: createLlmRuntime(registry).streamSimple,
+          }),
+          "Copilot stream wrapper",
+        );
+        const network = vi
+          .spyOn(globalThis, "fetch")
+          .mockRejectedValue(new Error("Unexpected network"));
+        const payloads: unknown[] = [];
+        try {
+          const response = await stream(
+            model,
+            {
+              messages: [{ role: "user", content: "Say hello", timestamp: 0 }],
+            },
+            {
+              apiKey: "test-token",
+              reasoning: level,
+              maxTokens: 1024,
+              maxRetries: 0,
+              onPayload: (payload) => {
+                payloads.push(payload);
+                throw new Error("Captured payload before network");
+              },
+            },
+          );
+          await response.result();
+          expect(network).not.toHaveBeenCalled();
+          expect.soft(profile?.levels.map(({ id }) => id)).toContain(level);
+          expect(profile?.levels.map(({ id }) => id)).not.toContain("max");
+          expect(payloads).toEqual([
+            expect.objectContaining({ reasoning: expect.objectContaining({ effort }) }),
+          ]);
+        } finally {
+          network.mockRestore();
+        }
+      });
 
       it("owns Copilot-specific forward-compat fallbacks", () => {
         const provider = requireProviderContractProvider("github-copilot");

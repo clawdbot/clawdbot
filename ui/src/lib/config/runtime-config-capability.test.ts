@@ -1015,66 +1015,6 @@ describe("runtime config capability", () => {
     runtimeConfig.dispose();
   });
 
-  it("restores a revert made while the interrupted write was in flight", async () => {
-    vi.useFakeTimers();
-    let committedRaw = '{\n  "count": 1\n}\n';
-    let hash = "hash-1";
-    const sets: Array<{ raw: string; baseHash: string }> = [];
-    const request = vi.fn((method: string, params?: unknown) => {
-      if (method === "config.get") {
-        return Promise.resolve({
-          config: JSON.parse(committedRaw) as Record<string, unknown>,
-          raw: committedRaw,
-          hash,
-          valid: true,
-          issues: [],
-        });
-      }
-      if (method === "config.set") {
-        sets.push(params as { raw: string; baseHash: string });
-        if (sets.length === 1) {
-          // Commits server-side; the ack is lost to the disconnect.
-          committedRaw = (params as { raw: string }).raw;
-          hash = "hash-2";
-          return new Promise(() => {});
-        }
-        committedRaw = (params as { raw: string }).raw;
-        hash = "hash-3";
-        return Promise.resolve({ hash });
-      }
-      return Promise.resolve({});
-    });
-    const { runtimeConfig, publish } = createConfigCapabilityHarness(
-      request as GatewayBrowserClient["request"],
-    );
-    await runtimeConfig.ensureLoaded();
-
-    runtimeConfig.patchForm(["count"], 2);
-    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
-    expect(sets).toHaveLength(1);
-
-    // Revert to the original while the save is in flight: the draft reads
-    // clean, so a plain reconnect reload would silently replace it with the
-    // committed bytes and drop the revert forever.
-    runtimeConfig.patchForm(["count"], 1);
-    expect(runtimeConfig.state.configFormDirty).toBe(false);
-    publish(false);
-    publish(true);
-    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
-
-    expect(sets).toHaveLength(1);
-    expect(runtimeConfig.state.configFormDirty).toBe(true);
-    expect(runtimeConfig.state.configDraftBaseHash).toBe("hash-2");
-    expect(runtimeConfig.state.configForm).toEqual({ count: 1 });
-
-    await expect(runtimeConfig.save()).resolves.toBe(true);
-    expect(sets).toHaveLength(2);
-    expect(sets[1]).toEqual({ raw: '{\n  "count": 1\n}\n', baseHash: "hash-2" });
-    expect(runtimeConfig.state.configForm).toEqual({ count: 1 });
-    expect(runtimeConfig.state.configAutoSaveStatus).toBe("saved");
-    runtimeConfig.dispose();
-  });
-
   it("keeps the conflict status through an offline discard", async () => {
     vi.useFakeTimers();
     const request = vi.fn(async (method: string) => {

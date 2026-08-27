@@ -3153,7 +3153,7 @@ EOF
     chmodSync(join(home, ".bash_profile"), 0o000);
 
     try {
-      const script = `source "${SCRIPT_PATH}"; ensure_user_local_bin_on_path`;
+      const shellCommand = `source "${SCRIPT_PATH}"; ensure_user_local_bin_on_path`;
       let result: ReturnType<typeof spawnSync>;
       if (process.getuid?.() === 0) {
         chmodSync(tmp, 0o755);
@@ -3162,7 +3162,7 @@ EOF
         chownSync(join(home, ".bash_login"), 65534, 65534);
         result = spawnSync(
           "setpriv",
-          ["--reuid=65534", "--regid=65534", "--clear-groups", "bash", "-c", script],
+          ["--reuid=65534", "--regid=65534", "--clear-groups", "bash", "-c", shellCommand],
           {
             encoding: "utf8",
             env: {
@@ -3177,7 +3177,11 @@ EOF
           },
         );
       } else {
-        result = runInstallShell(script, { HOME: home, PATH: "/usr/bin:/bin", SHELL: "/bin/bash" });
+        result = runInstallShell(shellCommand, {
+          HOME: home,
+          PATH: "/usr/bin:/bin",
+          SHELL: "/bin/bash",
+        });
       }
 
       expect(result.status).toBe(0);
@@ -3230,7 +3234,7 @@ EOF
     chmodSync(profile, 0o400);
 
     try {
-      const script = `source "${SCRIPT_PATH}"; persist_path_line_to_profile "$HOME/.profile" 'export PATH="$HOME/.local/bin:$PATH"'`;
+      const shellCommand = `source "${SCRIPT_PATH}"; persist_path_line_to_profile "$HOME/.profile" 'export PATH="$HOME/.local/bin:$PATH"'`;
       let result: ReturnType<typeof spawnSync>;
       if (process.getuid?.() === 0) {
         chmodSync(tmp, 0o755);
@@ -3238,7 +3242,7 @@ EOF
         chownSync(profile, 65534, 65534);
         result = spawnSync(
           "setpriv",
-          ["--reuid=65534", "--regid=65534", "--clear-groups", "bash", "-c", script],
+          ["--reuid=65534", "--regid=65534", "--clear-groups", "bash", "-c", shellCommand],
           {
             encoding: "utf8",
             env: {
@@ -3252,7 +3256,7 @@ EOF
           },
         );
       } else {
-        result = runInstallShell(script, { HOME: home, PATH: "/usr/bin:/bin" });
+        result = runInstallShell(shellCommand, { HOME: home, PATH: "/usr/bin:/bin" });
       }
 
       expect(result.status).toBe(0);
@@ -3355,7 +3359,7 @@ EOF
 
     try {
       const result = runInstallShell(
-        `source "${SCRIPT_PATH}"; persist_shell_path_prepend "$HOME/.local/bin" '\$HOME/.local/bin'`,
+        `source "${SCRIPT_PATH}"; persist_shell_path_prepend "$HOME/.local/bin" '$HOME/.local/bin'`,
         { HOME: home, PATH: "/usr/bin:/bin", SHELL: "/bin/bash" },
       );
 
@@ -3535,7 +3539,7 @@ EOF
         is_gateway_daemon_loaded() { return 0; }
         run_quiet_step() {
           case "$1" in
-            "Restarting gateway service"|"Checking gateway service") return 1 ;;
+            "Checking gateway service") return 1 ;;
             *) return 0 ;;
           esac
         }
@@ -3548,8 +3552,42 @@ EOF
 
     const quotedBin = openclawBin.replace(/ /g, "\\ ");
     expect(result?.status).toBe(0);
-    expect(result?.stdout).toContain(`Run: ${quotedBin} gateway restart`);
+    expect(result?.stdout).not.toContain(`Run: ${quotedBin} gateway restart`);
     expect(result?.stdout).toContain(`Run: ${quotedBin} gateway status --deep`);
+  });
+
+  it("does not explicitly restart after force-installing a loaded gateway", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-gateway-transition-"));
+    const openclawBin = join(tmp, "openclaw");
+    const commandLog = join(tmp, "commands.log");
+    writeFileSync(openclawBin, '#!/bin/sh\nprintf "%s\\n" "$*" >> "$COMMAND_LOG"\n');
+    chmodSync(openclawBin, 0o755);
+
+    try {
+      const result = runInstallShell(
+        `
+          set -euo pipefail
+          source "${SCRIPT_PATH}"
+          OPENCLAW_BIN=${JSON.stringify(openclawBin)}
+          is_gateway_daemon_loaded() { return 0; }
+          run_quiet_step() {
+            local title="$1"
+            shift
+            "$@"
+          }
+          refresh_gateway_service_if_loaded
+        `,
+        { COMMAND_LOG: commandLog },
+      );
+
+      expect(result.status, result.stderr || result.stdout).toBe(0);
+      expect(readFileSync(commandLog, "utf8").trim().split("\n")).toEqual([
+        "gateway install --force",
+        "gateway status --deep",
+      ]);
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
   });
 
   it("refreshes the shell command cache after loading a persisted PATH update", () => {

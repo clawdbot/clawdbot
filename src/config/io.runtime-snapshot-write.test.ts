@@ -6,35 +6,8 @@ import {
   setRuntimeConfigSnapshotRefreshHandler,
   setRuntimeConfigSnapshot,
 } from "./io.js";
+import { createProviderConfigFixture } from "./runtime-snapshot.test-fixtures.js";
 import type { OpenClawConfig } from "./types.js";
-
-function createSourceConfig(): OpenClawConfig {
-  return {
-    models: {
-      providers: {
-        openai: {
-          baseUrl: "https://api.openai.com/v1",
-          apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-          models: [],
-        },
-      },
-    },
-  };
-}
-
-function createRuntimeConfig(): OpenClawConfig {
-  return {
-    models: {
-      providers: {
-        openai: {
-          baseUrl: "https://api.openai.com/v1",
-          apiKey: "sk-runtime-resolved", // pragma: allowlist secret
-          models: [],
-        },
-      },
-    },
-  };
-}
 
 function resetRuntimeConfigState(): void {
   setRuntimeConfigSnapshotRefreshHandler(null);
@@ -52,7 +25,7 @@ describe("runtime config snapshot writes", () => {
 
   it("skips source projection for non-runtime-derived configs", () => {
     const sourceConfig: OpenClawConfig = {
-      ...createSourceConfig(),
+      ...createProviderConfigFixture(),
       gateway: {
         auth: {
           mode: "token",
@@ -60,24 +33,14 @@ describe("runtime config snapshot writes", () => {
       },
     };
     const runtimeConfig: OpenClawConfig = {
-      ...createRuntimeConfig(),
+      ...createProviderConfigFixture("sk-runtime-resolved"), // pragma: allowlist secret
       gateway: {
         auth: {
           mode: "token",
         },
       },
     };
-    const independentConfig: OpenClawConfig = {
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            apiKey: "sk-independent-config", // pragma: allowlist secret
-            models: [],
-          },
-        },
-      },
-    };
+    const independentConfig = createProviderConfigFixture("sk-independent-config"); // pragma: allowlist secret
 
     setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
     const projected = projectConfigOntoRuntimeSourceSnapshot(independentConfig);

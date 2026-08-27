@@ -101,7 +101,7 @@ type StoredChatOutboxClientState = {
 const STORED_OUTBOX_CONFIRMATION_GRACE_MS = 5_000;
 const STORED_OUTBOX_RETRY_DEFAULT_MS = 500;
 export const UNCONFIRMED_CHAT_SEND_ERROR =
-  "Delivery could not be confirmed after reconnect. Check the conversation before retrying.";
+  "Reconnected before delivery was confirmed. Check the conversation — retry only if your message didn't arrive.";
 const UNCERTAIN_CLEAR_SUCCESSOR_ERROR =
   "A preceding /clear may have completed. Review the current conversation before retrying.";
 
@@ -154,6 +154,17 @@ function sameQueuedDeliveryVersion(left: ChatQueueItem, right: ChatQueueItem): b
 
 function queuedDeliveryVersion(item: ChatQueueItem): string {
   return `${item.id}\u0000${item.sendRunId ?? ""}\u0000${item.sendAttempts ?? 0}`;
+}
+
+function sessionRunProvesQueuedDelivery(
+  sessionInfo: ChatHistoryResult["sessionInfo"],
+  item: ChatQueueItem,
+): boolean {
+  return Boolean(
+    item.sendRunId &&
+    (sessionInfo?.activeRunIds?.includes(item.sendRunId) ||
+      sessionInfo?.lastRunId === item.sendRunId),
+  );
 }
 
 async function readCurrentStoredChatHistory(
@@ -209,6 +220,10 @@ async function readCurrentStoredChatHistory(
       outbox.sessionKey,
       outbox.agentId,
       parked ? error : OFFLINE_QUEUE_STORAGE_ERROR,
+      // A parked attempted message owns its inline bubble footer; the pane
+      // banner would duplicate it. Never-attempted failures, command chips,
+      // and storage failures keep the banner — they render no bubble.
+      { inline: Boolean(parked && attempted && !item.localCommandName) },
     );
     return parked && !attempted ? "continue" : "blocked";
   }
@@ -221,7 +236,12 @@ async function readCurrentStoredChatHistory(
     return "continue";
   }
   syncVisibleChatQueueProjection(host);
-  if (chatMessagesContainQueuedSend(history.messages, item)) {
+  // Gateway chat run IDs equal client idempotency keys; terminal-event retirement
+  // uses the same delivery proof, even before the transcript marker is persisted.
+  if (
+    chatMessagesContainQueuedSend(history.messages, item) ||
+    sessionRunProvesQueuedDelivery(history.sessionInfo, item)
+  ) {
     // Materialize server history locally before removing the queue bubble.
     preserveQueuedUserTurn(host, item);
     const removed = removeQueuedMessageWithoutReleasing(host, item.id, outbox.sessionKey);
@@ -260,7 +280,7 @@ async function reconcileStoredChatOutboxHead(
   // recorded into the session row. Skipping the 1000-message chat.history here
   // stops one full-history RPC per transcript event while a run streams.
   // Attempted items keep the fetch: delivered-detection must retire their
-  // bubbles even mid-run, and a missing row falls through conservatively.
+  // bubbles even mid-run; missing transcript and run proof falls through conservatively.
   const neverAttempted =
     (item.sendAttempts ?? 0) === 0 && item.sendRequestStartedAtMs === undefined;
   if (neverAttempted && item.queueMode) {
@@ -337,6 +357,9 @@ async function reconcileStoredChatOutboxHead(
         outbox.sessionKey,
         outbox.agentId,
         UNCONFIRMED_CHAT_SEND_ERROR,
+        // The parked bubble's inline footer is the visible outcome; hidden
+        // panes still get the named toast. Command chips never park here.
+        { inline: !item.localCommandName },
       );
     }
     return "blocked";

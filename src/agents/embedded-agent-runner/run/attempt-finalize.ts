@@ -368,9 +368,8 @@ export async function completeEmbeddedAttemptAfterTurn(
   });
   runtime.anthropicPayloadLogger?.recordUsage(state.messagesSnapshot, state.promptError);
 
-  // A detached run (skill experience review) writes no transcript or session record and
-  // runs under the foreground session key; firing agent_end here would let plugins observe
-  // it as a foreground turn and let the review schedule a successor review of itself.
+  // A detached run (such as skill experience review) writes no transcript or session record.
+  // Firing agent_end would expose maintenance as a normal turn and schedule successor work.
   if (
     attempt.operation !== "settled-tool-finalization" &&
     attempt.sessionPersistence !== "detached" &&
