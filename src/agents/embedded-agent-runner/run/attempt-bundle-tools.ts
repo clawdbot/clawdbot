@@ -88,7 +88,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     shouldCreateBundleMcpRuntimeForAttempt({
       toolsEnabled,
       disableTools: params.attempt.disableTools || params.isRawModelRun,
-      toolsAllow: params.attempt.toolsAllow,
+      toolsAllow: effectiveToolsAllow,
     });
   const bundleMetadataSnapshot = params.getCurrentAttemptPluginMetadataSnapshot();
   // Scoped registries are partial views; only complete snapshots can bypass bundle discovery.

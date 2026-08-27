@@ -184,6 +184,16 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     expect(mocks.createBundleLspToolRuntime).not.toHaveBeenCalled();
   });
 
+  it("creates the MCP runtime when the effective policy adds bundle-mcp", async () => {
+    const input = createInput([], []);
+    input.attempt.toolsAllow = ["read"];
+    input.preparedToolBase.effectiveToolsAllow = ["read", "bundle-mcp"];
+
+    await prepareEmbeddedAttemptBundleTools(input);
+
+    expect(mocks.getOrCreateSessionMcpRuntime).toHaveBeenCalledOnce();
+  });
+
   it("refreshes spawned-child inheritance after authorized MCP tools materialize", async () => {
     const inheritedToolAllowlist = ["sessions_spawn"];
     mocks.getOrCreateSessionMcpRuntime.mockResolvedValue({});
