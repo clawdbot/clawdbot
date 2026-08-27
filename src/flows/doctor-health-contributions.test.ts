@@ -1291,6 +1291,59 @@ describe("doctor health contributions", () => {
     expect(mocks.probeGatewayMemoryStatus).not.toHaveBeenCalled();
   });
 
+  it("skips Gateway health probes during update-owned Doctor finalization", async () => {
+    const contribution = requireDoctorContribution(DOCTOR_GATEWAY_HEALTH_ID);
+    const ctx = {
+      cfg: { gateway: { mode: "local" } },
+      configResult: { cfg: { gateway: { mode: "local" } } },
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(false),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: { nonInteractive: true },
+      cfgForPersistence: { gateway: { mode: "local" } },
+      configPath: "/tmp/fake-openclaw.json",
+      env: {
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
+        OPENCLAW_SERVICE_REPAIR_POLICY: "external",
+      },
+    } as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(mocks.checkGatewayHealth).not.toHaveBeenCalled();
+    expect(mocks.probeGatewayMemoryStatus).not.toHaveBeenCalled();
+    expect(ctx.gatewayHealthSkipped).toBe(true);
+    expect(ctx.gatewayMemoryProbe).toEqual({ checked: false, ready: false, skipped: true });
+  });
+
+  it("keeps Gateway health probes for internally managed update Doctor runs", async () => {
+    mocks.checkGatewayHealth.mockResolvedValue({
+      authenticated: false,
+      healthOk: true,
+      status: { ok: true },
+    });
+    const contribution = requireDoctorContribution(DOCTOR_GATEWAY_HEALTH_ID);
+    const cfg = { gateway: { mode: "local" as const } };
+    const ctx = {
+      cfg,
+      configResult: { cfg },
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(false),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: { nonInteractive: true },
+      cfgForPersistence: cfg,
+      configPath: "/tmp/fake-openclaw.json",
+      env: { OPENCLAW_UPDATE_IN_PROGRESS: "1" },
+    } as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(mocks.checkGatewayHealth).toHaveBeenCalledOnce();
+    expect(ctx.healthOk).toBe(true);
+    expect(ctx.gatewayHealthSkipped).toBe(false);
+  });
+
   it("skips remote gateway health probes for local fallback exec SecretRefs", async () => {
     mocks.checkGatewayHealth.mockResolvedValue({
       authenticated: false,

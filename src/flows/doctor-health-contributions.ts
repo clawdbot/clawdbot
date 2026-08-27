@@ -2,7 +2,10 @@
 // exposing the same checks to structured lint and repair commands.
 import fs from "node:fs";
 import { isDeepStrictEqual } from "node:util";
-import { shouldManageGatewayService } from "../commands/doctor-service-repair-policy.js";
+import {
+  resolveServiceRepairPolicy,
+  shouldManageGatewayService,
+} from "../commands/doctor-service-repair-policy.js";
 import { scrubDoctorErrorMessage } from "./doctor-error-message.js";
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
 import {
@@ -14,6 +17,7 @@ import type {
   DoctorHealthFlowContext,
 } from "./doctor-health-contribution-types.js";
 import {
+  isUpdateDoctorRun,
   resolveDoctorMode,
   resolveDoctorWorkspaceDir,
 } from "./doctor-health-contribution-utils.js";
@@ -393,6 +397,12 @@ async function runShellCompletionHealth(ctx: DoctorHealthFlowContext): Promise<v
 
 async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<void> {
   const { note } = await loadNoteModule();
+  const env = ctx.env ?? process.env;
+  if (isUpdateDoctorRun(env) && resolveServiceRepairPolicy(env) === "external") {
+    ctx.gatewayHealthSkipped = true;
+    ctx.gatewayMemoryProbe = { checked: false, ready: false, skipped: true };
+    return;
+  }
   if ((await hasActiveGatewayExecCredential(ctx)) && ctx.options.allowExec !== true) {
     note(
       "Gateway health probes skipped because gateway credentials use an exec SecretRef. Run `openclaw doctor --allow-exec` to verify Gateway health with exec SecretRefs.",
