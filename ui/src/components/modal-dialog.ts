@@ -91,7 +91,7 @@ export class OpenClawModalDialog extends OpenClawLitElement {
 
     :host(.drawer) wa-dialog {
       --width: min(var(--openclaw-modal-width, 100vw), 100vw);
-      --show-duration: 0ms;
+      --show-duration: 200ms;
       --hide-duration: 0ms;
     }
 
@@ -117,7 +117,11 @@ export class OpenClawModalDialog extends OpenClawLitElement {
     }
 
     @media (prefers-reduced-motion: reduce) {
-      :host(.drawer) wa-dialog::part(dialog) {
+      :host(.drawer) wa-dialog {
+        --show-duration: 0ms;
+      }
+
+      :host(.drawer) wa-dialog[open]::part(dialog) {
         animation: none;
       }
     }
