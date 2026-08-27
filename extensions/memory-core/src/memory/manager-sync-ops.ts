@@ -154,6 +154,17 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
   }
 
   protected async runSync(params?: MemorySyncParams) {
+    try {
+      await this.runSyncPass(params);
+    } finally {
+      // Single enforcement point. Every exit from runSyncPass can have written cache rows:
+      // the targeted-session and full-reindex branches return early, and the incremental
+      // branches fall through. Bounding inside any one of them leaves the others unbounded.
+      this.pruneEmbeddingCacheIfNeeded?.();
+    }
+  }
+
+  private async runSyncPass(params?: MemorySyncParams) {
     // Guard: if an embedding provider is configured but currently unavailable,
     // abort sync to prevent silently degrading an existing semantic vector index
     // to fts-only and wiping existing semantic vectors.
@@ -346,10 +357,6 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
           this.refreshSessionDirtyFlag();
         }
       }
-      // Bound the cache here, not in the reindex: runSync owns every cache-writing path, and
-      // the incremental branches above insert rows without ever entering runInPlaceReindex.
-      // Enforcing only there left long-running databases unbounded between full rebuilds.
-      this.pruneEmbeddingCacheIfNeeded?.();
     } catch (err) {
       const reason = formatErrorMessage(err);
       const shouldFallback = this.shouldFallbackOnError(err);
