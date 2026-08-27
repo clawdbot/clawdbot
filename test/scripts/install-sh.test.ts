@@ -3687,9 +3687,12 @@ EOF
   it("preserves explicit pnpm prefer-offline settings from npmrc files", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-prefer-offline-npmrc-"));
     const project = join(tmp, "project");
+    const underscoreProject = join(tmp, "underscore-project");
     const userNpmrc = join(tmp, "user.npmrc");
     mkdirSync(project, { recursive: true });
+    mkdirSync(underscoreProject, { recursive: true });
     writeFileSync(join(project, ".npmrc"), "prefer-offline=false\n");
+    writeFileSync(join(underscoreProject, ".npmrc"), "prefer_offline=false\n");
     writeFileSync(userNpmrc, "prefer-offline=false\n");
 
     try {
@@ -3711,11 +3714,22 @@ EOF
         ].join("\n"),
         { PROJECT: tmp, NPM_CONFIG_USERCONFIG: userNpmrc },
       );
+      const underscoreResult = runInstallShell(
+        [
+          "set -euo pipefail",
+          `source "${SCRIPT_PATH}"`,
+          "unset PNPM_CONFIG_PREFER_OFFLINE pnpm_config_prefer_offline",
+          'if should_prefer_offline_pnpm_install "$PROJECT"; then printf "underscore=true\\n"; else printf "underscore=false\\n"; fi',
+        ].join("\n"),
+        { PROJECT: underscoreProject },
+      );
 
       expect(projectResult.status).toBe(0);
       expect(projectResult.stdout).toContain("project=false");
       expect(userResult.status).toBe(0);
       expect(userResult.stdout).toContain("user=false");
+      expect(underscoreResult.status).toBe(0);
+      expect(underscoreResult.stdout).toContain("underscore=true");
     } finally {
       rmSync(tmp, { force: true, recursive: true });
     }

@@ -2595,7 +2595,7 @@ should_prefer_offline_pnpm_install() {
     [[ -z "${PNPM_CONFIG_PREFER_OFFLINE+x}" && -z "${pnpm_config_prefer_offline+x}" ]] || return 1
     local npm_cmd=""
     npm_cmd="$(npm_command_path npm 2>/dev/null || true)"
-    [[ -z "$npm_cmd" ]] || ! npm_config_has_raw_key "$npm_cmd" "prefer[-_]offline" "$project_dir"
+    [[ -z "$npm_cmd" ]] || ! npm_config_has_raw_key "$npm_cmd" "prefer-offline" "$project_dir"
 }
 
 resolve_git_openclaw_ref() {
