@@ -101,61 +101,41 @@ help stay in sync with plugin runtime validation.
 - Windows filesystem-deny and host-list network policy knobs are not exposed by
   this plugin until MXC can enforce them on ProcessContainer.
 
-## Test setup with `openclaw config`
+## Test setup
 
-This patch creates a default `main` agent, then adds a dedicated `mxc-test`
-agent so MXC testing does not change the default agent. It uses
+Use an already configured OpenClaw installation with MXC installed and enabled
+on a supported Windows host. These commands create a uniquely named test agent
+and a new temporary workspace, leaving existing agents and workspaces alone.
 [`openclaw config patch --stdin`](https://docs.openclaw.ai/cli/config#config-patch)
-so setup is one validated config write instead of several path-based
-`config set` commands.
+applies sandbox settings only to that agent. Installation-wide MXC settings
+and policy files remain unchanged; review them before testing because they
+apply to the test agent too.
 
-If you already have `agents.list` entries, copy them into the patch before
-`mxc-test` instead of replacing the list.
+Run setup, testing, and cleanup in the same PowerShell session. Finish cleanup
+before running setup again. Stop if any command fails.
 
 ```powershell
-$mxcPolicyPath = Join-Path $env:TEMP "openclaw-mxc-policy.json"
-@'
-{
-  "filesystem": {
-    "restrictToProjectDir": true,
-    "additionalReadonlyPaths": [],
-    "additionalReadwritePaths": []
-  },
-  "process": {
-    "timeoutSeconds": 120
-  }
-}
-'@ | Set-Content -Path $mxcPolicyPath -Encoding utf8
+$mxcAgentCreated = $false
+$mxcAgent = "mxc-test-" + [guid]::NewGuid().ToString("N")
+$mxcWorkspace = Join-Path ([System.IO.Path]::GetTempPath()) $mxcAgent
+New-Item -ItemType Directory -Path $mxcWorkspace -ErrorAction Stop | Out-Null
 
-$mxcPolicyPathLiteral = ConvertTo-Json $mxcPolicyPath -Compress
+openclaw agents add $mxcAgent `
+  --workspace $mxcWorkspace `
+  --non-interactive
+if ($LASTEXITCODE -ne 0) { throw "Agent creation failed; stop without patching or deleting an existing agent." }
+$mxcAgentCreated = $true
+
 $mxcConfigPatch = @"
 {
   agents: {
-    list: [
-      {
-        id: "main",
-        workspace: "~/.openclaw/workspace",
-      },
-      {
-        id: "mxc-test",
-        workspace: "~/.openclaw/workspace-mxc-test",
+    entries: {
+      "$mxcAgent": {
         sandbox: {
           mode: "all",
           backend: "mxc",
           scope: "agent",
           workspaceAccess: "none",
-        },
-      },
-    ],
-  },
-  plugins: {
-    entries: {
-      mxc: {
-        enabled: true,
-        config: {
-          containment: "process",
-          network: "none",
-          mxcPolicyPaths: [$mxcPolicyPathLiteral],
         },
       },
     },
@@ -164,44 +144,9 @@ $mxcConfigPatch = @"
 "@
 
 $mxcConfigPatch | openclaw config patch --stdin --dry-run
+if ($LASTEXITCODE -ne 0) { throw "Sandbox validation failed; use Cleanup to remove the new test agent." }
 $mxcConfigPatch | openclaw config patch --stdin
-```
-
-Resulting config shape:
-
-```jsonc
-{
-  "agents": {
-    "list": [
-      {
-        "id": "main",
-        "workspace": "~/.openclaw/workspace",
-      },
-      {
-        "id": "mxc-test",
-        "workspace": "~/.openclaw/workspace-mxc-test",
-        "sandbox": {
-          "mode": "all",
-          "backend": "mxc",
-          "scope": "agent",
-          "workspaceAccess": "none",
-        },
-      },
-    ],
-  },
-  "plugins": {
-    "entries": {
-      "mxc": {
-        "enabled": true,
-        "config": {
-          "containment": "process",
-          "network": "none",
-          "mxcPolicyPaths": ["C:\\Users\\you\\AppData\\Local\\Temp\\openclaw-mxc-policy.json"],
-        },
-      },
-    },
-  },
-}
+if ($LASTEXITCODE -ne 0) { throw "Sandbox setup failed; use Cleanup to remove the new test agent." }
 ```
 
 ## Sandbox policy files
@@ -283,43 +228,32 @@ ProcessContainer cannot safely enforce the nested read-only grant.
 Run the TUI as that agent:
 
 ```powershell
-openclaw tui --session agent:mxc-test:main
+openclaw tui --session "agent:${mxcAgent}:main"
 ```
 
 For local embedded testing without a Gateway:
 
 ```powershell
-openclaw tui --local --session agent:mxc-test:main
+openclaw tui --local --session "agent:${mxcAgent}:main"
 ```
 
 ## Cleanup
 
-If you used the exact sample above, remove the test agent and MXC plugin
-configuration by patching the config back to the default-only shape:
+In the same PowerShell session, remove only the agent created by setup:
 
 ```powershell
-$mxcCleanupPatch = @'
-{
-  agents: {
-    list: [
-      {
-        id: "main",
-        workspace: "~/.openclaw/workspace",
-      },
-    ],
-  },
-  plugins: {
-    entries: {
-      mxc: null,
-    },
-  },
+if (-not $mxcAgentCreated) {
+  throw "No successfully created test agent in this session; do not delete an existing agent."
 }
-'@
-
-$mxcCleanupPatch | openclaw config patch --stdin --dry-run
-$mxcCleanupPatch | openclaw config patch --stdin
-Remove-Item -Path $mxcPolicyPath -ErrorAction SilentlyContinue
+openclaw agents delete $mxcAgent --force
+if ($LASTEXITCODE -ne 0) { throw "Agent cleanup failed; inspect the error before retrying." }
+$mxcAgentCreated = $false
 ```
+
+The delete command removes the test agent's configuration and attempts to move
+its workspace and state to Trash. Check its output for any manual-cleanup
+warning. Do not remove the MXC plugin entry or shared policy files: other
+agents may still use them.
 
 ## Host readiness
 
@@ -342,7 +276,7 @@ wxc-host-prep prepare-system-drive
 pnpm test:extension mxc
 ```
 
-`pnpm test extensions/mxc` is equivalent and also works.
+`pnpm test extensions/mxc` is also supported for the bundled extension test lane.
 
 For policy-only edits, the focused coverage is in:
 

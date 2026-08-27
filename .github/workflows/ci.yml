@@ -3831,23 +3831,18 @@ jobs:
       - name: Swift build (release)
         run: |
           set -euo pipefail
-          for attempt in 1 2 3; do
-            # The macOS lane validates the desktop app build; the CLI product is
-            # intentionally left to its own narrower surfaces instead of making
-            # this lane rebuild the whole package graph.
-            if swift build --package-path apps/macos --product OpenClaw --configuration release; then
-              exit 0
-            fi
-            if [[ "$attempt" -eq 3 ]]; then
-              break
-            fi
-            echo "swift build failed (attempt $attempt/3). Retrying…"
-            # SwiftPM can invalidate a restored binary artifact while planning.
-            # Reset so the next attempt downloads a complete dependency graph.
-            swift package --package-path apps/macos reset
-            sleep $((attempt * 20))
-          done
-          exit 1
+          # The macOS lane validates the desktop app build; the CLI product is
+          # intentionally left to its own narrower surfaces instead of making
+          # this lane rebuild the whole package graph.
+          if swift build --package-path apps/macos --product OpenClaw --configuration release; then
+            exit 0
+          fi
+
+          sparkle_framework="apps/macos/.build/artifacts/sparkle/Sparkle/Sparkle.xcframework"
+          [[ -d "$sparkle_framework" && ! -f "$sparkle_framework/Info.plist" ]] || exit 1
+          echo "::warning::SwiftPM did not produce complete Sparkle metadata; resetting once before retry."
+          swift package --package-path apps/macos reset
+          swift build --package-path apps/macos --product OpenClaw --configuration release
 
       - name: OpenClawKit Talk-trait opt-out (no ElevenLabsKit when default traits disabled)
         run: |
@@ -3880,22 +3875,12 @@ jobs:
         run: |
           set -euo pipefail
           swift_test_args=(--package-path apps/macos --enable-code-coverage)
-          for attempt in 1 2 3; do
-            attempt_args=("${swift_test_args[@]}")
-            # Keep the fast first-attempt Blacksmith path parallel, but make
-            # in-job retries serial after any contention-driven failure.
-            if [[ "$SWIFT_TEST_EXECUTION" == "parallel" && "$attempt" -eq 1 ]]; then
-              attempt_args+=(--parallel)
-            else
-              attempt_args+=(--no-parallel)
-            fi
-            if swift test "${attempt_args[@]}"; then
-              exit 0
-            fi
-            echo "swift test failed (attempt $attempt/3). Retrying…"
-            sleep $((attempt * 20))
-          done
-          exit 1
+          if [[ "$SWIFT_TEST_EXECUTION" == "parallel" ]]; then
+            swift_test_args+=(--parallel)
+          else
+            swift_test_args+=(--no-parallel)
+          fi
+          swift test "${swift_test_args[@]}"
 
       - name: Save SwiftPM cache
         if: needs.preflight.outputs.cache_write_allowed == 'true' && steps.swiftpm-cache.outputs.cache-hit != 'true'
