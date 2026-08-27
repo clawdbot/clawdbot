@@ -50,6 +50,18 @@ vi.mock("../channels/plugins/persisted-auth-state.js", () => ({
   hasBundledChannelPersistedAuthState: () => false,
 }));
 
+const routeStateOwnerState = vi.hoisted(() => ({ owners: [] as Array<Record<string, unknown>> }));
+
+vi.mock("../plugins/doctor-contract-registry.js", async () => {
+  const actual = await vi.importActual<typeof import("../plugins/doctor-contract-registry.js")>(
+    "../plugins/doctor-contract-registry.js",
+  );
+  return {
+    ...actual,
+    listPluginDoctorSessionRouteStateOwners: vi.fn(() => routeStateOwnerState.owners),
+  };
+});
+
 describe("doctor transcript and heartbeat session repairs", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
   let tempHome = "";
@@ -70,6 +82,7 @@ describe("doctor transcript and heartbeat session repairs", () => {
     deleteTestEnvValue("OPENCLAW_OAUTH_DIR");
     deleteTestEnvValue("OPENCLAW_AGENT_DIR");
     fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+    routeStateOwnerState.owners = [];
     noteMock.mockClear();
   });
 
@@ -325,6 +338,67 @@ describe("doctor transcript and heartbeat session repairs", () => {
     expect(
       loadSessionEntryReadOnly({ agentId: "ops", sessionKey: recoveredKey, storePath })?.sessionId,
     ).toBe("sqlite-heartbeat-ops");
+    expect(fs.existsSync(storePath)).toBe(false);
+  });
+
+  it("moves a plugin-repaired SQLite heartbeat row without restoring stale state", async () => {
+    routeStateOwnerState.owners = [
+      {
+        authProfilePrefixes: ["openai-codex:"],
+        cliSessionKeys: ["codex-cli"],
+        id: "codex",
+        label: "Codex",
+        providerIds: ["openai-codex"],
+        runtimeIds: ["codex-cli"],
+      },
+    ];
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { model: { primary: "github-copilot/gpt-5.4-mini" } },
+        entries: { main: {}, ops: {} },
+      },
+    };
+    setupSessionState(cfg, process.env, tempHome, "ops");
+    const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: "ops" });
+    const mainKey = "agent:ops:main";
+    await upsertSessionEntryCore(
+      { agentId: "ops", sessionKey: mainKey, storePath },
+      {
+        heartbeatIsolatedBaseSessionKey: mainKey,
+        model: "gpt-5.4",
+        modelOverride: "gpt-5.4",
+        modelOverrideSource: "auto",
+        modelProvider: "openai-codex",
+        providerOverride: "openai-codex",
+        sessionId: "sqlite-combined-ops",
+        updatedAt: Date.now(),
+      },
+    );
+    const confirmRuntimeRepair = vi.fn(
+      async (params: { message: string }) =>
+        params.message.startsWith("Clear stale Codex") ||
+        params.message.startsWith("Move heartbeat-owned main session"),
+    );
+
+    await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
+
+    const keys = listSessionEntryKeysReadOnly({ agentId: "ops", storePath });
+    const recoveredKeys = keys.filter((key) => key.startsWith("agent:ops:heartbeat-recovered-"));
+    expect(keys).not.toContain(mainKey);
+    expect(recoveredKeys).toHaveLength(1);
+    const recoveredKey = recoveredKeys[0];
+    if (!recoveredKey) {
+      throw new Error("expected one recovered combined-repair session key");
+    }
+    const recovered = loadSessionEntryReadOnly({
+      agentId: "ops",
+      sessionKey: recoveredKey,
+      storePath,
+    });
+    expect(recovered?.sessionId).toBe("sqlite-combined-ops");
+    expect(recovered?.providerOverride).toBeUndefined();
+    expect(recovered?.modelOverride).toBeUndefined();
+    expect(recovered?.modelProvider).toBeUndefined();
     expect(fs.existsSync(storePath)).toBe(false);
   });
 

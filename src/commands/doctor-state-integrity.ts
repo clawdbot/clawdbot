@@ -42,6 +42,7 @@ import {
 import {
   applySessionEntryReplacements,
   iterateDoctorSessionKeyBatches,
+  loadExactSessionEntryReadOnly,
   scanDoctorSessionEntriesStrict,
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
@@ -1520,6 +1521,13 @@ export async function noteStateIntegrity(
         warnings,
         changes,
       });
+      if (sqliteSessionKeys.has(mainKey)) {
+        mainEntry = loadExactSessionEntryReadOnly({
+          agentId,
+          sessionKey: mainKey,
+          storePath: sqliteStorePath,
+        })?.entry;
+      }
 
       const heartbeatMainMoved = await repairHeartbeatPoisonedMainSession({
         mainKey,
