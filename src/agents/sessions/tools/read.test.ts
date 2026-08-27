@@ -795,6 +795,7 @@ describe("read tool", () => {
     const readPath = path.join(realDir, "race-target.txt");
     const blockerStarted = createDeferred();
     const releaseBlocker = createDeferred();
+    const readAccess = vi.fn(async (absolutePath: string) => await fs.access(absolutePath));
     const blocker = withFileMutationQueue(writePath, async () => {
       blockerStarted.resolve();
       await releaseBlocker.promise;
@@ -807,27 +808,22 @@ describe("read tool", () => {
       undefined,
       {} as never,
     );
-    const readResult = createReadToolDefinition(tempDir).execute(
-      "read",
-      { path: readPath },
-      undefined,
-      undefined,
-      {} as never,
-    );
-    const readBeforeWrite = await Promise.race([
-      readResult.then(
-        () => "settled" as const,
-        () => "settled" as const,
-      ),
-      new Promise<"pending">((resolve) => {
-        setTimeout(() => resolve("pending"), 25);
-      }),
-    ]);
+    const readResult = createReadToolDefinition(tempDir, {
+      operations: {
+        access: readAccess,
+        readFile: async (absolutePath) => await fs.readFile(absolutePath),
+      },
+    }).execute("read", { path: readPath }, undefined, undefined, {} as never);
+    void readResult.catch(() => {});
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(readAccess).not.toHaveBeenCalled();
 
     releaseBlocker.resolve();
     await blocker;
     const [, result] = await Promise.all([writeResult, readResult]);
-    expect(readBeforeWrite).toBe("pending");
+    expect(readAccess).toHaveBeenCalledOnce();
     expect(textContent(result)).toBe("first snapshot");
   });
 });
