@@ -110,6 +110,15 @@ function createMonitor(
   });
 }
 
+async function waitForAbort(signal: AbortSignal): Promise<void> {
+  if (signal.aborted) {
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    signal.addEventListener("abort", () => resolve(), { once: true });
+  });
+}
+
 afterEach(() => {
   resetGatewayWorkAdmission();
   closeOpenClawStateDatabaseForTest();
@@ -635,13 +644,7 @@ describe("channel ingress monitor", () => {
   it("releases a pre-adoption delivery for retry before disposing on stop", async () => {
     await withQueue(async (queue) => {
       const deliver = vi.fn(async (_raw: RawEvent, lifecycle: ChannelIngressMonitorLifecycle) => {
-        await new Promise<void>((resolve) => {
-          if (lifecycle.abortSignal.aborted) {
-            resolve();
-            return;
-          }
-          lifecycle.abortSignal.addEventListener("abort", () => resolve(), { once: true });
-        });
+        await waitForAbort(lifecycle.abortSignal);
       });
       const monitor = createMonitor(queue, deliver);
       monitor.start();
@@ -805,13 +808,7 @@ describe("channel ingress monitor", () => {
   it("completes deliveries whose terminal result races a stop abort", async () => {
     await withQueue(async (queue) => {
       const deliver = vi.fn(async (_raw: RawEvent, lifecycle: ChannelIngressMonitorLifecycle) => {
-        await new Promise<void>((resolve) => {
-          if (lifecycle.abortSignal.aborted) {
-            resolve();
-            return;
-          }
-          lifecycle.abortSignal.addEventListener("abort", () => resolve(), { once: true });
-        });
+        await waitForAbort(lifecycle.abortSignal);
         return { kind: "completed" as const };
       });
       const monitor = createMonitor(queue, deliver);
@@ -832,13 +829,7 @@ describe("channel ingress monitor", () => {
     await withQueue(async (queue) => {
       const deliver = vi.fn(async (_raw: RawEvent, lifecycle: ChannelIngressMonitorLifecycle) => {
         lifecycle.onDeferred();
-        await new Promise<void>((resolve) => {
-          if (lifecycle.abortSignal.aborted) {
-            resolve();
-            return;
-          }
-          lifecycle.abortSignal.addEventListener("abort", () => resolve(), { once: true });
-        });
+        await waitForAbort(lifecycle.abortSignal);
         return { kind: "deferred" as const };
       });
       const monitor = createMonitor(queue, deliver);
@@ -855,10 +846,11 @@ describe("channel ingress monitor", () => {
     });
   });
 
-  it("keeps a deferred handoff authoritative when delivery then returns completed", async () => {
+  it("keeps a deferred handoff when stop abort races a conflicting completed return", async () => {
     await withQueue(async (queue) => {
       const deliver = vi.fn(async (_raw: RawEvent, lifecycle: ChannelIngressMonitorLifecycle) => {
         lifecycle.onDeferred();
+        await waitForAbort(lifecycle.abortSignal);
         return { kind: "completed" as const };
       });
       const monitor = createMonitor(queue, deliver);
@@ -868,11 +860,8 @@ describe("channel ingress monitor", () => {
 
       await monitor.stop();
 
-      // Contract pin: a deferred handoff owns the claim, so a conflicting
-      // completed return must surface as deferred. Through today's drain both
-      // outcomes leave the row held (the drain only completes from
-      // dispatching); this locks the claim with its owner rather than letting
-      // a sibling drain release or replay it.
+      // A recorded handoff owns the claim, so stop cannot rewrite the
+      // conflicting terminal return and release the row for replay.
       await expect(queue.listPending()).resolves.toEqual([]);
       await expect(queue.listClaims()).resolves.toHaveLength(1);
     });
