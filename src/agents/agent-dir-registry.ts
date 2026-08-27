@@ -1,5 +1,5 @@
 /** Process-local reverse registry from prepared agent directories to agent ids. */
-import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
@@ -12,7 +12,7 @@ export function normalizeAgentDirRegistryPath(
   agentDir: string,
   env: NodeJS.ProcessEnv = process.env,
 ): string {
-  return resolvePathViaExistingAncestorSync(resolveUserPath(agentDir, env));
+  return resolveIdentityPathViaExistingAncestorSync(resolveUserPath(agentDir, env));
 }
 
 /** Register a resolved agent directory for later reverse lookup. */
