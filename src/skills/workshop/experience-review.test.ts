@@ -374,31 +374,33 @@ describe("skill experience review scheduler", () => {
     scheduler.clear();
   });
 
-  it("does not replay running evidence after a shallow foreground turn", async () => {
+  it("does not re-arm evidence during asynchronous review preparation", async () => {
     vi.useFakeTimers();
-    let finishReview: (() => void) | undefined;
-    const runReview = vi
-      .fn()
-      .mockReturnValueOnce(
-        new Promise<void>((resolve) => {
-          finishReview = resolve;
-        }),
-      )
-      .mockResolvedValue(undefined);
+    let finishPreparation: (() => void) | undefined;
+    const prepareReview = vi.fn(async (candidate) => {
+      await new Promise<void>((resolve) => {
+        finishPreparation = resolve;
+      });
+      return candidate;
+    });
+    const runReview = vi.fn().mockResolvedValue(undefined);
     const scheduler = createSkillExperienceReviewScheduler({
       isSystemActive: () => false,
+      prepareReview,
       runReview,
     });
 
     scheduler.schedule(completedRun({ runId: "deep-turn" }));
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(runReview).toHaveBeenCalledOnce();
+    expect(prepareReview).toHaveBeenCalledOnce();
+    expect(runReview).not.toHaveBeenCalled();
 
     scheduler.schedule(completedRun({ runId: "shallow-turn", modelIterations: 1 }));
-    await vi.advanceTimersByTimeAsync(30_000);
-    finishReview?.();
+    finishPreparation?.();
     await flushMicrotasks();
-    await vi.advanceTimersByTimeAsync(30_000);
+    expect(runReview).toHaveBeenCalledOnce();
+
+    await vi.advanceTimersByTimeAsync(60_000);
 
     expect(runReview).toHaveBeenCalledOnce();
     scheduler.clear();

@@ -222,17 +222,13 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
           }
           reviewInFlight = true;
           try {
+            pendingBySession.delete(sessionKey);
             const candidate = deps.prepareReview
               ? await deps.prepareReview(pending.candidate)
               : pending.candidate;
             if (!candidate) {
-              pendingBySession.delete(sessionKey);
               return;
             }
-            if (pendingBySession.get(sessionKey) !== pending || pending.generation !== generation) {
-              return;
-            }
-            pendingBySession.delete(sessionKey);
             await deps.runReview(candidate);
           } finally {
             reviewInFlight = false;
