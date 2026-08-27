@@ -166,6 +166,10 @@ const broadUnitFastCandidateGlobs = [
 ];
 const ownerRoutedUnitTestPatterns = [
   ...cliProcessTestFiles,
+  // Command compaction tests need the scoped runtime registry even when their
+  // mocks live in a shared helper.
+  "src/agents/agent-command.compaction-rotation.test.ts",
+  "src/agents/agent-command.embedded-maintenance.test.ts",
   "src/agents/embedded-agent-runner/run.incomplete-turn.*.test.ts",
   "src/agents/embedded-agent-runner/run/attempt.abort-race.test.ts",
   "src/agents/embedded-agent-runner/run/attempt.settled-turn-finalization-context.test.ts",

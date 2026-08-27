@@ -1041,6 +1041,14 @@ describe("scripts/test-projects changed-target routing", () => {
   it.each([
     ["src/agents/agent-scope.test.ts", "test/vitest/vitest.agents-core.config.ts"],
     [
+      "src/agents/agent-command.compaction-rotation.test.ts",
+      "test/vitest/vitest.agents-core.config.ts",
+    ],
+    [
+      "src/agents/agent-command.embedded-maintenance.test.ts",
+      "test/vitest/vitest.agents-core.config.ts",
+    ],
+    [
       "src/agents/embedded-agent-runner/run.before-agent-reply-cron.test.ts",
       "test/vitest/vitest.agents-embedded-agent.config.ts",
     ],
@@ -1075,6 +1083,18 @@ describe("scripts/test-projects changed-target routing", () => {
         watchMode: false,
       },
     ]);
+  });
+
+  it("keeps split command compaction and model-switch tests in the runtime owner shard", () => {
+    const targets = [
+      "src/agents/agent-command.compaction-rotation.test.ts",
+      "src/agents/agent-command.embedded-maintenance.test.ts",
+      "src/agents/agent-command.live-model-switch.test.ts",
+    ];
+    expectSingleVitestRunPlan(buildVitestRunPlans(targets), {
+      config: "test/vitest/vitest.agents-core.config.ts",
+      includePatterns: targets,
+    });
   });
 
   it("routes every split incomplete-turn test to its dedicated serial shard", () => {

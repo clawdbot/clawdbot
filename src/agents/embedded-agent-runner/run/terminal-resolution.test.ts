@@ -118,6 +118,35 @@ async function resolveTerminalText(overrides: TerminalInputOverrides): Promise<s
 }
 
 describe("terminal resolution", () => {
+  it.each(["openai:selected", undefined])(
+    "reports the successful profile %s privately for command maintenance",
+    async (authProfileId) => {
+      const text = "The turn completed.";
+      const assistant = buildEmbeddedRunnerAssistant({ content: [{ type: "text", text }] });
+      const attempt = makeEmbeddedRunnerAttempt({
+        assistantTexts: [text],
+        lastAssistant: assistant,
+        currentAttemptAssistant: assistant,
+      });
+      const onSuccessfulAuthProfile = vi.fn();
+      const resolved = await resolveEmbeddedRunTerminal(
+        makeTerminalInput({
+          attempt,
+          attemptAssistant: assistant,
+          payloadsWithToolMedia: [{ text }],
+          authProfileId,
+          runParams: { authProfileStateMode: "read-only", onSuccessfulAuthProfile },
+        }),
+      );
+
+      expect(resolved.action).toBe("complete");
+      expect(onSuccessfulAuthProfile).toHaveBeenCalledExactlyOnceWith(authProfileId);
+      if (resolved.action === "complete") {
+        expect(resolved.result.meta.agentMeta).not.toHaveProperty("authProfileId");
+      }
+    },
+  );
+
   it.each([
     {
       reason: "auth" as const,
