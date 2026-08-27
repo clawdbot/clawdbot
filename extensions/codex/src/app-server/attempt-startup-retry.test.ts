@@ -24,6 +24,7 @@ import {
   clearSharedCodexAppServerClient,
   clearSharedCodexAppServerClientAndWait,
   getLeasedSharedCodexAppServerClient,
+  releaseLeasedSharedCodexAppServerClient,
 } from "./shared-client.js";
 import { createCodexTestModel } from "./test-support.js";
 
@@ -35,12 +36,13 @@ vi.mock("./desktop-generation.js", () => ({
 const tempRoots = new Set<string>();
 
 async function createStartupFailureFixture(
-  mode: "transient" | "contention" | "persistent" | "unsupported",
+  mode: "transient" | "contention" | "persistent" | "unsupported" | "overload",
 ) {
   const root = path.join(os.tmpdir(), `openclaw-codex-startup-retry-${randomUUID()}`);
   tempRoots.add(root);
   const fixturePath = path.join(root, "startup-failure.mjs");
   const spawnCountPath = path.join(root, "spawn-count");
+  const requestLogPath = path.join(root, "requests.log");
   const codexHome = path.join(root, "codex-home");
   await fs.mkdir(root, { recursive: true });
   await fs.writeFile(
@@ -48,7 +50,7 @@ async function createStartupFailureFixture(
     [
       'import fs from "node:fs";',
       'import readline from "node:readline";',
-      "const [spawnCountPath, mode, codexHome] = process.argv.slice(2);",
+      "const [spawnCountPath, mode, codexHome, requestLogPath] = process.argv.slice(2);",
       'const attempt = Number(fs.existsSync(spawnCountPath) ? fs.readFileSync(spawnCountPath, "utf8") : 0) + 1;',
       'fs.writeFileSync(spawnCountPath, String(attempt), "utf8");',
       "const startedAtPath = `${spawnCountPath}.started-at`;",
@@ -62,6 +64,11 @@ async function createStartupFailureFixture(
       '  lines.on("line", (line) => {',
       "    const message = JSON.parse(line);",
       "    if (message.id === undefined) return;",
+      "    fs.appendFileSync(requestLogPath, `${message.method}\\n`);",
+      '    if (mode === "overload" && message.method === "thread/resume") {',
+      '      process.stdout.write(`${JSON.stringify({ id: message.id, error: { code: -32001, message: "Server overloaded; retry later." } })}\\n`);',
+      "      return;",
+      "    }",
       '    const result = message.method === "initialize"',
       '      ? { userAgent: `openclaw/${mode === "unsupported" ? "0.1.0" : "0.149.0"} (macOS; test)` }',
       `      : ${JSON.stringify(threadStartResult("thread-recovered", "/repo"))};`,
@@ -75,11 +82,11 @@ async function createStartupFailureFixture(
     appServer: {
       transport: "stdio",
       command: process.execPath,
-      args: [fixturePath, spawnCountPath, mode, codexHome],
+      args: [fixturePath, spawnCountPath, mode, codexHome, requestLogPath],
       requestTimeoutMs: 5_000,
     },
   } satisfies CodexPluginConfig;
-  return { root, spawnCountPath, pluginConfig };
+  return { root, spawnCountPath, requestLogPath, pluginConfig };
 }
 
 function startFixtureAttempt(fixture: Awaited<ReturnType<typeof createStartupFailureFixture>>) {
@@ -201,5 +208,58 @@ describe("Codex app-server startup retry", () => {
       /app-server .* or newer is required/i,
     );
     expect(await fs.readFile(fixture.spawnCountPath, "utf8")).toBe("1");
+  });
+
+  it("preserves the shared client and binding after resume overload exhausts", async () => {
+    const fixture = await createStartupFailureFixture("overload");
+    const sibling = await startFixtureAttempt(fixture);
+    sibling.turnRoute.release();
+    const identity = {
+      kind: "session" as const,
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:agent-1:session-1",
+    };
+    try {
+      const binding = await testCodexAppServerBindingStore.read(identity);
+      expect(binding?.threadId).toBe("thread-recovered");
+      const requestsBeforeResume = await fs.readFile(fixture.requestLogPath, "utf8");
+
+      await expect(startFixtureAttempt(fixture)).rejects.toMatchObject({
+        name: "CodexAppServerRpcError",
+        code: -32_001,
+        method: "thread/resume",
+      });
+      const requests = await fs.readFile(fixture.requestLogPath, "utf8");
+      expect(new Set(requests.slice(requestsBeforeResume.length).trim().split("\n"))).toEqual(
+        new Set(["thread/resume"]),
+      );
+      await expect(testCodexAppServerBindingStore.read(identity)).resolves.toEqual(binding);
+
+      await expect(
+        sibling.client.request("thread/read", {
+          threadId: "thread-recovered",
+          includeTurns: false,
+        }),
+      ).resolves.toMatchObject({ thread: { id: "thread-recovered" } });
+      sibling.releaseSharedClientLease();
+      expect(sibling.client.getCloseError()).toBeUndefined();
+
+      const reacquired = await getLeasedSharedCodexAppServerClient({
+        startOptions: resolveCodexAppServerRuntimeOptions({ pluginConfig: fixture.pluginConfig })
+          .start,
+        agentDir: path.join(fixture.root, "agent"),
+      });
+      try {
+        expect(reacquired).toBe(sibling.client);
+        expect(reacquired.getCloseError()).toBeUndefined();
+        expect(await fs.readFile(fixture.spawnCountPath, "utf8")).toBe("1");
+      } finally {
+        releaseLeasedSharedCodexAppServerClient(reacquired);
+      }
+    } finally {
+      sibling.releaseSharedClientLease();
+      await sibling.client.closeAndWait();
+    }
   });
 });
