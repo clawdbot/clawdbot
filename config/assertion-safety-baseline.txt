@@ -945,7 +945,7 @@ extensions/openai/video-generation-provider.ts	3
 extensions/opencode-go/provider-policy-api.ts	1
 extensions/opencode-go/reasoning-sanitizer.ts	2
 extensions/opencode-go/stream-termination.ts	9
-extensions/opencode/provider-catalog.ts	3
+extensions/opencode/provider-catalog.ts	2
 extensions/opencode/provider-policy-api.ts	1
 extensions/opencode/session-catalog-plugin.ts	1
 extensions/opencode/stream.ts	3
@@ -3464,7 +3464,7 @@ src/plugin-sdk/provider-auth-login-flow-runtime.ts	6
 src/plugin-sdk/provider-auth-result.ts	4
 src/plugin-sdk/provider-auth-runtime.ts	1
 src/plugin-sdk/provider-auth.ts	1
-src/plugin-sdk/provider-catalog-live-runtime.ts	3
+src/plugin-sdk/provider-catalog-live-runtime.ts	2
 src/plugin-sdk/provider-catalog-shared.ts	4
 src/plugin-sdk/provider-enable-config.ts	2
 src/plugin-sdk/provider-entry.ts	3
