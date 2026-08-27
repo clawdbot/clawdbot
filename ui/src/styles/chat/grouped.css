@@ -411,20 +411,24 @@
   stroke-linejoin: round;
 }
 
+.chat-send-status[data-send-state="unconfirmed"] {
+  color: var(--warn);
+}
+
 .chat-group-footer .chat-send-status__retry {
   width: auto;
   min-width: 0;
   min-height: 0;
   padding: 0;
   border-radius: 0;
-  color: var(--danger);
+  color: inherit;
   font: inherit;
   opacity: 1 !important;
   pointer-events: auto;
 }
 
 .chat-group-footer .chat-send-status__retry:hover {
-  color: var(--danger);
+  color: inherit;
   text-decoration: underline;
 }
 

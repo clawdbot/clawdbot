@@ -3818,6 +3818,60 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
+  it.for(["dark", "light"])(
+    "keeps unconfirmed footers and Retry amber while failed sends stay red in %s mode",
+    async (theme, context) => {
+      const page = await openBrowserPage(390, 844);
+      try {
+        await page.setContent(`<!doctype html><html data-theme-mode="${theme}"><head><style>${readUiCss()}</style></head><body>
+        <span id="warning-color-probe" style="color: var(--warn)">Warning</span>
+        <span id="danger-color-probe" style="color: var(--danger)">Failure</span>
+        ${[
+          { state: "unconfirmed", label: "Delivery unconfirmed" },
+          { state: "failed", label: "Not sent" },
+        ]
+          .map(
+            ({ state, label }) => `<div class="chat-group user chat-group--with-footer">
+          <div class="chat-group-messages"><div class="chat-bubble">Attempted message</div></div>
+          <div class="chat-group-footer chat-group-footer--send-failure">
+            <div class="chat-group-footer__meta"><span class="chat-sender-name">You</span>
+              <span class="chat-send-status" data-send-state="${state}">
+                <span>·</span><span>${label}</span><span>·</span>
+                <button class="chat-send-status__retry" type="button">Retry</button>
+              </span>
+            </div>
+          </div>
+        </div>`,
+          )
+          .join("")}
+      </body></html>`);
+
+        for (const [state, probe] of [
+          ["unconfirmed", "warning"],
+          ["failed", "danger"],
+        ]) {
+          const status = page.locator(`.chat-send-status[data-send-state="${state}"]`);
+          const expectedColor = await page
+            .locator(`#${probe}-color-probe`)
+            .evaluate((element) => getComputedStyle(element).color);
+          expect(await status.evaluate((element) => getComputedStyle(element).color)).toBe(
+            expectedColor,
+          );
+          const retry = status.locator("button");
+          expect(await retry.evaluate((element) => getComputedStyle(element).color)).toBe(
+            expectedColor,
+          );
+          await retry.hover();
+          await context.expect
+            .poll(() => retry.evaluate((element) => getComputedStyle(element).color))
+            .toBe(expectedColor);
+        }
+      } finally {
+        await closeBrowserPage(page);
+      }
+    },
+  );
+
   it("covers every reachable queue presentation cell without repeating global state", async () => {
     const page = await openBrowserPage(1520, 2400);
     const reachableCells = QUEUE_MATRIX_MODES.flatMap((mode) =>
@@ -3856,11 +3910,11 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           '<span class="chat-queue__error"><span class="chat-queue__badge">Failed</span><span class="chat-queue__error-text">Request rejected</span></span>',
         ),
         queueExceptionCellHtml(
-          "unconfirmed",
+          "unconfirmed-local-command",
           "",
           "chat-queue__item--failed",
           "",
-          '<span class="chat-queue__error"><span class="chat-queue__badge">Delivery uncertain</span><span class="chat-queue__error-text">Review before retrying</span></span>',
+          '<span class="chat-queue__error"><span class="chat-queue__badge">Delivery uncertain</span><span class="chat-queue__error-text">Reconnected before delivery was confirmed. Check the conversation — retry only if your message didn\'t arrive.</span></span>',
         ),
         queueExceptionCellHtml(
           "applying-settings",
@@ -3932,7 +3986,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           "item-reconnect",
           "running-command",
           "failed",
-          "unconfirmed",
+          "unconfirmed-local-command",
           "applying-settings",
         ]) {
           await page.locator(`[data-queue-exception="${key}"]`).screenshot({

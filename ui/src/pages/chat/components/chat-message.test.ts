@@ -867,6 +867,34 @@ describe("grouped chat rendering", () => {
     expect(order).toEqual(["Reply to message", "Rewind", "name", "time"]);
   });
 
+  it.each([
+    { state: "failed", label: "Not sent" },
+    { state: "unconfirmed", label: "Delivery unconfirmed" },
+  ] as const)("shows a $state footer with its diagnostic and retry action", ({ state, label }) => {
+    const container = document.createElement("div");
+    const onRetryQueuedMessage = vi.fn();
+    renderGroupedMessage(
+      container,
+      createUserMessage("Attempted message", {
+        __openclaw: {
+          id: "attempted-send",
+          kind: "pending-send",
+          state,
+          error: "Delivery diagnostic",
+        },
+      }),
+      "user",
+      { onRetryQueuedMessage },
+    );
+
+    const status = expectElement(container, ".chat-group.user .chat-send-status", HTMLElement);
+    expect(status.dataset.sendState).toBe(state);
+    expect(status.title).toBe("Delivery diagnostic");
+    expect(status.textContent?.replace(/\s+/g, " ").trim()).toBe(`· ${label} · Retry`);
+    status.querySelector<HTMLButtonElement>(".chat-send-status__retry")?.click();
+    expect(onRetryQueuedMessage).toHaveBeenCalledWith("attempted-send");
+  });
+
   it("orders peer footer actions after the sender name and timestamp", () => {
     const container = document.createElement("div");
     const message = createUserMessage("Peer footer order.");

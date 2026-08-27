@@ -301,15 +301,21 @@ export function isPendingSendMessage(message: unknown): boolean {
 export function readPendingSendFailure(message: unknown): {
   error?: string;
   id: string;
+  state: "failed" | "unconfirmed";
 } | null {
   const metadata = asRecord(asRecord(message)?.["__openclaw"]);
   const state = metadata?.state;
   const id = metadata?.id;
-  if (metadata?.kind !== "pending-send" || state !== "failed" || typeof id !== "string") {
+  if (
+    metadata?.kind !== "pending-send" ||
+    (state !== "failed" && state !== "unconfirmed") ||
+    typeof id !== "string"
+  ) {
     return null;
   }
   return {
     id,
+    state,
     ...(typeof metadata.error === "string" ? { error: metadata.error } : {}),
   };
 }
