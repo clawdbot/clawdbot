@@ -993,6 +993,90 @@ function runGit(cwd: string, args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 }
 
+function runEnsureBaseCommitFixture(shallow: boolean) {
+  const root = tempDirs.make("openclaw-ensure-base-commit-");
+  const origin = path.join(root, "origin.git");
+  const checkout = path.join(root, "checkout");
+  const fakeBin = path.join(root, "bin");
+  const fetchLog = path.join(root, "fetch.log");
+  runGit(root, ["init", "--bare", "--initial-branch=main", origin]);
+  runGit(root, ["--git-dir", origin, "config", "uploadpack.allowFilter", "true"]);
+
+  const historyDepth = shallow ? 470 : 1;
+  const commits = Array.from({ length: historyDepth + 1 }, (_, index) => {
+    const message = `fixture ${index}`;
+    const content = `fixture ${index}\n`;
+    const parent = index === 0 ? "" : `from :${index}\n`;
+    return (
+      `commit refs/heads/main\nmark :${index + 1}\n` +
+      `committer CI Fixture <ci-fixture@example.invalid> ${1_700_000_000 + index} +0000\n` +
+      `data ${Buffer.byteLength(message)}\n${message}\n${parent}` +
+      `M 100644 inline fixture.txt\ndata ${Buffer.byteLength(content)}\n${content}`
+    );
+  }).join("\n");
+  execFileSync("git", ["--git-dir", origin, "fast-import", "--quiet"], {
+    input: `${commits}\ndone\n`,
+    encoding: "utf8",
+  });
+
+  const cloneArgs = ["clone", "--quiet", "--no-local"];
+  if (shallow) {
+    cloneArgs.push("--depth=2");
+  }
+  runGit(root, [...cloneArgs, origin, checkout]);
+
+  let baseSha = runGit(root, ["--git-dir", origin, "rev-parse", `main~${historyDepth}`]);
+  if (!shallow) {
+    const parent = runGit(root, ["--git-dir", origin, "rev-parse", "main"]);
+    const message = "remote update";
+    const content = "remote update\n";
+    const update =
+      `commit refs/heads/main\n` +
+      `committer CI Fixture <ci-fixture@example.invalid> 1700000010 +0000\n` +
+      `data ${Buffer.byteLength(message)}\n${message}\nfrom ${parent}\n` +
+      `M 100644 inline fixture.txt\ndata ${Buffer.byteLength(content)}\n${content}\ndone\n`;
+    execFileSync("git", ["--git-dir", origin, "fast-import", "--quiet"], {
+      input: update,
+      encoding: "utf8",
+    });
+    baseSha = runGit(root, ["--git-dir", origin, "rev-parse", "main"]);
+  }
+
+  mkdirSync(fakeBin);
+  const realGit = execFileSync("bash", ["-lc", "command -v git"], { encoding: "utf8" }).trim();
+  writeExecutable(path.join(fakeBin, "git"), [
+    "#!/usr/bin/env bash",
+    'if [[ " $* " == *" fetch "* ]]; then',
+    '  printf "%s\\n" "$*" >> "$FETCH_LOG"',
+    '  if [[ "${@: -1}" == "$BASE_SHA" ]]; then exit 128; fi',
+    '  if [[ "$BLOCK_DEEPEN" == "1" && " $* " == *" --deepen="* ]]; then exit 128; fi',
+    "fi",
+    'exec "$REAL_GIT" "$@"',
+  ]);
+
+  const action = parse(readFileSync(".github/actions/ensure-base-commit/action.yml", "utf8"));
+  const run = runWorkflowShellScript(action.runs.steps[0].run as string, {
+    cwd: checkout,
+    env: {
+      ...process.env,
+      BASE_SHA: baseSha,
+      BLOCK_DEEPEN: shallow ? "0" : "1",
+      FETCH_LOG: fetchLog,
+      FETCH_REF: "main",
+      PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+      REAL_GIT: realGit,
+    },
+  });
+
+  return {
+    baseSha,
+    checkout,
+    fetches: existsSync(fetchLog) ? readFileSync(fetchLog, "utf8") : "",
+    output: `${run.stdout}${run.stderr}`,
+    run,
+  };
+}
+
 function runPushDiffBaseFixture(options: {
   commitCount: 1 | 2 | 3;
   eventBaseSha: string | "parent";
@@ -5862,15 +5946,47 @@ server.listen(0, "127.0.0.1", () => {
   it("bounds shared base commit fetches", () => {
     const action = readFileSync(".github/actions/ensure-base-commit/action.yml", "utf8");
     const exactFetch = action.indexOf('fetch_base_ref --no-tags --depth=1 origin "$BASE_SHA"');
-    const branchDeepening = action.indexOf("for deepen_by in 25 100 300");
+    const branchDeepening = action.indexOf("for deepen_by in 25 100 300 1000");
 
     expect(action).toContain("fetch_base_ref()");
     expect(action).toContain("timeout --signal=TERM --kill-after=10s 30s git");
     expect(action).toContain("-c protocol.version=2");
+    expect(action).toContain('fetch --filter=blob:none "$@"');
+    expect(action).toContain('GIT_NO_LAZY_FETCH=1 git rev-parse --verify "$BASE_SHA^{commit}"');
+    expect(action.match(/if has_base_commit; then/gu)).toHaveLength(4);
+    expect(action).toContain("git rev-parse --is-shallow-repository");
+    expect(action).toContain("--unshallow");
     expect(action).not.toContain("if ! git fetch --no-tags");
     expect(exactFetch).toBeGreaterThan(-1);
     expect(branchDeepening).toBeGreaterThan(exactFetch);
     expect(action).toContain("::error title=ensure-base-commit missing base::");
+  });
+
+  it("recovers filtered shallow base history beyond the initial deepening budget", () => {
+    const fixture = runEnsureBaseCommitFixture(true);
+
+    expect(fixture.run.status, fixture.output).toBe(0);
+    expect(fixture.fetches).toContain("--filter=blob:none");
+    expect(fixture.fetches).toContain("--deepen=1000");
+    expect(runGit(fixture.checkout, ["rev-parse", "--verify", `${fixture.baseSha}^{commit}`])).toBe(
+      fixture.baseSha,
+    );
+    expect(runGit(fixture.checkout, ["diff", "--name-only", fixture.baseSha, "HEAD"])).toBe(
+      "fixture.txt",
+    );
+    expect(runGit(fixture.checkout, ["show", `${fixture.baseSha}:fixture.txt`])).toBe("fixture 0");
+  });
+
+  it("fetches a missing base from a complete checkout without unshallowing it", () => {
+    const fixture = runEnsureBaseCommitFixture(false);
+
+    expect(fixture.run.status, fixture.output).toBe(0);
+    expect(fixture.fetches).toContain("--filter=blob:none");
+    expect(fixture.fetches).not.toContain("--unshallow");
+    expect(runGit(fixture.checkout, ["rev-parse", "--is-shallow-repository"])).toBe("false");
+    expect(runGit(fixture.checkout, ["show", `${fixture.baseSha}:fixture.txt`])).toBe(
+      "remote update",
+    );
   });
 
   it("bounds specialized early checkout fetches", () => {

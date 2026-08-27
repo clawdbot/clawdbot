@@ -33,7 +33,11 @@ runs:
           exit 2
         fi
 
-        if git rev-parse --verify "$BASE_SHA^{commit}" >/dev/null 2>&1; then
+        has_base_commit() {
+          GIT_NO_LAZY_FETCH=1 git rev-parse --verify "$BASE_SHA^{commit}" >/dev/null 2>&1
+        }
+
+        if has_base_commit; then
           echo "Base commit already present: $BASE_SHA"
           exit 0
         fi
@@ -41,34 +45,38 @@ runs:
         fetch_base_ref() {
           timeout --signal=TERM --kill-after=10s 30s git \
             -c protocol.version=2 \
-            fetch "$@"
+            fetch --filter=blob:none "$@"
         }
 
         echo "Base commit missing; fetching exact SHA before branch history."
         if ! fetch_base_ref --no-tags --depth=1 origin "$BASE_SHA"; then
           echo "::warning title=ensure-base-commit exact fetch failed::Failed to fetch exact base SHA $BASE_SHA"
         fi
-        if git rev-parse --verify "$BASE_SHA^{commit}" >/dev/null 2>&1; then
+        if has_base_commit; then
           echo "Resolved base commit after exact fetch: $BASE_SHA"
           exit 0
         fi
 
-        for deepen_by in 25 100 300; do
+        for deepen_by in 25 100 300 1000; do
           echo "Base commit missing; deepening $FETCH_REF by $deepen_by."
           if ! fetch_base_ref --no-tags --deepen="$deepen_by" origin -- "$FETCH_REF"; then
             echo "::warning title=ensure-base-commit fetch failed::Failed to deepen $FETCH_REF by $deepen_by while looking for $BASE_SHA"
           fi
-          if git rev-parse --verify "$BASE_SHA^{commit}" >/dev/null 2>&1; then
+          if has_base_commit; then
             echo "Resolved base commit after deepening: $BASE_SHA"
             exit 0
           fi
         done
 
         echo "Base commit still missing; fetching full history for $FETCH_REF."
-        if ! fetch_base_ref --no-tags origin -- "$FETCH_REF"; then
+        full_history_args=(--no-tags)
+        if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+          full_history_args+=(--unshallow)
+        fi
+        if ! fetch_base_ref "${full_history_args[@]}" origin -- "$FETCH_REF"; then
           echo "::warning title=ensure-base-commit fetch failed::Failed to fetch full history for $FETCH_REF while looking for $BASE_SHA"
         fi
-        if git rev-parse --verify "$BASE_SHA^{commit}" >/dev/null 2>&1; then
+        if has_base_commit; then
           echo "Resolved base commit after full ref fetch: $BASE_SHA"
           exit 0
         fi
