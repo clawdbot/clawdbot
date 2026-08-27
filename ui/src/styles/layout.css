@@ -2659,9 +2659,9 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   white-space: nowrap;
 }
 
-/* Keycap hint, not content: the app's quiet mono shortcut idiom (see
-   .chat-question-panel__option kbd), fixed-width so letters and digits share
-   one rail beside the labels. */
+/* Keycap hint, not content: the app's quiet mono shortcut idiom, fixed-width so
+   letters and digits share one rail. Identity-menu chords use the system UI face
+   below because theme body fonts are not guaranteed to cover modifier glyphs. */
 .session-menu__shortcut,
 .chat-controls__model-option-action kbd {
   flex: 0 0 auto;
@@ -2671,6 +2671,15 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   font-size: var(--control-ui-text-xs);
   line-height: 1;
   text-align: center;
+}
+
+.sidebar-identity-menu .session-menu__shortcut {
+  font-family:
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI Symbol",
+    sans-serif;
 }
 
 .session-menu__info {
