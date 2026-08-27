@@ -2455,11 +2455,11 @@ jobs:
 
       - name: Setup Go for docs i18n
         if: matrix.requires_go == true
-        # The current workflow validates frozen targets whose go.mod may predate this patch pin.
+        # The current workflow validates frozen targets whose go.mod may predate this toolchain pin.
         # Keep the runner toolchain owned by the workflow; cache publication is gated separately.
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.7"
+          go-version: "1.27.0"
           cache: false
 
       - name: Resolve docs i18n Go cache
@@ -2493,7 +2493,7 @@ jobs:
 
       - name: Verify docs i18n Go toolchain
         if: matrix.requires_go == true
-        run: test "$(go env GOVERSION)" = "go1.26.7"
+        run: test "$(go env GOVERSION)" = "go1.27.0"
 
       - name: Configure Node test resources
         # Scale the in-process Vitest worker budget with the cores the job

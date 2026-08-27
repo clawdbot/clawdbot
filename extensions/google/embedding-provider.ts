@@ -251,39 +251,33 @@ async function fetchGeminiEmbeddingPayload(params: {
 }
 
 function normalizeGeminiBaseUrl(raw: string): string {
-  const trimmed = raw.replace(/\/+$/, "");
-  const openAiIndex = trimmed.indexOf("/openai");
-  if (openAiIndex > -1) {
-    const queryIndex = trimmed.indexOf("?", openAiIndex);
-    return normalizeGoogleApiBaseUrl(
-      `${trimmed.slice(0, openAiIndex)}${queryIndex < 0 ? "" : trimmed.slice(queryIndex)}`,
-    );
-  }
-  return normalizeGoogleApiBaseUrl(trimmed);
-}
-
-function buildGeminiModelPath(model: string): string {
-  return model.startsWith("models/") ? model : `models/${model}`;
-}
-
-function normalizeGoogleApiBaseUrl(baseUrl: string): string {
-  const trimmed = baseUrl.trim().replace(/\/+$/, "");
+  const trimmed = raw.trim();
   if (!trimmed) {
     return DEFAULT_GOOGLE_API_BASE_URL;
   }
   try {
     const url = new URL(trimmed);
     url.hash = "";
+    // OpenAI endpoint aliases and trailing slashes belong to the path, not tenant query values.
+    const openAiIndex = url.pathname.indexOf("/openai");
+    url.pathname = (openAiIndex < 0 ? url.pathname : url.pathname.slice(0, openAiIndex)).replace(
+      /\/+$/,
+      "",
+    );
     if (
       url.origin.toLowerCase() === "https://generativelanguage.googleapis.com" &&
-      url.pathname.replace(/\/+$/, "") === ""
+      url.pathname === "/"
     ) {
       url.pathname = "/v1beta";
     }
-    return url.toString().replace(/\/+$/, "");
+    return url.search ? url.href : url.href.replace(/\/$/, "");
   } catch {
     return trimmed;
   }
+}
+
+function buildGeminiModelPath(model: string): string {
+  return model.startsWith("models/") ? model : `models/${model}`;
 }
 
 export async function createGeminiEmbeddingProvider(

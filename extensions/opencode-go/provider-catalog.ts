@@ -1,19 +1,19 @@
-// Opencode Go provider module implements model/runtime integration.
 import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import {
   buildLiveModelProviderConfig,
   fetchLiveProviderModelIds,
   getCachedUpstreamProviderCatalog,
-  projectUpstreamProviderCatalogModel,
+  listProviderCatalogSnapshotEntries,
+  projectProviderCatalogSnapshotRows,
+  projectUpstreamProviderCatalogSnapshot,
   type LiveModelCatalogFetchGuard,
+  type ProviderCatalogSnapshot,
+  type ProjectedUpstreamProviderCatalogModel as OpencodeGoModelDefinition,
   type UpstreamProviderCatalog,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-model-shared";
-import type {
-  ModelDefinitionConfig,
-  ModelProviderConfig,
-} from "openclaw/plugin-sdk/provider-model-shared";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const PROVIDER_ID = "opencode-go";
@@ -29,82 +29,50 @@ const OPENCODE_GO_MODELS_ENDPOINT = "https://opencode.ai/zen/go/v1/models";
 const OPENCODE_UPSTREAM_CATALOG_ENDPOINT = "https://models.opencode.ai/api.json";
 const OPENCODE_GO_MODELS_TIMEOUT_MS = 5_000;
 const OPENCODE_GO_MODELS_CACHE_TTL_MS = 60_000;
-type OpencodeGoModelDefinition = ModelDefinitionConfig & {
-  provider: typeof PROVIDER_ID;
-  api: NonNullable<ModelDefinitionConfig["api"]>;
-  baseUrl: string;
-  input: Array<"text" | "image">;
-};
-
 const OPENCODE_GO_MANIFEST_PROVIDER = manifest.modelCatalog.providers[PROVIDER_ID];
-const OPENCODE_GO_SEED_MODELS = OPENCODE_GO_MANIFEST_PROVIDER.models.map((model) => {
-  const inheritedTransport = {
-    ...model,
-    provider: PROVIDER_ID,
-    api: "api" in model ? model.api : OPENCODE_GO_MANIFEST_PROVIDER.api,
-    baseUrl: "baseUrl" in model ? model.baseUrl : OPENCODE_GO_MANIFEST_PROVIDER.baseUrl,
-  };
-  // SAFETY: Bundled manifest rows supply model metadata, and inherited provider transport is filled above.
-  const hydrated = inheritedTransport as OpencodeGoModelDefinition;
-  // SAFETY: Compatibility normalization preserves the hydrated model's provider, transport, and input shape.
-  return normalizeModelCompat(hydrated) as OpencodeGoModelDefinition;
-});
-const OPENCODE_GO_SEED_MODEL_BY_ID = new Map(
-  OPENCODE_GO_SEED_MODELS.map((model) => [model.id.toLowerCase(), model]),
+const OPENCODE_GO_SEED_CATALOG: ProviderCatalogSnapshot = new Map(
+  OPENCODE_GO_MANIFEST_PROVIDER.models.map((row) => {
+    const inheritedTransport = {
+      ...row,
+      provider: PROVIDER_ID,
+      api: "api" in row ? row.api : OPENCODE_GO_MANIFEST_PROVIDER.api,
+      baseUrl: "baseUrl" in row ? row.baseUrl : OPENCODE_GO_MANIFEST_PROVIDER.baseUrl,
+    };
+    // SAFETY: Bundled rows and inherited transport supply the complete runtime model shape.
+    const hydrated = inheritedTransport as OpencodeGoModelDefinition;
+    // SAFETY: Normalization preserves the hydrated model's transport and input shape.
+    const model = normalizeModelCompat(hydrated) as OpencodeGoModelDefinition;
+    return [
+      model.id.toLowerCase(),
+      {
+        model,
+        ...("status" in row && (row.status === "deprecated" || row.status === "preview")
+          ? { status: row.status }
+          : {}),
+      },
+    ];
+  }),
 );
-const OPENCODE_GO_MODEL_BY_ID = new Map(OPENCODE_GO_SEED_MODEL_BY_ID);
-const OPENCODE_GO_SEED_MODEL_STATUS = new Map<string, "deprecated" | "preview">(
-  manifest.modelCatalog.providers[PROVIDER_ID].models.flatMap((model) =>
-    "status" in model && (model.status === "deprecated" || model.status === "preview")
-      ? [[model.id, model.status] as const]
-      : [],
-  ),
-);
-const OPENCODE_GO_MODEL_STATUS = new Map(OPENCODE_GO_SEED_MODEL_STATUS);
+let opencodeGoCatalog = OPENCODE_GO_SEED_CATALOG;
 
 function listStaticOpencodeGoModels(): OpencodeGoModelDefinition[] {
-  return OPENCODE_GO_SEED_MODELS.filter((model) => !OPENCODE_GO_MODEL_STATUS.has(model.id));
+  return [...OPENCODE_GO_SEED_CATALOG.values()]
+    .filter(({ model }) => !opencodeGoCatalog.get(model.id)?.status)
+    .map(({ model }) => model);
 }
 
 function cacheUpstreamOpencodeGoModels(catalog: UpstreamProviderCatalog): void {
-  const currentModels = new Map(
-    OPENCODE_GO_SEED_MODELS.map((model) => [model.id.toLowerCase(), model]),
-  );
-  const currentStatuses = new Map(OPENCODE_GO_SEED_MODEL_STATUS);
-  for (const upstreamModel of Object.values(catalog.models)) {
-    const projected = projectUpstreamProviderCatalogModel({
-      providerId: PROVIDER_ID,
-      provider: catalog,
-      model: upstreamModel,
-      anthropicBaseUrl: OPENCODE_GO_ANTHROPIC_BASE_URL,
-      defaultBaseUrl: OPENCODE_GO_OPENAI_BASE_URL,
-    });
-    if (!projected) {
-      continue;
-    }
-    const normalized = normalizeModelCompat({
-      ...projected,
-      ...(projected.api === "anthropic-messages" && projected.id.startsWith("qwen")
-        ? { compat: { ...projected.compat, thinkingFormat: "qwen" as const } }
-        : {}),
-    });
-    // SAFETY: The shared projector validates transport and limits; normalization preserves those model fields.
-    const model = normalized as OpencodeGoModelDefinition;
-    currentModels.set(model.id.toLowerCase(), model);
-    if (upstreamModel.status === "deprecated") {
-      currentStatuses.set(model.id, "deprecated");
-    } else {
-      currentStatuses.delete(model.id);
-    }
-  }
-  OPENCODE_GO_MODEL_BY_ID.clear();
-  for (const [id, model] of currentModels) {
-    OPENCODE_GO_MODEL_BY_ID.set(id, model);
-  }
-  OPENCODE_GO_MODEL_STATUS.clear();
-  for (const [id, status] of currentStatuses) {
-    OPENCODE_GO_MODEL_STATUS.set(id, status);
-  }
+  opencodeGoCatalog = projectUpstreamProviderCatalogSnapshot({
+    providerId: PROVIDER_ID,
+    provider: catalog,
+    seed: OPENCODE_GO_SEED_CATALOG,
+    anthropicBaseUrl: OPENCODE_GO_ANTHROPIC_BASE_URL,
+    defaultBaseUrl: OPENCODE_GO_OPENAI_BASE_URL,
+    decorateModel: (model) =>
+      model.api === "anthropic-messages" && model.id.startsWith("qwen")
+        ? { ...model, compat: { ...model.compat, thinkingFormat: "qwen" } }
+        : model,
+  });
 }
 
 type FetchOpencodeGoLiveModelIdsParams = {
@@ -145,7 +113,6 @@ export async function resolveOpencodeGoStarterModel(params: {
 export async function buildOpencodeGoLiveProviderConfig(
   params: FetchOpencodeGoLiveModelIdsParams = {},
 ): Promise<ModelProviderConfig> {
-  const fallbackModels = listStaticOpencodeGoModels();
   if (!params.apiKey && !params.discoveryApiKey) {
     return buildStaticOpencodeGoProviderConfig();
   }
@@ -169,7 +136,7 @@ export async function buildOpencodeGoLiveProviderConfig(
       api: "openai-completions",
       baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
     },
-    models: fallbackModels,
+    models: listStaticOpencodeGoModels(),
     apiKey: params.apiKey,
     discoveryApiKey: params.discoveryApiKey,
     fetchGuard: params.fetchGuard,
@@ -177,58 +144,17 @@ export async function buildOpencodeGoLiveProviderConfig(
     timeoutMs: OPENCODE_GO_MODELS_TIMEOUT_MS,
     ttlMs: OPENCODE_GO_MODELS_CACHE_TTL_MS,
     auditContext: "opencode-go-model-discovery",
-    projectRows: (rows) => {
-      const seen = new Set<string>();
-      const models: OpencodeGoModelDefinition[] = [];
-      for (const row of rows) {
-        if (!row || typeof row !== "object" || Array.isArray(row)) {
-          continue;
-        }
-        const object = "object" in row ? row.object : undefined;
-        if (object !== undefined && object !== "model") {
-          continue;
-        }
-        const id = "id" in row ? row.id : undefined;
-        const modelId = typeof id === "string" ? id.trim().toLowerCase() : "";
-        if (!modelId || seen.has(modelId) || OPENCODE_GO_MODEL_STATUS.has(modelId)) {
-          continue;
-        }
-        seen.add(modelId);
-        const model = OPENCODE_GO_MODEL_BY_ID.get(modelId);
-        if (model) {
-          models.push(model);
-        }
-      }
-      return models;
-    },
+    projectRows: (rows) => projectProviderCatalogSnapshotRows(rows, opencodeGoCatalog),
   });
 }
 
 export function listOpencodeGoModelCatalogEntries(): ModelCatalogEntry[] {
-  return [...OPENCODE_GO_MODEL_BY_ID.values()].map((model) => {
-    const entry: ModelCatalogEntry = {
-      provider: model.provider,
-      id: model.id,
-      name: model.name,
-      api: model.api,
-      baseUrl: model.baseUrl,
-      reasoning: model.reasoning,
-      input: model.input,
-      contextWindow: model.contextWindow,
-      contextTokens: model.contextTokens,
-      compat: model.compat,
-    };
-    const status = OPENCODE_GO_MODEL_STATUS.get(model.id);
-    if (status) {
-      entry.status = status;
-    }
-    return entry;
-  });
+  return listProviderCatalogSnapshotEntries(opencodeGoCatalog);
 }
 
 export function resolveOpencodeGoModel(modelId: string): ProviderRuntimeModel | undefined {
-  const normalizedModelId = modelId.trim().toLowerCase();
-  return OPENCODE_GO_SEED_MODEL_BY_ID.get(normalizedModelId);
+  // Public upstream metadata does not establish another account's Go entitlement.
+  return OPENCODE_GO_SEED_CATALOG.get(modelId.trim().toLowerCase())?.model;
 }
 
 export function isOpencodeGoKimiNoReasoningModelId(modelId: unknown): boolean {

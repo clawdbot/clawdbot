@@ -7,7 +7,9 @@ read_when:
 title: "Why OpenClaw"
 ---
 
-Every harness ships the same feature list now: [channels](/channels), [tools](/tools), [memory](/concepts/memory), [skills](/tools/skills), [scheduling](/automation). A feature table does not establish the security model. The main distinctions are **where the trust boundary lies** and **whether policy is enforced in code or requested in the system prompt**.
+OpenClaw is an extensible, proactive, open-source AI agent that works everywhere you work. It exists because software is inverting: for decades you went to the computer, opened the app, clicked through its screens, and did the work yourself. An agent acts on your behalf instead, on your machine, in your messages, against your accounts. That inversion is why agents feel like the beginning of something rather than another product cycle, and why they deserve more scrutiny than anything you have installed before: an assistant that acts for you holds credentials, reads mail, and runs commands on real computers. The architecture decides what it _can_ do long before any policy decides what it _may_.
+
+The project is stewarded by the [OpenClaw Foundation](https://openclaw.org), an independent 501(c)(3) whose mission is to make AI personal, fun, and empowering for everyone: your agent, your machine, your rules. It is built on the observation that the open source projects that endure (Linux, Apache, Mozilla) endure because a neutral steward stands behind them. The Foundation has sponsors rather than owners, with OpenAI, NVIDIA, Microsoft, Atlassian, GitHub, and Tencent among more than thirty, a full-time team, releases signed under its own identity, and Foundation-convened councils on agent identity, agent profiles, evals, and enterprise deployment. The aim is to be the Switzerland of AI: neutral ground for every model and every lab, and the most mature, battle-tested agent for anyone, individual or enterprise, to build on. For an evaluation, governance is not decoration. It answers who controls the roadmap, who signs what you deploy, and what happens when any one vendor's incentives change.
 
 Most harnesses are a single trust envelope. One process holds the agent loop, the channel connections, the credentials, and the shell, running as one OS user on a long-lived machine. Wrapping that process in a VM leaves all of those components inside the same boundary. The machine is maintained and patched in place.
 
@@ -157,7 +159,7 @@ With verified GitHub identity, commits from a shared session carry `Co-authored-
 
 ## Governance
 
-The whole OpenClaw product is MIT-licensed, with no enterprise edition under a different license, and it is governed by the [OpenClaw Foundation](https://openclaw.org), an independent 501(c)(3) non-profit with sponsors rather than owners — OpenAI, NVIDIA, Microsoft, Atlassian, GitHub, and Tencent among many others — and a full-time team. The Foundation's stated ambition is to be neutral ground across model providers, and the architecture reflects it: providers are plugins, and no lab's model is privileged. Releases are signed and published under the Foundation identity.
+The whole OpenClaw product is MIT-licensed, with no enterprise edition under a different license, and it is governed by the [OpenClaw Foundation](https://openclaw.org) introduced above. The Foundation's stewardship shows up in the architecture: providers are plugins, and no lab's model is privileged. Releases are signed and published under the Foundation identity.
 
 Hermes is built by Nous Research, a venture-funded company whose Series A was led by the crypto investor Paradigm at a token-based valuation, with a later round reported at a $1.5B valuation. This is a difference in governance and funding, not a judgment of the engineering. A neutral non-profit with published governance can serve as enterprise infrastructure.
 

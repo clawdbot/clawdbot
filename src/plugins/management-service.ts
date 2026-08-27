@@ -1,5 +1,4 @@
 // Structured plugin catalog and lifecycle operations shared by Gateway-facing surfaces.
-import path from "node:path";
 import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -49,6 +48,11 @@ import {
 import { commitPluginInstallRecordsWithConfig } from "./install-record-commit.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.js";
 import type { InstallPolicyWarningDetails } from "./install-security-scan.types.js";
+import {
+  requestDeferredPluginInstall,
+  resolvePluginInstallTransaction,
+  type PluginInstallTransaction,
+} from "./install-transaction.js";
 import {
   isUnavailableNpmTarget,
   PLUGIN_INSTALL_ERROR_CODE,
@@ -102,7 +106,6 @@ import {
 } from "./status-dependencies-core.js";
 import { setPluginEnabledInConfig } from "./toggle-config.js";
 import { collectClawPluginUninstallWarnings } from "./uninstall-claw-references.js";
-import { isUninstallPathInsideOrEqual } from "./uninstall-config.js";
 import {
   prepareConfigForPendingPluginDirectoryRemovalSet,
   recordPluginPackageUninstallPlan,
@@ -1105,131 +1108,54 @@ function throwInstallFailure(result: {
   });
 }
 
-function installRecordOwnsTarget(
-  record: PluginInstallRecord | undefined,
-  targetDir: string,
-): boolean {
-  return Boolean(
-    record?.installPath && path.resolve(record.installPath) === path.resolve(targetDir),
-  );
-}
-
-async function cleanupFailedManagedPluginInstall(params: {
-  env: NodeJS.ProcessEnv;
-  pluginId: string;
-  install: PluginInstallRecord;
-  targetDir: string;
-  extensionsDir: string;
-}): Promise<string[]> {
-  let installRecords: Record<string, PluginInstallRecord>;
-  try {
-    installRecords = await loadInstalledPluginIndexInstallRecords({ env: params.env });
-  } catch (error) {
-    return [
-      `Could not verify whether the failed plugin install was committed; retained ${params.targetDir}: ${formatErrorMessage(error)}`,
-    ];
-  }
-  if (installRecordOwnsTarget(installRecords[params.pluginId], params.targetDir)) {
-    return [
-      `Plugin install persistence reported an error after ${params.targetDir} was recorded; retained the managed target.`,
-    ];
-  }
-
-  const plan = planPluginUninstall(
-    recordPluginPackageUninstallPlan(
-      {
-        config: {
-          plugins: { installs: { [params.pluginId]: params.install } },
-        },
-        pluginId: params.pluginId,
-        deleteFiles: true,
-        extensionsDir: params.extensionsDir,
-      },
-      { runtimePluginIds: [] },
-    ),
-  );
-  if (!plan.ok) {
-    return [`Could not plan cleanup for failed plugin install: ${plan.error}`];
-  }
-  if (!plan.directoryRemoval) {
-    return [
-      `Could not resolve a managed cleanup target for failed plugin install ${params.pluginId}.`,
-    ];
-  }
-  const plannedTarget = path.resolve(plan.directoryRemoval.target);
-  const installedTarget = path.resolve(params.targetDir);
-  const removesIsolatedNpmProject =
-    plan.directoryRemoval.cleanup?.kind === "npm" &&
-    plannedTarget === path.resolve(plan.directoryRemoval.cleanup.npmRoot) &&
-    isUninstallPathInsideOrEqual(plannedTarget, installedTarget);
-  if (plannedTarget !== installedTarget && !removesIsolatedNpmProject) {
-    return [
-      `Refused cleanup for failed plugin install ${params.pluginId}: planned target does not match the newly installed target.`,
-    ];
-  }
-  try {
-    const cleanup = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
-    return cleanup.warnings;
-  } catch (error) {
-    return [
-      `Failed to remove the newly installed target after plugin persistence failed: ${formatErrorMessage(error)}`,
-    ];
-  }
-}
-
-function throwPersistenceFailureWithCleanupWarnings(error: unknown, warnings: string[]): never {
-  if (warnings.length === 0) {
-    throw error;
-  }
-  const cleanupWarning = [...new Set(warnings)].join("\n");
-  if (error instanceof ManagedPluginLifecycleError) {
-    throw new ManagedPluginLifecycleError(error.message, {
-      kind: error.kind,
-      code: error.code,
-      version: error.version,
-      warning: [error.warning, cleanupWarning].filter(Boolean).join("\n"),
-      installPolicyWarning: error.installPolicyWarning,
-      cause: error,
-    });
-  }
-  throw new ManagedPluginLifecycleError(formatErrorMessage(error), {
-    kind: "unavailable",
-    warning: cleanupWarning,
-    cause: error,
-  });
-}
-
 async function persistManagedSourceInstall(params: {
-  env: NodeJS.ProcessEnv;
   snapshot: ConfigSnapshotForInstallPersist;
   pluginId: string;
   install: PluginInstallRecord;
-  targetDir: string;
-  extensionsDir: string;
+  transaction?: PluginInstallTransaction;
   invalidateRuntimeCache?: boolean;
   runtime?: RuntimeEnv;
   successMessage?: string;
-  cleanupOnPersistenceFailure?: boolean;
 }): Promise<{ config: OpenClawConfig; warnings: string[] }> {
   const warnings: string[] = [];
-  const persist = () =>
-    persistPluginInstall({
+  let committed = false;
+  try {
+    const config = await persistPluginInstall({
       snapshot: params.snapshot,
       pluginId: params.pluginId,
       install: params.install,
       invalidateRuntimeCache: params.invalidateRuntimeCache,
       runtime: params.runtime,
       persistenceLogger: { warn: (message) => warnings.push(message) },
+      // Only the persistence owner can distinguish rejection from a late refresh failure.
+      onCommitted: () => {
+        committed = true;
+      },
       ...(params.successMessage ? { successMessage: params.successMessage } : {}),
     });
-  if (!params.cleanupOnPersistenceFailure) {
-    return { config: await persist(), warnings };
-  }
-  try {
-    return { config: await persist(), warnings };
+    return { config, warnings };
   } catch (error) {
-    const cleanupWarnings = await cleanupFailedManagedPluginInstall(params);
-    return throwPersistenceFailureWithCleanupWarnings(error, cleanupWarnings);
+    if (!committed) {
+      try {
+        await params.transaction?.rollback();
+      } catch (rollbackError) {
+        // oxlint-disable-next-line preserve-caught-error -- Oxlint 1.78 ignores AggregateError's third-argument cause.
+        throw new AggregateError(
+          [error, rollbackError],
+          "Plugin install failed and payload rollback failed",
+          { cause: rollbackError },
+        );
+      }
+    }
+    throw error;
+  } finally {
+    if (committed) {
+      await params.transaction?.commit().catch(() => {
+        const warning = "Plugin install committed, but backup cleanup failed. Restart is required.";
+        warnings.push(warning);
+        params.runtime?.log(warning);
+      });
+    }
   }
 }
 
@@ -1293,7 +1219,6 @@ type ManagedPluginSourceInstallParams = {
   safetyOverrides?: InstallSafetyOverrides;
   runtime?: RuntimeEnv;
   invalidateRuntimeCache?: boolean;
-  cleanupOnPersistenceFailure?: boolean;
 };
 
 /**
@@ -1362,18 +1287,17 @@ async function installResolvedManagedPluginSource(
     };
   }
 
-  const common = {
+  const common = requestDeferredPluginInstall({
     ...params.safetyOverrides,
     config: params.snapshot.config,
     extensionsDir,
     logger: params.logger,
-  };
+  });
   const complete = async <T extends SourceInstallerResult>(
     installResult: Promise<T>,
     completed: {
       install: (result: Extract<T, { ok: true }>) => PluginInstallRecord;
       expectedPluginId?: string;
-      targetDir?: string;
       snapshot?: ConfigSnapshotForInstallPersist;
       successMessage?: string;
     },
@@ -1386,28 +1310,20 @@ async function installResolvedManagedPluginSource(
       pluginId: string;
       targetDir: string;
     };
+    const transaction = resolvePluginInstallTransaction(installed);
     if (completed.expectedPluginId && installed.pluginId !== completed.expectedPluginId) {
+      await transaction?.rollback();
       return {
         ok: false as const,
         error: `official catalog plugin id mismatch: expected ${completed.expectedPluginId}, got ${installed.pluginId}`,
       };
     }
-    const targetDir = completed.targetDir ?? installed.targetDir;
-    // Links point at operator-owned source directories. Every published managed
-    // payload defaults to compensation, but link persistence never deletes source.
-    const cleanupOnPersistenceFailure =
-      request.source === "local" && request.link
-        ? false
-        : (params.cleanupOnPersistenceFailure ?? true);
     const persisted = await persistManagedSourceInstall({
       ...params,
-      cleanupOnPersistenceFailure,
-      env,
       snapshot: completed.snapshot ?? params.snapshot,
       pluginId: installed.pluginId,
       install: completed.install(installed),
-      targetDir,
-      extensionsDir,
+      transaction,
       successMessage: completed.successMessage,
     });
     return {
@@ -1446,7 +1362,6 @@ async function installResolvedManagedPluginSource(
       }),
       {
         snapshot: linkedSnapshot,
-        targetDir: installPath,
         successMessage: request.successMessage,
         install: (result) => ({
           source: request.recordSource,
@@ -1664,7 +1579,6 @@ export async function installManagedPlugin(params: {
             },
           }
         : {}),
-      cleanupOnPersistenceFailure: true,
       invalidateRuntimeCache: false,
       runtime: createSilentRuntime(),
     });
