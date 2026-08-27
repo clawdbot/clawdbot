@@ -20,7 +20,6 @@ import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapsh
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "../plugins/runtime-state.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
-import { resolveUserPath } from "../utils.js";
 import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";
 import { WizardCancelledError, WizardNavigationError } from "../wizard/prompts.js";
 import { resolveAppliedSnapshotConfig } from "./applied-snapshot-config.js";
@@ -45,7 +44,7 @@ import {
   SetupInferenceOwnerDriftError,
   invalidSetupConfigError,
   redactSetupInferenceError,
-  resolveSetupInferenceWorkspace,
+  resolveActivationWorkspace,
   setupInferenceLog,
   throwIfSetupInferenceCancelled,
 } from "./setup-inference-core.js";
@@ -147,14 +146,11 @@ async function activateSetupInferenceUnredacted(
   // while the writer still projects changes back onto the untouched authored bytes.
   const sourceCfg: OpenClawConfig = snapshot.sourceConfig ?? snapshot.config;
   const routeAgentId = resolveAmbientOwnerAgentId(cfg, params.agentId);
-  const workspace = params.workspace?.trim()
-    ? resolveUserPath(params.workspace)
-    : (
-        await resolveSetupInferenceWorkspace({
-          configExists: snapshot.exists,
-          configValid: snapshot.valid,
-        })
-      ).workspace;
+  const workspace = await resolveActivationWorkspace({
+    ...(params.workspace ? { requested: params.workspace } : {}),
+    configExists: snapshot.exists,
+    configValid: snapshot.valid,
+  });
 
   const tempDir = await (
     deps.createTempDir ?? (() => fs.mkdtemp(path.join(os.tmpdir(), "openclaw-setup-inference-")))

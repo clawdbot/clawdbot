@@ -369,3 +369,19 @@ export async function resolveSetupInferenceWorkspace(params: {
     hasAuthoredSetup,
   };
 }
+
+/** Explicit workspace wins; otherwise fall back to the authored/default workspace. */
+export async function resolveActivationWorkspace(params: {
+  requested?: string;
+  configExists: boolean;
+  configValid: boolean;
+}): Promise<string> {
+  if (params.requested?.trim()) {
+    return resolveUserPath(params.requested);
+  }
+  const { workspace } = await resolveSetupInferenceWorkspace({
+    configExists: params.configExists,
+    configValid: params.configValid,
+  });
+  return workspace;
+}
