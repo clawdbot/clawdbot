@@ -2922,11 +2922,15 @@ function resolveSemanticToolingTargets(changedPath: string) {
   );
 }
 
+function isGithubWorkflowOrActionYaml(changedPath: string) {
+  return (
+    /^\.github\/workflows\/[^/]+\.ya?ml$/u.test(changedPath) ||
+    /^\.github\/actions\/.+\.ya?ml$/u.test(changedPath)
+  );
+}
+
 function resolveGithubYamlGuardTargets(changedPath: string) {
-  if (/^\.github\/workflows\/[^/]+\.ya?ml$/u.test(changedPath)) {
-    return GITHUB_YAML_PINNING_GUARD_TEST_TARGETS;
-  }
-  if (/^\.github\/actions\/.+\.ya?ml$/u.test(changedPath)) {
+  if (isGithubWorkflowOrActionYaml(changedPath)) {
     return GITHUB_YAML_PINNING_GUARD_TEST_TARGETS;
   }
   return null;
@@ -2959,13 +2963,16 @@ function resolveToolingTestTargets(changedPath: string, cwd = process.cwd()) {
     !changedPath.startsWith("scripts/") && changedPath.endsWith(".d.mts")
       ? changedPath.replace(/\.d\.mts$/u, ".mjs")
       : changedPath;
+  const githubYaml = isGithubWorkflowOrActionYaml(implementationPath);
   const exactOwners = EXACT_TOOLING_TARGETS.get(implementationPath);
-  if (exactOwners) {
+  if (exactOwners && !githubYaml) {
     return resolveToolingTestOwnerTargets(...exactOwners);
   }
+  const exactTargets = exactOwners ? resolveToolingTestOwnerTargets(...exactOwners) : [];
   const semanticTargets = resolveSemanticToolingTargets(implementationPath);
   const facts = getChangedPathFacts(changedPath);
   const hasToolingOwner =
+    exactTargets.length > 0 ||
     semanticTargets.length > 0 ||
     facts.surface === "rootTooling" ||
     changedPath === "Dockerfile" ||
@@ -3003,6 +3010,7 @@ function resolveToolingTestTargets(changedPath: string, cwd = process.cwd()) {
   const githubYamlGuardTargets = resolveGithubYamlGuardTargets(implementationPath);
   const conventionalTargets = resolveConventionalToolingTestTargets(implementationPath, cwd);
   const hasDirectOwner = Boolean(
+    exactTargets.length ||
     explicitTargets?.length ||
     githubYamlGuardTargets?.length ||
     semanticTargets.length ||
@@ -3018,10 +3026,11 @@ function resolveToolingTestTargets(changedPath: string, cwd = process.cwd()) {
       : [];
   const importGraphTargets = importGraphResult ?? [];
   const referenceTargets =
-    semanticTargets.length === 0 && (githubYamlGuardTargets || !hasDirectOwner)
+    githubYaml || (semanticTargets.length === 0 && !hasDirectOwner)
       ? resolveDirectToolingReferenceTests(implementationPath, cwd)
       : [];
   const targets = [
+    ...exactTargets,
     ...(explicitTargets ?? []),
     ...semanticTargets,
     ...(conventionalTargets ?? []),
