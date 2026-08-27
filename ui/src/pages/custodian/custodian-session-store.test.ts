@@ -9,6 +9,14 @@ import { createContext } from "./custodian-page.test-harness.ts";
 import { CustodianSessionStore } from "./custodian-session-store.ts";
 import { custodianErrorMessage } from "./transcript.ts";
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 describe("CustodianSessionStore", () => {
   beforeEach(() => {
     installSafeLocalStorageForTesting(window).clear();
@@ -207,6 +215,35 @@ describe("CustodianSessionStore", () => {
       request.mock.calls.filter(([method]) => method === "openclaw.chat.history"),
     ).toHaveLength(historyCallCount);
     expect(store.messages[0]?.question?.id).toBe("repair");
+  });
+
+  it("keeps the newest transcript when concurrent refreshes resolve out of order", async () => {
+    const older = deferred<{ turns: Array<{ role: "assistant"; text: string; at: number }> }>();
+    const newer = deferred<{ turns: Array<{ role: "assistant"; text: string; at: number }> }>();
+    let historyCall = 0;
+    const request = vi.fn((method: string, params: { sessionId?: string }) => {
+      if (method === "openclaw.chat.history") {
+        historyCall += 1;
+        if (historyCall === 1) {
+          return Promise.resolve({ turns: [] });
+        }
+        return historyCall === 2 ? older.promise : newer.promise;
+      }
+      return Promise.resolve({ sessionId: params.sessionId, reply: "Ready.", action: "none" });
+    });
+    const { context } = createContext(request, ["openclaw.chat", "openclaw.chat.history"]);
+    const store = new CustodianSessionStore();
+    store.connect(context, "caretaker");
+    await waitForFast(() => expect(store.sending).toBe(false));
+
+    const olderRefresh = store.refreshTranscriptIfIdle();
+    const newerRefresh = store.refreshTranscriptIfIdle();
+    newer.resolve({ turns: [{ role: "assistant", text: "Newest history", at: 2 }] });
+    await newerRefresh;
+    older.resolve({ turns: [{ role: "assistant", text: "Older history", at: 1 }] });
+    await olderRefresh;
+
+    expect(store.messages.map((message) => message.text)).toEqual(["Newest history"]);
   });
 
   it("refreshes durable history after reconnect and clears the abandoned outcome", async () => {

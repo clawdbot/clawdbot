@@ -80,6 +80,7 @@ export class CustodianSessionStore {
   // refresh and on any fresh mint.
   private rejoinBarrierPending = this.restoredIdentity.restored;
   private requestEpoch = 0;
+  private transcriptGeneration = 0;
   private requestAbort: AbortController | null = null;
   private nextMessageId = 1;
   private retryParams: SystemAgentChatParams | null = null;
@@ -602,8 +603,14 @@ export class CustodianSessionStore {
     ) {
       return false;
     }
+    const generation = ++this.transcriptGeneration;
     const result = await this.transcript.read(client);
-    if (epoch !== this.requestEpoch || client !== this.activeClient) {
+    // The request epoch fences session changes; this generation fences same-session Retry overlap.
+    if (
+      epoch !== this.requestEpoch ||
+      client !== this.activeClient ||
+      generation !== this.transcriptGeneration
+    ) {
       return false;
     }
     this.transcript.finish(result);

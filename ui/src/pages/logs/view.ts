@@ -69,9 +69,9 @@ export function renderLogs(props: LogsProps) {
   const exportFileLabel: ExportFileLabel = needle || levelFiltered ? "filtered" : "visible";
   const exportDisplayLabel = t(`gatewayLogs.exportLabels.${exportFileLabel}`);
   const streamContent = !props.status.hasLoaded
-    ? props.status.error
-      ? nothing
-      : renderPanelState({ kind: "loading" })
+    ? props.loading
+      ? renderPanelState({ kind: "loading" })
+      : nothing
     : filtered.length === 0
       ? renderSettingsEmpty(t("gatewayLogs.empty"))
       : filtered.map(

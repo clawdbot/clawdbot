@@ -95,6 +95,15 @@ describe("renderLogs", () => {
     expect(container.querySelector('[role="status"]')).not.toBeNull();
   });
 
+  it("does not show loading when no initial request is pending", () => {
+    const container = document.createElement("div");
+
+    render(renderLogs(createProps({ loading: false, entries: [] })), container);
+
+    expect(container.textContent).not.toContain("No log entries.");
+    expect(container.querySelector('[role="status"]')).toBeNull();
+  });
+
   it("renders the subtitle under the section header", () => {
     const container = document.createElement("div");
 
