@@ -235,6 +235,24 @@ export function validatePluginConfig(params: {
     : resultError(result.errors.map((error) => error.text));
 }
 
+// The empty-config shortcut answers without compiling the schema, so it is only sound for
+// schemas built purely from keywords it accounts for. An allowlist holds that invariant where
+// a denylist leaked every new keyword: an extra constraint, an unresolvable `$ref`, or an
+// unknown keyword now falls through to validateManifestSchemaValue, which owns the diagnostic.
+const EMPTY_PLUGIN_CONFIG_SHORTCUT_KEYWORDS = new Set([
+  "type",
+  "additionalProperties",
+  "properties",
+  "title",
+  "description",
+  "$schema",
+  "$id",
+  "$comment",
+  "deprecated",
+  "readOnly",
+  "writeOnly",
+]);
+
 function isEmptyPluginConfigJsonSchema(schema: Record<string, unknown>): boolean {
   if (schema.type !== "object" || schema.additionalProperties !== false) {
     return false;
@@ -248,20 +266,7 @@ function isEmptyPluginConfigJsonSchema(schema: Record<string, unknown>): boolean
   ) {
     return false;
   }
-  const hasConditional = "if" in schema && ("then" in schema || "else" in schema);
-  return !(
-    "required" in schema ||
-    "dependentRequired" in schema ||
-    "dependentSchemas" in schema ||
-    "dependencies" in schema ||
-    "minProperties" in schema ||
-    "allOf" in schema ||
-    "anyOf" in schema ||
-    "oneOf" in schema ||
-    "not" in schema ||
-    "patternProperties" in schema ||
-    hasConditional
-  );
+  return Object.keys(schema).every((keyword) => EMPTY_PLUGIN_CONFIG_SHORTCUT_KEYWORDS.has(keyword));
 }
 
 export function pushDiagnostics(diagnostics: PluginDiagnostic[], append: PluginDiagnostic[]): void {

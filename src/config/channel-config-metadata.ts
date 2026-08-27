@@ -157,6 +157,26 @@ export function collectPluginSchemaMetadataCore(
     .map(({ originRank: _originRank, ...record }) => record);
 }
 
+function prepareChannelConfigSchema(
+  origin: PluginOrigin,
+  channelId: string,
+  schema: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  try {
+    const coreOwnedSchema =
+      origin === "bundled" || schema === undefined
+        ? schema
+        : normalizeCoreOwnedChannelSchema(schema);
+    return widenOfficialExternalChannelSecretSchema({ channelId, schema: coreOwnedSchema });
+  } catch {
+    // Normalization and official-channel widening both clone and walk the schema, so a deeply
+    // nested external manifest overflows here, before any validator runs. Surfacing the raw
+    // schema keeps metadata collection total and leaves the diagnostic to the one owner of it,
+    // validateManifestSchemaValue.
+    return schema;
+  }
+}
+
 /** Collects per-channel config metadata with the plugin that supplied the selected schema. */
 export function collectChannelSchemaMetadataWithOwnership(
   registry: PluginManifestRegistry,
@@ -197,14 +217,11 @@ export function collectChannelSchemaMetadataWithOwnership(
         // advertises the same channel id.
         continue;
       }
-      const coreOwnedSchema =
-        record.origin === "bundled" || channelConfig.schema === undefined
-          ? channelConfig.schema
-          : normalizeCoreOwnedChannelSchema(channelConfig.schema);
-      const configSchema = widenOfficialExternalChannelSecretSchema({
+      const configSchema = prepareChannelConfigSchema(
+        record.origin,
         channelId,
-        schema: coreOwnedSchema,
-      });
+        channelConfig.schema,
+      );
       byChannelId.set(channelId, {
         id: channelId,
         label: channelConfig.label ?? rootLabel ?? current?.label,
