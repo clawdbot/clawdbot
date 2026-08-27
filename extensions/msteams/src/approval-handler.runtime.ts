@@ -1,5 +1,8 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
-import { createChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
+import {
+  createChannelApprovalNativeRuntimeAdapter,
+  resolvePreparedApprovalAccountId,
+} from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -78,8 +81,13 @@ export const msTeamsApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
       };
     },
     deliverPending: async ({ cfg, accountId, preparedTarget, pendingPayload }) => {
+      const deliveryAccountId = resolvePreparedApprovalAccountId({
+        contextAccountId: accountId,
+        fallbackAccountId: DEFAULT_ACCOUNT_ID,
+      });
       const sent = await sendAdaptiveCardMSTeams({
         cfg,
+        accountId: deliveryAccountId,
         to: preparedTarget.to,
         card: pendingPayload.card,
       });
@@ -87,7 +95,7 @@ export const msTeamsApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
         return null;
       }
       return {
-        accountId: accountId ?? DEFAULT_ACCOUNT_ID,
+        accountId: deliveryAccountId,
         conversationId: sent.conversationId,
         activityId: sent.messageId,
         actionTokens: pendingPayload.actionTokens,
@@ -96,6 +104,7 @@ export const msTeamsApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
     updateEntry: async ({ cfg, entry, payload }) => {
       await editAdaptiveCardMSTeams({
         cfg,
+        accountId: entry.accountId,
         to: entry.conversationId,
         activityId: entry.activityId,
         card: payload,
@@ -129,7 +138,15 @@ export const msTeamsApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
       unregisterMSTeamsApprovalCardBindings(entry.actionTokens.map(({ token }) => token)),
   },
   observe: {
-    onDeliveryError: ({ cfg, error, plannedTarget, request, approvalKind, pendingPayload }) => {
+    onDeliveryError: ({
+      cfg,
+      accountId,
+      error,
+      plannedTarget,
+      request,
+      approvalKind,
+      pendingPayload,
+    }) => {
       log.error(`msteams approvals: failed to deliver request ${request.id}: ${String(error)}`);
       // The active native route suppressed the local text prompt, so a failed
       // card send must still surface a visible approval path (#130040 tracks
@@ -137,6 +154,10 @@ export const msTeamsApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
       const decisions = pendingPayload.allowedDecisions.join("|");
       void sendMessageMSTeams({
         cfg,
+        accountId: resolvePreparedApprovalAccountId({
+          contextAccountId: accountId,
+          fallbackAccountId: DEFAULT_ACCOUNT_ID,
+        }),
         to: plannedTarget.target.to,
         text: `⚠️ Could not deliver the ${approvalKind} approval card for ${request.id}. Reply "/approve ${request.id} <${decisions}>" to resolve it.`,
       }).catch((fallbackError: unknown) => {

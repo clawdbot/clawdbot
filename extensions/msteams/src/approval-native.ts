@@ -1,4 +1,3 @@
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { createApproverRestrictedNativeApprovalCapability } from "openclaw/plugin-sdk/approval-delivery-runtime";
 import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type {
@@ -23,7 +22,7 @@ import type {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveMSTeamsAccount } from "./accounts.js";
+import { resolveDefaultMSTeamsAccountId, resolveMSTeamsAccount } from "./accounts.js";
 import { getMSTeamsApprovalApprovers, msTeamsApprovalAuth } from "./approval-auth.js";
 import { msteamsConfigAdapter } from "./channel-config.js";
 import { normalizeMSTeamsMessagingTarget } from "./resolve-allowlist.js";
@@ -34,9 +33,6 @@ function isMSTeamsApprovalTransportEnabled(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): boolean {
-  if (params.accountId && normalizeAccountId(params.accountId) !== DEFAULT_ACCOUNT_ID) {
-    return false;
-  }
   const account = resolveMSTeamsAccount(params);
   return account.enabled && account.configured && account.tokenStatus === "available";
 }
@@ -65,7 +61,7 @@ const msTeamsApprovalRouteGates = createNativeApprovalChannelRouteGates({
   defaultForwardingMode: "session",
   isTransportEnabled: isMSTeamsApprovalTransportEnabled,
   listAccountIds: msteamsConfigAdapter.listAccountIds,
-  resolveDefaultAccountId: () => DEFAULT_ACCOUNT_ID,
+  resolveDefaultAccountId: resolveDefaultMSTeamsAccountId,
   normalizeForwardTarget: msTeamsApprovalTargetResolvers.normalizeForwardTarget,
   resolveTurnSourceTarget: msTeamsApprovalTargetResolvers.resolveTurnSourceTarget,
 });
