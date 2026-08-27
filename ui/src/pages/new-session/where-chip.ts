@@ -102,6 +102,7 @@ export function resolveWhereChip(params: {
 }
 
 export function renderWhereChip(params: {
+  autoPlacementMode?: "least-busy" | "eligible-order";
   state: WhereChipState;
   gatewayName: string;
   cloudProfileId: string;
@@ -193,7 +194,11 @@ export function renderWhereChip(params: {
                 {
                   value: "auto-device",
                   label: t("newSession.autoDevice"),
-                  sub: t("newSession.autoDeviceSub"),
+                  sub: t(
+                    params.autoPlacementMode === "eligible-order"
+                      ? "newSession.autoDeviceSubEligible"
+                      : "newSession.autoDeviceSub",
+                  ),
                   icon: icons.monitor,
                   checked: params.autoDevice === true,
                   disabled: Boolean(params.state.autoDeviceDisabledReason),

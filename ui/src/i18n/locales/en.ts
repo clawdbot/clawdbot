@@ -891,6 +891,7 @@ export const en: TranslationMap = {
     yourDevices: "Your devices",
     autoDevice: "Auto",
     autoDeviceSub: "Least-busy device",
+    autoDeviceSubEligible: "First eligible device",
     noSessionHosts: "No session hosts are paired. Connect a machine with session hosting enabled.",
     neverConnected: "Never connected",
     offlineFor: "Offline for {duration}",
