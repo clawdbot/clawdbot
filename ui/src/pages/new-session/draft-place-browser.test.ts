@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { DraftGatewayState } from "./draft-gateway-state.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import type { NewSessionRouteData } from "./location.ts";
@@ -155,7 +156,7 @@ describe("DraftGatewayState", () => {
     fixture.hello.features.methods.push("system.info");
     fixture.client.recoveryScopeReady = false;
     fixture.update();
-    await vi.waitFor(() => expect(fixture.gateway.gatewayName).toBe("Gateway A"));
+    await waitForFast(() => expect(fixture.gateway.gatewayName).toBe("Gateway A"));
 
     fixture.client.recoveryScope = "resolved-principal";
     fixture.client.recoveryScopeReady = true;
@@ -169,7 +170,7 @@ describe("DraftGatewayState", () => {
     const fixture = createBrowser(request);
     fixture.hello.features.methods.push("system.info");
     fixture.update();
-    await vi.waitFor(() => expect(fixture.gateway.gatewayName).toBe("Gateway A"));
+    await waitForFast(() => expect(fixture.gateway.gatewayName).toBe("Gateway A"));
 
     fixture.context.gateway.snapshot.phase = "reconnecting";
     fixture.update();
@@ -179,7 +180,7 @@ describe("DraftGatewayState", () => {
     fixture.update();
     expect(fixture.gateway.gatewayName).toBe("");
     pending.resolve({ machineName: "Gateway B" });
-    await vi.waitFor(() => expect(fixture.gateway.gatewayName).toBe("Gateway B"));
+    await waitForFast(() => expect(fixture.gateway.gatewayName).toBe("Gateway B"));
   });
 
   it("ignores a late name from the replaced client", async () => {
@@ -197,7 +198,7 @@ describe("DraftGatewayState", () => {
     });
     expect(fixture.gateway.gatewayName).toBe("");
     newName.resolve({ machineName: "Active Gateway" });
-    await vi.waitFor(() => expect(fixture.gateway.gatewayName).toBe("Active Gateway"));
+    await waitForFast(() => expect(fixture.gateway.gatewayName).toBe("Active Gateway"));
   });
 
   it.each([
@@ -217,7 +218,7 @@ describe("DraftGatewayState", () => {
       const fixture = createBrowser(request);
       fixture.hello.features.methods.push("system.info");
       fixture.update();
-      await vi.waitFor(() => expect(fixture.gateway.gatewayName).toBe("Current Gateway"));
+      await waitForFast(() => expect(fixture.gateway.gatewayName).toBe("Current Gateway"));
       current = response;
       fixture.context.gateway.snapshot.phase = "reconnecting";
       fixture.update();
@@ -227,7 +228,7 @@ describe("DraftGatewayState", () => {
       await new Promise<void>((resolve) => {
         setTimeout(resolve, 0);
       });
-      await vi.waitFor(() => expect(fixture.gateway.gatewayName).toBe(name));
+      await waitForFast(() => expect(fixture.gateway.gatewayName).toBe(name));
       expect(request.mock.calls.filter(([method]) => method === "system.info")).toHaveLength(
         advertised ? 2 : 1,
       );
