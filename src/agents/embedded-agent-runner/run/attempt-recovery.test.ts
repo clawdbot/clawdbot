@@ -18,6 +18,8 @@ type TransportDropScenario = {
   activeCount?: number;
   codeModeSuspended?: boolean;
   transportDropContinuations?: number;
+  terminal?: Parameters<typeof makeEmbeddedRunnerAttempt>[0]["terminal"];
+  yieldDetected?: boolean;
 };
 
 // Live shape: a code-mode exec batch settled, then the ChatGPT Responses stream
@@ -64,6 +66,8 @@ async function recoverAfterTransportDrop(scenario: TransportDropScenario = {}) {
       completedCount: toolCalls.length,
       activeCount: scenario.activeCount ?? 0,
     },
+    ...(scenario.terminal ? { terminal: scenario.terminal } : {}),
+    ...(scenario.yieldDetected ? { yieldDetected: true } : {}),
   });
   const terminalState = resolveEmbeddedRunAttemptTerminalState({
     attempt,
@@ -149,9 +153,24 @@ describe("recoverEmbeddedRunAttempt", () => {
     expect(failoverRetryController.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
   });
 
+  it.each([0, 1])(
+    "continues a parked Code Mode run from its persisted waiting result with activeCount=%i",
+    async (activeCount) => {
+      const { recovery, continueFromCurrentTranscript } = await recoverAfterTransportDrop({
+        codeModeSuspended: true,
+        activeCount,
+      });
+
+      expect(recovery).toMatchObject({ action: "retry" });
+      expect(continueFromCurrentTranscript).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it.each<[string, TransportDropScenario]>([
     ["the exec batch is still running", { activeCount: 1 }],
-    ["a Code Mode run is parked", { codeModeSuspended: true }],
+    ["the run was externally aborted", { terminal: { kind: "aborted", source: "external" } }],
+    ["the run timed out", { terminal: { kind: "timeout", phase: "prompt", source: "runtime" } }],
+    ["the attempt already has terminal state", { yieldDetected: true }],
     ["the assistant error is not transient", { errorMessage: "invalid request: bad schema" }],
     [
       "the failure is retryable but not a transport drop",

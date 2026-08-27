@@ -163,8 +163,9 @@ export async function recoverEmbeddedRunAttempt(input: {
     !timedOut &&
     !terminalInterrupted &&
     !hasAttemptTerminalState(attempt) &&
-    settledEvidence.allToolsProvenSettled &&
-    !settledEvidence.parkedCodeModeRun &&
+    midTurnBatchSettled &&
+    // A parked Code Mode result is persisted same-session state. Continuing is
+    // how the model reaches wait; it does not resubmit the prompt or exec call.
     isSilentTransportDropAssistant(currentAttemptAssistant)
       ? currentAttemptAssistant
       : undefined;
