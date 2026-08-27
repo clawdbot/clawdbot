@@ -218,7 +218,7 @@ suite.define(() => {
   );
 
   it("publishes a runtime palette only when its colors are ready and ignores superseded loads", async () => {
-    const { page, gateway } = await openThemedChat("claw", "dark");
+    const { page, gateway } = await openThemedChat("knot", "dark");
     let releasePalette!: () => void;
     const paletteGate = new Promise<void>((resolve) => {
       releasePalette = resolve;
@@ -247,7 +247,12 @@ suite.define(() => {
       const request = page.waitForRequest("**/themes/tide.css");
       await changeTheme("tide");
       await request;
-      expect(await page.locator("html").getAttribute("data-theme")).toBe("dark");
+      expect(await page.locator("html").getAttribute("data-theme")).toBe("openknot");
+      expect(
+        await page.evaluate(() =>
+          getComputedStyle(document.documentElement).getPropertyValue("--bg").trim(),
+        ),
+      ).toBe("#080808");
       await changeTheme("beacon");
       await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe("beacon");
       const response = page.waitForResponse("**/themes/tide.css");

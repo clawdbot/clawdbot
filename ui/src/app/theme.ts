@@ -149,14 +149,19 @@ export function syncThemePaletteStylesheet(theme: ThemeName, ready: () => void):
     return;
   }
   const link = existing instanceof HTMLLinkElement ? existing : document.createElement("link");
-  link.onload = ready;
-  link.onerror = () => {
-    // Failed assets must not strand startup; normal CSS defaults stay readable.
-    // Remove the failed link so a later selection can retry rather than wait forever.
-    console.error(`Theme palette failed to load; reload to retry: ${link.href}`);
-    link.remove();
+  const finish = (event: Event) => {
+    link.removeEventListener("load", finish);
+    link.removeEventListener("error", finish);
+    if (event.type === "error") {
+      // Failed assets must not strand startup; normal CSS defaults stay readable.
+      // Remove the failed link so a later selection can retry rather than wait forever.
+      console.error(`Theme palette failed to load; reload to retry: ${link.href}`);
+      link.remove();
+    }
     ready();
   };
+  link.addEventListener("load", finish, { once: true });
+  link.addEventListener("error", finish, { once: true });
   if (!existing) {
     link.id = id;
     link.rel = "stylesheet";
