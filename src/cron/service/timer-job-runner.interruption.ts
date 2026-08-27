@@ -26,7 +26,14 @@ export function withPrimaryWebhookTrace(params: {
   };
   return {
     ...params.result,
+    deliveryState: {
+      status: params.delivered ? "delivered" : "not-delivered",
+      delivered: params.delivered,
+      error: params.error,
+      failureNotification: { status: "not-requested" },
+    },
     delivered: params.delivered,
+    deliverySuppressionReason: undefined,
     deliveryAttempted: true,
     ...(params.error ? { deliveryError: params.error } : { deliveryError: undefined }),
     delivery: {

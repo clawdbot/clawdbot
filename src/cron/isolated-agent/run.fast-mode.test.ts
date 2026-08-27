@@ -196,7 +196,7 @@ describe("runCronIsolatedAgentTurn — fast mode", () => {
       ({ deliveryPayloads, summary, outputText, synthesizedText }) => ({
         delivered: true,
         deliveryAttempted: true,
-        cronRunSessionCleanupAttempted: true,
+        cronRunSessionCleanupHandled: true,
         summary,
         outputText,
         synthesizedText,

@@ -401,7 +401,6 @@ export function finalizeCronFailureNotifications(
     result: {
       status: "ok" | "error" | "skipped";
       error?: string;
-      deliveryError?: string;
       failureNotificationDetail?: CronFailureNotificationDetail;
       startedAt: number;
     };
@@ -426,11 +425,15 @@ export function finalizeCronFailureNotifications(
         : {}),
       deferredNotifications: params.deferredNotifications,
     });
-  } else if (params.result.status === "ok" && params.completionFailed) {
+  } else if (
+    params.result.status === "ok" &&
+    params.completionFailed &&
+    params.job.state.lastDeliveryStatus === "not-delivered"
+  ) {
     maybeEmitDeliveryFailureAlert(state, {
       job: params.job,
       alertConfig: params.alertConfig,
-      error: params.result.deliveryError,
+      error: params.job.state.lastDeliveryError,
       runAtMs: params.result.startedAt,
       deferredNotifications: params.deferredNotifications,
     });

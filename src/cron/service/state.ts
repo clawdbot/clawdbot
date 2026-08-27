@@ -25,6 +25,7 @@ import type {
   CronFailureNotificationDetail,
   CronDeliveryStatus,
   CronDeliveryTrace,
+  CronResolvedDeliveryState,
   CronJob,
   CronNextCheckProposal,
   CronJobCreate,
@@ -218,6 +219,7 @@ export type CronServiceDeps = {
       delivered?: boolean;
       deliveryError?: string;
       deliverySuppressionReason?: NormalizeReplySkipReason;
+      deliveryState?: CronResolvedDeliveryState;
       /**
        * `true` when announce/direct delivery was attempted for this run, even
        * if the final per-message ack status is uncertain.
@@ -233,6 +235,8 @@ export type CronServiceDeps = {
       delivered?: boolean;
       deliveryAttempted?: boolean;
       deliveryError?: string;
+      deliverySuppressionReason?: NormalizeReplySkipReason;
+      deliveryState?: CronResolvedDeliveryState;
       delivery?: CronDeliveryTrace;
     } & CronRunOutcome
   >;
@@ -245,6 +249,8 @@ export type CronServiceDeps = {
       delivered?: boolean;
       deliveryAttempted?: boolean;
       deliveryError?: string;
+      deliverySuppressionReason?: NormalizeReplySkipReason;
+      deliveryState?: CronResolvedDeliveryState;
       delivery?: CronDeliveryTrace;
       notify?: string;
       wake?: "now" | "next-heartbeat";

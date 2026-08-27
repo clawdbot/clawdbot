@@ -296,7 +296,20 @@ describe("startup run repair auto-disable", () => {
       completionStatus: undefined,
       deliveryStatus: "not-delivered" as const,
     },
-  ])("retains finalized one-shot after $name", ({ completionStatus, deliveryStatus }) => {
+    {
+      name: "best-effort undelivered completion followed by a delivery mode edit",
+      completionStatus: "succeeded" as const,
+      deliveryStatus: "not-delivered" as const,
+      deliveryMode: "none" as const,
+    },
+    {
+      name: "best-effort unknown completion followed by a delivery mode edit",
+      completionStatus: "succeeded" as const,
+      deliveryStatus: "unknown" as const,
+      deliveryMode: "none" as const,
+    },
+  ])("retains finalized one-shot after $name", (testCase) => {
+    const { completionStatus, deliveryStatus } = testCase;
     const runningAtMs = Date.parse("2026-08-01T17:00:00.000Z");
     const state = createCronServiceState({
       storePath: "/tmp/startup-run-repair-completion.json",
@@ -319,7 +332,10 @@ describe("startup run repair auto-disable", () => {
       wakeMode: "next-heartbeat",
       payload: { kind: "agentTurn", message: "do not replay" },
       // Current policy is intentionally mutable and must not decide replay.
-      delivery: { mode: "announce", bestEffort: true },
+      delivery: {
+        mode: testCase.deliveryMode ?? "announce",
+        bestEffort: true,
+      },
       state: { runningAtMs },
     };
 

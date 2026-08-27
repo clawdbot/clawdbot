@@ -139,10 +139,7 @@ export function applyJobResult(
   job.state.lastDelivered = deliveryState.delivered;
   job.state.lastDeliveryStatus = deliveryState.status;
   job.state.deliverySuppressionReason = deliveryState.deliverySuppressionReason;
-  job.state.lastDeliveryError =
-    deliveryState.status === "not-delivered" && deliveryState.error
-      ? deliveryState.error
-      : undefined;
+  job.state.lastDeliveryError = deliveryState.error;
   job.state.lastFailureNotificationDelivered = undefined;
   job.state.lastFailureNotificationDeliveryStatus = "not-requested";
   job.state.lastFailureNotificationDeliveryError = undefined;
@@ -192,13 +189,20 @@ export function applyJobResult(
   const isOneShotSchedule = job.schedule.kind === "at" || job.schedule.kind === "on-exit";
   const completionStatus =
     result.completionStatus ??
-    resolveAdmittedCronCompletionStatus(job, result.status, deliveryState.status);
+    resolveAdmittedCronCompletionStatus(
+      job,
+      result.status,
+      deliveryState.status,
+      deliveryState.deliverySuppressionReason,
+    );
+  // Best-effort or intentionally quiet completion cannot discard an undelivered one-shot.
   const shouldDelete =
     ownsSchedule &&
     isOneShotSchedule &&
     !preserveOneShotSchedule &&
     job.deleteAfterRun === true &&
-    completionStatus === "succeeded";
+    completionStatus === "succeeded" &&
+    (deliveryState.status === "delivered" || deliveryState.status === "not-requested");
   let autoDisableNotificationOwnsFailure = false;
   const finish = () => {
     finalizeCronFailureNotifications(state, {
