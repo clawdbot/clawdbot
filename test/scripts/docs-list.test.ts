@@ -56,6 +56,24 @@ read_when: "Read this page when the hint is inline."
     expect(output).toContain("Read when: Read this page when the hint is inline.");
   });
 
+  it("accepts YAML document end markers in front matter", () => {
+    const tempRepoRoot = makeTempRepoRoot("openclaw-docs-list-yaml-end-");
+    mkdirSync(path.join(tempRepoRoot, "docs"), { recursive: true });
+    writeFileSync(
+      path.join(tempRepoRoot, "docs", "page.md"),
+      `---
+summary: "YAML document end page"
+...
+`,
+      "utf8",
+    );
+
+    const output = runDocsList(tempRepoRoot);
+
+    expect(output).toContain("page.md - YAML document end page");
+    expect(output).not.toContain("unterminated front matter");
+  });
+
   it("renders the publish docs map on demand without creating a mirror", () => {
     const tempRepoRoot = makeTempRepoRoot("openclaw-docs-headings-");
     mkdirSync(path.join(tempRepoRoot, "docs", "nested"), { recursive: true });

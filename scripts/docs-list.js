@@ -96,7 +96,7 @@ function extractMetadata(fullPath) {
     return { summary: null, readWhen: [], error: "missing front matter" };
   }
 
-  const endIndex = content.indexOf("\n---", 3);
+  const endIndex = content.search(/\r?\n(?:---|\.\.\.)(?:\r?\n|$)/u);
   if (endIndex === -1) {
     return { summary: null, readWhen: [], error: "unterminated front matter" };
   }
