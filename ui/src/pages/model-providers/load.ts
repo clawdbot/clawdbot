@@ -42,6 +42,8 @@ type ModelProvidersCatalogResult = {
   providerOutcomes?: ModelCatalogProviderOutcome[];
 };
 
+type RequestResult<T> = { ok: true; result: T } | { ok: false; error: unknown };
+
 export const EMPTY_MODEL_PROVIDERS_DATA: ModelProvidersData = {
   authStatus: null,
   models: null,
@@ -67,6 +69,13 @@ function errorMessage(error: unknown): string {
   return formatUiError(error, "request failed");
 }
 
+function settleRequest<T>(promise: Promise<T>): Promise<RequestResult<T>> {
+  return promise.then(
+    (result) => ({ ok: true, result }),
+    (error: unknown) => ({ ok: false, error }),
+  );
+}
+
 export async function loadModelProvidersData(
   client: GatewayBrowserClient,
   opts: { agentId: string; refresh?: boolean; signal?: AbortSignal },
@@ -77,31 +86,36 @@ export async function loadModelProvidersData(
       : params === undefined
         ? client.request<T>(method)
         : client.request<T>(method, params);
-  const catalogRefresh = opts?.refresh
-    ? request<ModelProvidersCatalogResult>("models.list", {
-        view: "all",
+  const loadConfiguredModels = (loadOpts: { preparedOnly?: true; refresh?: true }) =>
+    settleRequest(
+      loadModels(client, {
         agentId: opts.agentId,
-        refresh: true,
-      })
-        .then((result) => ({ ok: true as const, result: result ?? null }))
-        .catch((error: unknown) => ({ ok: false as const, error }))
+        ...loadOpts,
+        rejectOnFailure: true,
+        ...(opts.signal ? { signal: opts.signal } : {}),
+      }),
+    );
+  const modelsRefresh = opts.refresh ? loadConfiguredModels({ refresh: true }) : undefined;
+  const catalogRefresh = modelsRefresh
+    ? modelsRefresh.then((modelsResult) =>
+        modelsResult.ok
+          ? settleRequest(
+              request<ModelProvidersCatalogResult>("models.list", {
+                view: "all",
+                agentId: opts.agentId,
+              }).then((result) => result ?? null),
+            )
+          : modelsResult,
+      )
     : Promise.resolve({ ok: true as const, result: null });
-  const modelsLoad = catalogRefresh.then((catalogResult) =>
-    loadModels(client, {
-      agentId: opts.agentId,
-      ...(opts.refresh && catalogResult.ok ? { refresh: true } : { preparedOnly: true }),
-      rejectOnFailure: true,
-    }).then(
-      (result) => ({ ok: true as const, result }),
-      (error: unknown) => ({ ok: false as const, error }),
-    ),
-  );
+  const modelsLoad = modelsRefresh
+    ? modelsRefresh.then((refreshResult) =>
+        refreshResult.ok ? refreshResult : loadConfiguredModels({ preparedOnly: true }),
+      )
+    : loadConfiguredModels({ preparedOnly: true });
   const [authStatus, models, catalogResult, config, providerUsageFetch, costByProvider] =
     await Promise.all([
-      loadModelAuthStatus(client, opts).then(
-        (result) => ({ ok: true as const, result }),
-        (error: unknown) => ({ ok: false as const, error }),
-      ),
+      settleRequest(loadModelAuthStatus(client, opts)),
       modelsLoad,
       catalogRefresh,
       request<ConfigSnapshot>("config.get", {})

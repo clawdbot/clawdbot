@@ -97,7 +97,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
           cases: [
             { match: { view: "configured" }, response: { models: [] } },
             {
-              match: { view: "all", agentId: "main", refresh: true },
+              match: { view: "all", agentId: "main" },
               response: {
                 models: [],
                 providerOutcomes: [{ provider: "openai", status: "auth-rejected" }],
