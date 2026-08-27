@@ -30,6 +30,26 @@ Six testable properties:
 
 The Gateway owns channel connections, config, credentials, and the [control-plane API](/gateway/protocol). It binds to loopback by default and refuses non-loopback binds without a working auth path ([architecture](/concepts/architecture), [network model](/network)).
 
+```mermaid
+flowchart LR
+  subgraph GW["Gateway (trusted)"]
+    direction TB
+    CH["Channel connections"]
+    POL["Policy: modes, scopes, exec approvals"]
+    SEC["Credentials: SecretRefs, sentinels"]
+    ST["Sessions, memory, audit (versioned SQLite)"]
+  end
+  subgraph EX["Movable execution (untrusted, no standing credentials)"]
+    direction TB
+    SB["Sandbox: Docker, Podman, OpenShell, Daytona"]
+    ND["Paired node: sealed, hash-verified worker"]
+    CW["Cloud worker: throwaway machine, closed RPC allowlist"]
+  end
+  OP["Operators, channels, peer agents"] -->|"authenticated, default-deny"| GW
+  GW -->|"exec calls, bounded per-turn context"| EX
+  EX -->|"results only"| GW
+```
+
 [`tools.exec.host`](/tools/exec) resolves to the gateway host, a [sandbox](/gateway/sandboxing), or a paired [node](/nodes). While a sandbox runtime is active, per-call escapes to the host are rejected, and an explicit `host=sandbox` with no runtime configured fails instead of silently running on the host. Backends: Docker and Podman (default profile: no network, read-only root, all capabilities dropped, non-root user), SSH, [OpenShell](/gateway/openshell), and [Daytona](/gateway/daytona) cloud sandboxes (automatic idle-stop with resume on next use, memory-preserving pause, cold-storage archiving) — the latter two installed as plugins, registered through the same backend contract as Docker. If you run OpenShell already, OpenClaw uses its sandboxes; it does not need to be wrapped in one.
 
 Sandbox bind mounts are validated twice, once on the normalized path and again after resolving through the deepest existing ancestor, so symlink-based bypass attempts fail closed. The deny-list of credential and system paths cannot be disabled — the `dangerouslyAllowExternalBindSources` override relaxes only the allowed-roots check.
@@ -48,6 +68,16 @@ Three controls govern separate decisions ([sandbox vs. tool policy vs. elevated]
 
 [Exec approvals](/tools/exec-approvals) bind an approved run to its canonical command, cwd, environment hash, and content-hashed file operands, and deny on any drift after approval. Where OpenClaw cannot bind precisely — shell pipelines, commands after a `cd`, interpreters with no identifiable single file operand — it refuses to mint the approval rather than approve an imprecise binding. When no approval UI is reachable, the answer is deny by default, and strict cases (inline eval, heredocs) cannot be softened by any fallback setting.
 
+```mermaid
+flowchart LR
+  MODE["Permission mode"] -->|"read-only: mutation tools never registered"| REG["Registered tools"]
+  REG --> TP["Tool policy: deny wins; audit names the rule"]
+  TP --> PLACE["Placement: gateway host, sandbox, or node"]
+  PLACE --> APR["Exec approval: canonical command, cwd, env hash, operand hashes"]
+  APR -->|"exact match"| RUN["Run"]
+  APR -->|"drift, unbindable command, or no approval UI"| DENY["Deny (fail closed)"]
+```
+
 Tool policy filters by name, not side effects: allowing `exec` while denying `write` does not make shell commands read-only. As documented, restricting side effects is the sandbox's responsibility.
 
 ### Identity and roles
@@ -63,6 +93,17 @@ Our [security docs](/gateway/security) define the scope: one gateway is one trus
 Every supported credential field takes a [SecretRef](/gateway/secrets): `env`, `file`, `exec` (this is how 1Password, Vault, Bitwarden, and sops plug in), or the shared store. When a secret fails to resolve at startup, the Gateway comes up degraded rather than down. The exact owner (one provider, one channel account, one plugin route) is marked unavailable, requests to it fail with a typed error, nothing falls back to a different credential, and [`doctor`](/cli/doctor) and `status` name every degraded owner with a redacted reason. A broken secret is an operational alert, not an outage.
 
 Model-provider credentials become sentinels in memory. Config, logs, SDK objects, and error paths carry the sentinel; the real value is substituted at the egress boundary, and an unrecognized sentinel-shaped value is refused rather than forwarded. An operator can supply a credential without exposing it to the agent: a secret entered under **Settings → Secrets** in the [Control UI](/web/control-ui) is write-only from the moment it is saved — list output never includes it, no agent-facing surface can read it back (one admin-scoped resolve exists for operators), and credential-shaped names default to protected. The agent's context only ever holds the sentinel, itself AES-256-GCM ciphertext keyed to the Gateway process, and the opt-in [egress proxy](/gateway/secrets) substitutes the real value at the network boundary for exact allow-listed destination hosts. A fully compromised agent context holds nothing worth exfiltrating. The agent can also request a credential it does not have: an [agent-requested secret](/tools/secrets) prompt goes to the operator, the value lands in the protected store, and the model still never sees it. Hermes has no equivalent: its dashboard uses "write-only" masking, but an `/api/env/reveal` endpoint returns the plaintext (`hermes_cli/web_server.py:8752`), entered values land in `.env` and the process environment, and iron-proxy's token swap covers eleven model-provider keys inside Docker sandboxes while the real credentials remain in the agent process. [`openclaw secrets audit`](/cli/secrets) finds plaintext at rest; `secrets configure --apply` moves it behind refs. Workspace `.env` files cannot override provider keys or `OPENCLAW_*` runtime controls.
+
+```mermaid
+flowchart LR
+  OPR["Operator"] -->|"Settings: Secrets (write-only)"| STORE["Protected store"]
+  AGT["Agent context"] -.->|"agent-requested secret: prompt"| OPR
+  AGT -->|"holds sentinel only (AES-256-GCM ciphertext)"| OUT["Outbound request"]
+  OUT --> EG["Egress boundary"]
+  STORE -->|"resolve"| EG
+  EG -->|"real value substituted, allow-listed hosts"| API["Provider API"]
+  EG -->|"unrecognized sentinel"| REF["Refused"]
+```
 
 Browser agents solved the sign-in case: 1Password for Claude and ChatGPT's takeover mode keep a password out of the model while a human logs in, one fill at a time, with no durable artifact. As far as we can determine, OpenClaw is the only agent harness where the agent can request an arbitrary credential mid-task and receive back only a durable, reusable handle. The MCP specification forbids the in-band version of this flow because a client cannot keep an elicited value out of model context; the Gateway can, because it owns both the question channel and the store. Hermes's tracker requested this feature (NousResearch/hermes-agent#410) and closed it by shipping operator-side vault resolvers instead.
 
