@@ -5,6 +5,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${ROOT_DIR}/scripts/lib/restart-mac-gateway.sh"
+source "${ROOT_DIR}/scripts/lib/mac-signing-identity.sh"
 APP_BUNDLE="${OPENCLAW_APP_BUNDLE:-}"
 APP_EXECUTABLE_RELATIVE_PATH="Contents/MacOS/OpenClaw"
 DEBUG_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build/debug/OpenClaw"
@@ -90,9 +91,12 @@ acquire_lock() {
   done
 }
 
+# Signed-vs-ad-hoc must use the exact rule the signer selects with (scripts/lib/
+# mac-signing-identity.sh). A local predicate here would silently route to ad-hoc signing on a
+# machine whose certificate scripts/codesign-mac-app.sh would have accepted, and ad-hoc signatures
+# drop TCC grants on every rebuild.
 check_signing_keys() {
-  security find-identity -p codesigning -v 2>/dev/null \
-    | grep -Eq '(Developer ID Application|Apple Distribution|Apple Development)'
+  has_mac_signing_identity
 }
 
 canonicalize_app_bundle() {
