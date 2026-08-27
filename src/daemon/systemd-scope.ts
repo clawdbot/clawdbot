@@ -192,7 +192,8 @@ export async function isSystemUnitActiveAndEnabled(
   env: GatewayServiceEnv,
   unitName: string,
 ): Promise<boolean> {
-  if (!(await isSystemdUnitActive(env, unitName, "system"))) {
+  const active = await isSystemdUnitActive(env, unitName, "system");
+  if (!active.ok || !active.value) {
     return false;
   }
   const res = await execSystemctl(["is-enabled", unitName], env);

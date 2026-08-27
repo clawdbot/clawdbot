@@ -61,6 +61,7 @@ import {
 } from "./navigation-surface.ts";
 import { isBrowserPanelAvailable, isDesktopPanelAvailable } from "./panel-availability.ts";
 import { NAV_WIDTH_MAX, NAV_WIDTH_MIN } from "./settings.ts";
+import { retryStaleChunkReloadWhenReachable } from "./stale-chunk-reload.ts";
 
 type DebugOverlayElement = HTMLElement & {
   toggle: () => void;
@@ -692,10 +693,18 @@ export class ShellChromeOwner {
     });
   }
 
-  private dispatchLazyShellEvent(event: LazyShellEvent): boolean {
-    return window.dispatchEvent(
-      new CustomEvent(event.eventType, { cancelable: true, detail: event.detail }),
-    );
+  retryPendingLazyAction(canReload: () => boolean): Promise<boolean> {
+    const event = this.pendingLazyAction;
+    return event
+      ? retryStaleChunkReloadWhenReachable({
+          canReload: () =>
+            canReload() && this.pendingLazyAction === event && persistLazyShellAction(event),
+        })
+      : Promise.resolve(false);
+  }
+
+  private dispatchLazyShellEvent({ eventType, detail }: LazyShellEvent): boolean {
+    return window.dispatchEvent(new CustomEvent(eventType, { cancelable: true, detail }));
   }
 
   private clearPendingLazyAction(event: LazyShellEvent): void {

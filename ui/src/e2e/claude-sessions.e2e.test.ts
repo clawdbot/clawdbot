@@ -456,6 +456,7 @@ suite.define(() => {
 
   it("auto-loads older chat without moving the viewport and disables paired-node continuation", async () => {
     const page = await suite.browser.newPage();
+    await page.clock.install();
     const catalogResponse = (threadId: string, name: string, nextCursor?: string) => ({
       catalogs: [
         {
@@ -550,17 +551,14 @@ suite.define(() => {
       cursors: { "node:devbox": "catalog-page-2" },
     });
     const catalogRequestCount = (await gateway.getRequests("sessions.catalog.list")).length;
-    await page.clock.install();
     await page.evaluate(() => window.dispatchEvent(new Event("focus")));
     await page.clock.runFor(50);
-    await expect
-      .poll(async () => (await gateway.getRequests("sessions.catalog.list")).length)
-      .toBeGreaterThanOrEqual(catalogRequestCount + 1);
+    expect((await gateway.getRequests("sessions.catalog.list")).length).toBe(catalogRequestCount);
     await page.clock.fastForward(30_000);
     await page.clock.runFor(100);
     await expect
       .poll(async () => (await gateway.getRequests("sessions.catalog.list")).length)
-      .toBeGreaterThanOrEqual(catalogRequestCount + 2);
+      .toBeGreaterThanOrEqual(catalogRequestCount + 1);
     await catalog.getByRole("link", { name: "Older remote review", exact: true }).waitFor();
     const remote = catalog.getByRole("link", { name: /^Remote architecture review$/ });
     await remote.hover();

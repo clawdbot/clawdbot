@@ -67,6 +67,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     context,
     client,
     isWebchatConnect,
+    sessionMutationCommitGuard,
     sessionMutationAuthorization,
   }) => {
     if (!assertValidParams(params, validateSessionsCreateParams, "sessions.create", respond)) {
@@ -78,8 +79,9 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     const cfg = context.getRuntimeConfig();
     const authority = createAgentRuntimeAuthorityGuard(client, context, respond);
     const commitGuard =
-      authority.commitGuard || sessionMutationAuthorization
+      authority.commitGuard || sessionMutationCommitGuard || sessionMutationAuthorization
         ? () => {
+            sessionMutationCommitGuard?.();
             authority.commitGuard?.();
             sessionMutationAuthorization?.assertCurrent();
           }

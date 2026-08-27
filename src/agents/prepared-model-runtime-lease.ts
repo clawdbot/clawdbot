@@ -1,17 +1,18 @@
 /** Agent-run lease admission for lifecycle-owned prepared model runtimes. */
+import { createAbortError, racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { getPreparedModelRuntimeBorrowedSnapshot } from "./prepared-model-runtime-generation-scope.js";
 import {
   PreparedModelRuntimeOwnerNotPublishedError,
   PreparedModelRuntimePublicationSupersededError,
-  hasConfiguredOwnerMatching,
   ownerKey,
   normalizePreparedModelRuntimeInput,
   preparedModelRuntimeConfigsMatch,
   publishModelRuntimeSnapshot,
   rebindInputToCommittedConfiguredOwner,
   resolveConfiguredOwner,
+  resolveConfiguredOwnerPublication,
   type PreparedModelRuntimeInput,
   type PreparedModelRuntimeLease,
   type PreparedModelRuntimeOwner,
@@ -32,6 +33,14 @@ type PreparedModelRuntimeLeaseContext = {
   prepareSnapshot(input: PreparedModelRuntimeInput): Promise<PreparedModelRuntimeSnapshot>;
 };
 
+function throwIfLeaseAdmissionAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw createAbortError("Prepared model runtime lease admission aborted", {
+      cause: signal.reason,
+    });
+  }
+}
+
 export async function acquirePreparedModelRuntimeLeaseFromOwners(
   rawInput: PreparedModelRuntimeInput,
   provenance: "run" | "ephemeral",
@@ -41,6 +50,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
     catalogMode?: PreparedModelRuntimeCatalogMode;
     pluginGeneration?: PreparedModelRuntimeOwner["pluginGeneration"];
     pluginMetadataSnapshot?: PluginMetadataSnapshot;
+    abortSignal?: AbortSignal;
   } = {},
 ): Promise<PreparedModelRuntimeLease> {
   let normalizedInput = normalizePreparedModelRuntimeInput({
@@ -67,11 +77,12 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
   let owner: PreparedModelRuntimeOwner;
   let snapshot: PreparedModelRuntimeSnapshot;
   for (;;) {
+    throwIfLeaseAdmissionAborted(options.abortSignal);
     // Replacement owns publication from synchronous staling through atomic generation commit.
     // Dynamic work arriving inside that window must retry after the new owners become visible.
     const replacement = context.getPendingReplacement();
     if (replacement) {
-      await replacement.promise;
+      await racePromiseWithAbortSignal(replacement.promise, options.abortSignal);
       if (context.getPendingReplacement()) {
         continue;
       }
@@ -84,7 +95,10 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
     if (provenance === "run" && context.getGatewayLifecycleActive() && options.pluginGeneration) {
       const configuredOwner = resolveConfiguredOwner(context.owners, input);
       if (configuredOwner?.pending) {
-        await configuredOwner.pending.catch(() => undefined);
+        await racePromiseWithAbortSignal(
+          configuredOwner.pending.catch(() => undefined),
+          options.abortSignal,
+        );
         continue;
       }
       if (
@@ -110,6 +124,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
         ) {
           // A turn may finish under its still-open parent lease after reload. Its historic
           // generation must never publish over the configured owner for newly admitted work.
+          throwIfLeaseAdmissionAborted(options.abortSignal);
           return { snapshot: borrowed, release: () => {} };
         }
         throw new PreparedModelRuntimeOwnerNotPublishedError(
@@ -129,7 +144,10 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
     if (existing?.pending && pluginGenerationChanged) {
       // Do not supersede active discovery. Wait for its owner to settle, then retry against
       // the published identity so same-generation callers still coalesce.
-      await existing.pending.catch(() => undefined);
+      await racePromiseWithAbortSignal(
+        existing.pending.catch(() => undefined),
+        options.abortSignal,
+      );
       continue;
     }
     if (
@@ -155,7 +173,13 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
         }
         const canActivateConfiglessSetup =
           input.agentId !== undefined && isReservedSystemAgentId(input.agentId);
-        if (hasConfiguredOwnerMatching(context.owners, input) || !canActivateConfiglessSetup) {
+        const configuredOwner = resolveConfiguredOwnerPublication(context.owners, input);
+        if (configuredOwner.matches || !canActivateConfiglessSetup) {
+          const pending = configuredOwner.pending;
+          if (pending) {
+            await racePromiseWithAbortSignal(pending, options.abortSignal);
+            continue;
+          }
           throw error;
         }
         // First-run Model Setup uses the reserved system-agent identity before a configless gateway
@@ -166,7 +190,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
       if (existing?.pending && !pluginGenerationChanged) {
         // Matching callers lease the immutable generation they joined even if a queued
         // mismatched caller publishes the next owner immediately after this one settles.
-        snapshot = await existing.pending;
+        snapshot = await racePromiseWithAbortSignal(existing.pending, options.abortSignal);
         if (existing.snapshot !== snapshot || existing.needsRefresh) {
           continue;
         }
@@ -174,21 +198,27 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
         break;
       }
       if (existing && !staleDynamicOwner && !pluginGenerationChanged) {
-        snapshot = await context.prepareSnapshot(input);
+        snapshot = await racePromiseWithAbortSignal(
+          context.prepareSnapshot(input),
+          options.abortSignal,
+        );
       } else {
         // Fresh keys publish a first generation; stale dynamic owners publish a distinct
         // replacement owner because existing leases retain their immutable snapshot, so
         // their release cannot delete the generation admitted for new work at this key.
-        snapshot = await publishModelRuntimeSnapshot(
-          input,
-          context.owners,
-          context.agentBuildCompletions,
-          context.getBuildTimeoutMs(),
-          undefined,
-          provenance,
-          options.catalogMode,
-          options.pluginGeneration,
-          options.pluginMetadataSnapshot,
+        snapshot = await racePromiseWithAbortSignal(
+          publishModelRuntimeSnapshot(
+            input,
+            context.owners,
+            context.agentBuildCompletions,
+            context.getBuildTimeoutMs(),
+            undefined,
+            provenance,
+            options.catalogMode,
+            options.pluginGeneration,
+            options.pluginMetadataSnapshot,
+          ),
+          options.abortSignal,
         );
       }
     } catch (error) {
@@ -210,9 +240,11 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
     owner = published;
     break;
   }
+  throwIfLeaseAdmissionAborted(options.abortSignal);
   if (owner.provenance !== provenance) {
     return { snapshot, release: () => {} };
   }
+  throwIfLeaseAdmissionAborted(options.abortSignal);
   if (provenance === "run" && options.retainIdleRunOwner) {
     context.retainedDirectRunOwners.retain(key, owner, context.owners);
   } else if (provenance === "run" && context.getGatewayLifecycleActive()) {

@@ -16,6 +16,7 @@ import {
 } from "../agents/model-selection.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { applySessionEntryReplacements } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { updateLegacySessionStore } from "../infra/state-migrations.legacy-session-store.js";
 import { listPluginDoctorSessionRouteStateOwners } from "../plugins/doctor-contract-registry.js";
@@ -57,17 +58,22 @@ function repairExample(repair: DoctorSessionRouteStateRepair): string {
   return `${repair.key} (${repair.reasons.join(", ")})`;
 }
 
-function resolveSessionAgentId(cfg: OpenClawConfig, sessionKey: string): string | undefined {
-  return parseAgentSessionKey(sessionKey)?.agentId ?? tryResolveDefaultAgentId(cfg);
+function resolveSessionAgentId(
+  cfg: OpenClawConfig,
+  sessionKey: string,
+  storeAgentId?: string,
+): string | undefined {
+  return parseAgentSessionKey(sessionKey)?.agentId ?? storeAgentId ?? tryResolveDefaultAgentId(cfg);
 }
 
 /** Resolves the currently configured provider/model/runtime route for a session key. */
 function resolveConfiguredDoctorSessionStateRoute(params: {
+  agentId?: string;
   cfg: OpenClawConfig;
   sessionKey: string;
   env?: NodeJS.ProcessEnv;
 }): DoctorSessionRouteState | undefined {
-  const agentId = resolveSessionAgentId(params.cfg, params.sessionKey);
+  const agentId = resolveSessionAgentId(params.cfg, params.sessionKey, params.agentId);
   if (!agentId) {
     return undefined;
   }
@@ -337,6 +343,7 @@ function scanEntryForOwner(params: {
 
 /** Streams session entries into compact plugin-owned route-state findings. */
 export function createPluginSessionStateDoctorScanner(params: {
+  agentId?: string;
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }) {
@@ -356,13 +363,14 @@ export function createPluginSessionStateDoctorScanner(params: {
       if (owners.length === 0) {
         return;
       }
-      const agentId = resolveSessionAgentId(params.cfg, key);
+      const agentId = resolveSessionAgentId(params.cfg, key, params.agentId);
       if (!agentId) {
         return;
       }
       let route = routeByAgentId.get(agentId);
       if (!route) {
         route = resolveConfiguredDoctorSessionStateRoute({
+          agentId,
           cfg: params.cfg,
           sessionKey: key,
           env: params.env,
@@ -484,10 +492,14 @@ function groupRepairsByOwner(
   return grouped;
 }
 
+type DoctorSessionStateStore =
+  | { kind: "legacy"; path: string }
+  | { kind: "sqlite"; agentId: string; path: string };
+
 /** Prompts for and applies plugin-owned session route state repairs to the session store. */
 export async function runPluginSessionStateDoctorRepairs(params: {
   scan: DoctorSessionRouteStateScan;
-  absoluteStorePath: string;
+  store: DoctorSessionStateStore;
   prompter: DoctorPrompterLike;
   warnings: string[];
   changes: string[];
@@ -511,22 +523,46 @@ export async function runPluginSessionStateDoctorRepairs(params: {
         let repaired = 0;
         const repairedAt = Date.now();
         const repairsByKey = new Map(repairs.map((repair) => [repair.key, repair]));
-        await updateLegacySessionStore(params.absoluteStorePath, (currentStore) => {
-          for (const [key, repair] of repairsByKey) {
-            const current = currentStore[key];
-            if (
-              isRecord(current) &&
-              applySessionRouteStateRepair({
-                sessionKey: key,
-                entry: current,
-                repair,
-                now: repairedAt,
-              })
-            ) {
-              repaired += 1;
+        if (params.store.kind === "sqlite") {
+          repaired = await applySessionEntryReplacements<number>({
+            agentId: params.store.agentId,
+            sessionKeys: [...repairsByKey.keys()],
+            storePath: params.store.path,
+            update: (currentEntries) => {
+              const replacements = currentEntries.flatMap(({ entry, sessionKey }) => {
+                const repair = repairsByKey.get(sessionKey);
+                return repair &&
+                  isRecord(entry) &&
+                  applySessionRouteStateRepair({
+                    sessionKey,
+                    entry,
+                    repair,
+                    now: repairedAt,
+                  })
+                  ? [{ entry, sessionKey }]
+                  : [];
+              });
+              return { replacements, result: replacements.length };
+            },
+          });
+        } else {
+          await updateLegacySessionStore(params.store.path, (currentStore) => {
+            for (const [key, repair] of repairsByKey) {
+              const current = currentStore[key];
+              if (
+                isRecord(current) &&
+                applySessionRouteStateRepair({
+                  sessionKey: key,
+                  entry: current,
+                  repair,
+                  now: repairedAt,
+                })
+              ) {
+                repaired += 1;
+              }
             }
-          }
-        });
+          });
+        }
         if (repaired > 0) {
           params.changes.push(
             `- Cleared stale ${ownerLabel} session routing state for ${countSessionLabel(

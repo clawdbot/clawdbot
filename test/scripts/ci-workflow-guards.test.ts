@@ -107,6 +107,7 @@ function evaluateWorkflowExpression(
     headRepository?: string;
     hostedRunnerProfileContract?: boolean;
     matrix?: Record<string, unknown>;
+    releaseGate?: boolean;
     repository: string;
     runCheck?: boolean;
     runnerBackend?: "" | "blacksmith" | "github" | "hybrid";
@@ -145,6 +146,9 @@ function evaluateWorkflowExpression(
               },
             }
           : {},
+    },
+    inputs: {
+      release_gate: context.releaseGate ?? false,
     },
     matrix: context.matrix ?? {},
     needs: {
@@ -3629,6 +3633,42 @@ NODE
     ).toBe(96);
   });
 
+  it("honors trusted dispatch runner selection for check shards", () => {
+    const runsOn = readCiWorkflow().jobs["check-shard"]["runs-on"];
+    const lintMatrix = {
+      runner: "blacksmith-32vcpu-ubuntu-2404",
+      task: "lint",
+    };
+    const evaluateDispatch = (
+      runnerBackend: "blacksmith" | "github" | "hybrid",
+      releaseGate = false,
+    ) =>
+      evaluateWorkflowExpression(runsOn, {
+        eventName: "workflow_dispatch",
+        matrix: lintMatrix,
+        releaseGate,
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        runnerBackend,
+      });
+
+    expect(evaluateDispatch("blacksmith")).toBe("blacksmith-32vcpu-ubuntu-2404");
+    expect(evaluateDispatch("blacksmith", true)).toBe("ubuntu-24.04");
+    expect(evaluateDispatch("github")).toBe("ubuntu-24.04");
+    expect(evaluateDispatch("hybrid")).toBe("ubuntu-24.04");
+    expect(
+      evaluateWorkflowExpression(runsOn, {
+        authorAssociation: "NONE",
+        eventName: "pull_request",
+        headRepository: "openclaw/openclaw",
+        matrix: lintMatrix,
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        runnerBackend: "blacksmith",
+      }),
+    ).toBe("ubuntu-24.04");
+  });
+
   it("encodes GitHub, Blacksmith, and hybrid runner-backend shapes", () => {
     const workflow = readCiWorkflow();
     const jobs = workflow.jobs as Record<string, { "runs-on": unknown }>;
@@ -6241,7 +6281,7 @@ server.listen(0, "127.0.0.1", () => {
     expect(schemaVersionStep.run).toContain('elif [[ "$HISTORICAL_TARGET" == "true" ]]');
   });
 
-  it("resets SwiftPM state between macOS release build retries", () => {
+  it("retries macOS release builds only when Sparkle metadata is incomplete", () => {
     const workflow = readCiWorkflow();
     const macosInstallStep = workflow.jobs["macos-swift"].steps.find(
       (step: WorkflowStep) => step.name === "Install XcodeGen / SwiftLint / SwiftFormat",
@@ -6257,6 +6297,9 @@ server.listen(0, "127.0.0.1", () => {
     );
     const buildStep = workflow.jobs["macos-swift"].steps.find(
       (step: WorkflowStep) => step.name === "Swift build (release)",
+    );
+    const validateCacheStep = workflow.jobs["macos-swift"].steps.find(
+      (step: WorkflowStep) => step.name === "Validate Swift build cache",
     );
 
     for (const installStep of [macosInstallStep, iosInstallStep]) {
@@ -6304,15 +6347,148 @@ server.listen(0, "127.0.0.1", () => {
     expect(macosLintStep.run).toContain("swiftlint lint --config config/swiftlint.yml");
     expect(macosLintStep.run).toContain("swiftformat --lint apps/macos/Sources");
     expect(iosLintStep.run).toContain("skipping iOS lint for this frozen target");
-    expect(buildStep.run).toContain("for attempt in 1 2 3");
-    expect(buildStep.run).toContain('if [[ "$attempt" -eq 3 ]]; then');
+    expect(buildStep.run).not.toContain("for attempt in");
+    expect(buildStep.run.match(/swift build /gu)).toHaveLength(2);
+    expect(buildStep.run).toContain(
+      '[[ -d "$sparkle_framework" && ! -f "$sparkle_framework/Info.plist" ]]',
+    );
     expect(buildStep.run).toContain("swift package --package-path apps/macos reset");
     expect(buildStep.run.indexOf("swift package --package-path apps/macos reset")).toBeGreaterThan(
-      buildStep.run.indexOf("swift build failed"),
+      buildStep.run.indexOf("sparkle_framework="),
     );
+
+    const runCacheFixture = (artifactState: "no-build" | "absent" | "incomplete" | "complete") => {
+      const root = tempDirs.make(`openclaw-swift-cache-${artifactState}-`);
+      const binDir = path.join(root, "bin");
+      const buildDir = path.join(root, "apps/macos/.build");
+      const frameworkDir = path.join(
+        root,
+        "apps/macos/.build/artifacts/sparkle/Sparkle/Sparkle.xcframework",
+      );
+      const callsPath = path.join(root, "swift-calls");
+      const outputPath = path.join(root, "github-output");
+      mkdirSync(binDir, { recursive: true });
+      if (artifactState === "absent") {
+        mkdirSync(buildDir, { recursive: true });
+      } else if (artifactState === "incomplete" || artifactState === "complete") {
+        mkdirSync(frameworkDir, { recursive: true });
+      }
+      if (artifactState === "complete") {
+        writeFileSync(path.join(frameworkDir, "Info.plist"), "complete\n", "utf8");
+      }
+      writeFileSync(
+        path.join(binDir, "swift"),
+        `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "$SWIFT_CALLS"
+`,
+        "utf8",
+      );
+      chmodSync(path.join(binDir, "swift"), 0o755);
+      const result = runWorkflowShellScript(validateCacheStep.run, {
+        cwd: root,
+        env: {
+          ...process.env,
+          GITHUB_OUTPUT: outputPath,
+          PATH: `${binDir}:${process.env.PATH ?? ""}`,
+          SWIFT_CALLS: callsPath,
+        },
+      });
+      const calls = existsSync(callsPath) ? readFileSync(callsPath, "utf8").trim().split("\n") : [];
+      return {
+        calls,
+        output: readFileSync(outputPath, "utf8").trim(),
+        status: result.status,
+      };
+    };
+
+    for (const artifactState of ["no-build", "complete"] as const) {
+      const result = runCacheFixture(artifactState);
+      expect(result.status).toBe(0);
+      expect(result.calls).toEqual([]);
+      expect(result.output).toBe("cache-valid=true");
+    }
+    for (const artifactState of ["absent", "incomplete"] as const) {
+      const result = runCacheFixture(artifactState);
+      expect(result.status).toBe(0);
+      expect(result.calls).toEqual(["package --package-path apps/macos reset"]);
+      expect(result.output).toBe("cache-valid=false");
+    }
+
+    const runBuildFixture = (
+      artifactState: "absent" | "incomplete" | "complete",
+      buildOutcome: "recover" | "fail",
+    ) => {
+      const root = tempDirs.make(`openclaw-swift-build-${artifactState}-${buildOutcome}-`);
+      const binDir = path.join(root, "bin");
+      const frameworkDir = path.join(
+        root,
+        "apps/macos/.build/artifacts/sparkle/Sparkle/Sparkle.xcframework",
+      );
+      const callsPath = path.join(root, "swift-calls");
+      mkdirSync(binDir, { recursive: true });
+      if (artifactState === "incomplete" || artifactState === "complete") {
+        mkdirSync(frameworkDir, { recursive: true });
+      }
+      if (artifactState === "complete") {
+        writeFileSync(path.join(frameworkDir, "Info.plist"), "complete\n", "utf8");
+      }
+      writeFileSync(
+        path.join(binDir, "swift"),
+        `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "$SWIFT_CALLS"
+if [[ "\${1:-}" == "package" ]]; then
+  exit 0
+fi
+build_count="$(grep -c '^build ' "$SWIFT_CALLS")"
+if [[ "$BUILD_OUTCOME" == "recover" && "$build_count" -eq 2 ]]; then
+  exit 0
+fi
+exit 1
+`,
+        "utf8",
+      );
+      chmodSync(path.join(binDir, "swift"), 0o755);
+      const result = runWorkflowShellScript(buildStep.run, {
+        cwd: root,
+        env: {
+          ...process.env,
+          BUILD_OUTCOME: buildOutcome,
+          PATH: `${binDir}:${process.env.PATH ?? ""}`,
+          SWIFT_CALLS: callsPath,
+        },
+      });
+      return {
+        calls: readFileSync(callsPath, "utf8").trim().split("\n"),
+        output: `${result.stdout}${result.stderr}`,
+        status: result.status,
+      };
+    };
+
+    const absentFramework = runBuildFixture("absent", "fail");
+    expect(absentFramework.status).toBe(1);
+    expect(absentFramework.calls.filter((call) => call.startsWith("build "))).toHaveLength(1);
+    expect(absentFramework.calls.filter((call) => call.startsWith("package "))).toHaveLength(0);
+
+    const recovered = runBuildFixture("incomplete", "recover");
+    expect(recovered.status).toBe(0);
+    expect(recovered.calls.filter((call) => call.startsWith("build "))).toHaveLength(2);
+    expect(recovered.calls.filter((call) => call.startsWith("package "))).toHaveLength(1);
+    expect(recovered.output).toContain("did not produce complete Sparkle metadata");
+
+    const completeFramework = runBuildFixture("complete", "fail");
+    expect(completeFramework.status).toBe(1);
+    expect(completeFramework.calls.filter((call) => call.startsWith("build "))).toHaveLength(1);
+    expect(completeFramework.calls.filter((call) => call.startsWith("package "))).toHaveLength(0);
+
+    const secondFailure = runBuildFixture("incomplete", "fail");
+    expect(secondFailure.status).toBe(1);
+    expect(secondFailure.calls.filter((call) => call.startsWith("build "))).toHaveLength(2);
+    expect(secondFailure.calls.filter((call) => call.startsWith("package "))).toHaveLength(1);
   });
 
-  it("serializes macOS Swift tests only on hosted dispatches and retries", () => {
+  it("preserves the first macOS Swift test failure", () => {
     const workflow = readCiWorkflow();
     const macosSwift = workflow.jobs["macos-swift"];
     const testStep = macosSwift.steps.find((step: WorkflowStep) => step.name === "Swift test");
@@ -6323,17 +6499,48 @@ server.listen(0, "127.0.0.1", () => {
     expect(testStep.run).toContain(
       "swift_test_args=(--package-path apps/macos --enable-code-coverage)",
     );
-    expect(testStep.run).toContain('attempt_args=("${swift_test_args[@]}")');
-    expect(testStep.run).toContain(
-      'if [[ "$SWIFT_TEST_EXECUTION" == "parallel" && "$attempt" -eq 1 ]]',
-    );
-    expect(testStep.run).toContain("attempt_args+=(--parallel)");
-    expect(testStep.run).toContain("else\n    attempt_args+=(--no-parallel)");
-    expect(testStep.run).toContain('swift test "${attempt_args[@]}"');
+    expect(testStep.run).toContain('if [[ "$SWIFT_TEST_EXECUTION" == "parallel" ]]');
+    expect(testStep.run).toContain("swift_test_args+=(--parallel)");
+    expect(testStep.run).toContain("swift_test_args+=(--no-parallel)");
+    expect(testStep.run).toContain('swift test "${swift_test_args[@]}"');
     expect(testStep.run).not.toContain(
       "swift test --package-path apps/macos --parallel --enable-code-coverage",
     );
-    expect(testStep.run).toContain("for attempt in 1 2 3");
+    expect(testStep.run).not.toContain("for attempt in");
+
+    for (const execution of ["parallel", "serial"] as const) {
+      const root = tempDirs.make(`openclaw-swift-test-first-attempt-${execution}-`);
+      const binDir = path.join(root, "bin");
+      const callsPath = path.join(root, "swift-calls");
+      mkdirSync(binDir, { recursive: true });
+      writeFileSync(
+        path.join(binDir, "swift"),
+        `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "$SWIFT_CALLS"
+test_count="$(grep -c '^test ' "$SWIFT_CALLS")"
+[[ "$test_count" -gt 1 ]]
+`,
+        "utf8",
+      );
+      chmodSync(path.join(binDir, "swift"), 0o755);
+      const result = runWorkflowShellScript(testStep.run, {
+        cwd: root,
+        env: {
+          ...process.env,
+          PATH: `${binDir}:${process.env.PATH ?? ""}`,
+          SWIFT_CALLS: callsPath,
+          SWIFT_TEST_EXECUTION: execution,
+        },
+      });
+      const calls = readFileSync(callsPath, "utf8").trim().split("\n");
+      expect(result.status).toBe(1);
+      expect(calls).toEqual([
+        `test --package-path apps/macos --enable-code-coverage --${
+          execution === "parallel" ? "parallel" : "no-parallel"
+        }`,
+      ]);
+    }
   });
 
   it("bounds the Windows Crabbox hydrate main fetch", () => {

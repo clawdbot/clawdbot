@@ -8,6 +8,11 @@ import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vite
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { upsertAcpSessionMeta } from "../acp/runtime/session-meta.js";
+import type { EmbeddedAgentQueueHandle } from "../agents/embedded-agent-runner/run-state.js";
+import {
+  clearActiveEmbeddedRun,
+  setActiveEmbeddedRun,
+} from "../agents/embedded-agent-runner/runs.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { createSessionsHistoryTool } from "../agents/tools/sessions-history-tool.js";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
@@ -912,6 +917,191 @@ describe("gateway server chat", () => {
           },
         });
       } finally {
+        testState.sessionStorePath = undefined;
+        clearConfigCache();
+      }
+    },
+  );
+
+  test.each(["chat.history", "chat.startup"] as const)(
+    "%s projects embedded identity through the existing run snapshot",
+    async (method) => {
+      const {
+        createAgentEventHandler,
+        createSessionEventSubscriberRegistry,
+        createSessionMessageSubscriberRegistry,
+      } = await import("./server-chat.js");
+      openDirectChatSession();
+      await writeMainSessionStore();
+      const context = createDirectChatContext();
+      const handler = createAgentEventHandler({
+        broadcast: context.broadcast,
+        broadcastToConnIds: context.broadcastToConnIds,
+        nodeSendToSession: context.nodeSendToSession,
+        agentRunSeq: context.agentRunSeq,
+        chatRunState: context.chatRunState,
+        resolveSessionKeyForRun: () => "main",
+        clearAgentRunContext: vi.fn(),
+        toolEventRecipients: context.chatRunState.toolEventRecipients,
+        sessionEventSubscribers: createSessionEventSubscriberRegistry(),
+        sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
+      });
+      const handle: EmbeddedAgentQueueHandle = {
+        runId: "run-embedded",
+        startedAtMs: 1_700_000_000_000,
+        abort: () => undefined,
+        isAborted: () => false,
+        isCompacting: () => false,
+        isStreaming: () => true,
+        queueMessage: async () => undefined,
+      };
+      setActiveEmbeddedRun("sess-main", handle, "main");
+      try {
+        handler({
+          runId: "run-embedded",
+          seq: 1,
+          stream: "item",
+          ts: 1_001,
+          data: { kind: "preamble", itemId: "preamble-1", progressText: "Checking files" },
+        });
+        handler({
+          runId: "run-embedded",
+          seq: 2,
+          stream: "tool",
+          ts: 1_002,
+          data: {
+            phase: "start",
+            name: "exec",
+            toolCallId: "tool-1",
+            args: { command: "SECRET_COMMAND" },
+          },
+        });
+        handler({
+          runId: "run-embedded",
+          seq: 3,
+          stream: "tool",
+          ts: 1_003,
+          data: {
+            phase: "input_delta",
+            name: "exec",
+            toolCallId: "tool-1",
+            diff: "SECRET_DIFF",
+          },
+        });
+        handler({
+          runId: "run-embedded",
+          seq: 4,
+          stream: "tool",
+          ts: 1_004,
+          data: {
+            phase: "update",
+            name: "exec",
+            toolCallId: "tool-1",
+            partialResult: "SECRET_PARTIAL",
+          },
+        });
+        handler({
+          runId: "run-embedded",
+          seq: 5,
+          stream: "tool",
+          ts: 1_005,
+          data: {
+            phase: "review",
+            name: "exec",
+            toolCallId: "tool-1",
+            review: { id: "review-1", text: "SECRET_REVIEW" },
+          },
+        });
+        handler({
+          runId: "run-embedded",
+          seq: 6,
+          stream: "tool",
+          ts: 1_006,
+          data: {
+            phase: "result",
+            name: "exec",
+            toolCallId: "tool-1",
+            result: "SECRET_RESULT",
+          },
+        });
+        handler({
+          runId: "run-embedded",
+          seq: 7,
+          stream: "plan",
+          ts: 1_007,
+          data: {
+            phase: "update",
+            steps: [{ step: "Inspect", status: "in_progress" }],
+          },
+        });
+
+        const responses: Array<{ ok: boolean; payload?: unknown }> = [];
+        await callDirectChat(method, {
+          id: method,
+          params: makeMainSessionParams(),
+          respond: captureChatResult(responses),
+          context,
+        });
+
+        expect(responses[0]?.ok).toBe(true);
+        const inFlightRun = (responses[0]?.payload as { inFlightRun?: unknown } | undefined)
+          ?.inFlightRun;
+        expect(inFlightRun).toEqual({
+          runId: "run-embedded",
+          text: "",
+          startedAt: 1_700_000_000_000,
+          sessionAbortable: true,
+          events: [
+            {
+              runId: "run-embedded",
+              seq: 1,
+              stream: "item",
+              ts: 1_001,
+              sessionKey: "main",
+              data: {
+                kind: "preamble",
+                itemId: "preamble-1",
+                progressText: "Checking files",
+              },
+            },
+            {
+              runId: "run-embedded",
+              seq: 2,
+              stream: "tool",
+              ts: 1_002,
+              sessionKey: "main",
+              data: { phase: "start", name: "exec", toolCallId: "tool-1" },
+            },
+            {
+              runId: "run-embedded",
+              seq: 3,
+              stream: "tool",
+              ts: 1_003,
+              sessionKey: "main",
+              data: { phase: "input_delta", name: "exec", toolCallId: "tool-1" },
+            },
+            {
+              runId: "run-embedded",
+              seq: 4,
+              stream: "tool",
+              ts: 1_004,
+              sessionKey: "main",
+              data: { phase: "update", name: "exec", toolCallId: "tool-1" },
+            },
+            {
+              runId: "run-embedded",
+              seq: 6,
+              stream: "tool",
+              ts: 1_006,
+              sessionKey: "main",
+              data: { phase: "result", name: "exec", toolCallId: "tool-1" },
+            },
+          ],
+          plan: { steps: [{ step: "Inspect", status: "in_progress" }] },
+        });
+        expect(JSON.stringify(inFlightRun)).not.toContain("SECRET");
+      } finally {
+        clearActiveEmbeddedRun("sess-main", handle, "main");
         testState.sessionStorePath = undefined;
         clearConfigCache();
       }

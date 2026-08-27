@@ -321,7 +321,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: exact-session deletion parameters and synchronous companion mutation contract.
       // +2: canonical session-model selection and auxiliary runtime-auth preparation.
       // +1: identifier authentication input type for external channel plugins.
-      4363,
+      // +1: shared channel-account logout config cleanup.
+      4364,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -419,7 +420,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +5: continuation runtime callables.
       // +2: bounded ask_user owner-order map builder and option resolver.
       // +2: canonical session-model selection and auxiliary runtime-auth preparation.
-      2587,
+      // +1: shared channel-account logout config cleanup.
+      2588,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

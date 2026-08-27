@@ -645,6 +645,7 @@ function wrapPosixCommandWithPathPrepend(
 
 /** Starts a host or sandbox exec process and registers it for polling/backgrounding. */
 export async function runExecProcess({
+  startupSignal: initialStartupSignal,
   onUpdate: initialOnUpdate,
   beforeSpawn: initialBeforeSpawn,
   onSettledBeforeNotify: initialOnSettledBeforeNotify,
@@ -683,6 +684,8 @@ export async function runExecProcess({
   timeoutSec: number | null;
   /** Whether exec may return a supervised session for later continuation. */
   processContinuationAvailable?: boolean;
+  /** Cancels startup only; background process lifetime belongs to the supervisor. */
+  startupSignal?: AbortSignal;
   onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void;
   /** Runs after process finalization and before the exit wake is queued. */
   onSettledBeforeNotify?: (outcome: ExecProcessOutcome) => void;
@@ -737,6 +740,7 @@ export async function runExecProcess({
   // Foreground delivery keeps its caller context only until yield, abort, or exit.
   // Clearing the callback also releases the completed turn's captured authority.
   let onUpdate = initialOnUpdate && AsyncLocalStorage.bind(initialOnUpdate);
+  let startupSignal = initialStartupSignal;
   let beforeSpawn = initialBeforeSpawn;
   let onSettledBeforeNotify = initialOnSettledBeforeNotify;
 
@@ -949,15 +953,21 @@ export async function runExecProcess({
   };
 
   const assertPreSpawnAuthorized = async () => {
+    startupSignal?.throwIfAborted();
     const denied = await beforeSpawn?.();
+    startupSignal?.throwIfAborted();
     if (denied) {
       throw new ExecProcessPreflightError(denied);
     }
   };
-  const spawn = (input: SpawnInput) =>
-    withoutGatewayToolCallerIdentity(() => supervisor.spawn(input));
+  const spawn = (input: SpawnInput) => {
+    // No await between the final cancellation check and supervisor admission.
+    startupSignal?.throwIfAborted();
+    return withoutGatewayToolCallerIdentity(() => supervisor.spawn(input));
+  };
 
   try {
+    startupSignal?.throwIfAborted();
     const spawnSpec = await prepareSpawnSpec();
     usingPty = spawnSpec.mode === "pty";
     const spawnBase = {
@@ -981,6 +991,7 @@ export async function runExecProcess({
           ptyCommand: spawnSpec.ptyCommand,
         });
       } catch (err) {
+        startupSignal?.throwIfAborted();
         const warning = `Warning: PTY spawn failed (${String(err)}); retrying without PTY for \`${opts.command}\`.`;
         logWarn(
           `exec: PTY spawn failed (${String(err)}); retrying without PTY for "${opts.command}".`,
@@ -1024,6 +1035,7 @@ export async function runExecProcess({
     });
     throw error;
   } finally {
+    startupSignal = undefined;
     beforeSpawn = undefined;
   }
   session.stdin = managedRun.stdin;

@@ -116,6 +116,8 @@ type AttemptControl = {
 
 export async function dispatchEmbeddedRunAttempt(input: {
   params: InternalRunParams;
+  /** Run-owned start timestamp captured before admission; projected on recovery. */
+  runStartedAtMs: number;
   runtime: AttemptRuntime;
   transcriptOwnership: AttemptTranscriptOwnership;
   control: AttemptControl;
@@ -269,6 +271,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
   });
   const attemptParams: EmbeddedRunAttemptParams = {
     admittedRunContext: params.admittedRunContext,
+    startedAtMs: input.runStartedAtMs,
     contextEngineAgentId: runtime.contextEngineAgentId,
     ...(control.pluginHarnessOwnsTransport ? { sandbox: pluginSandbox } : {}),
     operation: "attempt",

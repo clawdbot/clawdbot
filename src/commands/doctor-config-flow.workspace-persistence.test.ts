@@ -18,6 +18,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
 import { createDoctorPrompter, type DoctorOptions } from "./doctor-prompter.js";
+import { normalizeCompatibilityConfigValues } from "./doctor/shared/legacy-config-core-migrate.js";
 
 async function prepareDoctorContext(configPath: string): Promise<DoctorHealthFlowContext> {
   const runtime: RuntimeEnv = { error: vi.fn(), exit: vi.fn(), log: vi.fn() };
@@ -51,6 +52,80 @@ async function prepareDoctorContext(configPath: string): Promise<DoctorHealthFlo
 describe("Doctor workspace persistence", () => {
   afterEach(() => {
     closeOpenClawStateDatabaseForTest();
+  });
+
+  it.each(["entries", "list", "noncanonical list"])(
+    "repairs workspace and heartbeat values from %s through snapshot, doctor, and write",
+    async (shape) => {
+      await withTempHome(async (home) => {
+        await withEnvOverride({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+          const agent = {
+            workspace: null,
+            heartbeat: { every: "30m", activeHours: { start: "99:99", end: "17:00" } },
+          };
+          const configPath = await writeOpenClawConfig(home, {
+            agents:
+              shape === "entries"
+                ? { entries: { ops: agent } }
+                : { list: [{ id: shape === "list" ? "ops" : " Ops ", ...agent }] },
+            gateway: { mode: "local" },
+            plugins: { enabled: false },
+          });
+          const before = await readConfigFileSnapshot();
+          expect(before.valid).toBe(false);
+          if (shape === "noncanonical list") {
+            expect(before.sourceConfig.agents?.list).toHaveLength(1);
+          } else {
+            expect(before.sourceConfig.agents?.entries?.ops).toEqual(agent);
+            expect(before.sourceConfig.agents).not.toHaveProperty("list");
+          }
+
+          const ctx = await prepareDoctorContext(configPath);
+          expect(ctx.configResult.shouldWriteConfig).toBe(true);
+          expect(ctx.cfg.agents?.entries?.ops).toEqual({ heartbeat: { every: "30m" } });
+          await runInitialConfigWriteHealth(ctx);
+
+          const saved = JSON.parse(await fs.readFile(configPath, "utf-8"));
+          expect(saved.agents.entries.ops).toEqual({ heartbeat: { every: "30m" } });
+          expect(saved.agents).not.toHaveProperty("list");
+          expect((await readConfigFileSnapshot()).valid).toBe(true);
+          expect((await prepareDoctorContext(configPath)).configResult.shouldWriteConfig).toBe(
+            false,
+          );
+        });
+      });
+    },
+  );
+
+  it("repairs a legacy candidate without writing when include ownership blocks migration", async () => {
+    await withTempHome(async (home) => {
+      await withEnvOverride({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+        const configPath = await writeOpenClawConfig(home, {
+          agents: {
+            list: [
+              { id: " Ops ", workspace: null, heartbeat: { activeHours: { start: "99:99" } } },
+            ],
+          },
+          diagnostics: { otel: { $include: "otel.json" } },
+          gateway: { mode: "local" },
+          plugins: { enabled: false },
+        });
+        const includePath = path.join(path.dirname(configPath), "otel.json");
+        await fs.writeFile(includePath, JSON.stringify({ protocol: "grpc" }));
+        const original = await fs.readFile(configPath, "utf-8");
+        const before = await readConfigFileSnapshot();
+        expect(before.sourceConfig.agents?.list).toHaveLength(1);
+        expect(normalizeCompatibilityConfigValues(before.sourceConfig).config.agents?.list).toEqual(
+          [{ id: " Ops ", heartbeat: {} }],
+        );
+
+        const ctx = await prepareDoctorContext(configPath);
+        expect(ctx.configResult.shouldWriteConfig).toBe(false);
+        await runInitialConfigWriteHealth(ctx);
+        expect(await fs.readFile(configPath, "utf-8")).toBe(original);
+        expect(JSON.parse(await fs.readFile(includePath, "utf-8"))).toEqual({ protocol: "grpc" });
+      });
+    });
   });
 
   it("keeps the legacy owner on the shared workspace across later health writes", async () => {

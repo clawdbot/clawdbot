@@ -433,7 +433,7 @@ describe("pw-tools-core aria snapshot storage", () => {
       cdpUrl: "http://127.0.0.1:9222",
       targetId: "tab-1",
       refs: {
-        ax1: { role: "button", name: "OK" },
+        ax1: { role: "button", name: "OK", nth: 0 },
         ax2: { role: "button", name: "OK", nth: 1 },
         ax3: { role: "button", name: "" },
       },

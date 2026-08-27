@@ -510,23 +510,16 @@ describe("portal HTTP proxy", () => {
     expect(body).toBe("streamed request");
   });
 
-  it("shows a retry page while the target is down", async () => {
-    const unavailableTarget = createServer();
-    await new Promise<void>((resolve) => {
-      unavailableTarget.listen(0, "127.0.0.1", resolve);
-    });
-    const port = (unavailableTarget.address() as AddressInfo).port;
-    await new Promise<void>((resolve) => {
-      unavailableTarget.close(() => resolve());
-    });
-    const portal = await portalService().open({ targetPort: port });
+  it("shows a retry page when the target closes the connection", async () => {
+    targetHandler = (_req, res) => res.destroy();
+    const portal = await portalService().open({ targetPort });
 
     const result = await httpCall({
       port: portal.listenPort,
       headers: { Cookie: portalAuthCookie(portal) },
     });
     expect(result.status).toBe(502);
-    expect(result.body).toContain(`Waiting for the app on port ${port}…`);
+    expect(result.body).toContain(`Waiting for the app on port ${targetPort}…`);
     expect(result.body).toContain('http-equiv="refresh" content="2"');
   });
 

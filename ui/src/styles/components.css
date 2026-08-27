@@ -892,10 +892,12 @@ openclaw-session-progress-hovercard-provider {
   --session-hovercard-shift-y: 0;
 
   position: fixed;
+  inset: auto;
   z-index: 1990;
   width: min(296px, calc(100vw - 24px));
   max-height: min(520px, calc(100vh - 24px));
   padding: 0;
+  margin: 0;
   overflow: auto;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -958,8 +960,166 @@ openclaw-session-progress-hovercard-provider {
   }
 }
 
+/* Explicit details remain interactive on touch devices as well as hover pointers. */
+.person-activity-hovercard[data-open="true"] {
+  pointer-events: auto;
+}
+
+.person-activity-card {
+  font-size: calc(12px * var(--control-ui-text-scale));
+  line-height: 1.5;
+}
+
+.person-activity-card__header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 16px 12px;
+}
+
+.person-activity-card__header > div {
+  min-width: 0;
+}
+
+.person-activity-card h2,
+.person-activity-card h3,
+.person-activity-card p {
+  margin: 0;
+}
+
+.person-activity-card h2 {
+  overflow-wrap: anywhere;
+  font-size: calc(14px * var(--control-ui-text-scale));
+  font-weight: 600;
+}
+
+.person-activity-card__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+}
+
+.person-activity-card__status > span {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--ok);
+}
+
+.person-activity-card__facts {
+  display: grid;
+  gap: 12px;
+  padding: 0 16px 16px;
+  margin: 0;
+}
+
+.person-activity-card__facts > div {
+  display: grid;
+  grid-template-columns: 80px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.person-activity-card__facts dt,
+.person-activity-card__muted,
+.person-activity-card small {
+  color: var(--muted);
+}
+
+.person-activity-card__facts dd {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.person-activity-card small {
+  display: block;
+  font-size: calc(11px * var(--control-ui-text-scale));
+}
+
+.person-activity-card__section,
+.person-activity-card footer {
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+}
+
+.person-activity-card h3 {
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: inherit;
+  font-weight: 500;
+}
+
+.person-activity-card__sessions {
+  display: grid;
+  gap: 2px;
+}
+
+.person-activity-card__session {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px;
+  margin: 0 -6px;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.person-activity-card__session-copy {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.person-activity-card__session-copy > span {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.person-activity-card__session-icon {
+  flex: none;
+  margin-top: 2px;
+  color: var(--muted);
+}
+
+.person-activity-card svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+
+.person-activity-card footer a {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.person-activity-card a:hover {
+  background: var(--bg-hover);
+}
+
+.person-activity-card a:focus-visible {
+  border-radius: var(--radius-sm);
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+@media (pointer: coarse) {
+  .person-activity-card a {
+    min-height: 44px;
+    align-items: center;
+  }
+}
+
 .github-link-hovercard {
   position: fixed;
+  inset: auto;
+  margin: 0;
   z-index: 1990;
   width: min(440px, calc(100vw - 24px));
   min-height: 112px;

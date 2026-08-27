@@ -151,7 +151,8 @@ function scrubMemoryContent(params: {
   corpusSnippets: ReadonlySet<string>;
   agentId: string;
 }): { content: string; removedEntries: number; removedLines: number } {
-  const lines = params.content.split(/\r?\n/u);
+  // Preserve surviving line endings so unrelated artifacts do not enter the purge plan.
+  const lines = params.content.split("\n");
   const corpusSnippets = [...params.corpusSnippets];
   let removedEntries = 0;
   let removedLines = 0;
@@ -402,12 +403,12 @@ async function forgetWorkspaceMemory(
     }
     const absolutePath = path.join(corpusDir, file.name);
     const content = await fs.readFile(absolutePath, "utf8");
-    const lines = content.split(/\r?\n/u);
+    const lines = content.split("\n");
     const retained = lines.filter((line) => {
       if (!referencesSession(line, params.agentId, sessionIds)) {
         return true;
       }
-      const snippet = /^\[[^\]]+#L\d+\]\s*(.+)$/u.exec(line)?.[1]?.trim();
+      const snippet = /^\[[^\]]+#L\d+\]\s*(.+)$/u.exec(line.trimEnd())?.[1]?.trim();
       // Ingestion only admits snippets of at least 12 characters; shorter
       // malformed corpus rows must never trigger broad substring deletion.
       if (snippet && snippet.length >= 12) {

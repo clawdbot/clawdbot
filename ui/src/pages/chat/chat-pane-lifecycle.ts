@@ -78,7 +78,7 @@ import {
   readChatSessionSnapshot,
   resolveChatSnapshotKey,
 } from "./session-message-cache.ts";
-import { closeSlot, openSlot, type SidebarSlotId } from "./sidebar-layout.ts";
+import { closeSlot, isSidebarSlotVisible, openSlot, type SidebarSlotId } from "./sidebar-layout.ts";
 
 const COMPOSER_PREFILL_ATTENTION_DURATION_MS = 600;
 const COMPOSER_PREFILL_ATTENTION_CLASS = "agent-chat__input--prefill-attention";
@@ -313,9 +313,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
       if (!state) {
         return;
       }
-      const visible =
-        state.sidebarLayout.open === true &&
-        state.sidebarLayout.columns[0]?.panels.some((panel) => panel.slot === slot) === true;
+      const visible = isSidebarSlotVisible(state.sidebarLayout, slot);
       if (visible) {
         releaseAttachmentWorkspaceOwner(state, slot);
       }

@@ -191,6 +191,8 @@ type PluginReportParams = {
   config?: OpenClawConfig;
   effectiveOnly?: boolean;
   onlyPluginIds?: readonly string[];
+  /** Capture full registrations without starting channel runtime sidecars. */
+  runtimeInspection?: boolean;
   workspaceDir?: string;
   /** Use an explicit env when plugin roots should resolve independently from process.env. */
   env?: NodeJS.ProcessEnv;
@@ -276,6 +278,7 @@ function buildPluginReport(
               loadModules,
               cache: false,
               onlyPluginIds,
+              toolDiscovery: params?.runtimeInspection,
             }),
           ),
         { surface: "status", onlyPluginCount: onlyPluginIds?.length },

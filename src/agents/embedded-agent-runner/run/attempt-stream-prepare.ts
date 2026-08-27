@@ -480,6 +480,7 @@ export function prepareEmbeddedAttemptStream(input: {
     runId: attempt.runId,
     diagnosticOwner: input.diagnosticOwner,
     closeDiagnostics: () => closeDiagnosticEmbeddedRunOwner(input.diagnosticOwner),
+    startedAtMs: attempt.startedAtMs,
     ...(attempt.toolAuthorityFingerprint
       ? { toolAuthorityFingerprint: attempt.toolAuthorityFingerprint }
       : {}),

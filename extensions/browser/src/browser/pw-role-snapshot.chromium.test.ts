@@ -133,6 +133,7 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
           { id: "raw-short", name: "Raw named control" },
           { id: "raw-empty", name: "" },
           { id: "raw-long", name: "x".repeat(901) },
+          { id: "raw-short-again", name: "Raw named control" },
         ];
         await page.evaluate((controls) => {
           for (const { id, name } of controls) {

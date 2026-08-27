@@ -33,6 +33,7 @@ const dispatchChild = vi.hoisted(() => vi.fn());
 const spawnCallerIdentity = vi.hoisted(() => vi.fn());
 const spawnArgs = vi.hoisted(() => vi.fn());
 const githubPublicationRequest = vi.hoisted(() => vi.fn());
+const resolveGatewayContext = () => undefined;
 const scopedSessionAccess = vi.hoisted(() =>
   vi.fn(async (params: { run: () => Promise<unknown> }) => await params.run()),
 );
@@ -97,7 +98,8 @@ vi.mock("../../agents/tools/in-process-gateway.js", () => ({
     method: string,
     params: Record<string, unknown>,
     creation: unknown,
-  ) => gatewayCreate({ creation, method, params }),
+    options: unknown,
+  ) => gatewayCreate({ creation, method, options, params }),
   withAgentToolGatewayRuntimeIdentity: (request: unknown, identity: unknown) => {
     gatewayRuntimeIdentity(request, identity);
     return request;
@@ -246,6 +248,7 @@ describe("worker session tool topology", () => {
       },
     );
     execute = createWorkerSessionToolExecutor({
+      resolveGatewayContext,
       placements,
       dispatchChild,
       githubPublication: { requestForClaim: githubPublicationRequest },
@@ -452,6 +455,11 @@ describe("worker session tool topology", () => {
           via: "spawn",
         }),
         method: "sessions.create",
+        options: {
+          resolveGatewayContext,
+          sessionMutationCommitGuard: expect.any(Function),
+          timeoutMs: null,
+        },
         params: expect.not.objectContaining({ task: expect.anything() }),
       }),
     );
