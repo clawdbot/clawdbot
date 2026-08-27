@@ -5,7 +5,7 @@ import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { maxBytesForKind, mediaKindFromMime, type MediaKind } from "@openclaw/media-core/constants";
-import { kindFromMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
+import { detectMime, kindFromMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
   asDateTimestampMs,
@@ -86,6 +86,7 @@ const MANAGED_IMAGE_THUMBNAIL_MAX_SIDE = 300;
 const MANAGED_IMAGE_THUMBNAIL_CACHE_MAX_ENTRIES = 128;
 const MANAGED_IMAGE_THUMBNAIL_CACHE_MAX_BYTES = 16 * 1024 * 1024;
 const MANAGED_IMAGE_THUMBNAIL_MAX_PENDING = 128;
+const MANAGED_DATA_URL_SNIFF_BYTES = 16_384;
 const MANAGED_OUTGOING_ATTACHMENT_ID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const managedOutgoingImageTicketSecret = randomBytes(32);
@@ -615,11 +616,11 @@ function deriveAltText(source: string, index: number) {
   return localName || fallback;
 }
 
-function parseMediaDataUrl(
+async function parseMediaDataUrl(
   source: string,
   label: string,
   imageLimits: ManagedImageAttachmentLimits,
-): ParsedMediaDataUrl {
+): Promise<ParsedMediaDataUrl> {
   const trimmed = source.trim();
   if (!trimmed.startsWith("data:")) {
     return { kind: "not-data-url" };
@@ -645,16 +646,19 @@ function parseMediaDataUrl(
     throw new Error("Invalid image data URL");
   }
 
-  const mediaKind = mediaKindFromMime(contentType);
-  if (
-    mediaKind !== "image" &&
-    mediaKind !== "audio" &&
-    mediaKind !== "video" &&
-    mediaKind !== "document"
-  ) {
+  const declaredMediaKind = mediaKindFromMime(contentType);
+  if (!isManagedMediaKind(declaredMediaKind)) {
     return { kind: "unsupported-data-url" };
   }
 
+  const normalizedBase64 = base64Part.replace(/\s+/g, "");
+  const sniffBase64Length = Math.ceil(MANAGED_DATA_URL_SNIFF_BYTES / 3) * 4;
+  const detectedContentType = await detectMime({
+    buffer: Buffer.from(normalizedBase64.slice(0, sniffBase64Length), "base64"),
+    headerMime: contentType,
+  });
+  const detectedMediaKind = mediaKindFromMime(detectedContentType);
+  const mediaKind = isManagedMediaKind(detectedMediaKind) ? detectedMediaKind : declaredMediaKind;
   const maxBytes = maxBytesForManagedMediaKind(mediaKind, imageLimits);
   if (estimateBase64DecodedByteLength(base64Part) > maxBytes) {
     throw createManagedMediaByteLimitError({ kind: mediaKind, label, maxBytes });
@@ -662,8 +666,10 @@ function parseMediaDataUrl(
 
   return {
     kind: "media-data-url",
-    buffer: Buffer.from(base64Part.replace(/\s+/g, ""), "base64"),
-    contentType,
+    buffer: Buffer.from(normalizedBase64, "base64"),
+    contentType: isManagedMediaKind(detectedMediaKind)
+      ? (detectedContentType ?? contentType)
+      : contentType,
     mediaKind,
   };
 }
@@ -1424,7 +1430,7 @@ export async function createManagedOutgoingMediaBlocks(params: {
 
     let savedOriginalPath: string | null = null;
     try {
-      const parsedDataUrl = parseMediaDataUrl(mediaUrl, fallbackLabel, limits);
+      const parsedDataUrl = await parseMediaDataUrl(mediaUrl, fallbackLabel, limits);
       if (parsedDataUrl.kind === "unsupported-data-url") {
         continue;
       }

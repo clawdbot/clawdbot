@@ -1614,6 +1614,28 @@ describe("createManagedOutgoingImageBlocks", () => {
     ).rejects.toThrow(new RegExp(`Managed ${kind} attachment.*16 MiB byte limit`));
   });
 
+  it("applies the byte-detected image cap before fully decoding generic data URLs", async () => {
+    const oversizedImage = Buffer.concat([
+      Buffer.from(TINY_PNG_BASE64, "base64"),
+      Buffer.alloc(32 * 1024),
+    ]).toString("base64");
+    const bufferFromSpy = vi.spyOn(Buffer, "from");
+
+    try {
+      await expect(
+        createManagedOutgoingImageBlocks({
+          sessionKey: "agent:main:main",
+          mediaUrls: [`data:application/octet-stream;base64,${oversizedImage}`],
+          stateDir,
+          limits: { maxBytes: 1024 },
+        }),
+      ).rejects.toThrow(/Managed image attachment .* exceeds the 1024 bytes byte limit/u);
+      expect(bufferFromSpy).not.toHaveBeenCalledWith(oversizedImage, "base64");
+    } finally {
+      bufferFromSpy.mockRestore();
+    }
+  });
+
   it("requires explicit reply trust for local audio", async () => {
     const sourcePath = path.join(stateDir, "workspace", "voice.mp3");
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
