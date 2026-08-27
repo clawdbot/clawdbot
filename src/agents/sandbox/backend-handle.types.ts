@@ -39,6 +39,31 @@ export type SandboxBackendCommandResult = {
   code: number;
 };
 
+export type SandboxEnvironmentCapabilities = {
+  protocolVersion: 1;
+  process: true;
+  filesystem: true;
+  capabilityRootDiscovery?: true;
+};
+
+export type SandboxCapabilityRootRequest = {
+  id: string;
+  path: string;
+};
+
+export type SandboxCapabilityTextFile = {
+  path: string;
+  contents: string;
+};
+
+export type SandboxCapabilityRootDiscovery = {
+  id: string;
+  path: string;
+  mcpConfig?: SandboxCapabilityTextFile;
+  warnings?: string[];
+  error?: string;
+};
+
 /** Runtime context passed to backend-provided filesystem bridge factories. */
 export type SandboxFsBridgeContext = {
   workspaceDir: string;
@@ -79,7 +104,12 @@ export type SandboxBackendHandle = {
   workdirRoots?: readonly string[];
   capabilities?: {
     browser?: boolean;
+    environment?: SandboxEnvironmentCapabilities;
   };
+  discoverCapabilityRoots?: (params: {
+    roots: readonly SandboxCapabilityRootRequest[];
+    signal?: AbortSignal;
+  }) => Promise<SandboxCapabilityRootDiscovery[]>;
   buildExecSpec(params: {
     command: string;
     workdir?: string;

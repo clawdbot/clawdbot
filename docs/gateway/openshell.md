@@ -480,9 +480,11 @@ filesystem must permit the writes. `sandbox.docker.network`,
   if binds are configured.
 - Docker-specific runtime knobs under `sandbox.docker.*` (other than `env`)
   apply only to the Docker backend.
-- Native plugin code and Gateway RPC stay on the Gateway host. Plugin-owned and
-  MCP tools are available to sandboxed sessions only when sandbox tool policy
-  allows them.
+- Native plugin code, Gateway RPC, web tools, and Gateway-configured MCP servers
+  stay on the Gateway host. The built-in agent runtime additionally discovers
+  workspace `.mcp.json` declarations and runs their stdio MCP servers inside
+  OpenShell. Both sets of tools remain subject to normal and sandbox tool policy.
+- HTTP/SSE MCP transports are not environment-owned yet.
 
 ## Troubleshooting
 

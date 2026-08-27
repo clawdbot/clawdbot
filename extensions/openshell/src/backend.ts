@@ -35,6 +35,7 @@ import {
   type OpenShellExecContext,
 } from "./cli.js";
 import { resolveOpenShellPluginConfig, type ResolvedOpenShellPluginConfig } from "./config.js";
+import { discoverOpenShellCapabilityRoots } from "./environment-capabilities.js";
 import { createOpenShellFsBridge } from "./fs-bridge.js";
 import {
   DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS,
@@ -348,6 +349,14 @@ class OpenShellSandboxBackendImpl {
       workdirValidation: "backend",
       validateWorkdir: async (workdir) => await this.validateWorkdir(workdir),
       workdirRoots: [this.params.remoteWorkspaceDir, this.params.remoteAgentWorkspaceDir],
+      capabilities: {
+        environment: {
+          protocolVersion: 1,
+          process: true,
+          filesystem: true,
+          capabilityRootDiscovery: true,
+        },
+      },
       remoteWorkspaceDir: this.params.remoteWorkspaceDir,
       remoteAgentWorkspaceDir: this.params.remoteAgentWorkspaceDir,
       buildExecSpec: async ({ command, workdir, env, usePty }) => {
@@ -363,6 +372,16 @@ class OpenShellSandboxBackendImpl {
         await this.finalizeExec(token as PendingExec | undefined);
       },
       runShellCommand: runRemoteShellScript,
+      discoverCapabilityRoots: async ({ roots, signal }) => {
+        for (const root of roots) {
+          this.resolveRemoteTarget(root.path);
+        }
+        return await discoverOpenShellCapabilityRoots({
+          roots,
+          signal,
+          runCommand: runRemoteShellScript,
+        });
+      },
       createFsBridge: ({ sandbox }) =>
         this.params.execContext.config.mode === "remote"
           ? createRemoteShellSandboxFsBridge({

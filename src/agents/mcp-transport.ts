@@ -26,7 +26,7 @@ import { operatorMcpOAuthIdentity, requesterMcpOAuthIdentity } from "./mcp-oauth
 import { OpenClawStdioClientTransport } from "./mcp-stdio-transport.js";
 import { resolveMcpTransportConfig } from "./mcp-transport-config.js";
 
-type ResolvedMcpTransport = {
+export type ResolvedMcpTransport = {
   transport: Transport;
   description: string;
   transportType: "stdio" | "sse" | "streamable-http";

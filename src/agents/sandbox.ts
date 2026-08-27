@@ -56,6 +56,9 @@ export type {
   SandboxBackendCommandParams,
   SandboxBackendCommandResult,
   SandboxBackendExecSpec,
+  SandboxCapabilityRootDiscovery,
+  SandboxCapabilityRootRequest,
+  SandboxCapabilityTextFile,
   SandboxBackendFactory,
   SandboxBackendHandle,
   SandboxBackendId,
@@ -66,6 +69,7 @@ export type {
   SandboxBackendWorkdirValidation,
   SandboxBackendWorkdirResolver,
   SandboxBackendWorkdirValidator,
+  SandboxEnvironmentCapabilities,
 } from "./sandbox/backend.js";
 export type { RemoteShellSandboxHandle } from "./sandbox/remote-fs-bridge.js";
 export type {
