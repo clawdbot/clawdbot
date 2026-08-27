@@ -607,6 +607,10 @@ export async function callGatewayTool<T = Record<string, unknown>>(
     opts,
     approvalRuntimeToken,
   });
+  // A signed agent runtime identity is the connection identity. Explicitly suppress
+  // implicit shared-device fallback, while preserving identities required by approval replay.
+  const gatewayDeviceIdentity =
+    agentRuntimeIdentityToken && deviceIdentity === undefined ? null : deviceIdentity;
   const callOptions = {
     url: gateway.url,
     token: gateway.token,
@@ -620,7 +624,7 @@ export async function callGatewayTool<T = Record<string, unknown>>(
     mode: GATEWAY_CLIENT_MODES.BACKEND,
     ...(approvalRuntimeToken ? { approvalRuntimeToken } : {}),
     ...(agentRuntimeIdentityToken ? { agentRuntimeIdentityToken } : {}),
-    ...(deviceIdentity ? { deviceIdentity } : {}),
+    ...(gatewayDeviceIdentity !== undefined ? { deviceIdentity: gatewayDeviceIdentity } : {}),
     scopes,
   };
   try {

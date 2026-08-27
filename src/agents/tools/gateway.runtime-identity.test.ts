@@ -100,7 +100,9 @@ describe("gateway tool runtime identity", () => {
         async () => await callGatewayTool(method, {}, params),
       );
 
-      expect(capturedGatewayCall().agentRuntimeIdentityToken).toEqual(expect.any(String));
+      const call = capturedGatewayCall();
+      expect(call.agentRuntimeIdentityToken).toEqual(expect.any(String));
+      expect(call.deviceIdentity).toBeNull();
     },
   );
 

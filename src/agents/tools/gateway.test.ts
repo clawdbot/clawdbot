@@ -388,6 +388,31 @@ describe("gateway tool defaults", () => {
     expect(call).not.toHaveProperty("approvalRuntimeToken");
   });
 
+  it("preserves approval replay device identity alongside contextual agent identity", async () => {
+    mocks.callGateway.mockResolvedValueOnce({ ok: true });
+
+    await withGatewayToolCallerIdentity(
+      testGatewayCaller({ agentId: "ops", sessionKey: "agent:ops:telegram:direct:alice" }),
+      async () => {
+        await callGatewayTool(
+          "node.invoke",
+          {},
+          {
+            nodeId: "node-1",
+            command: "system.run",
+            params: { approved: true, runId: "approval-id" },
+            idempotencyKey: "invoke-1",
+          },
+          { scopes: ["operator.write", "operator.approvals"] },
+        );
+      },
+    );
+
+    const call = capturedGatewayCall();
+    expect(call.agentRuntimeIdentityToken).toEqual(expect.any(String));
+    expect(call.deviceIdentity).toEqual(mocks.deviceIdentity);
+  });
+
   it.each([
     {
       name: "unapproved system.run",
