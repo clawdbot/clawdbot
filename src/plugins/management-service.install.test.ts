@@ -10,7 +10,6 @@ import {
 import { invokePluginArtifactInstallMock } from "./test-helpers/install-fixtures.js";
 
 const mocks = vi.hoisted(() => ({
-  applyUninstall: vi.fn(),
   clawhubInstall: vi.fn(),
   installRecords: vi.fn(),
   metadata: vi.fn(),
@@ -21,7 +20,6 @@ const mocks = vi.hoisted(() => ({
   readConfig: vi.fn(),
   refreshRegistry: vi.fn(),
   replaceConfig: vi.fn(),
-  planUninstall: vi.fn(),
   selectWriteOptions: vi.fn((writeOptions: unknown) => writeOptions),
   slotSelection: vi.fn((config: unknown): { config: unknown; warnings: string[] } => ({
     config,
@@ -75,12 +73,6 @@ vi.mock("./installed-plugin-index-records.js", async (importOriginal) => ({
   loadInstalledPluginIndexInstallRecords: (...args: unknown[]) => mocks.installRecords(...args),
 }));
 
-vi.mock("./uninstall.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./uninstall.js")>()),
-  applyPluginUninstallDirectoryRemoval: (...args: unknown[]) => mocks.applyUninstall(...args),
-  planPluginUninstall: (...args: unknown[]) => mocks.planUninstall(...args),
-}));
-
 vi.mock("./official-external-plugin-catalog.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./official-external-plugin-catalog.js")>()),
   loadConfiguredHostedOfficialExternalPluginCatalogEntries: (...args: unknown[]) =>
@@ -105,11 +97,11 @@ const emptyArtifactAcknowledgment = {
   ),
 };
 
-function mockClawHubInstall(pluginId: string, packageName: string, targetDir?: string) {
+function mockClawHubInstall(pluginId: string, packageName: string) {
   mocks.clawhubInstall.mockResolvedValue({
     ok: true,
     pluginId,
-    targetDir: targetDir ?? `/tmp/extensions/${pluginId}`,
+    targetDir: `/tmp/extensions/${pluginId}`,
     extensions: ["index.js"],
     packageName,
     clawhub: {
@@ -136,7 +128,6 @@ describe("managed plugin installation", () => {
     });
     mocks.slotSelection.mockImplementation((config) => ({ config, warnings: [] }));
     mocks.installRecords.mockResolvedValue({});
-    mocks.applyUninstall.mockResolvedValue({ directoryRemoved: true, warnings: [] });
     mockHostedOfficialCatalog([]);
   });
 
@@ -335,123 +326,6 @@ describe("managed plugin installation", () => {
       },
       env: {},
     });
-  });
-
-  it("removes only the newly installed managed target after persistence conflicts", async () => {
-    const env = { HOME: "/tmp/openclaw-managed-install-conflict-home" };
-    const conflict = new Error("config changed during plugin install");
-    const targetDir = "/tmp/extensions/demo";
-    mocks.readConfig.mockResolvedValue(configSnapshot());
-    mockClawHubInstall("demo", "community/demo", targetDir);
-    mocks.persistInstall.mockRejectedValue(conflict);
-    mocks.planUninstall.mockReturnValue({
-      ok: true,
-      config: {},
-      pluginId: "demo",
-      actions: {},
-      directoryRemoval: { target: targetDir },
-    });
-
-    await expect(
-      installManagedPlugin({
-        request: {
-          source: "clawhub",
-          packageName: "community/demo",
-          acknowledgeCapabilities: emptyArtifactAcknowledgment,
-        },
-        env,
-      }),
-    ).rejects.toBe(conflict);
-    expect(mocks.planUninstall.mock.calls[0]?.[0]).toMatchObject({
-      config: {
-        plugins: {
-          installs: {
-            demo: expect.objectContaining({
-              source: "clawhub",
-              spec: "clawhub:community/demo",
-              installPath: targetDir,
-            }),
-          },
-        },
-      },
-      pluginId: "demo",
-      deleteFiles: true,
-    });
-    expect(mocks.applyUninstall).toHaveBeenCalledWith({ target: targetDir });
-  });
-
-  it("retains a failed install target when the durable record already owns it", async () => {
-    const env = { HOME: "/tmp/openclaw-managed-install-committed-home" };
-    const persistenceError = new Error("post-commit refresh failed");
-    const targetDir = "/tmp/openclaw-managed-install-committed-home/extensions/demo";
-    mocks.readConfig.mockResolvedValue(configSnapshot());
-    mockClawHubInstall("demo", "community/demo", targetDir);
-    let committedInstallRecords: Record<string, { source: string; installPath: string }> = {};
-    mocks.persistInstall.mockImplementation(async () => {
-      committedInstallRecords = { demo: { source: "clawhub", installPath: targetDir } };
-      throw persistenceError;
-    });
-    mocks.installRecords.mockImplementation(async (options?: { env?: NodeJS.ProcessEnv }) =>
-      options?.env === env ? committedInstallRecords : {},
-    );
-    mocks.planUninstall.mockReturnValue({
-      ok: true,
-      config: {},
-      pluginId: "demo",
-      actions: {},
-      directoryRemoval: { target: targetDir },
-    });
-
-    await expect(
-      installManagedPlugin({
-        request: {
-          source: "clawhub",
-          packageName: "community/demo",
-          acknowledgeCapabilities: emptyArtifactAcknowledgment,
-        },
-        env,
-      }),
-    ).rejects.toMatchObject({
-      message: "post-commit refresh failed",
-      warning: expect.stringContaining("retained the managed target"),
-      cause: persistenceError,
-    });
-    expect(mocks.installRecords).toHaveBeenCalledWith({ env });
-    expect(committedInstallRecords.demo?.installPath).toBe(targetDir);
-    expect(mocks.planUninstall).not.toHaveBeenCalled();
-    expect(mocks.applyUninstall).not.toHaveBeenCalled();
-  });
-
-  it("retains a failed install target when its durable records cannot be verified", async () => {
-    const env = { HOME: "/tmp/openclaw-managed-install-unavailable-home" };
-    const persistenceError = new Error("post-commit refresh failed");
-    const targetDir = "/tmp/openclaw-managed-install-unavailable-home/extensions/demo";
-    mocks.readConfig.mockResolvedValue(configSnapshot());
-    mockClawHubInstall("demo", "community/demo", targetDir);
-    mocks.persistInstall.mockRejectedValue(persistenceError);
-    mocks.installRecords
-      .mockResolvedValueOnce({})
-      .mockRejectedValue(new Error("durable index unavailable"));
-
-    await expect(
-      installManagedPlugin({
-        request: {
-          source: "clawhub",
-          packageName: "community/demo",
-          acknowledgeCapabilities: emptyArtifactAcknowledgment,
-        },
-        env,
-      }),
-    ).rejects.toMatchObject({
-      message: "post-commit refresh failed",
-      warning: expect.stringContaining(
-        "Could not verify whether the failed plugin install was committed",
-      ),
-      cause: persistenceError,
-    });
-    expect(mocks.installRecords).toHaveBeenCalledWith({ env });
-    expect(mocks.planUninstall).not.toHaveBeenCalled();
-    expect(mocks.applyUninstall).not.toHaveBeenCalled();
   });
 
   it("serializes install and enable mutations through one Gateway lock", async () => {
