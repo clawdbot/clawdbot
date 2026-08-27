@@ -190,7 +190,7 @@ External supervisor implementations should also apply these acceptance rules:
 
 - Bound capability probes with a timeout that accounts for full CLI cold-start latency on the deployed runtime and storage, rather than assuming warm-start timing.
 - If capability negotiation or handoff consumption refuses replacement, exit promptly with a nonzero status so the process manager's recovery policy can run. Do not remain alive without a Gateway child or listener.
-- Treat supervisor process liveness as distinct from replacement readiness. Report success only after the new Gateway owns its listener and reaches `/readyz`; `/healthz` proves liveness only.
+- Treat supervisor process liveness as distinct from replacement startup and channel readiness. Report success only after the new Gateway owns its listener and `/startupz` returns `status: "started"`; monitor `/readyz` separately for configured-channel health, while `/healthz` proves liveness only.
 
 ### Gateway profiling
 
