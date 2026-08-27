@@ -1,6 +1,8 @@
 // Subagent announce delivery tests cover the last-mile routing used when child
 // runs report progress or completion back to the requester session.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { validateAgentParams } from "../../../../packages/gateway-protocol/src/index.js";
+import { formatValidationErrors } from "../../../../packages/gateway-protocol/src/validation-errors.js";
 import type { SessionEntry } from "../../../config/sessions.js";
 import type { callGateway as runtimeCallGateway } from "../../../gateway/call.js";
 import type { dispatchGatewayMethodInProcess as runtimeDispatchGatewayMethodInProcess } from "../../../gateway/server-plugins.js";
@@ -3670,6 +3672,37 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       threadId: undefined,
       sourceReplyDeliveryMode: "message_tool_only",
     });
+  });
+
+  // The announce reaches the requester through the gateway `agent` method, whose
+  // internal-event schema is closed. A completion fact the schema does not carry
+  // is rejected on both the direct and direct-primary paths, so a child that
+  // finished is never delivered and the announce retries until it expires.
+  it("sends no-output completion agent params the gateway validator accepts", async () => {
+    const callGateway = createPayloadGatewayMock({ text: "NO_REPLY" });
+    const childSessionKey = "agent:worker:subagent:no-output-wire-contract";
+    await deliverSlackChannelAnnouncement({
+      callGateway,
+      directIdempotencyKey: "announce-channel-no-output-wire-contract",
+      sourceTool: "subagent_announce",
+      sourceSessionKey: childSessionKey,
+      internalEvents: taskCompletionEvents({
+        childSessionKey,
+        childSessionId: "child-session-id",
+        taskLabel: "no-output completion wire contract",
+        result: "(no output)",
+        noVisibleResult: true,
+      }),
+    });
+
+    const request = expectRecordFields(mockCallArg(callGateway), { method: "agent" });
+    const sentEvents = (request.params as { internalEvents?: Array<{ noVisibleResult?: boolean }> })
+      .internalEvents;
+    expect(sentEvents?.[0]?.noVisibleResult).toBe(true);
+    const isValid = validateAgentParams(request.params);
+    // Report the validator's own message so schema drift reads as the rejected
+    // property instead of a bare `false`.
+    expect(isValid ? "" : formatValidationErrors(validateAgentParams.errors)).toBe("");
   });
 
   it("does not count a different channel target as the requester completion delivery", async () => {
