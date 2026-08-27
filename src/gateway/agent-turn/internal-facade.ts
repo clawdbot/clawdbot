@@ -21,6 +21,7 @@ import {
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import type { GatewayRequestOptions } from "../server-methods/types.js";
 import { validateGatewayMethodParams } from "../server-methods/validation.js";
+import { waitForAgentTerminalDedupe } from "./agent-job.js";
 import { prepareAgentRequestPreflight } from "./agent-request-preflight.js";
 import { createAgentTurnService } from "./agent-turn-service.js";
 import type {
@@ -86,13 +87,15 @@ export function createInternalAgentTurnFacade(
         reject: (error) => throwEnvelopeRejection(method, error),
       },
     );
-    return (await waitForGatewayDispatchDeadline(
+    const response = (await waitForGatewayDispatchDeadline(
       method,
       result,
       deadlineMs,
       signal,
       onSignalAbort,
     )) as T;
+    options.assertContextCurrent?.();
+    return response;
   };
 
   const wait = async <T = unknown>(
@@ -263,8 +266,21 @@ export function createInternalAgentTurnFacade(
         if (waitReachedNonterminalDeadline) {
           return first;
         }
+        const dedupeTimeoutMs = resolveRemainingGatewayDispatchTimeoutMs(deadlineMs) ?? 30_000;
+        const terminalDedupe = await waitForGatewayDispatchDeadline(
+          method,
+          waitForAgentTerminalDedupe({ runId, timeoutMs: dedupeTimeoutMs }),
+          deadlineMs,
+          dispatchOptions.signal,
+          dispatchOptions.onSignalAbort,
+        );
+        options.assertContextCurrent?.();
+        if (!terminalDedupe) {
+          return first;
+        }
         // The terminal dedupe payload retains the full result needed by callers;
-        // agent.wait is only the liveness rendezvous for the already-admitted run.
+        // agent.wait is the liveness rendezvous; the owner signal above makes
+        // the terminal response atomically ready for the canonical replay.
         return await dispatchRaw(request, {
           deadlineMs,
           onSignalAbort: dispatchOptions.onSignalAbort,

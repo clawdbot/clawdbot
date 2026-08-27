@@ -5,13 +5,20 @@ import type { GatewayRequestContext } from "../server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import { createInternalAgentTurnFacade } from "./internal-facade.js";
 
-const { startTurn, waitForTurn } = vi.hoisted(() => ({
-  startTurn: vi.fn(),
-  waitForTurn: vi.fn(),
+const { authorizeGatewayRequestPreDispatch, startTurn, waitForAgentTerminalDedupe, waitForTurn } =
+  vi.hoisted(() => ({
+    authorizeGatewayRequestPreDispatch: vi.fn(),
+    startTurn: vi.fn(),
+    waitForAgentTerminalDedupe: vi.fn(),
+    waitForTurn: vi.fn(),
+  }));
+
+vi.mock("./agent-job.js", () => ({
+  waitForAgentTerminalDedupe,
 }));
 
 vi.mock("../server-methods.js", () => ({
-  authorizeGatewayRequestPreDispatch: async () => ({ error: null }),
+  authorizeGatewayRequestPreDispatch,
   createRequestGatewayMethodRegistry: () => ({
     isControlPlaneWrite: () => false,
   }),
@@ -33,23 +40,87 @@ vi.mock("./agent-turn-service.js", () => ({
   }),
 }));
 
-function createFacade() {
+function createFacade(
+  options: {
+    assertContextCurrent?: () => void;
+    getContext?: () => GatewayRequestContext;
+  } = {},
+) {
   return createInternalAgentTurnFacade({
+    assertContextCurrent: options.assertContextCurrent,
     client: createSyntheticPluginRuntimeClient(),
-    getContext: () =>
-      ({
-        dedupe: new Map(),
-        chatAbortControllers: new Map(),
-        getRuntimeConfig: () => ({}),
-        logGateway: { error: vi.fn(), warn: vi.fn() },
-      }) as unknown as GatewayRequestContext,
+    getContext:
+      options.getContext ??
+      (() =>
+        ({
+          dedupe: new Map(),
+          chatAbortControllers: new Map(),
+          getRuntimeConfig: () => ({}),
+          logGateway: { error: vi.fn(), warn: vi.fn() },
+        }) as unknown as GatewayRequestContext),
   });
 }
 
 describe("createInternalAgentTurnFacade", () => {
   beforeEach(() => {
+    authorizeGatewayRequestPreDispatch.mockReset();
+    authorizeGatewayRequestPreDispatch.mockResolvedValue({ error: null });
     startTurn.mockReset();
+    waitForAgentTerminalDedupe.mockReset();
+    waitForAgentTerminalDedupe.mockResolvedValue({ status: "ok" });
     waitForTurn.mockReset();
+  });
+
+  it("rejects agent.wait when authorization retires its captured context", async () => {
+    let releaseAuthorization!: (result: { error: null }) => void;
+    authorizeGatewayRequestPreDispatch.mockImplementationOnce(
+      async () =>
+        await new Promise<{ error: null }>((resolve) => {
+          releaseAuthorization = resolve;
+        }),
+    );
+    let contextCurrent = true;
+    const assertContextCurrent = vi.fn(() => {
+      if (!contextCurrent) {
+        throw new Error("retired gateway context");
+      }
+    });
+    const result = createFacade({ assertContextCurrent }).wait({
+      runId: "run-retired-during-auth",
+    });
+
+    await vi.waitFor(() => expect(releaseAuthorization).toBeTypeOf("function"));
+    contextCurrent = false;
+    releaseAuthorization({ error: null });
+
+    await expect(result).rejects.toThrow("retired gateway context");
+    expect(waitForTurn).not.toHaveBeenCalled();
+  });
+
+  it("rejects agent.wait when its context retires while the wait is pending", async () => {
+    let releaseWait!: (result: { runId: string; status: "ok" }) => void;
+    waitForTurn.mockImplementationOnce(
+      async () =>
+        await new Promise<{ runId: string; status: "ok" }>((resolve) => {
+          releaseWait = resolve;
+        }),
+    );
+    let contextCurrent = true;
+    const assertContextCurrent = vi.fn(() => {
+      if (!contextCurrent) {
+        throw new Error("retired gateway context");
+      }
+    });
+    const result = createFacade({ assertContextCurrent }).wait({
+      runId: "run-retired-during-wait",
+    });
+
+    await vi.waitFor(() => expect(waitForTurn).toHaveBeenCalledOnce());
+    contextCurrent = false;
+    releaseWait({ runId: "run-retired-during-wait", status: "ok" });
+
+    await expect(result).rejects.toThrow("retired gateway context");
+    expect(assertContextCurrent).toHaveBeenCalledTimes(2);
   });
 
   it("preserves accepted/final ordering and acceptance metadata without frames", async () => {
@@ -192,13 +263,23 @@ describe("createInternalAgentTurnFacade", () => {
         ]);
       });
     waitForTurn.mockResolvedValue({ runId: "run-replay", status: "ok" });
+    let releaseTerminalDedupe!: (result: { status: "ok" }) => void;
+    waitForAgentTerminalDedupe.mockImplementationOnce(
+      async () =>
+        await new Promise<{ status: "ok" }>((resolve) => {
+          releaseTerminalDedupe = resolve;
+        }),
+    );
 
-    await expect(
-      createFacade().dispatchRaw(
-        { message: "test", idempotencyKey: "same-request" },
-        { expectFinal: true, timeoutMs: 1_000 },
-      ),
-    ).resolves.toMatchObject({
+    const result = createFacade().dispatchRaw(
+      { message: "test", idempotencyKey: "same-request" },
+      { expectFinal: true, timeoutMs: 1_000 },
+    );
+    await vi.waitFor(() => expect(waitForAgentTerminalDedupe).toHaveBeenCalledOnce());
+    expect(startTurn).toHaveBeenCalledOnce();
+    releaseTerminalDedupe({ status: "ok" });
+
+    await expect(result).resolves.toMatchObject({
       ok: true,
       payload: { runId: "run-replay", status: "ok", result: terminalResult },
     });

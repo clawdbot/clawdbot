@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { agentHandlers } from "../server-methods/agent.js";
 import type { DedupeEntry } from "../server-shared.js";
-import { setGatewayDedupeEntry } from "./agent-job.js";
+import { setGatewayDedupeEntry, waitForAgentTerminalDedupe } from "./agent-job.js";
 
 function waitThroughGateway(
   params: { runId: string; timeoutMs: number },
@@ -110,6 +110,26 @@ describe("agent.wait gateway dedupe observations", () => {
     };
     expect(first.respond).toHaveBeenCalledWith(true, expected);
     expect(second.respond).toHaveBeenCalledWith(true, expected);
+  });
+
+  it("keeps terminal-dedupe readiness pending after lifecycle completion", async () => {
+    const runId = "run-terminal-dedupe-readiness";
+    const dedupe = new Map<string, DedupeEntry>();
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 100, endedAt: 200 },
+    });
+    let settled = false;
+    const readiness = waitForAgentTerminalDedupe({ runId, timeoutMs: 1_000 }).finally(() => {
+      settled = true;
+    });
+
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    completeRun(dedupe, runId);
+
+    await expect(readiness).resolves.toMatchObject({ status: "ok", endedAt: 200 });
   });
 
   it("lets a fresh wait observe completion after an earlier waiter times out", async () => {
