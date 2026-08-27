@@ -2281,7 +2281,15 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   ],
   [
     /^\.github\/workflows\/full-release-validation\.yml$/u,
-    ["src/dockerfile.test.ts", packageAcceptance, pluginPrerelease],
+    [
+      "src/dockerfile.test.ts",
+      "full-release-validation-state",
+      "full-release-validation-at-sha",
+      "release-ci-summary",
+      packageAcceptance,
+      pluginPrerelease,
+      "check-workflows",
+    ],
   ],
   [
     /^\.github\/workflows\/openclaw-release-checks\.yml$/u,

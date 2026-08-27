@@ -495,6 +495,22 @@ describe("scripts/test-projects changed-target routing", () => {
     );
   });
 
+  it("keeps full release validation workflow edits on FRV contract tests", () => {
+    expectChangedTargets(
+      [".github/workflows/full-release-validation.yml"],
+      [
+        "src/dockerfile.test.ts",
+        "test/scripts/full-release-validation-state.test.ts",
+        "test/scripts/full-release-validation-at-sha.test.ts",
+        "test/scripts/release-ci-summary.test.ts",
+        "test/scripts/package-acceptance-workflow.test.ts",
+        "test/scripts/plugin-prerelease-test-plan.test.ts",
+        "test/scripts/check-workflows.test.ts",
+        "test/scripts/ci-workflow-guards.test.ts",
+      ],
+    );
+  });
+
   it("keeps npm release workflow edits on the preflight cache guard", () => {
     expectChangedTargets(
       [".github/workflows/openclaw-npm-release.yml"],
