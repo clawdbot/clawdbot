@@ -115,6 +115,16 @@ export async function recoverEmbeddedRunOverflow(
     preflightEstimatedPromptTokens ??
     (input.contextTokenBudget > 0 ? input.contextTokenBudget + 1 : undefined);
   const activeSession = input.getActiveSession();
+  // The synthetic precheck route carries the admission budget OpenClaw actually
+  // rendered against (context budget minus provider reserve). Compacting to the
+  // raw context budget can leave the transcript above what providers admit, so
+  // prefer the measured value when a finite positive snapshot is present.
+  const recoveryTokenBudget =
+    typeof preflightRecovery?.promptBudgetBeforeReserve === "number" &&
+    Number.isFinite(preflightRecovery.promptBudgetBeforeReserve) &&
+    preflightRecovery.promptBudgetBeforeReserve > 0
+      ? Math.ceil(preflightRecovery.promptBudgetBeforeReserve)
+      : input.contextTokenBudget;
   log.warn(
     `[context-overflow-diag] sessionKey=${runParams.sessionKey ?? runParams.sessionId} ` +
       `provider=${input.provider}/${input.modelId} source=${contextOverflowError.source} ` +
@@ -169,7 +179,7 @@ export async function recoverEmbeddedRunOverflow(
     await input.runOwnsCompactionBeforeHook("overflow recovery");
     try {
       const compaction = await compactEmbeddedRunForRecovery(input, {
-        tokenBudget: input.contextTokenBudget,
+        tokenBudget: recoveryTokenBudget,
         trigger: "overflow",
         diagId: overflowDiagId,
         attempt: input.state.overflowCompactionAttempts,

@@ -383,6 +383,56 @@ describe("recoverEmbeddedRunOverflow", () => {
     expect(mocks.truncateOversizedToolResults).not.toHaveBeenCalled();
   });
 
+  it("compacts against the reserve-adjusted budget from the preflight snapshot", async () => {
+    const input = makeInput({
+      attempt: {
+        terminal: { kind: "failed", source: "precheck", error: overflowError() },
+        sessionIdUsed: "session-1",
+        messagesSnapshot: [],
+        preflightRecovery: {
+          route: "compact_only",
+          source: "mid-turn",
+          estimatedPromptTokens: 190_000,
+          promptBudgetBeforeReserve: 185_000,
+          overflowTokens: 5_000,
+        },
+      },
+    });
+
+    expect(await recoverEmbeddedRunOverflow(input)).toEqual({ action: "retry" });
+    expect(mocks.compact).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ tokenBudget: 185_000, trigger: "overflow" }),
+    );
+  });
+
+  it("falls back to the raw context budget without a preflight reserve snapshot", async () => {
+    const result = await recoverEmbeddedRunOverflow(makeInput());
+
+    expect(result).toEqual({ action: "retry" });
+    expect(mocks.compact).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ tokenBudget: 200_000 }),
+    );
+  });
+
+  it("keeps the raw context budget when the preflight reserve snapshot is not usable", async () => {
+    const input = makeInput({
+      attempt: {
+        terminal: { kind: "failed", source: "precheck", error: overflowError() },
+        sessionIdUsed: "session-1",
+        messagesSnapshot: [],
+        preflightRecovery: { route: "compact_only" },
+      },
+    });
+
+    expect(await recoverEmbeddedRunOverflow(input)).toEqual({ action: "retry" });
+    expect(mocks.compact).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ tokenBudget: 200_000 }),
+    );
+  });
+
   it("continues from the current transcript after mid-turn compaction", async () => {
     const input = makeInput({
       attempt: {
