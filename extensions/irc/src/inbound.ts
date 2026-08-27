@@ -61,7 +61,7 @@ const ircIngressIdentity = defineStableChannelIngressIdentity({
     {
       key: "irc-id-nick-host",
       kind: "stable-id" as const,
-      normalizeEntry: () => null,
+      normalizeEntry: normalizeIrcNickHostEntry,
       normalizeSubject: normalizeLowercaseStringOrEmpty,
       sensitivity: "pii" as const,
     },
@@ -116,10 +116,15 @@ function isHostlessNickUser(value: string): boolean {
 
 function normalizeIrcStableEntry(value: string): string | null {
   const normalized = normalizeIrcAllowEntry(value);
-  if (!normalized || normalized === "*" || !hasVerifiedHost(normalized)) {
+  if (!normalized.includes("!") || !hasVerifiedHost(normalized)) {
     return null;
   }
   return normalized;
+}
+
+function normalizeIrcNickHostEntry(value: string): string | null {
+  const normalized = normalizeIrcAllowEntry(value);
+  return !normalized.includes("!") && hasVerifiedHost(normalized) ? normalized : null;
 }
 
 function normalizeIrcNickUserEntry(value: string): string | null {

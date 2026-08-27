@@ -41,13 +41,18 @@ function normalizeDiscordIdEntry(entry: string): string | null {
 
 function normalizeDiscordNameEntry(entry: string): string | null {
   const text = entry.trim();
-  if (!text || text === "*" || normalizeDiscordIdEntry(text)) {
+  if (!text || text === "*" || normalizeDiscordIdEntry(text) || /#\d{4}$/.test(text)) {
     return null;
   }
   const nameSlug = normalizeDiscordAllowList([text], DISCORD_ALLOW_LIST_PREFIXES)
     ?.names.values()
     .next().value;
   return typeof nameSlug === "string" && nameSlug ? nameSlug : null;
+}
+
+function normalizeDiscordTagEntry(entry: string): string | null {
+  const text = entry.trim();
+  return /#\d{4}$/.test(text) ? normalizeDiscordNameSubject(text) : null;
 }
 
 function normalizeDiscordNameSubject(value: string): string | null {
@@ -66,7 +71,7 @@ const discordIngressIdentity = defineStableChannelIngressIdentity({
   aliases: (
     [
       ["discordUserName", normalizeDiscordNameEntry],
-      ["discordUserTag", () => null],
+      ["discordUserTag", normalizeDiscordTagEntry],
     ] as const
   ).map(([key, normalizeEntry]) => ({
     key,

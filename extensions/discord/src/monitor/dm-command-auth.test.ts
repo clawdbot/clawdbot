@@ -109,6 +109,19 @@ describe("resolveDiscordDmCommandAccess", () => {
     expect(dmCommandAuthorized(result)).toBe(true);
   });
 
+  it("authorizes a matching Discord tag when name matching is enabled", async () => {
+    const result = await resolveDiscordDmCommandAccess({
+      accountId: "default",
+      dmPolicy: "allowlist",
+      configuredAllowFrom: ["alice#0001"],
+      sender: { id: "999", name: "alice", tag: "alice#0001" },
+      allowNameMatching: true,
+      readStoreAllowFrom: async () => [],
+    });
+
+    expect(result.senderAccess.allowed).toBe(true);
+  });
+
   it("blocks open DMs when configured allowlist does not match", async () => {
     const result = await resolveDiscordDmCommandAccess({
       accountId: "default",

@@ -116,8 +116,7 @@ function normalizeSlackNameSlugEntry(entry: string): string | null {
   if (!name) {
     return null;
   }
-  const slug = normalizeSlackSlug(name);
-  return slug && slug !== name ? slug : null;
+  return normalizeSlackSlug(name) || null;
 }
 
 const slackIngressIdentity = defineStableChannelIngressIdentity({
