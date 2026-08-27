@@ -423,6 +423,37 @@ describe("WhatsApp approval reactions", () => {
     ).resolves.toBeNull();
   });
 
+  it("propagates transient Gateway errors for durable ingress replay", async () => {
+    registerExecApprovalTarget({
+      remoteJid: "15551230000@s.whatsapp.net",
+      approvalId: "exec-transient",
+    });
+    const gatewayError = new Error("Gateway 503 Service Unavailable");
+    resolverMocks.resolveWhatsAppApproval.mockRejectedValueOnce(gatewayError);
+    resolverMocks.isApprovalNotFoundError.mockReturnValue(false);
+
+    // Transient errors must throw so the durable ingress drain releases the
+    // claim and replays the reaction; swallowing them here would drop the
+    // operator's click with no retry owner.
+    await expect(
+      maybeResolveWhatsAppApprovalReaction({
+        cfg: approvalConfig(["+15551230000"]),
+        accountId: "default",
+        msg: buildReactionMessage({ remoteJid: "15551230000@s.whatsapp.net" }),
+        resolveInboundJid: async () => "+15551230000",
+      }),
+    ).rejects.toBe(gatewayError);
+    // The binding should NOT be cleared yet (not-found is the terminal case).
+    await expect(
+      resolveWhatsAppApprovalReactionTargetWithPersistence({
+        accountId: "default",
+        remoteJid: "15551230000@s.whatsapp.net",
+        messageId: "approval-message",
+        reactionKey: "👍",
+      }),
+    ).resolves.toBeTruthy();
+  });
+
   it("does not attribute a peer DM fromMe reaction to the peer", async () => {
     registerWhatsAppApprovalReactionTarget({
       accountId: "default",
