@@ -32,6 +32,12 @@ export const slackSetupPlugin: ChannelPlugin<ResolvedSlackAccount> = {
     threads: true,
     media: true,
     nativeCommands: true,
+    tts: {
+      voice: {
+        synthesisTarget: "voice-note",
+        captionedFinalText: true,
+      },
+    },
   },
   commands: {
     nativeCommandsAutoEnabled: false,

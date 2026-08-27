@@ -531,4 +531,61 @@ describe("slackOutbound", () => {
       }),
     );
   });
+
+  it("delivers a TTS voice note as a single captioned media upload without blocks", async () => {
+    sendMessageSlackMock.mockResolvedValueOnce({ messageId: "m-voice" });
+
+    const result = await slackOutbound.sendPayload!({
+      cfg,
+      to: "C123",
+      text: "",
+      payload: {
+        text: "Spoken summary of the deploy.",
+        mediaUrl: "file:///tmp/tts/deploy.ogg",
+        audioAsVoice: true,
+        spokenText: "Spoken summary of the deploy.",
+        trustedLocalMedia: true,
+        presentation: {
+          blocks: [{ type: "text", text: "Block body that must not be sent" }],
+        },
+      },
+      mediaLocalRoots: ["/tmp"],
+      accountId: "default",
+    });
+
+    expect(sendMessageSlackMock).toHaveBeenCalledOnce();
+    expect(sendMessageSlackMock).toHaveBeenCalledWith(
+      "C123",
+      "Spoken summary of the deploy.",
+      expect.objectContaining({
+        mediaUrl: "file:///tmp/tts/deploy.ogg",
+        mediaLocalRoots: ["/tmp"],
+      }),
+    );
+    expect(sendMessageSlackMock.mock.calls[0]?.[2]).not.toHaveProperty("blocks");
+    expect(result).toMatchObject({ channel: "slack", messageId: "m-voice" });
+  });
+
+  it("does not take the voice path when audioAsVoice is set but no media is present", async () => {
+    sendMessageSlackMock.mockResolvedValueOnce({ messageId: "m-blocks" });
+
+    await slackOutbound.sendPayload!({
+      cfg,
+      to: "C123",
+      text: "",
+      payload: {
+        text: "fallback text",
+        audioAsVoice: true,
+        channelData: {
+          slack: {
+            blocks: [{ type: "divider" }],
+          },
+        },
+      },
+      accountId: "default",
+    });
+
+    expect(sendMessageSlackMock).toHaveBeenCalledOnce();
+    expect(sendMessageSlackMock.mock.calls[0]?.[2]).toHaveProperty("blocks");
+  });
 });
