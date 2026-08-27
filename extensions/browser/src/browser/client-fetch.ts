@@ -47,8 +47,8 @@ export class BrowserServiceError extends Error {
     this.status = status;
     this.code = metadata?.code;
     this.unrecognizedCode = metadata?.unrecognizedCode;
-    this.reason = metadata?.reason;
-    this.details = metadata?.details;
+    this.reason = metadata && "reason" in metadata ? metadata.reason : undefined;
+    this.details = metadata && "details" in metadata ? metadata.details : undefined;
   }
 }
 

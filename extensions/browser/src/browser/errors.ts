@@ -214,7 +214,11 @@ export function parseBrowserErrorPayload(value: unknown): BrowserErrorPayload | 
   const code = isBrowserActErrorCode(body.code) ? body.code : undefined;
   const unrecognizedCode =
     body.unrecognizedCode === true || (body.code !== undefined && !code) ? true : undefined;
-  const actionCode = code ? { code } : unrecognizedCode ? { unrecognizedCode } : {};
+  const actionCode: { code?: BrowserActErrorCode; unrecognizedCode?: true } = code
+    ? { code }
+    : unrecognizedCode
+      ? { unrecognizedCode: true }
+      : {};
   if (body.reason === BROWSER_ERROR_REASONS.noDisplayForHeadedProfile) {
     const details = parseNoDisplayDetails(body.details);
     if (details) {
