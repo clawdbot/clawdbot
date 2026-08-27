@@ -1,5 +1,8 @@
 import path from "node:path";
-import { extractArchive, type ArchiveExtractLimits } from "openclaw/plugin-sdk/archive";
+import {
+  extractArchiveInPrivateDestinationWithRegularFileAliases,
+  type ArchiveExtractLimits,
+} from "openclaw/plugin-sdk/archive";
 import type { LlamaServerAsset } from "./llama-server-assets.js";
 
 const EXTRACT_TIMEOUT_MS = 10 * 60_000;
@@ -19,7 +22,7 @@ export async function extractLlamaServerArchive(params: {
   asset: LlamaServerAsset;
 }): Promise<string> {
   const isTar = params.asset.archive === "tar.gz";
-  await extractArchive({
+  await extractArchiveInPrivateDestinationWithRegularFileAliases({
     archivePath: params.archivePath,
     destDir: params.destDir,
     kind: isTar ? "tar" : "zip",

@@ -4,14 +4,14 @@ import path from "node:path";
 import * as tar from "tar";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  extractArchiveWithRegularFileAliases,
-  setArchiveRegularFileAliasTestHooks,
+  setArchiveRegularFileAliasTestHooksForTest,
+  extractArchiveInPrivateDestinationWithRegularFileAliases,
 } from "./archive-regular-file-aliases.js";
 
 const tempRoots: string[] = [];
 
 afterEach(async () => {
-  setArchiveRegularFileAliasTestHooks(undefined);
+  setArchiveRegularFileAliasTestHooksForTest(undefined);
   await Promise.all(
     tempRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
   );
@@ -43,7 +43,7 @@ function extractCase(params: {
   timeoutMs?: number;
   maxExtractedBytes?: number;
 }) {
-  return extractArchiveWithRegularFileAliases({
+  return extractArchiveInPrivateDestinationWithRegularFileAliases({
     archivePath: params.archivePath,
     destDir: params.destination,
     kind: "tar",
@@ -58,7 +58,7 @@ function extractCase(params: {
   });
 }
 
-describe("extractArchiveWithRegularFileAliases", () => {
+describe("extractArchiveInPrivateDestinationWithRegularFileAliases", () => {
   it("materializes only closed-manifest aliases as regular files", async () => {
     const fixture = await createArchiveCase();
 
@@ -84,10 +84,39 @@ describe("extractArchiveWithRegularFileAliases", () => {
     ).rejects.toThrow();
   });
 
+  it("validates required regular files without an alias manifest", async () => {
+    const fixture = await createArchiveCase();
+
+    await expect(
+      extractArchiveInPrivateDestinationWithRegularFileAliases({
+        archivePath: fixture.archivePath,
+        destDir: fixture.destination,
+        kind: "tar",
+        tarGzip: true,
+        timeoutMs: 15_000,
+        entryFilter: (entry) => (entry.kind === "symlink" ? "skip" : "extract"),
+        onFiltered: "skip-entry",
+        regularFileAliasRoot: "package",
+        requiredRegularFiles: ["missing-server"],
+      }),
+    ).rejects.toThrow(/does not contain required regular file missing-server/u);
+  });
+
+  it("rejects a private destination that is not empty", async () => {
+    const fixture = await createArchiveCase();
+    const marker = path.join(fixture.destination, "marker");
+    await fs.writeFile(marker, "preserve");
+
+    await expect(extractCase(fixture)).rejects.toThrow(
+      /private archive destination must be empty/u,
+    );
+    await expect(fs.readFile(marker, "utf8")).resolves.toBe("preserve");
+  });
+
   it("aborts a stalled alias copy at the shared absolute deadline", async () => {
     const fixture = await createArchiveCase();
     let stalledCopies = 0;
-    setArchiveRegularFileAliasTestHooks({
+    setArchiveRegularFileAliasTestHooksForTest({
       beforeCopy: async () => {
         stalledCopies += 1;
         await new Promise<void>(() => {

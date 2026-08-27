@@ -10,14 +10,15 @@ import {
   DEFAULT_MAX_EXTRACTED_BYTES,
   DEFAULT_MAX_ENTRY_BYTES,
   extractArchive,
+  prepareArchiveDestinationDir,
   type ExtractArchiveOptions,
 } from "@openclaw/fs-safe/archive";
 
-export type ArchiveRegularFileAliases = ReadonlyArray<
+type ArchiveRegularFileAliases = ReadonlyArray<
   readonly [source: string, destinations: readonly string[]]
 >;
 
-export type ExtractArchiveWithRegularFileAliasesOptions = ExtractArchiveOptions & {
+type ExtractArchiveInPrivateDestinationWithRegularFileAliasesOptions = ExtractArchiveOptions & {
   regularFileAliasRoot?: string;
   regularFileAliases?: ArchiveRegularFileAliases;
   requiredRegularFiles?: readonly string[];
@@ -44,9 +45,12 @@ type ArchiveRegularFileAliasTestHooks = {
 
 let testHooks: ArchiveRegularFileAliasTestHooks | undefined;
 
-export function setArchiveRegularFileAliasTestHooks(
+export function setArchiveRegularFileAliasTestHooksForTest(
   hooks: ArchiveRegularFileAliasTestHooks | undefined,
 ): void {
+  if (hooks && process.env.NODE_ENV !== "test" && process.env.VITEST !== "true") {
+    throw new Error("archive regular-file alias test hooks are only available in tests");
+  }
   testHooks = hooks;
 }
 
@@ -114,16 +118,16 @@ function assertManifestBasename(filename: string): string {
   return filename;
 }
 
-function resolveManifestRoot(destinationRealDir: string, root: string): string {
-  if (!root || root === ".") {
+function resolveManifestRoot(destinationRealDir: string, manifestRoot: string): string {
+  if (!manifestRoot || manifestRoot === ".") {
     return destinationRealDir;
   }
-  if (path.isAbsolute(root) || /\\/u.test(root)) {
-    throw new Error(`invalid archive regular-file manifest root: ${root}`);
+  if (path.isAbsolute(manifestRoot) || /\\/u.test(manifestRoot)) {
+    throw new Error(`invalid archive regular-file manifest root: ${manifestRoot}`);
   }
-  const parts = root.split("/");
+  const parts = manifestRoot.split("/");
   if (parts.some((part) => !part || part === "." || part === "..")) {
-    throw new Error(`invalid archive regular-file manifest root: ${root}`);
+    throw new Error(`invalid archive regular-file manifest root: ${manifestRoot}`);
   }
   const resolved = path.resolve(destinationRealDir, ...parts);
   const relative = path.relative(destinationRealDir, resolved);
@@ -133,7 +137,7 @@ function resolveManifestRoot(destinationRealDir: string, root: string): string {
     relative.startsWith(`..${path.sep}`) ||
     path.isAbsolute(relative)
   ) {
-    throw new Error(`invalid archive regular-file manifest root: ${root}`);
+    throw new Error(`invalid archive regular-file manifest root: ${manifestRoot}`);
   }
   return resolved;
 }
@@ -301,11 +305,12 @@ async function copyPlannedAlias(alias: PlannedAlias, deadline: OperationDeadline
 }
 
 /**
- * Extracts into a caller-owned unpublished directory, then materializes only closed-manifest
- * regular-file aliases under the same absolute deadline and extracted-output limits.
+ * Extracts into a caller-owned empty private destination and materializes only closed-manifest
+ * regular-file aliases under the same absolute deadline and output limits. The caller must keep
+ * the directory unpublished until success and discard the whole directory after any error.
  */
-export async function extractArchiveWithRegularFileAliases(
-  params: ExtractArchiveWithRegularFileAliasesOptions,
+export async function extractArchiveInPrivateDestinationWithRegularFileAliases(
+  params: ExtractArchiveInPrivateDestinationWithRegularFileAliasesOptions,
 ): Promise<void> {
   const {
     regularFileAliasRoot = ".",
@@ -313,15 +318,21 @@ export async function extractArchiveWithRegularFileAliases(
     requiredRegularFiles = [],
     ...extractOptions
   } = params;
-  if (!regularFileAliases) {
-    await extractArchive(extractOptions);
-    return;
-  }
   const deadline = createOperationDeadline(params.timeoutMs);
   try {
-    await extractArchive({ ...extractOptions, timeoutMs: deadline.remainingMs() });
+    const destinationRealDir = await deadline.wait(() =>
+      prepareArchiveDestinationDir(params.destDir),
+    );
+    const initialEntries = await deadline.wait(() => fs.readdir(destinationRealDir));
+    if (initialEntries.length > 0) {
+      throw new Error(`private archive destination must be empty: ${params.destDir}`);
+    }
     deadline.check();
-    const destinationRealDir = await deadline.wait(() => fs.realpath(params.destDir));
+    await extractArchive({
+      ...extractOptions,
+      timeoutMs: deadline.remainingMs(),
+    });
+    deadline.check();
     const manifestRoot = resolveManifestRoot(destinationRealDir, regularFileAliasRoot);
     const manifestRootReal = await deadline.wait(() => fs.realpath(manifestRoot));
     const relativeRoot = path.relative(destinationRealDir, manifestRootReal);
@@ -335,7 +346,7 @@ export async function extractArchiveWithRegularFileAliases(
     const existing = await inspectExtractedTree({ rootDir: destinationRealDir, deadline });
     const aliases = await planAliases({
       rootDir: manifestRootReal,
-      aliases: regularFileAliases,
+      aliases: regularFileAliases ?? [],
       requiredRegularFiles,
       deadline,
     });

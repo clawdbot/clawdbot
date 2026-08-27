@@ -1,10 +1,7 @@
 // Exposes archive extraction helpers after applying fs-safe defaults.
 import "./fs-safe-defaults.js";
 
-export {
-  extractArchiveWithRegularFileAliases as extractArchive,
-  type ExtractArchiveWithRegularFileAliasesOptions as ExtractArchiveOptions,
-} from "./archive-regular-file-aliases.js";
+export { extractArchiveInPrivateDestinationWithRegularFileAliases } from "./archive-regular-file-aliases.js";
 
 // Archive extraction facade for size limits, staged writes, and traversal checks.
 export {
@@ -17,6 +14,7 @@ export {
   DEFAULT_MAX_EXTRACTED_BYTES,
   DEFAULT_MAX_ENTRY_BYTES,
   createTarEntryPreflightChecker,
+  extractArchive,
   loadZipArchiveWithPreflight,
   mergeExtractedTreeIntoDestination,
   prepareArchiveDestinationDir,
@@ -27,4 +25,5 @@ export {
   type ArchiveLogger,
   type ArchiveEntryKind,
   type ArchiveExtractLimits,
+  type ExtractArchiveOptions,
 } from "@openclaw/fs-safe/archive";
