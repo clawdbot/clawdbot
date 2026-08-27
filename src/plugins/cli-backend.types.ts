@@ -1,5 +1,6 @@
 /** Type contracts for plugin-owned CLI backend integrations. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { SecretInput } from "../config/types.secrets.js";
 import type { ContextEngineHostCapability } from "../context-engine/types.js";
 
 /** Static command adapter owned by a CLI backend plugin registration. */
@@ -20,8 +21,8 @@ export type CliBackendConfig = {
   input?: "arg" | "stdin";
   /** Max prompt length for arg mode (if exceeded, stdin is used). */
   maxPromptArgChars?: number;
-  /** Extra env vars injected for this CLI. */
-  env?: Record<string, string>;
+  /** Extra env vars injected for this CLI. Values may be literal strings or SecretRefs resolved at spawn time. */
+  env?: Record<string, string | SecretInput>;
   /** Env vars to remove before launching this CLI. */
   clearEnv?: string[];
   /** Flag used to pass model id (e.g. --model). */

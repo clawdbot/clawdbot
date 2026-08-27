@@ -1547,6 +1547,43 @@ describe("runCliAgent spawn path", () => {
     );
   });
 
+  it("resolves a file SecretRef in backend.env to the token value at spawn time", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-secretref-"));
+    const tokenPath = path.join(dir, "notion-token");
+    await fs.writeFile(tokenPath, "resolved-notion-token\n");
+    mockSuccessfulCliRun();
+
+    await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "codex-cli",
+        model: "gpt-5.5",
+        config: {
+          secrets: {
+            providers: {
+              "notion-file": {
+                source: "file",
+                path: tokenPath,
+                mode: "singleValue",
+              },
+            },
+          },
+        },
+        backend: {
+          env: {
+            NOTION_TOKEN: {
+              source: "file",
+              provider: "notion-file",
+              id: "value",
+            },
+          },
+        },
+      }),
+    );
+
+    const input = mockCallArg(supervisorSpawnMock) as { env?: Record<string, string> };
+    expect(input.env?.NOTION_TOKEN).toBe("resolved-notion-token");
+  });
+
   it("captures a runtime artifact for a strict CLI credential", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-strict-artifact-"));
     const executable = path.join(dir, "claude-fixture");
