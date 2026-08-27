@@ -184,6 +184,15 @@ export function renderAppearanceSection(
   const customAccentSelected = Boolean(
     props.accent && !ACCENT_PRESETS.some((preset) => preset.hex === props.accent),
   );
+  const selectedAccentPreset = ACCENT_PRESETS.find((preset) => preset.hex === props.accent);
+  const accentSelectionStatus =
+    props.accent == null
+      ? t("configView.appearance.usingDefaultTheme")
+      : t("configView.appearance.usingAccent", {
+          value: selectedAccentPreset
+            ? t(selectedAccentPreset.labelKey)
+            : t("configView.appearance.customAccent"),
+        });
   return html`
     <div class="settings-page">
       <p class="settings-page__intro">
@@ -347,11 +356,6 @@ export function renderAppearanceSection(
         </div>
         <p class="settings-section__desc">
           ${t("configView.appearance.accentHint")}
-          ${renderSettingsDefaultDescription(
-            t("configView.appearance.accents.default"),
-            props.accentOverridden,
-          )}
-          ${accentProvenance}
         </p>
         <div class="settings-group">
           <div class="settings-row settings-row--stacked">
@@ -413,6 +417,10 @@ export function renderAppearanceSection(
             </div>
           </div>
         </div>
+        <p class="settings-section__desc settings-accent-status">
+          <span class="settings-accent-status__selection">${accentSelectionStatus}</span>
+          <span class="settings-accent-status__scope">${accentProvenance}</span>
+        </p>
       </section>
 
       <section id=${APPEARANCE_SETTINGS_TARGET_IDS.textSize} class="settings-section">

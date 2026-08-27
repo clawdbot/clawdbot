@@ -459,6 +459,18 @@
   gap: 12px;
 }
 
+.settings-accent-status {
+  min-height: 3em;
+}
+
+.settings-accent-status__scope {
+  opacity: 0.72;
+}
+
+.settings-accent-status__scope::before {
+  content: " ·\00a0";
+}
+
 .settings-accent-swatch {
   display: inline-flex;
   width: 36px;
@@ -512,29 +524,24 @@
 
 .settings-accent-swatch__picker {
   display: inline-flex;
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
   align-items: center;
   justify-content: center;
-  border-radius: 50%;
-  /* At 55% black, even a white swatch leaves a dark-enough scrim for the
-     white pipette to keep 4.5:1 contrast; the chosen accent cannot erase it. */
-  background: color-mix(in srgb, black 55%, transparent);
-  color: white;
-  filter: drop-shadow(0 1px 1px color-mix(in srgb, black 35%, transparent));
+  color: lch(
+    from var(--settings-accent-swatch, var(--accent)) calc((49.44 - l) * infinity) 0 0
+  );
   pointer-events: none;
 }
 
 .settings-accent-swatch__picker svg {
-  width: 12px;
-  height: 12px;
+  width: 15px;
+  height: 15px;
 }
 
 @media (forced-colors: active) {
   .settings-accent-swatch__picker {
-    background: CanvasText;
-    color: Canvas;
-    filter: none;
+    color: CanvasText;
   }
 
   .settings-accent-swatch--custom:has(.settings-accent-swatch__input:focus-visible) {
