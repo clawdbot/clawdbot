@@ -1078,11 +1078,14 @@ describe("runSetupWizard", () => {
           }),
         }),
         expect.any(Object),
-        {
-          secretInputMode: undefined,
-          remoteOriginUrl: storedUrl,
-        },
+        expect.any(Object),
       );
+      expect(
+        getMockCallArg(promptRemoteGatewayConfig, 0, 2, "remote prompt options"),
+      ).toStrictEqual({
+        secretInputMode: undefined,
+        remoteOriginUrl: storedUrl,
+      });
       expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining(remoteCredential));
     },
   );

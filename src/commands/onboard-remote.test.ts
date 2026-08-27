@@ -59,7 +59,7 @@ function createGatewayDiscoveryBeacon(): GatewayBonjourBeacon {
 }
 
 describe("promptRemoteGatewayConfig", () => {
-  const envSnapshot = captureEnv(["OPENCLAW_ALLOW_INSECURE_PRIVATE_WS"]);
+  const envSnapshot = captureEnv(["OPENCLAW_ALLOW_INSECURE_PRIVATE_WS", "OPENCLAW_GATEWAY_TOKEN"]);
 
   async function runRemotePrompt(params: {
     cfg?: OpenClawConfig;
@@ -88,7 +88,6 @@ describe("promptRemoteGatewayConfig", () => {
 
   afterEach(() => {
     envSnapshot.restore();
-    delete process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS;
   });
 
   it.each([
@@ -201,7 +200,16 @@ describe("promptRemoteGatewayConfig", () => {
       }) as WizardPrompter["text"];
 
       const { next, prompter } = await runRemotePrompt({
-        cfg: { gateway: { remote: { url: previousUrl, tlsFingerprint: "sha256:old-pin" } } },
+        cfg: {
+          gateway: {
+            remote: {
+              url: previousUrl,
+              transport: "ssh",
+              sshTarget: "operator@old.example",
+              tlsFingerprint: "sha256:old-pin",
+            },
+          },
+        },
         text,
         confirm: true,
         selectResponses: {
@@ -213,6 +221,7 @@ describe("promptRemoteGatewayConfig", () => {
 
       expect(next.gateway?.mode).toBe("remote");
       expect(next.gateway?.remote?.url).toBe("wss://gateway.tailnet.ts.net:18789");
+      expect(next.gateway?.remote?.transport).toBe("direct");
       expect(next.gateway?.remote?.token).toBe("token-123");
       expect(next.gateway?.remote?.tlsFingerprint).toBe("sha256:abc123");
       expect(prompter.note).toHaveBeenCalledWith(
@@ -226,6 +235,38 @@ describe("promptRemoteGatewayConfig", () => {
       );
     },
   );
+
+  it("does not retain a saved SSH route when discovery suggests a new manual tunnel", async () => {
+    detectBinary.mockResolvedValue(true);
+    discoverGatewayBeacons.mockResolvedValue([createGatewayDiscoveryBeacon()]);
+    const { next, prompter } = await runRemotePrompt({
+      cfg: {
+        gateway: {
+          remote: {
+            url: "ws://127.0.0.1:18789",
+            transport: "ssh",
+            sshTarget: "operator@old.example",
+            sshIdentity: "/tmp/old-identity",
+            sshHostKeyPolicy: "openssh",
+            remotePort: 19443,
+          },
+        },
+      },
+      text: vi.fn(async (params) => String(params.initialValue)),
+      confirm: true,
+      selectResponses: {
+        "Select gateway": "0",
+        "Connection method": "ssh",
+        "Gateway auth": "off",
+      },
+    });
+
+    expect(next.gateway?.remote).toEqual({ url: "ws://127.0.0.1:18789" });
+    expect(prompter.note).toHaveBeenCalledWith(
+      expect.stringContaining("<user>@gateway.tailnet.ts.net"),
+      "SSH tunnel",
+    );
+  });
 
   it("falls back to manual URL entry when discovery trust is declined", async () => {
     detectBinary.mockResolvedValue(true);

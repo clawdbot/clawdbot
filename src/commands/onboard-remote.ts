@@ -60,8 +60,9 @@ export async function promptRemoteGatewayConfig(
 ): Promise<OpenClawConfig> {
   let selectedBeacon: GatewayBonjourBeacon | null = null;
   let suggestedUrl = cfg.gateway?.remote?.url ?? DEFAULT_GATEWAY_URL;
-  let discoveryTlsFingerprint: string | undefined;
-  let trustedDiscoveryUrl: string | undefined;
+  let discoveryRemote:
+    | { url: string; transport: "direct" | "ssh"; tlsFingerprint?: string }
+    | undefined;
 
   const hasBonjourTool = (await detectBinary("dns-sd")) || (await detectBinary("avahi-browse"));
   const wantsDiscover = hasBonjourTool
@@ -138,10 +139,11 @@ export async function promptRemoteGatewayConfig(
           initialValue: false,
         });
         if (trusted) {
-          // Only pin discovery TLS when the user accepts the discovered endpoint;
-          // manual edits later clear the pin to avoid trusting a different host.
-          discoveryTlsFingerprint = fingerprint;
-          trustedDiscoveryUrl = suggestedUrl;
+          discoveryRemote = {
+            url: suggestedUrl,
+            transport: "direct",
+            ...(fingerprint ? { tlsFingerprint: fingerprint } : {}),
+          };
           await prompter.note(
             [
               t("wizard.remote.directDefaultsTls"),
@@ -157,6 +159,7 @@ export async function promptRemoteGatewayConfig(
         }
       } else {
         suggestedUrl = DEFAULT_GATEWAY_URL;
+        discoveryRemote = { url: suggestedUrl, transport: "ssh" };
         await prompter.note(
           [
             "Start a tunnel before using the CLI:",
@@ -175,8 +178,8 @@ export async function promptRemoteGatewayConfig(
     validate: (value) => validateGatewayWebSocketUrl(value),
   });
   const url = ensureWsUrl(urlInput);
-  const pinnedDiscoveryFingerprint =
-    discoveryTlsFingerprint && url === trustedDiscoveryUrl ? discoveryTlsFingerprint : undefined;
+  // Discovery choices belong only to the accepted URL, never a subsequent manual edit.
+  const selectedDiscovery = discoveryRemote?.url === url ? discoveryRemote : undefined;
 
   const authChoice = await prompter.select({
     message: t("wizard.remote.auth"),
@@ -299,13 +302,15 @@ export async function promptRemoteGatewayConfig(
       ...cfg.gateway,
       mode: "remote",
       remote: {
-        // Pins and SSH settings stay with the same trimmed URL; explicit choices below take precedence.
-        ...(url === remoteOriginUrl?.trim() ? cfg.gateway?.remote : {}),
+        // A newly suggested manual tunnel can reach another host behind the same loopback URL.
+        ...(url === remoteOriginUrl?.trim() && selectedDiscovery?.transport !== "ssh"
+          ? cfg.gateway?.remote
+          : {}),
         url,
         edgeAuth,
         token,
         password,
-        ...(pinnedDiscoveryFingerprint ? { tlsFingerprint: pinnedDiscoveryFingerprint } : {}),
+        ...(selectedDiscovery?.transport === "direct" ? selectedDiscovery : {}),
       },
     },
   };

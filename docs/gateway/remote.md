@@ -79,6 +79,9 @@ preserves the remote TLS fingerprint and transport settings when you keep the
 same URL (ignoring surrounding whitespace). Changing the URL clears those
 endpoint settings. A newly confirmed discovery fingerprint replaces the saved
 pin only for the discovered URL, and your selected auth method still applies.
+Accepting a discovered direct connection selects direct transport. Choosing a
+discovered SSH tunnel clears saved transport settings for the suggested loopback
+URL, which may now reach a different host; start the displayed tunnel manually.
 
 Host-key verification is strict by default (`gateway.remote.sshHostKeyPolicy: "strict"`). Set it to `"openssh"` to delegate to your effective OpenSSH config instead; review your user and system SSH settings before enabling it.
 
