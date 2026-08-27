@@ -9,7 +9,11 @@ import { renderNode } from "./config-form.node.ts";
 import { matchesConfigSectionSearch, parseConfigSearchQuery } from "./config-form.search.ts";
 import { hintForPath, humanize, schemaType, type JsonSchema } from "./config-form.shared.ts";
 import { splitConfigSchemaByTier } from "./config-form.tiers.ts";
-import { renderSettingsEmpty, renderSettingsPage } from "./settings-ui.ts";
+import {
+  renderSettingsEmpty,
+  renderSettingsHelpTrigger,
+  renderSettingsPage,
+} from "./settings-ui.ts";
 
 type ConfigFormProps = {
   schema: JsonSchema | null;
@@ -257,16 +261,15 @@ export function renderConfigForm(props: ConfigFormProps) {
                 ${docsUrl
                   ? html`
                       <span class="settings-section__docs">
-                        <button
-                          id=${docsTriggerId}
-                          type="button"
-                          class="settings-section__help-button"
-                          aria-label=${t("configForm.sectionHelp", { section: params.label })}
-                          aria-haspopup="dialog"
-                        >
-                          <span aria-hidden="true">?</span>
-                        </button>
+                        ${renderSettingsHelpTrigger({
+                          id: docsTriggerId,
+                          label: t("configForm.sectionHelp", { section: params.label }),
+                          tooltip: t("configForm.sectionHelp", { section: params.label }),
+                          icon: "question",
+                          popoverId: `settings-section-help-popover-${params.id}`,
+                        })}
                         <wa-popover
+                          id=${`settings-section-help-popover-${params.id}`}
                           class="settings-section__help-popover"
                           for=${docsTriggerId}
                           placement="bottom-end"

@@ -307,7 +307,7 @@ describe("AppSidebar agent chip", () => {
       sidebar.requestUpdate();
       await sidebar.updateComplete;
 
-      const glyph = sidebar.querySelector(".nav-item--home .sidebar-board-glyph");
+      const glyph = sidebar.querySelector('.nav-item--home [aria-label="Dashboard available"]');
       expect(glyph?.getAttribute("aria-label")).toBe("Dashboard available");
       expect(glyph?.hasAttribute("title")).toBe(false);
       expect(

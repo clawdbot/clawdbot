@@ -135,7 +135,6 @@ openclaw plugins install <plugin>@<marketplace>             # marketplace shorth
 openclaw plugins install <plugin> --marketplace <name>      # marketplace (explicit)
 openclaw plugins install <package> --force                  # confirm source / overwrite existing
 openclaw plugins install <package> --pin                    # pin resolved npm version
-openclaw plugins install clawhub:<package> --acknowledge-clawhub-risk
 openclaw plugins install <package> --acknowledge-install-policy-warning
 ```
 
@@ -153,9 +152,8 @@ sources. A new arbitrary npm, `npm-pack:`, git, local path/archive, or
 marketplace source warns and asks before continuing. Noninteractive arbitrary
 installs must pass `--force` after you review and trust the source. The same
 flag overwrites an existing install target when needed. Normal updates of an
-already tracked install do not require it. This confirmation is separate from
-`--acknowledge-clawhub-risk`, which only applies to risky ClawHub release trust
-warnings. `--force` does not bypass `security.installPolicy` or remaining
+already tracked install do not require it. `--force` does not bypass
+`security.installPolicy` or remaining
 install safety checks.
 </Warning>
 
@@ -205,11 +203,8 @@ third-party packages, and non-npm sources are not rewritten.
     If a plugin you published on ClawHub is hidden or blocked by a registry scan, use the publisher steps in [ClawHub publishing](/clawhub/publishing). This flag does not ask ClawHub to rescan the plugin or make a blocked release public. The deprecated `--dangerously-force-unsafe-install` flag remains a no-op.
 
   </Accordion>
-  <Accordion title="--acknowledge-clawhub-risk">
-    Community ClawHub installs check the selected release's trust record before downloading. If ClawHub disables download for the release, reports malicious scan findings, or puts the release in a blocking moderation state (quarantined, revoked), OpenClaw refuses it outright regardless of this flag. For non-blocking risky scan statuses or moderation states, OpenClaw shows the trust details and asks for confirmation before continuing.
-
-    Use `--acknowledge-clawhub-risk` only after reviewing the ClawHub warning and deciding to continue without an interactive prompt. Pending or stale (not-yet-clean) scan results warn but do not require acknowledgement. Official ClawHub packages and bundled OpenClaw plugin sources bypass this release-trust check entirely.
-
+  <Accordion title="ClawHub Security Audit">
+    Community ClawHub installs check the selected release's trust record before downloading. OpenClaw prints the outcome, exact audit overview, and details link. A Review outcome is informational and installation continues. If ClawHub disables download or returns a blocking moderation outcome, OpenClaw refuses the release. Official ClawHub packages and bundled OpenClaw plugin sources bypass this release-trust check.
   </Accordion>
   <Accordion title="Hook packs and npm specs">
     `plugins install` is also the install surface for hook packs that expose `openclaw.hooks` in `package.json`. Use `openclaw hooks` for filtered hook visibility and per-hook enablement, not package installation.
@@ -439,7 +434,6 @@ openclaw plugins update --all
 openclaw plugins update <id-or-npm-spec> --dry-run
 openclaw plugins update @openclaw/voice-call
 openclaw plugins update @acme/demo
-openclaw plugins update openclaw-codex-app-server --acknowledge-clawhub-risk
 openclaw plugins update openclaw-codex-app-server --acknowledge-install-policy-warning
 ```
 
@@ -475,8 +469,8 @@ Updates apply to tracked plugin installs in the managed plugin index and tracked
   <Accordion title="--acknowledge-install-policy-warning on update">
     `plugins update` uses the same warning acknowledgement as install, with `type: '<plugin>' to update anyway` in an interactive terminal. The policy is re-evaluated, and `block` or a policy failure remains terminal.
   </Accordion>
-  <Accordion title="--acknowledge-clawhub-risk on update">
-    Community ClawHub-backed plugin updates run the same exact-release trust check as installs before downloading the replacement package. Use `--acknowledge-clawhub-risk` for reviewed automation that should continue when the selected ClawHub release has a risky trust warning. Official ClawHub packages and bundled OpenClaw plugin sources bypass this release-trust prompt.
+  <Accordion title="ClawHub Security Audit on update">
+    Community ClawHub-backed plugin updates run the same exact-release trust check as installs before downloading the replacement package. Review outcomes are printed informationally and continue; blocked releases remain non-installable. Official ClawHub packages and bundled OpenClaw plugin sources bypass this release-trust check.
   </Accordion>
 </AccordionGroup>
 

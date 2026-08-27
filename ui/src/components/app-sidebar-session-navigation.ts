@@ -143,6 +143,10 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
 
   private readonly sessionOwnerFilter = new SessionOwnerFilterController(this, () => this.context);
 
+  sidebarSessionOwnerFilter() {
+    return this.sessionOwnerFilter;
+  }
+
   get sessionOwnerFilterId(): string | null {
     return this.sessionOwnerFilter.ownerId;
   }

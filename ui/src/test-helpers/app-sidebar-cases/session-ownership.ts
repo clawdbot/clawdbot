@@ -242,20 +242,18 @@ describe("AppSidebar session ownership", () => {
       }),
     );
     await sidebar.updateComplete;
-    expect(harness.setOwnerFilter).toHaveBeenCalledWith("profile-bob");
+    expect(harness.list).toHaveBeenCalledWith(expect.objectContaining({ ownerId: "profile-bob" }));
 
     result.owners = [{ type: "human", id: "profile-bob", label: "Bob" }];
     harness.publishList({ result, agentId: "main" });
     await sidebar.updateComplete;
     expect(sidebar.sessionOwnerFilterId).toBe("profile-bob");
-    expect(harness.setOwnerFilter).not.toHaveBeenCalledWith(null);
 
     result.owners = undefined;
     harness.publishList({ result, agentId: "main" });
     await sidebar.updateComplete;
     expect(sidebar.sessionOwnerFilterId).toBe("profile-bob");
     expect(sidebar.querySelector('[data-session-key="agent:main:ada"]')).toBeNull();
-    expect(harness.setOwnerFilter).not.toHaveBeenCalledWith(null);
     const unresolvedMenu = await openOwnerMenu(sidebar);
     expect(unresolvedMenu.querySelector('[value="owner:"]')).not.toBeNull();
 
@@ -264,7 +262,6 @@ describe("AppSidebar session ownership", () => {
     await sidebar.updateComplete;
     await sidebar.updateComplete;
     expect(sidebar.sessionOwnerFilterId).toBeNull();
-    expect(harness.setOwnerFilter).toHaveBeenLastCalledWith(null);
   });
 
   it("shows the authenticated user first in the owner filter", async () => {
@@ -334,7 +331,7 @@ describe("AppSidebar session ownership", () => {
       }),
     );
     await sidebar.updateComplete;
-    expect(harness.setInvolvingMeFilter).toHaveBeenCalledWith(true);
+    expect(harness.list).toHaveBeenCalledWith(expect.objectContaining({ involvingMe: true }));
   });
 
   it("renders no ownership chrome when the listed sessions have fewer than two owners", async () => {

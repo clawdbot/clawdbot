@@ -2490,7 +2490,6 @@ src/commands/channels/add-wizard.ts	2
 src/commands/channels/add.ts	3
 src/commands/channels/capabilities.ts	4
 src/commands/channels/list.ts	1
-src/commands/channels/remove.ts	1
 src/commands/channels/status.runtime.ts	9
 src/commands/cleanup-utils.ts	1
 src/commands/configure.channels.ts	1

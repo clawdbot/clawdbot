@@ -133,7 +133,7 @@ export function renderChatPermissionPicker(params: ChatPermissionPickerProps) {
       <div class="chat-controls__popover-title chat-controls__permission-heading">
         <span>${t("chat.permissionControls.label")}</span>
         <a
-          class="chat-controls__permission-learn-more"
+          class="chat-controls__permission-learn-more learn-more-link"
           href=${PERMISSION_MODES_DOCS_URL}
           target=${EXTERNAL_LINK_TARGET}
           rel=${buildExternalLinkRel()}

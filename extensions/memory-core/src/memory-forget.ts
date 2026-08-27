@@ -17,14 +17,17 @@ import {
   loadSqliteVecExtension,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { listMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-paths";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   openNodeSqliteDatabase,
   openOpenClawAgentDatabase,
   runSqliteImmediateTransactionSync,
+  tableExists,
   withOpenClawAgentDatabaseReadOnly,
 } from "openclaw/plugin-sdk/sqlite-runtime";
+import { readMemoryPreimages } from "./dreaming-consolidation-artifacts.js";
 import {
   DREAMING_MEMORY_BACKUP_NAMESPACE,
   SHORT_TERM_RECALL_NAMESPACE,
@@ -48,12 +51,12 @@ import {
 import type { ShortTermRecallEntry } from "./short-term-promotion-types.js";
 
 type ForgetDatabase = {
-  sqlite_master: { type: string; name: string };
   memory_index_chunks: {
     id: string;
     path: string;
     source: string;
     hash: string;
+    text: string;
   };
   memory_index_sources: { path: string; source: string };
   memory_index_chunk_provenance: {
@@ -67,7 +70,6 @@ type ForgetDatabase = {
   memory_index_state: { id: number; revision: number };
 };
 
-type MemoryBackup = { createdAt: string; content: string; contentHash: string };
 type MemoryRewrite = {
   absolutePath: string;
   relativePath: string;
@@ -203,27 +205,18 @@ function scrubMemoryContent(params: {
   return { content: lines.join("\n"), removedEntries, removedLines };
 }
 
-function tableNames(db: ReturnType<typeof openOpenClawAgentDatabase>["db"]): Set<string> {
-  const kysely = getNodeSqliteKysely<ForgetDatabase>(db);
-  return new Set(
-    executeSqliteQuerySync(
-      db,
-      kysely.selectFrom("sqlite_master").select("name").where("type", "=", "table"),
-    ).rows.map((row) => row.name),
-  );
-}
-
 async function planMemoryIndex(params: {
   agentId: string;
   changedPaths: ReadonlySet<string>;
   removedPaths: ReadonlySet<string>;
   sessionIds: ReadonlySet<string>;
   excludedSessionIds: ReadonlySet<string>;
+  matchesMemory: (content: string) => boolean;
 }): Promise<ForgetIndexPlan> {
   const result = withOpenClawAgentDatabaseReadOnly(
     ({ db, path: databasePath }) => {
       const kysely = getNodeSqliteKysely<ForgetDatabase>(db);
-      const chunks = executeSqliteQuerySync(
+      const indexedChunks = executeSqliteQuerySync(
         db,
         kysely
           .selectFrom("memory_index_chunks")
@@ -237,12 +230,22 @@ async function planMemoryIndex(params: {
             "memory_index_chunks.path as path",
             "memory_index_chunks.source as source",
             "memory_index_chunks.hash as hash",
+            "memory_index_chunks.text as text",
             "memory_index_chunk_provenance.origin_class as originClass",
             "memory_index_chunk_provenance.session_kind as sessionKind",
           ]),
-      ).rows.filter(
+      ).rows;
+      const changedPaths = new Set(params.changedPaths);
+      // Another workspace agent may already have scrubbed the shared file.
+      // Its remaining indexed snapshot still owns evidence for this agent's purge.
+      for (const chunk of indexedChunks) {
+        if (chunk.source === "memory" && params.matchesMemory(chunk.text)) {
+          changedPaths.add(chunk.path);
+        }
+      }
+      const chunks = indexedChunks.filter(
         (chunk) =>
-          params.changedPaths.has(chunk.path) ||
+          changedPaths.has(chunk.path) ||
           referencesSession(chunk.path, params.agentId, params.sessionIds) ||
           (params.sessionIds.size > 0 &&
             chunk.source === "sessions" &&
@@ -263,17 +266,16 @@ async function planMemoryIndex(params: {
       );
       const chunkIds = chunks.map((chunk) => chunk.id);
       const chunkHashes = [...new Set(chunks.map((chunk) => chunk.hash))];
-      const tables = tableNames(db);
       const ftsRows =
-        chunkIds.length > 0 && tables.has("memory_index_chunks_fts")
+        chunkIds.length > 0 && tableExists(db, "memory_index_chunks_fts")
           ? executeSqliteQuerySync(
               db,
               kysely.selectFrom("memory_index_chunks_fts").select("id").where("id", "in", chunkIds),
             ).rows.length
           : 0;
-      const hasVectorTable = tables.has("memory_index_chunks_vec");
+      const hasVectorTable = tableExists(db, "memory_index_chunks_vec");
       const embeddingCacheRows =
-        chunkHashes.length > 0 && tables.has("memory_embedding_cache")
+        chunkHashes.length > 0 && tableExists(db, "memory_embedding_cache")
           ? executeSqliteQuerySync(
               db,
               kysely
@@ -366,6 +368,7 @@ async function forgetWorkspaceMemory(
 ): Promise<MemoryForgetReport> {
   const targets = resolveMemorySessionTargets({
     agentId: params.agentId,
+    storePath: resolveStorePath(params.cfg.session?.store, { agentId: params.agentId }),
     sessionIds: params.sessionIds,
     hookSources: params.hookSources,
     participants: params.participants,
@@ -429,6 +432,8 @@ async function forgetWorkspaceMemory(
   }
 
   const memoryRewrites: MemoryRewrite[] = [];
+  const scrub = (content: string) =>
+    scrubMemoryContent({ content, entryKeys, sessionIds, corpusSnippets, agentId: params.agentId });
   let removedMemoryEntries = 0;
   let removedMemoryLines = 0;
   const memoryFiles = await listMemoryFiles(workspaceDir, [
@@ -436,6 +441,10 @@ async function forgetWorkspaceMemory(
     path.join(workspaceDir, "dreams.md"),
   ]);
   for (const absolutePath of memoryFiles) {
+    // Corpus evidence must survive until every dependent artifact is clean.
+    if (path.dirname(absolutePath) === corpusDir) {
+      continue;
+    }
     const content = await fs.readFile(absolutePath, "utf8");
     for (const line of content.split(/\r?\n/u)) {
       const key = PROMOTION_MARKER.exec(line)?.[1]?.trim();
@@ -443,13 +452,7 @@ async function forgetWorkspaceMemory(
         untargetableEntryKeys.add(key);
       }
     }
-    const scrubbed = scrubMemoryContent({
-      content,
-      entryKeys,
-      sessionIds,
-      corpusSnippets,
-      agentId: params.agentId,
-    });
+    const scrubbed = scrub(content);
     if (scrubbed.content !== content) {
       memoryRewrites.push({
         absolutePath,
@@ -469,10 +472,7 @@ async function forgetWorkspaceMemory(
         workspaceDir,
       }),
       readSessionIngestionState(workspaceDir),
-      readMemoryCoreWorkspaceEntries<MemoryBackup>({
-        namespace: DREAMING_MEMORY_BACKUP_NAMESPACE,
-        workspaceDir,
-      }),
+      readMemoryPreimages(workspaceDir),
       listMemoryArtifactProvenance({ workspaceDir }),
       listSessionTranscriptCorpusEntriesForAgent(params.agentId),
     ]);
@@ -505,13 +505,7 @@ async function forgetWorkspaceMemory(
   );
   let rewrittenBackups = 0;
   const nextBackups = backups.map(({ key, value }) => {
-    const scrubbed = scrubMemoryContent({
-      content: value.content,
-      entryKeys,
-      sessionIds,
-      corpusSnippets,
-      agentId: params.agentId,
-    });
+    const scrubbed = scrub(value.content);
     if (scrubbed.content === value.content) {
       return { key, value };
     }
@@ -575,6 +569,7 @@ async function forgetWorkspaceMemory(
     ),
     sessionIds,
     excludedSessionIds,
+    matchesMemory: (content) => scrub(content).content !== content,
   });
   const report: MemoryForgetReport = {
     agentId: params.agentId,
@@ -652,41 +647,9 @@ async function forgetWorkspaceMemory(
       );
     }
 
-    for (const rewrite of [...memoryRewrites, ...corpusRewrites]) {
-      if (rewrite.remove) {
-        await fs.unlink(rewrite.absolutePath);
-      } else {
-        await fs.writeFile(rewrite.absolutePath, rewrite.content, "utf8");
-      }
-    }
-    if (retainedShortTerm.length !== shortTermEntries.length) {
-      await writeMemoryCoreWorkspaceEntries({
-        namespace: SHORT_TERM_RECALL_NAMESPACE,
-        workspaceDir,
-        entries: retainedShortTerm,
-      });
-    }
-    if (
-      removedSeenScopes.length > 0 ||
-      Object.keys(retainedFileStates).length !== Object.keys(ingestionState.files).length
-    ) {
-      await writeSessionIngestionState(workspaceDir, {
-        ...ingestionState,
-        files: retainedFileStates,
-        seenMessages: Object.fromEntries(
-          Object.entries(ingestionState.seenMessages).filter(
-            ([scope]) => !referencesSession(scope, params.agentId, sessionIds),
-          ),
-        ),
-      });
-    }
-    if (rewrittenBackups > 0) {
-      await writeMemoryCoreWorkspaceEntries({
-        namespace: DREAMING_MEMORY_BACKUP_NAMESPACE,
-        workspaceDir,
-        entries: nextBackups,
-      });
-    }
+    // Remove derived records before their matching evidence. On any failure,
+    // unchanged files/corpus/origins still identify the remaining work on retry.
+    // The workspace lock and index snapshot/revision checks fence stale publishers.
     runSqliteImmediateTransactionSync(db, () => {
       if (chunkIds.length > 0) {
         if (indexPlan.ftsRows > 0) {
@@ -722,6 +685,41 @@ async function forgetWorkspaceMemory(
         );
       }
     });
+    if (retainedShortTerm.length !== shortTermEntries.length) {
+      await writeMemoryCoreWorkspaceEntries({
+        namespace: SHORT_TERM_RECALL_NAMESPACE,
+        workspaceDir,
+        entries: retainedShortTerm,
+      });
+    }
+    if (
+      removedSeenScopes.length > 0 ||
+      Object.keys(retainedFileStates).length !== Object.keys(ingestionState.files).length
+    ) {
+      await writeSessionIngestionState(workspaceDir, {
+        ...ingestionState,
+        files: retainedFileStates,
+        seenMessages: Object.fromEntries(
+          Object.entries(ingestionState.seenMessages).filter(
+            ([scope]) => !referencesSession(scope, params.agentId, sessionIds),
+          ),
+        ),
+      });
+    }
+    if (rewrittenBackups > 0) {
+      await writeMemoryCoreWorkspaceEntries({
+        namespace: DREAMING_MEMORY_BACKUP_NAMESPACE,
+        workspaceDir,
+        entries: nextBackups,
+      });
+    }
+    for (const rewrite of [...memoryRewrites, ...corpusRewrites]) {
+      if (rewrite.remove) {
+        await fs.unlink(rewrite.absolutePath);
+      } else {
+        await fs.writeFile(rewrite.absolutePath, rewrite.content, "utf8");
+      }
+    }
     deleteMemoryEntryOrigins({ agentId: params.agentId, entryKeys: [...entryKeys] });
     return report;
   } finally {

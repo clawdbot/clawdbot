@@ -433,7 +433,7 @@ export function renderSecretsStore(props: SecretsStoreViewProps): TemplateResult
           renderTable(props),
         )}
       `,
-      { wide: true, intro: t("secretsStore.hint") },
+      { wide: true },
     )}
     ${renderEntryDialog(props)} ${renderBulkDialog(props)}
   `;

@@ -362,7 +362,7 @@ export function renderRecentSession(params: {
             <span class="sidebar-recent-session__details-endcap">
               ${!session.isChild && sessionHasBoard(session.key)
                 ? html`<span
-                    class="sidebar-board-glyph"
+                    class="session-row-badge"
                     role="img"
                     aria-label=${t("sessionsView.dashboardAvailable")}
                     title=${t("sessionsView.dashboardAvailable")}
