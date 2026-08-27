@@ -92,6 +92,7 @@ JSON=0
 RUN_ONBOARD=0
 SET_NPM_PREFIX=0
 PNPM_CMD=()
+GIT_REF_KIND=""
 FRESH_GIT_MIN_FREE_KIB=$((6 * 1024 * 1024))
 
 print_usage() {
@@ -1019,6 +1020,10 @@ resolve_git_openclaw_ref() {
 checkout_git_openclaw_ref() {
   local repo_dir="$1"
   local ref="$2"
+  local branch_probe_status=0
+  local tag_probe_status=0
+
+  GIT_REF_KIND=""
 
   if [[ -z "$ref" ]]; then
     return 0
@@ -1028,29 +1033,59 @@ checkout_git_openclaw_ref() {
     git -C "$repo_dir" fetch --no-tags origin main
     git -C "$repo_dir" checkout main
     if [[ "$GIT_UPDATE" == "1" ]]; then
-      git -C "$repo_dir" pull --rebase --no-tags || true
+      if ! git -C "$repo_dir" rebase origin/main; then
+        git -C "$repo_dir" rebase --abort >/dev/null 2>&1 || true
+        fail "Could not update repository from origin/main"
+      fi
     fi
+    GIT_REF_KIND="moving"
     return 0
   fi
 
   if git -C "$repo_dir" ls-remote --exit-code --heads origin "$ref" >/dev/null 2>&1; then
     git -C "$repo_dir" fetch --no-tags origin "refs/heads/${ref}:refs/remotes/origin/${ref}"
     git -C "$repo_dir" checkout -B "$ref" "origin/$ref"
-    if [[ "$GIT_UPDATE" == "1" ]]; then
-      git -C "$repo_dir" pull --rebase --no-tags || true
-    fi
+    GIT_REF_KIND="moving"
     return 0
+  else
+    branch_probe_status=$?
   fi
 
-  git -C "$repo_dir" fetch --tags origin
+  if (( branch_probe_status != 2 )); then
+    fail "Could not resolve requested git branch: ${ref}"
+  fi
+
+  if git -C "$repo_dir" ls-remote --exit-code --tags origin "refs/tags/${ref}" "refs/tags/${ref}^{}" >/dev/null 2>&1; then
+    tag_probe_status=0
+  else
+    tag_probe_status=$?
+  fi
+
+  if (( tag_probe_status == 2 )); then
+    if git -C "$repo_dir" rev-parse --verify --quiet "${ref}^{commit}" >/dev/null; then
+      git -C "$repo_dir" checkout --detach "$ref"
+      GIT_REF_KIND="immutable"
+      return 0
+    fi
+    fail "Requested git version not found: ${ref}"
+  fi
+  if (( tag_probe_status != 0 )); then
+    fail "Could not resolve requested git tag: ${ref}"
+  fi
+
+  if ! git -C "$repo_dir" fetch --no-tags origin "refs/tags/${ref}:refs/tags/${ref}"; then
+    fail "Could not fetch requested git tag: ${ref}"
+  fi
 
   if git -C "$repo_dir" rev-parse --verify --quiet "refs/tags/${ref}^{commit}" >/dev/null; then
     git -C "$repo_dir" checkout --detach "$ref"
+    GIT_REF_KIND="immutable"
     return 0
   fi
 
   if git -C "$repo_dir" rev-parse --verify --quiet "${ref}^{commit}" >/dev/null; then
     git -C "$repo_dir" checkout --detach "$ref"
+    GIT_REF_KIND="immutable"
     return 0
   fi
 
@@ -1060,6 +1095,16 @@ checkout_git_openclaw_ref() {
 git_install_lockfile_flag() {
   local repo_dir="$1"
   local ref="$2"
+  local ref_kind="${3:-$GIT_REF_KIND}"
+
+  if [[ "$ref_kind" == "moving" ]]; then
+    echo "--no-frozen-lockfile"
+    return 0
+  fi
+  if [[ "$ref_kind" == "immutable" ]]; then
+    echo "--frozen-lockfile"
+    return 0
+  fi
 
   if [[ "$ref" == "main" ]] || git -C "$repo_dir" ls-remote --exit-code --heads origin "$ref" >/dev/null 2>&1; then
     echo "--no-frozen-lockfile"
@@ -1649,7 +1694,7 @@ install_openclaw_from_git() {
   activate_repo_pnpm_version "$repo_dir"
 
   local install_lockfile_flag
-  install_lockfile_flag="$(git_install_lockfile_flag "$repo_dir" "$git_ref")"
+  install_lockfile_flag="$(git_install_lockfile_flag "$repo_dir" "$git_ref" "$GIT_REF_KIND")"
   emit_json step name dependencies status start
   CI="${CI:-true}" run_pnpm -C "$repo_dir" install "$install_lockfile_flag"
   emit_json step name dependencies status ok

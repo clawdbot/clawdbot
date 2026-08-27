@@ -1397,6 +1397,7 @@ VERBOSE="${OPENCLAW_VERBOSE:-0}"
 VERIFY_INSTALL="${OPENCLAW_VERIFY_INSTALL:-0}"
 OPENCLAW_BIN=""
 PNPM_CMD=()
+GIT_REF_KIND=""
 HELP=0
 
 print_usage() {
@@ -2630,6 +2631,10 @@ resolve_git_openclaw_ref() {
 checkout_git_openclaw_ref() {
     local repo_dir="$1"
     local ref="$2"
+    local branch_probe_status=0
+    local tag_probe_status=0
+
+    GIT_REF_KIND=""
 
     if [[ -z "$ref" ]]; then
         return 0
@@ -2639,29 +2644,64 @@ checkout_git_openclaw_ref() {
         run_quiet_step "Fetching requested version" git -C "$repo_dir" fetch --no-tags origin main
         run_quiet_step "Checking out main" git -C "$repo_dir" checkout main
         if [[ "$GIT_UPDATE" == "1" ]]; then
-            run_quiet_step "Updating repository" git -C "$repo_dir" pull --rebase --no-tags || true
+            if ! run_quiet_step "Updating repository" git -C "$repo_dir" rebase origin/main; then
+                git -C "$repo_dir" rebase --abort >/dev/null 2>&1 || true
+                ui_error "Could not update repository from origin/main"
+                return 1
+            fi
         fi
+        GIT_REF_KIND="moving"
         return 0
     fi
 
     if git -C "$repo_dir" ls-remote --exit-code --heads origin "$ref" >/dev/null 2>&1; then
         run_quiet_step "Fetching requested version" git -C "$repo_dir" fetch --no-tags origin "refs/heads/${ref}:refs/remotes/origin/${ref}"
         run_quiet_step "Checking out ${ref}" git -C "$repo_dir" checkout -B "$ref" "origin/$ref"
-        if [[ "$GIT_UPDATE" == "1" ]]; then
-            run_quiet_step "Updating repository" git -C "$repo_dir" pull --rebase --no-tags || true
-        fi
+        GIT_REF_KIND="moving"
         return 0
+    else
+        branch_probe_status=$?
     fi
 
-    run_quiet_step "Fetching requested version" git -C "$repo_dir" fetch --tags origin
+    if (( branch_probe_status != 2 )); then
+        ui_error "Could not resolve requested git branch: ${ref}"
+        return 1
+    fi
+
+    if git -C "$repo_dir" ls-remote --exit-code --tags origin "refs/tags/${ref}" "refs/tags/${ref}^{}" >/dev/null 2>&1; then
+        tag_probe_status=0
+    else
+        tag_probe_status=$?
+    fi
+
+    if (( tag_probe_status == 2 )); then
+        if git -C "$repo_dir" rev-parse --verify --quiet "${ref}^{commit}" >/dev/null; then
+            run_quiet_step "Checking out ${ref}" git -C "$repo_dir" checkout --detach "$ref"
+            GIT_REF_KIND="immutable"
+            return 0
+        fi
+        ui_error "Requested git version not found: ${ref}"
+        return 1
+    fi
+    if (( tag_probe_status != 0 )); then
+        ui_error "Could not resolve requested git tag: ${ref}"
+        return 1
+    fi
+
+    if ! run_quiet_step "Fetching requested version" git -C "$repo_dir" fetch --no-tags origin "refs/tags/${ref}:refs/tags/${ref}"; then
+        ui_error "Could not fetch requested git tag: ${ref}"
+        return 1
+    fi
 
     if git -C "$repo_dir" rev-parse --verify --quiet "refs/tags/${ref}^{commit}" >/dev/null; then
         run_quiet_step "Checking out ${ref}" git -C "$repo_dir" checkout --detach "$ref"
+        GIT_REF_KIND="immutable"
         return 0
     fi
 
     if git -C "$repo_dir" rev-parse --verify --quiet "${ref}^{commit}" >/dev/null; then
         run_quiet_step "Checking out ${ref}" git -C "$repo_dir" checkout --detach "$ref"
+        GIT_REF_KIND="immutable"
         return 0
     fi
 
@@ -2769,6 +2809,16 @@ NODE
 git_install_lockfile_flag() {
     local repo_dir="$1"
     local ref="$2"
+    local ref_kind="${3:-$GIT_REF_KIND}"
+
+    if [[ "$ref_kind" == "moving" ]]; then
+        echo "--no-frozen-lockfile"
+        return 0
+    fi
+    if [[ "$ref_kind" == "immutable" ]]; then
+        echo "--frozen-lockfile"
+        return 0
+    fi
 
     if [[ "$ref" == "main" ]] || git -C "$repo_dir" ls-remote --exit-code --heads origin "$ref" >/dev/null 2>&1; then
         echo "--no-frozen-lockfile"
@@ -3264,7 +3314,7 @@ install_openclaw_from_git() {
     activate_repo_pnpm_version "$repo_dir"
 
     local install_lockfile_flag
-    install_lockfile_flag="$(git_install_lockfile_flag "$repo_dir" "$git_ref")"
+    install_lockfile_flag="$(git_install_lockfile_flag "$repo_dir" "$git_ref" "$GIT_REF_KIND")"
     CI="${CI:-true}" run_quiet_step "Installing dependencies" run_pnpm -C "$repo_dir" install "$install_lockfile_flag"
 
     if ! run_quiet_step "Building UI" run_pnpm -C "$repo_dir" ui:build; then

@@ -996,18 +996,25 @@ describe("install-cli.sh", () => {
     expect(result.stdout).toContain("main=main");
   });
 
-  it("fetches moving git refs without tags for git installs", () => {
+  it("fetches exact git refs and avoids redundant update probes", () => {
     expect(script).toContain('git -C "$repo_dir" fetch --no-tags origin main');
     expect(script).toContain(
       'git -C "$repo_dir" fetch --no-tags origin "refs/heads/${ref}:refs/remotes/origin/${ref}"',
     );
-    expect(script).toContain('git -C "$repo_dir" pull --rebase --no-tags || true');
+    expect(script).toContain(
+      'git -C "$repo_dir" ls-remote --exit-code --tags origin "refs/tags/${ref}" "refs/tags/${ref}^{}"',
+    );
+    expect(script).toContain('git -C "$repo_dir" rebase origin/main');
+    expect(script).not.toContain('git -C "$repo_dir" pull --rebase --no-tags || true');
 
     const branchCheckIndex = script.indexOf('ls-remote --exit-code --heads origin "$ref"');
-    const tagFetchIndex = script.indexOf("fetch --tags origin");
+    const tagFetchIndex = script.indexOf(
+      'fetch --no-tags origin "refs/tags/${ref}:refs/tags/${ref}"',
+    );
     expect(branchCheckIndex).toBeGreaterThan(-1);
     expect(tagFetchIndex).toBeGreaterThan(-1);
     expect(branchCheckIndex).toBeLessThan(tagFetchIndex);
+    expect(script).toContain('git_install_lockfile_flag "$repo_dir" "$git_ref" "$GIT_REF_KIND"');
   });
 
   it("uses non-frozen lockfile installs only for moving git refs", () => {
