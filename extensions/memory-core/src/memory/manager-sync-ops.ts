@@ -346,6 +346,10 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
           this.refreshSessionDirtyFlag();
         }
       }
+      // Bound the cache here, not in the reindex: runSync owns every cache-writing path, and
+      // the incremental branches above insert rows without ever entering runInPlaceReindex.
+      // Enforcing only there left long-running databases unbounded between full rebuilds.
+      this.pruneEmbeddingCacheIfNeeded?.();
     } catch (err) {
       const reason = formatErrorMessage(err);
       const shouldFallback = this.shouldFallbackOnError(err);
@@ -599,7 +603,6 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
           }
 
           this.writeMeta(nextMeta);
-          this.pruneEmbeddingCacheIfNeeded?.();
           return { nextMeta, vectorIndexComplete };
         } finally {
           // Escaped continuations must fail closed, never write to the live DB.

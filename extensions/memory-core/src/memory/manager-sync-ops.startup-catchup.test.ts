@@ -379,7 +379,11 @@ class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
     return work;
   }
 
-  protected pruneEmbeddingCacheIfNeeded(): void {}
+  embeddingCachePrunes = 0;
+
+  protected pruneEmbeddingCacheIfNeeded(): void {
+    this.embeddingCachePrunes += 1;
+  }
 
   protected resetProviderInitializationForRetry(): void {}
 
@@ -833,6 +837,18 @@ describe("session startup catch-up", () => {
     expect(restarted.indexedPaths).toEqual([]);
     await restarted.runArchiveSyncForTest();
     expect(restarted.getSourceMetadataUpdateCount()).toBe(1);
+  });
+
+  it("bounds the embedding cache on incremental syncs, not only full reindexes", async () => {
+    // Enforcement used to live inside runInPlaceReindex's shadow rebuild, so the incremental
+    // branches of runSync inserted cache rows that nothing ever evicted. A long-running
+    // database stayed unbounded between full rebuilds (openclaw/openclaw#114612).
+    await writeSessionFile("thread.jsonl");
+    const harness = new SessionStartupCatchupHarness([]);
+
+    await harness.runSyncForTest({ reason: "session-delta" });
+
+    expect(harness.embeddingCachePrunes).toBeGreaterThan(0);
   });
 
   it("does not fall back to full session sync when identity targets normalize away", async () => {
