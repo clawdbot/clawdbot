@@ -499,6 +499,78 @@ describe("openai-compatible generic embedding provider", () => {
     });
   });
 
+  it("splits embedBatch inputs into provider-capped sub-batches preserving order", async () => {
+    const server = await startEmbeddingServer({
+      respond: ({ body }) => {
+        const texts = Array.isArray(body.input) ? (body.input as string[]) : [body.input];
+        return {
+          object: "list",
+          data: texts.map((text, index) => ({
+            object: "embedding",
+            embedding: [String(text).length, index + 0.25, 1],
+            index,
+          })),
+          model: String(body.model),
+        };
+      },
+    });
+    const { provider } = await createOpenAICompatibleEmbeddingProvider(
+      createOptions({
+        config: {
+          models: {
+            providers: {
+              dashscope: {
+                api: "openai-completions",
+                baseUrl: server.baseUrl,
+                params: { maxBatchItems: 10 },
+                models: [],
+              },
+            },
+          },
+        } as EmbeddingProviderCreateOptions["config"],
+        provider: "dashscope",
+        model: "dashscope/text-embedding-v4",
+      }),
+    );
+
+    const texts = Array.from({ length: 12 }, (_, i) => "t".repeat(i + 1));
+    const embeddings = await provider.embedBatch(texts);
+
+    // 12 inputs with a 10-item provider cap must post 10 then 2.
+    expect(server.requests).toHaveLength(2);
+    expect(server.requests[0]?.body.input).toEqual(texts.slice(0, 10));
+    expect(server.requests[1]?.body.input).toEqual(texts.slice(10));
+    expect(embeddings).toEqual(
+      texts.map((text, i) => [text.length, (i % 10) + 0.25, 1]),
+    );
+  });
+
+  it("rejects invalid configured maxBatchItems with an actionable error", async () => {
+    const server = await startEmbeddingServer();
+    await expect(
+      openAICompatibleEmbeddingProviderAdapter.create(
+        createOptions({
+          config: {
+            models: {
+              providers: {
+                dashscope: {
+                  api: "openai-completions",
+                  baseUrl: server.baseUrl,
+                  params: { maxBatchItems: "ten" },
+                  models: [],
+                },
+              },
+            },
+          } as EmbeddingProviderCreateOptions["config"],
+          provider: "dashscope",
+          model: "dashscope/text-embedding-v4",
+        }),
+      ),
+    ).rejects.toThrow(
+      "models.providers.<id>.params.maxBatchItems must be a positive integer",
+    );
+  });
+
   it("bounds exact-limit embedding errors without splitting UTF-16 and cancels", async () => {
     const server = await startHangingErrorEmbeddingServer();
     const { provider } = await createOpenAICompatibleEmbeddingProvider(
