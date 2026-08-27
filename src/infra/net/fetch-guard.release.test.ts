@@ -142,6 +142,7 @@ describe("guarded request release", () => {
                     maxBytes: 4,
                     createOverflowError: () => reason,
                     createReleaseError: () => reason,
+                    cleanup: abandoned.release,
                   });
                   const reader = bounded.stream.getReader();
                   try {
