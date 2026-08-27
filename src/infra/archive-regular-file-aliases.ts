@@ -132,6 +132,7 @@ function isNotFoundError(error: unknown): boolean {
     typeof error === "object" &&
     error !== null &&
     "code" in error &&
+    // SAFETY: the preceding structural checks prove `error` has an inspectable `code` property.
     (error as { code?: unknown }).code === "ENOENT"
   );
 }
