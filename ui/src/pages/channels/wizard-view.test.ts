@@ -10,7 +10,8 @@ describe("renderChannelWizard", () => {
     await i18n.setLocale("en");
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await i18n.setLocale("en");
     for (const container of document.body.querySelectorAll("div")) {
       render(nothing, container);
     }
@@ -196,14 +197,13 @@ describe("renderChannelWizard", () => {
     expect(document.querySelector("textarea")).toBeNull();
   });
 
-  it.each([true, false])(
-    "keeps channel-copy success %s accessible across locale rerenders",
-    async (copied) => {
-      const writeText = vi.fn().mockImplementation(async () => {
-        if (!copied) {
-          throw new DOMException("Clipboard access denied");
-        }
-      });
+  it.each(
+    [true, false].flatMap((copied) => ["pending", "feedback"].map((phase) => ({ copied, phase }))),
+  )(
+    "keeps channel-copy success $copied accessible across a $phase locale rerender",
+    async ({ copied, phase }) => {
+      const write = Promise.withResolvers<void>();
+      const writeText = vi.fn(() => write.promise);
       const execCommand = vi.fn(() => false);
       vi.stubGlobal("navigator", { clipboard: { writeText } });
       Object.defineProperty(document, "execCommand", { configurable: true, value: execCommand });
@@ -240,28 +240,44 @@ describe("renderChannelWizard", () => {
 
       button?.click();
 
-      const feedback = copied ? "Copied!" : "Copy failed";
+      if (phase === "pending") {
+        expect(button?.disabled).toBe(true);
+        await i18n.setLocale("de");
+        render(renderChannelWizard(props), container);
+        expect(button?.textContent?.trim()).toBe("Kopieren");
+      }
+      if (copied) {
+        write.resolve();
+      } else {
+        write.reject(new DOMException("Clipboard access denied"));
+      }
+      const feedback =
+        phase === "pending"
+          ? copied
+            ? "Kopiert!"
+            : "Kopieren fehlgeschlagen"
+          : copied
+            ? "Copied!"
+            : "Copy failed";
       await vi.waitFor(() => expect(button?.textContent?.trim()).toBe(feedback));
       expect(button?.getAttribute("aria-label")).toBe(feedback);
       expect(writeText).toHaveBeenCalledWith("openclaw channels add");
       expect(execCommand).toHaveBeenCalledTimes(copied ? 0 : 1);
 
-      await i18n.setLocale("de");
-      try {
+      if (phase === "feedback") {
+        await i18n.setLocale("de");
         expect(() => render(renderChannelWizard(props), container)).not.toThrow();
         expect(button?.textContent?.trim()).toBe("Kopieren");
-        const reset = schedule.mock.calls.find(
-          ([, delay]) => delay === (copied ? 1_500 : 2_000),
-        )?.[0];
-        if (typeof reset !== "function") {
-          throw new Error("Expected copy feedback to schedule its reset");
-        }
-        reset();
-        expect(button?.textContent?.trim()).toBe("Kopieren");
-        expect(button?.getAttribute("aria-label")).toBe("Kopieren");
-      } finally {
-        await i18n.setLocale("en");
       }
+      const reset = schedule.mock.calls.find(
+        ([, delay]) => delay === (copied ? 1_500 : 2_000),
+      )?.[0];
+      if (typeof reset !== "function") {
+        throw new Error("Expected copy feedback to schedule its reset");
+      }
+      reset();
+      expect(button?.textContent?.trim()).toBe("Kopieren");
+      expect(button?.getAttribute("aria-label")).toBe("Kopieren");
     },
   );
 });

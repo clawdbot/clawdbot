@@ -11,6 +11,12 @@ export function copyMarkdownLabel(): string {
   return t("chat.actions.copyAsMarkdown");
 }
 
+function readButtonLabel(button: HTMLButtonElement) {
+  return (
+    button.querySelector("[data-copy-label]")?.textContent ?? button.getAttribute("aria-label")
+  );
+}
+
 function setButtonLabel(button: HTMLButtonElement, label: string, showFeedback = false) {
   button.setAttribute("aria-label", label);
   // Feedback sits beside fixed-size icons; actionable tooltips dismiss on click.
@@ -51,6 +57,8 @@ export async function handleCopyButton(event: Event, text: string, idleLabel: st
   }
 
   button.dataset.copyState = copied ? "copied" : "error";
+  // Keep a locale rerender that landed while the clipboard write was pending.
+  idleLabel = readButtonLabel(button) ?? idleLabel;
   const feedbackLabel = t(copied ? "common.copied" : "common.copyFailed");
   setButtonLabel(button, feedbackLabel, true);
 
@@ -61,8 +69,7 @@ export async function handleCopyButton(event: Event, text: string, idleLabel: st
     }
     delete button.dataset.copyState;
     // A locale rerender can replace the idle label while feedback is still active.
-    const renderedLabel =
-      button.querySelector("[data-copy-label]")?.textContent ?? button.getAttribute("aria-label");
+    const renderedLabel = readButtonLabel(button);
     setButtonLabel(
       button,
       renderedLabel && renderedLabel !== feedbackLabel ? renderedLabel : idleLabel,
