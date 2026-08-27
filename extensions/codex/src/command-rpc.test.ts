@@ -25,7 +25,8 @@ import { codexControlRequest, type CodexControlRequestOptions } from "./command-
 const requestCodexAppServerJsonMock = vi.hoisted(() => vi.fn());
 const withCodexAppServerJsonClientMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./app-server/request.js", () => ({
+vi.mock("./app-server/request.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./app-server/request.js")>()),
   requestCodexAppServerJson: requestCodexAppServerJsonMock,
   withCodexAppServerJsonClient: withCodexAppServerJsonClientMock,
 }));
@@ -37,6 +38,29 @@ describe("Codex command RPC helpers", () => {
   let harness: ReturnType<typeof createClientHarness>;
   let previousPluginRegistry: ReturnType<typeof getActivePluginRegistry>;
   const sessionKey = "agent:main:control";
+  const resumeResponse = {
+    thread: {
+      id: "thread-1",
+      sessionId: "session-1",
+      projectId: null,
+      cliVersion: "0.150.1",
+      createdAt: 1,
+      updatedAt: 1,
+      cwd: "/repo",
+      ephemeral: false,
+      modelProvider: "openai",
+      preview: "",
+      source: "appServer",
+      status: { type: "idle" },
+      turns: [],
+    },
+    model: "gpt-5.5",
+    modelProvider: "openai",
+    cwd: "/repo",
+    approvalPolicy: "never",
+    approvalsReviewer: "user",
+    sandbox: { type: "dangerFullAccess" },
+  };
 
   beforeEach(async () => {
     previousPluginRegistry = getActivePluginRegistry();
@@ -57,13 +81,16 @@ describe("Codex command RPC helpers", () => {
     setAuthStore({ version: 1, profiles: {} });
     harness = createClientHarness();
     requestCodexAppServerJsonMock.mockReset();
-    requestCodexAppServerJsonMock.mockResolvedValue({ thread: { id: "thread-1" } });
+    requestCodexAppServerJsonMock.mockResolvedValue(resumeResponse);
     withCodexAppServerJsonClientMock.mockReset();
     withCodexAppServerJsonClientMock.mockImplementation(
       async (
         _options: Parameters<typeof withCodexAppServerJsonClient>[0],
         run: Parameters<typeof withCodexAppServerJsonClient>[1],
-      ) => await run(requestCodexAppServerJsonMock, harness.client),
+      ) =>
+        await run(requestCodexAppServerJsonMock, harness.client, {
+          assertCurrent: () => undefined,
+        }),
     );
   });
 
@@ -118,9 +145,14 @@ describe("Codex command RPC helpers", () => {
       agentDir,
     });
     expect(acquiredOptions().authProfileId).toBeUndefined();
-    expect(onResponse).toHaveBeenCalledWith({ thread: { id: "thread-1" } }, harness.client, {
-      authProfileId: undefined,
-    });
+    expect(onResponse).toHaveBeenCalledWith(
+      expect.objectContaining({ thread: expect.objectContaining({ id: "thread-1" }) }),
+      harness.client,
+      {
+        authProfileId: undefined,
+        assertCurrent: expect.any(Function),
+      },
+    );
   });
 
   it.each(["oauth", "token"] as const)(
@@ -177,6 +209,7 @@ describe("Codex command RPC helpers", () => {
       );
       expect(onResponse).toHaveBeenCalledWith(expect.anything(), harness.client, {
         authProfileId: "openai:ready",
+        assertCurrent: expect.any(Function),
       });
     },
   );

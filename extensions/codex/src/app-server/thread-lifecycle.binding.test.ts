@@ -313,6 +313,7 @@ async function createManualResumeFixture(
     omitCatalog?: boolean;
     competingLease?: "read" | "release" | "resume";
     wireClient?: boolean;
+    parentControlledAfterAttach?: boolean;
   } = {},
 ) {
   const dynamicTools = options.dynamicTools ?? [];
@@ -358,6 +359,9 @@ async function createManualResumeFixture(
       return {
         thread: {
           ...thread,
+          ...(options.parentControlledAfterAttach && resumes > 0
+            ? { canAcceptDirectInput: false }
+            : {}),
           status: options.active
             ? { type: "active", activeFlags: [] }
             : { type: options.cold ? "notLoaded" : "idle" },
@@ -438,10 +442,22 @@ async function createManualResumeFixture(
     resolveCodexCommandDeps({
       bindingStore: testCodexAppServerBindingStore,
       codexControlRequest: async (_pluginConfig, method, requestParams, requestOptions) => {
+        await requestOptions?.beforeRequest?.(
+          <T>({
+            method: preflightMethod,
+            requestParams: preflightParams,
+          }: {
+            method: string;
+            requestParams?: unknown;
+          }) => client.request<T>(preflightMethod, preflightParams, { timeoutMs: 60_000 }),
+        );
         const result = await client.request<JsonValue>(method, requestParams, {
           timeoutMs: 60_000,
         });
-        await requestOptions?.onResponse?.(result, client, { authProfileId: undefined });
+        await requestOptions?.onResponse?.(result, client, {
+          authProfileId: undefined,
+          assertCurrent: () => undefined,
+        });
         return result;
       },
     }),
@@ -957,7 +973,13 @@ describe("Codex app-server thread lifecycle bindings", () => {
           fixture.request.mock.calls
             .map(([method]) => method)
             .filter((method) => method !== "skills/list"),
-        ).toEqual(["thread/resume", "thread/read", "thread/unsubscribe", "thread/resume"]);
+        ).toEqual([
+          "thread/read",
+          "thread/resume",
+          "thread/read",
+          "thread/unsubscribe",
+          "thread/resume",
+        ]);
       } finally {
         fixture.close();
       }
@@ -976,6 +998,10 @@ describe("Codex app-server thread lifecycle bindings", () => {
       error: "immutable native tool catalog",
     },
     { options: { active: true }, error: "native thread is not idle" },
+    {
+      options: { parentControlledAfterAttach: true },
+      error: "controlled by its parent",
+    },
   ])(
     "preserves pending manual resume when native configuration cannot be attested: $options",
     async ({ options, error }) => {
@@ -1024,7 +1050,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
           fixture.request.mock.calls
             .map(([method]) => method)
             .filter((method) => method !== "skills/list"),
-        ).toEqual(["thread/resume"]);
+        ).toEqual(["thread/read", "thread/resume"]);
       } finally {
         fixture.close();
       }
@@ -1163,7 +1189,10 @@ describe("Codex app-server thread lifecycle bindings", () => {
       });
       release.resolve();
       await expect(starting).rejects.toThrow("acquiring a pending resume configuration");
-      expect(fixture.request.mock.calls.map(([method]) => method)).toEqual(["thread/resume"]);
+      expect(fixture.request.mock.calls.map(([method]) => method)).toEqual([
+        "thread/read",
+        "thread/resume",
+      ]);
     } finally {
       release.resolve();
       await blocker;
