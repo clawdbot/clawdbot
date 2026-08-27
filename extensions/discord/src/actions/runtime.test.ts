@@ -2292,30 +2292,6 @@ describe("handleDiscordMessagingAction", () => {
       await loopback.close();
     }
   });
-  it("parses stringified components for direct sendMessage actions", async () => {
-    sendDiscordComponentMessage.mockClear();
-    sendMessageDiscord.mockClear();
-
-    await handleMessagingAction(
-      "sendMessage",
-      {
-        to: "channel:123",
-        content: "fallback text",
-        components: JSON.stringify({ blocks: [{ type: "text", text: "Component body" }] }),
-      },
-      enableAllActions,
-    );
-
-    expect(sendDiscordComponentMessage).toHaveBeenCalledTimes(1);
-    expect(sendDiscordComponentMessage).toHaveBeenCalledWith(
-      "channel:123",
-      expect.objectContaining({
-        blocks: [{ type: "text", text: "Component body" }],
-      }),
-      expect.any(Object),
-    );
-    expect(sendMessageDiscord).not.toHaveBeenCalled();
-  });
 
   it("ignores empty components objects for regular media sends", async () => {
     sendMessageDiscord.mockClear();

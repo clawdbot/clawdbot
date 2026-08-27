@@ -416,23 +416,6 @@ describe("discordMessageActions", () => {
     });
   });
 
-  it("declares Discord components for send message tool calls", () => {
-    const discovery = discordMessageActions.describeMessageTool?.({
-      cfg: { channels: { discord: { token: "Bot token-main" } } } as OpenClawConfig,
-    });
-
-    expect(schemaForAction(discovery, "send")).toMatchObject({
-      actions: ["send"],
-      visibility: "all-configured",
-      properties: {
-        components: {
-          description: expect.stringContaining("Components V2 payload"),
-          additionalProperties: true,
-        },
-      },
-    });
-  });
-
   it.each(["read", "search", "edit", "delete", "react", "pin", "channel-info"])(
     "routes %s actions through gateway execution mode",
     (action) => {

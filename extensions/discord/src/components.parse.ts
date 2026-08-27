@@ -404,7 +404,7 @@ export function coerceDiscordComponentParam(raw: unknown): unknown {
     return raw;
   }
   try {
-    return JSON.parse(raw);
+    return JSON.parse(raw) as unknown;
   } catch {
     return raw;
   }

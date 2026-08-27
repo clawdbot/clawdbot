@@ -12,7 +12,6 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { coerceDiscordComponentParam } from "./components.js";
 import { normalizeDiscordApprovalPayload } from "./outbound-approval.js";
 import {
   resolveDiscordComponentSpec,
@@ -213,9 +212,8 @@ export async function sendDiscordOutboundPayload(params: {
       !Array.isArray(payload.channelData.discord)
         ? (payload.channelData.discord as Record<string, unknown>)
         : {};
-    const coercedComponents = coerceDiscordComponentParam(discordData.components);
-    const nativeComponents = Array.isArray(coercedComponents)
-      ? (coercedComponents as DiscordSendComponents)
+    const nativeComponents = Array.isArray(discordData.components)
+      ? (discordData.components as DiscordSendComponents)
       : undefined;
     const embeds = Array.isArray(discordData.embeds)
       ? (discordData.embeds as DiscordSendEmbeds)

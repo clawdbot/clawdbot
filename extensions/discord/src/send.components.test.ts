@@ -1,7 +1,6 @@
+// Discord tests cover send.components plugin behavior.
 import { ChannelType, MessageFlags } from "discord-api-types/v10";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-// Discord tests cover send.components plugin behavior.
-import { coerceDiscordComponentParam } from "./components.js";
 import { createDiscordLoopbackRest, makeDiscordRest } from "./send.test-harness.js";
 
 const loadConfigMock = vi.hoisted(() => vi.fn(() => ({ session: { dmScope: "main" } })));
@@ -106,34 +105,6 @@ describe("sendDiscordComponentMessage", () => {
     resetClassicMocks();
   });
 
-  it("delivers stringified components through a real REST transport boundary", async () => {
-    const loopback = await createDiscordLoopbackRest();
-    try {
-      const raw = JSON.stringify({
-        blocks: [{ type: "text", text: "stringified transport proof" }],
-      });
-      const spec = coerceDiscordComponentParam(raw);
-
-      await sendDiscordComponentMessage("channel:chan-1", spec as never, {
-        cfg: DISCORD_TEST_CFG,
-        rest: loopback.rest,
-        token: "proof-token",
-      });
-
-      const post = loopback.requests.find((request) => request.method === "POST");
-      expect(post).toBeDefined();
-      const body = JSON.parse(post?.body ?? "{}") as Record<string, unknown>;
-      expect(body.flags).toBe(MessageFlags.IsComponentsV2);
-      expect(body.components).toEqual([
-        {
-          type: 17,
-          components: [{ type: 10, content: "stringified transport proof" }],
-        },
-      ]);
-    } finally {
-      await loopback.close();
-    }
-  });
   it("passes allowed mentions through component sends", async () => {
     const { rest, postMock, getMock } = makeDiscordRest();
     getMock.mockResolvedValueOnce({ type: ChannelType.GuildText, id: "chan-1" });

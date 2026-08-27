@@ -194,10 +194,9 @@ export async function handleDiscordMessageAction(
       readStringParam(params, "path", { trim: false }) ??
       readStringParam(params, "filePath", { trim: false });
     const requestedContent = readStringParam(params, "message", { allowEmpty: true });
+    const explicitComponents = coerceDiscordComponentParam(params.components);
     const presentation =
-      coerceDiscordComponentParam(params.components) == null
-        ? normalizeMessagePresentation(params.presentation)
-        : undefined;
+      explicitComponents == null ? normalizeMessagePresentation(params.presentation) : undefined;
     const adaptedPresentation = presentation
       ? adaptMessagePresentationForChannel({
           presentation,
@@ -219,7 +218,7 @@ export async function handleDiscordMessageAction(
     );
     const rawComponents = presentationFellBack
       ? undefined
-      : (coerceDiscordComponentParam(params.components) ??
+      : (explicitComponents ??
         presentationComponents ??
         buildDiscordInteractiveComponents(normalizeLegacyInteractiveReply(params.interactive)));
     const hasComponents =
