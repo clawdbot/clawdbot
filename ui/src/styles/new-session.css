@@ -1140,6 +1140,10 @@ wa-popover.new-session-page__project-popover::part(body) {
 }
 
 @media (max-width: 560px) {
+  .new-session-page .agent-chat__welcome-secondary:has(.agent-chat__suggestions) {
+    display: none;
+  }
+
   .agent-chat__input--mobile-toolbar .new-session-page__start-submit {
     width: var(--chat-composer-send-size);
     min-width: var(--chat-composer-send-size);

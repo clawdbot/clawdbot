@@ -486,24 +486,32 @@ function createOverrideFailureRun(params: {
 function makeSingleProviderStore(params: {
   provider: string;
   usageStat: NonNullable<AuthProfileStore["usageStats"]>[string];
-  credentialType?: "api_key" | "token";
+  credentialType?: "api_key" | "oauth" | "token";
 }): AuthProfileStore {
   const profileId = `${params.provider}:default`;
   return {
     version: AUTH_STORE_VERSION,
     profiles: {
       [profileId]:
-        params.credentialType === "token"
+        params.credentialType === "oauth"
           ? {
-              type: "token",
+              type: "oauth",
               provider: params.provider,
-              token: "test-token",
+              access: "test-access",
+              refresh: "test-refresh",
+              expires: Date.now() + 60_000,
             }
-          : {
-              type: "api_key",
-              provider: params.provider,
-              key: "test-key",
-            },
+          : params.credentialType === "token"
+            ? {
+                type: "token",
+                provider: params.provider,
+                token: "test-token",
+              }
+            : {
+                type: "api_key",
+                provider: params.provider,
+                key: "test-key",
+              },
     },
     usageStats: {
       [profileId]: params.usageStat,
@@ -524,8 +532,8 @@ async function expectSkippedUnavailableProvider(params: {
   providerPrefix: string;
   usageStat: NonNullable<AuthProfileStore["usageStats"]>[string];
   expectedReason: string;
-  credentialType?: "api_key" | "token";
-  expectedAuthMode?: "token";
+  credentialType?: "api_key" | "oauth" | "token";
+  expectedAuthMode?: "oauth" | "token";
 }) {
   const provider = `${params.providerPrefix}-${crypto.randomUUID()}`;
   const cfg = makeProviderFallbackCfg(provider);
@@ -3451,6 +3459,39 @@ describe("runWithModelFallback", () => {
     expect(result.attempts[0]?.authMode).toBe("oauth");
   });
 
+  it("preserves auth mode metadata after fallback exhaustion", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.6-sol",
+            fallbacks: ["openai/gpt-5.6-terra"],
+          },
+        },
+      },
+    });
+    const run = vi.fn().mockRejectedValue(
+      new FailoverError("OpenAI OAuth unavailable", {
+        reason: "auth_permanent",
+        provider: "openai",
+        authMode: "oauth",
+      }),
+    );
+
+    const error = requireFallbackSummaryError(
+      await captureRejection(
+        runWithModelFallback({
+          cfg,
+          provider: "openai",
+          model: "gpt-5.6-sol",
+          run,
+        }),
+      ),
+    );
+
+    expect(error.authMode).toBe("oauth");
+  });
+
   it("falls back on model-not-found error shapes", async () => {
     const cases: Array<{
       name: string;
@@ -3572,6 +3613,19 @@ describe("runWithModelFallback", () => {
         cooldownUntil: Date.now() + 5 * 60_000,
       },
       expectedReason: "unknown",
+    });
+  });
+
+  it("preserves OAuth mode when auth-disabled profiles are skipped", async () => {
+    await expectSkippedUnavailableProvider({
+      providerPrefix: "auth-disabled",
+      usageStat: {
+        disabledUntil: Date.now() + 5 * 60_000,
+        disabledReason: "auth_permanent",
+      },
+      expectedReason: "auth_permanent",
+      credentialType: "oauth",
+      expectedAuthMode: "oauth",
     });
   });
 

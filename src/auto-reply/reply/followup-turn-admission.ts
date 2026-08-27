@@ -14,7 +14,7 @@ import type { ReplyPayload } from "../types.js";
 import { resolveRunAfterAutoFallbackPrimaryProbeRecheck } from "./agent-runner-auto-fallback.js";
 import { resolveAdmittedRunSessionFile } from "./agent-runner-core.js";
 import { buildPreflightCompactionFailureText } from "./agent-runner-failure-reply.js";
-import { runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
+import { runSessionCompactionIfNeeded } from "./agent-runner-memory.js";
 import {
   resolveQueuedReplyExecutionConfig,
   resolveQueuedReplyRuntimeConfig,
@@ -374,7 +374,7 @@ export async function admitFollowupTurn(params: {
         : undefined;
     const preflightEntry = session.current();
     try {
-      activeEntry = await runPreflightCompactionIfNeeded({
+      activeEntry = await runSessionCompactionIfNeeded({
         cfg: config,
         followupRun: turn.queued,
         promptForEstimate: turn.queued.prompt,
@@ -384,7 +384,9 @@ export async function admitFollowupTurn(params: {
         sessionKey: replySessionKey,
         storePath: params.defaults.storePath,
         isHeartbeat: params.defaults.opts?.isHeartbeat === true,
-        replyOperation: operation,
+        abortSignal: operation.abortSignal,
+        onCompactionStart: () => operation.setPhase("preflight_compacting"),
+        onSessionIdChanged: (sessionId) => operation.updateSessionId(sessionId),
         onCompactionNotice: notifyPreflightCompaction,
       });
       if (compactionNoticeGenerationInvalidated) {

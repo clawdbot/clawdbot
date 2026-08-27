@@ -94,6 +94,7 @@ import { resolveInstalledPluginPackageOwnership } from "./installed-plugin-packa
 import { ManagedPluginLifecycleError } from "./management-lifecycle-error.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
+import { installPluginFromMarketplace } from "./marketplace.js";
 import {
   resolveTrustedOfficialClawHubPackageName,
   resolveTrustedSourceLinkedOfficialClawHubSpec,
@@ -200,6 +201,12 @@ export type ManagedPluginSourceInstallRequest =
       mode: "install" | "update";
     }
   | { source: "git"; spec: string; mode: "install" | "update" }
+  | {
+      source: "marketplace";
+      marketplace: string;
+      plugin: string;
+      mode: "install" | "update";
+    }
   | {
       source: "clawhub";
       spec: string;
@@ -1471,7 +1478,11 @@ async function installResolvedManagedPluginSource(
         config: params.snapshot.config,
         env,
         source,
-        ...("spec" in request ? { spec: request.spec } : {}),
+        ...(request.source === "marketplace"
+          ? { spec: `${request.plugin}@${request.marketplace}` }
+          : "spec" in request
+            ? { spec: request.spec }
+            : {}),
         ...("expectedIntegrity" in request && request.expectedIntegrity
           ? { expectedIntegrity: request.expectedIntegrity }
           : {}),
@@ -1573,6 +1584,27 @@ async function installResolvedManagedPluginSource(
           sourcePath: request.path,
           installPath: installPath ?? result.targetDir,
           version: result.version,
+        }),
+      },
+    );
+  }
+
+  if (request.source === "marketplace") {
+    return await complete(
+      installPluginFromMarketplace({
+        ...common,
+        marketplace: request.marketplace,
+        plugin: request.plugin,
+        mode: request.mode,
+      }),
+      {
+        install: (result) => ({
+          source: "marketplace",
+          installPath: result.targetDir,
+          version: result.version,
+          marketplaceName: result.marketplaceName,
+          marketplaceSource: result.marketplaceSource,
+          marketplacePlugin: result.marketplacePlugin,
         }),
       },
     );

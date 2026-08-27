@@ -1990,6 +1990,7 @@ async function verifyCodexSubagentProbe(params: {
 
 async function verifyCodexNativeSubagentBridgeProbe(params: {
   client: GatewayClient;
+  events: EventFrame[];
   sessionKey: string;
 }): Promise<void> {
   const runId = randomUUID();
@@ -2030,6 +2031,54 @@ async function verifyCodexNativeSubagentBridgeProbe(params: {
       text,
     )}; events=${JSON.stringify(events)}; tasks=${JSON.stringify(codexNativeTasks)}`,
   ).toBeDefined();
+
+  const parentControlledChild = events.some(
+    (event) => event.stream === "codex_app_server.item" && event.data?.type === "subAgentActivity",
+  );
+  if (parentControlledChild) {
+    // Native task IDs record the child thread at creation; model output is not
+    // authoritative enough to select the thread for this ownership probe.
+    const childThreadId = deliveredTask?.sourceId?.match(/^codex-thread:(.+)$/)?.[1];
+    expect(childThreadId).toBeTypeOf("string");
+    const sessionId = await readCodexHarnessSessionId(params);
+    const readBinding = () => {
+      const row = pluginStateEntriesInKeyRange({
+        pluginId: "codex",
+        namespace: "app-server-thread-bindings",
+        keyStartInclusive: "session-key:dev:",
+        keyEndExclusive: "session-key:dev;",
+        limit: 100,
+      }).find((entry) => asOptionalRecord(entry.value)?.sessionId === sessionId);
+      // Lease acquisition refreshes the KV write timestamp even when binding content is unchanged.
+      return row ? { key: row.key, value: row.value } : undefined;
+    };
+    const bindingBefore = readBinding();
+    expect(bindingBefore).toBeDefined();
+    const threadIdBefore = asOptionalRecord(
+      asOptionalRecord(bindingBefore?.value)?.binding,
+    )?.threadId;
+    expect(threadIdBefore).toBeTypeOf("string");
+    expect(threadIdBefore).not.toBe(childThreadId);
+    await requestCodexCommandText({
+      ...params,
+      command: `/codex resume ${childThreadId}`,
+      expectedText: "controlled by its parent",
+    });
+    expect(readBinding()).toEqual(bindingBefore);
+    await requestAgentText({
+      client: params.client,
+      sessionKey: params.sessionKey,
+      message: "Reply exactly PARENT-STILL-ATTACHED and nothing else.",
+      expectedReply: "PARENT-STILL-ATTACHED",
+    });
+    expect(readBinding()?.key).toBe(bindingBefore?.key);
+    expect(asOptionalRecord(asOptionalRecord(readBinding()?.value)?.binding)?.threadId).toBe(
+      threadIdBefore,
+    );
+    logCodexLiveStep("native-subagent-direct-input:rejected", { childThreadId });
+  } else {
+    logCodexLiveStep("native-subagent-direct-input:legacy-not-applicable");
+  }
 
   function listCodexNativeTasks() {
     return listTaskRecords().filter(
@@ -2313,7 +2362,11 @@ describeLive("gateway live (Codex harness)", () => {
               logCodexLiveStep("subagent-probe:start", { sessionKey });
               await verifyCodexSubagentProbe({ client: activeClient, sessionKey });
               logCodexLiveStep("native-subagent-bridge-probe:start", { sessionKey });
-              await verifyCodexNativeSubagentBridgeProbe({ client: activeClient, sessionKey });
+              await verifyCodexNativeSubagentBridgeProbe({
+                client: activeClient,
+                events: gatewayEvents,
+                sessionKey,
+              });
               logCodexLiveStep("subagent-probe:done");
               if (CODEX_HARNESS_SUBAGENT_ONLY) {
                 return;

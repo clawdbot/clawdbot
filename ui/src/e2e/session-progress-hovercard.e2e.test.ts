@@ -11,6 +11,7 @@ import {
   controlUiSessionUrl,
   createChatFlowE2eSuite,
   installMockGateway,
+  pauseVirtualClock,
 } from "./chat-flow.test-support.ts";
 
 const proofDir = path.join(
@@ -536,6 +537,8 @@ suite.define(() => {
         viewport: { height: 900, width: 1280 },
       },
       async ({ page }) => {
+        // Browser RPC time must not consume the hover-delay assertion windows.
+        await page.clock.install();
         await installMockGateway(page, {
           featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
           methodResponses: {
@@ -559,6 +562,7 @@ suite.define(() => {
             () => customElements.get("openclaw-session-progress-hovercard-provider") === undefined,
           ),
         ).toBe(true);
+        await pauseVirtualClock(page);
 
         const pointer = async (
           locator: typeof first,
@@ -574,9 +578,11 @@ suite.define(() => {
           });
 
         await first.hover();
+        await expect.poll(() => first.getAttribute("aria-haspopup")).toBe("dialog");
         expect(await card.count()).toBe(0);
-        await page.waitForTimeout(300);
+        await page.clock.runFor(449);
         expect(await card.count()).toBe(0);
+        await page.clock.runFor(1);
         await card.waitFor({ state: "visible" });
         const firstBounds = await first.boundingBox();
         expect(firstBounds).not.toBeNull();
@@ -586,21 +592,29 @@ suite.define(() => {
           clientX: (firstBounds?.x ?? 0) + (firstBounds?.width ?? 0),
           clientY: (firstBounds?.y ?? 0) + (firstBounds?.height ?? 0) / 2,
         });
-        await page.waitForTimeout(150);
+        await page.clock.runFor(219);
         expect(await card.count()).toBe(1);
         await page.mouse.move(
           (cardBounds?.x ?? 0) + (cardBounds?.width ?? 0) / 2,
           (cardBounds?.y ?? 0) + (cardBounds?.height ?? 0) / 2,
         );
+        await page.clock.runFor(1);
         expect(await card.count()).toBe(1);
         await page.mouse.move(900, 800);
-        await page.waitForTimeout(50);
+        await page.clock.runFor(99);
         expect(await card.count()).toBe(1);
-        await expect.poll(() => card.count()).toBe(0);
-        await page.waitForTimeout(300);
+        await page.clock.runFor(1);
+        expect(
+          await card.evaluateAll((cards) =>
+            cards.every((element) => element.getAttribute("data-open") === "false"),
+          ),
+        ).toBe(true);
+        await page.clock.runFor(300);
+        expect(await card.count()).toBe(0);
 
         await first.hover();
         await first.locator("a.sidebar-recent-session__link").focus();
+        await page.clock.runFor(1);
         await card.waitFor({ state: "visible" });
         await expect
           .poll(() => card.locator(".session-hovercard__title").textContent())
@@ -608,28 +622,34 @@ suite.define(() => {
         await page.keyboard.press("Escape");
         await expect.poll(() => card.count()).toBe(0);
         await page.mouse.move(900, 800);
-        await page.waitForTimeout(300);
+        await page.clock.runFor(300);
 
         await first.hover();
         expect(await card.count()).toBe(0);
+        await page.clock.runFor(449);
+        expect(await card.count()).toBe(0);
+        await page.clock.runFor(1);
         await card.waitFor({ state: "visible" });
 
         await second.hover();
-        await page.waitForTimeout(40);
+        await page.clock.runFor(79);
         expect(await card.locator(".session-hovercard__title").textContent()).toBe(
           "First timing row",
         );
-        await expect
-          .poll(() => card.locator(".session-hovercard__title").textContent())
-          .toBe("Second timing row");
+        await page.clock.runFor(1);
+        expect(await card.locator(".session-hovercard__title").textContent()).toBe(
+          "Second timing row",
+        );
 
         await card.hover();
         expect(await card.count()).toBe(1);
         await page.mouse.move(900, 800);
-        await expect.poll(() => card.count()).toBe(0);
-        await page.waitForTimeout(300);
+        await page.clock.runFor(100);
+        await page.clock.runFor(300);
+        expect(await card.count()).toBe(0);
 
         await first.hover();
+        await page.clock.runFor(450);
         await card.waitFor({ state: "visible" });
         await first
           .getByRole("button", { name: "Open session menu: First timing row" })
@@ -639,7 +659,7 @@ suite.define(() => {
           .poll(() => page.locator("openclaw-session-menu").getByRole("menuitem").count())
           .toBeGreaterThan(0);
         await second.dispatchEvent("pointerover", { pointerType: "mouse" });
-        await page.waitForTimeout(500);
+        await page.clock.runFor(500);
         expect(await card.count()).toBe(0);
       },
     );

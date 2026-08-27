@@ -31,6 +31,9 @@ vi.mock("./install.js", async (importOriginal) => ({
   installPluginFromNpmPackArchive: (...args: unknown[]) => mocks.install(...args),
   installPluginFromPath: (...args: unknown[]) => mocks.install(...args),
 }));
+vi.mock("./marketplace.js", () => ({
+  installPluginFromMarketplace: (...args: unknown[]) => mocks.install(...args),
+}));
 vi.mock("./install-persistence.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./install-persistence.js")>()),
   persistPluginInstall: (...args: unknown[]) => mocks.persist(...args),
@@ -46,6 +49,12 @@ const requests = [
   { source: "npm-pack", archivePath: "/incoming.tgz", mode: "update" },
   { source: "git", spec: "git:example/demo", mode: "update" },
   { source: "clawhub", spec: "clawhub:community/demo", mode: "update" },
+  {
+    source: "marketplace",
+    marketplace: "local/repo",
+    plugin: "demo",
+    mode: "update",
+  },
 ] satisfies ManagedPluginSourceInstallRequest[];
 
 describe("managed plugin install transactions", () => {
@@ -73,6 +82,13 @@ describe("managed plugin install transactions", () => {
           params: Parameters<typeof import("./install-persistence.js").persistPluginInstall>[0],
         ) => {
           expect(params.install.acceptedSurface?.tools).toEqual(["demo.write"]);
+          if (request.source === "marketplace") {
+            expect(params.install).toMatchObject({
+              source: "marketplace",
+              marketplaceSource: request.marketplace,
+              marketplacePlugin: request.plugin,
+            });
+          }
           if (failure === "before-commit") {
             throw conflict;
           }
@@ -115,6 +131,9 @@ describe("managed plugin install transactions", () => {
             targetDir,
             version: "2.0.0",
             extensions: [],
+            marketplaceName: "Local",
+            marketplaceSource: "local/repo",
+            marketplacePlugin: "demo",
             git: { url: "https://example.test/demo.git" },
             packageName: "community/demo",
             clawhub: {

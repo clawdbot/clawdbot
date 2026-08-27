@@ -641,6 +641,8 @@ export function throwFallbackFailureSummary(params: {
     reason: lastAttempt?.reason ?? "unknown",
     provider: lastAttempt?.provider,
     model: lastAttempt?.model,
+    // Recovery must not infer OAuth from the provider after candidate errors collapse here.
+    authMode: lastAttempt?.authMode,
     status: lastAttempt?.status,
     code: lastAttempt?.code,
     cause: params.lastError instanceof Error ? params.lastError : undefined,

@@ -320,7 +320,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +3: typed ask_user option-index contract and two bounded owner-order resolvers.
       // +2: exact-session deletion parameters and synchronous companion mutation contract.
       // +2: canonical session-model selection and auxiliary runtime-auth preparation.
-      4346,
+      // +1: identifier authentication input type for external channel plugins.
+      4347,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
