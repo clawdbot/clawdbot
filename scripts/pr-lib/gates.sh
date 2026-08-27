@@ -339,6 +339,8 @@ run_remote_crabbox_aws_gate() {
     --tailscale=false \
     --no-hydrate \
     --fresh-pr "openclaw/openclaw#$pr" \
+    --idle-timeout 90m \
+    --ttl 240m \
     --stop-after always \
     --timing-json \
     --label "openclaw-pr-gate:$pr:$head_sha" \
