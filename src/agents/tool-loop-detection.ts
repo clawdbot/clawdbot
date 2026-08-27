@@ -3,13 +3,13 @@
  *
  * Watches recent tool history for repeated no-progress patterns and circuit-breaker thresholds.
  */
-import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
 import {
   normalizeNullableString as nonEmptyStringField,
   normalizeOptionalString as normalizeRunId,
 } from "@openclaw/normalization-core/string-coerce";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
+import { sha256Hex } from "../infra/crypto-digest.js";
 import type { SessionState, ToolCallRecord } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isPlainObject } from "../utils.js";
@@ -107,12 +107,28 @@ function resolveLoopDetectionConfig(config?: ToolLoopDetectionConfig): ResolvedL
  * Uses tool name + deterministic JSON serialization digest of params.
  */
 export function hashToolCall(toolName: string, params: unknown): string {
-  return `${toolName}:${digestStable(params)}`;
+  return `${toolName}:${sha256Hex(stableStringify(params))}`;
 }
 
-function digestStable(value: unknown): string {
-  const serialized = stableStringify(value);
-  return createHash("sha256").update(serialized).digest("hex");
+function digestToolOutcome(value: unknown): string {
+  // Canonical IDs retain valid envelope syntax; malformed markers and JSON field
+  // boundaries remain meaningful. Literal/copied envelopes share this syntax rule;
+  // it grants no trust and never changes arguments or delivered content.
+  const canonicalMarkerId = "0000000000000000";
+  const serialized = stableStringify(value, (text) =>
+    text.replace(
+      /(<<<EXTERNAL_UNTRUSTED_CONTENT id=(\\*)")([a-f0-9]{16})(\2">>>(?:(?!<<<(?:END_)?EXTERNAL_UNTRUSTED_CONTENT)[\s\S])*<<<END_EXTERNAL_UNTRUSTED_CONTENT id=\2")\3(\2">>>)/g,
+      // Repeated JSON encoding produces 2^n - 1 backslashes before marker quotes.
+      (match, start: string, escapes: string, _id: string, middle: string, end: string) =>
+        (escapes.length & (escapes.length + 1)) !== 0 ||
+        [...middle.matchAll(/(?<!\\)\\*"/g)].some(
+          (quote) => quote[0].length % (escapes.length + 1) !== 0,
+        )
+          ? match
+          : start + canonicalMarkerId + middle + canonicalMarkerId + end,
+    ),
+  );
+  return sha256Hex(serialized);
 }
 
 function extractTextContent(result: unknown): string {
@@ -165,14 +181,14 @@ function hashExecToolOutcome(details: Record<string, unknown>, text: string): st
   }
 
   if (status === "running") {
-    return digestStable({
+    return digestToolOutcome({
       status,
       tail: stringField(details.tail) ?? "",
     });
   }
 
   if (status === "completed" || status === "failed") {
-    return digestStable({
+    return digestToolOutcome({
       status,
       exitCode: typeof details.exitCode === "number" ? details.exitCode : null,
       timedOut: details.timedOut === true,
@@ -181,7 +197,7 @@ function hashExecToolOutcome(details: Record<string, unknown>, text: string): st
   }
 
   if (status === "approval-pending" || status === "approval-unavailable") {
-    return digestStable({
+    return digestToolOutcome({
       status,
       reason: stringField(details.reason),
       host: stringField(details.host),
@@ -291,13 +307,13 @@ function hashToolOutcome(
   if (error !== undefined) {
     const unknownToolName = extractUnknownToolName(error);
     return {
-      resultHash: `error:${digestStable(formatErrorForHash(error))}`,
+      resultHash: `error:${digestToolOutcome(formatErrorForHash(error))}`,
       noProgress: true,
       unknownToolName,
     };
   }
   if (!isPlainObject(result)) {
-    return { resultHash: result === undefined ? undefined : digestStable(result) };
+    return { resultHash: result === undefined ? undefined : digestToolOutcome(result) };
   }
 
   const details = isPlainObject(result.details) ? result.details : {};
@@ -327,13 +343,13 @@ function hashToolOutcome(
     }
   }
   if (toolName === "write" && isWriteNoProgressOutcome(details)) {
-    return { resultHash: digestStable({ status: "unchanged" }), noProgress: true };
+    return { resultHash: digestToolOutcome({ status: "unchanged" }), noProgress: true };
   }
   if (isKnownPollToolCall(toolName, params) && toolName === "process" && isPlainObject(params)) {
     const action = params.action;
     if (action === "poll") {
       return {
-        resultHash: digestStable({
+        resultHash: digestToolOutcome({
           action,
           status: details.status,
           exitCode: details.exitCode ?? null,
@@ -345,7 +361,7 @@ function hashToolOutcome(
     }
     if (action === "log") {
       return {
-        resultHash: digestStable({
+        resultHash: digestToolOutcome({
           action,
           status: details.status,
           totalLines: details.totalLines ?? null,
@@ -360,11 +376,11 @@ function hashToolOutcome(
   }
 
   if (isVolatileSendResult(toolName, params)) {
-    return { resultHash: digestStable(stripVolatileSendIds(details)) };
+    return { resultHash: digestToolOutcome(stripVolatileSendIds(details)) };
   }
 
   return {
-    resultHash: digestStable({
+    resultHash: digestToolOutcome({
       details,
       text,
     }),
