@@ -244,13 +244,23 @@ describe("daytona exec launcher", () => {
     expect(ptyHandle.disconnect).toHaveBeenCalledTimes(1);
   });
 
-  it("forwards stdin EOF to a Daytona PTY", async () => {
+  it("forwards stdin data before EOF to a Daytona PTY", async () => {
     const launcher = await loadLauncher();
     const stdin = Object.assign(new EventEmitter(), { resume: vi.fn() });
     let resolveWait: ((result: { exitCode: number }) => void) | undefined;
+    let resolveData: (() => void) | undefined;
     const ptyHandle = {
       waitForConnection: vi.fn(async () => {}),
-      sendInput: vi.fn(async () => {}),
+      sendInput: vi
+        .fn()
+        .mockResolvedValueOnce(undefined)
+        .mockImplementationOnce(
+          () =>
+            new Promise<void>((resolve) => {
+              resolveData = resolve;
+            }),
+        )
+        .mockResolvedValue(undefined),
       wait: vi.fn(
         () =>
           new Promise<{ exitCode: number }>((resolve) => {
@@ -273,7 +283,11 @@ describe("daytona exec launcher", () => {
     );
     await vi.waitFor(() => expect(ptyHandle.wait).toHaveBeenCalledTimes(1));
 
+    stdin.emit("data", Buffer.from("hello"));
     stdin.emit("end");
+    await vi.waitFor(() => expect(ptyHandle.sendInput).toHaveBeenCalledTimes(2));
+
+    resolveData?.();
     await vi.waitFor(() => expect(ptyHandle.sendInput).toHaveBeenLastCalledWith("\x04"));
 
     resolveWait?.({ exitCode: 0 });

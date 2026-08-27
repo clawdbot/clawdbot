@@ -127,13 +127,19 @@ export async function runPtyExec(sandbox, payload, options = {}) {
     }
 
     const stdin = options.stdin ?? process.stdin;
+    let inputQueue = Promise.resolve();
+    const enqueueInput = (data) => {
+      // Preserve terminal byte order across the SDK's async send boundary;
+      // EOT must never overtake the final stdin chunk.
+      inputQueue = inputQueue.then(() => ptyHandle.sendInput(data)).catch(() => {});
+    };
     stdin.on("data", (chunk) => {
-      void ptyHandle.sendInput(new Uint8Array(chunk)).catch(() => {});
+      enqueueInput(new Uint8Array(chunk));
     });
     // A pipe-open caller closes stdin to signal EOF. PTYs have no half-close,
     // so forward terminal EOT or commands waiting for EOF can hang indefinitely.
     stdin.on("end", () => {
-      void ptyHandle.sendInput("\x04").catch(() => {});
+      enqueueInput("\x04");
     });
     stdin.resume();
     process.stdout.on("resize", () => {
