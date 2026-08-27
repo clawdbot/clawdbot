@@ -25,6 +25,7 @@ const { wakeSubagentRunAfterDescendants } =
 function createWakeHarness(params: {
   callGateway: ReturnType<typeof vi.fn>;
   replaced: boolean;
+  acceptedBindingStatus?: "persisted" | "pending-persistence";
   dispatchGatewayMethodInProcess?: ReturnType<typeof vi.fn>;
 }) {
   const sourceEntry = createSubagentRunRecord({
@@ -46,11 +47,22 @@ function createWakeHarness(params: {
   const recordAcceptedSubagentSteerDispatch = vi.fn(
     async (recordParams: {
       gatewayRunId: string;
+      expectedDispatch?: SubagentAcceptedSteerDispatch;
       phase?: SubagentAcceptedSteerDispatch["phase"];
       lifecycleGeneration?: string;
       expectedSessionId?: string;
       expectedLifecycleRevision?: string;
     }) => {
+      if (
+        recordParams.expectedDispatch &&
+        sourceEntry.acceptedSteerDispatch !== recordParams.expectedDispatch
+      ) {
+        return { status: "rejected" as const };
+      }
+      const status =
+        recordParams.phase === "accepted"
+          ? (params.acceptedBindingStatus ?? "persisted")
+          : "persisted";
       const dispatch = {
         gatewayRunId: recordParams.gatewayRunId,
         phase: recordParams.phase,
@@ -60,7 +72,7 @@ function createWakeHarness(params: {
       };
       sourceEntry.acceptedSteerDispatch = dispatch;
       return {
-        status: "persisted" as const,
+        status,
         ownerRunId: sourceEntry.runId,
         owner: sourceEntry,
         dispatch,
@@ -185,6 +197,42 @@ describe("wakeSubagentRunAfterDescendants", () => {
     );
   });
 
+  it("binds a runtime-assigned accepted run id to the exact durable reservation", async () => {
+    mocks.loadSessionEntryByKey.mockReturnValue({ sessionId: "sess-wake" });
+    const runtimeRunId = "runtime-assigned-wake-run";
+    const dispatchGatewayMethodInProcess = vi.fn(async () => ({
+      runId: runtimeRunId,
+      status: "accepted",
+    }));
+    const callGateway = vi.fn(async () => ({}));
+    const harness = createWakeHarness({
+      callGateway,
+      replaced: true,
+      dispatchGatewayMethodInProcess,
+    });
+
+    await expect(wakeSubagentRunAfterDescendants(wakeParams, harness.deps)).resolves.toBe("woke");
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(harness.recordAcceptedSubagentSteerDispatch).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        gatewayRunId: runtimeRunId,
+        expectedDispatch: expect.objectContaining({
+          gatewayRunId: wakeDispatchId,
+          phase: "dispatching",
+        }),
+        phase: "accepted",
+      }),
+    );
+    expect(harness.replaceSubagentRunAfterSteer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        previousRunId: wakeParams.runId,
+        nextRunId: runtimeRunId,
+      }),
+    );
+  });
+
   it("retains ownership when the wake response is lost after dispatch", async () => {
     mocks.loadSessionEntryByKey.mockReturnValue({ sessionId: "sess-wake" });
     const dispatchGatewayMethodInProcess = vi.fn(async (_method: string, _params: unknown) => {
@@ -213,12 +261,13 @@ describe("wakeSubagentRunAfterDescendants", () => {
     });
   });
 
-  it("rejects a mismatched response run id without replacing deterministic ownership", async () => {
+  it("cleans the deterministic reservation when the wake response is empty", async () => {
     mocks.loadSessionEntryByKey.mockReturnValue({ sessionId: "sess-wake" });
-    const dispatchGatewayMethodInProcess = vi.fn(async () => ({
-      runId: "mismatched-wake-run",
+    const dispatchGatewayMethodInProcess = vi.fn(async () => ({}));
+    const callGateway = vi.fn(async (request: { params?: { runId?: string } }) => ({
+      aborted: true,
+      runIds: [request.params?.runId],
     }));
-    const callGateway = vi.fn(async () => ({ aborted: true, runIds: [wakeDispatchId] }));
     const harness = createWakeHarness({
       callGateway,
       replaced: true,
@@ -236,5 +285,108 @@ describe("wakeSubagentRunAfterDescendants", () => {
         params: { sessionKey: wakeParams.childSessionKey, runId: wakeDispatchId },
       }),
     );
+    expect(harness.sourceEntry.acceptedSteerDispatch).toBeUndefined();
+  });
+
+  it("defers replacement when the accepted run binding is not durable", async () => {
+    mocks.loadSessionEntryByKey.mockReturnValue({ sessionId: "sess-wake" });
+    const runtimeRunId = "runtime-wake-pending-persistence";
+    const dispatchGatewayMethodInProcess = vi.fn(async () => ({
+      runId: runtimeRunId,
+      status: "accepted",
+    }));
+    const callGateway = vi.fn(async () => ({}));
+    const harness = createWakeHarness({
+      callGateway,
+      replaced: true,
+      acceptedBindingStatus: "pending-persistence",
+      dispatchGatewayMethodInProcess,
+    });
+
+    await expect(wakeSubagentRunAfterDescendants(wakeParams, harness.deps)).resolves.toBe(
+      "termination-unconfirmed",
+    );
+
+    expect(harness.replaceSubagentRunAfterSteer).not.toHaveBeenCalled();
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(harness.sourceEntry.acceptedSteerDispatch).toMatchObject({
+      gatewayRunId: runtimeRunId,
+      phase: "accepted",
+    });
+  });
+
+  it("terminates an accepted run when completion authority closes before replacement", async () => {
+    mocks.loadSessionEntryByKey.mockReturnValue({ sessionId: "sess-wake" });
+    const runtimeRunId = "runtime-wake-after-closure";
+    let effectsAllowed = true;
+    const dispatchGatewayMethodInProcess = vi.fn(async () => {
+      effectsAllowed = false;
+      return { runId: runtimeRunId, status: "accepted" };
+    });
+    const callGateway = vi.fn(async (request: { params?: { runId?: string } }) => ({
+      aborted: true,
+      runIds: [request.params?.runId],
+    }));
+    const harness = createWakeHarness({
+      callGateway,
+      replaced: true,
+      dispatchGatewayMethodInProcess,
+    });
+
+    await expect(
+      wakeSubagentRunAfterDescendants(
+        { ...wakeParams, isChildSessionEffectsAllowed: () => effectsAllowed },
+        harness.deps,
+      ),
+    ).resolves.toBe("not-woken");
+
+    expect(harness.replaceSubagentRunAfterSteer).not.toHaveBeenCalled();
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "chat.abort",
+        params: { sessionKey: wakeParams.childSessionKey, runId: runtimeRunId },
+      }),
+    );
+    expect(harness.sourceEntry.acceptedSteerDispatch).toBeUndefined();
+  });
+
+  it("rejects a mismatched response run id without replacing deterministic ownership", async () => {
+    mocks.loadSessionEntryByKey.mockReturnValue({ sessionId: "sess-wake" });
+    const dispatchGatewayMethodInProcess = vi.fn(async () => ({
+      runId: "mismatched-wake-run",
+    }));
+    const callGateway = vi.fn(async (request: { params?: { runId?: string } }) => ({
+      aborted: true,
+      runIds: [request.params?.runId],
+    }));
+    const harness = createWakeHarness({
+      callGateway,
+      replaced: true,
+      dispatchGatewayMethodInProcess,
+    });
+
+    await expect(wakeSubagentRunAfterDescendants(wakeParams, harness.deps)).resolves.toBe(
+      "not-woken",
+    );
+
+    expect(harness.replaceSubagentRunAfterSteer).not.toHaveBeenCalled();
+    expect(callGateway).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        method: "chat.abort",
+        params: { sessionKey: wakeParams.childSessionKey, runId: "mismatched-wake-run" },
+      }),
+    );
+    expect(callGateway).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        method: "chat.abort",
+        params: { sessionKey: wakeParams.childSessionKey, runId: wakeDispatchId },
+      }),
+    );
+    expect(harness.recordAcceptedSubagentSteerDispatch).not.toHaveBeenCalledWith(
+      expect.objectContaining({ gatewayRunId: "mismatched-wake-run" }),
+    );
+    expect(harness.sourceEntry.acceptedSteerDispatch).toBeUndefined();
   });
 });

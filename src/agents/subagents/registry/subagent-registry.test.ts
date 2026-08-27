@@ -1222,6 +1222,72 @@ describe("subagent registry seam flow", () => {
     expect(mocks.persistSubagentRunsToDiskOrThrow.mock.calls.length).toBeGreaterThanOrEqual(4);
   });
 
+  it("promotes only the exact current steer reservation to an accepted run", () => {
+    const runId = "run-steer-exact-reservation";
+    const entry = createSubagentRunRecord({
+      runId,
+      childSessionKey: "agent:main:subagent:steer-exact-reservation",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "bind the accepted gateway run",
+      cleanup: "keep",
+      createdAt: Date.now() - 1_000,
+      startedAt: Date.now() - 500,
+    });
+    mod.addSubagentRunForTests(entry);
+    const stored = mod.getSubagentRunByRunId(runId);
+    if (!stored) {
+      throw new Error("expected exact steer reservation owner");
+    }
+    expect(mod.markSubagentRunForSteerRestart(runId, stored)).toBe(true);
+    const reserved = mod.recordAcceptedSubagentSteerDispatch({
+      runId,
+      expected: stored,
+      gatewayRunId: "deterministic-reservation",
+      phase: "dispatching",
+    });
+    expect(reserved.status).toBe("persisted");
+    if (reserved.status === "rejected") {
+      throw new Error("expected persisted steer reservation");
+    }
+
+    expect(
+      mod.recordAcceptedSubagentSteerDispatch({
+        runId,
+        expected: stored,
+        gatewayRunId: "unbound-runtime-run",
+        expectedDispatch: { gatewayRunId: "stale-reservation", phase: "dispatching" },
+        phase: "accepted",
+      }),
+    ).toEqual({ status: "rejected" });
+    expect(stored.acceptedSteerDispatch).toBe(reserved.dispatch);
+
+    const accepted = mod.recordAcceptedSubagentSteerDispatch({
+      runId,
+      expected: stored,
+      gatewayRunId: "bound-runtime-run",
+      expectedDispatch: reserved.dispatch,
+      phase: "accepted",
+    });
+    expect(accepted).toMatchObject({
+      status: "persisted",
+      ownerRunId: runId,
+      dispatch: {
+        gatewayRunId: "bound-runtime-run",
+        phase: "accepted",
+      },
+    });
+    expect(
+      mod.recordAcceptedSubagentSteerDispatch({
+        runId,
+        expected: stored,
+        gatewayRunId: "late-runtime-run",
+        expectedDispatch: reserved.dispatch,
+        phase: "accepted",
+      }),
+    ).toEqual({ status: "rejected" });
+  });
+
   it("keeps killed ownership while reconciling an accepted steer dispatch", async () => {
     const runId = "run-steer-kill-race";
     const gatewayRunId = "run-steer-kill-race-next";

@@ -37,6 +37,11 @@ type SubagentDescendantWakeDeps = {
   loadSubagentRegistryRuntime: () => Promise<SubagentRegistryRuntime>;
 };
 
+type WakeAgentResponse = {
+  runId?: string;
+  status?: string;
+};
+
 export function hasUsableSessionEntry(entry: unknown): entry is Record<string, unknown> {
   if (!isRecord(entry)) {
     return false;
@@ -96,6 +101,8 @@ export async function wakeSubagentRunAfterDescendants(
   if (!hasUsableSessionEntry(childEntry)) {
     return "not-woken";
   }
+  const expectedSessionId = normalizeOptionalString(childEntry.sessionId);
+  const expectedLifecycleRevision = normalizeOptionalString(childEntry.lifecycleRevision);
 
   const cfg = deps.getRuntimeConfig();
   const announceTimeoutMs = resolveSubagentAnnounceTimeoutMs(cfg);
@@ -116,14 +123,8 @@ export async function wakeSubagentRunAfterDescendants(
     gatewayRunId: wakeDispatchId,
     phase: "dispatching",
     lifecycleGeneration: wakeLifecycleGeneration,
-    expectedSessionId:
-      typeof childEntry.sessionId === "string"
-        ? childEntry.sessionId.trim() || undefined
-        : undefined,
-    expectedLifecycleRevision:
-      typeof childEntry.lifecycleRevision === "string"
-        ? childEntry.lifecycleRevision.trim() || undefined
-        : undefined,
+    expectedSessionId,
+    expectedLifecycleRevision,
   });
   if (reservedDispatch.status !== "persisted") {
     if (reservedDispatch.status === "rejected") {
@@ -142,75 +143,77 @@ export async function wakeSubagentRunAfterDescendants(
     owner: reservedDispatch.owner,
     dispatch: reservedDispatch.dispatch,
   };
-  const recordAcceptedWake = async (gatewayRunId: string): Promise<boolean> => {
+  const recordAcceptedWake = async (
+    gatewayRunId: string,
+  ): Promise<"persisted" | "pending-persistence" | "rejected"> => {
     const acceptedDispatch = await registryRuntime.recordLazySubagentSteerDispatch({
       runId: wakeDispatchOwnership.ownerRunId,
       expected: wakeDispatchOwnership.owner,
       gatewayRunId,
+      expectedDispatch: wakeDispatchOwnership.dispatch,
       phase: "accepted",
       lifecycleGeneration: wakeLifecycleGeneration,
-      expectedSessionId:
-        typeof childEntry.sessionId === "string"
-          ? childEntry.sessionId.trim() || undefined
-          : undefined,
-      expectedLifecycleRevision:
-        typeof childEntry.lifecycleRevision === "string"
-          ? childEntry.lifecycleRevision.trim() || undefined
-          : undefined,
+      expectedSessionId,
+      expectedLifecycleRevision,
     });
     if (acceptedDispatch.status === "rejected") {
-      return false;
+      return "rejected";
     }
     wakeDispatchOwnership = {
       ownerRunId: acceptedDispatch.ownerRunId,
       owner: acceptedDispatch.owner,
       dispatch: acceptedDispatch.dispatch,
     };
-    return true;
+    return acceptedDispatch.status;
   };
-  const terminateUnownedWake = async (
-    gatewayRunId: string,
-    acceptedDispatchRecorded = false,
-  ): Promise<SubagentDescendantWakeOutcome> => {
-    if (!acceptedDispatchRecorded) {
-      await recordAcceptedWake(gatewayRunId);
-    }
-    const terminated = await terminateAcceptedCollectorRun({
+  const stopWake = async (gatewayRunId: string, accepted: boolean) =>
+    await terminateAcceptedCollectorRun({
       childSessionKey: params.childSessionKey,
       gatewayRunId,
-      expectedSessionId:
-        typeof childEntry.sessionId === "string"
-          ? childEntry.sessionId.trim() || undefined
-          : undefined,
-      expectedLifecycleRevision:
-        typeof childEntry.lifecycleRevision === "string"
-          ? childEntry.lifecycleRevision.trim() || undefined
-          : undefined,
+      ...(accepted ? { expectedSessionId, expectedLifecycleRevision } : { retry: false }),
       timeoutMs: announceTimeoutMs,
       callGateway: deps.callGateway,
     });
-    if (terminated) {
-      await registryRuntime.clearLazySubagentSteerRestart(
-        wakeDispatchOwnership.ownerRunId,
-        wakeDispatchOwnership.owner,
-        wakeDispatchOwnership.dispatch,
-      );
-      return "not-woken";
-    }
-    // The accepted wake run was never proven stopped. Report the unconfirmed fact
-    // so the caller keeps the child session for cleanup retry rather than deleting
-    // a session a live Gateway run may still own.
-    log.warn("descendant wake termination unconfirmed; retained child session ownership", {
+  const retainWakeOwnership = (gatewayRunId: string): SubagentDescendantWakeOutcome => {
+    // A live or concurrently replaced run may still own the child session.
+    // Retain cleanup ownership rather than letting announce delete through it.
+    log.warn("descendant wake cleanup unconfirmed; retained child session ownership", {
       runId: params.runId,
       gatewayRunId,
       childSessionKey: params.childSessionKey,
     });
     return "termination-unconfirmed";
   };
+  const settleWake = async (
+    gatewayRunId: string,
+    acceptedState?: "persisted" | "pending-persistence" | "rejected",
+    releaseOwnership = true,
+  ): Promise<SubagentDescendantWakeOutcome> => {
+    const binding = acceptedState ?? (await recordAcceptedWake(gatewayRunId));
+    if (binding === "pending-persistence") {
+      return retainWakeOwnership(gatewayRunId);
+    }
+    const stopped = await stopWake(gatewayRunId, binding === "persisted");
+    const cleared =
+      stopped &&
+      releaseOwnership &&
+      (await registryRuntime.clearLazySubagentSteerRestart(
+        wakeDispatchOwnership.ownerRunId,
+        wakeDispatchOwnership.owner,
+        wakeDispatchOwnership.dispatch,
+      ));
+    return cleared ? "not-woken" : retainWakeOwnership(gatewayRunId);
+  };
+  const settleUnboundWake = async (
+    returnedRunId: string,
+  ): Promise<SubagentDescendantWakeOutcome> => {
+    const returnedRunStopped = await stopWake(returnedRunId, false);
+    return await settleWake(wakeDispatchId, undefined, returnedRunStopped);
+  };
 
-  let wakeRunId: string;
+  let wakeResponse: WakeAgentResponse | undefined;
   try {
-    const wakeResponse = await runAnnounceDeliveryWithRetry<{ runId?: string }>({
+    wakeResponse = await runAnnounceDeliveryWithRetry<WakeAgentResponse>({
       operation: "descendant wake agent call",
       signal: params.signal,
       isAttemptAllowed: params.isChildSessionEffectsAllowed,
@@ -240,24 +243,32 @@ export async function wakeSubagentRunAfterDescendants(
         );
       },
     });
-    wakeRunId = normalizeOptionalString(wakeResponse?.runId) ?? "";
   } catch {
-    return await terminateUnownedWake(wakeDispatchId);
+    return await settleWake(wakeDispatchId);
   }
 
+  const wakeRunId = normalizeOptionalString(wakeResponse?.runId);
   if (!wakeRunId) {
-    return await terminateUnownedWake(wakeDispatchId);
+    return await settleWake(wakeDispatchId);
   }
-  const acceptedDispatchRecorded = await recordAcceptedWake(wakeRunId);
-  if (!acceptedDispatchRecorded) {
-    return await terminateUnownedWake(wakeRunId);
+  // The deterministic ID binds itself to this request. A distinct runtime ID
+  // needs the Gateway's accepted discriminant before it can claim the reservation.
+  if (wakeRunId !== wakeDispatchId && wakeResponse?.status !== "accepted") {
+    return await settleUnboundWake(wakeRunId);
+  }
+  const acceptedState = await recordAcceptedWake(wakeRunId);
+  if (acceptedState === "pending-persistence") {
+    return retainWakeOwnership(wakeRunId);
+  }
+  if (acceptedState === "rejected") {
+    return await settleUnboundWake(wakeRunId);
   }
 
   if (
     !params.isChildSessionEffectsAllowed() ||
     !isAgentEventLifecycleGenerationCurrent(wakeLifecycleGeneration)
   ) {
-    return await terminateUnownedWake(wakeRunId, true);
+    return await settleWake(wakeRunId, acceptedState);
   }
   const replaced = await registryRuntime.replaceSubagentRunAfterSteer({
     previousRunId: wakeDispatchOwnership.ownerRunId,
@@ -271,5 +282,5 @@ export async function wakeSubagentRunAfterDescendants(
     // post-restart redispatch reconstructs the correct prompt.
     task: wakeMessage,
   });
-  return replaced ? "woke" : await terminateUnownedWake(wakeRunId, true);
+  return replaced ? "woke" : await settleWake(wakeRunId, acceptedState);
 }

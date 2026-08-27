@@ -3190,7 +3190,11 @@ describe("subagent announce formatting", () => {
     agentSpy.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
-          releaseWake = () => resolve(visibleAgentResponse("run-parent-phase-2"));
+          releaseWake = () =>
+            resolve({
+              ...visibleAgentResponse("run-parent-phase-2"),
+              status: "accepted",
+            });
         }),
     );
     callGatewaySpy.mockImplementation(async (req: unknown) => {

@@ -54,7 +54,10 @@ import {
   createSubagentRegistrySweeper,
   retireSupersededSubagentRun as retireSupersededSubagentRunForSweep,
 } from "./subagent-registry-sweeper.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import type {
+  SubagentAcceptedSteerDispatch,
+  SubagentRunRecord,
+} from "./subagent-registry.types.js";
 import {
   resolveSubagentRunOrphanReason,
   resolveSubagentSessionCompletion,
@@ -558,8 +561,22 @@ const subagentRunManager = createSubagentRunManager({
 
 export const markSubagentRunForSteerRestart = subagentRunManager.markSubagentRunForSteerRestart;
 export const clearSubagentRunSteerRestart = subagentRunManager.clearSubagentRunSteerRestart;
-export const recordAcceptedSubagentSteerDispatch =
-  subagentRunManager.recordAcceptedSubagentSteerDispatch;
+export function recordAcceptedSubagentSteerDispatch(
+  params: Parameters<typeof subagentRunManager.recordAcceptedSubagentSteerDispatch>[0] & {
+    expectedDispatch?: SubagentAcceptedSteerDispatch;
+  },
+) {
+  const owner = subagentRuns.get(params.runId.trim());
+  // A returned runtime ID may replace only the exact pre-dispatch reservation;
+  // stale responses must not overwrite a newer child-session owner.
+  if (
+    params.expectedDispatch &&
+    (owner !== params.expected || owner.acceptedSteerDispatch !== params.expectedDispatch)
+  ) {
+    return { status: "rejected" as const };
+  }
+  return subagentRunManager.recordAcceptedSubagentSteerDispatch(params);
+}
 export const replaceSubagentRunAfterSteerCore = subagentRunManager.replaceSubagentRunAfterSteer;
 export const claimSubagentRunKill = subagentRunManager.claimSubagentRunKill;
 export const releaseSubagentRunKillClaim = subagentRunManager.releaseSubagentRunKillClaim;
