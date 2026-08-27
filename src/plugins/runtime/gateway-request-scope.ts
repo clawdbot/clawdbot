@@ -32,6 +32,7 @@ type PluginRuntimePluginScope = {
 const PLUGIN_RUNTIME_GATEWAY_REQUEST_SCOPE_KEY: unique symbol = Symbol.for(
   "openclaw.pluginRuntimeGatewayRequestScope",
 );
+const GATEWAY_CONTEXT_RESOLVERS_KEY: unique symbol = Symbol.for("openclaw.gatewayContextResolvers");
 
 const pluginRuntimeGatewayRequestScope = resolveGlobalSingleton<
   AsyncLocalStorage<PluginRuntimeGatewayRequestScope>
@@ -39,7 +40,11 @@ const pluginRuntimeGatewayRequestScope = resolveGlobalSingleton<
   PLUGIN_RUNTIME_GATEWAY_REQUEST_SCOPE_KEY,
   () => new AsyncLocalStorage<PluginRuntimeGatewayRequestScope>(),
 );
-const gatewayContextResolvers = new WeakMap<object, GatewayContextResolver>();
+// Built plugin chunks and source Gateway code must redeem the same host-issued owner bindings.
+const gatewayContextResolvers = resolveGlobalSingleton<WeakMap<object, GatewayContextResolver>>(
+  GATEWAY_CONTEXT_RESOLVERS_KEY,
+  () => new WeakMap(),
+);
 
 export function bindGatewayContextResolver(
   owner: object,

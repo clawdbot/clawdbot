@@ -1,5 +1,5 @@
 // Matrix plugin module implements task runner behavior.
-import type { RuntimeLogger } from "../../runtime-api.js";
+import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 
 export function createMatrixMonitorTaskRunner(params: {
   logger: RuntimeLogger;

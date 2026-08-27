@@ -124,6 +124,7 @@ export type PreparedModelRuntimeRefreshOptions = {
   onBuildStats?: (stats: PreparedModelRuntimeBuildStats) => void;
   allowGatewaySubagentBinding?: boolean;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
+  isPublicationCurrent?: () => boolean;
 };
 
 export type PreparedModelRuntimeBuildStats = Readonly<{

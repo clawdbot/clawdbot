@@ -8,25 +8,11 @@ import Testing
 @MainActor
 struct ExecApprovalsUIRollbackTests {
     @Test
-    func `migration requirement surfaces without automatic retry`() async throws {
+    func `settings migration requirement surfaces without automatic retry`() async throws {
         try await self.withTempStateDir { stateDirectoryURL in
             let migrationError = ExecApprovalsLegacyMigrationRequiredError(
                 stateDirectoryURL: stateDirectoryURL,
                 legacyFileURL: stateDirectoryURL.appendingPathComponent("exec-approvals.json"))
-            var quickModeReadCount = 0
-            let state = AppState(
-                preview: true,
-                execApprovalsDefaultsAsyncResolver: {
-                    quickModeReadCount += 1
-                    return .failure(.migrationRequired(migrationError))
-                },
-                execApprovalsReadRetryDelay: .zero)
-
-            await state.recoverExecApprovalModeRead(maxAttempts: 5)
-
-            #expect(quickModeReadCount == 1)
-            #expect(state.execApprovalLoadError == ExecApprovalsReadError.migrationRequired(migrationError).message)
-
             var settingsReadCount = 0
             let model = ExecApprovalsSettingsModel(
                 resolveApprovalsAsync: { _ in
@@ -40,36 +26,6 @@ struct ExecApprovalsUIRollbackTests {
 
             #expect(settingsReadCount == 1)
             #expect(model.readErrorMessage == ExecApprovalsReadError.migrationRequired(migrationError).message)
-        }
-    }
-
-    @Test
-    func `quick mode recovers after initial approvals read is unavailable`() async throws {
-        try await self.withTempStateDir { stateDir in
-            _ = try ExecApprovalsStore.updateDefaults { defaults in
-                defaults.security = .full
-                defaults.ask = .off
-            }.get()
-            let record = try ExecApprovalsSQLiteStore.read(stateDirectoryURL: stateDir)
-            let rawJSON = try #require(record?.rawJSON)
-            try Self.replaceRawJSON("{", stateDirectoryURL: stateDir)
-
-            let state = AppState(
-                preview: true,
-                execApprovalsReadRetryDelay: .zero)
-
-            #expect(state.execApprovalPolicyLoadState == .loading)
-            await state.recoverExecApprovalModeRead(maxAttempts: 1)
-
-            #expect(!state.execApprovalPolicyAvailable)
-            #expect(state.execApprovalLoadError != nil)
-
-            try Self.replaceRawJSON(rawJSON, stateDirectoryURL: stateDir)
-            await state.recoverExecApprovalModeRead(maxAttempts: 1)
-
-            #expect(state.execApprovalPolicyAvailable)
-            #expect(state.execApprovalMode == .allow)
-            #expect(state.execApprovalLoadError == nil)
         }
     }
 
@@ -89,9 +45,6 @@ struct ExecApprovalsUIRollbackTests {
             let model = ExecApprovalsSettingsModel(
                 readRetryDelay: .zero,
                 automaticReadRetryAttempts: 0)
-            let previousMode = AppStateStore.shared.execApprovalMode
-            defer { AppStateStore.shared.syncExecApprovalMode(previousMode) }
-            AppStateStore.shared.syncExecApprovalMode(.ask)
 
             #expect(model.policyLoadState == .loading)
             #expect(model.readErrorMessage == nil)
@@ -108,12 +61,11 @@ struct ExecApprovalsUIRollbackTests {
             #expect(model.ask == .off)
             #expect(model.entries.map(\.pattern) == ["/usr/bin/printf"])
             #expect(model.readErrorMessage == nil)
-            #expect(AppStateStore.shared.execApprovalMode == .ask)
         }
     }
 
     @Test
-    func `defaults mutation refreshes quick mode through app state owner`() async throws {
+    func `defaults mutation preserves settings retry behavior`() async throws {
         try await self.withTempStateDir { _ in
             _ = try ExecApprovalsStore.updateDefaults { defaults in
                 defaults.security = .allowlist
@@ -132,23 +84,17 @@ struct ExecApprovalsUIRollbackTests {
                 automaticReadRetryAttempts: 0)
             model.selectAgent("__defaults__")
             await model.waitForPendingSettingsRead()
-            let previousMode = AppStateStore.shared.execApprovalMode
-            defer { AppStateStore.shared.syncExecApprovalMode(previousMode) }
-            AppStateStore.shared.syncExecApprovalMode(.ask)
 
             model.setSecurity(.full)
             #expect(model.security == .full)
             await model.waitForPendingSettingsRead()
-            await AppStateStore.shared.waitForExecApprovalModeRead()
 
             #expect(!model.policyAvailable)
-            #expect(AppStateStore.shared.execApprovalMode == .allow)
 
             await model.retryUnavailableSettings(maxAttempts: 1)
 
             #expect(model.policyAvailable)
             #expect(model.security == .full)
-            #expect(AppStateStore.shared.execApprovalMode == .allow)
             #expect(readCount == 3)
         }
     }
@@ -195,24 +141,6 @@ struct ExecApprovalsUIRollbackTests {
             #expect(model.ask == .off)
             #expect(model.readErrorMessage == nil)
             #expect(readCount == 3)
-        }
-    }
-
-    @Test
-    func `quick mode failure keeps last known value`() async throws {
-        try await self.withTempStateDir { _ in
-            let state = AppState(preview: true)
-            state.syncExecApprovalMode(.ask)
-
-            state.applyExecApprovalModeMutation(.allow, result: .failure(.unavailable))
-
-            #expect(state.execApprovalMode == .ask)
-            #expect(state.execApprovalMutationError == ExecApprovalsMutationError.unavailable.message)
-
-            state.applyExecApprovalModeMutation(.allow, result: .success(()))
-
-            #expect(state.execApprovalMode == .allow)
-            #expect(state.execApprovalMutationError == nil)
         }
     }
 

@@ -42,6 +42,7 @@ import "../web-awesome.ts";
 const loadMcpAppView = () => import("../mcp-app-view-registration.ts");
 
 export type BoardWidgetCellCallbacks = {
+  appViewGeneration: () => number;
   grant: (name: string, decision: BoardGrantDecision) => Promise<void>;
   movePointerDown: (widget: BoardWidget, event: PointerEvent) => void;
   resizePointerDown: (widget: BoardWidget, event: PointerEvent) => void;

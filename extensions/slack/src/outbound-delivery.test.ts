@@ -11,9 +11,9 @@ import {
   setActivePluginRegistry,
   type PluginHookRegistration,
 } from "openclaw/plugin-sdk/channel-test-helpers";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { slackOutbound } from "./outbound-adapter.js";
-import type { OpenClawConfig } from "./runtime-api.js";
 
 const sendMessageSlackMock = vi.hoisted(() => vi.fn());
 

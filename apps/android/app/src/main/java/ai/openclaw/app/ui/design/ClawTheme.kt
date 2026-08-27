@@ -12,6 +12,8 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
@@ -156,6 +158,19 @@ private val ClawLightColors =
     codeBorder = Color(0xFFD7DDE7),
   )
 
+internal fun clawColorsForTheme(
+  dark: Boolean,
+  accentArgb: Long?,
+): ClawColors {
+  val base = if (dark) ClawDarkColors else ClawLightColors
+  val accent = accentArgb?.let(::Color) ?: return base
+  return base.copy(
+    accent = accent,
+    accentSoft = accent.copy(alpha = if (dark) 0.25f else 0.08f).compositeOver(base.canvas),
+    accentBorder = lerp(accent, Color.Black, 0.12f),
+  )
+}
+
 private val LocalClawColors = staticCompositionLocalOf { ClawDarkColors }
 private val LocalClawSpacing = staticCompositionLocalOf { ClawSpacing() }
 private val LocalClawRadii = staticCompositionLocalOf { ClawRadii() }
@@ -192,9 +207,10 @@ internal object ClawTheme {
 @Composable
 internal fun ClawDesignTheme(
   dark: Boolean = true,
+  accentArgb: Long? = null,
   content: @Composable () -> Unit,
 ) {
-  val colors = if (dark) ClawDarkColors else ClawLightColors
+  val colors = clawColorsForTheme(dark = dark, accentArgb = accentArgb)
   val typography = clawTypography(clawFontFamily)
 
   CompositionLocalProvider(

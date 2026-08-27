@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../../sessions/user-turn-transcript.test-support.js";
+import { runAgentHarnessGatewayQuestion } from "../../harness/gateway-question.js";
 import { registerQueuedUserMessageRetirement } from "../../sessions/queued-user-message-retirement.js";
 import {
   reportSteeringMessagePersistenceFailure,
@@ -45,6 +46,53 @@ function steerWithDeliveryWait(
 }
 
 describe("embedded OpenClaw queued steering cancellation", () => {
+  it("keeps a claimed harness secret out of the session transcript", async () => {
+    const secretValue = "test-secret-value-123";
+    const sessionKey = "agent:main:secret-transcript";
+    const persistedTranscript: string[] = [];
+    const recorder = createUserTurnTranscriptRecorder({
+      input: { text: secretValue },
+      target: createTestUserTurnTranscriptTarget({ sessionKey }),
+    });
+    const persistApproved = vi.spyOn(recorder, "persistApproved").mockImplementation(async () => {
+      persistedTranscript.push(JSON.stringify(recorder.message?.content));
+      return undefined;
+    });
+    const onBlockReply = vi.fn(async () => undefined);
+    const pendingSecret = runAgentHarnessGatewayQuestion({
+      questions: [
+        {
+          id: "credential",
+          header: "API key",
+          question: "Enter the requested credential",
+          isSecret: true,
+          options: [],
+        },
+      ],
+      sessionKey,
+      timeoutMs: 60_000,
+      gatewayCall: vi.fn(),
+      delivery: { onBlockReply },
+    });
+    const steer = vi.fn(async () => undefined);
+
+    await steerActiveSessionWithOptionalDeliveryWait(
+      { steer, subscribe: () => () => {} },
+      secretValue,
+      { isInboundUserMessage: true, userTurnTranscriptRecorder: recorder },
+      sessionKey,
+    );
+
+    await expect(pendingSecret).resolves.toEqual({
+      status: "answered",
+      answers: { answers: { credential: [secretValue] } },
+    });
+    expect(persistApproved).not.toHaveBeenCalled();
+    expect(recorder.hasPersisted()).toBe(false);
+    expect(persistedTranscript.join("\n")).not.toContain(secretValue);
+    expect(steer).not.toHaveBeenCalled();
+  });
+
   it("forwards prepared transcript context with a queued steering message", async () => {
     const steer = vi.fn(async () => undefined);
     const recorder = createUserTurnTranscriptRecorder({

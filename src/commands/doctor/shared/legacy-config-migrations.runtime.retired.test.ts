@@ -1034,16 +1034,19 @@ describe("retired runtime config migrations", () => {
     expect(result.changes.join("\n")).toContain("before_prompt_build");
   });
 
-  it("copies responsePrefix to supported channels while retaining custom-channel fallback", () => {
-    const result = applyAll({
-      messages: { responsePrefix: "[bot]" },
-      channels: { whatsapp: {}, custom: { enabled: true } },
-    });
+  it.each(["whatsapp", "buzz", "clickclack", "qa-channel"])(
+    "copies responsePrefix to %s while retaining custom-channel fallback",
+    (channel) => {
+      const result = applyAll({
+        messages: { responsePrefix: "[bot]" },
+        channels: { [channel]: {}, custom: { enabled: true } },
+      });
 
-    expect(result.raw).toHaveProperty("channels.whatsapp.responsePrefix", "[bot]");
-    expect(result.raw).toHaveProperty("messages.responsePrefix", "[bot]");
-    expect(applyAll(result.raw).changes).toEqual([]);
-  });
+      expect(result.raw).toHaveProperty(`channels.${channel}.responsePrefix`, "[bot]");
+      expect(result.raw).toHaveProperty("messages.responsePrefix", "[bot]");
+      expect(applyAll(result.raw).changes).toEqual([]);
+    },
+  );
 
   it("keeps the inherited session-memory policy", () => {
     const result = applyAll({

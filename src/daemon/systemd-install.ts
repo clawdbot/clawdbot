@@ -18,11 +18,13 @@ import {
   readEnvironmentValueSource,
   readManagedServiceEnvKeysFromEnvironment,
 } from "./service-managed-env.js";
-import type {
-  GatewayServiceEnv,
-  GatewayServiceEnvironmentValueSource,
-  GatewayServiceInstallArgs,
-  GatewayServiceManageArgs,
+import {
+  hasGatewayServiceLauncherOverride,
+  resolveManagedGatewayServiceCommand,
+  type GatewayServiceEnv,
+  type GatewayServiceEnvironmentValueSource,
+  type GatewayServiceInstallArgs,
+  type GatewayServiceManageArgs,
 } from "./service-types.js";
 import {
   assertSystemdAvailable,
@@ -163,7 +165,7 @@ async function writeSystemdUnit({
 
   const unitPath = resolveSystemdUnitPath(env);
   const priorManagedKeys = readManagedServiceEnvKeysFromEnvironment(
-    (await readSystemdServiceExecStart(env))?.environment,
+    resolveManagedGatewayServiceCommand(await readSystemdServiceExecStart(env))?.environment,
   );
   await fs.mkdir(path.dirname(unitPath), { recursive: true });
   await assertSystemdManagedPathIsNotSymlink(unitPath);
@@ -573,6 +575,14 @@ export async function installSystemdService(
 ): Promise<{ unitPath: string }> {
   const { unitPath, backedUp } = await writeSystemdUnit(args);
   await activateSystemdService({ env: args.env });
+  if (
+    args.warn &&
+    hasGatewayServiceLauncherOverride(await readSystemdServiceExecStart(args.env).catch(() => null))
+  ) {
+    args.warn(
+      "Systemd drop-in overrides the managed service command or working directory; inspect, update, or remove the drop-in because reinstalling the base unit does not change the effective launcher.",
+    );
+  }
   writeFormattedLines(
     args.stdout,
     [

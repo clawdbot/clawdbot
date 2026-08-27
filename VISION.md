@@ -60,7 +60,8 @@ We prioritize secure defaults, but also expose clear knobs for trusted high-powe
 
 Privacy follows the same default rule.
 OpenClaw sends no usage analytics, tracking identifiers, or attribution tags unless the operator turned that on themselves.
-A change that needs such signals waits until an explicit user-facing opt-in exists for them.
+The setup wizard offers optional anonymous feature statistics, with no selected by default; the daily update check reports version and platform and can be disabled.
+See [Usage telemetry and update checks](https://docs.openclaw.ai/gateway/telemetry).
 
 ## Plugins & Memory
 

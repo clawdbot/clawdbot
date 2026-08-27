@@ -326,3 +326,38 @@ it("keeps collaboration UI dormant for a solo identity", () => {
     }),
   ).toBe(true);
 });
+
+it("links faces only when the host opts in, so nested facepiles stay plain", async () => {
+  const users: PresenceViewer[] = [
+    { id: "profile-ada", name: "Ada King", watchedSessions: [] },
+    { id: "profile-mira", name: "Mira", watchedSessions: [] },
+  ];
+  const mount = async (personActivity?: { basePath: string; navigate: (id: string) => void }) => {
+    const facepile = document.createElement("openclaw-viewer-facepile") as HTMLElement & {
+      staticUsers: readonly PresenceViewer[];
+      personActivity?: { basePath: string; navigate: (id: string) => void };
+      updateComplete: Promise<boolean>;
+    };
+    facepile.staticUsers = users;
+    if (personActivity) {
+      facepile.personActivity = personActivity;
+    }
+    document.body.append(facepile);
+    await facepile.updateComplete;
+    return facepile;
+  };
+
+  const navigate = vi.fn();
+  const linked = await mount({ basePath: "", navigate });
+  expect(
+    [...linked.querySelectorAll<HTMLAnchorElement>("a.person-activity-avatar-link")].map((link) =>
+      link.getAttribute("href"),
+    ),
+  ).toEqual(["/activity?person=profile-ada", "/activity?person=profile-mira"]);
+
+  // Sidebar rows and collapsed group headers render facepiles inside an anchor or button;
+  // a nested link there would break the parent's click target.
+  const plain = await mount();
+  expect(plain.querySelector("a")).toBeNull();
+  expect(plain.querySelectorAll("openclaw-viewer-avatar")).toHaveLength(2);
+});

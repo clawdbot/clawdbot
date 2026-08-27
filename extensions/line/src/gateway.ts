@@ -1,17 +1,13 @@
 // Line plugin module implements gateway behavior.
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-outbound";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { clearAccountEntryFields, type ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveLineAccount } from "./accounts.js";
-import {
-  clearAccountEntryFields,
-  DEFAULT_ACCOUNT_ID,
-  type ChannelPlugin,
-  type LineConfig,
-  type OpenClawConfig,
-  type ResolvedLineAccount,
-} from "./channel-api.js";
 import { getLineRuntime } from "./runtime.js";
+import type { LineConfig, ResolvedLineAccount } from "./types.js";
 
 const loadLineProbeRuntime = createLazyRuntimeModule(() => import("./probe.runtime.js"));
 const loadLineMonitorRuntime = createLazyRuntimeModule(() => import("./monitor.runtime.js"));

@@ -23,6 +23,7 @@ export type CodexAppServerModel = {
   inputModalities: string[];
   supportedReasoningEfforts: string[];
   defaultReasoningEffort?: string;
+  multiAgentVersion?: "disabled" | "v1" | "v2" | null;
 };
 
 /** One page of Codex app-server model metadata plus optional pagination state. */
@@ -167,6 +168,9 @@ function readCodexModel(value: CodexModel): CodexAppServerModel {
     supportedReasoningEfforts: readReasoningEfforts(value.supportedReasoningEfforts),
     ...(normalizeOptionalString(value.defaultReasoningEffort)
       ? { defaultReasoningEffort: normalizeOptionalString(value.defaultReasoningEffort) }
+      : {}),
+    ...(value.multiAgentVersion !== undefined
+      ? { multiAgentVersion: value.multiAgentVersion }
       : {}),
   };
 }

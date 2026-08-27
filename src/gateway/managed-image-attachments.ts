@@ -22,6 +22,7 @@ import {
   resolveExistingAgentSessionStoreTargetsReadOnlyResult,
   type SessionStoreTargetsReadCache,
 } from "../config/sessions/targets-read-availability.js";
+import { sanitizeUntrustedFileName } from "../infra/fs-safe-advanced.js";
 import { openLocalFileSafely, readLocalFileSafely } from "../infra/fs-safe.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { loadPendingSessionDeliveries } from "../infra/session-delivery-queue-storage.js";
@@ -76,7 +77,7 @@ import {
 const OUTGOING_IMAGE_ROUTE_PREFIX = "/api/chat/media/outgoing";
 const DEFAULT_TRANSIENT_OUTGOING_IMAGE_TTL_MS = 15 * 60 * 1000;
 const MANAGED_OUTGOING_IMAGE_TICKET_SCOPE = "managed-outgoing-image";
-export const MANAGED_OUTGOING_IMAGE_TICKET_TTL_MS = 5 * 60 * 1000;
+const MANAGED_OUTGOING_IMAGE_TICKET_TTL_MS = 5 * 60 * 1000;
 export const MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX = "artifact_managed_image_";
 export const MANAGED_OUTGOING_MEDIA_ARTIFACT_ID_PREFIX = "artifact_managed_media_";
 const MANAGED_IMAGE_THUMBNAIL_MAX_SIDE = 300;
@@ -861,9 +862,13 @@ function buildManagedImageResizeWarningBlock(params: {
   };
 }
 
-function toRecordFilename(filePath: string) {
-  const name = path.basename(filePath).trim();
-  return name || null;
+function toRecordFilename(filePath: string, attachmentName?: string, fallbackName?: string) {
+  const fallback = fallbackName ?? path.basename(filePath).trim();
+  if (!attachmentName?.trim()) {
+    return fallback || null;
+  }
+  const safeName = sanitizeUntrustedFileName(attachmentName, fallback);
+  return `${path.parse(safeName).name}${path.extname(filePath)}`;
 }
 
 function asArray(value: string[] | undefined | null) {
@@ -1544,10 +1549,11 @@ export async function createManagedOutgoingMediaBlocks(params: {
           width: originalStats.width,
           height: originalStats.height,
           sizeBytes: originalStats.sizeBytes,
-          filename:
-            mediaKind === "image"
-              ? toRecordFilename(savedOriginal.path)
-              : attachmentMetadata?.name?.trim() || label,
+          filename: toRecordFilename(
+            savedOriginal.path,
+            attachmentMetadata?.name,
+            mediaKind === "image" ? undefined : label,
+          ),
         },
       };
       let playback: "native" | "transcode" | undefined;

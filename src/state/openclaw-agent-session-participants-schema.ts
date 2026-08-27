@@ -27,6 +27,7 @@ export function ensureSessionParticipantsSchema(database: DatabaseSync): boolean
     // sqlite-allow-raw -- canonical additive DDL only.
     database.exec(sessionParticipantsSchemaSql());
     ensureColumn(database, SESSION_PARTICIPANTS_TABLE, "actor_source TEXT");
+    ensureColumn(database, SESSION_PARTICIPANTS_TABLE, "contribution_count INTEGER");
   };
   if (database.isTransaction) {
     ensure();

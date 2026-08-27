@@ -23,7 +23,6 @@ export {
   type SessionsDeleteResult,
   type WorktreePreservationReason,
 } from "./sessions-delete.js";
-export { SessionsResolveParamsSchema, type SessionsResolveParams } from "./sessions-resolve.js";
 export {
   SESSIONS_PATCH_MANY_MAX_TARGETS,
   SessionsPatchManyParamsSchema,
@@ -419,6 +418,8 @@ export const SessionsListParamsSchema = closedObject({
   creatorId: Type.Optional(NonEmptyString),
   /** Filter rows by their current assignable owner identity. */
   ownerId: Type.Optional(NonEmptyString),
+  /** Prepend the authenticated viewer's owned rows to the normal first page. */
+  ownerFirst: Type.Optional(Type.Boolean()),
   /** Limit rows to sessions owned by or previously prompted by the authenticated viewer. */
   involvingMe: Type.Optional(Type.Boolean()),
   spawnedBy: Type.Optional(NonEmptyString),

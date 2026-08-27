@@ -1,8 +1,8 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import {
+  findTranscriptEvent,
   loadSessionEntry,
-  loadTranscriptEvents,
   resolveSessionTranscriptRuntimeTarget,
   updateSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
@@ -181,13 +181,12 @@ export async function resolveExistingAttemptTranscriptState(params: {
   let hasBootstrapTranscriptState = false;
   if (storePath && sessionKey) {
     try {
-      const sqliteEvents = await loadTranscriptEvents({
-        agentId,
-        sessionId,
-        sessionKey,
-        storePath,
-      });
-      hasBootstrapTranscriptState = sqliteEvents.some(isTranscriptMessageEvent);
+      hasBootstrapTranscriptState = Boolean(
+        await findTranscriptEvent(
+          { agentId, sessionId, sessionKey, storePath },
+          isTranscriptMessageEvent,
+        ),
+      );
     } catch {
       hasBootstrapTranscriptState = false;
     }

@@ -462,13 +462,22 @@ internal object AndroidScreenshotFixture {
       put(
         "commands",
         buildJsonArray {
-          add(
-            buildJsonObject {
-              put("name", JsonPrimitive("status"))
-              put("description", JsonPrimitive("Show current OpenClaw status"))
-              put("acceptsArgs", JsonPrimitive(false))
-            },
-          )
+          listOf(
+            Triple("help", "Show available commands.", false),
+            Triple("commands", "List all slash commands.", false),
+            Triple("tools", "List available runtime tools.", true),
+            Triple("skill", "Run a skill by name.", true),
+            Triple("learn", "Draft a reusable skill from recent work or named sources.", true),
+            Triple("loop", "Loop a prompt: /loop [interval] <prompt> | /loop status | /loop stop [name]", true),
+          ).forEach { (name, description, acceptsArgs) ->
+            add(
+              buildJsonObject {
+                put("name", JsonPrimitive(name))
+                put("description", JsonPrimitive(description))
+                put("acceptsArgs", JsonPrimitive(acceptsArgs))
+              },
+            )
+          }
         },
       )
       put(

@@ -71,6 +71,7 @@ suite.define(() => {
       kind: "direct",
       label: hiddenLabel,
       updatedAt: 2,
+      archived: false,
     });
 
     await expect

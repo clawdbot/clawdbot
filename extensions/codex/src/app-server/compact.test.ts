@@ -2325,6 +2325,7 @@ function createFakeCodexClient(
             status: { type: "idle" },
             path: null,
             cwd: tempDir,
+            projectId: null,
             cliVersion: CODEX_APP_SERVER_VERSION,
             source: "unknown",
             agentNickname: null,

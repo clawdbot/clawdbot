@@ -63,13 +63,13 @@ describe("channel plugin catalog", () => {
     expect(wecom?.id).toBe("wecom");
     expect(wecom?.pluginId).toBe("wecom-openclaw-plugin");
     expect(wecom?.trustedSourceLinkedOfficialInstall).toBe(true);
-    expect(wecom?.install?.npmSpec).toBe("@wecom/wecom-openclaw-plugin@2026.5.7");
+    expect(wecom?.install?.npmSpec).toBe("@wecom/wecom-openclaw-plugin@2026.7.2");
 
     const yuanbao = getChannelPluginCatalogEntry("yuanbao", options);
     expect(yuanbao?.id).toBe("yuanbao");
     expect(yuanbao?.pluginId).toBe("openclaw-plugin-yuanbao");
     expect(yuanbao?.trustedSourceLinkedOfficialInstall).toBe(true);
-    expect(yuanbao?.install?.npmSpec).toBe("openclaw-plugin-yuanbao@2.15.0");
+    expect(yuanbao?.install?.npmSpec).toBe("openclaw-plugin-yuanbao@2.18.2");
   });
 
   it("excludes only the rejected origin/plugin pair when resolving fallback copies", () => {

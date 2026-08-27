@@ -327,17 +327,6 @@
               "additionalProperties": true,
               "description": "Job fields. action=\"add\": full job. action=\"update\": partial patch — only supplied fields change; null clears.",
               "properties": {
-                "agentId": {
-                  "anyOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ],
-                  "description": "Agent id, or null to clear it"
-                },
                 "declarationKey": {
                   "description": "Idempotent declaration key (add only).",
                   "maxLength": 200,
@@ -845,6 +834,7 @@
               "type": "string"
             },
             "path": {
+              "description": "Required for config.schema.lookup; optional for config.get.",
               "type": "string"
             },
             "timeoutMs": {
@@ -1119,6 +1109,7 @@
             },
             "kinds": {
               "items": {
+                "enum": ["main", "group", "cron", "hook", "node", "other"],
                 "type": "string"
               },
               "type": "array"

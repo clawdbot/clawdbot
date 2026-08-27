@@ -362,7 +362,15 @@ if (args[0] === "--pure" && args[1] === "db" && args.includes("--format") && arg
   process.exitCode = 2;
 }
 `;
-  await fs.writeFile(executable, script);
+  // Flush and close the executable before exec: a still-open write handle makes
+  // the immediately following spawn fail with ETXTBSY under parallel CI shards.
+  const executableHandle = await fs.open(executable, "w");
+  try {
+    await executableHandle.writeFile(script);
+    await executableHandle.sync();
+  } finally {
+    await executableHandle.close();
+  }
   if (process.platform === "win32") {
     await fs.writeFile(path.join(directory, "opencode.js"), script);
     // This exact direct-forwarder shape is parsed into a Node entrypoint;

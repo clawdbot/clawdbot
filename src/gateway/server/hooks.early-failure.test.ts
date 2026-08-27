@@ -10,6 +10,7 @@ import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
 } from "../../process/gateway-work-admission.js";
+import { CommandLane } from "../../process/lanes.js";
 import { resolveHooksConfig } from "../hooks.js";
 
 const mocks = vi.hoisted(() => ({
@@ -32,7 +33,27 @@ vi.mock("../../infra/system-events.js", () => ({
   enqueueSystemEvent: mocks.enqueueSystemEvent,
 }));
 
-const { createGatewayHooksRequestHandler } = await import("./hooks.js");
+const { createGatewayHookDispatcher, createGatewayHooksRequestHandler } =
+  await import("./hooks.js");
+
+const pluginHookTurn = {
+  name: "IMAP fastmail",
+  agentId: "hooks",
+  sessionKey: "hook:imap:fastmail:11:42",
+  message: "New untrusted email",
+  externalContentSource: "email" as const,
+  deliver: false,
+};
+
+function createPluginHookDispatcher(options: { admissionTimeoutMs?: number } = {}) {
+  const logHooks = { warn: vi.fn(), debug: vi.fn(), info: vi.fn(), error: vi.fn() };
+  const dispatcher = createGatewayHookDispatcher({
+    deps: {} as never,
+    logHooks: logHooks as never,
+    agentStartAdmissionTimeoutMs: options.admissionTimeoutMs,
+  });
+  return { dispatcher, logHooks };
+}
 
 function createConfig(global: boolean): OpenClawConfig {
   return {
@@ -202,4 +223,230 @@ describe("gateway hook early-failure recovery", () => {
       expect(runTurn).not.toHaveBeenCalled();
     },
   );
+
+  it("contains plugin email turns without enabling the HTTP hook surface", async () => {
+    const config: OpenClawConfig = {
+      agents: { entries: { main: { default: true }, hooks: {} } },
+      hooks: {
+        allowedAgentIds: ["main"],
+        allowedSessionKeyPrefixes: ["hook:http:"],
+      },
+    };
+    mocks.getRuntimeConfig.mockReturnValue(config);
+    mocks.runCronIsolatedAgentTurn.mockImplementationOnce(
+      async (params: { onExecutionStarted?: () => void }) => {
+        params.onExecutionStarted?.();
+        return { status: "ok", summary: "done" };
+      },
+    );
+    const { dispatcher, logHooks } = createPluginHookDispatcher();
+    const unsafePluginTurn = {
+      ...pluginHookTurn,
+      allowUnsafeExternalContent: true,
+      sessionMode: "persistent",
+    };
+
+    const result = await dispatcher.dispatchHookAgentTurn(unsafePluginTurn, "imap");
+
+    expect(result).toEqual({ ok: true, runId: expect.any(String) });
+    expect(mocks.runCronIsolatedAgentTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "hooks",
+        sessionKey: pluginHookTurn.sessionKey,
+        lane: CommandLane.HookDispatch,
+        job: expect.objectContaining({
+          name: "IMAP fastmail",
+          agentId: "hooks",
+          sessionTarget: "isolated",
+          payload: expect.objectContaining({
+            kind: "agentTurn",
+            message: pluginHookTurn.message,
+            externalContentSource: "email",
+            allowUnsafeExternalContent: undefined,
+          }),
+          delivery: { mode: "none" },
+        }),
+        executionIdentity: {
+          ingress: {
+            kind: "webhook",
+            boundary: "gateway.hooks.plugin",
+            state: "present",
+            rawSourceRef: "imap:IMAP fastmail",
+          },
+        },
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(logHooks.info).toHaveBeenCalledWith(
+        "hook agent run completed without announcement",
+        expect.objectContaining({ name: "IMAP fastmail" }),
+      ),
+    );
+  });
+
+  it("announces successful plugin hook turns through the existing heartbeat path", async () => {
+    mocks.getRuntimeConfig.mockReturnValue(createConfig(false));
+    mocks.runCronIsolatedAgentTurn.mockImplementationOnce(
+      async (params: { onExecutionStarted?: () => void }) => {
+        params.onExecutionStarted?.();
+        return { status: "ok", summary: "New email summarized" };
+      },
+    );
+    const { dispatcher } = createPluginHookDispatcher();
+
+    await expect(
+      dispatcher.dispatchHookAgentTurn({ ...pluginHookTurn, deliver: true }, "imap"),
+    ).resolves.toEqual({ ok: true, runId: expect.any(String) });
+
+    await vi.waitFor(() =>
+      expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
+        "Hook IMAP fastmail: New email summarized",
+        { sessionKey: "agent:hooks:main" },
+      ),
+    );
+    expect(mocks.requestHeartbeat).toHaveBeenCalledWith({
+      source: "hook",
+      intent: "immediate",
+      reason: expect.stringMatching(/^hook:[0-9a-f-]+$/),
+      agentId: "hooks",
+      sessionKey: "agent:hooks:main",
+    });
+  });
+
+  it("reports plugin hook execution errors through the existing failure path", async () => {
+    mocks.getRuntimeConfig.mockReturnValue(createConfig(false));
+    mocks.runCronIsolatedAgentTurn.mockRejectedValueOnce(new Error("runner preparation failed"));
+    const { dispatcher, logHooks } = createPluginHookDispatcher();
+
+    await expect(dispatcher.dispatchHookAgentTurn(pluginHookTurn, "imap")).resolves.toEqual({
+      ok: false,
+      reason: "hook agent run failed before entering the agent runner",
+    });
+
+    expect(logHooks.warn).toHaveBeenCalledWith(
+      "hook agent failed: Error: runner preparation failed",
+    );
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
+      "Hook IMAP fastmail (error): Error: runner preparation failed",
+      { sessionKey: "agent:hooks:main" },
+    );
+    expect(mocks.requestHeartbeat).toHaveBeenCalledWith({
+      source: "hook",
+      intent: "immediate",
+      reason: expect.stringMatching(/^hook:[0-9a-f-]+:error$/),
+      agentId: "hooks",
+      sessionKey: "agent:hooks:main",
+    });
+  });
+
+  it.each([
+    { name: "missing agent ownership", override: { agentId: "  " }, reason: "agentId is required" },
+    { name: "non-hook session", override: { sessionKey: "agent:hooks:main" } },
+    { name: "empty hook session", override: { sessionKey: "hook:" } },
+    { name: "session whitespace", override: { sessionKey: "hook:imap:bad value" } },
+    { name: "trimmed session whitespace", override: { sessionKey: " hook:imap:message" } },
+    { name: "session control character", override: { sessionKey: "hook:imap:\u0000message" } },
+    {
+      name: "non-email content",
+      override: { externalContentSource: "webhook" as "email" },
+      reason: "externalContentSource must be email",
+    },
+  ])("rejects plugin hook turns with $name before dispatch", async ({ override, reason }) => {
+    const { dispatcher } = createPluginHookDispatcher();
+
+    await expect(
+      dispatcher.dispatchHookAgentTurn({ ...pluginHookTurn, ...override }, "imap"),
+    ).resolves.toEqual({
+      ok: false,
+      reason:
+        reason ??
+        "sessionKey must start with hook: and contain no whitespace or control characters",
+    });
+    expect(mocks.runCronIsolatedAgentTurn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "session conflict",
+      result: {
+        status: "error",
+        error: "session changed",
+        admissionDisposition: "session-conflict",
+      },
+      reason: "hook agent run was rejected because the target session changed",
+    },
+    {
+      name: "preparation failure",
+      result: { status: "error", error: "provider preparation failed" },
+      reason: "hook agent run failed before entering the agent runner",
+    },
+  ])("preserves plugin hook $name admission failure taxonomy", async ({ result, reason }) => {
+    mocks.getRuntimeConfig.mockReturnValue(createConfig(false));
+    mocks.runCronIsolatedAgentTurn.mockResolvedValueOnce(result);
+    const { dispatcher } = createPluginHookDispatcher();
+
+    await expect(dispatcher.dispatchHookAgentTurn(pluginHookTurn, "imap")).resolves.toEqual({
+      ok: false,
+      reason,
+    });
+  });
+
+  it("preserves plugin hook admission timeout and fences late execution", async () => {
+    const releasePreparation = createDeferred();
+    mocks.getRuntimeConfig.mockReturnValue(createConfig(false));
+    mocks.runCronIsolatedAgentTurn.mockImplementationOnce(async () => {
+      await releasePreparation.promise;
+      return { status: "ok", summary: "done" };
+    });
+    const { dispatcher } = createPluginHookDispatcher({ admissionTimeoutMs: 10 });
+
+    try {
+      await expect(dispatcher.dispatchHookAgentTurn(pluginHookTurn, "imap")).resolves.toEqual({
+        ok: false,
+        reason: "hook agent run did not start before admission timeout",
+      });
+    } finally {
+      releasePreparation.resolve();
+    }
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+  });
+
+  it("serializes HTTP and plugin turns together while replaying plugin idempotency keys", async () => {
+    const releaseHttpRun = createDeferred();
+    mocks.getRuntimeConfig.mockReturnValue(createConfig(false));
+    mocks.runCronIsolatedAgentTurn
+      .mockImplementationOnce(async (params: { onExecutionStarted?: () => void }) => {
+        params.onExecutionStarted?.();
+        await releaseHttpRun.promise;
+        return { status: "ok", summary: "HTTP done" };
+      })
+      .mockImplementationOnce(async (params: { onExecutionStarted?: () => void }) => {
+        params.onExecutionStarted?.();
+        return { status: "ok", summary: "plugin done" };
+      });
+    const { dispatcher } = createPluginHookDispatcher();
+    const httpResult = await dispatcher.dispatchAgentHook({
+      ...pluginHookTurn,
+      effectiveAgentId: "hooks",
+      sessionMode: "isolated",
+      sourcePath: "/hooks/gmail",
+      wakeMode: "now",
+      channel: "last",
+      delivery: { mode: "none" },
+      externalContentSource: "gmail",
+    });
+    expect(httpResult.ok).toBe(true);
+
+    const pluginTurn = { ...pluginHookTurn, idempotencyKey: "message-42" };
+    const firstPluginRun = dispatcher.dispatchHookAgentTurn(pluginTurn, "imap");
+    const duplicatePluginRun = dispatcher.dispatchHookAgentTurn(pluginTurn, "imap");
+    expect(mocks.runCronIsolatedAgentTurn).toHaveBeenCalledOnce();
+
+    releaseHttpRun.resolve();
+    const [first, duplicate] = await Promise.all([firstPluginRun, duplicatePluginRun]);
+    expect(first).toEqual({ ok: true, runId: expect.any(String) });
+    expect(duplicate).toEqual(first);
+    await expect(dispatcher.dispatchHookAgentTurn(pluginTurn, "imap")).resolves.toEqual(first);
+    expect(mocks.runCronIsolatedAgentTurn).toHaveBeenCalledTimes(2);
+  });
 });

@@ -1328,7 +1328,7 @@ describe("config plugin validation", () => {
 
     expect(res.ok).toBe(true);
     const message =
-      "plugin not installed: yuanbao — install the official external plugin with: openclaw plugins install openclaw-plugin-yuanbao@2.15.0";
+      "plugin not installed: yuanbao — install the official external plugin with: openclaw plugins install openclaw-plugin-yuanbao@2.18.2";
     expectPathMessage(res.warnings, "plugins.entries.yuanbao", message);
     expect((res.warnings ?? []).filter((warning) => warning.message === message)).toHaveLength(1);
   });
@@ -2026,6 +2026,42 @@ describe("config plugin validation", () => {
         "plugins.entries.codex.config.codexPlugins.plugins.github.marketplaceName",
         "invalid config",
       );
+    }
+  });
+
+  it("admits the beta.2 Codex untrusted policy for doctor migration", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "openclaw" }] },
+        plugins: {
+          entries: {
+            codex: {
+              enabled: true,
+              config: {
+                appServer: {
+                  mode: "guardian",
+                  approvalPolicy: "untrusted",
+                  sandbox: "workspace-write",
+                  approvalsReviewer: "user",
+                },
+              },
+            },
+          },
+        },
+      },
+      {
+        env: {
+          ...suiteEnv(),
+          OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(process.cwd(), "extensions"),
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.plugins?.entries?.codex?.config).toMatchObject({
+        appServer: { approvalPolicy: "untrusted" },
+      });
     }
   });
 

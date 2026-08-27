@@ -130,6 +130,7 @@ export function createGateway(client: GatewayBrowserClient, connected = true): G
       return snapshot;
     },
     connection: { gatewayUrl: "ws://localhost", token: "", password: "", bootstrapToken: "" },
+    connectionRevision: 0,
     eventLog: [],
     connect: () => undefined,
     setSessionKey: () => undefined,

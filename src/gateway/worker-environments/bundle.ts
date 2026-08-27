@@ -15,6 +15,7 @@ import {
 import {
   compareWorkerBundlePaths,
   hashWorkerBundleManifest,
+  WORKER_BUNDLE_ARTIFACT_MODE,
   WORKER_BUNDLE_MANIFEST_VERSION,
 } from "../../shared/worker-bundle-hash.js";
 import { VERSION } from "../../version.js";
@@ -356,6 +357,11 @@ async function writeTarball(params: {
         noMtime: true,
         portable: true,
         strict: true,
+        onWriteEntry: ({ stat }) => {
+          if (stat) {
+            stat.mode = (stat.mode & ~0o777) | WORKER_BUNDLE_ARTIFACT_MODE;
+          }
+        },
       },
       params.entries.map((entry) => entry.path),
     );

@@ -171,7 +171,7 @@ describe("normalizeProviders", () => {
     }
   });
 
-  it("deduplicates Google Gemini provider rows after model id normalization", async () => {
+  it("deduplicates model rows and keeps repeated publication stable with secret ownership", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
     try {
       const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
@@ -195,9 +195,10 @@ describe("normalizeProviders", () => {
             }),
           ],
         },
+        custom: { baseUrl: "https://models.example/v1", models: [] },
       };
 
-      const normalized = normalizeProviders({ providers, agentDir });
+      const normalized = normalizeProviders({ providers, agentDir, env: {} });
 
       expect(normalized?.google?.models).toHaveLength(1);
       // The first normalized row wins so explicit config details are not replaced by discovery.
@@ -208,6 +209,20 @@ describe("normalizeProviders", () => {
       expect(model?.maxTokens).toBe(2048);
       expect(model?.reasoning).toBe(false);
       expect(model?.cost).toEqual({ input: 1, output: 2, cacheRead: 3, cacheWrite: 4 });
+
+      const published = normalizeProviderCatalogModelsForConfig(normalized);
+      expect(published).toBe(normalized);
+      const secretRefManagedProviders = new Set<string>();
+      const repeated = normalizeProviders({
+        providers: published,
+        agentDir,
+        env: {},
+        secretRefManagedProviders,
+      });
+      // A no-op object pass must still record marker ownership for secret preservation.
+      expect(repeated).toBe(published);
+      expect(normalizeProviderCatalogModelsForConfig(repeated)).toBe(published);
+      expect(secretRefManagedProviders.has("google")).toBe(true);
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }

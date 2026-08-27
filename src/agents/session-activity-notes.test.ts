@@ -51,6 +51,18 @@ describe("session activity assistant buffering", () => {
     expect(state.notes.at(-1)?.text).toBe("Assistant: visible after");
   });
 
+  it.each(["HEARTBEAT_OK", "NO_REPLY"])(
+    "does not record the internal acknowledgement %s as assistant activity",
+    (acknowledgement) => {
+      const state = createSessionActivityNoteState();
+      noteSessionActivityEvent(state, assistantEvent(1_000, acknowledgement, acknowledgement));
+
+      flushSessionActivityAssistantNote(state);
+
+      expect(state.notes).toEqual([]);
+    },
+  );
+
   it("keeps delta-only producers on the bounded incremental path", () => {
     const state = createSessionActivityNoteState();
     noteSessionActivityEvent(state, assistantEvent(1_000, "", "a".repeat(5_000)));

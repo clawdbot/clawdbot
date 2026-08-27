@@ -5,7 +5,6 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isAssistantHeartbeatAckForDisplay } from "../../lib/chat/heartbeat-display.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
-import { formatUiExternalText } from "../../lib/format-error.ts";
 // Control UI page module reconciles Chat Gateway events into Chat state.
 import { isUiGlobalSessionKey, resolveUiDefaultAgentId } from "../../lib/sessions/session-key.ts";
 import {
@@ -24,7 +23,7 @@ import {
   readChatSessionProjectionScope,
   setChatSessionProjection,
 } from "./history-merge.ts";
-import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
+import { reconcileChatRunLifecycle, setChatRunError } from "./run-lifecycle.ts";
 import { appendChatMessageToCache } from "./session-message-cache.ts";
 import {
   latestStreamBoundaryRunId,
@@ -50,10 +49,6 @@ type AssistantMessageNormalizationOptions = {
   requireContentArray?: boolean;
   allowTextField?: boolean;
 };
-
-function setChatRunError(state: ChatState, summary: string) {
-  state.chatRunError = { summary: formatUiExternalText(summary) };
-}
 
 function chatEventSessionMatches(state: ChatState, payload: ChatEventPayload): boolean {
   return chatScopedEventSessionMatches(state, payload.sessionKey, payload.agentId);
@@ -215,11 +210,9 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     typeof payload.runId === "string" &&
     payload.runId === state.chatRunId;
   const authoritativeTerminalMatches = Boolean(
-    payload.runId &&
-    authoritativeHistoryAppliedForRun(state, payload.runId) &&
-    chatEventSessionMatches(state, payload),
+    payload.runId && authoritativeHistoryAppliedForRun(state, payload.runId) && sessionMatches,
   );
-  if (!sessionMatches && !activeRunMatches) {
+  if (!sessionMatches) {
     if (payload.state === "final") {
       const finalMessage = normalizedFinalMessage;
       if (finalMessage && !shouldHideAssistantChatMessage(finalMessage)) {

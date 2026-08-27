@@ -46,6 +46,7 @@ export type ShardGroupPlan = { kind: "group"; name: string; plan: ShardGroupConf
 export type ShardPlan = ShardTargetPlan | ShardGroupPlan;
 type RunShardOptions = {
   concurrency?: number;
+  continueOnFailure?: boolean;
   env?: NodeJS.ProcessEnv;
   fsModuleCacheMaxBytes?: number;
   nodeCompileCacheMaxBytes?: number;
@@ -322,7 +323,7 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
   let nextIndex = 0;
   let exitCode = 0;
   const workers = Array.from({ length: concurrency }, async (_, cacheSlot) => {
-    while (nextIndex < plans.length && exitCode === 0) {
+    while (nextIndex < plans.length && (exitCode === 0 || options.continueOnFailure)) {
       const index = nextIndex;
       nextIndex += 1;
       const entry = plans[index];
@@ -333,7 +334,10 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
       if (!Array.isArray(targetArgs) || targetArgs.length === 0) {
         console.error(`Missing node test shard configs for ${entry.name}`);
         exitCode = exitCode || 1;
-        return;
+        if (!options.continueOnFailure) {
+          return;
+        }
+        continue;
       }
       const args =
         Array.isArray(vitestExtraArgs) && vitestExtraArgs.length > 0
@@ -345,8 +349,8 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
       });
       const code = await runner(args, childEnv, entry.name);
       if (code !== 0) {
-        // Stop scheduling new plans after a failure; the in-flight sibling
-        // finishes so its buffered output still lands in the job log.
+        // Ordinary CI stops scheduling after failure; cache warmers explicitly
+        // continue so later groups still seed their independent transforms.
         exitCode = exitCode || code;
       }
     }
@@ -386,5 +390,8 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   // Bins holding spawn/signal-timing suites are marked planConcurrency 1 by
   // the planner; overlapping them with a sibling Vitest run causes flakes.
   const planConcurrency = Number(process.env.OPENCLAW_NODE_TEST_PLAN_CONCURRENCY) || undefined;
-  process.exitCode = await runShardPlans(plans, { concurrency: planConcurrency });
+  process.exitCode = await runShardPlans(plans, {
+    concurrency: planConcurrency,
+    continueOnFailure: process.env.OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE === "1",
+  });
 }

@@ -11,6 +11,7 @@ import { measureDiagnosticsTimelineSpanSync } from "../../infra/diagnostics-time
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-harness-session-key.js";
 import { isBrowserOperatorUiClient } from "../../utils/message-channel.js";
+import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
 import { pendingChatSendDedupeKey } from "../server-shared.js";
 import {
   loadSessionEntry,
@@ -152,6 +153,16 @@ export function prepareChatSendSession(params: {
     config: cfg,
     agentId: selectedAgent.agentId,
   });
+  if (!entry) {
+    const creationError = authorizeGatewaySessionCreation({
+      cfg,
+      client,
+      agentId,
+    });
+    if (creationError) {
+      return { ok: false as const, error: creationError };
+    }
+  }
   const activeRunScopeKey = resolveChatSendActiveScopeKey({
     sessionKey,
     agentId: selectedAgent.agentId,

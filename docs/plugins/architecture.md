@@ -31,7 +31,7 @@ This is the **deep architecture reference** for the OpenClaw plugin system. For 
 
 ## Public capability model
 
-Capabilities are the public **native plugin** model inside OpenClaw. Every native OpenClaw plugin registers against one or more capability types:
+Capabilities are the public **native plugin** model inside OpenClaw. Native plugins can register one or more capability types:
 
 | Capability             | Registration method                              | Example plugins                                             |
 | ---------------------- | ------------------------------------------------ | ----------------------------------------------------------- |
@@ -50,9 +50,10 @@ Capabilities are the public **native plugin** model inside OpenClaw. Every nativ
 | Web search             | `api.registerWebSearchProvider(...)`             | `brave`, `firecrawl`, `google`                              |
 | Channel / messaging    | `api.registerChannel(...)`                       | `matrix`, `msteams`                                         |
 | Gateway discovery      | `api.registerGatewayDiscoveryService(...)`       | `bonjour`                                                   |
+| Migration              | `api.registerMigrationProvider(...)`             | `migrate-claude`, `migrate-hermes`                          |
 
 <Note>
-A plugin that registers zero capabilities but provides hooks, tools, discovery services, or background services is a **legacy hook-only** plugin. That pattern is still fully supported.
+A plugin that registers only hooks is **hook-only**. Plugins with tools, commands, background services, or routes but no capabilities are **non-capability** plugins. Both patterns remain supported; gateway discovery is an explicit capability listed above.
 </Note>
 
 ### External compatibility stance
