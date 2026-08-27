@@ -84,31 +84,8 @@ export class NavDrawerSwipeOwner {
     this.reset();
     const shell = this.host.querySelector<HTMLElement>(".shell");
     const toastHost = this.host.querySelector<HTMLElement>("openclaw-toast-host");
-    if (shell && toastHost && toastHost.parentElement !== shell) {
+    if (shell && toastHost?.parentElement?.classList.contains("shell-nav")) {
       shell.moveBefore(toastHost, null);
-    }
-  }
-
-  trapFocus(event: KeyboardEvent): void {
-    const drawer = this.host.querySelector<HTMLElement>(".shell-nav");
-    if (!drawer) {
-      return;
-    }
-    const focusable = this.focusable();
-    if (focusable.length === 0) {
-      event.preventDefault();
-      drawer.focus({ preventScroll: true });
-      return;
-    }
-    const first = focusable[0]!;
-    const last = focusable.at(-1)!;
-    const active = document.activeElement;
-    if (event.shiftKey && (active === first || !drawer.contains(active))) {
-      event.preventDefault();
-      last.focus({ preventScroll: true });
-    } else if (!event.shiftKey && (active === last || !drawer.contains(active))) {
-      event.preventDefault();
-      first.focus({ preventScroll: true });
     }
   }
 

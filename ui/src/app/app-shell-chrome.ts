@@ -51,6 +51,7 @@ import {
   type NativeHistoryState,
 } from "./native-web-chrome.ts";
 import type { NavDrawerSwipeOwner } from "./nav-drawer-swipe.ts";
+import { trapNavDrawerFocus } from "./navigation-surface.ts";
 import { isBrowserPanelAvailable, isDesktopPanelAvailable } from "./panel-availability.ts";
 import { NAV_WIDTH_MAX, NAV_WIDTH_MIN } from "./settings.ts";
 
@@ -235,14 +236,9 @@ export class ShellChromeOwner {
   }
 
   visibleNavDrawerToggle(): HTMLElement | undefined {
-    for (const candidate of this.host.querySelectorAll<HTMLElement>(
-      ".topbar-nav-toggle, .chat-pane__nav-toggle",
-    )) {
-      if (candidate.checkVisibility()) {
-        return candidate;
-      }
-    }
-    return undefined;
+    return [
+      ...this.host.querySelectorAll<HTMLElement>(".topbar-nav-toggle, .chat-pane__nav-toggle"),
+    ].find((candidate) => candidate.checkVisibility());
   }
 
   closeNavDrawer(options: { restoreFocus?: boolean } = {}): void {
@@ -427,7 +423,7 @@ export class ShellChromeOwner {
         event.preventDefault();
         host.closeNavDrawer({ restoreFocus: true });
       } else if (event.key === "Tab") {
-        this.navDrawerSwipeOwner?.trapFocus(event);
+        trapNavDrawerFocus(host, event);
       }
       return;
     }
