@@ -4,11 +4,9 @@ import "../test-support/browser-security.mock.js";
 import "./server-context.chrome-test-harness.js";
 import * as cdpModule from "./cdp.js";
 import { OPEN_TAB_DISCOVERY_POLL_MS } from "./server-context.constants.js";
-import {
-  createTestBrowserRouteContext,
-  makeState,
-  originalFetch,
-} from "./server-context.remote-tab-ops.harness.js";
+import { createBrowserRouteContext } from "./server-context.js";
+import { beginProfileTransition, markBrowserRuntimeStopping } from "./server-context.lifecycle.js";
+import { makeState, originalFetch } from "./server-context.remote-tab-ops.harness.js";
 import { createProfileSelectionOps } from "./server-context.selection.js";
 import type { ProfileRuntimeState } from "./server-context.types.js";
 
@@ -116,9 +114,13 @@ describe("browser tab discovery poll abort", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it.each([false, true])(
-    "cancels opened-target discovery and closes the target (close fails: %s)",
-    async (closeFails) => {
+  it.each([
+    { closeFails: false, shutdown: false },
+    { closeFails: true, shutdown: false },
+    { closeFails: false, shutdown: true },
+  ])(
+    "cancels opened-target discovery and closes the target (close fails: $closeFails, shutdown: $shutdown)",
+    async ({ closeFails, shutdown }) => {
       vi.useFakeTimers();
       const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
       vi.spyOn(cdpModule, "createTargetViaCdp").mockResolvedValue({
@@ -143,9 +145,7 @@ describe("browser tab discovery poll abort", () => {
       });
       globalThis.fetch = withBrowserFetchPreconnect(fetchMock);
       const state = makeState("openclaw");
-      const openclaw = createTestBrowserRouteContext({ getState: () => state }).forProfile(
-        "openclaw",
-      );
+      const openclaw = createBrowserRouteContext({ getState: () => state }).forProfile("openclaw");
       const controller = new AbortController();
       const openPromise = openclaw.openTab("about:blank", { signal: controller.signal });
 
@@ -154,11 +154,23 @@ describe("browser tab discovery poll abort", () => {
         true,
       );
       expect(vi.getTimerCount()).toBe(1);
-      controller.abort();
+      let stopping: Promise<unknown> | undefined;
+      if (shutdown) {
+        markBrowserRuntimeStopping(state);
+        stopping = beginProfileTransition({
+          state,
+          runtime: state.profiles.get("openclaw")!,
+          reason: "runtime shutdown",
+          closeSharedAdapters: false,
+        });
+      } else {
+        controller.abort();
+      }
 
       await expect(openPromise).rejects.toMatchObject({ name: "AbortError", message: "aborted" });
       expect(closeRequests).toEqual(["http://127.0.0.1:18800/json/close/PENDING"]);
       expect(closeSignalsAborted).toEqual([false]);
+      await stopping;
       expect(vi.getTimerCount()).toBe(0);
     },
   );

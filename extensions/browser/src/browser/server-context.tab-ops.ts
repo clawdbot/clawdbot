@@ -272,10 +272,12 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
     opts?.signal?.throwIfAborted();
     const normalizedLabel = opts?.label === undefined ? undefined : normalizeTabLabel(opts.label);
     const ssrfPolicyOpts = getNavigationPolicy();
+    const cdpPolicy = getCdpControlPolicy();
+    // Runtime shutdown fences state() before draining this operation's cleanup.
+    const cleanupTimeoutMs = state().resolved.remoteCdpTimeoutMs;
 
     if (capabilities.usesChromeMcp) {
       await assertBrowserNavigationAllowed({ url, ...ssrfPolicyOpts });
-      const cdpPolicy = getCdpControlPolicy();
       assertChromeMcpCdpTransportAllowed(profile, cdpPolicy);
       const { openChromeMcpTab } = await getChromeMcpModule();
       const cdpTimeouts = getRemoteCdpActionTimeouts();
@@ -299,7 +301,7 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
           const page = await createPageViaPlaywright({
             cdpUrl: profile.cdpUrl,
             url,
-            cdpPolicy: getCdpControlPolicy(),
+            cdpPolicy,
             ...ssrfPolicyOpts,
           });
           createdTargetId = page.targetId;
@@ -329,7 +331,7 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
       const createTargetOpts: Parameters<typeof createTargetViaCdp>[0] = {
         cdpUrl: profile.cdpUrl,
         url,
-        ssrfPolicy: getCdpControlPolicy(),
+        ssrfPolicy: cdpPolicy,
         waitForNavigationResult: true,
       };
       if (cdpActionTimeouts) {
@@ -480,9 +482,9 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
         // inherit the caller's abort or replace the original open failure.
         await fetchOk(
           appendCdpPath(cdpHttpBase, `/json/close/${encodeURIComponent(createdTargetId)}`),
-          state().resolved.remoteCdpTimeoutMs,
+          cleanupTimeoutMs,
           undefined,
-          getCdpControlPolicy(),
+          cdpPolicy,
         ).catch(() => {});
       }
       throw openError;
