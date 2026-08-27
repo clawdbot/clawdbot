@@ -34,8 +34,6 @@ vi.resetModules();
 
 const { installPluginFromNpmPackArchive, installPluginFromNpmSpec, PLUGIN_INSTALL_ERROR_CODE } =
   await import("./install.js");
-const { classifyNpmManagedOverrideCompatibilityError } =
-  await import("./install-managed-npm-state.js");
 
 const suiteTempRootTracker = createSyncSuiteTempRootTracker("openclaw-plugin-install-npm-spec");
 let previousNpmGlobalConfig: string | undefined;
@@ -742,22 +740,6 @@ beforeAll(async () => {
 });
 
 describe("installPluginFromNpmSpec", () => {
-  it.each([
-    "npm ERR! Invalid comparator: npm:@nolyfill/domexception@1.0.28",
-    'npm error code EINVALIDTAGNAME\nnpm error Invalid tag name "0.2.2>ip" of package "werift-ice@0.2.2>ip"',
-    "npm error Override without name: @scope/parent>child",
-    'npm error code EINVALIDPACKAGENAME\nnpm error Invalid package name "parent>" of package "parent>@scope/child"',
-  ])("detects npm-incompatible managed override errors", (stderr) => {
-    expect(classifyNpmManagedOverrideCompatibilityError({ stdout: "", stderr })).toBeDefined();
-  });
-
-  it.each([
-    'npm error code EINVALIDTAGNAME\nnpm error Invalid tag name "next" of package "pkg@next"',
-    'npm error code EINVALIDPACKAGENAME\nnpm error Invalid package name "bad name" of package "bad name@1"',
-  ])("ignores unrelated npm package validation errors", (stderr) => {
-    expect(classifyNpmManagedOverrideCompatibilityError({ stdout: "", stderr })).toBeUndefined();
-  });
-
   it("classifies npm metadata command failures", async () => {
     runCommandWithTimeoutMock.mockResolvedValue(failedSpawn("registry unavailable"));
 
@@ -3048,7 +3030,7 @@ describe("installPluginFromNpmSpec", () => {
     }
   });
 
-  it("retries without each npm-incompatible override kind while preserving valid rules", async () => {
+  it("normalizes selectors before npm planning and retries only unsupported aliases", async () => {
     const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
     const hostRoot = suiteTempRootTracker.makeTempDir();
     fs.writeFileSync(
@@ -3089,6 +3071,13 @@ describe("installPluginFromNpmSpec", () => {
     let installAttempts = 0;
     runCommandWithTimeoutMock.mockImplementation(
       async (argv: string[], options?: { cwd?: string }) => {
+        if (isNpmPeerPlannerInstallCommand(argv)) {
+          const manifest = JSON.parse(
+            fs.readFileSync(path.join(options?.cwd ?? "", "package.json"), "utf8"),
+          ) as { overrides?: Record<string, unknown> };
+          expect(manifest.overrides).not.toHaveProperty("werift-ice@0.2.2>ip");
+          expect(manifest.overrides?.["range-target@>1"]).toBe("2.0.0");
+        }
         if (isManagedNpmInstallCommand(argv)) {
           installAttempts += 1;
           const npmProjectRoot = options?.cwd;
@@ -3099,13 +3088,20 @@ describe("installPluginFromNpmSpec", () => {
             fs.readFileSync(path.join(npmProjectRoot, "package.json"), "utf8"),
           ) as { overrides?: Record<string, unknown>; openclaw?: { managedOverrides?: string[] } };
           if (installAttempts === 1) {
-            // Producer filters pnpm parent-child selectors up front; the first
-            // manifest must never contain them, so npm rejects only the alias.
-            expect(manifest.overrides).not.toHaveProperty("werift-ice@0.2.2>ip");
             expect(manifest.overrides?.["node-domexception"]).toBe(
               "npm:@nolyfill/domexception@1.0.28",
             );
             expect(manifest.overrides?.["range-target@>1"]).toBe("2.0.0");
+            expect(manifest.overrides).not.toHaveProperty("werift-ice@0.2.2>ip");
+            expect(manifest.overrides).toEqual({
+              axios: "1.18.0",
+              nested: {
+                alias: "npm:@scope/alias@1.0.0",
+                semver: "1.2.3",
+              },
+              "node-domexception": "npm:@nolyfill/domexception@1.0.28",
+              "range-target@>1": "2.0.0",
+            });
             expect(manifest.openclaw?.managedOverrides).toEqual([
               "axios",
               "nested",
