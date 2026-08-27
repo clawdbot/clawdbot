@@ -14,7 +14,7 @@ const MAX_DISCOVERY_FILES = 10_000;
 const SUMMARY_SCAN_BATCH_SIZE = 100;
 const MAX_SUMMARY_CACHE_ENTRIES = 256;
 const MAX_SESSION_BYTES = 32 * 1024 * 1024;
-const FS_CONSTANTS_WITH_OPTIONAL_NONBLOCK = fsConstants as typeof fsConstants & {
+// SAFETY: Node omits O_NONBLOCK from some platform typings, but the runtime flag is optional.`nconst FS_CONSTANTS_WITH_OPTIONAL_NONBLOCK = fsConstants as typeof fsConstants & {
   O_NONBLOCK?: number;
 };
 const PI_SESSION_OPEN_FLAGS =
