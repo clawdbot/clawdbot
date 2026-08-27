@@ -1,7 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import { emitSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
-import { createTranscriptUpdateBroadcastHandler } from "./server-session-events.js";
+import {
+  createLifecycleEventBroadcastHandler,
+  createTranscriptUpdateBroadcastHandler,
+} from "./server-session-events.js";
 
 const mocks = vi.hoisted(() => ({
   loadAccessorSessionEntryReadOnly: vi.fn(),
@@ -92,5 +96,40 @@ describe("transcript session-event catalog fencing", () => {
     await pending;
 
     expect(context.broadcastToConnIds).not.toHaveBeenCalled();
+  });
+
+  it("discards an event when the session identity changes during catalog loading", async () => {
+    let resolveCatalog: ((value: ModelCatalogEntry[]) => void) | undefined;
+    const loadModelCatalog = vi.fn(
+      () =>
+        new Promise<ModelCatalogEntry[]>((resolve) => {
+          resolveCatalog = resolve;
+        }),
+    );
+    const broadcastToConnIds = vi.fn();
+    const handler = createLifecycleEventBroadcastHandler({
+      broadcastToConnIds,
+      sessionEventSubscribers: { getAll: () => new Set(["conn-1"]) },
+      chatAbortControllers: new Map(),
+      loadModelCatalog,
+    });
+
+    const pending = handler({
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      reason: "delete",
+    });
+
+    await vi.waitFor(() => expect(loadModelCatalog).toHaveBeenCalledOnce());
+    emitSessionIdentityMutation({
+      kind: "reset",
+      previous: { sessionId: "sess-main", sessionKeys: ["agent:main:main"] },
+      current: { sessionId: "sess-replacement", sessionKeys: ["agent:main:main"] },
+    });
+    resolveCatalog?.([]);
+    await pending;
+
+    expect(mocks.loadGatewaySessionRow).not.toHaveBeenCalled();
+    expect(broadcastToConnIds).not.toHaveBeenCalled();
   });
 });
