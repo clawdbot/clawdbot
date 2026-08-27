@@ -4,11 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { zstdCompressSync } from "node:zlib";
-import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import { listSessionTranscriptCorpusEntriesForAgent } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import { loadSqliteVecExtension } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { listMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { deleteSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
@@ -31,11 +28,13 @@ import {
 } from "./memory-entry-origins.js";
 import { forgetMemoryEntries } from "./memory-forget.js";
 import { closeMemoryDatabase, openMemoryDatabaseAtPath } from "./memory/manager-db.js";
+import { runSessionBackfill } from "./session-backfill.js";
 import { readSessionIngestionState, writeSessionIngestionState } from "./session-ingestion.js";
 import { buildPromotionRecallAnnotations } from "./short-term-promotion-metadata.js";
 import {
   applyShortTermPromotions,
   rankShortTermPromotionCandidates,
+  readShortTermRecallEntries,
   recordShortTermRecalls,
 } from "./short-term-promotion.js";
 import { configureMemoryCoreDreamingStateForTests } from "./test-helpers.js";
@@ -208,6 +207,73 @@ describe("memory forget", () => {
     ).toEqual(report);
     expect(listMemorySessionTombstones({ agentId: "main" })).toEqual(tombstones);
   });
+
+  it("removes staged backfill entries when their source session is forgotten", async () => {
+    await seedSession("backfilled");
+    const nowMs = Date.parse("2026-08-26T12:00:00.000Z");
+    const privateFact = "The project launch code is amber-indigo.";
+    await appendSessionTranscriptMessageByIdentity({
+      agentId: "main",
+      sessionId: "backfilled",
+      sessionKey: "agent:main:backfilled",
+      message: {
+        role: "user",
+        content: privateFact,
+        timestamp: nowMs,
+        __openclaw: { senderIsOwner: true },
+      },
+    });
+    const applied = await runSessionBackfill({
+      agentId: "main",
+      workspaceDir,
+      apply: true,
+      nowMs,
+      timezone: "UTC",
+    });
+    expect(applied.stagedEntries).toBe(1);
+    const report = await forgetMemoryEntries({
+      cfg,
+      agentId: "main",
+      sessionIds: ["backfilled"],
+    });
+    const remaining = await readShortTermRecallEntries({ workspaceDir, nowMs });
+    expect(report.artifacts.shortTermEntries).toBe(1);
+    expect(remaining.map((entry) => entry.snippet)).not.toContain(privateFact);
+  });
+
+  it.each(["prefix-survivor", "prefix.jsonl.other", "PREFIX"])(
+    "does not purge session %s when an unresolved explicit selector is prefix",
+    async (survivorId) => {
+      await seedSession(survivorId);
+      const corpusDir = path.join(workspaceDir, "memory", ".dreams", "session-corpus");
+      await fs.mkdir(corpusDir, { recursive: true });
+      const corpusPath = path.join(corpusDir, "2026-08-26.txt");
+      const content = `[main/sessions/main/${survivorId}#L1] User: Preserve this unrelated fact.\n`;
+      await fs.writeFile(corpusPath, content);
+      const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
+      db.prepare(
+        `INSERT INTO memory_index_chunks
+        (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+       VALUES ('survivor-chunk', ?, 'sessions', 1, 1,
+         'survivor-hash', 'test', 'Preserve this unrelated fact.', '[1,0]', 1)`,
+      ).run(`sessions/main/${survivorId}.jsonl`);
+      db.prepare(
+        `INSERT INTO memory_index_chunk_provenance
+        (chunk_id, origin_class, session_kind, observed_at)
+       VALUES ('survivor-chunk', 'owner', 'interactive', 1)`,
+      ).run();
+      const report = await forgetMemoryEntries({
+        cfg,
+        agentId: "main",
+        sessionIds: ["prefix"],
+      });
+      const remainingContent = await fs.readFile(corpusPath, "utf8").catch(() => "missing");
+      const remainingChunks = db.prepare("SELECT id FROM memory_index_chunks").all();
+      expect(report.sessionResolutions).toEqual([{ sessionId: "prefix", source: "unresolved" }]);
+      expect(remainingContent).toBe(content);
+      expect(remainingChunks).toEqual([{ id: "survivor-chunk" }]);
+    },
+  );
 
   it("does not infer hook or participant facts for an archived-only session", async () => {
     await seedSession("archived", "gmail");
@@ -615,7 +681,11 @@ describe("memory forget", () => {
         source: "memory",
         originClass: "owner",
       },
-      { path: "sessions/main/target", source: "sessions", originClass: "owner" },
+      {
+        path: "sessions/main/target.jsonl.reset.2026-08-25T10-00-00.000Z.zst",
+        source: "sessions",
+        originClass: "owner",
+      },
       {
         path: `sessions/main/${narrativeArchiveName}`,
         source: "sessions",
@@ -624,7 +694,7 @@ describe("memory forget", () => {
         text: "violet",
       },
       {
-        path: "sessions/main/survivor.jsonl.deleted-2026-08-25.zst",
+        path: "sessions/main/survivor.jsonl.deleted.2026-08-25T10-00-00.000Z.zst",
         source: "sessions",
         originClass: "owner",
       },
@@ -743,7 +813,7 @@ describe("memory forget", () => {
       (db.prepare("SELECT path FROM memory_index_sources").all() as Array<{ path: string }>).map(
         (row) => row.path,
       ),
-    ).toEqual(["MEMORY.md", "sessions/main/survivor.jsonl.deleted-2026-08-25.zst"]);
+    ).toEqual(["MEMORY.md", "sessions/main/survivor.jsonl.deleted.2026-08-25T10-00-00.000Z.zst"]);
     expect(
       db
         .prepare("SELECT id FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH ?")
@@ -794,177 +864,6 @@ describe("memory forget", () => {
     expect(repeated.sessionIds).toEqual(["target"]);
     expect(Object.values(repeated.artifacts).every((count) => count === 0)).toBe(true);
     expect(listMemorySessionTombstones({ agentId: "main" })).toEqual(tombstones);
-  });
-
-  it("reports session-authored curated memory without deleting unattributable file content", async () => {
-    await seedSession("target");
-    const curatedContent = "# Long-Term Memory\nThe launch code is violet.\n";
-    const writeTool = createOpenClawCodingTools({
-      workspaceDir,
-      config: cfg,
-      sessionId: "target",
-      sessionKey: "agent:main:target",
-      senderIsOwner: true,
-    }).find((tool) => tool.name === "write");
-    expect(writeTool).toBeDefined();
-    await writeTool!.execute("write-curated-memory", {
-      path: "MEMORY.md",
-      content: curatedContent,
-    });
-    await appendSessionTranscriptMessageByIdentity({
-      agentId: "main",
-      sessionId: "target",
-      sessionKey: "agent:main:target",
-      message: {
-        role: "assistant",
-        content: [
-          {
-            type: "toolCall",
-            id: "observed-write",
-            name: "write",
-            arguments: { path: "MEMORY.md" },
-          },
-        ],
-      },
-    });
-
-    const preview = await forgetMemoryEntries({
-      cfg,
-      agentId: "main",
-      sessionIds: ["target"],
-      dryRun: true,
-    });
-    expect(preview.curatedWrites).toEqual([
-      { relativePath: "MEMORY.md", observedAt: expect.any(Number) },
-    ]);
-    expect(await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8")).toBe(curatedContent);
-
-    const report = await forgetMemoryEntries({
-      cfg,
-      agentId: "main",
-      sessionIds: ["target"],
-    });
-    expect(report).toEqual({ ...preview, dryRun: false });
-    expect(report.artifacts.memoryFiles).toBe(0);
-    expect(await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8")).toBe(curatedContent);
-  });
-
-  it("reports harness memory writes from selected live and archived transcripts without observer state", async () => {
-    await seedSession("survivor");
-    await seedSession("target");
-    const observedAt = Date.parse("2026-08-26T12:34:56.000Z");
-    const memoryContent = "# Long-Term Memory\nA harness-authored private fact.\n";
-    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
-    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), memoryContent);
-    await fs.writeFile(path.join(workspaceDir, "USER.md"), "# User\n");
-    await fs.writeFile(path.join(workspaceDir, "memory", "profile.md"), "# Profile\n");
-    const patchInput = [
-      "*** Begin Patch",
-      "*** Update File: MEMORY.md",
-      "@@",
-      "+A harness-authored private fact.",
-      "*** Update File: README.md",
-      "@@",
-      "+Not a memory file.",
-      "*** End Patch",
-    ].join("\n");
-    await appendSessionTranscriptMessageByIdentity({
-      agentId: "main",
-      sessionId: "target",
-      sessionKey: "agent:main:target",
-      message: {
-        role: "assistant",
-        timestamp: observedAt,
-        content: [
-          { type: "toolCall", id: "patch", name: "apply_patch", arguments: { input: patchInput } },
-          { type: "toolCall", id: "profile", name: "write", arguments: { path: "USER.md" } },
-          {
-            type: "toolCall",
-            id: "nested",
-            name: "edit",
-            input: { file_path: path.join(workspaceDir, "memory", "profile.md") },
-          },
-          {
-            type: "toolCall",
-            id: "structured",
-            name: "apply_patch",
-            arguments: { changes: [{ path: "memory/structured.md" }, { path: "README.md" }] },
-          },
-          { type: "toolCall", id: "ordinary", name: "write", arguments: { path: "README.md" } },
-          { type: "toolCall", id: "escaping", name: "edit", arguments: { path: "../MEMORY.md" } },
-          { type: "toolCall", id: "malformed", name: "apply_patch", arguments: { input: 42 } },
-          { type: "toolCall", id: "read-only", name: "read", arguments: { path: "MEMORY.md" } },
-          { type: "toolCall", id: "missing", name: "write", arguments: null },
-          null,
-        ],
-      },
-    });
-    await appendSessionTranscriptMessageByIdentity({
-      agentId: "main",
-      sessionId: "survivor",
-      sessionKey: "agent:main:survivor",
-      message: {
-        role: "assistant",
-        timestamp: observedAt + 1,
-        content: [
-          {
-            type: "toolCall",
-            id: "unselected",
-            name: "write",
-            arguments: { path: "memory/keep.md" },
-          },
-        ],
-      },
-    });
-    const archiveDir = path.join(stateDir, "agents", "main", "sessions");
-    await fs.mkdir(archiveDir, { recursive: true });
-    const archivedMessage = {
-      type: "message",
-      timestamp: new Date(observedAt + 1).toISOString(),
-      message: {
-        role: "assistant",
-        content: [
-          {
-            type: "tool_use",
-            id: "archived",
-            name: "edit",
-            input: { filePath: "memory/archive.md" },
-          },
-        ],
-      },
-    };
-    await fs.writeFile(
-      path.join(archiveDir, "target.jsonl.deleted.2026-08-26T12-35-00.000Z.zst"),
-      zstdCompressSync(`${JSON.stringify(archivedMessage)}\n`),
-    );
-    expect(await listSessionTranscriptCorpusEntriesForAgent("main")).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ sessionId: "target", artifactKind: "active-session" }),
-        expect.objectContaining({ sessionId: "target", artifactKind: "archive-artifact" }),
-      ]),
-    );
-    expect(await listMemoryArtifactProvenance({ workspaceDir })).toEqual([]);
-
-    const preview = await forgetMemoryEntries({
-      cfg,
-      agentId: "main",
-      sessionIds: ["target"],
-      dryRun: true,
-    });
-
-    expect(preview.curatedWrites).toEqual([
-      { relativePath: "MEMORY.md", observedAt },
-      { relativePath: "memory/archive.md", observedAt: observedAt + 1 },
-      { relativePath: "memory/profile.md", observedAt },
-      { relativePath: "memory/structured.md", observedAt },
-      { relativePath: "USER.md", observedAt },
-    ]);
-    expect(await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8")).toBe(memoryContent);
-
-    const report = await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: ["target"] });
-    expect(report).toEqual({ ...preview, dryRun: false });
-    expect(report.artifacts.memoryFiles).toBe(0);
-    expect(await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8")).toBe(memoryContent);
   });
 
   it("keeps missing provenance untargetable without creating its table during dry-run", async () => {

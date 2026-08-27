@@ -2225,6 +2225,17 @@ describe("memory index", () => {
     await manager.sync({ reason: "test" });
 
     expect(providerFixture.embedBatchInputCalls).toBeGreaterThan(0);
+    expect(
+      providerFixture.embeddedBatchInputs
+        .flat()
+        .flatMap((input) =>
+          typeof input === "string"
+            ? []
+            : (input.parts ?? []).flatMap((part) =>
+                part.type === "inline-data" ? [`${part.mimeType}:${part.data}`] : [],
+              ),
+        ),
+    ).toEqual(expect.arrayContaining(["image/png:cG5n", "audio/wav:d2F2"]));
 
     const db = Reflect.get(manager, "db") as DatabaseSync;
     const indexedMediaPaths = () =>

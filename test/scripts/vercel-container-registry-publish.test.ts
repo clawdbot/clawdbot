@@ -592,7 +592,7 @@ describe("Vercel Container Registry publishing", () => {
       version: reusable.on?.workflow_call?.inputs?.version,
     });
     expect(reusablePublish.steps?.find((step) => step.name === "Set up Docker Builder")?.uses).toBe(
-      "docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c",
+      "docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e",
     );
     const materializeVercel = reusablePublish.steps?.find(
       (step) => step.name === "Materialize locked Vercel CLI",

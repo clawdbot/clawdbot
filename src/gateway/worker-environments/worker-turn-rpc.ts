@@ -35,6 +35,10 @@ import { sameWorkerSessionTurnClaim, type WorkerSessionTurnClaim } from "./place
 import type { WorkerTurnExecutionIdentityCapability } from "./placement-turn-claim-events.js";
 import type { WorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerEnvironmentStore } from "./store.js";
+import {
+  serializeWorkerSessionToolResult,
+  workerSessionToolErrorResult,
+} from "./worker-session-tool-result.js";
 
 type WorkerProcessTurnBinding = {
   turnClaim: WorkerSessionTurnClaim;
@@ -442,11 +446,13 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
         ...operation,
         ...(signal ? { signal } : {}),
       });
-    } catch {
-      return { ok: false, reason: "gateway-unavailable" };
+    } catch (error) {
+      result = {
+        resultJson: serializeWorkerSessionToolResult(workerSessionToolErrorResult(error)),
+      };
     }
     // The tool may have awaited provider provisioning or another session turn.
-    // Never return its result after the source turn or placement was revoked.
+    // Neither success nor failure may return after the source turn or placement was revoked.
     const current = validate();
     return current.ok ? { ok: true, result } : current;
   };

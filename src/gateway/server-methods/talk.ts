@@ -9,7 +9,9 @@ import {
   ErrorCodes,
   errorShape,
   missingScopeErrorShape,
+  normalizeUiAppearancePreference,
   type TalkSpeakParams,
+  UI_APPEARANCE_PREFERENCE_KEYS,
   validateTalkCatalogParams,
   validateTalkConfigParams,
   validateTalkModeParams,
@@ -35,6 +37,8 @@ import {
   assertSecretOwnerAvailable,
   isSecretOwnerAvailable,
 } from "../../secrets/runtime-degraded-state.js";
+import { getUserPreferences } from "../../state/user-preferences.js";
+import { resolveUserProfileId } from "../../state/user-profiles.js";
 import { resolveTalkSessionAgentId } from "../../talk/agent-target.js";
 import {
   canonicalizeRealtimeVoiceProviderId,
@@ -802,9 +806,18 @@ export const talkHandlers: GatewayRequestHandlers = {
       configPayload.session = { mainKey: sessionMainKey };
     }
 
-    // User accent wins over the operator seam color, matching Control UI
-    // precedence (ui.prefs.accent -> ui.seamColor -> theme default).
-    const seamColor = snapshot.config.ui?.prefs?.accent ?? snapshot.config.ui?.seamColor;
+    const profileId = client?.authenticatedUserProfile?.profileId;
+    const canonicalProfileId = profileId ? resolveUserProfileId(profileId) : undefined;
+    const accentKey = UI_APPEARANCE_PREFERENCE_KEYS.accent;
+    const profileAccent = canonicalProfileId
+      ? normalizeUiAppearancePreference(
+          accentKey,
+          getUserPreferences(canonicalProfileId, [accentKey])[accentKey],
+        )
+      : undefined;
+    // Profile accent overrides gateway prefs, then the gateway seam color and theme default.
+    const seamColor =
+      profileAccent ?? snapshot.config.ui?.prefs?.accent ?? snapshot.config.ui?.seamColor;
     if (typeof seamColor === "string") {
       configPayload.ui = { seamColor };
     }

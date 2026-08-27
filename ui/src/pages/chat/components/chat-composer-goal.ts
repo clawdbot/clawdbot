@@ -35,11 +35,14 @@ function createGoalElapsedRef(goal: SessionGoal) {
       clearGoalElapsedTimer(bound);
       bound = null;
     }
-    if (!(element instanceof HTMLElement) || goal.status !== "active") {
+    if (!(element instanceof HTMLElement)) {
+      return;
+    }
+    element.textContent = formatGoalElapsed(goalElapsedMs(goal, Date.now()));
+    if (goal.status !== "active") {
       return;
     }
     bound = element;
-    element.textContent = formatGoalElapsed(goalElapsedMs(goal, Date.now()));
     const timer = setInterval(() => {
       // Tests and detached renders can drop the pill without a final ref call.
       if (!element.isConnected) {

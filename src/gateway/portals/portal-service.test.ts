@@ -48,11 +48,13 @@ async function getDistinctFreePort(excluded: number): Promise<number> {
 describe("portal open authority fence", () => {
   it("refuses to mutate a reused portal when the caller's authority lapsed", async () => {
     const { service } = makeService(["127.0.0.1"]);
-    const first = (await service.open({ targetPort: 41234, title: "Live" })).portal;
+    const first = await service.open({ targetPort: 41234, title: "Live" });
+    const releaseRejected = vi.fn();
     await expect(
       service.open({
         targetPort: 41234,
         title: "Hijacked",
+        onClose: releaseRejected,
         assertCurrent: () => {
           throw new Error("authority lapsed");
         },
@@ -60,13 +62,44 @@ describe("portal open authority fence", () => {
     ).rejects.toThrow("authority lapsed");
     const summary = service.list().find((portal) => portal.id === first.id);
     expect(summary?.title).toBe("Live");
+    expect(releaseRejected).toHaveBeenCalledOnce();
+  });
+
+  it("releases the listener and target when authority is lost during startup", async () => {
+    const actualListen = httpListen.listenGatewayHttpServer;
+    let authorityCurrent = true;
+    let listener: Server | undefined;
+    vi.spyOn(httpListen, "listenGatewayHttpServer").mockImplementation(async (params) => {
+      listener = params.httpServer;
+      await actualListen(params);
+      authorityCurrent = false;
+    });
+    const { service, httpServers } = makeService(["127.0.0.1"]);
+    const releaseTarget = vi.fn();
+
+    await expect(
+      service.open({
+        targetPort: 3000,
+        onClose: releaseTarget,
+        assertCurrent: () => {
+          if (!authorityCurrent) {
+            throw new Error("Worker portal authority changed");
+          }
+        },
+      }),
+    ).rejects.toThrow("Worker portal authority changed");
+
+    expect(service.list()).toEqual([]);
+    expect(httpServers).toEqual([]);
+    expect(listener?.listening).toBe(false);
+    expect(releaseTarget).toHaveBeenCalledOnce();
   });
 });
 
 describe("gateway portal service", () => {
   it("allocates one port across every frozen bind host", async () => {
     const { service, httpServers } = makeService(["127.0.0.1", "::1"]);
-    const portal = (await service.open({ targetPort: 3000, title: "App" })).portal;
+    const portal = await service.open({ targetPort: 3000, title: "App" });
 
     expect(portal).toMatchObject({ id: "p3000", port: 3000, title: "App" });
     expect(portal.listenPort).toBeGreaterThan(0);
@@ -95,7 +128,7 @@ describe("gateway portal service", () => {
     });
     const { service, httpServers } = makeService(["127.0.0.1", "::1"]);
 
-    const portal = (await service.open({ targetPort })).portal;
+    const portal = await service.open({ targetPort });
 
     expect(portal.listenPort).toBe(acceptedPort);
     expect(calls).toEqual([
@@ -141,15 +174,20 @@ describe("gateway portal service", () => {
 
   it("updates an existing target without replacing its listener or token", async () => {
     const { service, httpServers } = makeService(["127.0.0.1"]);
-    const first = (await service.open({ targetPort: 3000, title: "First" })).portal;
-    const second = (
-      await service.open({
-        targetPort: 3000,
-        title: "Second",
-        description: "Updated",
-        path: "/preview",
-      })
-    ).portal;
+    const releaseFirst = vi.fn();
+    const releaseRedundant = vi.fn();
+    const first = await service.open({
+      targetPort: 3000,
+      title: "First",
+      onClose: releaseFirst,
+    });
+    const second = await service.open({
+      targetPort: 3000,
+      title: "Second",
+      description: "Updated",
+      path: "/preview",
+      onClose: releaseRedundant,
+    });
 
     expect(second).toMatchObject({
       id: first.id,
@@ -163,48 +201,48 @@ describe("gateway portal service", () => {
     expect(second.url).toBe(`${second.publicUrl}?${second.tokenQuery}`);
     expect(httpServers).toHaveLength(1);
     expect(service.list()).toEqual([second]);
+    expect(releaseFirst).not.toHaveBeenCalled();
+    expect(releaseRedundant).toHaveBeenCalledOnce();
+
+    await service.close(first.id);
+    expect(releaseFirst).toHaveBeenCalledOnce();
+    expect(releaseRedundant).toHaveBeenCalledOnce();
   });
 
   it("keeps local and worker portals on the same application port distinct", async () => {
     const { service } = makeService(["127.0.0.1"]);
-    const local = (await service.open({ targetPort: 3000 })).portal;
-    const worker = (
-      await service.open({
-        targetPort: 3000,
-        target: {
-          kind: "worker",
-          environmentId: "cloud/a",
-          ownerEpoch: 7,
-          remotePort: 3000,
-          connect: unavailableWorkerConnection,
-        },
-        origin: "Cloud worker A",
-      })
-    ).portal;
-    const otherWorker = (
-      await service.open({
-        targetPort: 3000,
-        target: {
-          kind: "worker",
-          environmentId: "cloud-a",
-          ownerEpoch: 7,
-          remotePort: 3000,
-          connect: unavailableWorkerConnection,
-        },
-      })
-    ).portal;
-    const staleWorker = (
-      await service.open({
-        targetPort: 3000,
-        target: {
-          kind: "worker",
-          environmentId: "cloud/a",
-          ownerEpoch: 6,
-          remotePort: 3000,
-          connect: unavailableWorkerConnection,
-        },
-      })
-    ).portal;
+    const local = await service.open({ targetPort: 3000 });
+    const worker = await service.open({
+      targetPort: 3000,
+      target: {
+        kind: "worker",
+        environmentId: "cloud/a",
+        ownerEpoch: 7,
+        remotePort: 3000,
+        connect: unavailableWorkerConnection,
+      },
+      origin: "Cloud worker A",
+    });
+    const otherWorker = await service.open({
+      targetPort: 3000,
+      target: {
+        kind: "worker",
+        environmentId: "cloud-a",
+        ownerEpoch: 7,
+        remotePort: 3000,
+        connect: unavailableWorkerConnection,
+      },
+    });
+    const staleWorker = await service.open({
+      targetPort: 3000,
+      target: {
+        kind: "worker",
+        environmentId: "cloud/a",
+        ownerEpoch: 6,
+        remotePort: 3000,
+        connect: unavailableWorkerConnection,
+      },
+    });
 
     expect(local.id).toBe("p3000");
     expect(new Set([local.id, worker.id, otherWorker.id, staleWorker.id]).size).toBe(4);
@@ -220,32 +258,28 @@ describe("gateway portal service", () => {
     const { service } = makeService(["127.0.0.1"]);
     const closeStaleForward = vi.fn();
     const closeCurrentForward = vi.fn();
-    const stale = (
-      await service.open({
-        targetPort: 3000,
-        target: {
-          kind: "worker",
-          environmentId: "cloud-a",
-          ownerEpoch: 6,
-          remotePort: 3000,
-          connect: unavailableWorkerConnection,
-        },
-        onClose: closeStaleForward,
-      })
-    ).portal;
-    const current = (
-      await service.open({
-        targetPort: 3000,
-        target: {
-          kind: "worker",
-          environmentId: "cloud-a",
-          ownerEpoch: 7,
-          remotePort: 3000,
-          connect: unavailableWorkerConnection,
-        },
-        onClose: closeCurrentForward,
-      })
-    ).portal;
+    const stale = await service.open({
+      targetPort: 3000,
+      target: {
+        kind: "worker",
+        environmentId: "cloud-a",
+        ownerEpoch: 6,
+        remotePort: 3000,
+        connect: unavailableWorkerConnection,
+      },
+      onClose: closeStaleForward,
+    });
+    const current = await service.open({
+      targetPort: 3000,
+      target: {
+        kind: "worker",
+        environmentId: "cloud-a",
+        ownerEpoch: 7,
+        remotePort: 3000,
+        connect: unavailableWorkerConnection,
+      },
+      onClose: closeCurrentForward,
+    });
 
     await service.closeWorkerPortals("cloud-a", 6);
 
@@ -261,18 +295,16 @@ describe("gateway portal service", () => {
   it("keeps worker portal ids bounded for the longest supported environment id", async () => {
     const { service } = makeService(["127.0.0.1"]);
     const environmentId = "w".repeat(256);
-    const portal = (
-      await service.open({
-        targetPort: 3000,
-        target: {
-          kind: "worker",
-          environmentId,
-          ownerEpoch: 7,
-          remotePort: 3000,
-          connect: unavailableWorkerConnection,
-        },
-      })
-    ).portal;
+    const portal = await service.open({
+      targetPort: 3000,
+      target: {
+        kind: "worker",
+        environmentId,
+        ownerEpoch: 7,
+        remotePort: 3000,
+        connect: unavailableWorkerConnection,
+      },
+    });
 
     expect(portal.id.length).toBeLessThanOrEqual(256);
     expect(service.listWorkerPortals(environmentId, 7)).toEqual([portal]);
@@ -282,7 +314,7 @@ describe("gateway portal service", () => {
 
   it("revalidates worker close authority immediately before queued removal", async () => {
     const { service } = makeService(["127.0.0.1"]);
-    const portal = (await service.open({ targetPort: 3000 })).portal;
+    const portal = await service.open({ targetPort: 3000 });
     let authorityCurrent = true;
     const assertCurrent = () => {
       if (!authorityCurrent) {
@@ -337,9 +369,9 @@ describe("gateway portal service", () => {
 
   it("closes idempotently and closes every portal on shutdown", async () => {
     const { service, httpServers } = makeService(["127.0.0.1"]);
-    const first = (await service.open({ targetPort: 3000 })).portal;
+    const first = await service.open({ targetPort: 3000 });
     const firstServer = httpServers.at(-1);
-    const second = (await service.open({ targetPort: 4000 })).portal;
+    const second = await service.open({ targetPort: 4000 });
     const secondServer = httpServers.at(-1);
     expect(firstServer).toBeDefined();
     expect(secondServer).toBeDefined();
@@ -372,7 +404,7 @@ describe("gateway portal service", () => {
     ["::", "[::1]"],
   ])("maps wildcard bind host %s to openable host %s", async (bindHost, openableHost) => {
     const { service } = makeService([bindHost]);
-    const portal = (await service.open({ targetPort: 3000 })).portal;
+    const portal = await service.open({ targetPort: 3000 });
 
     expect(portal.publicUrl).toBe(`http://${openableHost}:${portal.listenPort}/`);
     expect(portal.url).toBe(`${portal.publicUrl}?${portal.tokenQuery}`);

@@ -116,6 +116,7 @@ export function buildCliAgentSystemPrompt(params: {
   tools: AgentTool[];
   contextFiles?: EmbeddedContextFile[];
   bootstrapMode?: BootstrapMode;
+  bootstrapTruncationNotice?: string;
   skillsPrompt?: string;
   modelDisplay: string;
   agentId?: string;
@@ -173,6 +174,7 @@ export function buildCliAgentSystemPrompt(params: {
     userDate,
     contextFiles: params.contextFiles,
     bootstrapMode: params.bootstrapMode,
+    bootstrapTruncationNotice: params.bootstrapTruncationNotice,
   });
 }
 

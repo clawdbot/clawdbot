@@ -275,7 +275,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
   }
 
   private renderBody(column?: SidebarColumn) {
-    if (!column) {
+    if (!column || column.panels.length === 0) {
       return html`<div id="chat-side-panel-content" class="side-panel__body">
         ${this.renderEmpty()}
       </div>`;
@@ -359,7 +359,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
         style=${styleMap({ width, height })}
         aria-label=${t("chat.sidePanel.label")}
       >
-        ${column
+        ${column?.panels.length
           ? this.renderHeader(column)
           : html`<header class="rail-header side-panel__header side-panel__header--empty">
               <strong class="side-panel__empty-header-title">${t("chat.sidePanel.label")}</strong>

@@ -301,6 +301,12 @@ export const icons = {
     <circle cx="15" cy="18" r="1.1" fill="currentColor" stroke="none" />`),
   arrowDown: strokeIcon(svg`<path d="M12 5v14m7-7-7 7-7-7" />`),
   arrowUp: strokeIcon(svg`<path d="M12 19V5m-7 7 7-7 7 7" />`),
+  audioLines: strokeIcon(svg`<path d="M2 10v3" />
+    <path d="M6 6v11" />
+    <path d="M10 3v18" />
+    <path d="M14 8v7" />
+    <path d="M18 5v13" />
+    <path d="M22 10v3" />`),
   chevronUp: strokeIcon(svg`<path d="m18 15-6-6-6 6" />`),
   chevronsUpDown: strokeIcon(svg`<path d="m7 15 5 5 5-5" />
     <path d="m7 9 5-5 5 5" />`),
@@ -351,6 +357,9 @@ export const icons = {
     <path d="M13 6h8" />
     <path d="M13 12h8" />
     <path d="M13 18h8" />`),
+  moreHorizontal: strokeIcon(svg` <circle cx="5" cy="12" r="1" />
+    <circle cx="12" cy="12" r="1" />
+    <circle cx="19" cy="12" r="1" />`),
   ...toolIcons,
 } as const;
 

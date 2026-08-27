@@ -93,9 +93,9 @@ export async function recoverEmbeddedRunOverflow(
     return { action: "none" };
   }
 
+  const terminal = projectAgentRunAttemptTerminal(input.attempt.terminal);
   const providerPromptRejection =
-    contextOverflowError.source === "assistantError" ||
-    projectAgentRunAttemptTerminal(input.attempt.terminal).promptErrorSource === "prompt"
+    contextOverflowError.source === "assistantError" || terminal.promptErrorSource === "prompt"
       ? markLastProviderPromptContextRejected(getProviderPromptState(input.runParams.runId))
       : undefined;
 
@@ -104,6 +104,14 @@ export async function recoverEmbeddedRunOverflow(
   const errorText = contextOverflowError.text;
   const observedOverflowTokens = extractObservedOverflowTokenCount(errorText);
   const preflightRecovery = input.attempt.preflightRecovery;
+  const preflightPromptBudget =
+    terminal.promptErrorSource === "precheck" &&
+    preflightRecovery?.source === "mid-turn" &&
+    typeof preflightRecovery.promptBudgetBeforeReserve === "number" &&
+    Number.isFinite(preflightRecovery.promptBudgetBeforeReserve) &&
+    preflightRecovery.promptBudgetBeforeReserve > 0
+      ? Math.floor(preflightRecovery.promptBudgetBeforeReserve)
+      : undefined;
   const preflightEstimatedPromptTokens =
     typeof preflightRecovery?.estimatedPromptTokens === "number" &&
     Number.isFinite(preflightRecovery.estimatedPromptTokens) &&
@@ -169,7 +177,7 @@ export async function recoverEmbeddedRunOverflow(
     await input.runOwnsCompactionBeforeHook("overflow recovery");
     try {
       const compaction = await compactEmbeddedRunForRecovery(input, {
-        tokenBudget: input.contextTokenBudget,
+        tokenBudget: preflightPromptBudget ?? input.contextTokenBudget,
         trigger: "overflow",
         diagId: overflowDiagId,
         attempt: input.state.overflowCompactionAttempts,

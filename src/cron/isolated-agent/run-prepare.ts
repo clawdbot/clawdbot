@@ -642,6 +642,9 @@ export async function prepareCronRunContext(params: {
       config: cfgWithAgentDefaults,
       workspaceDir,
       allowGatewaySubagentBinding: true,
+      // The published owner already selected this run's metadata generation.
+      // Reloading it here re-hashes every installed plugin on each hook/cron run.
+      ...(modelOwner.metadataSnapshot ? { metadataSnapshot: modelOwner.metadataSnapshot } : {}),
       selections: runtimePluginCandidates.map((candidate) => {
         const runtime = resolveSessionRuntimeOverrideForProvider({
           provider: candidate.provider,

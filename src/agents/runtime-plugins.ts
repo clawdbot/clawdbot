@@ -1,6 +1,9 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { adoptRuntimeContextEngineRegistrations } from "../context-engine/registry.js";
-import { listRuntimePluginIdsFromRegistry } from "../plugins/active-runtime-registry.js";
+import {
+  listLoadedRuntimePluginIds,
+  listRuntimePluginIdsFromRegistry,
+} from "../plugins/active-runtime-registry.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../plugins/installed-plugin-index-install-records.js";
 import { loadPluginRegistryHandle } from "../plugins/loader.js";
@@ -68,6 +71,9 @@ function resolveAgentRuntimePluginRegistryLoad(params: AgentRuntimePluginRegistr
     ...(workspaceDir ? { workspaceDir } : {}),
   };
   const requestPluginRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+  // Gateway-hosted fall-through must not cold-load every plugin (30-45s event-loop convoy);
+  // startup runtime plugin ids plus selected run owners bound the registry scope.
+  const activePluginIds = listLoadedRuntimePluginIds();
   const startupPluginIds =
     params.basePluginIds !== undefined
       ? [...params.basePluginIds]
@@ -75,7 +81,9 @@ function resolveAgentRuntimePluginRegistryLoad(params: AgentRuntimePluginRegistr
         ? listRuntimePluginIdsFromRegistry(requestPluginRegistry)
         : metadataSnapshot.pluginIds
           ? [...metadataSnapshot.pluginIds]
-          : undefined;
+          : activePluginIds.length > 0
+            ? activePluginIds
+            : undefined;
   const planParams = {
     config: params.config,
     workspaceDir: workspaceDir ?? process.cwd(),

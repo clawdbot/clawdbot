@@ -7,6 +7,7 @@ import {
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { CHANNEL_IDS } from "../channels/ids.js";
 import { parseConfigSetPath, parseConfigSetValue } from "../cli/config-cli-path.js";
+import { isKernelOwnedChannelConfigKey } from "../config/channel-config-keys.js";
 import {
   MANIFEST_ONLY_CHANNEL_OWNERSHIP_POLICY,
   collectChannelSchemaMetadataCore,
@@ -18,7 +19,6 @@ import {
   getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
 } from "../config/runtime-snapshot.js";
-import { isKernelOwnedChannelConfigKey } from "../config/schema.hints.js";
 import {
   buildConfigSchemaCore,
   classifyConfigSchemaPathSegment,

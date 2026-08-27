@@ -242,15 +242,14 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
       : nothing;
   // Dictation previews at the captured selection. The textarea remains
   // read-only until stop commits the same insertion into the real draft.
-  const dictationPreviewDraft =
-    dictation?.active && dictation.partial
-      ? insertComposerDictation(
-          visibleDraft,
-          dictation.partial,
-          state.dictationSelection?.start ?? visibleDraft.length,
-          state.dictationSelection?.end ?? visibleDraft.length,
-        ).value
-      : visibleDraft;
+  const dictationPreviewDraft = dictation?.active
+    ? insertComposerDictation(
+        state.dictationSelection?.value ?? visibleDraft,
+        dictation.transcript,
+        state.dictationSelection?.start ?? visibleDraft.length,
+        state.dictationSelection?.end ?? visibleDraft.length,
+      ).value
+    : visibleDraft;
   const draftDirection = detectTextDirection(dictationPreviewDraft);
   const interruptedStatus = props.runError
     ? nothing
@@ -326,7 +325,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
       ${disabledBanner} ${progressCard} ${queue} ${goalCard}
       ${showComposerInput
         ? html`<div
-            class="agent-chat__input agent-chat__input--chat ${props.offline
+            class="agent-chat__input agent-chat__input--chat agent-chat__input--mobile-toolbar ${props.offline
               ? "agent-chat__input--offline"
               : ""}${dictation?.active ? " agent-chat__input--dictating" : ""}"
             @wa-show=${handleChatComposerDropdownShow}

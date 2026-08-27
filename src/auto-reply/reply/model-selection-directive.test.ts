@@ -47,7 +47,6 @@ describe("resolveModelDirectiveSelection", () => {
       raw: "external/sensitive",
     });
 
-    expect(policy.automaticFallbackKeys).toEqual(new Set(["external/sensitive"]));
     expect(policy.allowedKeys.has("external/sensitive")).toBe(false);
     expect(result.selection).toBeUndefined();
     expect(result.error).toContain('Model "external/sensitive" is not allowed.');

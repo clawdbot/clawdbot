@@ -6,6 +6,7 @@ import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import type { SessionIngestionFileState } from "./dreaming-ingestion-state.js";
 import { removeBackfillDiaryEntries, writeBackfillDiaryEntries } from "./dreaming-narrative.js";
 import { listMemorySessionTombstones } from "./memory-entry-origins.js";
+import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import { previewGroundedRemMarkdown } from "./rem-evidence.js";
 import type {
   SessionBackfillDay,
@@ -30,6 +31,7 @@ import {
   foreignSessionIngestionSource,
   mergeTrackedMessageHashes,
   readSessionIngestionState,
+  resolveAdmissionPolicy,
   scanSessionIngestionSource,
   sessionExclusionReason,
   sessionIngestionSourceFromCorpus,
@@ -37,6 +39,8 @@ import {
   writeSessionIngestionState,
   type SessionIngestionCandidate,
   type SessionIngestionSource,
+  type SessionAdmissionPolicy,
+  type SessionEntryOrigin,
 } from "./session-ingestion.js";
 import {
   readShortTermRecallEntries,
@@ -76,6 +80,7 @@ type SessionBackfillScan = {
 type RunSessionBackfillParams = {
   agentId: string;
   workspaceDir: string;
+  pluginConfig?: Record<string, unknown>;
   from?: string;
   to?: string;
   limitDays?: number;
@@ -90,6 +95,7 @@ type RunSessionBackfillParams = {
 async function listSessionBackfillSources(params: {
   agentId: string;
   archiveFiles: string[];
+  admissionPolicy?: SessionAdmissionPolicy;
 }): Promise<SessionIngestionSource[]> {
   const corpus = await listSessionTranscriptCorpusEntriesForAgent(params.agentId, {
     includeRetainedSqlite: true,
@@ -104,7 +110,7 @@ async function listSessionBackfillSources(params: {
         entry !== null &&
         !entry.buildOptions.generatedByDreamingNarrative &&
         !entry.buildOptions.generatedByCronRun &&
-        !sessionExclusionReason(entry, undefined, forgottenSessionIds),
+        !sessionExclusionReason(entry, params.admissionPolicy, forgottenSessionIds),
     );
   const canonicalPaths = new Set(sources.map((entry) => path.resolve(entry.absolutePath)));
   for (const archiveFile of params.archiveFiles) {
@@ -303,16 +309,29 @@ async function buildRemDiaryEntries(params: {
   }
 }
 
-function uniqueGroundedItems(results: MemorySearchResult[]): MemorySearchResult[] {
-  const seen = new Set<string>();
+function coalesceBackfillClaims(
+  results: Array<MemorySearchResult & { sessionOrigin?: SessionEntryOrigin }>,
+) {
+  const claims = new Map<
+    string,
+    Pick<MemorySearchResult, "path" | "startLine" | "endLine" | "snippet">
+  >();
   return results.flatMap((result) => {
     const snippet = result.snippet.replace(/^(?:Assistant|User):\s*/i, "").trim();
     const key = snippet.replace(/\s+/g, " ").toLowerCase();
-    if (!key || seen.has(key)) {
+    if (!key) {
       return [];
     }
-    seen.add(key);
-    return [{ ...result, snippet }];
+    const claim = claims.get(key) ?? {
+      path: result.path,
+      startLine: result.startLine,
+      endLine: result.endLine,
+      snippet,
+    };
+    claims.set(key, claim);
+    // Share the first citation for query/day dedupe, but retain each source's
+    // identity so coalescing a claim cannot discard its deletion lineage.
+    return [{ ...result, ...claim }];
   });
 }
 
@@ -332,12 +351,10 @@ async function applySessionBackfillDays(params: {
       day: day.day,
       lines: day.candidates,
     });
-    const grounded = uniqueGroundedItems(results);
+    const grounded = coalesceBackfillClaims(results);
     if (grounded.length === 0) {
       continue;
     }
-    // Standard grounded staging owns claim identity. Exact duplicates are
-    // collapsed here; claim-hash keying also converges the same fact across sources.
     await recordGroundedShortTermCandidates({
       workspaceDir: params.workspaceDir,
       query: `${SESSION_BACKFILL_QUERY_PREFIX}:${day.day}`,
@@ -348,6 +365,8 @@ async function applySessionBackfillDays(params: {
         snippet: result.snippet,
         score: SESSION_INGESTION_SCORE,
         dayBucket: day.day,
+        provenance: result.provenance,
+        sessionOrigin: result.sessionOrigin,
       })),
       dedupeByQueryPerDay: true,
       nowMs: params.nowMs,
@@ -371,6 +390,16 @@ async function executeSessionBackfillCore(
   if (params.rem && params.apply) {
     throw new Error("Memory session-backfill --rem cannot be combined with --apply.");
   }
+  const execute = () => executeSessionBackfillBatchCore({ ...params, workspaceDir });
+  return params.apply || params.rem || params.rollback
+    ? withMemoryWorkspaceLock(workspaceDir, execute)
+    : execute();
+}
+
+async function executeSessionBackfillBatchCore(
+  params: RunSessionBackfillParams,
+): Promise<SessionBackfillExecution> {
+  const workspaceDir = params.workspaceDir;
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
   if (params.rollback) {
     // Backfill diary markers and grounded-only candidates are a shared artifact
@@ -414,6 +443,7 @@ async function executeSessionBackfillCore(
   const sources = await listSessionBackfillSources({
     agentId: params.agentId,
     archiveFiles: params.archiveFiles ?? [],
+    admissionPolicy: resolveAdmissionPolicy(params.pluginConfig),
   });
   const collected = await collectSessionBackfillCandidates({
     sources,

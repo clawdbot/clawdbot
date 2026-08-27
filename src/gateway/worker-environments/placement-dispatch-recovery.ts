@@ -92,6 +92,9 @@ function blockingWorkspaceJournalSessions(
 
 export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
   const { environments, failure, placements } = deps;
+  // Orphan Git refs carry no live authority. Scan them once in the tracked full
+  // post-start sweep, never on readiness or targeted turn recovery.
+  let orphanCleanupPending = false;
 
   const adoptActive = async (placement: WorkerActiveDispatchPlacement): Promise<void> => {
     // Turn claims belong to the previous Gateway lifecycle and cannot prove live authority
@@ -158,7 +161,8 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
     } else {
       await environments.reconcileOnce();
     }
-    const pendingResultOwners = await recoverPendingWorkspaceResults(deps, true);
+    const pendingResultOwners = await recoverPendingWorkspaceResults(deps, mode !== "startup");
+    orphanCleanupPending = mode === "startup";
     const journalOwners = blockingWorkspaceJournalSessions(placements);
     const moveOwners = (await deps.recoverPlacementMoves?.()) ?? new Set<string>();
     for (const placement of placements.listForReconcile()) {
@@ -231,7 +235,15 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
   // durable active ownership and retry teardown already fenced by a previous failure.
   const reconcileActive = async (environmentId?: string): Promise<void> => {
     await environments.reconcileOnce();
-    const pendingResultOwners = await recoverPendingWorkspaceResults(deps, false, environmentId);
+    const cleanupOrphans = orphanCleanupPending && environmentId === undefined;
+    const pendingResultOwners = await recoverPendingWorkspaceResults(
+      deps,
+      cleanupOrphans,
+      environmentId,
+    );
+    if (cleanupOrphans) {
+      orphanCleanupPending = false;
+    }
     const journalOwners = blockingWorkspaceJournalSessions(placements);
     const moveOwners = (await deps.recoverPlacementMoves?.()) ?? new Set<string>();
     for (const placement of placements.listForReconcile()) {

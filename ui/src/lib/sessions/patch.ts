@@ -32,8 +32,6 @@ export type SessionPatchOptions = {
   expectedSessionId?: string;
   /** Explicit unread marker observed by an automatic read acknowledgement. */
   expectedMarkedUnreadAt?: number | null;
-  /** Let a caller with stricter lifecycle ownership publish the resolved model value. */
-  deferModelOverride?: boolean;
   /** Keep optimistic model state bound to the UI owner that initiated the patch. */
   ownsModelOverride?: () => boolean;
   /** Capture the current connection now, but dispatch only after this tail settles. */

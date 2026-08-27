@@ -1459,6 +1459,7 @@ export function createHookRunner(
     receipt?: Readonly<{
       token: ExecutionIdentityAdmissionToken;
       assertAuthority: () => boolean | void;
+      markOwnerDecision?: () => void;
     }>,
   ): Promise<PluginHookBeforeToolCallResult | undefined> {
     return runModifyingHook<"before_tool_call", PluginHookBeforeToolCallResult>(
@@ -1495,22 +1496,26 @@ export function createHookRunner(
         },
         shouldStop: (result) => result.block === true,
         terminalLabel: "block=true",
-        onHandlerResult: ({ hook, result }) =>
+        onHandlerResult: ({ hook, result }) => {
+          receipt?.markOwnerDecision?.();
           recordBeforeToolCallDecision({
             event,
             hook,
             token: receipt?.token,
             result,
             receiptAuthority: receipt?.assertAuthority,
-          }),
-        onHandlerError: (hook, failOpen) =>
+          });
+        },
+        onHandlerError: (hook, failOpen) => {
+          receipt?.markOwnerDecision?.();
           recordBeforeToolCallDecision({
             event,
             hook,
             token: receipt?.token,
             failOpen,
             receiptAuthority: receipt?.assertAuthority,
-          }),
+          });
+        },
       },
       event.toolName,
     );

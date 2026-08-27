@@ -7,6 +7,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SOURCE_ROOT="$(cd "${OPENCLAW_NPM_ONBOARD_SOURCE_ROOT:-${OPENCLAW_LIVE_DOCKER_REPO_ROOT:-$ROOT_DIR}}" && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
+source "$ROOT_DIR/scripts/e2e/lib/prepublish-plugin-registry.sh"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-npm-onboard-channel-agent-e2e" OPENCLAW_NPM_ONBOARD_E2E_IMAGE)"
 DOCKER_TARGET="${OPENCLAW_NPM_ONBOARD_DOCKER_TARGET:-bare}"
@@ -23,6 +24,7 @@ STATUS_TEXT_MAX_BYTES="$(
 run_log=""
 plugin_pack_dir=""
 plugin_package_args=()
+OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DOCKER_ARGS=()
 
 cleanup() {
   if [ -n "${PACKAGE_TGZ:-}" ]; then
@@ -95,6 +97,11 @@ prepare_source_plugin_package() {
 
 prepare_source_plugin_package
 
+if [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
+  openclaw_prepublish_plugin_registry_configure_docker_args \
+    "$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR"
+fi
+
 docker_e2e_package_mount_args "$PACKAGE_TGZ"
 run_log="$(docker_e2e_run_log npm-onboard-channel-agent)"
 OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 npm-onboard-channel-agent empty)"
@@ -108,10 +115,12 @@ if ! docker_e2e_run_with_harness \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   "${plugin_package_args[@]}" \
+  "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DOCKER_ARGS[@]}" \
   -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'; then
 set -Eeuo pipefail
 
 source scripts/lib/openclaw-e2e-instance.sh
+source scripts/e2e/lib/prepublish-plugin-registry.sh
 openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}"
 export NPM_CONFIG_PREFIX="$HOME/.npm-global"
 export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
@@ -126,6 +135,7 @@ scenario_tmp="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-npm-onboard-channel-agent.XX
 MOCK_REQUEST_LOG="$scenario_tmp/mock-openai-requests.jsonl"
 export SUCCESS_MARKER MOCK_REQUEST_LOG
 mock_pid=""
+plugin_registry_pid=""
 
 case "$CHANNEL" in
   telegram)
@@ -155,6 +165,7 @@ esac
 
 cleanup() {
   openclaw_e2e_stop_process "${mock_pid:-}"
+  openclaw_e2e_stop_process "${plugin_registry_pid:-}"
   rm -rf "$scenario_tmp"
 }
 trap cleanup EXIT
@@ -179,6 +190,11 @@ dump_debug_logs() {
     "$OPENCLAW_HOME/.openclaw/agents/main/agent/auth-profiles.json"
 }
 trap 'status=$?; dump_debug_logs "$status"; exit "$status"' ERR
+
+if [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
+  openclaw_prepublish_plugin_registry_start_mounted \
+    /tmp/openclaw-npm-onboard-plugin-registry plugin_registry_pid '["@openclaw/codex"]'
+fi
 
 openclaw_e2e_install_package /tmp/openclaw-install.log
 

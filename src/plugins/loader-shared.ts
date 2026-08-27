@@ -41,7 +41,7 @@ import type { PluginRecord, PluginRegistry } from "./registry.js";
 import {
   captureActivePluginRegistrySnapshot,
   commitStagedPluginRegistry,
-  restoreActivePluginRegistrySnapshot,
+  rollbackStagedPluginRegistry,
   stageActivePluginRegistry,
 } from "./runtime.js";
 import { validateJsonSchemaValue } from "./schema-validator.js";
@@ -422,7 +422,7 @@ export function activatePluginRegistry(
     activateContextEngineRegistrations(registry);
     commitStagedPluginRegistry(activeSnapshot.activeRegistry, registry);
   } catch (error) {
-    restoreActivePluginRegistrySnapshot(activeSnapshot);
+    rollbackStagedPluginRegistry(activeSnapshot);
     if (previousHookRegistry) {
       initializeGlobalHookRunner(previousHookRegistry);
     } else {

@@ -1,4 +1,5 @@
 // Ollama embedding runtime implements provider integration.
+import type { EmbeddingProvider } from "openclaw/plugin-sdk/embedding-providers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import {
   isKnownEnvApiKeyMarker,
@@ -26,13 +27,7 @@ import { readProviderBaseUrl } from "./provider-base-url.js";
 import { resolveOllamaApiBase } from "./provider-models.js";
 import { readOllamaResponseErrorText } from "./request-header-redaction.js";
 
-export type OllamaEmbeddingProvider = {
-  id: string;
-  model: string;
-  maxInputTokens?: number;
-  embedQuery: (text: string, options?: { signal?: AbortSignal }) => Promise<number[]>;
-  embedBatch: (texts: string[], options?: { signal?: AbortSignal }) => Promise<number[][]>;
-};
+export type OllamaEmbeddingProvider = EmbeddingProvider;
 
 type MemoryCoreAcquireLocalService = (
   target: {
@@ -55,7 +50,7 @@ type OllamaEmbeddingOptions = {
   model: string;
   fallback?: string;
   local?: unknown;
-  outputDimensionality?: number;
+  dimensions?: number;
   taskType?: unknown;
   acquireLocalService?: MemoryCoreAcquireLocalService;
 };
@@ -393,7 +388,7 @@ async function resolveOllamaEmbeddingClient(
     headers,
     ssrfPolicy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl),
     model,
-    outputDimensionality: options.outputDimensionality,
+    outputDimensionality: options.dimensions,
     ...(localService && baseUrlOrigin !== "remote-config"
       ? {
           localServiceTarget: {
@@ -481,9 +476,22 @@ export async function createOllamaEmbeddingProvider(
   const provider: OllamaEmbeddingProvider = {
     id: "ollama",
     model: client.model,
-    embedQuery,
-    embedBatch: async (texts, optionsLocal) =>
-      texts.length === 0 ? [] : await embedMany(texts, optionsLocal?.signal),
+    embed: async (input, optionsValue) => {
+      const text = typeof input === "string" ? input : input.text;
+      return optionsValue?.inputType === "query"
+        ? await embedQuery(text, optionsValue)
+        : ((await embedMany([text], optionsValue?.signal))[0] ?? []);
+    },
+    embedBatch: async (inputs, optionsLocal) => {
+      const texts = inputs.map((input) => (typeof input === "string" ? input : input.text));
+      if (texts.length === 0) {
+        return [];
+      }
+      if (optionsLocal?.inputType === "query") {
+        return await Promise.all(texts.map((text) => embedQuery(text, optionsLocal)));
+      }
+      return await embedMany(texts, optionsLocal?.signal);
+    },
   };
 
   return {
@@ -492,7 +500,7 @@ export async function createOllamaEmbeddingProvider(
       ...client,
       embedBatch: async (texts) => {
         try {
-          return await provider.embedBatch(texts);
+          return await provider.embedBatch(texts, { inputType: "document" });
         } catch (err) {
           throw new Error(formatErrorMessage(err), { cause: err });
         }

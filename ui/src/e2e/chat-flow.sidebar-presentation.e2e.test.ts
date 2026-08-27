@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
 import {
   captureUiProofEnabled,
   chatSessionListResponse,
@@ -335,8 +336,24 @@ suite.define(() => {
     const busyKey = "agent:main:busy-session";
     const plainKey = "agent:main:plain-session";
     const longKey = "agent:main:long-title-session";
+    const homeKey = "agent:main:main";
     await installMockGateway(page, {
+      featureMethods: [...defaultControlUiFeatureMethods, "board.get"],
       methodResponses: {
+        "board.get": {
+          cases: [homeKey, busyKey, plainKey, longKey].map((sessionKey) => ({
+            match: { sessionKey },
+            response: {
+              sessionKey,
+              revision: 1,
+              tabs:
+                sessionKey === homeKey || sessionKey === busyKey
+                  ? [{ tabId: "overview", title: "Overview", position: 0, chatDock: "right" }]
+                  : [],
+              widgets: [],
+            },
+          })),
+        },
         "sessions.list": chatSessionListResponse([
           {
             key: busyKey,
@@ -383,19 +400,53 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      // Rotation expands the spinner element's square DOMRect even though its
-      // circular ink is unchanged; freeze it while asserting endcap geometry.
-      await page.addStyleTag({ content: ".session-run-spinner { animation: none !important; }" });
       const busyRow = page.locator(`.sidebar-recent-session[data-session-key="${busyKey}"]`);
       const plainRow = page.locator(`.sidebar-recent-session[data-session-key="${plainKey}"]`);
       await busyRow.locator(".session-row-badges").waitFor();
-      if (captureUiProofEnabled) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(sessionSecondRowProofDir, "01-second-row-endcap.png"),
-        });
+      const sidebar = page.locator("openclaw-app-sidebar");
+      const homeBoard = sidebar.locator(".nav-item--home .sidebar-board-glyph svg");
+      const sessionBoard = busyRow.locator(".sidebar-board-glyph svg");
+      const ordinaryBadge = busyRow.locator(".session-row-badge--incognito svg");
+      await homeBoard.waitFor({ state: "visible" });
+      await sessionBoard.waitFor({ state: "visible" });
+      const shellNav = page.locator(".shell-nav");
+      const sidebarResizer = page.getByRole("separator", { name: "Resize sidebar" });
+      const badgeSizes = [];
+      for (const sidebarWidth of [258, 240]) {
+        if (sidebarWidth === 240) {
+          await sidebarResizer.focus();
+          await page.keyboard.press("Home");
+        }
+        await expect
+          .poll(async () => Math.round((await shellNav.boundingBox())?.width ?? 0))
+          .toBe(sidebarWidth);
+        await page.mouse.move(900, 400);
+        if (captureUiProofEnabled) {
+          await page.screenshot({
+            animations: "disabled",
+            fullPage: true,
+            path: path.join(sessionSecondRowProofDir, `01-second-row-endcap-${sidebarWidth}.png`),
+          });
+          await shellNav.screenshot({
+            animations: "disabled",
+            path: path.join(sessionSecondRowProofDir, `01-sidebar-${sidebarWidth}.png`),
+          });
+        }
+        badgeSizes.push(
+          await Promise.all(
+            [homeBoard, sessionBoard, ordinaryBadge].map((icon) =>
+              icon.evaluate((element) => {
+                const { height, width } = element.getBoundingClientRect();
+                return { height, width };
+              }),
+            ),
+          ),
+        );
       }
 
+      // Rotation expands the spinner element's square DOMRect even though its
+      // circular ink is unchanged; freeze it while asserting endcap geometry.
+      await page.addStyleTag({ content: ".session-run-spinner { animation: none !important; }" });
       const layout = await busyRow.evaluate((row) => {
         const rect = (selector: string) => {
           const element = row.querySelector<HTMLElement>(selector);
@@ -515,6 +566,13 @@ suite.define(() => {
         });
       }
       await plainRow.waitFor();
+      for (const sizes of badgeSizes) {
+        expect(sizes).toEqual([
+          { height: 12, width: 12 },
+          { height: 12, width: 12 },
+          { height: 12, width: 12 },
+        ]);
+      }
     } finally {
       await suite.closeBrowserContext(context);
     }

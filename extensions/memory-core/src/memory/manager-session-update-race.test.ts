@@ -8,7 +8,11 @@ import { deleteSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/sess
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { recordMemorySessionTombstones } from "../memory-entry-origins.js";
+import {
+  recordMemoryEntryOrigins,
+  recordMemorySessionTombstones,
+} from "../memory-entry-origins.js";
+import { forgetMemoryEntries } from "../memory-forget.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
@@ -326,6 +330,149 @@ describe("memory session update sync", () => {
       sessions: [{ agentId: "main", sessionId, sessionKey }],
     });
     expectSessionIndexRemoved(database, sessionPath);
+  });
+
+  it.each([
+    { mode: "targeted per-file", provider: "batch-test", force: false },
+    { mode: "full per-file", provider: "batch-test", force: true },
+    { mode: "full source-wide", provider: "batch-wide-test", force: true },
+  ])(
+    "does not publish forgotten data after pending $mode embeddings",
+    async ({ provider, force }) => {
+      const sessionId = "forgotten-during-embedding";
+      const sessionKey = `agent:main:chat:${sessionId}`;
+      const cfg = createConfig({
+        provider,
+        batchEnabled: true,
+        vectorEnabled: false,
+        cacheEnabled: true,
+        sources: ["sessions"],
+        sessionMemory: true,
+      });
+      const manager = await getFreshManager(cfg, "cli");
+      await manager.sync({ reason: "index-empty-corpus", force: true });
+      await seedSessionTranscript({
+        sessionId,
+        sessionKey,
+        messages: [
+          { role: "user", timestamp: Date.now(), content: "Private violet alpha fragment." },
+        ],
+      });
+      let releaseEmbedding = () => {};
+      fixture.provider.providerRuntimeBatchGate = new Promise<void>((resolve) => {
+        releaseEmbedding = resolve;
+      });
+      const activeSync = manager.sync({
+        reason: "forget-during-embedding",
+        ...(force ? { force: true } : { sessions: [{ agentId: "main", sessionId, sessionKey }] }),
+      });
+      try {
+        await vi.waitFor(() => expect(fixture.provider.providerRuntimeActiveBatchCalls).toBe(1));
+        await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: [sessionId] });
+        releaseEmbedding();
+        await expect(activeSync).rejects.toThrow("forgotten while memory indexing");
+        const database = Reflect.get(manager, "db") as DatabaseSync;
+        expectSessionIndexRemoved(database, `sessions/main/${sessionId}.jsonl`);
+        expect(database.prepare("SELECT hash FROM memory_embedding_cache").all()).toEqual([]);
+        expect(manager.status().dirty).toBe(true);
+
+        await manager.sync({ reason: "retry-after-forget", force: true });
+        expectSessionIndexRemoved(database, `sessions/main/${sessionId}.jsonl`);
+        expect(manager.status().dirty).toBe(false);
+      } finally {
+        releaseEmbedding();
+        await activeSync.catch(() => undefined);
+        fixture.provider.providerRuntimeBatchGate = null;
+      }
+    },
+  );
+
+  it.each([
+    { mode: "incremental embeddings", force: false, repeatPurge: false },
+    { mode: "full reindex embeddings", force: true, repeatPurge: false },
+    { mode: "completed shadow before repeat purge", force: true, repeatPurge: true },
+  ])("does not publish a stale workspace file after $mode", async ({ force, repeatPurge }) => {
+    const cfg = createConfig({
+      provider: "batch-test",
+      batchEnabled: true,
+      vectorEnabled: false,
+      cacheEnabled: true,
+      sources: ["memory"],
+    });
+    const baseline = await getFreshManager(cfg, "cli");
+    await baseline.sync({ reason: "index-before-new-memory", force: true });
+    await baseline.close();
+    const sessionId = "forgotten-memory-source";
+    const memoryPath = path.join(fixture.paths.workspace, "MEMORY.md");
+    await fs.writeFile(
+      memoryPath,
+      "# Memory\n<!-- openclaw-memory-promotion:private-entry -->\n- Private violet alpha fragment.\n",
+    );
+    recordMemoryEntryOrigins({
+      agentId: "main",
+      origins: [
+        {
+          agentId: "main",
+          sessionId,
+          sessionKey: null,
+          entryKey: "private-entry",
+          originClass: "owner",
+          observedAt: Date.now(),
+        },
+      ],
+    });
+    if (repeatPurge) {
+      // An earlier purge persisted its tombstone but failed before rewriting
+      // this previously unindexed file. Retrying must fence a completed shadow.
+      recordMemorySessionTombstones({ agentId: "main", sessionIds: [sessionId] });
+    }
+    const manager = await getFreshManager(cfg, "cli", true);
+    let releaseEmbedding = () => {};
+    if (!repeatPurge) {
+      fixture.provider.providerRuntimeBatchGate = new Promise<void>((resolve) => {
+        releaseEmbedding = resolve;
+      });
+    }
+    let purge: ReturnType<typeof forgetMemoryEntries> | undefined;
+    const activeSync = manager.sync({
+      reason: "forget-during-file-index",
+      force,
+      progress: ({ completed, total }) => {
+        if (repeatPurge && total > 0 && completed === total && !purge) {
+          purge = forgetMemoryEntries({ cfg, agentId: "main", sessionIds: [sessionId] });
+          void purge.catch(() => undefined);
+        }
+      },
+    });
+    try {
+      if (!repeatPurge) {
+        await vi.waitFor(() => expect(fixture.provider.providerRuntimeActiveBatchCalls).toBe(1));
+        await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: [sessionId] });
+        releaseEmbedding();
+      }
+      await expect(activeSync).rejects.toThrow(
+        repeatPurge ? "full reindex was building" : "changed while indexing",
+      );
+      await purge;
+      expect(await fs.readFile(memoryPath, "utf8")).not.toContain("Private violet");
+      const database = Reflect.get(manager, "db") as DatabaseSync;
+      expect(
+        database.prepare("SELECT text FROM memory_index_chunks WHERE path = 'MEMORY.md'").all(),
+      ).toEqual([]);
+      expect(manager.status().dirty).toBe(true);
+      await manager.sync({ reason: "retry-after-memory-forget", force: true });
+      expect(manager.status().dirty).toBe(false);
+      expect(
+        database
+          .prepare("SELECT text FROM memory_index_chunks WHERE text LIKE '%Private violet%'")
+          .all(),
+      ).toEqual([]);
+    } finally {
+      releaseEmbedding();
+      await activeSync.catch(() => undefined);
+      await purge?.catch(() => undefined);
+      fixture.provider.providerRuntimeBatchGate = null;
+    }
   });
 
   it.each([

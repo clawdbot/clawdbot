@@ -183,6 +183,8 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
     "Optional repository root shown in the system prompt runtime line (overrides auto-detect).",
   "agents.defaults.models":
     "Configured model catalog and per-model settings. Entries provide aliases, params, and runtime metadata; they do not restrict model overrides.",
+  "agents.defaults.modelSelectionScope":
+    'Optional scope for chat commands and Gateway session model updates without an explicit scope: "session" changes only the current session, "agent" also updates that agent\'s primary, and "global" also updates the shared agents.defaults.model fallback. Omit to preserve existing behavior. Explicit scope flags take precedence; configured-default writes still require owner/admin authority. Telegram callback pickers and the embedded local TUI stay session-only.',
   "agents.defaults.modelPolicy":
     "Explicit policy for model overrides. Omit it or leave allow empty to permit any model.",
   "agents.defaults.modelPolicy.allow":

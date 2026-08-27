@@ -9,10 +9,7 @@ import {
   restoreRegisteredEmbeddingProviders,
   type RegisteredEmbeddingProvider,
 } from "../plugins/embedding-providers.js";
-import {
-  adaptMemoryEmbeddingProviderAdapter,
-  type MemoryEmbeddingProviderAdapter,
-} from "../plugins/memory-embedding-providers.js";
+import type { MemoryEmbeddingProviderAdapter } from "../plugins/memory-embedding-providers.js";
 import {
   SecretSurfaceUnavailableError,
   setActiveDegradedSecretOwners,
@@ -30,7 +27,7 @@ const asConfig = (cfg: OpenClawConfig): OpenClawConfig => ({
 let registeredEmbeddingProvidersSnapshot: RegisteredEmbeddingProvider[];
 
 function registerTestMemoryAdapter(adapter: MemoryEmbeddingProviderAdapter): void {
-  registerEmbeddingProvider(adaptMemoryEmbeddingProviderAdapter(adapter));
+  registerEmbeddingProvider(adapter);
 }
 
 function registerBaseMemoryEmbeddingProviders(options?: { includeGemini?: boolean }): void {

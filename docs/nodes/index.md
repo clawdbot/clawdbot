@@ -513,6 +513,11 @@ visible but disabled with an actionable reason. Enable hosting with
 setting, then restart the node host. Update-required hosts must be upgraded and
 restarted before selection.
 
+While node inventory refreshes, or if that refresh fails, the picker keeps known
+devices visible but disables remote selection and Start until fresh inventory
+arrives. Local remains selectable; cached worker slots never authorize a new
+remote session.
+
 Choose **Any available node** to let the Gateway select an eligible paired,
 connected session host. For OpenClaw worker turns, it selects the host with the
 most available worker slots and breaks ties by device ID. Runtimes that do not

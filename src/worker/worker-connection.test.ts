@@ -1,4 +1,4 @@
-import { once } from "node:events";
+import { EventEmitter, once } from "node:events";
 import net from "node:net";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { describe, expect, it, vi } from "vitest";
@@ -18,7 +18,6 @@ import type {
   WorkerInferenceTerminalFrame,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import {
-  formatWorkerConnectionFailure,
   toWorkerConnectionError,
   WorkerAdmissionDeadlineExceededError,
   WorkerConnectionStoppedError,
@@ -143,6 +142,107 @@ function installThrowingThenHealthyListeners(connection: ReturnType<typeof creat
 }
 
 describe("worker connection endpoint failures", () => {
+  it.each([
+    "connect failure",
+    "no hello",
+    "retryable rejection",
+    "redacted connect failure",
+  ] as const)("retains the last %s diagnosis at the admission deadline", async (scenario) => {
+    vi.useFakeTimers();
+    const sockets: EventEmitter[] = [];
+    const diagnostics: Array<Error | undefined> = [];
+    const endpointUrl =
+      "wss://fixture-user:fixture-password@gateway.example:8443/private/__openclaw__/worker?token=fixture-token";
+    const connection = createWorkerConnection({
+      endpoint: {
+        kind: "websocket",
+        url: endpointUrl,
+        cloudflareAccess: { clientId: "fixture-client-id", clientSecret: "fixture-client-secret" },
+      },
+      connectParams: FRAME_CONNECT_PARAMS,
+      admissionTimeoutMs: 300,
+      admissionDeadlineMs: 1_000,
+      reconnectBackoff: { initialMs: 100, maxMs: 100, factor: 1, jitter: 0 },
+      onConnectionFailure: (error) => diagnostics.push(error),
+      createSocket: () => {
+        const socket = Object.assign(new EventEmitter(), {
+          readyState: 0,
+          send: (raw: string) => {
+            if (scenario === "retryable rejection") {
+              socket.emit(
+                "message",
+                Buffer.from(
+                  JSON.stringify({
+                    type: "res",
+                    id: JSON.parse(raw).id,
+                    ok: false,
+                    error: {
+                      code: "INVALID_REQUEST",
+                      message: "unavailable",
+                      details: { reason: "gateway-unavailable" },
+                      retryable: true,
+                    },
+                  }),
+                ),
+              );
+            }
+          },
+          close: () => socket.emit("close", 1006, Buffer.alloc(0)),
+          terminate: () => socket.emit("close", 1006, Buffer.alloc(0)),
+        });
+        sockets.push(socket);
+        setTimeout(() => {
+          if (scenario === "connect failure" || scenario === "redacted connect failure") {
+            const detail =
+              scenario === "redacted connect failure"
+                ? `Opening handshake has timed out ${FRAME_CONNECT_PARAMS.admission.credential} fixture-client-secret ${endpointUrl} ${"x".repeat(4_096)}`
+                : "Opening handshake has timed out";
+            socket.emit("error", new Error(sockets.length === 1 ? "ECONNREFUSED" : detail));
+            socket.emit("close", 1006, Buffer.alloc(0));
+          } else {
+            socket.readyState = 1;
+            socket.emit("open");
+          }
+        }, 0);
+        return socket as unknown as WebSocket;
+      },
+    });
+    const expected =
+      scenario === "connect failure" || scenario === "redacted connect failure"
+        ? "connect failed: Opening handshake has timed out"
+        : scenario === "no hello"
+          ? "no hello within deadline"
+          : "worker admission rejected: gateway-unavailable";
+    try {
+      const starting = connection.start().catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(1_000);
+      const error = await starting;
+      expect(error).toBeInstanceOf(WorkerAdmissionDeadlineExceededError);
+      expect(error).toMatchObject({ message: expect.stringContaining(expected) });
+      expect(error).toMatchObject({ message: expect.stringContaining("gateway.example:8443") });
+      expect(error).toMatchObject({
+        message: expect.stringContaining(`after ${sockets.length} attempts`),
+      });
+      expect(sockets.length).toBeGreaterThan(1);
+      expect(diagnostics.at(-1)).toBe(error);
+      const message = (error as Error).message;
+      expect(message.length).toBeLessThan(400);
+      for (const secret of [
+        "fixture-user",
+        "fixture-password",
+        "fixture-token",
+        "fixture-client-secret",
+        FRAME_CONNECT_PARAMS.admission.credential,
+      ]) {
+        expect(message).not.toContain(secret);
+      }
+      await expect(connection.waitForExit()).resolves.toEqual({ kind: "failed", error });
+    } finally {
+      await connection.stop();
+      vi.useRealTimers();
+    }
+  });
+
   it("fails insecure public endpoints without entering reconnect backoff", async () => {
     const createSocket = vi.fn();
     const connection = createWorkerConnection({
@@ -190,14 +290,14 @@ describe("worker connection endpoint failures", () => {
       reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
       onConnectionFailure: (error) => {
         if (error) {
-          failures.push(formatWorkerConnectionFailure(endpoint, error));
+          failures.push(error.message);
         }
       },
     });
 
     try {
       await expect(connection.start()).rejects.toBeInstanceOf(WorkerAdmissionDeadlineExceededError);
-      expect(failures.at(-1)).toMatch(
+      expect(failures.at(-2)).toMatch(
         new RegExp(
           `^worker could not reach gateway 127\\.0\\.0\\.1:${port}: .*ECONNREFUSED.*; check TLS pin/publicUrl configuration$`,
           "u",

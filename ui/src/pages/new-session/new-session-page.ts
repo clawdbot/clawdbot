@@ -397,7 +397,9 @@ export class NewSessionPage extends OpenClawLightDomElement {
       deviceId: this.place.deviceId,
       autoDevice: this.place.autoDevice,
       devicePlacement: this.place.devicePlacementRequirement(),
-      deviceDisabledReason: this.place.modelControl.devicePlacementUnsupportedReason(),
+      deviceDisabledReason:
+        this.place.modelControl.devicePlacementUnsupportedReason() ??
+        this.gateway.deviceCatalogDisabledReason,
     });
     const projectState = resolveProjectChip({
       folder: this.place.folder,
@@ -677,7 +679,10 @@ export class NewSessionPage extends OpenClawLightDomElement {
           ? "new-session-page--incognito"
           : ""}"
       >
-        ${renderNewSessionIncognitoControl(this.submission)}
+        ${renderNewSessionIncognitoControl(
+          this.submission,
+          this.submission.capabilities.canStartAsDraft(this.context),
+        )}
         <div
           class="new-session-page__scroll"
           ?inert=${this.submission.submitting}

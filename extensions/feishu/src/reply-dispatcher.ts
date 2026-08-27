@@ -7,7 +7,6 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createChannelMessageReplyPipeline,
-  createReplyPrefixContext,
   formatChannelProgressDraftLineForEntry,
   isChannelProgressDraftWorkToolName,
   resolveChannelPreviewStreamMode,
@@ -197,73 +196,73 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     sendReplyToMessageId !== undefined &&
     sendReplyToMessageId !== rootId;
   const account = resolveFeishuRuntimeAccount({ cfg, accountId });
-  const prefixContext = createReplyPrefixContext({ cfg, agentId });
-
   let typingState: TypingIndicatorState | null = null;
-  const { typingCallbacks } = createChannelMessageReplyPipeline({
-    cfg,
-    agentId,
-    channel: "feishu",
-    accountId,
-    typing: {
-      start: async () => {
-        // Check if typing indicator is enabled (default: true)
-        if (!(account.config.typingIndicator ?? true)) {
-          return;
-        }
-        if (!typingTargetMessageId) {
-          return;
-        }
-        // Skip typing indicator for old messages — likely replays after context
-        // compaction that would flood users with stale notifications (#30418).
-        const messageCreateTimeMs = normalizeEpochMs(params.messageCreateTimeMs);
-        if (
-          messageCreateTimeMs !== undefined &&
-          Date.now() - messageCreateTimeMs > TYPING_INDICATOR_MAX_AGE_MS
-        ) {
-          return;
-        }
-        // Feishu reactions persist until explicitly removed, so skip keepalive
-        // re-adds when a reaction already exists. Re-adding the same emoji
-        // triggers a new push notification for every call (#28660).
-        if (typingState?.reactionId) {
-          return;
-        }
-        typingState = await addTypingIndicator({
-          cfg,
-          messageId: typingTargetMessageId,
-          accountId,
-          runtime: params.runtime,
-        });
+  // Reply text and card attribution share the same selected-model context.
+  const { typingCallbacks, responsePrefix, responsePrefixContextProvider, onModelSelected } =
+    createChannelMessageReplyPipeline({
+      cfg,
+      agentId,
+      channel: "feishu",
+      accountId,
+      typing: {
+        start: async () => {
+          // Check if typing indicator is enabled (default: true)
+          if (!(account.config.typingIndicator ?? true)) {
+            return;
+          }
+          if (!typingTargetMessageId) {
+            return;
+          }
+          // Skip typing indicator for old messages — likely replays after context
+          // compaction that would flood users with stale notifications (#30418).
+          const messageCreateTimeMs = normalizeEpochMs(params.messageCreateTimeMs);
+          if (
+            messageCreateTimeMs !== undefined &&
+            Date.now() - messageCreateTimeMs > TYPING_INDICATOR_MAX_AGE_MS
+          ) {
+            return;
+          }
+          // Feishu reactions persist until explicitly removed, so skip keepalive
+          // re-adds when a reaction already exists. Re-adding the same emoji
+          // triggers a new push notification for every call (#28660).
+          if (typingState?.reactionId) {
+            return;
+          }
+          typingState = await addTypingIndicator({
+            cfg,
+            messageId: typingTargetMessageId,
+            accountId,
+            runtime: params.runtime,
+          });
+        },
+        stop: async () => {
+          if (!typingState) {
+            return;
+          }
+          await removeTypingIndicator({
+            cfg,
+            state: typingState,
+            accountId,
+            runtime: params.runtime,
+          });
+          typingState = null;
+        },
+        onStartError: (err) =>
+          logTypingFailure({
+            log: (message) => params.runtime.log?.(message),
+            channel: "feishu",
+            action: "start",
+            error: err,
+          }),
+        onStopError: (err) =>
+          logTypingFailure({
+            log: (message) => params.runtime.log?.(message),
+            channel: "feishu",
+            action: "stop",
+            error: err,
+          }),
       },
-      stop: async () => {
-        if (!typingState) {
-          return;
-        }
-        await removeTypingIndicator({
-          cfg,
-          state: typingState,
-          accountId,
-          runtime: params.runtime,
-        });
-        typingState = null;
-      },
-      onStartError: (err) =>
-        logTypingFailure({
-          log: (message) => params.runtime.log?.(message),
-          channel: "feishu",
-          action: "start",
-          error: err,
-        }),
-      onStopError: (err) =>
-        logTypingFailure({
-          log: (message) => params.runtime.log?.(message),
-          channel: "feishu",
-          action: "stop",
-          error: err,
-        }),
-    },
-  });
+    });
 
   const textChunkLimit = core.channel.text.resolveTextChunkLimit(cfg, "feishu", accountId, {
     fallbackLimit: 4000,
@@ -460,7 +459,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       activeStreamingGeneration = generation;
       try {
         const cardHeader = resolveCardHeader(agentId, identity);
-        const cardNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
+        const cardNote = resolveCardNote(agentId, identity, responsePrefixContextProvider());
         const streamingTarget = sendTarget
           .replace(/^(feishu|lark):/i, "")
           .replace(/^(chat|user|group|dm|open_id):/i, "")
@@ -539,7 +538,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       if (streamingToClose?.isActive()) {
         statusLine = "";
         const text = buildCombinedStreamText(finalizedReasoningText, finalizedAnswerText);
-        const finalNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
+        const finalNote = resolveCardNote(agentId, identity, responsePrefixContextProvider());
         let closed;
         try {
           closed = await streamingToClose.closeWithResult(text, { note: finalNote });
@@ -953,7 +952,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       return result;
     }
     const cardHeader = resolveCardHeader(agentId, identity);
-    const cardNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
+    const cardNote = resolveCardNote(agentId, identity, responsePrefixContextProvider());
     return await sendChunkedTextReply({
       text: content,
       useCard: true,
@@ -1181,8 +1180,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   };
 
   const dispatcherOptions: NonNullable<ChannelInboundTurnPlan["dispatcherOptions"]> = {
-    responsePrefix: prefixContext.responsePrefix,
-    responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
+    responsePrefix,
+    responsePrefixContextProvider,
     humanDelay: resolveHumanDelayConfig(cfg, agentId),
     silentReplyContext: {
       cfg,
@@ -1440,7 +1439,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
 
         if (useCard) {
           const cardHeader = resolveCardHeader(agentId, identity);
-          const cardNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
+          const cardNote = resolveCardNote(agentId, identity, responsePrefixContextProvider());
           deliveredResults.push(
             await sendChunkedTextReply({
               text,
@@ -1515,7 +1514,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     dispatcherOptions,
     delivery,
     replyOptions: {
-      onModelSelected: prefixContext.onModelSelected,
+      onModelSelected,
       disableBlockStreaming:
         typeof blockStreamingEnabled === "boolean" ? !blockStreamingEnabled : true,
       onPartialReply: previewStreamingEnabled

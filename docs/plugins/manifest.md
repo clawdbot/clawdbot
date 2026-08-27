@@ -1123,6 +1123,8 @@ Suppression fields:
 
 Do not put runtime-only data in `modelCatalog`. Use `static` only when manifest rows are complete enough for provider-filtered list and picker surfaces to skip registry/runtime discovery. Use `refreshable` when manifest rows are useful listable seeds or supplements but a refresh/cache can add more rows later; refreshable rows are not authoritative by themselves. Use `runtime` when OpenClaw must load provider runtime to know the list.
 
+Capabilities belong to the declared API and base URL, not only the provider/model id. When model listing enriches a cached row, it uses manifest capabilities only for a matching route; a custom endpoint must supply its own limits and capabilities.
+
 ## modelIdNormalization reference
 
 Use `modelIdNormalization` for cheap provider-owned model-id cleanup that must happen before provider runtime loads. This keeps aliases such as short model names, provider-local legacy ids, and proxy prefix rules in the owning plugin manifest instead of in core model-selection tables.

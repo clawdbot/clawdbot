@@ -29,6 +29,10 @@ describe("GATEWAY_EVENTS", () => {
     expect(GATEWAY_EVENTS).toContain("skills.changed");
   });
 
+  it("advertises profile-scoped preference invalidation updates", () => {
+    expect(GATEWAY_EVENTS).toContain("users.prefs.changed");
+  });
+
   it("advertises portal replace-set updates", () => {
     expect(GATEWAY_EVENTS).toContain("portal.changed");
   });

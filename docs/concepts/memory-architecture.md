@@ -96,14 +96,13 @@ noise, and recall feedback loops:
   structurally marked and never re-extracted as a new memory. A fact recalled
   one hundred times stays one fact.
 
-Beyond per-chunk trust metadata, every pipeline-promoted durable entry also
-records **which sessions it came from**, and that lineage survives
-consolidation merges. Session lineage is what makes two operator guarantees
-possible: excluding configured sources (an email hook, a channel) from
-durable memory by policy, and purging everything derived from a session, a
-person, or a source with `openclaw memory forget` — including a durable
-exclusion that keeps purged sessions from ever being re-ingested. That
-policy story is covered end to end in
+Beyond per-chunk trust metadata, automatic session ingestion records source
+sessions for its staged entries. Consolidation carries those origins forward,
+so `openclaw memory forget` can remove tracked entries derived from selected
+sessions and exclude those session IDs from future ingestion. Separately,
+admission policy can exclude matching sources from dreaming ingestion and session backfill.
+Neither control covers every workspace write or retained copy; see the
+coverage, retained-data boundaries, and operator workflow in
 [Memory provenance and deletion](/concepts/memory-provenance).
 
 ## Trust boundaries and limits

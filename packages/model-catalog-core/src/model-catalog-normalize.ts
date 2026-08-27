@@ -659,51 +659,27 @@ export function normalizeModelCatalogProviderRows(params: {
   const providerHeaders = normalizeStringMap(params.providerCatalog.headers);
   const rows: NormalizedModelCatalogRow[] = [];
 
-  for (const model of params.providerCatalog.models) {
-    const id = normalizeOptionalString(model.id) ?? "";
-    if (!id) {
+  for (const rawModel of params.providerCatalog.models) {
+    const model = normalizeModelCatalogModel(rawModel);
+    if (!model) {
       continue;
     }
-    const api = normalizeModelCatalogApi(model.api) ?? providerApi;
-    const baseUrl = normalizeOptionalString(model.baseUrl) ?? providerBaseUrl;
-    const headers = mergeStringMaps(providerHeaders, normalizeStringMap(model.headers));
-    const contextWindow = normalizePositiveNumber(model.contextWindow);
-    const contextWindowSelection = normalizeModelCatalogContextWindowSelection(model);
-    const contextTokens = normalizePositiveInteger(model.contextTokens);
-    const maxTokens = normalizePositiveNumber(model.maxTokens);
-    const thinkingLevelMap = normalizeModelCatalogThinkingLevelMap(model.thinkingLevelMap);
-    const cost = normalizeModelCatalogCost(model.cost);
-    const compat = normalizeModelCatalogCompat(model.compat);
-    const mediaInput = normalizeModelCatalogMediaInput(model.mediaInput);
-    const statusReason = normalizeOptionalString(model.statusReason) ?? "";
-    const replacedBy = normalizeOptionalString(model.replacedBy) ?? "";
-    const replaces = normalizeOptionalTrimmedStringList(model.replaces);
-    const tags = normalizeOptionalTrimmedStringList(model.tags);
+    const api = model.api ?? providerApi;
+    const baseUrl = model.baseUrl ?? providerBaseUrl;
+    const headers = mergeStringMaps(providerHeaders, model.headers);
     rows.push({
+      ...model,
       provider,
-      id,
-      ref: buildModelCatalogRef(provider, id),
-      mergeKey: buildModelCatalogMergeKey(provider, id),
-      name: normalizeOptionalString(model.name) || id,
+      ref: buildModelCatalogRef(provider, model.id),
+      mergeKey: buildModelCatalogMergeKey(provider, model.id),
+      name: model.name ?? model.id,
       source: params.source,
-      input: normalizeModelCatalogInputs(model.input) ?? [...DEFAULT_MODEL_INPUT],
-      reasoning: typeof model.reasoning === "boolean" ? model.reasoning : false,
-      status: normalizeModelCatalogStatus(model.status) ?? DEFAULT_MODEL_STATUS,
+      input: model.input ?? [...DEFAULT_MODEL_INPUT],
+      reasoning: model.reasoning ?? false,
+      status: model.status ?? DEFAULT_MODEL_STATUS,
       ...(api ? { api } : {}),
       ...(baseUrl ? { baseUrl } : {}),
       ...(headers ? { headers } : {}),
-      ...(contextWindow !== undefined ? { contextWindow } : {}),
-      ...contextWindowSelection,
-      ...(contextTokens !== undefined ? { contextTokens } : {}),
-      ...(maxTokens !== undefined ? { maxTokens } : {}),
-      ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
-      ...(cost ? { cost } : {}),
-      ...(compat ? { compat } : {}),
-      ...(mediaInput ? { mediaInput } : {}),
-      ...(statusReason ? { statusReason } : {}),
-      ...(replaces ? { replaces } : {}),
-      ...(replacedBy ? { replacedBy } : {}),
-      ...(tags ? { tags } : {}),
     });
   }
 

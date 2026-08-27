@@ -190,6 +190,7 @@ export type GatewaySessionRow = {
   effectiveQueueMode?: QueueMode;
   modelProvider?: string;
   model?: string;
+  modelOverrideSource?: "user" | "auto" | null;
   modelSelectionLocked?: boolean;
   agentRuntime?: GatewayAgentRuntime;
   contextTokens?: number;

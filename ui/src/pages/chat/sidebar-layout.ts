@@ -1,4 +1,5 @@
 import type {
+  SidebarColumn,
   SidebarDock,
   SidebarLayout,
   SidebarPanel,
@@ -26,6 +27,17 @@ const SIDEBAR_DIVIDER_WIDTH_PX = 4;
 
 function cloneLayout(layout: SidebarLayout): SidebarLayout {
   return structuredClone(layout);
+}
+
+function createSidebarColumn(): SidebarColumn {
+  return {
+    id: "side-panel-column",
+    side: "right",
+    panels: [],
+    activePanelId: "",
+    height: SIDEBAR_DEFAULT_HEIGHT_PX,
+    width: SIDEBAR_DEFAULT_WIDTH_PX,
+  };
 }
 
 function clampWidth(width: number): number {
@@ -63,16 +75,13 @@ function nextPanelId(layout: SidebarLayout, slot: SidebarSlotId): string {
 }
 
 function removePanel(layout: SidebarLayout, panelId: string): SidebarPanel | null {
-  for (let columnIndex = 0; columnIndex < layout.columns.length; columnIndex += 1) {
-    const column = layout.columns[columnIndex]!;
+  for (const column of layout.columns) {
     const panelIndex = column.panels.findIndex((panel) => panel.id === panelId);
     if (panelIndex < 0) {
       continue;
     }
     const panel = column.panels.splice(panelIndex, 1)[0]!;
-    if (column.panels.length === 0) {
-      layout.columns.splice(columnIndex, 1);
-    } else if (column.activePanelId === panelId) {
+    if (column.activePanelId === panelId) {
       column.activePanelId =
         column.panels[Math.min(panelIndex, column.panels.length - 1)]?.id ?? "";
     }
@@ -95,22 +104,9 @@ export function openSlot(layout: SidebarLayout, slot: SidebarSlotId): SidebarLay
     return next;
   }
   const panel: SidebarPanel = { id: nextPanelId(next, slot), slot };
-  const column = next.columns[0];
-  if (column) {
-    column.panels.push(panel);
-    column.activePanelId = panel.id;
-  } else {
-    next.columns = [
-      {
-        id: "side-panel-column",
-        side: "right",
-        panels: [panel],
-        activePanelId: panel.id,
-        height: SIDEBAR_DEFAULT_HEIGHT_PX,
-        width: SIDEBAR_DEFAULT_WIDTH_PX,
-      },
-    ];
-  }
+  const column = (next.columns[0] ??= createSidebarColumn());
+  column.panels.push(panel);
+  column.activePanelId = panel.id;
   next.open = true;
   return next;
 }
@@ -122,9 +118,12 @@ export function closeSlot(layout: SidebarLayout, slot: SidebarSlotId): SidebarLa
     .find((entry) => entry.slot === slot);
   if (panel) {
     removePanel(next, panel.id);
-    if (next.columns.length === 0) {
+    if (next.columns.every((column) => column.panels.length === 0)) {
       next.open = false;
     }
+  }
+  if (next.columns.length === 0) {
+    next.open = false;
   }
   return next;
 }
@@ -162,7 +161,12 @@ export function reorderPanel(
 }
 
 export function setSidebarOpen(layout: SidebarLayout, open: boolean): SidebarLayout {
-  return { ...cloneLayout(layout), open };
+  const next = cloneLayout(layout);
+  if (open) {
+    next.columns[0] ??= createSidebarColumn();
+  }
+  next.open = open;
+  return next;
 }
 
 export function setSidebarExpanded(layout: SidebarLayout, expanded: boolean): SidebarLayout {

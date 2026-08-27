@@ -445,6 +445,42 @@ date context. Falls back to the host timezone.
 - Config writers that mutate these fields (for example `/models set`, `/models set-image`, and fallback add/remove commands) save canonical object form and preserve existing fallback lists when possible.
 - `maxConcurrent`: max parallel agent runs across sessions (each session still serialized). By default, OpenClaw uses `min(16, max(8, available CPU parallelism))`, based on `os.availableParallelism()` with `os.cpus().length` as a fallback.
 
+### `agents.defaults.modelSelectionScope`
+
+Optional scope for chat commands and Gateway session model updates without an explicit scope.
+There is no default value: leaving it unset preserves each surface's existing
+behavior.
+
+```json5
+{
+  agents: { defaults: { modelSelectionScope: "session" } },
+}
+```
+
+| Value       | Effect                                                                                                                                                                                                                                             |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `"session"` | Change only the current session's model selection.                                                                                                                                                                                                 |
+| `"agent"`   | Also update the current agent's explicit primary at `agents.entries.<agent>.model`, creating that primary when needed. Never change the shared global fallback.                                                                                    |
+| `"global"`  | Also update the shared `agents.defaults.model` fallback. Do not replace other agents' explicit primaries or other sessions' pins.                                                                                                                  |
+| Unset       | Keep the existing surface behavior: direct owner/admin chat commands, Discord pickers, and Gateway session model updates request an effective configured-default update; Telegram callback pickers and the embedded local TUI remain session-only. |
+
+An effective configured-default update writes the agent's explicit primary when
+one exists, otherwise the shared global fallback. Explicit `/model` flags
+`-s`/`--session`, `-a`/`--agent`, and `-g`/`--global` take precedence over the setting.
+Without owner/admin authority, bare commands remain session-only and explicit
+`-a` or `-g` requests are rejected. Telegram callback pickers and the embedded local TUI remain
+session-only even when this setting is configured. There are no per-agent or
+per-channel overrides of this setting.
+
+Agent and global updates can affect new and existing unpinned sessions and cron
+jobs that inherit the changed default on their next run. They do not rewrite
+other sessions' explicit model selections. `/model default -s` clears only the
+current session's selection so it inherits the current configured default.
+Selecting the effective configured default clears the session model pin, but
+agent/global scope still requests a write to the configured target.
+See [Model selection in chat](/concepts/models#model-in-chat) for persistence,
+permissions, and picker behavior.
+
 ### Runtime policy
 
 ```json5
@@ -637,9 +673,9 @@ An explicit request `agentId` always wins, followed by `systemAgent.agentId`, a 
 - `postIndexSync`: post-compaction session-memory reindex mode. Default: `"async"`. Use `"await"` for strongest freshness, `"async"` for lower compaction latency, or `"off"` only when session-memory sync is handled elsewhere.
 - `postCompactionSections`: optional AGENTS.md H2/H3 section names to re-inject after compaction. Leave unset or use `[]` to disable.
 - `model`: optional `provider/model-id` or bare alias from `agents.defaults.models` for compaction summarization only. Bare aliases resolve before dispatch; configured literal model IDs retain precedence on collisions. Use this when the main session should keep one model but compaction summaries should run on another; when unset, compaction uses the session's primary model.
-- `maxActiveTranscriptBytes`: byte threshold (`number` or strings like `"20mb"`) that opts in to normal local compaction before a run when transcript history reaches the threshold. For Codex app-server sessions, the same threshold caps native rollout transcripts and oversized native threads restart fresh. Disabled when unset or `0`. When a context engine returns an explicit compacted successor identity, OpenClaw adopts it; the built-in SQLite compactor keeps the current identity.
+- `maxActiveTranscriptBytes`: byte threshold (`number` or strings like `"20mb"`) that opts in to normal local compaction before a run when the transcript window the model sees (everything since the latest compaction or reset, plus its kept tail) reaches the threshold. For Codex app-server sessions, the same threshold caps native rollout transcripts and oversized native threads restart fresh. Disabled when unset or `0`. When a context engine returns an explicit compacted successor identity, OpenClaw adopts it; the built-in SQLite compactor keeps the current identity.
 - `notifyUser`: when `true`, sends brief context-maintenance notices to the user: when compaction starts and completes (for example, "Compacting context..." and "Compaction complete"), and when a pre-compaction memory flush is exhausted so the reply continues in a degraded state (for example, "Memory maintenance temporarily failed; continuing your reply."). Disabled by default to keep these notices silent.
-- `memoryFlush`: silent agentic turn before auto-compaction to store durable memories. Set `model` to an exact provider/model such as `ollama/qwen3:8b` when this housekeeping turn should stay on a local model; the override does not inherit the active session fallback chain. `forceFlushTranscriptBytes` forces the flush when transcript size reaches the threshold even if token counters are stale. Skipped when workspace is read-only.
+- `memoryFlush`: silent agentic turn before auto-compaction to store durable memories. Set `model` to an exact provider/model such as `ollama/qwen3:8b` when this housekeeping turn should stay on a local model; the override does not inherit the active session fallback chain. `forceFlushTranscriptBytes` forces the flush when the model-visible transcript window reaches the threshold even if token counters are stale; after compaction, that window includes the retained tail and subsequent turns rather than discarded history. Skipped when workspace is read-only.
 
 Custom compaction instructions are code-owned. Implement a compaction provider
 plugin with `summarize()` for custom summary construction, and use

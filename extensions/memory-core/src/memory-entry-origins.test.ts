@@ -77,6 +77,7 @@ describe("memory entry origins", () => {
   it("lazily persists forgotten sessions without recreating tombstones on reads or repeat writes", () => {
     const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
     const version = db.prepare("PRAGMA user_version").get();
+    const revisionBefore = db.prepare("SELECT revision FROM memory_index_state WHERE id = 1").get();
     db.exec("DROP TABLE IF EXISTS memory_session_tombstones");
 
     expect(listMemorySessionTombstones({ agentId: "main" })).toEqual([]);
@@ -96,6 +97,10 @@ describe("memory entry origins", () => {
         createdAt: 1_000,
       }),
     ).toBe(2);
+    const deletionRevision = db
+      .prepare("SELECT revision FROM memory_index_state WHERE id = 1")
+      .get();
+    expect(deletionRevision).not.toEqual(revisionBefore);
     expect(
       recordMemorySessionTombstones({
         agentId: "main",
@@ -104,6 +109,9 @@ describe("memory entry origins", () => {
         createdAt: 2_000,
       }),
     ).toBe(0);
+    expect(db.prepare("SELECT revision FROM memory_index_state WHERE id = 1").get()).toEqual(
+      deletionRevision,
+    );
     expect(listMemorySessionTombstones({ agentId: "main" })).toEqual([
       { sessionId: "session-1", agentId: "main", reason: "forgotten", createdAt: 1_000 },
       { sessionId: "session-2", agentId: "main", reason: "forgotten", createdAt: 1_000 },

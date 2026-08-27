@@ -3,7 +3,6 @@ import type * as Lark from "@larksuiteoapi/node-sdk";
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenClawPluginApi } from "../runtime-api.js";
-import { listEnabledFeishuAccounts } from "./accounts.js";
 import { FeishuChatSchema, type FeishuChatParams } from "./chat-schema.js";
 import { resolveFeishuChatType } from "./chat-type.js";
 import { createFeishuClient } from "./client.js";
@@ -244,12 +243,7 @@ export function registerFeishuChatTools(api: OpenClawPluginApi) {
   }
   const cfg = api.config;
 
-  const accounts = listEnabledFeishuAccounts(cfg);
-  if (accounts.length === 0) {
-    return;
-  }
-
-  const toolsCfg = resolveAnyEnabledFeishuToolsConfig(accounts);
+  const toolsCfg = resolveAnyEnabledFeishuToolsConfig(cfg);
   if (!toolsCfg.chat) {
     return;
   }

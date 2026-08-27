@@ -1769,6 +1769,7 @@ export const en: TranslationMap = {
   },
   configView: {
     adminRequired: "Configuration changes require operator.admin access.",
+    channelSettings: "Channel settings",
     categories: {
       core: "Core",
       ai: "Agent Defaults",
@@ -1854,6 +1855,7 @@ export const en: TranslationMap = {
       xl: "XL",
       xxl: "XXL",
     },
+    profileSyncedHint: "Saved to your profile — follows you on every device.",
     syncedHint: "Synced across your devices through the gateway.",
     syncPendingHint: "Waiting to sync through the gateway.",
     notifications: {
@@ -4276,6 +4278,7 @@ export const en: TranslationMap = {
     eventStale: "Stale session",
   },
   connection: {
+    disconnectedTitle: "Disconnected",
     queuedCount: "{count} queued",
     reconnecting: "Reconnecting…",
     restarting: "Restarting…",
@@ -5583,6 +5586,10 @@ export const en: TranslationMap = {
       gatewayRestarted: {
         label: "System · gateway restarted",
       },
+      cliHarnessContext: {
+        label: "System · injected context",
+      },
+      showContent: "Show content",
     },
     progressLabels: {
       shelling: "Shelling",
@@ -5809,9 +5816,8 @@ export const en: TranslationMap = {
       fastMode: "Fast mode",
       searchModels: "Search models",
       noMatchingModels: "No models match your search",
-      sessionOverride: "Session override",
-      resetToDefault: "Reset to default ({model})",
-      useDefault: "Use default",
+      onlyForSession: "Only for this session",
+      useDefaultModel: "Use default ({model})",
       defaultWithModel: "Default ({model})",
       defaultWithLevel: "Default ({level})",
       fastHelp: "Faster responses, higher usage of limits.",

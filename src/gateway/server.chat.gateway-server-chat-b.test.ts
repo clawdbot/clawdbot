@@ -4968,6 +4968,19 @@ describe("gateway server chat", () => {
             },
           }),
           JSON.stringify({
+            type: "user",
+            uuid: "skill-meta-1",
+            isMeta: true,
+            sourceToolUseID: "toolu_skill",
+            timestamp: "2026-03-26T16:29:55.000Z",
+            message: {
+              role: "user",
+              content: [
+                { type: "text", text: "Base directory for this skill: /tmp/skills/autoreview" },
+              ],
+            },
+          }),
+          JSON.stringify({
             type: "assistant",
             uuid: "assistant-1",
             timestamp: "2026-03-26T16:29:55.500Z",
@@ -5005,15 +5018,27 @@ describe("gateway server chat", () => {
         }>(ws, "chat.history", makeMainSessionParams({ limit: 100 }));
         expect(history.ok).toBe(true);
         const messages = history.payload?.messages ?? [];
-        expect(messages).toHaveLength(107);
+        expect(messages).toHaveLength(108);
         const userMessage = expectDefined(messages[0], "oldest imported user message") as {
           role?: string;
           content?: string;
+          provenance?: unknown;
         };
         expect(userMessage.role).toBe("user");
         expect(userMessage.content).toBe("hi");
-        const assistantMessage = expectDefined(
+        // The operator-authored turn carries no injected provenance.
+        expect(userMessage.provenance).toBeUndefined();
+        const injectedMessage = expectDefined(
           messages[1],
+          "harness-injected imported user message",
+        ) as { role?: string; provenance?: unknown };
+        expect(injectedMessage.role).toBe("user");
+        expect(injectedMessage.provenance).toMatchObject({
+          kind: "internal_system",
+          sourceTool: "cli_harness_context",
+        });
+        const assistantMessage = expectDefined(
+          messages[2],
           "oldest imported assistant message",
         ) as { role?: string; provider?: string };
         expect(assistantMessage.role).toBe("assistant");
@@ -5021,9 +5046,9 @@ describe("gateway server chat", () => {
         expect(JSON.stringify(messages)).toContain("imported message 105");
         expect(history.payload?.hasMore).toBe(false);
         expect(history.payload?.nextOffset).toBeUndefined();
-        expect(history.payload?.totalMessages).toBe(107);
+        expect(history.payload?.totalMessages).toBe(108);
         expect(history.payload?.completeSnapshot).toBe(true);
-        expect(new Set(messages.map((message) => message["__openclaw"]?.id)).size).toBe(107);
+        expect(new Set(messages.map((message) => message["__openclaw"]?.id)).size).toBe(108);
       } finally {
         homeEnvSnapshot.restore();
       }
