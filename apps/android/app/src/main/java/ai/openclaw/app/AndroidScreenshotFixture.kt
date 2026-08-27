@@ -28,26 +28,43 @@ internal object AndroidScreenshotFixture {
   const val cronJobId = "android-release-digest"
   const val cronJobName = "Android release digest"
 
-  private val pendingQuestion =
-    System.currentTimeMillis().let { nowMs ->
-      QuestionRecord(
-        id = "android-screenshot-question",
-        questions =
-          listOf(
-            Question(
-              questionId = "release_note",
-              header = "Release note",
-              question = "What should the release note mention?",
-              options = emptyList(),
+  fun createRequester(): (String, String?) -> String {
+    // A runtime gets a fresh lifetime; list refreshes and scene re-entry keep its exact record.
+    val pendingQuestion =
+      System.currentTimeMillis().let { nowMs ->
+        QuestionRecord(
+          id = "android-screenshot-question",
+          questions =
+            listOf(
+              Question(
+                questionId = "release_note",
+                header = "Release note",
+                question = "What should the release note mention?",
+                options = emptyList(),
+              ),
             ),
-          ),
-        agentId = "main",
-        sessionKey = mainSessionKey,
-        createdAtMs = nowMs,
-        expiresAtMs = nowMs + 600_000,
-        status = "pending",
-      )
+          agentId = "main",
+          sessionKey = mainSessionKey,
+          createdAtMs = nowMs,
+          expiresAtMs = nowMs + 600_000,
+          status = "pending",
+        )
+      }
+    return { method, paramsJson ->
+      when (method) {
+        "health" -> buildJsonObject { put("ok", JsonPrimitive(true)) }.toString()
+        "chat.history" -> chatHistory()
+        "sessions.list" -> sessionList(paramsJson)
+        "chat.metadata" -> chatMetadata()
+        "question.list" -> Json.encodeToString(QuestionListResult(listOf(pendingQuestion)))
+        "cron.list" -> cronList()
+        "cron.get" -> cronJob().toString()
+        "cron.runs" -> cronRuns()
+        "openclaw.chat" -> systemAgentChat(paramsJson)
+        else -> error("Screenshot fixture does not implement gateway method $method with params $paramsJson")
+      }
     }
+  }
 
   val agents =
     listOf(
@@ -124,23 +141,6 @@ internal object AndroidScreenshotFixture {
           ),
         ),
     )
-
-  fun request(
-    method: String,
-    paramsJson: String?,
-  ): String =
-    when (method) {
-      "health" -> buildJsonObject { put("ok", JsonPrimitive(true)) }.toString()
-      "chat.history" -> chatHistory()
-      "sessions.list" -> sessionList(paramsJson)
-      "chat.metadata" -> chatMetadata()
-      "question.list" -> Json.encodeToString(QuestionListResult(listOf(pendingQuestion)))
-      "cron.list" -> cronList()
-      "cron.get" -> cronJob().toString()
-      "cron.runs" -> cronRuns()
-      "openclaw.chat" -> systemAgentChat(paramsJson)
-      else -> error("Screenshot fixture does not implement gateway method $method with params $paramsJson")
-    }
 
   private fun systemAgentChat(paramsJson: String?): String {
     val message =

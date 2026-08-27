@@ -42,6 +42,7 @@ import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelStore
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.junit.After
@@ -86,7 +87,13 @@ class ChatQuestionDraftLayoutTest {
         .getDeclaredField("chat")
         .apply { isAccessible = true }
         .get(runtime) as ChatController
-    question = Json.decodeFromString<QuestionListResult>(AndroidScreenshotFixture.request("question.list", "{}")).questions.single()
+    @Suppress("UNCHECKED_CAST")
+    val request =
+      ChatController::class.java
+        .getDeclaredField("requestGateway")
+        .apply { isAccessible = true }
+        .get(controller) as suspend (String, String?) -> String
+    question = runBlocking { Json.decodeFromString<QuestionListResult>(request("question.list", "{}")).questions.single() }
     originalAnimatorScale = Settings.Global.getString(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE)
     Settings.Global.putFloat(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 0f)
   }
