@@ -84,6 +84,8 @@
     "!dist/plugin-sdk/command-status-runtime.d.ts",
     "!dist/plugin-sdk/command-surface.d.ts",
     "!dist/plugin-sdk/concurrency-runtime.d.ts",
+    "!dist/plugin-sdk/continuation-test-runtime.js",
+    "!dist/plugin-sdk/continuation-test-runtime.d.ts",
     "!dist/plugin-sdk/context-visibility-runtime.d.ts",
     "!dist/plugin-sdk/conversation-binding-runtime.d.ts",
     "!dist/plugin-sdk/cron-store-runtime.d.ts",
@@ -236,6 +238,8 @@
     "!dist/plugin-sdk/test-media-understanding.d.ts",
     "!dist/plugin-sdk/test-state.js",
     "!dist/plugin-sdk/test-state.d.ts",
+    "!dist/plugin-sdk/task-flow-test-runtime.js",
+    "!dist/plugin-sdk/task-flow-test-runtime.d.ts",
     "!dist/plugin-sdk/test-node-mocks.js",
     "!dist/plugin-sdk/test-node-mocks.d.ts",
     "!dist/plugin-sdk/text-autolink-runtime.d.ts",
@@ -618,9 +622,6 @@
     "./plugin-sdk/concurrency-runtime": {
       "default": "./dist/plugin-sdk/concurrency-runtime.js"
     },
-    "./plugin-sdk/continuation-test-runtime": {
-      "default": "./dist/plugin-sdk/continuation-test-runtime.js"
-    },
     "./plugin-sdk/dedupe-runtime": {
       "types": "./dist/plugin-sdk/dedupe-runtime.d.ts",
       "default": "./dist/plugin-sdk/dedupe-runtime.js"
@@ -859,9 +860,6 @@
     "./plugin-sdk/lazy-runtime": {
       "types": "./dist/plugin-sdk/lazy-runtime.d.ts",
       "default": "./dist/plugin-sdk/lazy-runtime.js"
-    },
-    "./plugin-sdk/task-flow-test-runtime": {
-      "default": "./dist/plugin-sdk/task-flow-test-runtime.js"
     },
     "./plugin-sdk/temp-path": {
       "types": "./dist/plugin-sdk/temp-path.d.ts",

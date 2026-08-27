@@ -25,6 +25,7 @@ const RAW_TASK_MUTATOR_ALLOWED_CALLERS = new Set([
 ]);
 
 const TASK_FLOW_REGISTRY_ALLOWED_IMPORTERS = new Set([
+  "plugin-sdk/task-flow-test-runtime.ts",
   "tasks/task-flow-owner-access.ts",
   "tasks/task-flow-registry.audit.ts",
   "tasks/task-flow-registry.maintenance.ts",
