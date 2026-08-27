@@ -674,9 +674,10 @@ describe("Dockerfile", () => {
   it("keeps runtime pnpm available", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     expect(dockerfile).toContain("ENV COREPACK_HOME=/usr/local/share/corepack");
-    expect(dockerfile).toContain(
-      'corepack prepare "$(node -p "require(\'./package.json\').packageManager")" --activate',
-    );
+    expect(dockerfile).toContain('corepack prepare "$pnpm_spec" --activate');
+    expect(dockerfile).toContain('corepack "$pnpm_spec" --version &&');
+    expect(dockerfile).toContain("chmod a+r /app/pnpm-lock.yaml");
+    expect(dockerfile).not.toContain("(cd /tmp && corepack");
   });
 
   it("pre-creates named-volume mount points before switching to the node user", async () => {

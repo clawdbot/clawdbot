@@ -71,7 +71,7 @@ export async function rebuildRolledBackGitRuntime(params: {
   };
 
   const manager = await resolveUpdateBuildManager(
-    (argv, options) => params.runCommand(argv, { timeoutMs: options.timeoutMs, env: options.env }),
+    params.runCommand,
     params.gitRoot,
     params.timeoutMs,
     params.defaultCommandEnv,

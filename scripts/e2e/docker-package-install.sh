@@ -67,19 +67,21 @@ DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d \
     set -euo pipefail
     export PNPM_HOME=/tmp/pnpm-home
     export PATH="$PNPM_HOME:$PATH"
-    corepack prepare pnpm@11.22.0 --activate
+    corepack prepare "$1" --activate
     pnpm config set global-bin-dir "$PNPM_HOME"
     pnpm config set global-dir /tmp/pnpm-global
     pnpm add --global --allow-build=openclaw /tmp/openclaw-current.tgz
     test "$(command -v openclaw)" = "$PNPM_HOME/openclaw"
-    package_root="$(pnpm root --global)/openclaw"
+    pnpm list --global --json > /tmp/pnpm-packages.json
+    package_root="$(node -p "require(\"/tmp/pnpm-packages.json\")[0].dependencies.openclaw.path")"
+    test -f "$package_root/package.json"
     printf "%s\n" "$package_root" > /tmp/openclaw-package-root
     openclaw --version > /tmp/openclaw-version
     openclaw --help > /tmp/openclaw-help
     test -s /tmp/openclaw-help
     touch /tmp/openclaw-proof-ready
     exec sleep infinity
-  ' >/dev/null
+  ' -- "$(node -p "require('$ROOT_DIR/package.json').packageManager")" >/dev/null
 
 echo "Installing the real OpenClaw package artifact with Bun..."
 DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d \
@@ -123,6 +125,7 @@ done
 NPM_PACKAGE_ROOT="/usr/local/lib/node_modules/openclaw"
 NPM_INSTALLED_VERSION="$(docker exec "$NPM_PROOF_CONTAINER" cat /tmp/openclaw-version | tr -d '\r\n')"
 PNPM_PACKAGE_ROOT="$(docker exec "$PNPM_PROOF_CONTAINER" cat /tmp/openclaw-package-root | tr -d '\r\n')"
+PNPM_PACKAGE_VERSION="$(docker exec "$PNPM_PROOF_CONTAINER" node -p "require('$PNPM_PACKAGE_ROOT/package.json').version")"
 PNPM_INSTALLED_VERSION="$(docker exec "$PNPM_PROOF_CONTAINER" cat /tmp/openclaw-version | tr -d '\r\n')"
 BUN_OPENCLAW_PATH="$(
   docker exec "$BUN_PROOF_CONTAINER" \
@@ -133,6 +136,7 @@ BUN_INSTALLED_VERSION="$(
     node -p 'JSON.parse(require("node:fs").readFileSync("/tmp/openclaw-bun-proof.json", "utf8")).openclawVersion'
 )"
 PACKAGE_VERSION="$(docker exec "$NPM_PROOF_CONTAINER" node -p "require('$NPM_PACKAGE_ROOT/package.json').version")"
+test "$PNPM_PACKAGE_VERSION" = "$PACKAGE_VERSION"
 for installed_version in "$NPM_INSTALLED_VERSION" "$PNPM_INSTALLED_VERSION" "$BUN_INSTALLED_VERSION"; do
   if [[ "$installed_version" != *"$PACKAGE_VERSION"* ]]; then
     echo "installed CLI output $installed_version does not contain package version $PACKAGE_VERSION" >&2
@@ -155,7 +159,7 @@ node --import tsx "$ROOT_DIR/scripts/e2e/lib/docker-artifact-proof/write-identit
   --detail "npm:helpCommand=passed" \
   --detail "npm:nonRootExecution=passed" \
   --detail "pnpm:installedPackageRoot=$PNPM_PACKAGE_ROOT" \
-  --detail "pnpm:installedPackageVersion=$PACKAGE_VERSION" \
+  --detail "pnpm:installedPackageVersion=$PNPM_PACKAGE_VERSION" \
   --detail "pnpm:openclawVersion=$PNPM_INSTALLED_VERSION" \
   --detail "pnpm:openclawPath=/tmp/pnpm-home/openclaw" \
   --detail "pnpm:helpCommand=passed" \

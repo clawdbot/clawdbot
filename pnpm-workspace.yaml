@@ -6,6 +6,7 @@ packages:
   - examples/*
 
 minimumReleaseAge: 2880
+minimumReleaseAgeStrict: true
 
 minimumReleaseAgeExclude:
   - "@openclaw/crabline@0.1.19"

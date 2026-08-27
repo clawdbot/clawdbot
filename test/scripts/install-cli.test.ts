@@ -167,7 +167,6 @@ describe("install-cli.sh", () => {
           "ensure_pnpm() { :; }",
           "ensure_pnpm_binary_for_scripts() { :; }",
           "ensure_pnpm_git_prepare_allowlist() { :; }",
-          "activate_repo_pnpm_version() { :; }",
           "cleanup_legacy_submodules() { :; }",
           "resolve_git_openclaw_ref() { printf 'main\\n'; }",
           "checkout_git_openclaw_ref() { :; }",
@@ -311,7 +310,6 @@ describe("install-cli.sh", () => {
         checkout_git_openclaw_ref() { :; }
         cleanup_legacy_submodules() { :; }
         ensure_pnpm_git_prepare_allowlist() { :; }
-        activate_repo_pnpm_version() { :; }
         git_install_lockfile_flag() { printf '%s\\n' '--frozen-lockfile'; }
         run_pnpm() { :; }
         git() {
@@ -424,7 +422,7 @@ describe("install-cli.sh", () => {
       checkout_git_openclaw_ref() { [[ "$1" == "$target" && "$2" == "main" ]]; }
       cleanup_legacy_submodules() { [[ "$1" == "$target" ]]; }
       ensure_pnpm_git_prepare_allowlist() { [[ "$1" == "$target" ]]; }
-      activate_repo_pnpm_version() { [[ "$1" == "$target" ]]; }
+      ensure_pnpm() { [[ "$1" == "$target" ]]; }
       git_install_lockfile_flag() {
         [[ "$1" == "$target" ]]
         printf '%s\\n' '--frozen-lockfile'
@@ -939,7 +937,6 @@ describe("install-cli.sh", () => {
                   "ensure_pnpm() { :; }",
                   "ensure_pnpm_binary_for_scripts() { :; }",
                   "ensure_pnpm_git_prepare_allowlist() { :; }",
-                  "activate_repo_pnpm_version() { :; }",
                   "cleanup_legacy_submodules() { :; }",
                   "resolve_git_openclaw_ref() { printf 'main\\n'; }",
                   "checkout_git_openclaw_ref() { :; }",
@@ -1254,9 +1251,9 @@ HOOK
   });
 
   it("aligns pnpm to the checked-out repo packageManager before installing", () => {
-    expect(script).toContain("activate_repo_pnpm_version()");
-    expect(script).toContain('"$corepack_cmd" prepare "pnpm@${version}" --activate');
-    expect(script).toContain('activate_repo_pnpm_version "$repo_dir"');
+    expect(script).toContain("ensure_pnpm()");
+    expect(script).toContain('"$corepack_cmd" prepare "$spec" --activate');
+    expect(script).toContain('ensure_pnpm "$repo_dir"');
   });
 
   it("preserves explicit pnpm prefer-offline settings", () => {
@@ -1343,7 +1340,7 @@ HOOK
           `cd ${JSON.stringify(process.cwd())}`,
           `source ${JSON.stringify(SCRIPT_PATH)}`,
           `cd ${JSON.stringify(outer)}`,
-          `activate_repo_pnpm_version ${JSON.stringify(repo)}`,
+          `ensure_pnpm ${JSON.stringify(repo)}`,
           'printf "cmd=%s\\n" "${PNPM_CMD[*]}"',
           `printf "run=%s\\n" "$(run_pnpm -C ${JSON.stringify(repo)} --version)"`,
         ].join("\n"),
@@ -2018,6 +2015,16 @@ HOOK
       );
       expect(result.status).toBe(0);
       expect(result.stdout).toBe(expected);
+      const tool = runInstallCliShell(
+        [
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          `node_bin() { printf '%s\\n' ${JSON.stringify(process.execPath)}; }`,
+          `npm_lifecycle_allow_arg ${JSON.stringify(npm)} pnpm@12.0.0 "$PWD" pnpm@12.0.0`,
+        ].join("\n"),
+        { NPM_FAKE_VERSION: version },
+      );
+      expect(tool.status).toBe(0);
+      expect(tool.stdout).toBe(expected ? "--allow-scripts=pnpm@12.0.0" : "");
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }

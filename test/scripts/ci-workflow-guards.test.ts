@@ -28,6 +28,7 @@ import {
   writeGitHubOutput,
 } from "../../scripts/ci-changed-scope.mjs";
 import { visitModuleSpecifiers } from "../../scripts/lib/guard-inventory-utils.mjs";
+import { pnpmLockfileDocuments } from "../../scripts/lib/pnpm-lockfile-documents.mjs";
 import { NATIVE_I18N_LOCALES } from "../../scripts/native-i18n-locales.ts";
 import { resolvePnpmRunner } from "../../scripts/pnpm-runner.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -4304,7 +4305,7 @@ NODE
     expect(setupPnpm.with?.["cache-mode"]).toContain("'restore' || 'off'");
     expect(actionSteps.indexOf(restore)).toBeLessThan(actionSteps.indexOf(setupPnpm));
 
-    expect(installScript).toContain("install_args+=(--package-import-method=hardlink)");
+    expect(installScript).toContain("export PNPM_CONFIG_PACKAGE_IMPORT_METHOD=hardlink");
     expect(installScript).toContain("run_pnpm_install --offline");
     expect(installScript).toContain("run_pnpm_install --prefer-offline");
     expect(installScript).toContain('[ "$DEPENDENCY_CACHE_HIT" = "true" ]');
@@ -4468,7 +4469,7 @@ NODE
         spawnSync(pnpm.command, [...pnpm.args, ...args], {
           cwd,
           encoding: "utf8",
-          env: { ...process.env, CI: "true" },
+          env: { ...process.env, CI: "true", PNPM_CONFIG_PACKAGE_IMPORT_METHOD: "hardlink" },
         });
       const version = runPnpm(["--version"], source);
       expect(version.status, version.stderr).toBe(0);
@@ -4552,10 +4553,14 @@ server.listen(0, "127.0.0.1", () => {
             }),
           );
         writeConsumerManifest("1.0.0");
+        // The fixture owns the same pinned toolchain as CI; its registry serves dependencies only.
+        const { environment } = pnpmLockfileDocuments(readFileSync("pnpm-lock.yaml", "utf8"));
+        if (environment !== null) {
+          writeFileSync(path.join(workspace, "pnpm-lock.yaml"), `---\n${environment}\n---\n`);
+        }
         const installArgs = [
           "install",
           `--store-dir=${store}`,
-          "--package-import-method=hardlink",
           "--ignore-scripts",
           "--config.engine-strict=false",
         ];
@@ -4616,10 +4621,16 @@ server.listen(0, "127.0.0.1", () => {
 
         registryServer.kill("SIGTERM");
         rmSync(registry, { force: true, recursive: true });
+        const cachedIdentity = statSync(restoredPackageFile);
+        const cachedLockfile = readFileSync(path.join(workspace, "pnpm-lock.yaml"), "utf8");
         const offlineArgs = [...installArgs, "--offline", "--frozen-lockfile"];
         const reconciliation = runPnpm(offlineArgs, workspace);
         expect(reconciliation.status, `${reconciliation.stdout}${reconciliation.stderr}`).toBe(0);
-        expect(reconciliation.stdout).toContain("Already up to date");
+        expect(statSync(restoredPackageFile)).toMatchObject({
+          dev: cachedIdentity.dev,
+          ino: cachedIdentity.ino,
+        });
+        expect(readFileSync(path.join(workspace, "pnpm-lock.yaml"), "utf8")).toBe(cachedLockfile);
         expect(
           readFileSync(path.join(consumer, "node_modules", "cache-proof-dep", "index.js"), "utf8"),
         ).toBe('module.exports = "cache-proof-v1";\n');
@@ -4627,7 +4638,10 @@ server.listen(0, "127.0.0.1", () => {
         const drift = runPnpm(offlineArgs, workspace);
         expect(drift.status).toBe(1);
         expect(`${drift.stdout}${drift.stderr}`).toContain('Cannot install with "frozen-lockfile"');
-        expect(`${drift.stdout}${drift.stderr}`).toContain("packages/consumer/package.json");
+        expect(`${drift.stdout}${drift.stderr}`).toContain('in importers["packages/consumer"]');
+        expect(`${drift.stdout}${drift.stderr}`).toContain(
+          "cache-proof-dep (lockfile: 1.0.0, manifest: 2.0.0)",
+        );
       } finally {
         registryServer.kill("SIGTERM");
       }
@@ -9614,7 +9628,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       );
       for (const installFlag of [
         "--frozen-lockfile",
-        "--ignore-scripts=false",
+        "--config.ignore-scripts=false",
         "--config.engine-strict=false",
         "--config.enable-pre-post-scripts=true",
         "--config.side-effects-cache=true",

@@ -274,12 +274,14 @@ COPY --from=runtime-assets --chown=node:node /app/qa ./qa
 
 # Keep pnpm available in the runtime image for container-local workflows.
 # Use a shared Corepack home so the non-root `node` user does not need a
-# first-run network fetch when invoking pnpm.
+# first-run network fetch when invoking pnpm. Warm in /app to also record
+# its pinned toolchain metadata before offline runtime use.
 ENV COREPACK_HOME=/usr/local/share/corepack
 RUN install -d -m 0755 "$COREPACK_HOME" && \
     corepack enable && \
+    pnpm_spec="$(node -p "require('./package.json').packageManager")" && \
     for attempt in 1 2 3 4 5; do \
-      if corepack prepare "$(node -p "require('./package.json').packageManager")" --activate; then \
+      if corepack prepare "$pnpm_spec" --activate; then \
         break; \
       fi; \
       if [ "$attempt" -eq 5 ]; then \
@@ -287,6 +289,8 @@ RUN install -d -m 0755 "$COREPACK_HOME" && \
       fi; \
       sleep $((attempt * 2)); \
     done && \
+    corepack "$pnpm_spec" --version && \
+    chmod a+r /app/pnpm-lock.yaml && \
     chmod -R a+rX "$COREPACK_HOME"
 
 # Install additional system packages needed by your skills or extensions.
@@ -397,6 +401,9 @@ ENV NODE_ENV=production
 # The node:24-bookworm image includes a 'node' user (uid 1000)
 # This reduces the attack surface by preventing container escape via root privileges
 USER node
+
+# Verify the shipped toolchain needs no privileged writes or first-run downloads.
+RUN COREPACK_ENABLE_NETWORK=0 PNPM_CONFIG_OFFLINE=true pnpm --version
 
 # Start gateway server with default config.
 # Binds to loopback (127.0.0.1) by default for security.

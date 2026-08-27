@@ -1,87 +1,109 @@
 // Covers package manager resolution for update build flows.
-import { describe, expect, it } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import { resolveUpdateBuildManager } from "./update-package-manager.js";
 
 type PackageManagerCommandRunner = Parameters<typeof resolveUpdateBuildManager>[0];
+const roots: string[] = [];
+afterEach(async () => {
+  await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
+});
+
+async function checkout(version: string) {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-manager-test-"));
+  roots.push(root);
+  await fs.writeFile(
+    path.join(root, "package.json"),
+    JSON.stringify({ packageManager: `pnpm@${version}+sha512.test` }),
+  );
+  return root;
+}
 
 describe("resolveUpdateBuildManager", () => {
-  it("bootstraps pnpm via npm when pnpm and corepack are unavailable", async () => {
-    const paths: string[] = [];
-    const calls: Array<{ argv: string[]; path: string }> = [];
-    const runCommand: PackageManagerCommandRunner = async (argv, options) => {
-      const key = argv.join(" ");
-      calls.push({ argv, path: options.env?.PATH ?? options.env?.Path ?? "" });
-      if (key === "pnpm --version") {
-        const envPath = options.env?.PATH ?? options.env?.Path ?? "";
-        if (envPath.includes("openclaw-update-pnpm-")) {
-          paths.push(envPath);
-          return { stdout: "11.0.0", stderr: "", code: 0 };
+  it.each(["11.22.0", "12.0.0"])(
+    "bootstraps the target checkout's exact pnpm %s via npm",
+    async (version) => {
+      const root = await checkout(version);
+      const calls: string[][] = [];
+      let prefix = "";
+      const runCommand: PackageManagerCommandRunner = async (argv, options) => {
+        calls.push(argv);
+        expect(options.cwd).toBe(root);
+        const key = argv.join(" ");
+        if (key === "pnpm --version") {
+          const envPath = options.env?.PATH ?? options.env?.Path ?? "";
+          if (
+            prefix &&
+            envPath.split(path.delimiter)[0] === path.join(prefix, "node_modules", ".bin")
+          ) {
+            return { stdout: version, stderr: "", code: 0 };
+          }
+          return { stdout: "10.0.0", stderr: "", code: 0 };
         }
-        throw new Error("spawn pnpm ENOENT");
+        if (key === "corepack --version") {
+          throw new Error("spawn corepack ENOENT");
+        }
+        if (key === "npm --version") {
+          return { stdout: "10.0.0", stderr: "", code: 0 };
+        }
+        if (key.startsWith("npm install --prefix ")) {
+          prefix = argv[3] ?? "";
+          expect(argv[4]).toBe(`pnpm@${version}`);
+          expect(JSON.parse(await fs.readFile(path.join(prefix, "package.json"), "utf8"))).toEqual({
+            private: true,
+            allowScripts: { [`pnpm@${version}`]: true },
+          });
+          return { stdout: "added pnpm", stderr: "", code: 0 };
+        }
+        throw new Error(`Unexpected command ${key}`);
+      };
+      const result = await resolveUpdateBuildManager(
+        runCommand,
+        root,
+        5000,
+        undefined,
+        "require-preferred",
+      );
+      expect(result.kind).toBe("resolved");
+      if (result.kind !== "resolved") {
+        throw new Error(result.reason);
       }
-      if (key === "corepack --version") {
-        throw new Error("spawn corepack ENOENT");
-      }
-      if (key === "npm --version") {
-        return { stdout: "10.0.0", stderr: "", code: 0 };
-      }
-      if (key.startsWith("npm install --prefix ") && key.endsWith(" pnpm@11")) {
-        return { stdout: "added 1 package", stderr: "", code: 0 };
-      }
-      return { stdout: "", stderr: "", code: 0 };
-    };
-
-    const result = await resolveUpdateBuildManager(runCommand, process.cwd(), 5000, undefined);
-
-    expect(result.kind).toBe("resolved");
-    if (result.kind === "resolved") {
       expect(result.manager).toBe("pnpm");
-      expect(calls.map((call) => call.argv)).toEqual([
-        ["pnpm", "--version"],
-        ["corepack", "--version"],
-        ["npm", "--version"],
-        ["npm", "install", "--prefix", calls[3]?.argv[3] ?? "", "pnpm@11"],
-        ["pnpm", "--version"],
-      ]);
-      const tempRoot = calls[3]?.argv[3];
-      expect(typeof tempRoot).toBe("string");
-      expect(tempRoot?.includes("openclaw-update-pnpm-")).toBe(true);
-      expect(paths).toHaveLength(1);
-      expect(paths[0]?.split(":")[0]).toBe(`${tempRoot}/node_modules/.bin`);
+      expect(calls).toContainEqual(["npm", "install", "--prefix", prefix, `pnpm@${version}`]);
+      await expect(fs.stat(prefix)).resolves.toBeDefined();
       await result.cleanup?.();
-    }
-  });
+      await expect(fs.stat(prefix)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
 
-  it("returns a specific bootstrap failure when pnpm cannot be installed from npm", async () => {
+  it.each(["install", "verify"])("cleans failed pnpm bootstrap at %s", async (failure) => {
+    const root = await checkout("12.0.0");
+    let prefix = "";
     const runCommand: PackageManagerCommandRunner = async (argv) => {
       const key = argv.join(" ");
-      if (key === "pnpm --version") {
-        throw new Error("spawn pnpm ENOENT");
-      }
-      if (key === "corepack --version") {
-        throw new Error("spawn corepack ENOENT");
+      if (key === "pnpm --version" || key === "corepack --version") {
+        throw new Error("missing tool");
       }
       if (key === "npm --version") {
         return { stdout: "10.0.0", stderr: "", code: 0 };
       }
-      if (key.startsWith("npm install --prefix ") && key.endsWith(" pnpm@11")) {
-        return { stdout: "", stderr: "network exploded", code: 1 };
-      }
-      return { stdout: "", stderr: "", code: 0 };
+      prefix = argv[3] ?? "";
+      return { stdout: "", stderr: "", code: failure === "install" ? 1 : 0 };
     };
-
     const result = await resolveUpdateBuildManager(
       runCommand,
-      process.cwd(),
+      root,
       5000,
       undefined,
       "require-preferred",
     );
-
     expect(result).toEqual({
       kind: "missing-required",
       preferred: "pnpm",
       reason: "pnpm-npm-bootstrap-failed",
     });
+    await expect(fs.stat(prefix)).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

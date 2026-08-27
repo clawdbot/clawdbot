@@ -52,6 +52,7 @@ const TOOLING_CLOSURE = [
   "scripts/lib/npm-publish-plan.mjs",
   "scripts/lib/plugin-publication-candidates.ts",
   "scripts/lib/plugin-publication-collector.ts",
+  "scripts/lib/pnpm-lockfile-documents.mjs",
   "scripts/lib/record-shared.mjs",
   "scripts/lib/release-version.mjs",
 ];

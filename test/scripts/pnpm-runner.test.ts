@@ -1,4 +1,5 @@
 // Pnpm Runner tests cover pnpm runner script behavior.
+import { spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -79,9 +80,9 @@ describe("resolvePnpmRunner", () => {
     }
   });
 
-  it("executes native pnpm binaries from npm_execpath directly on non-Windows", () => {
+  it.each(["pnpm", "pnpm-native"])("executes native %s from npm_execpath directly", (basename) => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "pnpm-runner-"));
-    const npmExecPath = path.join(tempDir, "pnpm");
+    const npmExecPath = path.join(tempDir, basename);
     writeFileSync(npmExecPath, Buffer.from([0x7f, 0x45, 0x4c, 0x46]));
     chmodSync(npmExecPath, 0o755);
 
@@ -126,9 +127,8 @@ describe("resolvePnpmRunner", () => {
     }
   });
 
-  it("executes pnpm.exe directly on Windows", () => {
-    const npmExecPath =
-      "C:\\Users\\test\\AppData\\Local\\pnpm\\.tools\\@pnpm+exe\\10.32.1\\node_modules\\@pnpm\\exe\\pnpm.exe";
+  it.each(["pnpm.exe", "pnpm-native.exe"])("executes %s directly on Windows", (basename) => {
+    const npmExecPath = `C:\\Users\\test\\AppData\\Local\\pnpm\\${basename}`;
 
     expect(
       resolvePnpmRunner({
@@ -143,6 +143,25 @@ describe("resolvePnpmRunner", () => {
       args: ["exec", "vitest", "run"],
       shell: false,
     });
+  });
+
+  posixIt("executes a shell npm_execpath with its own interpreter", () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "pnpm-runner-shell-"));
+    const npmExecPath = path.join(tempDir, "pnpm");
+    writeFileSync(npmExecPath, '#!/bin/sh\nprintf "%s\\n" "$@"\n');
+    chmodSync(npmExecPath, 0o755);
+    try {
+      const spec = createPnpmRunnerSpawnSpec({
+        npmExecPath,
+        pnpmArgs: ["literal & argument"],
+        stdio: "pipe",
+      });
+      const result = spawnSync(spec.command, spec.args, { ...spec.options, encoding: "utf8" });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toBe("literal & argument\n");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("uses pnpm.cjs through node for Windows-style paths", () => {

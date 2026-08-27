@@ -233,7 +233,7 @@ describe("pnpm 11 isolated install preflight", () => {
     });
   });
 
-  it("uses the owner-reported custom bin without changing pnpm command resolution", async () => {
+  it("uses the owning v11 layout and custom bin with pnpm 12", async () => {
     await withTestDir({ prefix: "openclaw-package-update-pnpm-isolated-" }, async (base) => {
       const globalDir = path.join(base, "pnpm-home", "global");
       const globalRoot = path.join(globalDir, "v11");
@@ -264,7 +264,7 @@ describe("pnpm 11 isolated install preflight", () => {
         }
         if (command === "pnpm --version") {
           expect(options.env?.PATH?.split(path.delimiter)[0]).toBe(pathBinDir);
-          return { stdout: `${pnpmWarning}\n11.4.0\n`, stderr: "", code: 0 };
+          return { stdout: `${pnpmWarning}\n12.0.0\n`, stderr: "", code: 0 };
         }
         throw new Error(`unexpected command: ${command}`);
       };
@@ -572,60 +572,6 @@ describe("pnpm 11 isolated install preflight", () => {
         expect(result.failedStep?.name).toBe("global update");
       }
       expect(runStep).toHaveBeenCalledTimes(cases.length);
-    });
-  });
-
-  it("probes pnpm from its owner root before rejecting a mismatched major", async () => {
-    await withTestDir({ prefix: "openclaw-package-update-pnpm-major-" }, async (base) => {
-      const globalRoot = path.join(base, "pnpm-home", "global", "v11");
-      const globalBinDir = path.join(base, "pnpm-home", "bin");
-      const { packageRoot } = await writePnpmIsolatedPackage({
-        globalRoot,
-        installName: "install",
-        version: "1.0.0",
-      });
-      const runStep = vi.fn();
-      const runCommand: CommandRunner = async (argv, options) => {
-        const command = argv.join(" ");
-        expect(options.cwd).toBe(globalRoot);
-        expect(options.env?.PATH?.split(path.delimiter)[0]).toBe(globalBinDir);
-        if (command === "pnpm root -g") {
-          return { stdout: `${globalRoot}\n`, stderr: "", code: 0 };
-        }
-        if (command === "pnpm bin -g") {
-          return { stdout: `${globalBinDir}\n`, stderr: "", code: 0 };
-        }
-        if (command === "pnpm --version") {
-          return { stdout: "10.32.1\n", stderr: "", code: 0 };
-        }
-        throw new Error(`unexpected command: ${command}`);
-      };
-
-      const result = await runGlobalPackageUpdateSteps({
-        installTarget: {
-          manager: "pnpm",
-          command: "pnpm",
-          pnpmIsolated: {
-            layoutVersion: 11,
-          },
-          globalRoot,
-          packageRoot,
-        },
-        installSpec: "openclaw@2.0.0",
-        packageName: "openclaw",
-        packageRoot,
-        runCommand,
-        runStep,
-        timeoutMs: 1000,
-        env: { PATH: `${globalBinDir}${path.delimiter}${path.join(base, "pnpm-10", "bin")}` },
-      });
-
-      expect(result.failedStep?.name).toBe("pnpm isolated install preflight");
-      expect(result.failedStep?.stderrTail).toContain("reports pnpm 10.32.1");
-      expect(runStep).not.toHaveBeenCalled();
-      await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(
-        '"version":"1.0.0"',
-      );
     });
   });
 

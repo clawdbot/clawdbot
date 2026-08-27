@@ -194,6 +194,8 @@ describe("install.ps1 failure handling", () => {
           '  if ($actual -ne $entry.Value) { throw "version=$($entry.Key) actual=$actual" }',
           "}",
           "$script:NpmVersion = '12.0.0'",
+          "$tool = Get-NpmLifecycleAllowArgument -NpmCommand 'npm.cmd' -InstallSpec 'pnpm@12.0.0' -ExactIdentity 'pnpm@12.0.0'",
+          'if ($tool -ne "--allow-scripts=pnpm@12.0.0") { throw "tool=$tool" }',
           "$alias = Get-NpmLifecycleAllowArgument -NpmCommand 'npm.cmd' -InstallSpec 'openclaw@npm:@scope/candidate@1.0.0'",
           "if ($alias -ne '--allow-scripts=@scope/candidate') { throw \"alias=$alias\" }",
           "$tarball = Get-NpmLifecycleAllowArgument -NpmCommand 'npm.cmd' -InstallSpec 'https://example.invalid/openclaw.tgz'",
@@ -202,7 +204,7 @@ describe("install.ps1 failure handling", () => {
           '$safeCwd = Join-Path $commaRoot "safe"',
           '$candidate = Join-Path $commaRoot "candidate.tgz"',
           "$relative = Get-NpmLifecycleAllowArgument -NpmCommand 'npm.cmd' -InstallSpec $candidate -NpmCwd $safeCwd",
-          "if ($relative -match ',' -or $relative -notmatch '^--allow-scripts=\.\.[\\/]candidate\.tgz$') { throw \"relative=$relative\" }",
+          "if ($relative -match ',' -or $relative -notmatch '^--allow-scripts=\\.\\.[\\\\/]candidate\\.tgz$') { throw \"relative=$relative\" }",
           "foreach ($invalidVersion in @('invalid', 'npm 12.0.0 warning')) {",
           "  $script:NpmVersion = $invalidVersion",
           "  $caught = $false",
@@ -1105,7 +1107,7 @@ describe("install.ps1 failure handling", () => {
     expect(ensurePnpmBody).toContain(
       'Invoke-CorepackCommand -Arguments @("prepare", $pnpmSpec, "--activate")',
     );
-    expect(ensurePnpmBody).toContain('Invoke-NpmCommand -Arguments @("install", "-g", $pnpmSpec)');
+    expect(ensurePnpmBody).toContain("Invoke-NpmCommand -Arguments $installArgs");
     expect(mainBody).toContain("Remove-PreviousNpmOwner");
     expect(mainBody).toContain("Remove-PreviousGitWrapper");
     expect(mainBody).toContain("Start-NpmShimBackup");
@@ -1324,12 +1326,10 @@ describe("install.ps1 failure handling", () => {
     expect(ensurePnpmBody).toContain(
       'Invoke-CorepackCommand -Arguments @("prepare", $pnpmSpec, "--activate")',
     );
-    expect(ensurePnpmBody).toContain('Invoke-NpmCommand -Arguments @("install", "-g", $pnpmSpec)');
+    expect(ensurePnpmBody).toContain("Invoke-NpmCommand -Arguments $installArgs");
     expect(ensurePnpmBody).toContain("$pnpmInstalled = ($LASTEXITCODE -eq 0)");
     expect(ensurePnpmBody).toContain("if (-not $pnpmInstalled)");
-    expect(ensurePnpmBody).toContain(
-      'Invoke-NpmCommand -Arguments @("install", "-g", "--force", $pnpmSpec)',
-    );
+    expect(ensurePnpmBody).toContain('Invoke-NpmCommand -Arguments ($installArgs + @("--force"))');
     expect(gitFilterSupportBody).toContain("git clone -h");
     expect(gitFilterSupportBody).toContain("filter");
     expect(transactionalCloneBody).toContain('$cloneArgs += "--filter=blob:none"');
@@ -1354,9 +1354,11 @@ describe("install.ps1 failure handling", () => {
     expect(gitInstallBody).not.toContain('"--frozen-lockfile"');
     expect(gitInstallBody).not.toContain('"--filter"');
     expect(gitInstallBody).not.toContain('"--ignore-scripts=true"');
-    expect(gitInstallBody).toContain('"--child-concurrency=$env:PNPM_CONFIG_CHILD_CONCURRENCY"');
     expect(gitInstallBody).toContain(
-      '"--network-concurrency=$env:PNPM_CONFIG_NETWORK_CONCURRENCY"',
+      '"--config.child-concurrency=$env:PNPM_CONFIG_CHILD_CONCURRENCY"',
+    );
+    expect(gitInstallBody).toContain(
+      '"--config.network-concurrency=$env:PNPM_CONFIG_NETWORK_CONCURRENCY"',
     );
     expect(gitInstallBody).toContain(
       '"--config.workspace-concurrency=$env:PNPM_CONFIG_WORKSPACE_CONCURRENCY"',

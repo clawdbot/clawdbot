@@ -330,7 +330,7 @@ NODE
       resolve_git_openclaw_ref() { printf 'main\\n'; }
       checkout_git_openclaw_ref() { :; }
       cleanup_legacy_submodules() { :; }
-      activate_repo_pnpm_version() { :; }
+      ensure_pnpm() { :; }
       git_install_lockfile_flag() { printf '%s\\n' '--frozen-lockfile'; }
       run_quiet_step() { return 0; }
       ensure_user_local_bin_on_path() {
@@ -490,7 +490,7 @@ NODE
       resolve_git_openclaw_ref() { printf 'main\\n'; }
       checkout_git_openclaw_ref() { [[ "$1" == "$target" && "$2" == "main" ]]; }
       cleanup_legacy_submodules() { [[ "$1" == "$target" ]]; }
-      activate_repo_pnpm_version() { [[ "$1" == "$target" ]]; }
+      ensure_pnpm() { [[ "$1" == "$target" ]]; }
       git_install_lockfile_flag() {
         [[ "$1" == "$target" ]]
         printf '%s\\n' '--frozen-lockfile'
@@ -961,6 +961,15 @@ NODE
       );
       expect(result.status).toBe(0);
       expect(readFileSync(args, "utf8").includes("--allow-scripts=openclaw")).toBe(expected);
+      const tool = runInstallShell(
+        [
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          `npm_lifecycle_allow_arg ${JSON.stringify(npm)} pnpm@12.0.0 "$PWD" pnpm@12.0.0`,
+        ].join("\n"),
+        { NPM_FAKE_VERSION: version },
+      );
+      expect(tool.status).toBe(0);
+      expect(tool.stdout).toBe(expected ? "--allow-scripts=pnpm@12.0.0" : "");
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
@@ -1560,7 +1569,7 @@ EOF
       resolve_git_openclaw_ref() { printf 'main\\n'; }
       checkout_git_openclaw_ref() { :; }
       cleanup_legacy_submodules() { :; }
-      activate_repo_pnpm_version() { :; }
+      ensure_pnpm() { :; }
       git_install_lockfile_flag() { printf '%s\\n' '--frozen-lockfile'; }
       run_quiet_step() {
         printf 'step:%s|%s\\n' "$1" "\${*:2}"
@@ -3143,7 +3152,7 @@ EOF
     chmodSync(join(home, ".bash_profile"), 0o000);
 
     try {
-      const script = `source "${SCRIPT_PATH}"; ensure_user_local_bin_on_path`;
+      const shellScript = `source "${SCRIPT_PATH}"; ensure_user_local_bin_on_path`;
       let result: ReturnType<typeof spawnSync>;
       if (process.getuid?.() === 0) {
         chmodSync(tmp, 0o755);
@@ -3152,7 +3161,7 @@ EOF
         chownSync(join(home, ".bash_login"), 65534, 65534);
         result = spawnSync(
           "setpriv",
-          ["--reuid=65534", "--regid=65534", "--clear-groups", "bash", "-c", script],
+          ["--reuid=65534", "--regid=65534", "--clear-groups", "bash", "-c", shellScript],
           {
             encoding: "utf8",
             env: {
@@ -3167,7 +3176,11 @@ EOF
           },
         );
       } else {
-        result = runInstallShell(script, { HOME: home, PATH: "/usr/bin:/bin", SHELL: "/bin/bash" });
+        result = runInstallShell(shellScript, {
+          HOME: home,
+          PATH: "/usr/bin:/bin",
+          SHELL: "/bin/bash",
+        });
       }
 
       expect(result.status).toBe(0);
@@ -3220,7 +3233,7 @@ EOF
     chmodSync(profile, 0o400);
 
     try {
-      const script = `source "${SCRIPT_PATH}"; persist_path_line_to_profile "$HOME/.profile" 'export PATH="$HOME/.local/bin:$PATH"'`;
+      const shellScript = `source "${SCRIPT_PATH}"; persist_path_line_to_profile "$HOME/.profile" 'export PATH="$HOME/.local/bin:$PATH"'`;
       let result: ReturnType<typeof spawnSync>;
       if (process.getuid?.() === 0) {
         chmodSync(tmp, 0o755);
@@ -3228,7 +3241,7 @@ EOF
         chownSync(profile, 65534, 65534);
         result = spawnSync(
           "setpriv",
-          ["--reuid=65534", "--regid=65534", "--clear-groups", "bash", "-c", script],
+          ["--reuid=65534", "--regid=65534", "--clear-groups", "bash", "-c", shellScript],
           {
             encoding: "utf8",
             env: {
@@ -3242,7 +3255,7 @@ EOF
           },
         );
       } else {
-        result = runInstallShell(script, { HOME: home, PATH: "/usr/bin:/bin" });
+        result = runInstallShell(shellScript, { HOME: home, PATH: "/usr/bin:/bin" });
       }
 
       expect(result.status).toBe(0);
@@ -3345,7 +3358,7 @@ EOF
 
     try {
       const result = runInstallShell(
-        `source "${SCRIPT_PATH}"; persist_shell_path_prepend "$HOME/.local/bin" '\$HOME/.local/bin'`,
+        `source "${SCRIPT_PATH}"; persist_shell_path_prepend "$HOME/.local/bin" '$HOME/.local/bin'`,
         { HOME: home, PATH: "/usr/bin:/bin", SHELL: "/bin/bash" },
       );
 
@@ -3953,9 +3966,9 @@ HOOK
   });
 
   it("aligns pnpm to the checked-out repo packageManager before installing", () => {
-    expect(script).toContain("activate_repo_pnpm_version()");
-    expect(script).toContain('corepack prepare "pnpm@${version}" --activate');
-    expect(script).toContain('activate_repo_pnpm_version "$repo_dir"');
+    expect(script).toContain("ensure_pnpm()");
+    expect(script).toContain('corepack prepare "$spec" --activate');
+    expect(script).toContain('ensure_pnpm "$repo_dir"');
   });
 
   it("preserves explicit pnpm prefer-offline settings", () => {
@@ -4042,7 +4055,7 @@ HOOK
           `cd ${JSON.stringify(process.cwd())}`,
           `source ${JSON.stringify(SCRIPT_PATH)}`,
           `cd ${JSON.stringify(outer)}`,
-          `activate_repo_pnpm_version ${JSON.stringify(repo)}`,
+          `ensure_pnpm ${JSON.stringify(repo)}`,
           'printf "cmd=%s\\n" "${PNPM_CMD[*]}"',
           `printf "run=%s\\n" "$(run_pnpm -C ${JSON.stringify(repo)} --version)"`,
         ].join("\n"),

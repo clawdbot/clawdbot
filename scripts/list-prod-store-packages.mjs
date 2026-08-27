@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { parse } from "yaml";
+import { pnpmLockfileDocuments } from "./lib/pnpm-lockfile-documents.mjs";
 const specs = new Set();
 const target = {
   cpu: process.arch,
@@ -79,24 +80,6 @@ function addSpec(lockfile, spec) {
     specs.add(spec);
   }
 }
-function parseListRoots() {
-  const input = fs.readFileSync(0, "utf8").trim();
-  if (!input) {
-    return [];
-  }
-  const parsed = JSON.parse(input);
-  return Array.isArray(parsed) ? parsed : [parsed];
-}
-function visitListNode(lockfile, node) {
-  for (const dep of Object.values(node.dependencies ?? {})) {
-    const name = dep.from || dep.name;
-    const spec = packageSpec(name, dep.version);
-    if (spec && dep.resolved?.startsWith("https://registry.npmjs.org/")) {
-      addSpec(lockfile, spec);
-    }
-    visitListNode(lockfile, dep);
-  }
-}
 function addImporterRoots(lockfile) {
   for (const importer of Object.values(lockfile?.importers ?? {})) {
     for (const deps of [importer.dependencies, importer.optionalDependencies]) {
@@ -108,10 +91,7 @@ function addImporterRoots(lockfile) {
 }
 function readLockfile() {
   const lockfilePath = path.join(process.cwd(), "pnpm-lock.yaml");
-  if (!fs.existsSync(lockfilePath)) {
-    return undefined;
-  }
-  return parse(fs.readFileSync(lockfilePath, "utf8"));
+  return parse(pnpmLockfileDocuments(fs.readFileSync(lockfilePath, "utf8")).dependencies);
 }
 function addSnapshotClosure(lockfile) {
   const snapshots = lockfile?.snapshots;
@@ -153,9 +133,6 @@ function addSnapshotClosure(lockfile) {
   }
 }
 const lockfile = readLockfile();
-for (const root of parseListRoots()) {
-  visitListNode(lockfile, root);
-}
 addImporterRoots(lockfile);
 addSnapshotClosure(lockfile);
 process.stdout.write([...specs].toSorted((a, b) => a.localeCompare(b)).join("\n"));

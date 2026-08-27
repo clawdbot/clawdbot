@@ -9,7 +9,6 @@ import { pathExists } from "./fs-safe.js";
 import { readPackageVersion } from "./package-json.js";
 import { movePathWithCopyFallback } from "./replace-file.js";
 import { trimLogTail } from "./restart-sentinel.js";
-import { parseSemver } from "./runtime-guard.js";
 import {
   PACKAGE_POST_INSTALL_DOCTOR_ADVISORY,
   UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
@@ -288,30 +287,8 @@ async function validatePnpmIsolatedUpdate(params: {
     };
   }
 
-  const versionProbe = await runPnpmPreflightProbe({ ...params, args: ["--version"] });
-  if (versionProbe.failedStep || !versionProbe.result) {
-    return {
-      globalBinDir: null,
-      failedStep: versionProbe.failedStep,
-    };
-  }
-  const reportedVersion = readPackageManagerProbeValue(versionProbe.result.stdout);
-  const version = parseSemver(reportedVersion);
-  if (version?.major !== owner.layoutVersion) {
-    return {
-      globalBinDir: null,
-      failedStep: {
-        name: "pnpm isolated install preflight",
-        command: `${params.installTarget.command} --version`,
-        cwd: expectedGlobalRoot,
-        durationMs: 0,
-        exitCode: 1,
-        stdoutTail: versionProbe.result.stdout || null,
-        stderrTail: `OpenClaw belongs to pnpm isolated layout v${owner.layoutVersion}, but the update command reports pnpm ${reportedVersion || "unknown"}. Use pnpm ${owner.layoutVersion} for this install or update it manually.`,
-      },
-    };
-  }
-
+  // The CLI major is independent of the global layout (pnpm 12 still uses v11).
+  // Ownership is established by the active project, reported root, and bin above.
   return {
     globalBinDir,
     failedStep: null,

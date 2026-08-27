@@ -1,6 +1,6 @@
 // List Prod Store Packages tests cover list prod store packages script behavior.
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "../helpers/temp-dir.js";
@@ -8,19 +8,10 @@ import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "../helpers/tem
 const scriptPath = resolve("scripts/list-prod-store-packages.mjs");
 const tempDirs: string[] = [];
 
-function runListProdStorePackages(input: unknown, cwd = process.cwd()) {
+function runListProdStorePackages(cwd: string) {
   return spawnSync(process.execPath, [scriptPath], {
     cwd,
     encoding: "utf8",
-    input: JSON.stringify(input),
-  });
-}
-
-function runListProdStorePackagesRaw(input: string, cwd = process.cwd()) {
-  return spawnSync(process.execPath, [scriptPath], {
-    cwd,
-    encoding: "utf8",
-    input,
   });
 }
 
@@ -29,91 +20,26 @@ describe("list-prod-store-packages", () => {
     cleanupTempDirs(tempDirs);
   });
 
-  it("accepts pnpm list array output", () => {
-    const cwd = makeTempRepoRoot(tempDirs, "openclaw-prod-store-packages-");
-    const result = runListProdStorePackages(
-      [
-        {
-          dependencies: {
-            sourceMap: {
-              from: "source-map",
-              resolved: "https://registry.npmjs.org/source-map/-/source-map-0.6.1.tgz",
-              version: "0.6.1",
-            },
-          },
-        },
-      ],
-      cwd,
-    );
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toBe("source-map@0.6.1");
-  });
-
-  it("accepts pnpm list object output", () => {
-    const cwd = makeTempRepoRoot(tempDirs, "openclaw-prod-store-packages-");
-    const result = runListProdStorePackages(
-      {
-        dependencies: {
-          litSignals: {
-            from: "@lit-labs/signals",
-            resolved: "https://registry.npmjs.org/@lit-labs/signals/-/signals-0.1.3.tgz",
-            version: "0.1.3",
-          },
-        },
-      },
-      cwd,
-    );
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toBe("@lit-labs/signals@0.1.3");
-  });
-
-  it("adds lockfile snapshot dependencies missing from pnpm list output", () => {
-    const cwd = makeTempRepoRoot(tempDirs, "openclaw-prod-store-packages-");
-    mkdirSync(join(cwd, "scripts"));
-    writeFileSync(
-      join(cwd, "pnpm-lock.yaml"),
-      [
-        "lockfileVersion: '10.0'",
-        "",
-        "packages:",
-        "  source-map-support@0.5.21:",
-        "    resolution: {integrity: sha512-test}",
-        "  source-map@0.6.1:",
-        "    resolution: {integrity: sha512-test}",
-        "",
-        "snapshots:",
-        "  source-map-support@0.5.21:",
-        "    dependencies:",
-        "      source-map: 0.6.1",
-        "  source-map@0.6.1: {}",
-        "",
-      ].join("\n"),
-    );
-    const result = runListProdStorePackages(
-      {
-        dependencies: {
-          sourceMapSupport: {
-            from: "source-map-support",
-            resolved:
-              "https://registry.npmjs.org/source-map-support/-/source-map-support-0.5.21.tgz",
-            version: "0.5.21",
-          },
-        },
-      },
-      cwd,
-    );
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toBe("source-map-support@0.5.21\nsource-map@0.6.1");
-  });
-
-  it("adds production importer dependency closures without pnpm list input", () => {
+  it.each([false, true])("adds production closures with toolchain metadata %s", (withToolchain) => {
     const cwd = makeTempRepoRoot(tempDirs, "openclaw-prod-store-packages-");
     writeFileSync(
       join(cwd, "pnpm-lock.yaml"),
       [
+        ...(withToolchain
+          ? [
+              "---",
+              "lockfileVersion: '9.0'",
+              "importers:",
+              "  .:",
+              "    packageManagerDependencies:",
+              "      pnpm: {specifier: 12.0.0, version: 12.0.0}",
+              "packages:",
+              "  pnpm@12.0.0: {}",
+              "snapshots:",
+              "  pnpm@12.0.0: {}",
+              "---",
+            ]
+          : []),
         "lockfileVersion: '10.0'",
         "",
         "importers:",
@@ -153,7 +79,7 @@ describe("list-prod-store-packages", () => {
         "",
       ].join("\n"),
     );
-    const result = runListProdStorePackagesRaw("", cwd);
+    const result = runListProdStorePackages(cwd);
 
     expect(result.status).toBe(0);
     expect(result.stdout.split("\n")).toEqual(
@@ -182,6 +108,11 @@ describe("list-prod-store-packages", () => {
       [
         "lockfileVersion: '10.0'",
         "",
+        "importers:",
+        "  .:",
+        "    dependencies:",
+        "      'native-wrapper':",
+        "        version: '1.0.0(peer@1.0.0)'",
         "packages:",
         "  native-wrapper@1.0.0:",
         "    resolution: {integrity: sha512-test}",
@@ -203,18 +134,7 @@ describe("list-prod-store-packages", () => {
         "",
       ].join("\n"),
     );
-    const result = runListProdStorePackages(
-      {
-        dependencies: {
-          nativeWrapper: {
-            from: "native-wrapper",
-            resolved: "https://registry.npmjs.org/native-wrapper/-/native-wrapper-1.0.0.tgz",
-            version: "1.0.0(peer@1.0.0)",
-          },
-        },
-      },
-      cwd,
-    );
+    const result = runListProdStorePackages(cwd);
 
     expect(result.status).toBe(0);
     const expectedPlatformPackage = [`native-wrapper-${process.platform}-${process.arch}@1.0.0`];
@@ -226,7 +146,7 @@ describe("list-prod-store-packages", () => {
     );
   });
 
-  it("does not add unrelated lockfile packages missing from pnpm list output", () => {
+  it("does not add packages outside production importer closures", () => {
     const cwd = makeTempRepoRoot(tempDirs, "openclaw-prod-store-packages-");
     writeFileSync(
       join(cwd, "pnpm-lock.yaml"),
@@ -241,7 +161,7 @@ describe("list-prod-store-packages", () => {
         "",
       ].join("\n"),
     );
-    const result = runListProdStorePackages({ dependencies: {} }, cwd);
+    const result = runListProdStorePackages(cwd);
 
     expect(result.status).toBe(0);
     expect(result.stdout).toBe("");
@@ -267,6 +187,11 @@ describe("list-prod-store-packages", () => {
       [
         "lockfileVersion: '10.0'",
         "",
+        "importers:",
+        "  .:",
+        "    dependencies:",
+        "      '@zed-industries/codex-acp':",
+        "        version: '0.15.0'",
         "packages:",
         "  '@zed-industries/codex-acp@0.15.0':",
         "    resolution: {integrity: sha512-test}",
@@ -290,18 +215,7 @@ describe("list-prod-store-packages", () => {
         "",
       ].join("\n"),
     );
-    const result = runListProdStorePackages(
-      {
-        dependencies: {
-          codexAcp: {
-            from: "@zed-industries/codex-acp",
-            resolved: "https://registry.npmjs.org/@zed-industries/codex-acp/-/codex-acp-0.15.0.tgz",
-            version: "0.15.0",
-          },
-        },
-      },
-      cwd,
-    );
+    const result = runListProdStorePackages(cwd);
 
     expect(result.status).toBe(0);
     expect(result.stdout.split("\n").filter(Boolean)).toEqual(
