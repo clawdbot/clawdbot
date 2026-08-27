@@ -37,6 +37,7 @@ import type { BoardFace, BoardVisibleChatDock } from "../../lib/board/settings.t
 import type { BoardTab } from "../../lib/board/types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import type { SwarmRosterHydrator } from "../../lib/sessions/swarm-roster.ts";
 import { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
@@ -198,7 +199,8 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected readonly taskSidebarTranscript = new ChatTranscriptController(this);
   protected readonly progressCard = new SessionProgressCardController(this, {
     gateway: () => this.context?.gateway,
-    sessionKey: () => this.state?.sessionKey,
+    sessionKey: () =>
+      this.state && !this.isCurrentSessionArchived(this.state) ? this.state.sessionKey : undefined,
   });
   private boardFullscreenController: FullscreenController | null = null;
   protected get boardFullscreen(): FullscreenController {
@@ -222,6 +224,15 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   });
   protected questionPrompts: QuestionPrompt[] = [];
   protected state: ChatPageHost | undefined;
+
+  protected isCurrentSessionArchived(state: ChatPageHost): boolean {
+    return (
+      state.selectedChatSessionArchived ||
+      state.sessionsResult?.sessions.some(
+        (row) => row.archived === true && areUiSessionKeysEquivalent(row.key, state.sessionKey),
+      ) === true
+    );
+  }
   /* Infinity until the first ResizeObserver tick so an unmeasured pane keeps
    * the wide side-by-side layout instead of flashing the stacked one. */
   @litState() protected paneWidth = Number.POSITIVE_INFINITY;
@@ -287,7 +298,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     if (renderedLayout.columns[0]?.panels.some((panel) => panel.slot === "companion")) {
       this.setSessionObserverVisibility(open);
     }
-    state.updateSidebarLayout(setSidebarOpen(renderedLayout, open));
+    this.commitSidebarLayout(setSidebarOpen(renderedLayout, open));
   }
 
   protected requestSessionRail(intent: "open" | "toggle"): void {
@@ -297,11 +308,11 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     }
     const visible = this.selectedSessionRailMode(state.sessionKey) === "expanded";
     if (intent === "toggle" && visible) {
-      state.updateSidebarLayout(closeSlot(state.sidebarLayout, "companion"));
+      this.commitSidebarLayout(closeSlot(state.sidebarLayout, "companion"));
       this.setSessionObserverVisibility(false);
       return;
     }
-    state.updateSidebarLayout(openSlot(state.sidebarLayout, "companion"));
+    this.commitSidebarLayout(openSlot(state.sidebarLayout, "companion"));
     this.setSessionObserverVisibility(true);
   }
 
@@ -487,6 +498,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   }
 
   protected abstract refreshSessionPullRequests(options?: { refresh?: boolean }): Promise<void>;
+  protected abstract commitSidebarLayout(layout: SidebarLayout): void;
   protected abstract refreshSwarmRoster(): void;
   protected abstract resolveBoardProvider(): BoardProvider;
   protected abstract handleBoardCommand(event: BoardCommandEvent): void;

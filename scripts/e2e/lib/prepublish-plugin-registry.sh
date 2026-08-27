@@ -1,5 +1,33 @@
 #!/usr/bin/env bash
 
+openclaw_prepublish_plugin_registry_configure_docker_args() {
+  local registry_dir="$1"
+  local resolved_registry_dir
+  resolved_registry_dir="$(cd "$registry_dir" && pwd)"
+  local manifest="$resolved_registry_dir/prepublish-plugin-registry.json"
+  if [ ! -f "$manifest" ]; then
+    echo "Prepublish plugin registry manifest is missing." >&2
+    return 1
+  fi
+
+  local source_sha="${OPENCLAW_DOCKER_E2E_SELECTED_SHA:-}"
+  local candidate_version="${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION:-}"
+  local manifest_sha256="${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256:-}"
+  source_sha="${source_sha:-$(node -e 'process.stdout.write(require(process.argv[1]).sourceSha)' "$manifest")}"
+  candidate_version="${candidate_version:-$(node -e 'process.stdout.write(require(process.argv[1]).candidateVersion)' "$manifest")}"
+  if [ -z "$manifest_sha256" ]; then
+    manifest_sha256="$(node -e 'const fs=require("node:fs"),crypto=require("node:crypto");process.stdout.write(crypto.createHash("sha256").update(fs.readFileSync(process.argv[1])).digest("hex"))' "$manifest")"
+  fi
+
+  OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DOCKER_ARGS=(
+    -e OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR=/tmp/openclaw-prepublish-plugin-registry
+    -e OPENCLAW_DOCKER_E2E_SELECTED_SHA="$source_sha"
+    -e OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION="$candidate_version"
+    -e OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256="$manifest_sha256"
+    -v "$resolved_registry_dir:/tmp/openclaw-prepublish-plugin-registry:ro"
+  )
+}
+
 openclaw_prepublish_plugin_registry_start() {
   local artifact_dir="$1" source_sha="$2" candidate_version="$3"
   local manifest_sha256="$4" registry_root="$5" pid_variable="$6"
@@ -89,4 +117,20 @@ NODE
   export NPM_CONFIG_REGISTRY="http://127.0.0.1:$(cat "$port_file")"
   export npm_config_registry="$NPM_CONFIG_REGISTRY"
   printf -v "$pid_variable" "%s" "$server_pid"
+}
+
+openclaw_prepublish_plugin_registry_start_mounted() {
+  local registry_root="$1" pid_variable="$2" required_packages_json="$3"
+  shift 3
+  [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ] || return 0
+
+  OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_REQUIRED_PACKAGES_JSON="$required_packages_json" \
+    openclaw_prepublish_plugin_registry_start \
+    "$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR" \
+    "${OPENCLAW_DOCKER_E2E_SELECTED_SHA:?missing selected SHA}" \
+    "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION:?missing candidate version}" \
+    "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256:?missing manifest SHA-256}" \
+    "$registry_root" \
+    "$pid_variable" \
+    "$@"
 }

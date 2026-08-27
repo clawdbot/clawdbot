@@ -703,7 +703,6 @@ describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875
       ]),
       sessions: {
         reconcileRunTerminal,
-        setModelOverride: vi.fn(),
       },
     });
 
@@ -738,7 +737,6 @@ describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875
       sessionsResult: null,
       sessions: {
         reconcileRunTerminal,
-        setModelOverride: vi.fn(),
       },
     });
 

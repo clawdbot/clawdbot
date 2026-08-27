@@ -198,7 +198,7 @@ export const usersHandlers: GatewayRequestHandlers = {
       respond(false, undefined, profileError(error));
     }
   },
-  "users.prefs.set": ({ client, params, respond }) => {
+  "users.prefs.set": ({ client, context, params, respond }) => {
     if (!validateUsersPrefsSetParams(params)) {
       respond(
         false,
@@ -254,6 +254,25 @@ export const usersHandlers: GatewayRequestHandlers = {
         return;
       }
       respond(true, { status: "ok" }, undefined);
+      const keys = Object.keys(params.entries);
+      if (keys.length === 0) {
+        return;
+      }
+      const connIds = context.getClientConnIds?.((connectedClient) => {
+        const connectedProfileId = connectedClient.authenticatedUserProfile?.profileId;
+        return Boolean(
+          connectedProfileId &&
+          (connectedProfileId === canonicalProfileId ||
+            resolveUserProfileId(connectedProfileId) === canonicalProfileId),
+        );
+      });
+      if (connIds?.size) {
+        context.broadcastToConnIds(
+          "users.prefs.changed",
+          { profileId: canonicalProfileId, keys },
+          connIds,
+        );
+      }
     } catch (error) {
       respond(false, undefined, profileError(error));
     }

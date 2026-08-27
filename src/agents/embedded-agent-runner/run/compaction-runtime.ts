@@ -103,6 +103,7 @@ export async function compactEmbeddedRunForRecovery(
       agentDir: input.agentDir,
       config: runParams.config,
       toolOverrides: runParams.toolOverrides,
+      toolsAllow: runParams.toolsAllow,
       skillsSnapshot: runParams.skillsSnapshot,
       senderId: runParams.senderId,
       provider: input.provider,

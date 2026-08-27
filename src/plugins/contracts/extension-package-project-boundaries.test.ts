@@ -63,6 +63,8 @@ const MEMORY_HOST_SDK_EXPORTS = [
   "./status",
 ] as const;
 const MEMORY_HOST_SDK_ALLOWED_CORE_BRIDGE_FILES = [
+  // Type-only alias to the canonical embedding provider contract.
+  "packages/memory-host-sdk/src/host/embeddings.types.ts",
   "packages/memory-host-sdk/src/host/error-utils.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime-auth.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime-kysely.ts",

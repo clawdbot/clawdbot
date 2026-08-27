@@ -538,7 +538,7 @@ async function hydrateAttachmentPayload(params: {
   } else if (!filename) {
     params.args.filename = inferAttachmentFilename({
       mediaHint: mediaSource,
-      contentType: contentTypeParam ?? undefined,
+      contentType: normalized.contentType,
     });
   }
 }

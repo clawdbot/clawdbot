@@ -22,6 +22,7 @@ import {
 import { applyMemoryConsolidationPlan, consolidateMemory } from "./dreaming-consolidation.js";
 import { compactMemoryForBudget, DEFAULT_MEMORY_FILE_MAX_CHARS } from "./memory-budget.js";
 import { reconcileMemoryEntryOrigins } from "./memory-entry-origins.js";
+import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import {
   buildPromotionMarker,
   hashMemoryContent,
@@ -37,7 +38,7 @@ import {
 } from "./short-term-promotion-metadata.js";
 import { resolveShortTermSourcePathCandidates } from "./short-term-promotion-record.js";
 import { rehydratePromotionCandidate } from "./short-term-promotion-rehydrate.js";
-import { readStore, withShortTermLock, writeStore } from "./short-term-promotion-store.js";
+import { readStore, writeStore } from "./short-term-promotion-store.js";
 import {
   DEFAULT_PROMOTION_MIN_RECALL_COUNT,
   DEFAULT_PROMOTION_MIN_SCORE,
@@ -263,7 +264,9 @@ export async function applyShortTermPromotions(
       entry.provenance,
     ]),
   );
-  const store = await withShortTermLock(workspaceDir, async () => readStore(workspaceDir, nowIso));
+  const store = await withMemoryWorkspaceLock(workspaceDir, async () =>
+    readStore(workspaceDir, nowIso),
+  );
   const currentCandidates = options.candidates.map((candidate) => {
     const entry = store.entries[candidate.key];
     const authoritative = entry
@@ -418,7 +421,7 @@ export async function applyShortTermPromotions(
   let rewriteSkippedReason: string | undefined;
   const promotionLockTarget = await resolveMemoryPromotionLockTarget(workspaceDir);
   await withFileLock(promotionLockTarget, MEMORY_WRITE_LOCK_OPTIONS, async () => {
-    await withShortTermLock(workspaceDir, async () => {
+    await withMemoryWorkspaceLock(workspaceDir, async () => {
       const latestStore = await readStore(workspaceDir, nowIso);
       const authoritativeSelected: PromotionCandidate[] = [];
       for (const candidate of rehydratedSelected) {
@@ -630,19 +633,22 @@ export async function applyShortTermPromotions(
         });
       }
       committedCandidates = [...successfulCandidates.values()];
+      // Publish quotes before releasing the deletion boundary; otherwise a
+      // completed forget can be followed by a stale consolidation highlight.
+      if (consolidationResult) {
+        await appendConsolidationSummary({
+          workspaceDir,
+          result: consolidationResult,
+          nowMs,
+        }).catch((error: unknown) => {
+          options.consolidation?.logger.warn(
+            `memory-core: MEMORY.md was consolidated but DREAMS.md summary failed: ${String(error)}`,
+          );
+        });
+      }
     });
   });
-  if (consolidationResult) {
-    await appendConsolidationSummary({
-      workspaceDir,
-      result: consolidationResult,
-      nowMs,
-    }).catch((error: unknown) => {
-      options.consolidation?.logger.warn(
-        `memory-core: MEMORY.md was consolidated but DREAMS.md summary failed: ${String(error)}`,
-      );
-    });
-  } else if (rewriteSkippedReason) {
+  if (!consolidationResult && rewriteSkippedReason) {
     await appendConsolidationSkippedSummary({
       workspaceDir,
       nowMs,

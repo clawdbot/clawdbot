@@ -22,6 +22,7 @@ import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import type { QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
 import { shellQuote } from "./shell-quote.js";
 import {
+  formatQaScenarioCommandOutput,
   runQaScenarioCommandLifecycle,
   type QaScenarioCommandExecution,
   type QaScenarioCommandResult,
@@ -293,12 +294,7 @@ async function runScenarioCommandSteps(params: {
           : {}),
         timeoutMs,
       });
-      if (result.stdout) {
-        logChunks.push(result.stdout);
-      }
-      if (result.stderr) {
-        logChunks.push(result.stderr);
-      }
+      logChunks.push(formatQaScenarioCommandOutput(result));
       if (result.failureMessage || result.exitCode !== 0 || result.signal) {
         failureMessage =
           result.failureMessage ??

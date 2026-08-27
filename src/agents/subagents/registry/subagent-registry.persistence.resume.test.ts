@@ -40,6 +40,57 @@ function activateRegistry() {
   mod.activateSubagentRegistry(() => ({ recoveryRuntime }) as never);
 }
 
+function createOrphanedRequiredDelivery(
+  status: "pending" | "suspended" | "in_progress",
+): SubagentRunRecord {
+  const now = Date.now();
+  const runId = `run-orphan-${status}-delivery`;
+  const childSessionKey = `agent:main:subagent:orphan-${status}-delivery`;
+  const terminalReply = { disposition: "visible" as const, text: "durable final reply" };
+  return {
+    runId,
+    childSessionKey,
+    requesterSessionKey: "agent:main:main",
+    requesterDisplayKey: "main",
+    task: "deliver after restart",
+    cleanup: "delete",
+    createdAt: now - 100,
+    expectsCompletionMessage: true,
+    cleanupHandled: false,
+    execution: {
+      status: "terminal",
+      startedAt: now - 50,
+      endedAt: now,
+      outcome: { status: "ok" },
+    },
+    completion: {
+      required: true,
+      resultText: "canonical final reply",
+      capturedAt: now,
+      terminalReply,
+    },
+    delivery: {
+      status,
+      ...(status === "suspended" ? { suspendedAt: now, suspendedReason: "expiry" as const } : {}),
+      ...(status === "in_progress"
+        ? { disposition: "session_queued" as const, queueId: "queue-1" }
+        : {}),
+      payload: {
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        childSessionKey,
+        childRunId: runId,
+        task: "deliver after restart",
+        startedAt: now - 50,
+        endedAt: now,
+        outcome: { status: "ok" },
+        expectsCompletionMessage: true,
+        terminalReply,
+      },
+    },
+  };
+}
+
 describe("subagent registry persistence resume", () => {
   let tempStateDir: string | null = null;
 
@@ -197,6 +248,68 @@ describe("subagent registry persistence resume", () => {
         expect.objectContaining({ childRunId: runId, outcome: { status } }),
       );
       expect(mod.getSubagentRunByRunId(runId)?.execution.outcome).toEqual({ status });
+    });
+  });
+
+  it("replays one required completion after restart without the child session", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+    const stateDir = tempStateDir;
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const run = createOrphanedRequiredDelivery("pending");
+      saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+
+      mod.initSubagentRegistry();
+      activateRegistry();
+      await vi.waitFor(
+        () => {
+          expect(announceSpy).toHaveBeenCalledOnce();
+          expect(loadSubagentRegistryFromSqlite().has(run.runId)).toBe(false);
+        },
+        { timeout: 5_000, interval: 10 },
+      );
+      expect(announceSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          childSessionKey: run.childSessionKey,
+          childRunId: run.runId,
+          requesterSessionKey: "agent:main:main",
+          roundOneReply: "canonical final reply",
+          terminalReply: run.completion?.terminalReply,
+          outcome: { status: "ok" },
+        }),
+      );
+
+      mod.resetSubagentRegistryForTests({ persist: false });
+      mod.initSubagentRegistry();
+      activateRegistry();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(announceSpy).toHaveBeenCalledOnce();
+    });
+  });
+
+  it.each([
+    { status: "suspended" as const, disposition: undefined, queueId: undefined },
+    { status: "in_progress" as const, disposition: "session_queued" as const, queueId: "queue-1" },
+  ])("retains $status required delivery with its owner after restart", async (expected) => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+    const stateDir = tempStateDir;
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const run = createOrphanedRequiredDelivery(expected.status);
+      saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+
+      mod.initSubagentRegistry();
+      activateRegistry();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+
+      expect(announceSpy).not.toHaveBeenCalled();
+      expect(loadSubagentRegistryFromSqlite().get(run.runId)?.delivery).toMatchObject({
+        status: expected.status,
+        ...(expected.disposition ? { disposition: expected.disposition } : {}),
+        ...(expected.queueId ? { queueId: expected.queueId } : {}),
+      });
     });
   });
 

@@ -5582,6 +5582,35 @@ Update and merge these partial structured summaries.`,
     );
   });
 
+  it.each([
+    {
+      fixture: "single",
+      expectedQuestionId: "deploy_target",
+      expectedMultiSelect: undefined,
+    },
+    { fixture: "multi", expectedQuestionId: "checks", expectedMultiSelect: true },
+  ])("plans the $fixture ask_user Telegram fixture", async (entry) => {
+    const server = await startMockServer();
+    const response = await expectNonStreamingResponses(server, {
+      input: [
+        makeUserInput(
+          `tool search qa check target=ask_user ask_user_fixture=${entry.fixture}. Ask the question.`,
+        ),
+      ],
+    });
+
+    const call = outputItem(await response.json());
+    const args = JSON.parse(String(call.arguments)) as {
+      questions?: Array<{ id?: string; multiSelect?: boolean }>;
+    };
+    expect(call.name).toBe("ask_user");
+    expect(args.questions).toHaveLength(1);
+    expect(args.questions?.[0]).toMatchObject({
+      id: entry.expectedQuestionId,
+      ...(entry.expectedMultiSelect ? { multiSelect: true } : {}),
+    });
+  });
+
   it("plans QA tool-search failure calls with denied-input args", async () => {
     const server = await startMockServer();
 

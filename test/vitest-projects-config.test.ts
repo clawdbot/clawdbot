@@ -50,7 +50,10 @@ import unitFastRootConfig from "./vitest/vitest.unit-fast-root.config.ts";
 import { createUnitFastVitestConfig } from "./vitest/vitest.unit-fast.config.ts";
 
 const patternFiles = createPatternFileHelper("openclaw-vitest-projects-config-");
-const scopedGatewayMethodsIsolatedTestFiles = ["server-methods/agent.test.ts"];
+const scopedGatewayMethodsIsolatedTestFiles = [
+  "server-methods/agent.test.ts",
+  "server-methods/board.runtime-boundaries.test.ts",
+];
 
 function requireTestConfig<T extends { test?: unknown }>(config: T): NonNullable<T["test"]> {
   if (!config.test) {
@@ -108,7 +111,9 @@ describe("projects vitest config", () => {
     expect(serverIsolatedConfig.runner).toBeUndefined();
     expect(serverIsolatedConfig.include).toEqual(gatewayServerIsolatedTestFiles);
     expect(methodsConfig.exclude).toContain("server-methods/agent.test.ts");
+    expect(methodsConfig.exclude).toContain("server-methods/board.runtime-boundaries.test.ts");
     expect(gatewayFallback.exclude).toContain("server-methods/agent.test.ts");
+    expect(gatewayFallback.exclude).toContain("server-methods/board.runtime-boundaries.test.ts");
     expect(gatewayFallback.exclude).toContain("server.sessions.compaction-read-errors.test.ts");
   });
 

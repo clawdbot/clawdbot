@@ -278,6 +278,8 @@ export type DiscordAccountConfig = Omit<
 > &
   ChannelBotInteractionConfig &
   ChannelReactionConfig<never, never, string> & {
+    /** Post a room-specific introduction when joining a group. Default: true. */
+    joinIntro?: boolean;
     /** Override native command registration for Discord (bool or "auto"). */
     commands?: ProviderCommandsConfig;
     token?: SecretInput;

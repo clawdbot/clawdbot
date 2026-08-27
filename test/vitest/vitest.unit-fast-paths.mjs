@@ -174,6 +174,8 @@ const ownerRoutedUnitTestPatterns = [
   "src/agents/embedded-agent-runner/run.session-permissions.test.ts",
   "src/agents/embedded-agent-runner/run.shared-integration.test.ts",
   "src/auto-reply/reply/dispatch-from-config.test.ts",
+  "src/auto-reply/reply/dispatch-from-config.delivery.test.ts",
+  "src/auto-reply/reply/dispatch-from-config.lifecycle.test.ts",
 ];
 const broadUnitFastCandidateSkipGlobs = [
   "**/*.e2e.test.ts",

@@ -85,8 +85,13 @@ const policyTestWatches = [
   },
   {
     testFile: "ui/src/styles/base-theme-tokens.node.test.ts",
-    ownerGlobs: ["ui/src/**/*.css"],
-    watchGlobs: ["ui/src/**/*.css", "ui/src/**/*.ts"],
+    ownerGlobs: ["ui/src/**/*.css", "ui/public/themes/*.css"],
+    watchGlobs: ["ui/src/**/*.css", "ui/src/**/*.ts", "ui/public/themes/*.css"],
+  },
+  {
+    testFile: "ui/src/styles/base-theme-contrast.node.test.ts",
+    ownerGlobs: ["ui/src/styles/base.css", "ui/public/themes/*.css"],
+    watchGlobs: ["ui/src/styles/base.css", "ui/public/themes/*.css"],
   },
   {
     testFile: "ui/src/styles/cursor-policy.node.test.ts",
@@ -284,7 +289,10 @@ const COMPACT_GROUP_SECONDS_HINTS = new Map<string, number>([
   ["auto-reply-reply-commands-1", 28],
   ["auto-reply-reply-commands-2", 9],
   ["auto-reply-reply-commands-3", 24],
-  ["auto-reply-reply-dispatch", 73],
+  ["auto-reply-reply-dispatch", 15],
+  ["auto-reply-reply-dispatch-core", 35],
+  ["auto-reply-reply-dispatch-delivery", 32],
+  ["auto-reply-reply-dispatch-lifecycle", 8],
   ["auto-reply-reply-session", 34],
   ["auto-reply-reply-state-routing", 63],
   // Apportioned from the split infra-process trio (see below).
@@ -390,7 +398,10 @@ const COMPACT_LARGE_GROUP_STRIPE_SECONDS_HINTS = new Map<string, number>([
   ["auto-reply-reply-commands-1", 34],
   ["auto-reply-reply-commands-2", 11],
   ["auto-reply-reply-commands-3", 28],
-  ["auto-reply-reply-dispatch", 86],
+  ["auto-reply-reply-dispatch", 18],
+  ["auto-reply-reply-dispatch-core", 42],
+  ["auto-reply-reply-dispatch-delivery", 38],
+  ["auto-reply-reply-dispatch-lifecycle", 10],
   ["core-runtime-media-ui-1", 93],
   ["core-runtime-media-ui-2", 93],
   ["core-runtime-media-ui-3", 93],
@@ -477,7 +488,10 @@ const COMPACT_GITHUB_GROUP_SECONDS_HINTS = new Map<string, number>([
   ["auto-reply-reply-commands-1", 53],
   ["auto-reply-reply-commands-2", 26],
   ["auto-reply-reply-commands-3", 48],
-  ["auto-reply-reply-dispatch", 138],
+  ["auto-reply-reply-dispatch", 30],
+  ["auto-reply-reply-dispatch-core", 75],
+  ["auto-reply-reply-dispatch-delivery", 70],
+  ["auto-reply-reply-dispatch-lifecycle", 20],
   ["auto-reply-reply-session", 79],
   ["auto-reply-reply-state-routing", 34],
   // Measured per config inside run 31814517685's combined 175s infra wall.
@@ -787,6 +801,9 @@ const KEEP_LARGE_NODE_TEST_RUNNER = new Set([
   "agentic-gateway-core-3",
   "agentic-gateway-methods",
   "auto-reply-reply-dispatch",
+  "auto-reply-reply-dispatch-core",
+  "auto-reply-reply-dispatch-delivery",
+  "auto-reply-reply-dispatch-lifecycle",
   // The commands stripes and security suite are import-bound (30-45s of
   // module-graph import per file); the 8 vCPU class with a higher Vitest
   // worker budget cuts their wall clock roughly linearly.
@@ -816,12 +833,25 @@ function createAutoReplyReplySplitShards(): NodeTestSplitShard[] {
     "auto-reply-reply-agent-runner": [] as string[],
     "auto-reply-reply-commands": [] as string[],
     "auto-reply-reply-dispatch": [] as string[],
+    "auto-reply-reply-dispatch-core": [] as string[],
+    "auto-reply-reply-dispatch-delivery": [] as string[],
+    "auto-reply-reply-dispatch-lifecycle": [] as string[],
     "auto-reply-reply-session": [] as string[],
     "auto-reply-reply-state-routing": [] as string[],
   };
+  const dispatchEntrypoints = new Map<string, keyof typeof groups>([
+    ["dispatch-from-config.test.ts", "auto-reply-reply-dispatch-core"],
+    ["dispatch-from-config.delivery.test.ts", "auto-reply-reply-dispatch-delivery"],
+    ["dispatch-from-config.lifecycle.test.ts", "auto-reply-reply-dispatch-lifecycle"],
+  ]);
 
   for (const file of files) {
     const name = relative("src/auto-reply/reply", file).replaceAll("\\", "/");
+    const dispatchEntrypointGroup = dispatchEntrypoints.get(name);
+    if (dispatchEntrypointGroup) {
+      groups[dispatchEntrypointGroup].push(file);
+      continue;
+    }
     if (
       name.startsWith("agent-runner") ||
       name.startsWith("acp-") ||

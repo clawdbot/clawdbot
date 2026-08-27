@@ -545,12 +545,13 @@ jobs:
           OPENCLAW_CI_CHANGED_PATHS_JSON: ${{ steps.changed_scope.outputs.changed_paths_json || 'null' }}
           OPENCLAW_CI_CHECKOUT_REVISION: ${{ steps.checkout_ref.outputs.sha }}
           OPENCLAW_CI_HISTORICAL_TARGET: ${{ steps.historical_target.outputs.eligible || 'false' }}
+          OPENCLAW_CI_RELEASE_GATE: ${{ inputs.release_gate && 'true' || 'false' }}
           OPENCLAW_CI_RELEASE_CANDIDATE_TARGET: ${{ steps.release_candidate_target.outputs.eligible || 'false' }}
           OPENCLAW_CI_TARGET_CONTEXT_TARGET: ${{ steps.target_context_target.outputs.eligible || 'false' }}
           OPENCLAW_CI_WORKFLOW_REVISION: ${{ github.sha }}
           OPENCLAW_CI_REPOSITORY: ${{ github.repository }}
           OPENCLAW_CI_EVENT_NAME: ${{ github.event_name }}
-          OPENCLAW_CI_RUNNER_BACKEND: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND }}
+          OPENCLAW_CI_RUNNER_BACKEND: ${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)) && 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND }}
         run: |
           manifest_node_args=()
           if [ "${GITHUB_EVENT_NAME:-}" = "workflow_dispatch" ]; then
@@ -668,6 +669,7 @@ jobs:
           })();
           const docsOnly = parseBoolean(process.env.OPENCLAW_CI_DOCS_ONLY);
           const docsChanged = parseBoolean(process.env.OPENCLAW_CI_DOCS_CHANGED);
+          const releaseGate = parseBoolean(process.env.OPENCLAW_CI_RELEASE_GATE);
           const runNode = parseBoolean(process.env.OPENCLAW_CI_RUN_NODE) && !docsOnly;
           const runNodeFastOnly =
             runNode && parseBoolean(process.env.OPENCLAW_CI_RUN_NODE_FAST_ONLY);
@@ -754,6 +756,24 @@ jobs:
                 task: "ci-routing",
               });
             }
+          }
+          if (releaseGate) {
+            checksFastCoreTasks.push(
+              ...Array.from({ length: 5 }, (_, index) => {
+                const stripe = index + 1;
+                return {
+                  check_name: `checks-fast-release-lint-core-${stripe}`,
+                  runtime: "node",
+                  stripe,
+                  task: `release-lint-core-${stripe}`,
+                };
+              }),
+              {
+                check_name: "checks-fast-release-lint-extensions",
+                runtime: "node",
+                task: "release-lint-extensions",
+              },
+            );
           }
 
           const compactPullRequest = isCanonicalRepository && eventName === "pull_request";
@@ -1930,11 +1950,11 @@ jobs:
       max-parallel: 12
       matrix: ${{ fromJson(needs.preflight.outputs.checks_fast_core_matrix) }}
     env:
-      CHECKOUT_BASE_SHA: ${{ matrix.task == 'baseline-ratchets' && needs.preflight.outputs.diff_base_revision || '' }}
+      CHECKOUT_BASE_SHA: ${{ (matrix.task == 'baseline-ratchets' || startsWith(matrix.task, 'release-lint-')) && needs.preflight.outputs.diff_base_revision || '' }}
     steps:
       - *linux_node_checkout_step
       - name: Prepare release-gate ratchet merge tree
-        if: matrix.task == 'baseline-ratchets' && github.event_name == 'workflow_dispatch' && inputs.release_gate
+        if: (matrix.task == 'baseline-ratchets' || startsWith(matrix.task, 'release-lint-')) && github.event_name == 'workflow_dispatch' && inputs.release_gate
         env:
           GH_TOKEN: ${{ github.token }}
           PULL_REQUEST_NUMBER: ${{ inputs.pull_request_number }}
@@ -1976,7 +1996,6 @@ jobs:
           fi
           git checkout --detach "$merge_sha"
           echo "RATCHET_BASE_REF=${frozen_base_sha}" >> "$GITHUB_ENV"
-          echo "RATCHET_RELEASE_MERGE_TREE=true" >> "$GITHUB_ENV"
 
       - name: Setup Node environment
         uses: ./.ci-harness/.github/actions/setup-node-env
@@ -2046,9 +2065,14 @@ jobs:
               fi
               pnpm check:max-lines-ratchet --base "$base_ref"
               pnpm check:assertion-safety --base "$base_ref"
-              if [[ "${RATCHET_RELEASE_MERGE_TREE:-}" == "true" ]]; then
-                node --import tsx scripts/run-oxlint-shards.mts --only=core --only=extensions --threads=1
-              fi
+              ;;
+            release-lint-core-*)
+              stripe="${TASK#release-lint-core-}"
+              node --import tsx scripts/run-oxlint-shards.mts \
+                --only=core --split-core --core-stripe="${stripe}/5" --threads=1
+              ;;
+            release-lint-extensions)
+              node --import tsx scripts/run-oxlint-shards.mts --only=extensions --threads=1
               ;;
             bun-launcher)
               OPENCLAW_E2E_SKIP_BUILD=1 OPENCLAW_TEST_BUN_LAUNCHER=1 pnpm test test/openclaw-launcher.e2e.test.ts
@@ -2396,7 +2420,7 @@ jobs:
         # Keep the runner toolchain owned by the workflow; cache publication is gated separately.
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.6"
+          go-version: "1.26.7"
           cache: false
 
       - name: Resolve docs i18n Go cache
@@ -2430,7 +2454,7 @@ jobs:
 
       - name: Verify docs i18n Go toolchain
         if: matrix.requires_go == true
-        run: test "$(go env GOVERSION)" = "go1.26.6"
+        run: test "$(go env GOVERSION)" = "go1.26.7"
 
       - name: Configure Node test resources
         # Scale the in-process Vitest worker budget with the cores the job
@@ -2453,6 +2477,9 @@ jobs:
             workers=4
           else
             workers=3
+          fi
+          if [ "$workers" -gt "$cores" ]; then
+            workers="$cores"
           fi
           echo "detected cores=$cores plan_concurrency=${SHARD_PLAN_CONCURRENCY:-default} predicted_test_seconds=${PREDICTED_TEST_SECONDS:-unknown} -> workers=$workers"
           echo "OPENCLAW_VITEST_MAX_WORKERS=$workers" >> "$GITHUB_ENV"
@@ -2636,9 +2663,10 @@ jobs:
           FROZEN_TARGET: ${{ needs.preflight.outputs.frozen_target }}
           HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
           FORMAT_CHECK: ${{ needs.preflight.outputs.run_format_check }}
+          RELEASE_GATE: ${{ inputs.release_gate && 'true' || 'false' }}
           RUN_CONTROL_UI_I18N: ${{ needs.preflight.outputs.run_control_ui_i18n }}
           RUN_UI_TESTS: ${{ needs.preflight.outputs.run_ui_tests }}
-          RUNNER_BACKEND: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)) && 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND }}
+          RUNNER_BACKEND: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)) && 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND }}
           OPENCLAW_LOCAL_CHECK: "0"
           TASK: ${{ matrix.task }}
           PR_BASE_SHA: ${{ github.event_name == 'pull_request' && needs.preflight.outputs.diff_base_revision || '' }}
@@ -2735,9 +2763,12 @@ jobs:
               lint_args=(--threads=8)
               if [ "$RUNNER_BACKEND" = "github" ]; then
                 # Five dedicated hosted jobs own the aggregated core Programs. Keep
-                # extension preparation, optional UI checks, and formatting in
-                # this sixth lane so each 4-core runner stays below ~6m.
+                # extension preparation in this sixth lane except when the exact
+                # merge-tree release lint job already owns it.
                 lint_args=(--only=extensions --only=scripts --threads=1)
+                if [ "$RELEASE_GATE" = "true" ]; then
+                  lint_args=(--only=scripts --threads=1)
+                fi
                 export GOMAXPROCS=2
               elif [ "$(nproc)" -lt 8 ]; then
                 # Fork PRs build each semantic Program once. Bound both oxlint
@@ -2875,7 +2906,7 @@ jobs:
       contents: read
     name: check-lint-core-${{ matrix.stripe }}
     needs: [preflight]
-    if: ${{ needs.preflight.outputs.run_check == 'true' && (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)) }}
+    if: ${{ needs.preflight.outputs.run_check == 'true' && (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     strategy:
@@ -2910,7 +2941,7 @@ jobs:
       contents: read
     name: check-test-types-core-${{ matrix.stripe }}
     needs: [preflight]
-    if: ${{ needs.preflight.outputs.run_check == 'true' && (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)) }}
+    if: ${{ needs.preflight.outputs.run_check == 'true' && (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)) }}
     # Measured 232-269s per stripe on hosted 4-core; hybrid attempt 1 rides
     # the 8 vCPU class like the compact large rows, retries stay hosted.
     runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}

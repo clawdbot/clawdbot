@@ -152,6 +152,10 @@ export const SessionRowSchema = Type.Object(
     estimatedCostUsd: Type.Optional(Type.Number()),
     model: Type.Optional(Type.String()),
     modelProvider: Type.Optional(Type.String()),
+    /** Persisted override provenance; null means inherited, omission means not projected. */
+    modelOverrideSource: Type.Optional(
+      Type.Union([Type.Literal("user"), Type.Literal("auto"), Type.Null()]),
+    ),
     toolOverrides: Type.Optional(SessionToolOverridesSchema),
   },
   { additionalProperties: true },

@@ -327,17 +327,6 @@
               "additionalProperties": true,
               "description": "Job fields. action=\"add\": full job. action=\"update\": partial patch — only supplied fields change; null clears.",
               "properties": {
-                "agentId": {
-                  "anyOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ],
-                  "description": "Agent id, or null to clear it"
-                },
                 "declarationKey": {
                   "description": "Idempotent declaration key (add only).",
                   "maxLength": 200,

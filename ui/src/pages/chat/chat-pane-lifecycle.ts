@@ -62,6 +62,7 @@ import { refreshPageChat, retireChatMetadataRequests } from "./chat-state-refres
 import { resetChatViewState } from "./chat-view-state.ts";
 import { dismissConfirmedActionPopovers } from "./components/chat-message.ts";
 import { clearChatModelSearchOnEscape } from "./components/chat-model-picker.ts";
+import { dismissThreadPortals } from "./components/chat-thread-interactions.ts";
 import { WIDGET_PROMPT_EVENT, type WidgetPromptEventDetail } from "./components/chat-tool-cards.ts";
 import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "./composer-persistence.ts";
 import { exportChatMarkdown } from "./export.ts";
@@ -92,9 +93,11 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     },
     pending: this.pendingPanelToggleRequests,
     requestUpdate: () => this.requestUpdate(),
+    updateSidebarLayout: (layout) => this.commitSidebarLayout(layout),
   });
 
   private chatRouteReadyReported = false;
+  private currentSessionArchived: boolean | undefined;
   private stagedAttachmentGatewayOwner: ChatAttachmentGatewayOwner = null;
   private suppressStagedAttachmentHandoffOnDisconnect = false;
 
@@ -313,7 +316,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
       if (visible) {
         releaseAttachmentWorkspaceOwner(state, slot);
       }
-      state.updateSidebarLayout(
+      this.commitSidebarLayout(
         visible ? closeSlot(state.sidebarLayout, slot) : openSlot(state.sidebarLayout, slot),
       );
     };
@@ -663,6 +666,12 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
         this.showComposerPrefillAttention(input);
       }
     }
+    const archived = this.state ? this.isCurrentSessionArchived(this.state) : false;
+    if (archived && this.currentSessionArchived === false) {
+      dismissThreadPortals(this.presentationId, this);
+      this.querySelector<HTMLElement>(".chat-thread")?.focus({ preventScroll: true });
+    }
+    this.currentSessionArchived = archived;
     this.cancelResetConfirmationForSessionChange();
     this.syncHistoryObserver();
     const board = this.resolveBoardView();

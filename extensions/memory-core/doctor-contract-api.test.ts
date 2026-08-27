@@ -28,6 +28,7 @@ import {
   writeMemoryCoreWorkspaceEntry,
 } from "./src/dreaming-state.js";
 import { bm25RankToScore, buildFtsQuery } from "./src/memory/hybrid.js";
+import { runVectorKnnQuery } from "./src/memory/manager-search-knn.js";
 import { searchKeyword, searchVector } from "./src/memory/manager-search.js";
 import {
   dreamingTestState as dreamingTesting,
@@ -447,6 +448,7 @@ async function searchMigratedVectorRows(agentPath: string) {
       limit: 1,
       snippetMaxChars: 200,
       ensureVectorReady: async () => true,
+      runVectorKnn: async (request) => runVectorKnnQuery(db, request),
       sourceFilterVec: { sql: "", params: [] },
       sourceFilterChunks: { sql: "", params: [] },
     });

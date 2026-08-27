@@ -85,3 +85,7 @@ export function isBrowserProxyNodeInvokeCommand(command: unknown): boolean {
 
 export const NODE_MCP_TOOL_CALL_TIMEOUT_MS = 120_000;
 export const NODE_MCP_TOOL_CALL_GATEWAY_TIMEOUT_MS = NODE_MCP_TOOL_CALL_TIMEOUT_MS + 5_000;
+
+export const NODE_PLUGIN_TOOL_CALL_TIMEOUT_MS = 30_000;
+// Leave the Gateway time to return the node's structured timeout and dispatch status.
+export const NODE_PLUGIN_TOOL_CALL_GATEWAY_TIMEOUT_MS = NODE_PLUGIN_TOOL_CALL_TIMEOUT_MS + 5_000;

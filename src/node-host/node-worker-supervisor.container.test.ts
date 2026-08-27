@@ -33,7 +33,9 @@ if (process.connected || process.argv.includes("--internal-worker-ipc")) {
   process.stderr.write("container worker unexpectedly received Node IPC");
   process.exit(24);
 }
-if (descriptor.assignment.prompt === "wait") {
+if (descriptor.assignment.prompt === "admission-failure") {
+  throw new Error("worker admission deadline exceeded after 9 attempts to gateway.example:443: connect failed: Opening handshake has timed out " + descriptor.admission.credential);
+} else if (descriptor.assignment.prompt === "wait") {
   fs.writeFileSync(descriptor.assignment.workspaceDir + "/worker-started", "started");
   setInterval(() => {}, 1000);
 } else {
@@ -131,7 +133,9 @@ if (command === "version") {
 } else if (command === "info") {
   const daemonId = fs.readFileSync(path.join(engineRoot, "daemon-id"), "utf8");
   record({ argv: args, daemonId });
-  process.stdout.write(daemonId + "\n");
+  const delayFile = path.join(engineRoot, "info-delay-ms");
+  const delayMs = fs.existsSync(delayFile) ? Number(fs.readFileSync(delayFile, "utf8")) : 0;
+  setTimeout(() => process.stdout.write(daemonId + "\n"), delayMs);
 } else if (command === "create") {
   const id = createHash("sha256").update(JSON.stringify(args)).digest("hex");
   const labels = {};
@@ -497,6 +501,28 @@ describe("node worker supervisor container isolation", () => {
     }
   });
 
+  it("persists the container worker's admission diagnosis from stderr without credentials", async () => {
+    const fixture = containerFixture();
+    const input = testWorkerLaunchInput(
+      fixture.workspaceDir,
+      "container-admission-failure",
+      "admission-failure",
+    );
+    try {
+      await fixture.supervisor.launch(input, endpoint);
+      const failed = await waitForTerminal(fixture.supervisor, input.launchId);
+      expect(failed).toMatchObject({ state: "failed" });
+      expect(failed?.errorText).toContain(
+        "worker admission deadline exceeded after 9 attempts to gateway.example:443: connect failed: Opening handshake has timed out",
+      );
+      expect(failed?.errorText).not.toContain(input.descriptor.admission.credential);
+      expect(Buffer.byteLength(failed?.errorText ?? "", "utf8")).toBeLessThanOrEqual(4_096);
+      expect((await fixture.supervisor.status(input.launchId))?.errorText).toBe(failed?.errorText);
+    } finally {
+      await fixture.supervisor.close();
+    }
+  });
+
   it("keeps a launch running while its container is still starting", async () => {
     const fixture = containerFixture();
     const input = testWorkerLaunchInput(fixture.workspaceDir, "container-startup-poll");
@@ -566,6 +592,56 @@ describe("node worker supervisor container isolation", () => {
       await fixture.supervisor.close();
     }
   });
+
+  it(
+    "launches after a busy daemon takes six seconds to revalidate",
+    { timeout: 15_000 },
+    async () => {
+      const fixture = containerFixture();
+      const input = testWorkerLaunchInput(fixture.workspaceDir, "container-busy-daemon");
+      fs.writeFileSync(path.join(fixture.engineRoot, "info-delay-ms"), "6000");
+
+      try {
+        expect(await fixture.supervisor.launch(input, endpoint)).toMatchObject({
+          state: "running",
+        });
+        expect(await waitForTerminal(fixture.supervisor, input.launchId)).toMatchObject({
+          state: "completed",
+        });
+      } finally {
+        await fixture.supervisor.close();
+      }
+    },
+  );
+
+  it(
+    "records the revalidation command when the daemon exceeds its deadline",
+    { timeout: 45_000 },
+    async () => {
+      const fixture = containerFixture();
+      const input = testWorkerLaunchInput(fixture.workspaceDir, "container-unresponsive-daemon");
+      fs.writeFileSync(path.join(fixture.engineRoot, "info-delay-ms"), "35000");
+
+      try {
+        const failed = await fixture.supervisor.launch(input, endpoint);
+
+        expect(failed.state).toBe("failed");
+        expect(failed.errorText).toMatch(/Command timed out after \d+ milliseconds:/u);
+        expect(failed.errorText).toContain("docker info --format '{{.ID}}'");
+        expect(await fixture.supervisor.status(input.launchId)).toMatchObject({
+          state: "failed",
+          errorText: failed.errorText,
+        });
+        expect(
+          fixture
+            .events()
+            .filter((event) => event.argv[0] === "create" || event.argv[0] === "start"),
+        ).toEqual([]);
+      } finally {
+        await fixture.supervisor.close();
+      }
+    },
+  );
 
   it("keeps a pending cancelled container slot occupied until the fake engine confirms removal", async () => {
     const capacitySnapshots: Array<{ total: number; available: number }> = [];

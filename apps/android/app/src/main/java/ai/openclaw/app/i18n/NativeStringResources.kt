@@ -205,6 +205,7 @@ internal val nativeStringResourceIds: Map<String, Int> =
     "Attention" to R.string.native_c2eb8cd9d9564314,
     "Audio Test" to R.string.native_85bb24ced460372b,
     "Audio error" to R.string.native_1770865a7ea3f15c,
+    "Audio error · Retry" to R.string.native_70ab6c4383505d40,
     "Audio playback is unavailable" to R.string.native_973cbee2e75ade09,
     "Authentication needed" to R.string.native_7a211017043ea5cb,
     "Automatic" to R.string.native_d461a493a3753877,

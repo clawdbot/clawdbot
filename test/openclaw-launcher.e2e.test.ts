@@ -496,6 +496,16 @@ describe("openclaw launcher", () => {
 
   it.each([
     {
+      name: "container env with root --help",
+      args: ["--help"],
+      env: { OPENCLAW_CONTAINER: "demo" },
+    },
+    {
+      name: "container env with root -h",
+      args: ["-h"],
+      env: { OPENCLAW_CONTAINER: "demo" },
+    },
+    {
       name: "container env",
       args: ["browser", "--help"],
       env: { OPENCLAW_CONTAINER: "demo" },
@@ -514,7 +524,10 @@ describe("openclaw launcher", () => {
     const fixtureRoot = await makeLauncherFixture(fixtureRoots);
     await fs.writeFile(
       path.join(fixtureRoot, "dist", "cli-startup-metadata.json"),
-      JSON.stringify({ browserHelpText: "PRECOMPUTED browser help\n" }),
+      JSON.stringify({
+        rootHelpText: "PRECOMPUTED root help\n",
+        browserHelpText: "PRECOMPUTED browser help\n",
+      }),
       "utf8",
     );
     await fs.writeFile(

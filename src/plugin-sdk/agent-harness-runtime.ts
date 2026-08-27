@@ -99,6 +99,8 @@ export type {
   AgentHarnessSideQuestionResult,
   AgentHarnessSettledTurnFinalizationResult,
   AgentHarnessResetParams,
+  AgentHarnessSessionDeletionParams,
+  AgentHarnessSessionDeletionMutation,
   AgentHarnessSessionForkFailureCode,
   AgentHarnessSessionForkParams,
   AgentHarnessSessionForkResult,
@@ -206,6 +208,7 @@ export { resolveAgentRunAbortLifecycleFields } from "../agents/run-termination.j
 export { isHostScopedAgentToolActive } from "../agents/agent-tools.ring-zero-context.js";
 export { log as embeddedAgentLog } from "../agents/embedded-agent-runner/logger.js";
 export { buildAgentRuntimePlan } from "../agents/runtime-plan/build.js";
+export { prepareAgentRuntimeAuth } from "../agents/runtime-plan/prepare-auth.js";
 export { classifyEmbeddedAgentRunResultForModelFallback } from "../agents/embedded-agent-runner/result-fallback-classifier.js";
 export { resolveUserPath } from "../utils.js";
 export { callGatewayTool } from "../agents/tools/gateway.js";

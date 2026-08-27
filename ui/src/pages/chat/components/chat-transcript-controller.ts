@@ -15,6 +15,7 @@ import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import { styleMap } from "lit/directives/style-map.js";
 import { McpAppUnmountGate } from "../../../components/mcp-app-unmount.ts";
+import { resolveScrollBehavior } from "../../../lib/scroll-behavior.ts";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
 import {
   CHAT_TRANSCRIPT_END_THRESHOLD_PX,
@@ -491,7 +492,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
       this.threadInnerElement
         ?.querySelector(".chat-bubble--reply-target")
         ?.classList.remove("chat-bubble--reply-target");
-      bubble.scrollIntoView?.({ behavior: "smooth", block: "center" });
+      bubble.scrollIntoView?.({ behavior: resolveScrollBehavior(), block: "center" });
       bubble.classList.add("chat-bubble--reply-target");
       bubble.addEventListener(
         "animationend",

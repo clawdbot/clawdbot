@@ -134,39 +134,44 @@
             "id": "gpt-5.6-sol",
             "name": "GPT-5.6 Sol",
             "reasoning": true,
+            "thinkingLevelMap": { "minimal": "low", "xhigh": "xhigh", "max": "max" },
             "input": ["text", "image"],
             "contextWindow": 1050000,
             "contextTokens": 922000,
             "maxTokens": 128000,
             "cost": { "input": 5, "output": 30, "cacheRead": 0.5, "cacheWrite": 0 },
-            "compat": { "codeMode": "capable" }
+            "compat": { "codeMode": "capable", "supportedReasoningEfforts": ["none", "low", "medium", "high", "xhigh", "max"] }
           },
           {
             "id": "gpt-5.6-terra",
             "name": "GPT-5.6 Terra",
             "reasoning": true,
+            "thinkingLevelMap": { "minimal": "low", "xhigh": "xhigh", "max": "max" },
             "input": ["text", "image"],
             "contextWindow": 1050000,
             "contextTokens": 922000,
             "maxTokens": 128000,
             "cost": { "input": 2.5, "output": 15, "cacheRead": 0.25, "cacheWrite": 0 },
-            "compat": { "codeMode": "capable" }
+            "compat": { "codeMode": "capable", "supportedReasoningEfforts": ["none", "low", "medium", "high", "xhigh", "max"] }
           },
           {
             "id": "gpt-5.6-luna",
             "name": "GPT-5.6 Luna",
             "reasoning": true,
+            "thinkingLevelMap": { "minimal": "low", "xhigh": "xhigh", "max": "max" },
             "input": ["text", "image"],
             "contextWindow": 1050000,
             "contextTokens": 922000,
             "maxTokens": 128000,
             "cost": { "input": 1, "output": 6, "cacheRead": 0.1, "cacheWrite": 0 },
-            "compat": { "codeMode": "capable" }
+            "compat": { "codeMode": "capable", "supportedReasoningEfforts": ["none", "low", "medium", "high", "xhigh", "max"] }
           },
           {
             "id": "gpt-5.3-codex",
             "name": "GPT-5.3-Codex",
             "reasoning": true,
+            "thinkingLevelMap": { "minimal": "low", "xhigh": "xhigh", "max": null },
+            "compat": { "supportedReasoningEfforts": ["low", "medium", "high", "xhigh"] },
             "input": ["text", "image"],
             "contextWindow": 400000,
             "contextTokens": 272000,
@@ -179,6 +184,8 @@
             "status": "deprecated",
             "replacedBy": "gpt-5.6-terra",
             "reasoning": true,
+            "thinkingLevelMap": { "minimal": "low", "xhigh": "xhigh", "max": null },
+            "compat": { "supportedReasoningEfforts": ["none", "low", "medium", "high", "xhigh"] },
             "input": ["text", "image"],
             "contextWindow": 1050000,
             "maxTokens": 128000,
@@ -190,12 +197,13 @@
             "status": "deprecated",
             "replacedBy": "gpt-5.6-sol",
             "reasoning": true,
+            "thinkingLevelMap": { "minimal": "low", "xhigh": "xhigh", "max": null },
             "input": ["text", "image"],
             "contextWindow": 1050000,
             "contextTokens": 272000,
             "maxTokens": 128000,
             "cost": { "input": 5, "output": 30, "cacheRead": 0.5, "cacheWrite": 0 },
-            "compat": { "codeMode": "capable" }
+            "compat": { "codeMode": "capable", "supportedReasoningEfforts": ["none", "low", "medium", "high", "xhigh"] }
           },
           {
             "id": "gpt-5.4-mini",

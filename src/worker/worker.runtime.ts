@@ -9,6 +9,10 @@ import { isPathInside } from "../infra/path-guards.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import type { WorkerBrowserRuntime } from "./browser-runtime.js";
 import { buildWorkerConnectParams, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
+import {
+  WorkerAdmissionDeadlineExceededError,
+  type WorkerAdmissionDeadlineResult,
+} from "./worker-connection-contract.js";
 import { createWorkerConnection, type WorkerConnectionState } from "./worker-connection.js";
 import {
   WorkerInferenceProxyClient,
@@ -19,6 +23,7 @@ import {
 // Cross-process contract: serialized to stdout by runWorkerCommand and parsed by the
 // gateway worker turn launcher.
 export type WorkerRuntimeResult =
+  | WorkerAdmissionDeadlineResult
   | { status: "completed"; transcriptLeafId: string | null; transcriptNextSeq: number }
   | {
       status: "failed";
@@ -95,7 +100,9 @@ export async function runWorkerDescriptor(
   const connection = createWorkerConnection({
     endpoint: descriptor.connectionEndpoint,
     connectParams: buildWorkerConnectParams(descriptor),
-    onConnectionFailure: (error) => options.onConnectionFailure?.(error?.message),
+    onConnectionFailure: (error) => {
+      options.onConnectionFailure?.(error?.message);
+    },
   });
   const abortFromCaller = () => {
     abortController.abort(options.signal?.reason);
@@ -138,6 +145,15 @@ export async function runWorkerDescriptor(
       const fenced = fencedResult(connection.state);
       if (fenced) {
         return fenced;
+      }
+      if (error instanceof WorkerAdmissionDeadlineExceededError && !options.signal?.aborted) {
+        return {
+          status: "not-started",
+          reason: "admission-deadline",
+          // The deadline error message already carries the formatted, redacted
+          // last-failure diagnosis (see WorkerConnection.failAdmissionDeadline).
+          errorText: error.message,
+        };
       }
       throw error;
     }

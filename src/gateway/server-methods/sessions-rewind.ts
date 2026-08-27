@@ -344,12 +344,12 @@ async function mutateSessionAtMessage(
         return;
       }
       const upstreamLink = readSessionUpstreamLink(current.canonicalKey, current.target.agentId);
-      if (upstreamLink && action !== "fork") {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, EXTERNAL_CONVERSATION_ERROR),
-        );
+      const archived = current.entry.archivedAt !== undefined;
+      if ((archived || upstreamLink) && action !== "fork") {
+        const message = archived
+          ? `${action === "switch" ? "Branch switch" : "Rewind"} is unavailable for archived sessions.`
+          : EXTERNAL_CONVERSATION_ERROR;
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
         return;
       }
       const placementError = resolveSessionWorkerPlacementMutationError({

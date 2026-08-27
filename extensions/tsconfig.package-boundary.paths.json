@@ -263,6 +263,9 @@
       "openclaw/plugin-sdk/channel-ingress-test-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/channel-ingress-test-runtime.d.ts"
       ],
+      "openclaw/plugin-sdk/channel-join-intro-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/channel-join-intro-runtime.d.ts"
+      ],
       "openclaw/plugin-sdk/dangerous-name-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/dangerous-name-runtime.d.ts"
       ],

@@ -9,6 +9,7 @@ import {
   projectAgentRunAttemptTerminal,
   type AgentRunAttemptTerminal,
 } from "../../agent-run-terminal-outcome.js";
+import { agentSessionSetContextReplacementHook } from "../../sessions/agent-session-compaction.js";
 import { log } from "../logger.js";
 import type { EmbeddedAgentQueueHandle } from "../runs.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
@@ -58,6 +59,9 @@ export async function runEmbeddedAttemptExecutionPhase(
     toolCatalog.toolSearchRunPlan;
   const { runtimeChannel } = systemPrompt;
   const { toolSearchTargetTranscriptProjections } = toolBase;
+  activeSession[agentSessionSetContextReplacementHook](() =>
+    toolBase.skillInstructionDeliveryCache.clear(),
+  );
   const hookAgentId = input.setup.sessionAgentId;
   let repairedRejectedProviderReplay = false;
   const diagnosticOwner = createDiagnosticEmbeddedRunOwner({

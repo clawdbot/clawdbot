@@ -6,7 +6,6 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { getRuntimeConfig } from "../../config/config.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveCronCreationDelivery } from "../../cron/delivery-context.js";
 import { assertCronDeliveryInputNonBlankFields } from "../../cron/delivery-target-validation.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
@@ -211,22 +210,19 @@ FAILURE ALERTS: jobs with a failure route default to alerting after 2 consecutiv
 Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted automation-run sessions: self status/list/get/runs/remove + own next_check only. failureAlert {...}|false disables. jobId canonical (id=compat). contextMessages 0-10 embeds recent chat lines into reminder text.`;
 }
 
-// Trigger-gated surfaces are advertised by default. Only an explicit false
-// narrows the model-facing surface, matching the scheduler's own gate in
-// cron/service/jobs-validation.ts.
-function resolveCronTriggersEnabled(config?: OpenClawConfig): boolean {
-  return config?.cron?.triggers?.enabled !== false;
-}
-
 export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): AnyAgentTool {
   const callGateway = deps?.callGatewayTool ?? callGatewayTool;
-  const triggersEnabled = resolveCronTriggersEnabled(opts?.config);
+  // Trigger-gated surfaces default on, matching cron/service/jobs-validation.ts.
+  const triggersEnabled = opts?.config?.cron?.triggers?.enabled !== false;
   const tool: AnyAgentTool = {
     label: "Automations",
     name: AUTOMATIONS_TOOL_NAME,
     displaySummary: CRON_TOOL_DISPLAY_SUMMARY,
     description: buildCronToolDescription({ triggersEnabled }),
-    parameters: createCronToolSchema({ triggersEnabled }),
+    parameters: createCronToolSchema({
+      agentSessionKey: opts?.agentSessionKey,
+      triggersEnabled,
+    }),
     execute: async (_toolCallId, args, operationSignal) => {
       operationSignal?.throwIfAborted();
       const params = args as Record<string, unknown>;

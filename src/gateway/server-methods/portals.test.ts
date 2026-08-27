@@ -50,7 +50,7 @@ describe("portal gateway methods", () => {
       listWorkerPortals: () => [],
       open: vi.fn(async () => {
         portals = [portal];
-        return { portal, created: true };
+        return portal;
       }),
       close: vi.fn(async () => {
         portals = [];

@@ -33,7 +33,6 @@ import ai.openclaw.app.chat.SESSION_UNREAD_ACK_CAPABILITY
 import ai.openclaw.app.chat.SessionBranch
 import ai.openclaw.app.chat.SessionForkResult
 import ai.openclaw.app.chat.SessionRewindResult
-import ai.openclaw.app.chat.SystemSpeechSpeaker
 import ai.openclaw.app.gateway.DeviceAuthEntry
 import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
@@ -93,6 +92,7 @@ import ai.openclaw.app.node.asStringOrNull
 import ai.openclaw.app.node.invokeErrorFromThrowable
 import ai.openclaw.app.node.readAndroidPermissionSnapshot
 import ai.openclaw.app.node.resolveGatewayAccentArgb
+import ai.openclaw.app.node.resolveProfileAccentArgb
 import ai.openclaw.app.systemagent.SystemAgentChatController
 import ai.openclaw.app.systemagent.SystemAgentChatState
 import ai.openclaw.app.systemagent.SystemAgentGatewayAccess
@@ -100,6 +100,7 @@ import ai.openclaw.app.voice.AndroidOnDeviceVoiceWakeRecognizer
 import ai.openclaw.app.voice.GatewayTranscriptionSession
 import ai.openclaw.app.voice.MicCaptureManager
 import ai.openclaw.app.voice.PreviewVoiceWakeRecognizer
+import ai.openclaw.app.voice.SystemSpeechSpeaker
 import ai.openclaw.app.voice.TalkAudioPlayer
 import ai.openclaw.app.voice.TalkModeManager
 import ai.openclaw.app.voice.TalkPttOnceStart
@@ -1966,7 +1967,7 @@ class NodeRuntime private constructor(
       ).also { controller ->
         scope.launch {
           controller.state.collect { state ->
-            voiceWakeManager.setSuppressed(VoiceWakeSuppressionReason.MessageSpeech, state != null)
+            voiceWakeManager.setSuppressed(VoiceWakeSuppressionReason.MessageSpeech, state?.isActive == true)
           }
         }
       }
@@ -5174,6 +5175,11 @@ class NodeRuntime private constructor(
     if (event == GatewayEvent.VoicewakeChanged.rawValue) {
       applyVoiceWakeWords(payloadJson)
     }
+    if (event == GatewayEvent.UsersPrefsChanged.rawValue) {
+      // The gateway targets this event at connections bound to the caller's own
+      // profile; receipt means our profile appearance changed on another device.
+      scope.launch { refreshBrandingFromGateway() }
+    }
     handleExecApprovalGatewayEvent(event = event, payloadJson = payloadJson)
     micCapture.handleGatewayEvent(event, payloadJson)
     talkMode.handleGatewayEvent(event, payloadJson)
@@ -5548,7 +5554,7 @@ class NodeRuntime private constructor(
       val res = requestGatewayData(gatewayScope, "config.get", "{}")
       val root = json.parseToJsonElement(res).asObjectOrNull()
       val config = root?.get("config").asObjectOrNull()
-      val parsed = resolveGatewayAccentArgb(config)
+      val parsed = fetchProfileAccentArgb(gatewayScope) ?: resolveGatewayAccentArgb(config)
       publishGatewayData(gatewayScope) {
         _gatewayAccentArgb.value = parsed
       }
@@ -5556,6 +5562,28 @@ class NodeRuntime private constructor(
       // ignore
     }
   }
+
+  /**
+   * Caller's per-profile accent (users.prefs.get). Null covers profile-less
+   * connections (no_durable_identity), older gateways without the method, and
+   * malformed stored values, so the gateway accent stays the fallback. Inner
+   * try: a failed profile fetch must not discard the config accent.
+   */
+  private suspend fun fetchProfileAccentArgb(gatewayScope: GatewayDataScope): Long? =
+    try {
+      val res =
+        requestGatewayData(gatewayScope, GatewayMethod.UsersPrefsGet.rawValue, """{"keys":["ui.accent"]}""")
+      val root = json.parseToJsonElement(res).asObjectOrNull()
+      if ((root?.get("status") as? JsonPrimitive)?.contentOrNull == "ok") {
+        resolveProfileAccentArgb(root.get("entries").asObjectOrNull())
+      } else {
+        null
+      }
+    } catch (cancelled: CancellationException) {
+      throw cancelled
+    } catch (_: Throwable) {
+      null
+    }
 
   /** Lists one directory of the active agent's workspace (read-only RPC). */
   suspend fun listWorkspaceFiles(

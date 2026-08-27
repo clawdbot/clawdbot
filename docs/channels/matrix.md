@@ -342,6 +342,8 @@ openclaw matrix verify status
 openclaw matrix verify status --include-recovery-key --json
 ```
 
+With `--include-recovery-key`, text output confirms when a raw recovery key is available and directs you to add `--json`. Text output never prints the key itself; keep JSON output containing a recovery key private.
+
 `verify status` reports three independent trust signals (`--verbose` shows all of them):
 
 - `Locally trusted`: trusted by this client only

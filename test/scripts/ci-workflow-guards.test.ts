@@ -99,6 +99,7 @@ function evaluateWorkflowExpression(
     headRepository?: string;
     matrix?: Record<string, unknown>;
     repository: string;
+    runCheck?: boolean;
     runnerBackend?: "" | "blacksmith" | "github" | "hybrid";
     runAttempt: number;
   },
@@ -136,6 +137,13 @@ function evaluateWorkflowExpression(
           : {},
     },
     matrix: context.matrix ?? {},
+    needs: {
+      preflight: {
+        outputs: {
+          run_check: String(context.runCheck ?? true),
+        },
+      },
+    },
     vars: {
       OPENCLAW_CI_RUNNER_BACKEND: context.runnerBackend ?? "",
     },
@@ -216,6 +224,7 @@ function runCiManifestFixture(options: {
   qaSmokePlan?: boolean;
   formatCheck?: boolean;
   releaseCandidateCompatibility?: boolean;
+  releaseGate?: boolean;
   targetContextCompatibility?: boolean;
   nodeFastOnly?: boolean;
   nodeFastPluginContracts?: boolean;
@@ -404,6 +413,7 @@ function runCiManifestFixture(options: {
           (options.eventName ?? "workflow_dispatch") === "workflow_dispatch"
             ? "true"
             : "false",
+        OPENCLAW_CI_RELEASE_GATE: String(options.releaseGate ?? false),
         OPENCLAW_CI_RELEASE_CANDIDATE_TARGET:
           options.releaseCandidateCompatibility === true ? "true" : "false",
         OPENCLAW_CI_TARGET_CONTEXT_TARGET:
@@ -6468,6 +6478,13 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     const checkShardRun = checkShardStep.run;
     const hostedCoreLint = workflow.jobs["check-lint-hosted-core-shard"];
+    const hostedCoreTypes = workflow.jobs["check-test-types-hosted-core-shard"];
+    const manualDispatch = {
+      eventName: "workflow_dispatch",
+      repository: "openclaw/openclaw",
+      runnerBackend: "blacksmith",
+      runAttempt: 1,
+    } as const;
     const untrustedForkPullRequest = {
       authorAssociation: "NONE",
       eventName: "pull_request",
@@ -6478,8 +6495,11 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     } as const;
 
     expect(manifestStep.env.OPENCLAW_CI_RUNNER_BACKEND).toBe(
-      "${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND }}",
+      "${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)) && 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND }}",
     );
+    expect(
+      evaluateWorkflowExpression(manifestStep.env.OPENCLAW_CI_RUNNER_BACKEND, manualDispatch),
+    ).toBe("github");
     expect(
       evaluateWorkflowExpression(
         manifestStep.env.OPENCLAW_CI_RUNNER_BACKEND,
@@ -6489,9 +6509,15 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(
       evaluateWorkflowExpression(checkShardStep.env.RUNNER_BACKEND, untrustedForkPullRequest),
     ).toBe("github");
+    expect(evaluateWorkflowExpression(checkShardStep.env.RUNNER_BACKEND, manualDispatch)).toBe(
+      "github",
+    );
+    expect(checkShardStep.env.RELEASE_GATE).toBe("${{ inputs.release_gate && 'true' || 'false' }}");
     expect(manifestStep.run).toContain("runnerBackend: process.env.OPENCLAW_CI_RUNNER_BACKEND");
     expect(checkShardRun).toContain('if [ "$RUNNER_BACKEND" = "github" ]; then');
     expect(checkShardRun).toContain("lint_args=(--only=extensions --only=scripts --threads=1)");
+    expect(checkShardRun).toContain('if [ "$RELEASE_GATE" = "true" ]; then');
+    expect(checkShardRun).toContain("lint_args=(--only=scripts --threads=1)");
     expect(checkShardRun).toContain('elif [ "$(nproc)" -lt 8 ]; then');
     expect(checkShardRun).toContain("lint_args=(--threads=1)");
     expect(checkShardRun).not.toContain("lint_args=(--split-core --threads=1)");
@@ -6504,9 +6530,11 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(hostedCoreLint.if).toContain(
       "github.event.pull_request.head.repo.full_name != github.repository",
     );
-    expect(workflow.jobs["check-test-types-hosted-core-shard"].if).toContain(
+    expect(hostedCoreTypes.if).toContain(
       "github.event.pull_request.head.repo.full_name != github.repository",
     );
+    expect(evaluateWorkflowExpression(hostedCoreLint.if, manualDispatch)).toBe(true);
+    expect(evaluateWorkflowExpression(hostedCoreTypes.if, manualDispatch)).toBe(true);
     expect(hostedCoreLint["runs-on"]).toBe("ubuntu-24.04");
     expect(hostedCoreLint.strategy).toEqual({
       "fail-fast": false,
@@ -6544,14 +6572,14 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "pull-requests": "read",
     });
     expect(checksFastJob.env.CHECKOUT_BASE_SHA).toBe(
-      "${{ matrix.task == 'baseline-ratchets' && needs.preflight.outputs.diff_base_revision || '' }}",
+      "${{ (matrix.task == 'baseline-ratchets' || startsWith(matrix.task, 'release-lint-')) && needs.preflight.outputs.diff_base_revision || '' }}",
     );
     expect(checkout.run).toContain(
       'fetch_refs+=("+${CHECKOUT_BASE_SHA}:refs/remotes/origin/ci-ratchet-base")',
     );
     expect(checkout.run).toContain('"${fetch_refs[@]}" || return 1');
     expect(releaseGateMerge.if).toBe(
-      "matrix.task == 'baseline-ratchets' && github.event_name == 'workflow_dispatch' && inputs.release_gate",
+      "(matrix.task == 'baseline-ratchets' || startsWith(matrix.task, 'release-lint-')) && github.event_name == 'workflow_dispatch' && inputs.release_gate",
     );
     expect(checksFastRun.run).toContain("baseline-ratchets)");
     expect(checksFastRun.run).toContain("coercion-helpers)");
@@ -6603,9 +6631,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(releaseGateMerge.run).toContain(
       'echo "RATCHET_BASE_REF=${frozen_base_sha}" >> "$GITHUB_ENV"',
     );
-    expect(releaseGateMerge.run).toContain(
-      'echo "RATCHET_RELEASE_MERGE_TREE=true" >> "$GITHUB_ENV"',
-    );
     expect(checksFastRun.run).not.toContain("PROTOCOL_MANUAL_BASE_SHA");
     expect(checksFastRun.run).toContain(
       '"+${PROTOCOL_SINCE_BASE_SHA}:refs/remotes/origin/protocol-since-base"',
@@ -6631,10 +6656,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     expect(maxLinesRatchet).toContain("checkEnvVarCount(envVarCountArgs(argv), root);");
     expect(checksFastRun.run).toContain(
-      'if [[ "${RATCHET_RELEASE_MERGE_TREE:-}" == "true" ]]; then',
+      '--only=core --split-core --core-stripe="${stripe}/5" --threads=1',
     );
     expect(checksFastRun.run).toContain(
-      "node --import tsx scripts/run-oxlint-shards.mts --only=core --only=extensions --threads=1",
+      "node --import tsx scripts/run-oxlint-shards.mts --only=extensions --threads=1",
     );
     expect(checksFastRun.run).not.toContain(
       "node scripts/run-oxlint.mjs src ui/src packages extensions",
@@ -6663,6 +6688,34 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         check_name: "checks-fast-coercion-helpers",
         runtime: "node",
         task: "coercion-helpers",
+      },
+    ]);
+
+    const releaseGate = runCiManifestFixture({
+      bundledPlanner: true,
+      eventName: "workflow_dispatch",
+      historicalCompatibility: false,
+      releaseGate: true,
+    });
+    expect(releaseGate.status, releaseGate.output).toBe(0);
+    expect(
+      JSON.parse(
+        expectDefined(releaseGate.outputs.checks_fast_core_matrix, "release-gate checks matrix"),
+      ).include.filter((entry: { task: string }) => entry.task.startsWith("release-lint-")),
+    ).toEqual([
+      ...Array.from({ length: 5 }, (_, index) => {
+        const stripe = index + 1;
+        return {
+          check_name: `checks-fast-release-lint-core-${stripe}`,
+          runtime: "node",
+          stripe,
+          task: `release-lint-core-${stripe}`,
+        };
+      }),
+      {
+        check_name: "checks-fast-release-lint-extensions",
+        runtime: "node",
+        task: "release-lint-extensions",
       },
     ]);
   });
@@ -7829,7 +7882,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       uses: SETUP_GO_V6,
       with: {
         cache: false,
-        "go-version": "1.26.6",
+        "go-version": "1.26.7",
       },
     });
     expect(setupGoStep.with).not.toHaveProperty("go-version-file");
@@ -7852,12 +7905,12 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     });
     expect(verifyGoStep).toMatchObject({
       if: "matrix.requires_go == true",
-      run: 'test "$(go env GOVERSION)" = "go1.26.6"',
+      run: 'test "$(go env GOVERSION)" = "go1.26.7"',
     });
 
     const goMod = readTrackedText("scripts/docs-i18n/go.mod");
     expect(goMod).toMatch(/^go 1\.26\.0$/mu);
-    expect(goMod).toMatch(/^toolchain go1\.26\.6$/mu);
+    expect(goMod).toMatch(/^toolchain go1\.26\.7$/mu);
   });
 
   it("fails and retries quiet Node test shard stalls quickly", () => {
@@ -7925,6 +7978,20 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     for (const sparsePath of sparseCheckoutPaths) {
       expect({ sparsePath, exists: existsSync(sparsePath) }).toEqual({ sparsePath, exists: true });
     }
+  });
+
+  it("clamps Node test workers to the detected core count", () => {
+    const workflow = readCiWorkflow();
+    const nodeTestJob = workflow.jobs["checks-node-core-test-nondist-shard"];
+    const resourceStep = nodeTestJob.steps.find(
+      (step: WorkflowStep) => step.name === "Configure Node test resources",
+    );
+
+    expect(resourceStep.run).toContain('if [ "$workers" -gt "$cores" ]; then');
+    expect(resourceStep.run).toContain('workers="$cores"');
+    expect(resourceStep.run.indexOf('workers="$cores"')).toBeLessThan(
+      resourceStep.run.indexOf("OPENCLAW_VITEST_MAX_WORKERS"),
+    );
   });
 
   it("uses candidate-owned script interfaces for frozen target CI", () => {

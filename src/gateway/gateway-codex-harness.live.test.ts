@@ -5,6 +5,7 @@ import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
@@ -21,6 +22,7 @@ import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ContextEngine } from "../context-engine/types.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { pluginStateEntriesInKeyRange } from "../plugin-state/plugin-state-store.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import type { CallGatewayOptions } from "./call.js";
@@ -2045,6 +2047,101 @@ async function verifyCodexNativeSubagentBridgeProbe(params: {
   }
 }
 
+async function verifyCodexSessionDeletion(params: {
+  client: GatewayClient;
+  events: EventFrame[];
+  modelKey: string;
+  sessionKey: string;
+}): Promise<void> {
+  const { client, events, modelKey, sessionKey } = params;
+  const threadId = observedCodexThreadIds.get(sessionKey);
+  expect(threadId).toBeTypeOf("string");
+  const sessionId = await readCodexHarnessSessionId({ client, sessionKey });
+  const readBindings = () =>
+    pluginStateEntriesInKeyRange({
+      pluginId: "codex",
+      namespace: "app-server-thread-bindings",
+      keyStartInclusive: "session-key:dev:",
+      keyEndExclusive: "session-key:dev;",
+      limit: 100,
+    });
+  const before = readBindings().find((row) => asOptionalRecord(row.value)?.sessionId === sessionId);
+  expect(before).toBeDefined();
+  const siblingKey = `${sessionKey}:deletion-sibling`;
+  const selectModel = async (key: string) =>
+    requestCodexCommandText({
+      client,
+      events,
+      sessionKey: key,
+      command: `/model ${modelKey} --runtime codex`,
+      expectedText: "Runtime set to codex",
+    });
+  await selectModel(siblingKey);
+  await requestAgentText({
+    client,
+    sessionKey: siblingKey,
+    expectedReply: "SIBLING-READY",
+    message: "Reply with exactly SIBLING-READY and nothing else.",
+  });
+  const siblingThreadId = observedCodexThreadIds.get(siblingKey);
+  const siblingSessionId = await readCodexHarnessSessionId({ client, sessionKey: siblingKey });
+  const siblingBinding = readBindings().find(
+    (row) => asOptionalRecord(row.value)?.sessionId === siblingSessionId,
+  );
+  expect(siblingBinding).toBeDefined();
+
+  // A competing attachment must reject before displacing either native owner.
+  await requestCodexCommandText({
+    client,
+    events,
+    sessionKey,
+    command: `/codex resume ${siblingThreadId}`,
+    expectedText: "owned by another OpenClaw session or conversation",
+  });
+  expect(readBindings().find((row) => row.key === before?.key)).toEqual(before);
+  expect(readBindings().find((row) => row.key === siblingBinding?.key)).toEqual(siblingBinding);
+
+  const deletion = await client.request<{ deleted: boolean }>("sessions.delete", {
+    key: sessionKey,
+  });
+  expect(deletion.deleted).toBe(true);
+  expect(readBindings().some((row) => row.key === before?.key)).toBe(false);
+  expect(readBindings().find((row) => row.key === siblingBinding?.key)).toEqual(siblingBinding);
+  await requestAgentText({
+    client,
+    sessionKey: siblingKey,
+    expectedReply: "SIBLING-ALIVE",
+    message: "Reply with exactly SIBLING-ALIVE and nothing else.",
+  });
+  expect(observedCodexThreadIds.get(siblingKey)).toBe(siblingThreadId);
+
+  // Session deletion releases OpenClaw ownership, not the native Codex history.
+  // Attach that existing thread to a new session and complete a real turn.
+  await selectModel(sessionKey);
+  const attached = await requestCodexCommandText({
+    client,
+    events,
+    sessionKey,
+    command: `/codex resume ${threadId}`,
+    expectedText: "Attached this OpenClaw session",
+  });
+  expect(attached).toContain(threadId);
+  expect(await readCodexHarnessSessionId({ client, sessionKey })).not.toBe(sessionId);
+  await requestAgentText({
+    client,
+    sessionKey,
+    expectedReply: "DELETED-THREAD-RESUMED",
+    message: "Reply with exactly DELETED-THREAD-RESUMED and nothing else.",
+  });
+  expect(observedCodexThreadIds.get(sessionKey)).toBe(threadId);
+  logCodexLiveStep("session-deletion", {
+    competingResumeRejected: true,
+    removedBinding: true,
+    siblingContinued: true,
+    nativeHistoryResumed: true,
+  });
+}
+
 describeLive("gateway live (Codex harness)", () => {
   it(
     "runs gateway agent turns through the plugin-owned Codex app-server harness",
@@ -2564,6 +2661,12 @@ describeLive("gateway live (Codex harness)", () => {
             );
           }
         }
+        await verifyCodexSessionDeletion({
+          client,
+          events: gatewayEvents,
+          modelKey,
+          sessionKey: "agent:dev:live-codex-harness",
+        });
       } finally {
         try {
           clearRuntimeConfigSnapshot();

@@ -9,14 +9,13 @@ import {
 import { icons } from "../../components/icons.ts";
 import { getLobsterdexEntries } from "../../components/lobster-dex.ts";
 import { previewLobsterChirp } from "../../components/lobster-pet-audio.ts";
-import { LOBSTER_PALETTE_LORE } from "../../components/lobster-pet-lore.ts";
 import {
-  LOBSTER_PET_PALETTES,
   canonicalLobsterLook,
   lobsterLookStyle,
-  lobsterPaletteName,
   renderLobsterSvg,
-} from "../../components/lobster-pet.ts";
+} from "../../components/lobster-pet-look.ts";
+import { LOBSTER_PALETTE_LORE, lobsterPaletteName } from "../../components/lobster-pet-lore.ts";
+import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
 import "../../components/tooltip.ts";
 import {
   renderSettingsDefaultState,
@@ -32,6 +31,9 @@ import { renderSettingsSelectRow } from "./settings-select-row.ts";
 import type { ConfigProps } from "./view-types.ts";
 
 export function serverUiPrefProvenanceHint(provenance: ServerUiPrefProvenance): string {
+  if (provenance === "profile") {
+    return t("configView.profileSyncedHint");
+  }
   if (provenance === "device-local") {
     return t("quickSettings.personal.browserOnly");
   }

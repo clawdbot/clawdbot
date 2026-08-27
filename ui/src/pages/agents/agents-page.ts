@@ -105,6 +105,7 @@ class AgentsPage
   @state() agentFileDrafts: Record<string, string> = {};
   @state() agentFileActive: string | null = null;
   @state() agentFileSaving = false;
+  readonly agentFileWriteRevisions = new Map<string, number>();
   @state() agentIdentityLoading = false;
   @state() agentIdentityError: string | null = null;
   @state() identityDraft: AgentIdentityDraft = { name: null, emoji: null, avatar: null };
@@ -251,6 +252,10 @@ class AgentsPage
     return this.context.sessions;
   }
 
+  get agents() {
+    return this.context.agents;
+  }
+
   get client() {
     return this.gateway.client;
   }
@@ -332,7 +337,6 @@ class AgentsPage
       return;
     }
     this.agentFilesList = status.list;
-    this.agentFilesError = status.error;
     void this.selectDefaultAgentFile(agentId);
   }
 
@@ -671,7 +675,6 @@ class AgentsPage
         return;
       }
       this.agentFilesList = list ?? agents.files(agentId).list;
-      this.agentFilesError = agents.files(agentId).error;
     } finally {
       if (this.isCurrentRequest(client, generation, agentId, { agents })) {
         this.agentFilesLoading = false;
@@ -745,6 +748,7 @@ class AgentsPage
     this.agentFileActive = null;
     this.agentFileContents = {};
     this.agentFileDrafts = {};
+    this.agentFileWriteRevisions.clear();
     this.agentFilesLoading = false;
     this.agentFileSaving = false;
     this.agentSkillsReport = null;
@@ -858,17 +862,7 @@ class AgentsPage
     if (!this.canCall("agents.files.set", "operator.admin")) {
       return;
     }
-    const client = this.client;
-    const generation = this.requestGeneration;
-    const agents = this.context.agents;
-    if (!client) {
-      return;
-    }
-    void saveAgentFile(this, agentId, name, content).then((saved) => {
-      if (saved && this.isCurrentRequest(client, generation, agentId, { agents })) {
-        void this.loadAgentFiles(agentId, true);
-      }
-    });
+    void saveAgentFile(this, agentId, name, content);
   }
 
   private reloadConfig() {
@@ -974,7 +968,7 @@ class AgentsPage
           agentFiles: {
             list: this.agentFilesList,
             loading: this.agentFilesLoading,
-            error: this.agentFilesError,
+            error: this.agentFilesError ?? this.context.agents.files(selectedAgentId).error,
             active: this.agentFileActive,
             contents: this.agentFileContents,
             drafts: this.agentFileDrafts,

@@ -2002,6 +2002,7 @@ openclaw-chat-session-rail {
   padding: 12px 14px 16px;
   overflow-y: auto;
   border-top: 1px solid var(--border);
+  user-select: text;
   overscroll-behavior-y: contain;
 }
 

@@ -166,25 +166,34 @@ function hasLoneSurrogate(value: string): boolean {
 }
 
 describe("Crabbox worker provider", () => {
-  it("derives ordered machine classes and shapes while preserving configured defaults", async () => {
+  it("reads large machine catalogs while preserving shapes, order, and configured defaults", async () => {
     const calls: string[][] = [];
-    const provider = providerWithRunner(async (argv) => {
+    const provider = providerWithRunner(async (argv, options) => {
       calls.push(argv);
-      return commandResult({
-        stdout: JSON.stringify([
-          {
-            provider: "aws",
-            classes: [
-              { class: "tiny", type: "c7a.2xlarge", vcpu: 8, memoryGb: 16 },
-              { class: "small", type: "c7a.4xlarge", vcpu: 16, memoryGb: 32 },
-              { class: "standard", type: "c7a.8xlarge", vcpu: 32, memoryGb: 64 },
-              { class: "fast", type: "c7a.16xlarge", vcpu: 64, memoryGb: 128 },
-              { class: "large", type: "c7a.24xlarge", vcpu: 96, memoryGb: 192 },
-              { class: "beast", type: "c7a.48xlarge", vcpu: 192, memoryGb: 384 },
-            ],
-          },
-        ]),
-      });
+      return processRuntime.runCommandWithTimeout(
+        [process.execPath, "-e", "process.stdin.pipe(process.stdout)"],
+        {
+          ...options,
+          input: JSON.stringify([
+            {
+              provider: "unrelated",
+              classCatalog: { metadata: "x".repeat(65_536) },
+            },
+            {
+              provider: "aws",
+              classes: [
+                { class: "tiny", type: "c7a.2xlarge", vcpu: 8, memoryGb: 16 },
+                { class: "small", type: "c7a.4xlarge", vcpu: 16, memoryGb: 32 },
+                { class: "standard", type: "c7a.8xlarge", vcpu: 32, memoryGb: 64 },
+                { class: "fast", type: "c7a.16xlarge", vcpu: 64, memoryGb: 128 },
+                { class: "large", type: "c7a.24xlarge", vcpu: 96, memoryGb: 192 },
+                { class: "beast", type: "c7a.48xlarge", vcpu: 192, memoryGb: 384 },
+              ],
+            },
+            { provider: "machine0", classCatalog: { disposition: "unmapped", profiles: [] } },
+          ]),
+        },
+      );
     });
     expect(provider.supportedExecutionModes).toEqual(["worker-turn", "remote-exec"]);
     expect(await provider.listMachineOptions?.(PROFILE)).toEqual([
@@ -215,6 +224,12 @@ describe("Crabbox worker provider", () => {
       },
     ]);
     await provider.listMachineOptions?.(PROFILE);
+    expect(await provider.listMachineOptions?.({ ...PROFILE, provider: "machine0" })).toEqual([
+      { id: "standard", label: "Standard", default: true },
+      { id: "fast", label: "Fast" },
+      { id: "large", label: "Large" },
+      { id: "beast", label: "Beast" },
+    ]);
     expect(calls.filter((argv) => argv[1] === "providers")).toHaveLength(1);
   });
 
@@ -956,17 +971,17 @@ describe("Crabbox worker provider", () => {
     {
       name: "fails",
       result: commandResult({ code: 7, stderr: "apt exploded" }),
-      message: "Crabbox setup failed with exit code 7",
+      message: "Crabbox profile setup failed with exit code 7",
     },
     {
       name: "times out",
       result: commandResult({ code: null, killed: true, termination: "timeout" }),
-      message: "Crabbox setup did not exit normally (timeout)",
+      message: "Crabbox profile setup did not exit normally (timeout)",
     },
     {
       name: "cannot start",
       result: undefined,
-      message: "Crabbox setup could not start",
+      message: "Crabbox profile setup could not start",
     },
   ])(
     "stops the lease and removes its private env profile when setup $name",
@@ -1023,6 +1038,64 @@ describe("Crabbox worker provider", () => {
       expect(calls.at(-1)).toEqual([SIBLING_BINARY, "stop", "--provider", "aws", "--id", LEASE_ID]);
     },
   );
+
+  it.each([
+    { phase: "profile setup", setupAttempt: 1 },
+    { phase: "desktop setup", setupAttempt: 2 },
+    { phase: "node enrollment setup", setupAttempt: 3 },
+  ])("identifies the failed $phase phase", async ({ phase, setupAttempt }) => {
+    let attempts = 0;
+    const provider = providerWithRunner(async (argv) => {
+      if (argv[1] === "inspect") {
+        return commandResult({ stdout: inspectJson() });
+      }
+      if (argv[1] === "run" && ++attempts === setupAttempt) {
+        return commandResult({ code: 7, stderr: "setup command rejected" });
+      }
+      return commandResult();
+    });
+
+    await expect(
+      provider.provision({ ...PROFILE, setup: "install-node", desktop: true }, OPERATION_ID),
+    ).rejects.toMatchObject({
+      code: "invalid_profile",
+      message: `Crabbox ${phase} failed with exit code 7: setup command rejected`,
+    });
+  });
+
+  it("preserves the node enrollment diagnosis after the Crabbox banner and setup noise", async () => {
+    const diagnosis =
+      "Error: Codex remote-exec requires the exact official @openclaw/codex@2026.8.1 plugin to be installed by cloudWorkers profile setup";
+    const stderr = [
+      `workspace owner acquired wait=218ms recovered=false run context: run=${"a".repeat(32)} lease=${LEASE_ID} slug=openclaw-${"b".repeat(32)} provider=machine0 ssh=openclaw@worker.example.test:2222 workspace=/workspace/openclaw`,
+      "x".repeat(2_000),
+      diagnosis,
+      "    at prepareCodex ([eval]:20:11)",
+      "    at runScriptInThisContext (node:internal/vm:209:10)",
+      "    at node:internal/process/execution:446:12",
+      "    at [eval]-wrapper:6:24",
+      "    at runScriptInContext (node:internal/process/execution:444:60)",
+      "    at evalFunction (node:internal/process/execution:279:30)",
+      "Node.js v24.15.0",
+    ].join("\n");
+    const provider = providerWithRunner(async (argv) => {
+      if (argv[1] === "status") {
+        return commandResult({ stdout: inspectJson() });
+      }
+      return argv[1] === "run"
+        ? commandResult({ code: 1, stderr, stdout: "setup progress ".repeat(200) })
+        : commandResult();
+    });
+
+    await expect(
+      provider.provision({ ...PROFILE, provider: "machine0" }, OPERATION_ID, {
+        executionMode: "remote-exec",
+      }),
+    ).rejects.toMatchObject({
+      code: "invalid_profile",
+      message: expect.stringContaining(diagnosis),
+    });
+  });
 
   it("preserves the allocated lease and both failures when setup cleanup times out", async () => {
     let releaseCommitted = false;
@@ -2854,8 +2927,8 @@ describe("Crabbox worker provider", () => {
           code,
           termination,
           killed: termination !== "exit",
-          stderr: `provider warning ${secret} ${"provider progress ".repeat(90)}${terminalStderr}`,
-          stdout: terminalStdout,
+          stderr: `provider warning ${secret}\n${terminalStderr}`,
+          stdout: `${"provider progress ".repeat(90)}\n${terminalStdout}`,
         }),
       );
       const operation =
@@ -2870,10 +2943,11 @@ describe("Crabbox worker provider", () => {
         action === "warmup"
           ? "Crabbox warmup failed with exit code 5: "
           : "Crabbox inspect did not exit normally (timeout): ";
-      expect(message).toContain("provider warning");
+      expect(message.startsWith(`${failurePrefix}... `)).toBe(true);
       expect(message).toContain(terminalStderr);
       expect(message).toContain(terminalStdout);
       expect(message).not.toContain(secret);
+      expect(message).not.toMatch(/\s{2,}/u);
       expect(message.length).toBeLessThanOrEqual(failurePrefix.length + 512);
       expect(hasLoneSurrogate(message)).toBe(false);
     },
@@ -2882,10 +2956,11 @@ describe("Crabbox worker provider", () => {
   it.each(["stderr", "stdout"] as const)(
     "preserves UTF-16 boundaries and terminal detail from %s",
     async (stream) => {
+      const terminalDetail = "😀 terminal failure";
       const provider = providerWithRunner(async () =>
         commandResult({
           code: 2,
-          [stream]: `${"x".repeat(253)}😀${"y".repeat(300)}😀 terminal failure`,
+          [stream]: `${"x".repeat(600)}😀${"y".repeat(507 - terminalDetail.length)}${terminalDetail}`,
         }),
       );
 

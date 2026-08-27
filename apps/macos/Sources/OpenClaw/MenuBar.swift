@@ -154,26 +154,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var terminationCleanupFinished = false
     private var profileInstanceLock: AppInstanceLock?
     private let webChatAutoLogger = Logger(subsystem: "ai.openclaw", category: "Chat")
-    var nodeTerminationCleanup: @MainActor () async -> Void = {
-        // CUA shutdown drains the worker before closing the daemon socket; run it
-        // first so other cleanup cannot consume the app termination deadline.
+    private static func cleanUpProcesses() async {
+        // Start tunnel retirement before helper drains can consume the quit deadline.
+        async let tunnelCleanup: Void = RemoteTunnelManager.shared.shutdown()
+        async let gatewayCleanup: Void = GatewayConnection.shared.shutdown()
+        async let profileCleanup: Void = MacGatewayConnectionFleet.shared.shutdown()
+        // CUA must drain its worker before the node closes the daemon socket.
         if AppLaunchRuntimePlan.current.allowsCuaComputerControl {
             await CuaDriverHostCoordinator.shared.shutdown()
         }
         await TalkMLXSpeechSynthesizer.shared.shutdown()
         await MacNodeModeCoordinator.shared.stopAndWait()
-    }
-
-    var peekabooBridgeTerminationCleanup: @MainActor () async -> Void = {
-        await PeekabooBridgeHostCoordinator.shared.shutdown()
-    }
-
-    var waitForTerminationCleanupDeadline: @MainActor () async -> Void = {
-        try? await Task.sleep(for: .seconds(AppTerminationTiming.cleanupDeadlineSeconds))
-    }
-
-    var applicationTerminationReply: @MainActor (NSApplication, Bool) -> Void = { app, allow in
-        app.reply(toApplicationShouldTerminate: allow)
+        _ = await (tunnelCleanup, gatewayCleanup, profileCleanup)
     }
 
     var openDashboardAction: @MainActor () -> Void = { AppNavigationActions.openDashboard() }
@@ -244,13 +236,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             title: "Open Dashboard",
             systemImage: "gauge",
             action: #selector(self.openDashboardFromDockMenu(_:))))
-        let canvasTitle = AppStateStore.shared.canvasPanelVisible ? "Close Canvas" : "Open Canvas"
-        let canvasItem = self.dockMenuItem(
-            title: canvasTitle,
-            systemImage: "rectangle.inset.filled.on.rectangle",
-            action: #selector(self.toggleCanvasFromDockMenu(_:)))
-        canvasItem.isEnabled = AppStateStore.shared.canvasEnabled
-        menu.addItem(canvasItem)
         menu.addItem(.separator())
         menu.addItem(self.dockMenuItem(
             title: "Settings…",
@@ -269,11 +254,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc
     private func openDashboardFromDockMenu(_: Any?) {
         self.openDashboardAction()
-    }
-
-    @objc
-    private func toggleCanvasFromDockMenu(_: Any?) {
-        AppNavigationActions.toggleCanvas()
     }
 
     @objc
@@ -431,9 +411,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         VoiceWakeGlobalSettingsSync.shared.stop()
         DashboardManager.shared.close()
         WebChatManager.shared.close()
-        WebChatManager.shared.resetTunnels()
-        Task { await RemoteTunnelManager.shared.stopAll() }
-        Task { await GatewayConnection.shared.shutdown() }
+    }
+
+    static func requestTermination() {
+        // terminateLater spins a nested AppKit loop. Calling terminate on the main
+        // dispatch queue prevents that loop from running MainActor cleanup or its deadline.
+        NSApp.perform(#selector(NSApplication.terminate(_:)), with: nil, afterDelay: 0, inModes: [.common])
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -443,17 +426,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard self.terminationCleanupTask == nil else {
             return .terminateLater
         }
-        let nodeCleanup = self.nodeTerminationCleanup
-        let bridgeCleanup = self.peekabooBridgeTerminationCleanup
         self.terminationCleanupTask = Task { @MainActor [weak self] in
-            async let nodeCleanupResult: Void = nodeCleanup()
-            async let bridgeCleanupResult: Void = bridgeCleanup()
-            _ = await (nodeCleanupResult, bridgeCleanupResult)
+            async let processCleanupResult: Void = Self.cleanUpProcesses()
+            async let bridgeCleanupResult: Void = PeekabooBridgeHostCoordinator.shared.shutdown()
+            _ = await (processCleanupResult, bridgeCleanupResult)
             self?.finishTerminationCleanup(for: sender)
         }
-        let waitForDeadline = self.waitForTerminationCleanupDeadline
         self.terminationDeadlineTask = Task { @MainActor [weak self] in
-            await waitForDeadline()
+            try? await Task.sleep(for: .seconds(AppTerminationTiming.cleanupDeadlineSeconds))
             guard !Task.isCancelled else { return }
             self?.finishTerminationCleanup(for: sender)
         }
@@ -469,7 +449,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.terminationDeadlineTask?.cancel()
         self.terminationCleanupTask = nil
         self.terminationDeadlineTask = nil
-        self.applicationTerminationReply(sender, true)
+        sender.reply(toApplicationShouldTerminate: true)
     }
 
     static func shouldPresentScheduledFirstRunOnboarding(onboardingSeen: Bool) -> Bool {

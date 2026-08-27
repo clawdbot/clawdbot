@@ -319,6 +319,50 @@ describe("gateway session utils", () => {
   afterAll(closeSessionSqliteDatabasesForTest);
 
   test.each([
+    {
+      name: "inherited default",
+      entry: { sessionId: "inherited-default", updatedAt: 1 },
+      expected: null,
+    },
+    {
+      name: "user pin equal to default",
+      entry: {
+        sessionId: "user-pin",
+        updatedAt: 1,
+        providerOverride: "openai",
+        modelOverride: "gpt-5.4",
+        modelOverrideSource: "user",
+      },
+      expected: "user",
+    },
+    {
+      name: "automatic fallback",
+      entry: {
+        sessionId: "automatic-fallback",
+        updatedAt: 1,
+        providerOverride: "openai",
+        modelOverride: "gpt-5.4-mini",
+        modelOverrideSource: "auto",
+      },
+      expected: "auto",
+    },
+  ] satisfies Array<{
+    name: string;
+    entry: SessionEntry;
+    expected: "auto" | "user" | null;
+  }>)("projects model override source for $name", ({ entry, expected }) => {
+    const row = buildGatewaySessionRow({
+      cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
+      storePath: "",
+      store: {},
+      key: "main",
+      entry,
+    });
+
+    expect(row.modelOverrideSource).toBe(expected);
+  });
+
+  test.each([
     { name: "never read", entry: {}, expected: false },
     {
       name: "legacy activity without creation provenance",

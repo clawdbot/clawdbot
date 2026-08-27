@@ -46,7 +46,6 @@ import {
   type WorkerWorkspaceApplyResult,
 } from "./workspace-reconcile.js";
 import { workerWorkspaceResultStaging } from "./workspace-result-staging.js";
-import { REMOTE_WORKSPACE_MANIFEST_JS } from "./workspace-sync-scripts.js";
 
 const DEFAULT_COMMAND_TIMEOUT_MS = 60_000;
 const COMMAND_RESULT_GRACE_MS = 5_000;
@@ -74,6 +73,7 @@ type NodeWorkerLaunch = (request: {
   isDispatchAuthorized: () => boolean;
   isCancellationAuthorized: () => boolean;
   timeoutMs: number;
+  credentialExpiresAtMs?: number;
   signal?: AbortSignal;
   onDispatchReady?: () => void;
 }) => Promise<Exclude<NodeWorkerSupervisorReceipt, { state: "pending" | "running" }>>;
@@ -321,25 +321,6 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       sharedHost: true,
       runWorkspaceCommand: async (command) => await exec(command),
     });
-    const captureManifest = async (dir: string, base: string | null, reference: string) => {
-      const captured = await exec({
-        argv: [
-          "node",
-          "-e",
-          REMOTE_WORKSPACE_MANIFEST_JS,
-          dir,
-          ...(base ? [base, "eligible"] : ["", "all"]),
-          reference.slice("sha256:".length),
-        ],
-        transportRetry: "idempotent",
-      });
-      const manifestRef = captured.stdout.trim();
-      const validRef = /^sha256:[a-f0-9]{64}$/u.test(manifestRef);
-      if (captured.termination !== "exit" || captured.code !== 0 || !validRef) {
-        throw new Error("Node workspace manifest capture failed");
-      }
-      return manifestRef;
-    };
     const validateRestoredWorkspace = async (): Promise<void> => {
       if (!restoredWorkspace) {
         return;
@@ -361,7 +342,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       }
       const quiescence = await quiesceWorkspace(restoredWorkspace.remoteWorkspaceDir);
       try {
-        const remoteManifestRef = await captureManifest(
+        const remoteManifestRef = await workspace.captureManifest(
           restoredWorkspace.remoteWorkspaceDir,
           prepared.snapshot.manifest.baseCommit,
           restoredWorkspace.manifestRef,
@@ -411,7 +392,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
         const changed = uploaded.currentManifestRef !== request.baseManifestRef;
         let expectedRemoteRef = uploaded.currentManifestRef;
         const verifyStable = async () => {
-          const observed = await captureManifest(
+          const observed = await workspace.captureManifest(
             request.remoteWorkspaceDir,
             uploaded.base.baseCommit,
             expectedRemoteRef,
@@ -536,6 +517,9 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
           isDispatchAuthorized,
           isCancellationAuthorized: () => hasDurableBinding(entry as NodeTunnelEntry),
           timeoutMs: request.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS,
+          ...(request.credentialExpiresAtMs === undefined
+            ? {}
+            : { credentialExpiresAtMs: request.credentialExpiresAtMs }),
           onDispatchReady: request.onDispatchReady,
           signal: request.signal
             ? AbortSignal.any([entry.abortController.signal, request.signal])

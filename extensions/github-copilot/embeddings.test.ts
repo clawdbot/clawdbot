@@ -227,6 +227,16 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
   });
 
   it("strips the provider prefix from a user-selected model", async () => {
+    const options = {
+      ...defaultCreateOptions(),
+      model: "github-copilot/text-embedding-3-small",
+    };
+    expect(githubCopilotMemoryEmbeddingProviderAdapter.normalizeModel?.(options)).toBe(
+      "text-embedding-3-small",
+    );
+    expect(resolveFirstGithubTokenMock).not.toHaveBeenCalled();
+    expect(resolveCopilotRuntimeAuthMock).not.toHaveBeenCalled();
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
     mockDiscoveryResponse({
       ok: true,
       json: buildModelsResponse([
@@ -234,15 +244,19 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
       ]),
     });
 
-    const result = await githubCopilotMemoryEmbeddingProviderAdapter.create({
-      ...defaultCreateOptions(),
-      model: "github-copilot/text-embedding-3-small",
-    } as never);
+    const result = await githubCopilotMemoryEmbeddingProviderAdapter.create(options);
 
     expect(result.provider?.model).toBe("text-embedding-3-small");
   });
 
-  it("throws when the user-selected model is unavailable", async () => {
+  it.each([
+    "gpt-4o",
+    "github-copilot/",
+    "github-copilot/github-copilot/text-embedding-3-small",
+    "github-copilot/ text-embedding-3-small",
+    "github-copilot/\tgithub-copilot/text-embedding-3-small",
+    "other/text-embedding-3-small",
+  ])("rejects the unavailable explicit model %s", async (model) => {
     mockDiscoveryResponse({
       ok: true,
       json: buildModelsResponse([
@@ -253,9 +267,13 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
     await expect(
       githubCopilotMemoryEmbeddingProviderAdapter.create({
         ...defaultCreateOptions(),
-        model: "gpt-4o",
+        model:
+          githubCopilotMemoryEmbeddingProviderAdapter.normalizeModel?.({
+            ...defaultCreateOptions(),
+            model,
+          }) ?? model,
       } as never),
-    ).rejects.toThrow('GitHub Copilot embedding model "gpt-4o" is not available');
+    ).rejects.toThrow(`GitHub Copilot embedding model "${model}" is not available`);
   });
 
   it("throws when discovery finds no embedding models", async () => {
@@ -328,7 +346,7 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
 
     let caught: Error | undefined;
     try {
-      await result.provider?.embedQuery("hello");
+      await result.provider?.embed("hello", { inputType: "query" });
     } catch (error) {
       caught = error as Error;
     }

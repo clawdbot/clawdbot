@@ -996,6 +996,32 @@ describe("worker runtime", () => {
     });
   });
 
+  it.each([false, true])("uses only prepared prompt inputs (Gateway extra: %s)", async (extra) => {
+    const { gateway, workspaceDir, launch } = await setup();
+    const promptDir = path.join(workspaceDir, ".openclaw");
+    const literalPrompt = path.join(workspaceDir, "not-a-prompt-file.md");
+    await mkdir(promptDir);
+    await writeFile(path.join(workspaceDir, "AGENTS.md"), "prepared-worker-context");
+    await writeFile(path.join(promptDir, "SYSTEM.md"), "ambient-system-marker");
+    await writeFile(path.join(promptDir, "APPEND_SYSTEM.md"), "ambient-append-marker");
+    await writeFile(literalPrompt, "unrequested-file-contents");
+    if (extra) {
+      launch.assignment.systemPrompt = literalPrompt;
+    }
+
+    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+
+    const prompt = gateway.inferenceRequests[0]?.context.systemPrompt;
+    expect(prompt).toContain("prepared-worker-context");
+    expect.soft(prompt).toContain("Available tools:");
+    expect.soft(prompt).not.toContain("ambient-system-marker");
+    expect.soft(prompt).not.toContain("ambient-append-marker");
+    expect.soft(prompt).not.toContain("unrequested-file-contents");
+    if (extra) {
+      expect.soft(prompt).toContain(literalPrompt);
+    }
+  });
+
   it("exposes exactly the Gateway-authorized worker tools", async () => {
     const { gateway, launch } = await setup();
     launch.assignment.toolAuthority.allowedToolNames = [
@@ -1282,6 +1308,68 @@ describe("worker runtime", () => {
     await expect(runWorkerDescriptor(launch)).rejects.toThrow("worker admission rejected");
     expect(gateway.connectionCount).toBe(1);
   });
+
+  it.each(["initial admission", "running turn"] as const)(
+    "marks only an initial admission deadline as safe to re-arm: %s",
+    async (phase) => {
+      const workspaceDir = await mkdtemp(path.join(tmpdir(), "openclaw-worker-admission-"));
+      tempDirs.push(workspaceDir);
+      const launch = descriptor(path.join(workspaceDir, "gateway.sock"), workspaceDir);
+      const connection = createWorkerConnection({
+        endpoint: launch.connectionEndpoint,
+        connectParams: buildWorkerConnectParams(launch),
+      });
+      // Production formats the last failure into the deadline message
+      // (WorkerConnection.failAdmissionDeadline); model that here.
+      const deadline = new WorkerAdmissionDeadlineExceededError(
+        "no admission after 3 attempts to gateway.sock: connect ECONNREFUSED",
+      );
+      const start = vi.spyOn(connection, "start");
+      if (phase === "initial admission") {
+        start.mockRejectedValue(deadline);
+      } else {
+        start.mockResolvedValue({
+          type: "worker-hello-ok",
+          environmentId: launch.admission.environmentId,
+          sessionId: SESSION_ID,
+          ownerEpoch: OWNER_EPOCH,
+          rpcSetVersion: WORKER_RPC_SET_VERSION,
+          protocolFeatures: [...WORKER_PROTOCOL_FEATURES],
+          credentialExpiresAtMs: Date.now() + 60_000,
+          policy: { heartbeatIntervalMs: 60_000, maxPayload: 25 * 1024 * 1024 },
+        });
+      }
+      const connectionModule = await import("./worker-connection.js");
+      const factory = vi
+        .spyOn(connectionModule, "createWorkerConnection")
+        .mockImplementation((options) => {
+          options.onConnectionFailure?.(new Error("connect ECONNREFUSED"));
+          return connection;
+        });
+      const embeddedRuntime = await import("./embedded-agent.runtime.js");
+      const runTurn = vi
+        .spyOn(embeddedRuntime, "runWorkerEmbeddedTurn")
+        .mockRejectedValue(deadline);
+      try {
+        if (phase === "initial admission") {
+          await expect(runWorkerDescriptor(launch)).resolves.toEqual({
+            status: "not-started",
+            reason: "admission-deadline",
+            errorText: expect.stringContaining("connect ECONNREFUSED"),
+          });
+          expect(runTurn).not.toHaveBeenCalled();
+        } else {
+          await expect(runWorkerDescriptor(launch)).rejects.toBe(deadline);
+          expect(runTurn).toHaveBeenCalledOnce();
+        }
+      } finally {
+        runTurn.mockRestore();
+        factory.mockRestore();
+        start.mockRestore();
+        await connection.stop();
+      }
+    },
+  );
 
   it("exits cleanly when admission observes a superseded owner epoch", async () => {
     const { launch } = await setup({ admissionFailure: "owner-epoch-mismatch" });

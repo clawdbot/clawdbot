@@ -31,6 +31,7 @@ vi.mock("../../media/store.js", async (importOriginal) => {
   return { ...actual, readMediaBuffer: mocks.readMediaBuffer };
 });
 
+import { resolveSessionStorePathCore } from "../../config/sessions.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
@@ -40,8 +41,10 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { listSessionStateEventsSince } from "../../sessions/session-state-events.js";
 import { upsertSessionUpstreamLink } from "../../sessions/session-upstream-links.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { sessionRewindHandlers } from "./sessions-rewind.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -279,6 +282,17 @@ function installUpstreamForkHarness(): void {
     },
   });
   setActivePluginRegistry(registry);
+}
+
+async function archiveSourceSession(storePath?: string): Promise<void> {
+  const entry = expectDefined(
+    loadSessionEntry({ agentId: "main", sessionKey, storePath }),
+    "source session",
+  );
+  await upsertSessionEntryCore(
+    { agentId: "main", sessionKey, storePath },
+    { ...entry, archivedAt: Date.now() },
+  );
 }
 
 describe("session message-cut methods", () => {
@@ -526,6 +540,66 @@ describe("session message-cut methods", () => {
       undefined,
     );
     expect(mocks.readMediaBuffer).toHaveBeenCalledTimes(4);
+  });
+
+  it.each([
+    ["sessions.rewind", "user-entry", "Rewind"],
+    ["sessions.branches.switch", "off-path-entry", "Branch switch"],
+  ] as const)("rejects archived %s", async (method, entryId, label) => {
+    await archiveSourceSession();
+
+    const respond = await invoke(method, entryId);
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: `${label} is unavailable for archived sessions.`,
+      }),
+    );
+  });
+
+  it("allows archived sessions to fork", async () => {
+    await archiveSourceSession();
+
+    const respond = await invoke("sessions.fork", "user-entry");
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ sessionKey: expect.any(String) }),
+      undefined,
+    );
+  });
+
+  it("rechecks archived state after waiting for the session lifecycle lock", async () => {
+    const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
+    const mutationEntered = createDeferredCore();
+    const releaseMutation = createDeferredCore();
+    const archiving = runExclusiveSessionLifecycleMutation({
+      scope: storePath,
+      identities: [sourceSessionId],
+      run: async () => {
+        mutationEntered.resolve();
+        await releaseMutation.promise;
+        await archiveSourceSession(storePath);
+      },
+    });
+    await mutationEntered.promise;
+
+    const rewinding = invoke("sessions.rewind", "user-entry");
+    releaseMutation.resolve();
+    await archiving;
+
+    const respond = await rewinding;
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "Rewind is unavailable for archived sessions.",
+      }),
+    );
   });
 
   it.each([

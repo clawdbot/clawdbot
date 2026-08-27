@@ -1,5 +1,6 @@
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import { expect, it } from "vitest";
+import { CLOUD_PROFILE_RETRY_DELAYS_MS } from "../pages/new-session/cloud-profile-discovery.ts";
 import {
   WORKSPACE,
   captureDeviceRuntimeUiProof,
@@ -102,9 +103,15 @@ suite.define(() => {
   });
 
   it.each(deviceTargets)(
-    "does not dispatch the $name device from stale capacity during a topology refresh",
+    "does not dispatch the $name device from stale capacity during a failed topology refresh",
     async ({ value }) => {
-      const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+      const context = await suite.browser.newContext({
+        locale: "en-US",
+        serviceWorkers: "block",
+        ...(process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+          ? { recordVideo: { dir: ".artifacts/control-ui-e2e/device-runtime-gating" } }
+          : {}),
+      });
       const page = await context.newPage();
       const environment = {
         id: "node:paired-runner",
@@ -133,7 +140,15 @@ suite.define(() => {
         await page.locator(".new-session-page__message").fill("require current worker capacity");
         const start = page.getByRole("button", { name: "Start session" });
         await expect.poll(() => start.isEnabled()).toBe(true);
+        await where.click();
+        const selectedDevice = page.locator('[data-value="device:paired-runner"]');
+        const automaticDevice = page.locator('[data-value="auto-device"]');
+        const localDevice = page.locator('[data-value="gateway"]');
+        await selectedDevice.waitFor({ state: "visible" });
 
+        const clockTime = Date.now();
+        await page.clock.install({ time: clockTime });
+        await page.clock.pauseAt(clockTime + 1_000);
         await gateway.deferNext("environments.list");
         const requestsBeforeRefresh = (await gateway.getRequests("environments.list")).length;
         await gateway.emitGatewayEvent("node.runnerInventory.changed", {
@@ -148,6 +163,24 @@ suite.define(() => {
           )
           .toBe(value === "auto-device" ? "true" : "paired-runner");
 
+        await gateway.rejectDeferred("environments.list", {
+          code: "UNAVAILABLE",
+          message: "worker inventory is temporarily unavailable",
+        });
+        await page.clock.runFor(CLOUD_PROFILE_RETRY_DELAYS_MS[0] - 1);
+        expect(await gateway.getRequests("environments.list")).toHaveLength(
+          requestsBeforeRefresh + 1,
+        );
+        await captureDeviceRuntimeUiProof(page, `failed-topology-${value.replace(":", "-")}.png`);
+        expect(await start.isDisabled()).toBe(true);
+        expect(await selectedDevice.isDisabled()).toBe(true);
+        expect(await automaticDevice.isDisabled()).toBe(true);
+        expect(await localDevice.isEnabled()).toBe(true);
+        expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+
+        await gateway.deferNext("environments.list");
+        await page.clock.runFor(1);
+        await gateway.waitForRequest("environments.list", { after: requestsBeforeRefresh + 1 });
         await gateway.resolveDeferred("environments.list", {
           environments: [{ ...environment, workerSlots: { total: 2, available: 0 } }],
           profiles: [],
@@ -157,6 +190,15 @@ suite.define(() => {
           .poll(() => start.locator("xpath=..").getAttribute("content"))
           .toContain("No worker slots are available");
         expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+
+        await page.clock.resume();
+        await gateway.emitGatewayEvent("node.runnerInventory.changed", {
+          nodeId: "paired-runner",
+        });
+        await gateway.waitForRequest("environments.list", { after: requestsBeforeRefresh + 2 });
+        await expect.poll(() => start.isEnabled()).toBe(true);
+        expect(await selectedDevice.isEnabled()).toBe(true);
+        expect(await automaticDevice.isEnabled()).toBe(true);
       } finally {
         await context.close();
       }
@@ -190,6 +232,22 @@ suite.define(() => {
     async ({ preference, attribute, value, target }) => {
       const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
       const page = await context.newPage();
+      if (preference.kind === "cloud") {
+        // Settle recovery scope after discovery starts: both the retired and
+        // replacement catalog request must stay held until restoration resumes.
+        await page.addInitScript(() => {
+          const originalDigest = crypto.subtle.digest.bind(crypto.subtle);
+          const delayed = new Promise<void>((resolve) => {
+            window.addEventListener("test-release-recovery-scope", () => resolve(), { once: true });
+          });
+          crypto.subtle.digest = async (algorithm, data) => {
+            if (new TextDecoder().decode(data) === "e2e-device-token") {
+              await delayed;
+            }
+            return originalDigest(algorithm, data);
+          };
+        });
+      }
       const appUrl = new URL(suite.server.baseUrl);
       const gatewayUrl = `${appUrl.protocol === "https:" ? "wss:" : "ws:"}//${appUrl.host}`;
       const storageKey = `openclaw.new-session.preferences.v1:${gatewayOriginScope(gatewayUrl)}`;
@@ -219,11 +277,12 @@ suite.define(() => {
         { key: storageKey, workspace: WORKSPACE, where: preference },
       );
       const gateway = await installMockGateway(page, {
-        deferredMethods: ["environments.list"],
+        heldMethods: ["environments.list"],
         operatorScopes: ["operator.read", "operator.write", "operator.admin"],
         workspace: WORKSPACE,
         workspaceGit: true,
         methodResponses: {
+          "environments.list": catalog,
           "worktrees.branches": {
             branches: [{ kind: "local", name: "main" }],
             defaultBranch: "main",
@@ -242,6 +301,12 @@ suite.define(() => {
         await expect
           .poll(() => page.locator("#new-session-detail-trigger").getAttribute("data-worktree"))
           .toBe("true");
+        if (preference.kind === "cloud") {
+          await page.evaluate(() => {
+            window.dispatchEvent(new Event("test-release-recovery-scope"));
+          });
+          await gateway.waitForRequest("environments.list", { after: 1 });
+        }
         await page.locator(".new-session-page__message").fill("keep my chosen remote destination");
         const start = page.getByRole("button", { name: "Start session" });
         await expect.poll(() => start.isDisabled()).toBe(true);
@@ -250,7 +315,7 @@ suite.define(() => {
           .toContain("Restoring your last session setup");
         expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
 
-        await gateway.resolveDeferred("environments.list", catalog);
+        await gateway.resolveDeferred("environments.list");
         const where = page.locator("#new-session-where-trigger");
         await expect.poll(() => where.getAttribute(attribute)).toBe(value);
         await expect.poll(() => start.isEnabled()).toBe(true);
