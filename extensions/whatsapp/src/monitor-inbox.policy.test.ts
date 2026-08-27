@@ -2,13 +2,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { WebInboundMessage } from "./inbound/types.js";
 import {
-  DEFAULT_ACCOUNT_ID,
-  getAuthDir,
-  getMonitorWebInbox,
-  getSock,
   installWebMonitorInboxUnitTestHooks,
   mockLoadConfig,
-  settleInboundWork,
+  startInboxMonitor,
+  waitForInboundWorkDrained,
   waitForMessageCalls,
   waitForPairingPromptSent,
 } from "./monitor-inbox.test-harness.js";
@@ -59,28 +56,16 @@ async function startWebInboxMonitor(params: {
   loadConfig?: () => Record<string, unknown>;
   sendReadReceipts?: boolean;
 }) {
-  const monitorWebInbox = getMonitorWebInbox();
   if (params.config) {
     mockLoadConfig.mockReturnValue(params.config);
   }
   const onMessage = vi.fn();
-  const base = {
+  const { listener, sock } = await startInboxMonitor(onMessage, {
     cfg: (params.config ?? mockLoadConfig()) as never,
     ...(params.loadConfig ? { loadConfig: params.loadConfig as never } : {}),
-    verbose: false,
-    accountId: DEFAULT_ACCOUNT_ID,
-    authDir: getAuthDir(),
-    onMessage,
-  };
-  const listener = await monitorWebInbox(
-    params.sendReadReceipts === undefined
-      ? base
-      : {
-          ...base,
-          sendReadReceipts: params.sendReadReceipts,
-        },
-  );
-  return { onMessage, listener, sock: getSock() };
+    ...(params.sendReadReceipts === undefined ? {} : { sendReadReceipts: params.sendReadReceipts }),
+  });
+  return { onMessage, listener, sock };
 }
 
 function firstInboundPayload(onMessage: ReturnType<typeof vi.fn>) {
@@ -169,7 +154,7 @@ describe("web monitor inbox", () => {
         }),
       ),
     );
-    await settleInboundWork();
+    await waitForInboundWorkDrained();
 
     expect(onMessage).not.toHaveBeenCalled();
     expect(sock.sendMessage).not.toHaveBeenCalled();
@@ -367,7 +352,7 @@ describe("web monitor inbox", () => {
           }),
         ),
       );
-      await settleInboundWork();
+      await waitForInboundWorkDrained();
 
       expect(onMessage).toHaveBeenCalledTimes(expectedCalls);
       if (expectedCalls === 1) {
