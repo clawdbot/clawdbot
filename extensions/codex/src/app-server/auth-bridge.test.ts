@@ -795,20 +795,35 @@ describe("bridgeCodexAppServerStartOptions", () => {
     });
   });
 
-  it("preserves custom stdio backend arguments", async () => {
-    await withTempDir("openclaw-codex-custom-backend-", async (agentDir) => {
-      const startOptions = createStartOptions({
-        command: "custom-codex-compatible-server",
-        commandSource: "config",
-        args: [],
+  it.each([
+    { commandSource: "config", authProfileId: "openai:test", ephemeral: true },
+    { commandSource: "env", authProfileId: "openai:test", ephemeral: true },
+    { commandSource: "config", authProfileId: null, ephemeral: false },
+    { commandSource: "env", authProfileId: null, ephemeral: false },
+  ] as const)(
+    "uses ephemeral=$ephemeral auth for a $commandSource command with profile $authProfileId",
+    async ({ commandSource, authProfileId, ephemeral }) => {
+      await withTempDir("openclaw-codex-custom-backend-", async (agentDir) => {
+        const startOptions = createStartOptions({
+          command: "/custom/codex",
+          commandSource,
+        });
+
+        const bridged = await bridgeCodexAppServerStartOptions({
+          startOptions,
+          agentDir,
+          authProfileId,
+          authProfileStore: {
+            version: 1,
+            profiles: { "openai:test": { type: "api_key", provider: "openai", key: "fake-key" } },
+          },
+        });
+
+        expect(bridged.args).toEqual(ephemeral ? EPHEMERAL_AUTH_ARGS : ["app-server"]);
+        expect(startOptions.args).toEqual(["app-server"]);
       });
-      await writeCodexCliAuthFile(resolveCodexAppServerHomeDir(agentDir));
-
-      const bridged = await bridgeCodexAppServerStartOptions({ startOptions, agentDir });
-
-      expect(bridged.args).toEqual([]);
-    });
-  });
+    },
+  );
 
   it("preserves inherited HOME when clearEnv asks to clear app-server isolation vars", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
