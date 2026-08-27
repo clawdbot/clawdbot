@@ -147,7 +147,10 @@ export class ShellChromeOwner {
       this.handleKeyboardShortcutsRequest,
       options,
     );
-    document.addEventListener("keydown", this.handleDocumentKeydown, options);
+    document.addEventListener("keydown", this.handleDocumentKeydown, {
+      capture: true,
+      signal: this.listeners.signal,
+    });
     window.addEventListener("resize", this.handleWindowResize, options);
     window.addEventListener("dragover", this.handleUnhandledFileDrag, options);
     window.addEventListener("drop", this.handleUnhandledFileDrag, options);
@@ -394,7 +397,7 @@ export class ShellChromeOwner {
   readonly handleDocumentKeydown = (event: KeyboardEvent): void => {
     const host = this.host;
     if (host.navDrawerOpen && isMobileNavLayout()) {
-      if (document.openClawModalLayers?.size) {
+      if (event.defaultPrevented || document.openClawModalLayers?.size) {
         return;
       }
       if (

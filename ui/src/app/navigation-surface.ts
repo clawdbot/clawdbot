@@ -16,7 +16,11 @@ export function trapNavDrawerFocus(host: HTMLElement, event: KeyboardEvent): voi
   );
   const target = event.shiftKey ? focusable.at(-1) : focusable[0];
   const boundary = event.shiftKey ? focusable[0] : focusable.at(-1);
-  if (!drawer.contains(document.activeElement) || document.activeElement === boundary) {
+  if (
+    !drawer.contains(document.activeElement) ||
+    document.activeElement === boundary ||
+    (event.shiftKey && document.activeElement === drawer)
+  ) {
     event.preventDefault();
     (target ?? drawer).focus({ preventScroll: true });
   }
