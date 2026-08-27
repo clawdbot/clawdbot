@@ -3,14 +3,24 @@
  *
  * Resolves `**\/AGENTS.md`-style extra-bootstrap patterns with Node's async
  * `fs.promises.glob`, which awaits per-directory lstat/readdir and keeps the
- * event loop live during embedded_run bootstrap-context — the reason no bespoke
- * yielding walker is needed here. fs.glob owns matching (dot rules, platform
- * case, `..`, literal-named directory symlinks); this module only filters each
- * match to a workspace-contained realpath, a boundary fs.glob does not enforce,
- * so out-of-workspace bootstrap content never reaches the prompt.
+ * event loop live during embedded_run bootstrap-context. fs.glob owns matching
+ * (dot rules, platform case, `..`, literal-named directory symlinks); this
+ * module only filters each match to a workspace-contained realpath, a boundary
+ * fs.glob does not enforce, so out-of-workspace bootstrap content never reaches
+ * the prompt.
+ *
+ * fs.glob is absent on some runtimes (older Node, certain Bun builds). A narrow
+ * capability fallback resolves the same pattern with a local Minimatch directory
+ * walk there, so a configured glob still loads its files instead of throwing
+ * into the loader's `io` diagnostic and dropping the whole configured set. The
+ * fallback triggers only when the API is unavailable — a real fs.glob error
+ * still surfaces — and its matches pass through the same realpath containment
+ * filter as the fs.glob path.
  */
+import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { Minimatch } from "minimatch";
 import { isPathInside } from "../infra/path-guards.js";
 
 // Normalize a configured pattern to POSIX-relative form: fs.glob expects
@@ -74,8 +84,72 @@ function literalPatternPrefix(pattern: string, routedToGlob: boolean): string {
   return literal.join("/") || ".";
 }
 
-// Resolve a glob pattern to workspace-relative POSIX paths via Node's async
-// fs.glob, keeping only matches whose realpath stays inside the workspace root.
+// Walk root for the fs.glob-absent fallback: the literal directory prefix before
+// the first glob-magic character, so the local scan starts where fs.glob would
+// root its walk instead of always re-reading from the workspace root.
+function resolveFallbackWalkRoot(normalizedPattern: string): string {
+  const globIndex = normalizedPattern.search(/[?*{}]/u);
+  if (globIndex === -1) {
+    return normalizedPattern;
+  }
+  const slashIndex = normalizedPattern.lastIndexOf("/", globIndex);
+  return slashIndex === -1 ? "." : normalizedPattern.slice(0, slashIndex) || ".";
+}
+
+// fs.glob-absent fallback matcher (older Node / some Bun builds): resolve the
+// pattern with a local Minimatch directory walk, yielding workspace-relative
+// matches for the shared realpath-containment filter in the resolver. A subtree
+// that cannot be read is skipped, not thrown — mirroring how fs.glob walks past
+// an unreadable branch, so an unreadable sibling package never aborts loading of
+// a readable one. Yields the raw separator-joined relative path (backslashes
+// preserved) so the caller's toPortableMatchPath folds only the platform
+// separator, exactly as on the fs.glob path.
+async function* walkFallbackMatches(
+  workspaceDir: string,
+  normalizedPattern: string,
+): AsyncGenerator<string> {
+  const matcher = new Minimatch(normalizedPattern, {
+    nocomment: true,
+    nonegate: true,
+    windowsPathsNoEscape: true,
+  });
+  const walkRoot = resolveFallbackWalkRoot(normalizedPattern);
+  const stack = [walkRoot === "." ? "" : walkRoot];
+  while (stack.length > 0) {
+    const currentRelativeDir = stack.pop() ?? "";
+    const currentDir = path.resolve(workspaceDir, currentRelativeDir);
+    if (!isPathInside(workspaceDir, currentDir)) {
+      continue;
+    }
+    let entries: syncFs.Dirent[];
+    try {
+      entries = await fs.readdir(currentDir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const childRelativePath = currentRelativeDir
+        ? path.join(currentRelativeDir, entry.name)
+        : entry.name;
+      const matchKey = toPortableMatchPath(childRelativePath);
+      if (entry.isDirectory()) {
+        // Descend only where a partial match can still be completed: a shallow
+        // pattern never enters a deeper subtree, bounding the walk to fs.glob's.
+        if (matcher.match(matchKey, true)) {
+          stack.push(childRelativePath);
+        }
+        continue;
+      }
+      if ((entry.isFile() || entry.isSymbolicLink()) && matcher.match(matchKey)) {
+        yield childRelativePath;
+      }
+    }
+  }
+}
+
+// Resolve a glob pattern to workspace-relative POSIX paths, keeping only matches
+// whose realpath stays inside the workspace root. fs.glob owns matching where
+// available; a runtime without it uses the local Minimatch walk fallback.
 export async function resolveExtraBootstrapPatternPaths(
   workspaceDir: string,
   pattern: string,
@@ -91,12 +165,20 @@ export async function resolveExtraBootstrapPatternPaths(
     workspaceRealpath = path.resolve(workspaceDir);
   }
   const matches = new Set<string>();
+  // Capability branch: fs.glob is the matcher wherever it exists; the local walk
+  // keeps configured patterns resolving where it is absent. Narrow by design — it
+  // switches on the missing API only and never swallows a real fs.glob error.
+  const matchSource =
+    typeof fs.glob === "function"
+      ? fs.glob(normalizedPattern, { cwd: workspaceDir })
+      : walkFallbackMatches(workspaceDir, normalizedPattern);
   try {
     // Single async pass. fs.glob resolves `..` (a globstar parent steps above
     // cwd) and follows literal-named directory symlinks out of the tree; the
     // realpath containment filter drops any match that escapes the workspace so
-    // those never enter the prompt.
-    for await (const relativeMatch of fs.glob(normalizedPattern, { cwd: workspaceDir })) {
+    // those never enter the prompt. The fallback walk yields the same shape and
+    // shares this filter.
+    for await (const relativeMatch of matchSource) {
       const absolute = path.resolve(workspaceDir, relativeMatch);
       let realpath: string;
       try {

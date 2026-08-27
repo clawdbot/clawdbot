@@ -9,6 +9,21 @@ import {
   loadWorkspacePatternFilesWithDiagnostics,
 } from "./workspace.js";
 
+// Run `body` with fs.promises.glob hidden so the pattern resolver takes its
+// capability fallback, as on a runtime that ships no fs.glob. Restored in
+// `finally` so no sibling test observes the gap.
+async function withoutFsGlob(body: () => Promise<void>): Promise<void> {
+  const original = Object.getOwnPropertyDescriptor(fs, "glob");
+  Object.defineProperty(fs, "glob", { value: undefined, configurable: true, writable: true });
+  try {
+    await body();
+  } finally {
+    if (original) {
+      Object.defineProperty(fs, "glob", original);
+    }
+  }
+}
+
 describe("loadExtraBootstrapFilesWithDiagnostics", () => {
   let fixtureRoot = "";
   let fixtureCount = 0;
@@ -1010,6 +1025,43 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
         ]);
       } finally {
         await fs.chmod(privateDir, 0o700);
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "preserves strictPatternRead sibling semantics when fs.glob is absent",
+    async () => {
+      // The fs.glob-absent fallback must not alter strictPatternRead's
+      // sibling-directory behavior: an unreadable sibling package (EACCES) is still
+      // walked past, the readable sibling still loads, and no diagnostic is
+      // surfaced — identical to the fs.glob path proved by the test above. The local
+      // walk skips a subtree it cannot read exactly as fs.glob does.
+      const workspaceDir = await createWorkspaceDir("strict-unreadable-noglob");
+      const blockedDir = path.join(workspaceDir, "packages", "blocked");
+      const readableDir = path.join(workspaceDir, "packages", "readable");
+      await fs.mkdir(blockedDir, { recursive: true });
+      await fs.mkdir(readableDir, { recursive: true });
+      await fs.writeFile(path.join(blockedDir, "TOOLS.md"), "blocked", "utf-8");
+      await fs.writeFile(path.join(readableDir, "TOOLS.md"), "readable", "utf-8");
+      await fs.chmod(blockedDir, 0o000);
+      try {
+        await withoutFsGlob(async () => {
+          const result = await loadWorkspacePatternFilesWithDiagnostics(
+            workspaceDir,
+            ["packages/*/TOOLS.md"],
+            {
+              acceptedBasenames: new Set(["TOOLS.md"]),
+              strictPatternRead: true,
+            },
+          );
+          expect(result.files).toEqual([
+            expect.objectContaining({ path: path.join(readableDir, "TOOLS.md") }),
+          ]);
+          expect(result.diagnostics).toEqual([]);
+        });
+      } finally {
+        await fs.chmod(blockedDir, 0o700);
       }
     },
   );

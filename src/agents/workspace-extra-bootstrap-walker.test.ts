@@ -4,6 +4,8 @@
 // directly against `fs.glob` over the same real tree (the parity oracle) and pin
 // the two places the containment filter must diverge from fs.glob: a match whose
 // realpath escapes the workspace, and a literal-named symlink pointing outside.
+// A final block covers the fs.glob-absent capability fallback (runtimes without
+// fs.promises.glob), where matching runs through the local Minimatch walk.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -897,6 +899,168 @@ describe("resolveExtraBootstrapPatternPaths literal-backslash match paths", () =
       );
       expect(backslashFile?.content).toBe("backslash agents");
       expect(diagnostics).toHaveLength(0);
+    },
+  );
+});
+
+describe("resolveExtraBootstrapPatternPaths fs.glob-absent fallback", () => {
+  let fixtureRoot = "";
+  let fixtureCount = 0;
+
+  const createWorkspaceDir = async (prefix: string) => {
+    const dir = path.join(fixtureRoot, `${prefix}-${fixtureCount++}`);
+    await fs.mkdir(dir, { recursive: true });
+    return dir;
+  };
+
+  const trySymlink = async (target: string, linkPath: string): Promise<boolean> => {
+    try {
+      await fs.symlink(target, linkPath, "dir");
+      return true;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code ?? "";
+      if (["EPERM", "EACCES", "ENOSYS"].includes(code)) {
+        return false;
+      }
+      throw err;
+    }
+  };
+
+  // Run `body` with fs.promises.glob hidden so the resolver takes its capability
+  // fallback, exactly as it would on a runtime that ships no fs.glob (older Node,
+  // some Bun builds). Restored in `finally` so no sibling test observes the gap.
+  const withoutFsGlob = async (body: () => Promise<void>): Promise<void> => {
+    const original = Object.getOwnPropertyDescriptor(fs, "glob");
+    Object.defineProperty(fs, "glob", { value: undefined, configurable: true, writable: true });
+    try {
+      expect(typeof fs.glob).not.toBe("function");
+      await body();
+    } finally {
+      if (original) {
+        Object.defineProperty(fs, "glob", original);
+      }
+    }
+  };
+
+  beforeAll(async () => {
+    // realpath the root so the shared containment realpath compares canonical
+    // paths on macOS (/var -> /private/var).
+    fixtureRoot = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-walker-noglob-")),
+    );
+  });
+
+  afterAll(async () => {
+    if (fixtureRoot) {
+      await fs.rm(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("discriminates the fix: an unguarded fs.glob call throws when the API is absent", async () => {
+    // Discriminating control. The pre-fix resolver iterated `fs.glob(...)`
+    // unconditionally; with the API hidden that exact call throws synchronously.
+    // This reproduces the failure the fallback removes — the throw the loader turns
+    // into an `io` diagnostic and an empty match set — proving the fallback, not
+    // the test harness, is what lets the guarded resolver succeed in the cases
+    // below.
+    const workspaceDir = await createWorkspaceDir("control");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "root", "utf-8");
+    await withoutFsGlob(async () => {
+      const callUnguardedGlob = () =>
+        (fs.glob as unknown as (pattern: string, options: unknown) => AsyncIterable<string>)(
+          "**/AGENTS.md",
+          { cwd: workspaceDir },
+        );
+      expect(callUnguardedGlob).toThrow();
+    });
+  });
+
+  it("resolves a recursive pattern via the local walk when fs.glob is absent", async () => {
+    // Fix: without fs.glob the resolver falls back to the local Minimatch walk and
+    // still returns every configured match across sibling directories instead of
+    // throwing. Same match set the fs.glob path returns for this tree.
+    const workspaceDir = await createWorkspaceDir("recursive");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "root", "utf-8");
+    await fs.mkdir(path.join(workspaceDir, "pkg-a"), { recursive: true });
+    await fs.mkdir(path.join(workspaceDir, "pkg-b", "deep"), { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "pkg-a", "AGENTS.md"), "a", "utf-8");
+    await fs.writeFile(path.join(workspaceDir, "pkg-b", "deep", "AGENTS.md"), "bd", "utf-8");
+
+    await withoutFsGlob(async () => {
+      const matches = (
+        await resolveExtraBootstrapPatternPaths(workspaceDir, "**/AGENTS.md")
+      ).toSorted();
+      expect(matches).toStrictEqual(["AGENTS.md", "pkg-a/AGENTS.md", "pkg-b/deep/AGENTS.md"]);
+    });
+  });
+
+  it("roots the fallback walk at the pattern's literal prefix", async () => {
+    // The fallback scans from the literal directory prefix before the first
+    // glob-magic segment (`packages/*/TOOLS.md` -> `packages`), matching only the
+    // intended sibling packages and never a same-named file outside that prefix.
+    const workspaceDir = await createWorkspaceDir("prefixed");
+    await fs.mkdir(path.join(workspaceDir, "packages", "one"), { recursive: true });
+    await fs.mkdir(path.join(workspaceDir, "packages", "two"), { recursive: true });
+    await fs.mkdir(path.join(workspaceDir, "elsewhere"), { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "packages", "one", "TOOLS.md"), "one", "utf-8");
+    await fs.writeFile(path.join(workspaceDir, "packages", "two", "TOOLS.md"), "two", "utf-8");
+    await fs.writeFile(path.join(workspaceDir, "elsewhere", "TOOLS.md"), "no", "utf-8");
+
+    await withoutFsGlob(async () => {
+      const matches = (
+        await resolveExtraBootstrapPatternPaths(workspaceDir, "packages/*/TOOLS.md")
+      ).toSorted();
+      expect(matches).toStrictEqual(["packages/one/TOOLS.md", "packages/two/TOOLS.md"]);
+    });
+  });
+
+  it("loads configured bootstrap files through the loader when fs.glob is absent", async () => {
+    // Loader-boundary discriminating test. Pre-fix, a configured glob with no
+    // fs.glob threw into the loader's catch, producing an `io` diagnostic and an
+    // EMPTY file set. Post-fix the fallback resolves the pattern, so the file loads
+    // and no diagnostic is surfaced. This single assertion fails on pre-fix code
+    // (empty files + io diagnostic) and passes on the fix.
+    const workspaceDir = await createWorkspaceDir("loader-boundary");
+    await fs.mkdir(path.join(workspaceDir, "pkg"), { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "pkg", "AGENTS.md"), "pkg agents", "utf-8");
+
+    await withoutFsGlob(async () => {
+      const { files, diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(workspaceDir, [
+        "**/AGENTS.md",
+      ]);
+      const loaded = files.find(
+        (file) => file.path === path.join(workspaceDir, "pkg", "AGENTS.md"),
+      );
+      expect(loaded?.content).toBe("pkg agents");
+      expect(diagnostics).toStrictEqual([]);
+    });
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "drops a fallback match whose realpath escapes the workspace",
+    async () => {
+      // Containment holds on the fallback path too: a literal-named directory
+      // symlink whose target escapes the workspace is dropped by the shared
+      // realpath filter, so out-of-tree bootstrap content never reaches the prompt
+      // even without fs.glob.
+      const rootDir = await createWorkspaceDir("escape");
+      const workspaceDir = path.join(rootDir, "workspace");
+      const outsideDir = path.join(rootDir, "outside");
+      const pkgDir = path.join(workspaceDir, "pkg");
+      await fs.mkdir(pkgDir, { recursive: true });
+      await fs.mkdir(outsideDir, { recursive: true });
+      await fs.writeFile(path.join(outsideDir, "AGENTS.md"), "outside", "utf-8");
+      if (!(await trySymlink(path.join("..", "..", "outside"), path.join(pkgDir, "linked")))) {
+        return;
+      }
+
+      await withoutFsGlob(async () => {
+        const matches = await resolveExtraBootstrapPatternPaths(
+          workspaceDir,
+          "pkg/linked/**/AGENTS.md",
+        );
+        expect(matches).toStrictEqual([]);
+      });
     },
   );
 });
