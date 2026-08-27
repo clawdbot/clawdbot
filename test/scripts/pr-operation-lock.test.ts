@@ -1248,6 +1248,74 @@ describePosix("scripts/pr per-PR operation lock", () => {
     expect(result.stderr).not.toContain("Retaining the operation lock");
     expect(refExists(repoDir)).toBe(false);
   });
+  it("releases the linked-wrapper lock after the operation removes its worktree", () => {
+    const repoDir = realpathSync(createRepo());
+    const { binDir } = installPrCliFixture(repoDir);
+    installRequiredPrCommandStubs(binDir);
+    for (const file of [
+      "scripts/watch-pr-ci.mjs",
+      "scripts/watch-pr-ci.mts",
+      "scripts/verify-pr-hosted-gates.mjs",
+      "scripts/verify-pr-hosted-gates.mts",
+      "scripts/lib/plain-gh.mjs",
+      "scripts/lib/direct-run.mjs",
+      "scripts/lib/tsx-cli-shim.mjs",
+    ]) {
+      writeFileSync(join(repoDir, file), "// fixture\n");
+    }
+    writeFileSync(
+      join(repoDir, "scripts", "lib", "plain-gh.sh"),
+      "resolve_plain_gh_bin() { printf '/usr/bin/true\\n'; }\ngh_plain() { :; }\n",
+    );
+    writeFileSync(
+      join(repoDir, "scripts", "pr-lib", "common.sh"),
+      [
+        "validate_pr_temp_storage() { :; }",
+        `read_pr_view_json() { printf '%s\\n' '{"baseRefName":"main"}'; }`,
+        "pr_view_string_field() { printf 'main\\n'; }",
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(repoDir, "scripts", "pr-lib", "merge.sh"),
+      [
+        "merge_run() {",
+        '  local pr="$1" root',
+        "  root=$(repo_root)",
+        '  cd "$root"',
+        '  git worktree remove --force ".worktrees/pr-$pr"',
+        "  printf 'fixture: linked worktree deleted\\n'",
+        "}",
+      ].join("\n"),
+    );
+    execFileSync("git", ["add", "scripts"], { cwd: repoDir });
+    execFileSync("git", ["commit", "-qm", "test: origin main wrapper"], { cwd: repoDir });
+    execFileSync("git", ["update-ref", "refs/remotes/origin/main", "main"], { cwd: repoDir });
+
+    const linkedDir = join(repoDir, ".worktrees", "pr-42");
+    execFileSync("git", ["worktree", "add", "-q", "-b", "pr-42", linkedDir, "main"], {
+      cwd: repoDir,
+    });
+    execFileSync("git", ["switch", "-q", "-c", "release/test-train"], { cwd: repoDir });
+    writeFileSync(join(repoDir, "scripts", "pr-lib", "gates.sh"), "ci_dispatch() { :; }\n");
+    execFileSync("git", ["add", "scripts/pr-lib/gates.sh"], { cwd: repoDir });
+    execFileSync("git", ["commit", "-qm", "test: canonical wrapper drift"], { cwd: repoDir });
+
+    const result = spawnSync(join(linkedDir, "scripts", "pr"), ["merge-run", "42"], {
+      cwd: linkedDir,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_GH_BIN: "/usr/bin/true",
+        PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
+      },
+    });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stdout).toContain("fixture: linked worktree deleted");
+    expect(existsSync(linkedDir)).toBe(false);
+    expect(refExists(repoDir)).toBe(false);
+    expect(result.stderr).not.toContain("Retaining the operation lock");
+  });
   it("retains the exact owner when supervisor release cannot take the ref lock", async () => {
     const repoDir = createRepo();
     // Retry counts are covered above; this integration case only needs the real ref-lock failure.
@@ -1992,7 +2060,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
     expect(script).toContain('recover_pr_operation_lock "$pr" "$owner_oid" "$confirmation"');
     expect(script).toContain('source "$script_parent_dir/pr-lib/operation-lock.sh"');
     expect(script).toContain(
-      'pr-lib/process-group-runner.mjs" "$script_parent_dir/.." "$script_self" "$@"',
+      'pr-lib/process-group-runner.mjs" "$canonical_repo_root" "$script_self" "$@"',
     );
     expect(script).toContain('prepare_run "$pr"');
     expect(runner).toContain('process.platform === "win32"');
