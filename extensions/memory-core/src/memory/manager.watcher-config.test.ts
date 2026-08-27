@@ -354,20 +354,13 @@ describe("memory watcher config", () => {
       extraPaths: [{ path: extraDir, pattern: "notes/**/*.md" }],
     });
 
-    await expectWatcherManager(cfg);
+    const activeManager = await expectWatcherManager(cfg);
     const extraWatcher = createdNativeWatchers.find(
       (watcher) => watcher.dir === extraDir && watcher.recursive,
     );
     expect(extraWatcher).toBeDefined();
     vi.useFakeTimers();
-    const syncSpy = vi
-      .spyOn(
-        manager as unknown as {
-          sync: (params?: { reason?: string }) => Promise<void>;
-        },
-        "sync",
-      )
-      .mockResolvedValue(undefined);
+    const syncSpy = vi.spyOn(activeManager, "sync").mockResolvedValue(undefined);
 
     extraWatcher?.emit("change", path.join("drafts", "skip.md"));
     await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
@@ -438,16 +431,9 @@ describe("memory watcher config", () => {
       await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
       const cfg = createWatcherConfig();
 
-      await expectWatcherManager(cfg);
+      const activeManager = await expectWatcherManager(cfg);
       vi.useFakeTimers();
-      const syncSpy = vi
-        .spyOn(
-          manager as unknown as {
-            sync: (params?: { reason?: string }) => Promise<void>;
-          },
-          "sync",
-        )
-        .mockResolvedValue(undefined);
+      const syncSpy = vi.spyOn(activeManager, "sync").mockResolvedValue(undefined);
 
       createdChokidarWatchers[0]?.emit(event);
       await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
@@ -462,16 +448,9 @@ describe("memory watcher config", () => {
       await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
       const cfg = createWatcherConfig();
 
-      await expectWatcherManager(cfg);
+      const activeManager = await expectWatcherManager(cfg);
       vi.useFakeTimers();
-      const syncSpy = vi
-        .spyOn(
-          manager as unknown as {
-            sync: (params?: { reason?: string }) => Promise<void>;
-          },
-          "sync",
-        )
-        .mockResolvedValue(undefined);
+      const syncSpy = vi.spyOn(activeManager, "sync").mockResolvedValue(undefined);
 
       const memoryWatcher = createdNativeWatchers.find(
         (w) => w.dir === path.join(workspaceDir, "memory"),
@@ -487,16 +466,9 @@ describe("memory watcher config", () => {
     await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
     const cfg = createWatcherConfig();
 
-    await expectWatcherManager(cfg);
+    const activeManager = await expectWatcherManager(cfg);
     vi.useFakeTimers();
-    const syncSpy = vi
-      .spyOn(
-        manager as unknown as {
-          sync: (params?: { reason?: string }) => Promise<void>;
-        },
-        "sync",
-      )
-      .mockResolvedValue(undefined);
+    const syncSpy = vi.spyOn(activeManager, "sync").mockResolvedValue(undefined);
 
     const memoryWatcher = createdNativeWatchers.find(
       (w) => w.dir === path.join(workspaceDir, "memory"),
@@ -541,16 +513,9 @@ describe("memory watcher config", () => {
     await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
     const cfg = createWatcherConfig();
 
-    await expectWatcherManager(cfg);
+    const activeManager = await expectWatcherManager(cfg);
     vi.useFakeTimers();
-    const syncSpy = vi
-      .spyOn(
-        manager as unknown as {
-          sync: (params?: { reason?: string }) => Promise<void>;
-        },
-        "sync",
-      )
-      .mockResolvedValue(undefined);
+    const syncSpy = vi.spyOn(activeManager, "sync").mockResolvedValue(undefined);
 
     const memoryDir = path.join(workspaceDir, "memory");
     const memoryWatcher = createdNativeWatchers.find((w) => w.dir === memoryDir);
@@ -728,6 +693,35 @@ describe("memory watcher config", () => {
       path.join(workspaceDir, "MEMORY.md"),
       path.join(workspaceDir, "USER.md"),
     ]);
+  });
+
+  it("schedules startup sync when the Linux root disappears during its initial scan", async () => {
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
+    const dir = path.join(workspaceDir, "memory");
+    const originalReaddir = fsSync.readdirSync.bind(fsSync);
+    const readdirSpy = vi.spyOn(fsSync, "readdirSync");
+    readdirSpy.mockImplementation((...args: Parameters<typeof fsSync.readdirSync>) => {
+      if (String(args[0]) === dir) {
+        fsSync.renameSync(dir, path.join(workspaceDir, "previous-memory"));
+      }
+      return originalReaddir(...args);
+    });
+    try {
+      vi.useFakeTimers();
+      const activeManager = await expectWatcherManager(createWatcherConfig({ extraPaths: [] }));
+      const main = createdNativeWatchers.find((watcher) => watcher.dir === dir);
+      expect(main).toBeDefined();
+      expect(main!.close).toHaveBeenCalledTimes(1);
+      expect(createdNativeWatchers.some((watcher) => watcher.dir === workspaceDir)).toBe(false);
+      expect(watchMock).toHaveBeenCalledTimes(1);
+      const sync = vi.spyOn(activeManager, "sync").mockResolvedValue(undefined);
+      // ignoreInitial fallback cannot replace the broad sync lost with native coverage.
+      await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
+      expect(sync).toHaveBeenCalledExactlyOnceWith({ reason: "watch" });
+    } finally {
+      readdirSpy.mockRestore();
+    }
   });
 
   it.each(["ENOENT", "EACCES", "ROOT_REPLACED", "CHILD_STAT_MISSING"])(
@@ -1093,18 +1087,11 @@ describe("memory watcher config", () => {
     await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
     const cfg = createWatcherConfig();
 
-    await expectWatcherManager(cfg);
+    const activeManager = await expectWatcherManager(cfg);
     vi.useFakeTimers();
     const notesPath = path.join(extraDir, "notes.md");
     const initialStats = await fs.stat(notesPath);
-    const syncSpy = vi
-      .spyOn(
-        manager as unknown as {
-          sync: (params?: { reason?: string }) => Promise<void>;
-        },
-        "sync",
-      )
-      .mockResolvedValue(undefined);
+    const syncSpy = vi.spyOn(activeManager, "sync").mockResolvedValue(undefined);
 
     // extraDir is now watched via native fs.watch; emit a change event that
     // resolves to notes.md and confirm settle behavior still applies before

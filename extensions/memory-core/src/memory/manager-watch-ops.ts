@@ -586,6 +586,9 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
       subtreeAttached = fsSync.statSync(dir).ino === recordedInode && subtreeAttached;
     } catch (err) {
       this.closeNativeMemoryWatchPair(pair);
+      if (!this.closed) {
+        markDirty();
+      }
       return isFileMissingError(err) ? "missing" : "failed";
     }
     if (!subtreeAttached) {
