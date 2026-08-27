@@ -540,27 +540,30 @@ describe("handleSlackAction", () => {
       });
     });
 
-    it("allows a direct-operator origin to add and remove members", async () => {
-      const cfg = mgmtConfig();
-      const addResult = await handleSlackAction(
-        { action: "addMember", channelId: "C123", userId: "U1" },
-        cfg,
-        { conversationReadOrigin: "direct-operator" },
-      );
-      expect(requireDetails(addResult).ok).toBe(true);
-      expect(addSlackChannelMember).toHaveBeenCalledWith("C123", "U1", { cfg, teamId: undefined });
-
-      const removeResult = await handleSlackAction(
-        { action: "removeMember", channelId: "C123", userId: "U1" },
-        cfg,
-        { conversationReadOrigin: "direct-operator" },
-      );
-      expect(requireDetails(removeResult).ok).toBe(true);
-      expect(removeSlackChannelMember).toHaveBeenCalledWith("C123", "U1", {
-        cfg,
-        teamId: undefined,
-      });
-    });
+    it.each([
+      { action: "createChannel", params: { name: "new-channel" } },
+      { action: "renameChannel", params: { channelId: "C123", name: "renamed" } },
+      { action: "addMember", params: { channelId: "C123", userId: "U1" } },
+      { action: "removeMember", params: { channelId: "C123", userId: "U1" } },
+      { action: "archiveChannel", params: { channelId: "C123" } },
+    ])(
+      "rejects $action from a direct-operator read origin without touching Slack",
+      async ({ action, params }) => {
+        const cfg = mgmtConfig();
+        await expect(
+          handleSlackAction({ action, ...params }, cfg, {
+            conversationReadOrigin: "direct-operator",
+          }),
+        ).rejects.toThrow(
+          "Slack channel management requires an owner or operator.admin requester.",
+        );
+        expect(createSlackChannel).not.toHaveBeenCalled();
+        expect(renameSlackChannel).not.toHaveBeenCalled();
+        expect(addSlackChannelMember).not.toHaveBeenCalled();
+        expect(removeSlackChannelMember).not.toHaveBeenCalled();
+        expect(archiveSlackChannel).not.toHaveBeenCalled();
+      },
+    );
 
     it("archives a channel for an owner requester", async () => {
       const cfg = mgmtConfig();

@@ -273,9 +273,9 @@ function assertSlackChannelManagementAllowed(params: {
   account: ResolvedSlackAccount;
   context?: SlackActionContext;
 }) {
-  if (params.context?.conversationReadOrigin === "direct-operator") {
-    return;
-  }
+  // A direct-operator read origin only proves conversation-read visibility; it must
+  // not authorize workspace mutations. Match the Teams sibling boundary by requiring
+  // senderIsOwner or operator.admin for every channel-management write.
   if (params.context?.senderIsOwner === true) {
     return;
   }
