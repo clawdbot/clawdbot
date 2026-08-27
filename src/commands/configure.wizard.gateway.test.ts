@@ -133,6 +133,53 @@ describe("runConfigureWizard", () => {
     expect(mocks.clackText).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { outcome: "succeeded", reachable: true, completion: "Daemon setup completed." },
+    { outcome: "succeeded", reachable: false, completion: "Daemon setup completed." },
+    {
+      outcome: "failed",
+      reachable: false,
+      completion: "Configuration unchanged, but daemon setup failed.",
+    },
+    { outcome: "skipped", reachable: false, completion: "Daemon setup skipped." },
+  ] as const)(
+    "reports startup reachability after daemon $outcome ($reachable)",
+    async ({ outcome, reachable, completion }) => {
+      setupBaseWizardState({ gateway: { mode: "local" } });
+      queueWizardPrompts({ select: ["local"], confirm: [] });
+      maybeInstallDaemon.mockResolvedValueOnce(outcome);
+      mocks.waitForGatewayReachable.mockResolvedValueOnce({ ok: reachable });
+
+      await runConfigureWizard({ command: "configure", sections: ["daemon"] }, createRuntime());
+
+      expect(mocks.note).toHaveBeenCalledWith(
+        expect.stringContaining(reachable ? "Gateway: reachable" : "Gateway: not detected"),
+        "Control UI",
+      );
+      expect(mocks.clackOutro).toHaveBeenCalledWith(completion);
+      if (outcome !== "succeeded") {
+        expect(mocks.waitForGatewayReachable).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("observes fresh startup after an interactive health check followed by daemon setup", async () => {
+    setupBaseWizardState({ gateway: { mode: "local" } });
+    queueWizardPrompts({ select: ["local", "health", "daemon", "__continue"], confirm: [] });
+    maybeInstallDaemon.mockResolvedValueOnce("succeeded");
+    mocks.waitForGatewayReachable
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({ ok: true });
+
+    await runConfigureWizard({ command: "configure" }, createRuntime());
+
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("Gateway: reachable"),
+      "Control UI",
+    );
+    expect(mocks.waitForGatewayReachable).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps remote password health when the configured token ref is unresolved", async () => {
     const remotePassword = "remote-password"; // pragma: allowlist secret
     const remoteConfig: OpenClawConfig = {
@@ -324,12 +371,13 @@ describe("runConfigureWizard", () => {
       },
     });
     queueWizardPrompts({ select: ["local"], confirm: [] });
+    maybeInstallDaemon.mockResolvedValueOnce("succeeded");
 
     await withEnvAsync(
       { OPENCLAW_GATEWAY_TOKEN: "ambient-token", WIZARD_GATEWAY_TOKEN: "configured-token" },
       () =>
         runConfigureWizard(
-          { command: "configure", sections: ["gateway", "health"] },
+          { command: "configure", sections: ["gateway", "daemon", "health"] },
           createRuntime(),
         ),
     );
@@ -340,6 +388,11 @@ describe("runConfigureWizard", () => {
     expect(mocks.waitForGatewayReachable).toHaveBeenCalledWith(
       expect.objectContaining({ token: "configured-token" }),
     );
+    expect(mocks.waitForGatewayReachable).toHaveBeenLastCalledWith({
+      url: "ws://127.0.0.1:18789",
+      token: "configured-token",
+      password: undefined,
+    });
     expect(mocks.healthCommand).toHaveBeenCalledWith(
       expect.objectContaining({ token: "configured-token" }),
       expect.anything(),
@@ -468,6 +521,7 @@ describe("runConfigureWizard", () => {
     expect(mocks.probeGatewayReachable).toHaveBeenCalledWith(
       expect.objectContaining({ url: "ws://127.0.0.1:18789" }),
     );
+    expect(mocks.waitForGatewayReachable).not.toHaveBeenCalled();
     expect(mocks.note).toHaveBeenCalledWith(
       expect.stringContaining("Web UI: http://10.211.55.3:18789/"),
       "Control UI",

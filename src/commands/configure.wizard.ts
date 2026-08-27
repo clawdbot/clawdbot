@@ -905,9 +905,13 @@ export async function runConfigureWizard(
       mode: "local",
       localPrecedence: "env-first",
     });
+    // Service activation can precede the listener; only a successful daemon action
+    // earns the startup grace period, not failed/skipped or config-only work.
+    const probe =
+      daemonSetupOutcome === "succeeded" ? waitForGatewayReachable : probeGatewayReachable;
     let gatewayProbe = probeAuth.warning
       ? { ok: false, detail: "auth unavailable; probe skipped" }
-      : await probeGatewayReachable({
+      : await probe({
           url: probeLinks.wsUrl,
           token: probeAuth.auth.token,
           password: probeAuth.auth.password,
