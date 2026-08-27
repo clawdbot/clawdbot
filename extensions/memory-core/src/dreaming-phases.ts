@@ -17,6 +17,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeConceptToken } from "./concept-vocabulary.js";
 import { isPromotionOriginBlocked } from "./dreaming-consolidation-candidates.js";
 import { appendFailedDreamingEvent } from "./dreaming-events.js";
 import {
@@ -193,8 +194,6 @@ type DailySnippetChunk = {
   snippet: string;
   identitySnippet?: string;
 };
-
-const REM_REFLECTION_TAG_BLACKLIST = new Set(["assistant", "user", "system", "subagent", "the"]);
 
 function buildDailyChunkSnippet(heading: string | null, chunkLines: string[]): string {
   const body = chunkLines.join(" ").trim();
@@ -1260,8 +1259,9 @@ function buildRemReflections(
 ): string[] {
   const tagStats = new Map<string, { count: number; evidence: Set<string> }>();
   for (const entry of entries) {
-    for (const tag of entry.conceptTags) {
-      if (!tag || REM_REFLECTION_TAG_BLACKLIST.has(tag.toLowerCase())) {
+    // Stored spellings may normalize to one topic; each memory contributes only once.
+    for (const tag of new Set(entry.conceptTags.map(normalizeConceptToken))) {
+      if (!tag) {
         continue;
       }
       const stat = tagStats.get(tag) ?? { count: 0, evidence: new Set<string>() };
