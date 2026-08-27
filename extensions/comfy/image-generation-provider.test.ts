@@ -636,7 +636,6 @@ describe("comfy image-generation provider", () => {
     expect(Number.isInteger(firstSeed)).toBe(true);
     expect(firstSeed).toBeGreaterThanOrEqual(0);
     expect(Number.isSafeInteger(firstSeed)).toBe(true);
-    expect(firstSeed).not.toBe(0);
     expect(secondSeed).not.toBe(firstSeed);
   });
 

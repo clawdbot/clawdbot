@@ -5,6 +5,11 @@
   },
   "enabledByDefault": true,
   "providers": ["comfy"],
+  "configContracts": {
+    "secretInputs": {
+      "paths": [{ "path": "headers.*", "expected": "string" }]
+    }
+  },
   "setup": {
     "providers": [
       {
