@@ -2629,7 +2629,6 @@ export const en: TranslationMap = {
     idleFact: "Idle stop: {value}",
     desktopFact: "Desktop: {value}",
     providerList: "View supported backends",
-    customClass: "Custom…",
     fields: {
       profileId: "Profile ID",
       profileIdHelp: "Use letters, numbers, hyphens, or underscores.",
@@ -2637,9 +2636,8 @@ export const en: TranslationMap = {
       backendHelp: "The backend passed to Crabbox, such as AWS or Hetzner.",
       backendPlaceholder: "hetzner",
       machineClass: "Machine class",
-      machineClassHelp: "Choose a portable class or enter an exact provider instance type.",
-      customClass: "Custom machine class",
-      customClassPlaceholder: "c7a.24xlarge",
+      machineClassHelp:
+        "Enter a class accepted by the selected Crabbox backend and binary. The provider determines its effective sizing.",
       ttl: "Max lifetime",
       ttlHelp: "Use a positive Go duration such as 8h or 90m.",
       ttlPlaceholder: "8h",
@@ -2665,7 +2663,7 @@ export const en: TranslationMap = {
       profileExists: "Choose another profile ID; this one already exists.",
       profileMissing: "This profile changed or was removed. Reload the page and try again.",
       backend: "Enter a Crabbox backend, such as aws or hetzner.",
-      machineClass: "Choose a machine class or enter an instance type up to 128 characters.",
+      machineClass: "Enter a machine class of 1 to 128 characters.",
       ttl: "Enter a positive Go duration for max lifetime, such as 8h or 90m.",
       idleTimeout: "Enter a positive Go duration for idle stop, such as 45m.",
       binary: "Enter an absolute Crabbox binary path or leave the field empty.",
