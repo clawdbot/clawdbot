@@ -49,11 +49,15 @@ export function resolveInstallEnv(
   if (manager !== "pnpm") {
     return env;
   }
+  const preferOffline =
+    env?.PNPM_CONFIG_PREFER_OFFLINE ?? env?.pnpm_config_prefer_offline ?? "true";
   return {
     ...env,
     PNPM_CONFIG_RESOLUTION_MODE: env?.PNPM_CONFIG_RESOLUTION_MODE ?? "highest",
     npm_config_resolution_mode: env?.npm_config_resolution_mode ?? "highest",
     pnpm_config_resolution_mode: env?.pnpm_config_resolution_mode ?? "highest",
+    PNPM_CONFIG_PREFER_OFFLINE: preferOffline,
+    pnpm_config_prefer_offline: preferOffline,
   };
 }
 

@@ -1651,7 +1651,7 @@ install_openclaw_from_git() {
   local install_lockfile_flag
   install_lockfile_flag="$(git_install_lockfile_flag "$repo_dir" "$git_ref")"
   emit_json step name dependencies status start
-  CI="${CI:-true}" run_pnpm -C "$repo_dir" install "$install_lockfile_flag"
+  CI="${CI:-true}" run_pnpm -C "$repo_dir" install --prefer-offline "$install_lockfile_flag"
   emit_json step name dependencies status ok
 
   emit_json step name control-ui status start

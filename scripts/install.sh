@@ -3265,7 +3265,7 @@ install_openclaw_from_git() {
 
     local install_lockfile_flag
     install_lockfile_flag="$(git_install_lockfile_flag "$repo_dir" "$git_ref")"
-    CI="${CI:-true}" run_quiet_step "Installing dependencies" run_pnpm -C "$repo_dir" install "$install_lockfile_flag"
+    CI="${CI:-true}" run_quiet_step "Installing dependencies" run_pnpm -C "$repo_dir" install --prefer-offline "$install_lockfile_flag"
 
     if ! run_quiet_step "Building UI" run_pnpm -C "$repo_dir" ui:build; then
         ui_warn "UI build failed; continuing (CLI may still work)"
