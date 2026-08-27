@@ -2,6 +2,7 @@ import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "ope
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { isSilentReplyPayloadText } from "openclaw/plugin-sdk/reply-chunking";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveDeliveredAnswerItemId } from "./event-projector-assistant-delivered-answer.js";
 import {
   createAssistantAsyncMessage as buildAssistantAsyncMessage,
   createAssistantCommentaryMessage as buildAssistantCommentaryMessage,
@@ -658,33 +659,14 @@ export class CodexAssistantProjection {
   }
 
   private resolveDeliveredAnswerItemId(): string | undefined {
-    // Item-id mirror of collectAssistantTexts(): the Activity "selected answer" must
-    // name the item whose text delivery actually chooses. Without this, a trailing
-    // silent token shadows the real answer in the operator UI while the channel
-    // correctly receives the audible reply.
-    const pickLast = (minIndex: number, audibleOnly: boolean): string | undefined => {
-      for (let i = this.assistantItemOrder.length - 1; i >= minIndex; i -= 1) {
-        const itemId = this.assistantItemOrder[i];
-        if (!itemId || this.assistantPhaseByItem.get(itemId) === "commentary") {
-          continue;
-        }
-        const text = this.assistantTextByItem.get(itemId)?.trim();
-        if (!text || this.isToolProgressEchoText(itemId, text)) {
-          continue;
-        }
-        if (audibleOnly && isSilentReplyPayloadText(text)) {
-          continue;
-        }
-        return itemId;
-      }
-      return undefined;
-    };
-    return (
-      pickLast(this.persistableAssistantBarrier, true) ??
-      pickLast(this.persistableAssistantBarrier, false) ??
-      pickLast(0, true) ??
-      this.resolveFinalAssistantTextItem()?.itemId
-    );
+    return resolveDeliveredAnswerItemId({
+      assistantItemOrder: this.assistantItemOrder,
+      assistantPhaseByItem: this.assistantPhaseByItem,
+      assistantTextByItem: this.assistantTextByItem,
+      persistableAssistantBarrier: this.persistableAssistantBarrier,
+      isToolProgressEchoText: (itemId, text) => this.isToolProgressEchoText(itemId, text),
+      resolveFinalAssistantTextItemId: () => this.resolveFinalAssistantTextItem()?.itemId,
+    });
   }
 
   private resolveFinalAssistantTextItem(): { itemId: string; text: string } | undefined {
