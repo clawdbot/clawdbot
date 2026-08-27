@@ -140,6 +140,15 @@ enum GatewayEnvironment {
         return (trimmed?.isEmpty == false) ? trimmed : nil
     }
 
+    static func appGitCommitString() -> String? {
+        let bundleCommit = Bundle.main.infoDictionary?["OpenClawGitCommit"] as? String
+        let trimmed = bundleCommit?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard let trimmed,
+              trimmed.range(of: #"^[0-9a-f]{40}$"#, options: .regularExpression) != nil
+        else { return nil }
+        return trimmed
+    }
+
     static func expectedGatewayVersionString() -> String? {
         CLIInstallPolicy.requiredGatewayVersionString(
             appVersion: self.appVersionString(),

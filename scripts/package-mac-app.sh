@@ -40,8 +40,14 @@ esac
 # helper (notarization verifies it), so refuse the skip there instead of
 # producing a silently incomplete release bundle.
 SKIP_MLX_TTS="${OPENCLAW_SKIP_MLX_TTS:-0}"
+BUNDLE_PREWARMED_RUNTIME="${OPENCLAW_BUNDLE_PREWARMED_RUNTIME:-0}"
+PREWARMED_NODE_VERSION="${OPENCLAW_PREWARMED_NODE_VERSION:-24.15.0}"
 if [[ "$SKIP_MLX_TTS" == "1" && "$BUILD_CONFIG" == "release" ]]; then
   echo "ERROR: OPENCLAW_SKIP_MLX_TTS is not allowed for release builds; the MLX voice helper must ship in release." >&2
+  exit 1
+fi
+if [[ "$BUNDLE_PREWARMED_RUNTIME" == "1" && "$BUILD_CONFIG" == "release" ]]; then
+  echo "ERROR: OPENCLAW_BUNDLE_PREWARMED_RUNTIME is for development builds only." >&2
   exit 1
 fi
 BUILD_TS="$(openclaw_resolve_build_timestamp)"
@@ -76,6 +82,12 @@ if [[ "${BUILD_ARCHS_VALUE}" == "all" ]]; then
 fi
 IFS=' ' read -r -a BUILD_ARCHS <<< "$BUILD_ARCHS_VALUE"
 PRIMARY_ARCH="${BUILD_ARCHS[0]}"
+if [[ "$BUNDLE_PREWARMED_RUNTIME" == "1" ]]; then
+  if [[ "${#BUILD_ARCHS[@]}" -ne 1 || "$PRIMARY_ARCH" != "$(uname -m)" ]]; then
+    echo "ERROR: Prewarmed runtime builds require one native architecture ($(uname -m))." >&2
+    exit 1
+  fi
+fi
 SPARKLE_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-AGCY8w5vHirVfGGDGc8Szc5iuOqupZSh9pMj/Qs67XI=}"
 SPARKLE_FEED_URL="${SPARKLE_FEED_URL:-https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml}"
 AUTO_CHECKS=true
@@ -475,6 +487,7 @@ create_verified_peekaboo_snapshot() {
 }
 
 PATCHED_SWIFTPM_RESOURCE_SOURCES=()
+PACKAGE_TEMP_DIRS=()
 
 restore_swiftpm_resource_sources() {
   local source_file
@@ -487,6 +500,15 @@ restore_swiftpm_resource_sources() {
     fi
   done
   PATCHED_SWIFTPM_RESOURCE_SOURCES=()
+}
+
+cleanup_package_temp_dirs() {
+  local temp_dir
+  for temp_dir in "${PACKAGE_TEMP_DIRS[@]:-}"; do
+    [[ -n "$temp_dir" ]] || continue
+    rm -rf "$temp_dir"
+  done
+  PACKAGE_TEMP_DIRS=()
 }
 
 patch_swiftpm_resource_lookups() {
@@ -600,6 +622,7 @@ cleanup_package_build() {
   restore_swiftpm_resource_sources
   cleanup_peekaboo_snapshot
   cleanup_swift_package_root
+  cleanup_package_temp_dirs
 }
 
 trap cleanup_package_build EXIT
@@ -626,6 +649,89 @@ run_pnpm() {
     resolve_pnpm_cmd
   fi
   (cd "$ROOT_DIR" && "${PNPM_CMD[@]}" "$@")
+}
+
+bundle_prewarmed_runtime() {
+  local work_dir package_dir prefix_dir runtime_tgz runtime_directory runtime_root node_path entry_path
+  local archive_name archive_path manifest_path archive_sha manifest_arch version_output
+  work_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-mac-runtime.XXXXXX")"
+  PACKAGE_TEMP_DIRS+=("$work_dir")
+  package_dir="$work_dir/package"
+  prefix_dir="$work_dir/prefix"
+  mkdir -p "$package_dir" "$prefix_dir"
+
+  echo "🧭 Refreshing packaged runtime metadata"
+  node --import tsx "$ROOT_DIR/scripts/runtime-postbuild.mts"
+
+  echo "📦 Packing the exact OpenClaw runtime"
+  runtime_tgz="$(
+    node "$ROOT_DIR/scripts/package-openclaw-for-docker.mjs" \
+      --source-dir "$ROOT_DIR" \
+      --output-dir "$package_dir" \
+      --output-name openclaw-current.tgz \
+      --allow-unreleased-changelog \
+      --skip-build
+  )"
+  [[ -f "$runtime_tgz" ]] || {
+    echo "ERROR: OpenClaw runtime package was not created." >&2
+    return 1
+  }
+
+  echo "🔥 Prewarming Node and production dependencies"
+  OPENCLAW_NO_ONBOARD=1 bash "$ROOT_DIR/scripts/install-cli.sh" \
+    --json \
+    --no-onboard \
+    --prefix "$prefix_dir" \
+    --node-version "$PREWARMED_NODE_VERSION" \
+    --version "file:$runtime_tgz"
+
+  runtime_directory="node-v${PREWARMED_NODE_VERSION}"
+  runtime_root="$prefix_dir/tools/$runtime_directory/lib/node_modules/openclaw"
+  node_path="$prefix_dir/tools/$runtime_directory/bin/node"
+  entry_path="$runtime_root/dist/entry.js"
+  [[ -x "$node_path" && -r "$entry_path" ]] || {
+    echo "ERROR: Prewarmed runtime staging is incomplete." >&2
+    return 1
+  }
+
+  node --import tsx "$ROOT_DIR/scripts/verify-macos-prewarmed-runtime.mts" \
+    --repo-root "$ROOT_DIR" \
+    --runtime-root "$runtime_root" \
+    --runtime-bin "$prefix_dir/tools/$runtime_directory/bin"
+
+  version_output="$("$node_path" "$entry_path" --version)"
+  [[ "$version_output" == *"OpenClaw ${APP_VERSION}"* ]] || {
+    echo "ERROR: Prewarmed runtime version does not match app version: $version_output" >&2
+    return 1
+  }
+  [[ "$version_output" == *"(${BUILD_GIT_COMMIT:0:7}"* ]] || {
+    echo "ERROR: Prewarmed runtime commit does not match app commit: $version_output" >&2
+    return 1
+  }
+
+  archive_name="prewarmed-runtime-${PRIMARY_ARCH}.tar.gz"
+  archive_path="$APP_ROOT/Contents/Resources/$archive_name"
+  manifest_path="$APP_ROOT/Contents/Resources/prewarmed-runtime.json"
+  /usr/bin/tar -czf "$archive_path" -C "$prefix_dir" "tools/$runtime_directory"
+  archive_sha="$(/usr/bin/shasum -a 256 "$archive_path" | /usr/bin/awk '{print $1}')"
+  manifest_arch="$PRIMARY_ARCH"
+  [[ "$manifest_arch" != "x86_64" ]] || manifest_arch="x64"
+  node - "$manifest_path" "$APP_VERSION" "$BUILD_GIT_COMMIT" "$manifest_arch" \
+    "$PREWARMED_NODE_VERSION" "$runtime_directory" "$archive_name" "$archive_sha" <<'NODE'
+const fs = require("node:fs");
+const [manifestPath, appVersion, gitCommit, architecture, nodeVersion, runtimeDirectory, archiveFile, archiveSHA256] = process.argv.slice(2);
+fs.writeFileSync(manifestPath, `${JSON.stringify({
+  schemaVersion: 1,
+  appVersion,
+  gitCommit,
+  architecture,
+  nodeVersion,
+  runtimeDirectory,
+  archiveFile,
+  archiveSHA256,
+}, null, 2)}\n`);
+NODE
+  echo "✅ Bundled prewarmed runtime $archive_name"
 }
 
 merge_framework_machos() {
@@ -909,6 +1015,10 @@ if [ ! -f "$INSTALL_CLI_SRC" ]; then
 fi
 cp "$INSTALL_CLI_SRC" "$APP_ROOT/Contents/Resources/install-cli.sh"
 chmod 0644 "$APP_ROOT/Contents/Resources/install-cli.sh"
+
+if [[ "$BUNDLE_PREWARMED_RUNTIME" == "1" ]]; then
+  bundle_prewarmed_runtime
+fi
 
 echo "🌐 Copying app localizations"
 node --import tsx "$ROOT_DIR/scripts/apple-app-i18n.ts" compile-macos \

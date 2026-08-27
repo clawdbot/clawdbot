@@ -2014,18 +2014,22 @@ describe("scripts/changed-lanes", () => {
     for (const changedPath of [
       "scripts/codesign-mac-app.sh",
       "scripts/create-dmg.sh",
+      "scripts/install-cli.sh",
       "scripts/lib/plistbuddy.sh",
       "scripts/lib/swift-toolchain.sh",
       "scripts/mac-elevation-host.sh",
       "scripts/notarize-mac-artifact.sh",
       "scripts/package-mac-app.sh",
       "scripts/package-mac-dist.sh",
+      "scripts/verify-macos-prewarmed-runtime.mts",
       "test/scripts/codesign-mac-app.test.ts",
       "test/scripts/create-dmg.test.ts",
+      "test/scripts/install-cli-prewarmed.test.ts",
       "test/scripts/mac-elevation-host.test.ts",
       "test/scripts/notarize-mac-artifact.test.ts",
       "test/scripts/package-mac-app.test.ts",
       "test/scripts/package-mac-dist.test.ts",
+      "test/scripts/verify-macos-prewarmed-runtime.test.ts",
     ]) {
       const result = detectChangedLanes([changedPath]);
       const plan = createChangedCheckPlan(result, {
@@ -2035,6 +2039,7 @@ describe("scripts/changed-lanes", () => {
       });
 
       expectLanes(result.lanes, {
+        scripts: changedPath.endsWith(".mts"),
         testRoot: changedPath.endsWith(".ts"),
         tooling: true,
       });

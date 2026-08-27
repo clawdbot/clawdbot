@@ -42,6 +42,23 @@ enum CLIInstallPolicy {
     }
 }
 
+struct PrewarmedRuntimeManifest: Decodable, Equatable, Sendable {
+    let schemaVersion: Int
+    let appVersion: String
+    let gitCommit: String
+    let architecture: String
+    let nodeVersion: String
+    let runtimeDirectory: String
+    let archiveFile: String
+    let archiveSHA256: String
+}
+
+struct PrewarmedRuntimeResource: Equatable, Sendable {
+    let archivePath: String
+    let manifestPath: String
+    let manifest: PrewarmedRuntimeManifest
+}
+
 struct ManagedCLIUpdateSummary: Decodable, Equatable {
     struct Version: Decodable, Equatable {
         let version: String?
@@ -84,6 +101,7 @@ enum CLIInstaller {
     enum InstallTarget: Equatable {
         case exact(String)
         case channel(Channel)
+        case prewarmed(PrewarmedRuntimeResource)
 
         var selector: String {
             switch self {
@@ -91,12 +109,20 @@ enum CLIInstaller {
             case .channel(.stable): "latest"
             case .channel(.beta): "beta"
             case .channel(.dev): "main"
+            case let .prewarmed(resource): "bundled \(resource.manifest.appVersion)"
             }
         }
 
         var requiresExactVersion: Bool {
-            if case .exact = self { return true }
-            return false
+            switch self {
+            case .exact, .prewarmed: true
+            case .channel: false
+            }
+        }
+
+        var expectedCommit: String? {
+            if case let .prewarmed(resource) = self { return resource.manifest.gitCommit }
+            return nil
         }
     }
 
@@ -188,7 +214,61 @@ enum CLIInstaller {
             .path
     }
 
+    static func prewarmedRuntimeResource(bundle: Bundle = .main) -> PrewarmedRuntimeResource? {
+        guard let manifestURL = bundle.url(
+            forResource: "prewarmed-runtime",
+            withExtension: "json")
+        else { return nil }
+        return self.prewarmedRuntimeResource(
+            manifestURL: manifestURL,
+            resourceDirectory: manifestURL.deletingLastPathComponent())
+    }
+
+    static func prewarmedRuntimeResource(
+        manifestURL: URL,
+        resourceDirectory: URL,
+        fileManager: FileManager = .default) -> PrewarmedRuntimeResource?
+    {
+        guard let data = try? Data(contentsOf: manifestURL),
+              let manifest = try? JSONDecoder().decode(PrewarmedRuntimeManifest.self, from: data),
+              manifest.schemaVersion == 1,
+              URL(fileURLWithPath: manifest.archiveFile).lastPathComponent == manifest.archiveFile,
+              !manifest.archiveFile.isEmpty,
+              !manifest.appVersion.isEmpty,
+              manifest.gitCommit.range(of: #"^[0-9a-f]{40}$"#, options: .regularExpression) != nil,
+              manifest.archiveSHA256.range(of: #"^[0-9a-f]{64}$"#, options: .regularExpression) != nil,
+              !manifest.nodeVersion.isEmpty,
+              !manifest.runtimeDirectory.isEmpty
+        else { return nil }
+        let archiveURL = resourceDirectory.appendingPathComponent(manifest.archiveFile)
+        guard fileManager.isReadableFile(atPath: archiveURL.path) else { return nil }
+        return PrewarmedRuntimeResource(
+            archivePath: archiveURL.path,
+            manifestPath: manifestURL.path,
+            manifest: manifest)
+    }
+
+    static func prewarmedInstallTarget(bundle: Bundle = .main) -> InstallTarget? {
+        self.prewarmedInstallTarget(
+            resource: self.prewarmedRuntimeResource(bundle: bundle),
+            appVersion: GatewayEnvironment.appVersionString(),
+            appCommit: GatewayEnvironment.appGitCommitString())
+    }
+
+    static func prewarmedInstallTarget(
+        resource: PrewarmedRuntimeResource?,
+        appVersion: String?,
+        appCommit: String?) -> InstallTarget?
+    {
+        guard let resource,
+              resource.manifest.appVersion == appVersion,
+              resource.manifest.gitCommit == appCommit
+        else { return nil }
+        return .prewarmed(resource)
+    }
+
     static func status() async -> Status {
+        let expectedCommit = self.prewarmedInstallTarget()?.expectedCommit
         let preferredPaths = await CommandResolver.preferredPathsAsync()
         let locations = self.installedLocations(
             searchPaths: preferredPaths,
@@ -202,6 +282,7 @@ enum CLIInstaller {
             let status = await self.status(
                 location: location,
                 expectedVersion: GatewayEnvironment.expectedGatewayVersionString(),
+                expectedCommit: expectedCommit,
                 preferredPaths: preferredPaths)
             if status.isReady {
                 self.rememberValidated(status, defaults: AppDefaults.standard)
@@ -213,10 +294,15 @@ enum CLIInstaller {
     }
 
     static func managedStatus() async -> Status {
-        await self.managedStatus(expectedVersion: GatewayEnvironment.expectedGatewayVersionString())
+        await self.managedStatus(
+            expectedVersion: GatewayEnvironment.expectedGatewayVersionString(),
+            expectedCommit: self.prewarmedInstallTarget()?.expectedCommit)
     }
 
-    private static func managedStatus(expectedVersion: String?) async -> Status {
+    private static func managedStatus(
+        expectedVersion: String?,
+        expectedCommit: String? = nil) async -> Status
+    {
         let location = self.managedExecutableLocation()
         guard FileManager.default.isExecutableFile(atPath: location) else {
             return .missing(location: location)
@@ -226,6 +312,7 @@ enum CLIInstaller {
         let status = await self.status(
             location: location,
             expectedVersion: expectedVersion,
+            expectedCommit: expectedCommit,
             preferredPaths: preferredPaths)
         if status.isReady {
             self.rememberValidated(status, defaults: AppDefaults.standard)
@@ -238,12 +325,14 @@ enum CLIInstaller {
         return await self.status(
             location: location,
             expectedVersion: GatewayEnvironment.expectedGatewayVersionString(),
+            expectedCommit: self.prewarmedInstallTarget()?.expectedCommit,
             preferredPaths: preferredPaths)
     }
 
     private static func status(
         location: String,
         expectedVersion: String?,
+        expectedCommit: String?,
         preferredPaths: [String]) async -> Status
     {
         let environment = self.probeEnvironment(
@@ -260,7 +349,8 @@ enum CLIInstaller {
         let versionStatus = self.classifyVersion(
             location: location,
             output: response.stdout,
-            expectedVersion: expectedVersion)
+            expectedVersion: expectedVersion,
+            expectedCommit: expectedCommit)
         guard versionStatus.isReady else { return versionStatus }
         guard await self.runtimeIsCompatible(environment: environment) else {
             return .unusable(location: location)
@@ -279,22 +369,43 @@ enum CLIInstaller {
     static func classifyVersion(
         location: String,
         output: String?,
-        expectedVersion: String?) -> Status
+        expectedVersion: String?,
+        expectedCommit: String? = nil) -> Status
     {
         let normalized = GatewayEnvironment.normalizeGatewayVersionOutput(output)
         guard let normalized, Semver.parse(normalized) != nil else {
             return .unusable(location: location)
         }
-        guard Semver.parse(expectedVersion) != nil else {
-            return .ready(location: location, version: normalized)
-        }
-        guard Semver.satisfiesExpectedGatewayVersion(installed: normalized, expected: expectedVersion) else {
+        if Semver.parse(expectedVersion) != nil,
+           !Semver.satisfiesExpectedGatewayVersion(installed: normalized, expected: expectedVersion)
+        {
             return .incompatible(
                 location: location,
                 found: normalized,
                 required: expectedVersion ?? "unknown")
         }
+        if let expectedCommit {
+            let foundCommit = self.buildCommit(fromVersionOutput: output)
+            guard foundCommit.map(expectedCommit.hasPrefix) == true else {
+                return .incompatible(
+                    location: location,
+                    found: "\(normalized) (\(foundCommit?.prefix(12) ?? "unknown build"))",
+                    required: "\(expectedVersion ?? normalized) (\(expectedCommit.prefix(12)))")
+            }
+        }
         return .ready(location: location, version: normalized)
+    }
+
+    static func buildCommit(fromVersionOutput output: String?) -> String? {
+        guard let output,
+              let range = output.range(
+                  of: #"\(([0-9a-fA-F]{7,40})\)"#,
+                  options: .regularExpression)
+        else { return nil }
+        return output[range]
+            .dropFirst()
+            .dropLast()
+            .lowercased()
     }
 
     static func probeEnvironment(
@@ -358,7 +469,9 @@ enum CLIInstaller {
 
         if response.success {
             let expectedVersion = target.requiresExactVersion ? GatewayEnvironment.appVersionString() : nil
-            let managedStatus = await self.managedStatus(expectedVersion: expectedVersion)
+            let managedStatus = await self.managedStatus(
+                expectedVersion: expectedVersion,
+                expectedCommit: target.expectedCommit)
             guard case let .ready(_, verifiedVersion) = managedStatus else {
                 await statusHandler("Install failed: \(managedStatus.message)")
                 return false
@@ -437,7 +550,8 @@ enum CLIInstaller {
     static func installWatchdogTimeout(for target: InstallTarget) -> TimeInterval {
         // Dev installs clone/fetch source, install dependencies, and build the UI
         // plus CLI. Keep that workflow bounded without killing healthy cold builds.
-        target == .channel(.dev) ? 7200 : 900
+        if target == .channel(.dev) { return 7200 }
+        return 900
     }
 
     static func installPrefix(
@@ -455,6 +569,20 @@ enum CLIInstaller {
         scriptPath: String,
         compatibleWith appVersion: String? = nil) -> [String]
     {
+        if case let .prewarmed(resource) = target {
+            return [
+                "/bin/bash",
+                scriptPath,
+                "--json",
+                "--no-onboard",
+                "--prefix",
+                prefix,
+                "--prewarmed-runtime",
+                resource.archivePath,
+                "--prewarmed-manifest",
+                resource.manifestPath,
+            ]
+        }
         var command = [
             "/bin/bash",
             scriptPath,
@@ -571,7 +699,7 @@ enum CLIInstaller {
 
     private static func rememberInstallPolicy(_ target: InstallTarget) {
         let policy = switch target {
-        case .exact: "exact"
+        case .exact, .prewarmed: "exact"
         case let .channel(channel): channel.rawValue
         }
         AppDefaults.standard.set(policy, forKey: cliInstallPolicyKey)
@@ -626,6 +754,7 @@ enum CLIInstaller {
         }
 
         return switch (name, status) {
+        case ("prewarmed-runtime", "start"): "Installing bundled OpenClaw runtime…"
         case ("disk-space", "start"): "Checking available disk space…"
         case ("node", "start"): "Installing Node.js runtime…"
         case ("git-tools", "start"): "Preparing Git and pnpm…"

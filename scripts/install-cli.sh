@@ -88,6 +88,8 @@ NPM_LOGLEVEL="${OPENCLAW_NPM_LOGLEVEL:-error}"
 INSTALL_METHOD="${OPENCLAW_INSTALL_METHOD:-npm}"
 GIT_DIR="${OPENCLAW_GIT_DIR:-${OPENCLAW_EFFECTIVE_HOME}/openclaw}"
 GIT_UPDATE="${OPENCLAW_GIT_UPDATE:-1}"
+PREWARMED_RUNTIME=""
+PREWARMED_MANIFEST=""
 JSON=0
 RUN_ONBOARD=0
 SET_NPM_PREFIX=0
@@ -104,6 +106,8 @@ Usage: install-cli.sh [options]
   --git, --github                     Shortcut for --install-method git
   --git-dir, --dir <path>             Checkout directory (default: ~/openclaw, or \$OPENCLAW_HOME/openclaw)
   --version <ver>                     OpenClaw version (default: latest)
+  --prewarmed-runtime <archive>       Install a complete bundled runtime archive
+  --prewarmed-manifest <manifest>     Verify the bundled runtime manifest
   --compatible-with <ver>             Refuse a CLI that cannot modify config written by <ver>
   --node-version <ver>                Node version (default: 24.19.0; 22.23.2 on Linux ARMv7)
   --onboard                           Run "openclaw onboard" after install
@@ -386,6 +390,20 @@ parse_args() {
           fail "Missing value for $1"
         fi
         OPENCLAW_VERSION="$2"
+        shift 2
+        ;;
+      --prewarmed-runtime)
+        if [[ $# -lt 2 || "${2:-}" == --* ]]; then
+          fail "Missing value for $1"
+        fi
+        PREWARMED_RUNTIME="$2"
+        shift 2
+        ;;
+      --prewarmed-manifest)
+        if [[ $# -lt 2 || "${2:-}" == --* ]]; then
+          fail "Missing value for $1"
+        fi
+        PREWARMED_MANIFEST="$2"
         shift 2
         ;;
       --compatible-with)
@@ -1673,6 +1691,143 @@ EOF
   emit_json step name openclaw status ok method git
 }
 
+prewarmed_manifest_value() {
+  local key="$1"
+  /usr/bin/plutil -extract "$key" raw -o - "$PREWARMED_MANIFEST" 2>/dev/null || true
+}
+
+install_openclaw_from_prewarmed_runtime() {
+  local schema_version app_version git_commit architecture node_version runtime_directory
+  local archive_file expected_sha actual_sha current_arch stage new_runtime target_runtime backup_runtime
+  local node_path entry_path version_output old_node_link wrapper_tmp backup_wrapper node_link_tmp
+
+  [[ -r "$PREWARMED_RUNTIME" ]] || fail "Prewarmed runtime archive is unreadable: $PREWARMED_RUNTIME"
+  [[ -r "$PREWARMED_MANIFEST" ]] || fail "Prewarmed runtime manifest is unreadable: $PREWARMED_MANIFEST"
+
+  schema_version="$(prewarmed_manifest_value schemaVersion)"
+  app_version="$(prewarmed_manifest_value appVersion)"
+  git_commit="$(prewarmed_manifest_value gitCommit)"
+  architecture="$(prewarmed_manifest_value architecture)"
+  node_version="$(prewarmed_manifest_value nodeVersion)"
+  runtime_directory="$(prewarmed_manifest_value runtimeDirectory)"
+  archive_file="$(prewarmed_manifest_value archiveFile)"
+  expected_sha="$(prewarmed_manifest_value archiveSHA256)"
+  current_arch="$(arch_detect)"
+
+  [[ "$schema_version" == "1" ]] || fail "Unsupported prewarmed runtime manifest schema: ${schema_version:-missing}"
+  [[ "$git_commit" =~ ^[0-9a-f]{40}$ ]] || fail "Prewarmed runtime manifest has an invalid Git commit"
+  [[ "$expected_sha" =~ ^[0-9a-f]{64}$ ]] || fail "Prewarmed runtime manifest has an invalid SHA-256"
+  [[ "$runtime_directory" =~ ^node-v[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "Prewarmed runtime directory is invalid"
+  [[ "$node_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "Prewarmed Node version is invalid"
+  [[ "$runtime_directory" == "node-v${node_version}" ]] || fail "Prewarmed runtime directory does not match its Node version"
+  [[ "$architecture" == "$current_arch" ]] || fail "Prewarmed runtime architecture ${architecture:-missing} does not match $current_arch"
+  [[ "$archive_file" == "$(basename "$PREWARMED_RUNTIME")" ]] || fail "Prewarmed runtime archive name does not match its manifest"
+  [[ -n "$app_version" ]] || fail "Prewarmed runtime manifest has no OpenClaw version"
+
+  actual_sha="$(sha256_file "$PREWARMED_RUNTIME")"
+  [[ "$actual_sha" == "$expected_sha" ]] || fail "Prewarmed runtime SHA-256 mismatch"
+
+  while IFS= read -r entry; do
+    entry="${entry#./}"
+    case "$entry" in
+      "tools/${runtime_directory}"|"tools/${runtime_directory}/"|"tools/${runtime_directory}/"*) ;;
+      *) fail "Prewarmed runtime archive contains an unexpected path: $entry" ;;
+    esac
+    case "/$entry/" in
+      */../*) fail "Prewarmed runtime archive contains an unsafe path: $entry" ;;
+    esac
+  done < <(/usr/bin/tar -tzf "$PREWARMED_RUNTIME")
+
+  mkdir -p "$PREFIX" "$PREFIX/bin" "$PREFIX/tools"
+  stage="$(mktemp -d "${PREFIX}/.prewarmed-runtime.XXXXXX")"
+  TMPFILES+=("$stage")
+  emit_json step name prewarmed-runtime status start
+  /usr/bin/tar -xzf "$PREWARMED_RUNTIME" -C "$stage"
+
+  new_runtime="${PREFIX}/tools/.${runtime_directory}.new.$$"
+  target_runtime="${PREFIX}/tools/${runtime_directory}"
+  backup_runtime="${PREFIX}/tools/.${runtime_directory}.backup.$$"
+  rm -rf "$new_runtime" "$backup_runtime"
+  mv "$stage/tools/$runtime_directory" "$new_runtime"
+  node_path="$new_runtime/bin/node"
+  entry_path="$new_runtime/lib/node_modules/openclaw/dist/entry.js"
+  [[ -x "$node_path" ]] || fail "Prewarmed runtime is missing its Node executable"
+  [[ -r "$entry_path" ]] || fail "Prewarmed runtime is missing the OpenClaw entrypoint"
+  [[ "$($node_path --version 2>/dev/null || true)" == "v${node_version}" ]] || fail "Prewarmed Node version verification failed"
+  version_output="$($node_path "$entry_path" --version 2>/dev/null || true)"
+  [[ "$version_output" == *"OpenClaw ${app_version}"* ]] || fail "Prewarmed OpenClaw version verification failed"
+  [[ "$version_output" == *"(${git_commit:0:7}"* ]] || fail "Prewarmed OpenClaw commit verification failed"
+
+  old_node_link=""
+  if [[ -L "$PREFIX/tools/node" ]]; then
+    old_node_link="$(readlink "$PREFIX/tools/node")"
+  elif [[ -e "$PREFIX/tools/node" ]]; then
+    fail "Managed runtime pointer is not a symbolic link: $PREFIX/tools/node"
+  fi
+  if [[ -e "$PREFIX/bin/openclaw" && ! -f "$PREFIX/bin/openclaw" ]]; then
+    fail "Managed OpenClaw launcher is not a file: $PREFIX/bin/openclaw"
+  fi
+  wrapper_tmp="${PREFIX}/bin/.openclaw.new.$$"
+  backup_wrapper="${PREFIX}/bin/.openclaw.backup.$$"
+  node_link_tmp="${PREFIX}/tools/.node.new.$$"
+  rm -f "$wrapper_tmp" "$backup_wrapper" "$node_link_tmp"
+  cat >"$wrapper_tmp" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+exec "${PREFIX}/tools/node/bin/node" "${PREFIX}/tools/node/lib/node_modules/openclaw/dist/entry.js" "\$@"
+EOF
+  chmod +x "$wrapper_tmp"
+
+  rollback_prewarmed_runtime() {
+    rm -rf "$target_runtime"
+    [[ ! -e "$backup_runtime" ]] || mv "$backup_runtime" "$target_runtime"
+    rm -f "$PREFIX/tools/node"
+    [[ -z "$old_node_link" ]] || ln -s "$old_node_link" "$PREFIX/tools/node"
+    rm -f "$PREFIX/bin/openclaw"
+    [[ ! -e "$backup_wrapper" ]] || mv "$backup_wrapper" "$PREFIX/bin/openclaw"
+    rm -f "$wrapper_tmp" "$node_link_tmp"
+  }
+
+  if [[ -e "$target_runtime" || -L "$target_runtime" ]]; then
+    mv "$target_runtime" "$backup_runtime"
+  fi
+  if ! mv "$new_runtime" "$target_runtime"; then
+    [[ ! -e "$backup_runtime" ]] || mv "$backup_runtime" "$target_runtime"
+    fail "Could not activate the prewarmed runtime"
+  fi
+
+  ln -s "$runtime_directory" "$node_link_tmp"
+  rm -f "$PREFIX/tools/node"
+  if ! mv -f "$node_link_tmp" "$PREFIX/tools/node"; then
+    rollback_prewarmed_runtime
+    fail "Could not activate the prewarmed Node pointer"
+  fi
+  if [[ -e "$PREFIX/bin/openclaw" ]]; then
+    mv "$PREFIX/bin/openclaw" "$backup_wrapper"
+  fi
+  if ! mv "$wrapper_tmp" "$PREFIX/bin/openclaw"; then
+    rollback_prewarmed_runtime
+    fail "Could not activate the prewarmed OpenClaw launcher"
+  fi
+
+  version_output="$("$PREFIX/bin/openclaw" --version 2>/dev/null || true)"
+  if [[ "$version_output" != *"OpenClaw ${app_version}"* || "$version_output" != *"(${git_commit:0:7}"* ]]; then
+    rollback_prewarmed_runtime
+    fail "Installed prewarmed runtime verification failed"
+  fi
+  rm -rf "$backup_runtime" "$backup_wrapper"
+  unset -f rollback_prewarmed_runtime
+  emit_json step name prewarmed-runtime status ok version "$app_version"
+}
+
+resolve_openclaw_version() {
+  local version=""
+  if [[ -x "${PREFIX}/bin/openclaw" ]]; then
+    version="$("${PREFIX}/bin/openclaw" --version 2>/dev/null | head -n 1 | tr -d '\r')"
+  fi
+  echo "$version"
+}
+
 is_gateway_daemon_loaded() {
   local claw="$1"
   if [[ -z "$claw" || ! -x "$claw" ]]; then
@@ -1741,31 +1896,44 @@ main() {
   parse_args "$@"
   PREFIX="$(resolve_installer_path "$PREFIX")"
   GIT_DIR="$(resolve_installer_path "$GIT_DIR")"
+  PREWARMED_RUNTIME="$(resolve_installer_path "$PREWARMED_RUNTIME")"
+  PREWARMED_MANIFEST="$(resolve_installer_path "$PREWARMED_MANIFEST")"
+
+  if [[ -n "$PREWARMED_RUNTIME" || -n "$PREWARMED_MANIFEST" ]]; then
+    [[ -n "$PREWARMED_RUNTIME" && -n "$PREWARMED_MANIFEST" ]] ||
+      fail "Prewarmed runtime installation requires both archive and manifest"
+  fi
 
   if [[ "${OPENCLAW_NO_ONBOARD:-0}" == "1" ]]; then
     RUN_ONBOARD=0
   fi
 
-  if [[ "$INSTALL_METHOD" == "git" ]]; then
+  if [[ -z "$PREWARMED_RUNTIME" && "$INSTALL_METHOD" == "git" ]]; then
     preflight_fresh_git_disk_space "$GIT_DIR"
   fi
 
-  select_node_version_for_platform "$(os_detect)" "$(arch_detect)"
-  PATH="$(node_dir)/bin:${PREFIX}/bin:${PATH}"
-  export PATH
-
-  install_node
-  if [[ "$INSTALL_METHOD" == "git" ]]; then
-    install_openclaw_from_git "$GIT_DIR"
-  elif [[ "$INSTALL_METHOD" == "npm" ]]; then
-    ensure_git
-    if [[ "$SET_NPM_PREFIX" -eq 1 ]]; then
-      fix_npm_prefix_if_needed
-    fi
-    install_openclaw
+  if [[ -n "$PREWARMED_RUNTIME" ]]; then
+    install_openclaw_from_prewarmed_runtime
   else
-    fail "Unknown install method: ${INSTALL_METHOD} (use npm or git)"
+    select_node_version_for_platform "$(os_detect)" "$(arch_detect)"
+    PATH="$(node_dir)/bin:${PREFIX}/bin:${PATH}"
+    export PATH
+
+    install_node
+    if [[ "$INSTALL_METHOD" == "git" ]]; then
+      install_openclaw_from_git "$GIT_DIR"
+    elif [[ "$INSTALL_METHOD" == "npm" ]]; then
+      ensure_git
+      if [[ "$SET_NPM_PREFIX" -eq 1 ]]; then
+        fix_npm_prefix_if_needed
+      fi
+      install_openclaw
+    else
+      fail "Unknown install method: ${INSTALL_METHOD} (use npm or git)"
+    fi
   fi
+  PATH="${PREFIX}/tools/node/bin:${PREFIX}/bin:${PATH}"
+  export PATH
 
   local installed_version
   if ! installed_version="$("${PREFIX}/bin/openclaw" --version 2>/dev/null | head -n 1 | tr -d '\r')" ||

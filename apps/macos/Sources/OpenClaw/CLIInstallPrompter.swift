@@ -71,6 +71,9 @@ final class CLIInstallPrompter {
         confirmStable: Bool = false,
         presentingSheetOn window: NSWindow?) async -> CLIInstaller.InstallTarget?
     {
+        if let target = CLIInstaller.prewarmedInstallTarget() {
+            return target
+        }
         let appVersion = Self.appVersion()
         if let target = CLIInstaller.automaticInstallTarget(
             appVersion: appVersion,

@@ -804,15 +804,21 @@ extension OnboardingView {
 
     func cliPage() -> some View {
         let remoteMode = self.state.connectionMode == .remote
+        let hasPrewarmedRuntime = CLIInstaller.prewarmedInstallTarget() != nil
         let setupDetail = if remoteMode {
             "OpenClaw is installing the matching runtime for this Mac node. " +
                 "It will connect to your selected Gateway without starting another one here."
         } else {
             "OpenClaw is setting up its background service on this Mac."
         }
-        let detail = setupDetail + " Published Stable and Beta installs are usually quick. " +
-            "Dev (Git main) downloads and builds OpenClaw from source, so allow several minutes " +
-            "and several gigabytes of free space. No administrator password is required."
+        let detail = if hasPrewarmedRuntime {
+            setupDetail + " This development build includes its exact prewarmed runtime, " +
+                "so setup installs locally without downloading or building OpenClaw."
+        } else {
+            setupDetail + " Published Stable and Beta installs are usually quick. " +
+                "Dev (Git main) downloads and builds OpenClaw from source, so allow several minutes " +
+                "and several gigabytes of free space. No administrator password is required."
+        }
         return onboardingPage {
             Text("Getting things ready")
                 .font(.largeTitle.weight(.semibold))

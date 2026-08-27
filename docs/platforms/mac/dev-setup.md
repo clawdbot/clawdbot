@@ -31,6 +31,18 @@ pnpm install
 Outputs `dist/OpenClaw.app`. Without an Apple Developer ID certificate, the
 script falls back to ad-hoc signing.
 
+For an arm64 development build that can install its matching core CLI/runtime
+without downloading or building OpenClaw, package a prewarmed runtime inside the app:
+
+```bash
+OPENCLAW_BUNDLE_PREWARMED_RUNTIME=1 ./scripts/package-mac-app.sh
+```
+
+The app still installs the runtime into the standard profile-owned `bin/` and
+`tools/` directories. The bundled archive is only an offline installation
+source and is not included in release builds. Provider and plugin discovery and
+installation follow the same paths as a normal Stable build.
+
 Set `OPENCLAW_SKIP_MLX_TTS=1` to package a dev/proof build without the local
 MLX voice helper. This skips the `openclaw-mlx-tts` binary and its large
 mlx-swift Metal shader stack, which some beta Xcode toolchains cannot compile.

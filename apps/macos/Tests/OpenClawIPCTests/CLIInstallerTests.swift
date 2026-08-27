@@ -81,6 +81,60 @@ struct CLIInstallerTests {
         #expect(!command.contains("--compatible-with"))
     }
 
+    @Test func `prewarmed runtime resource is validated and installed through the bundled script`() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(
+            "openclaw-prewarmed-runtime-\(UUID().uuidString)",
+            isDirectory: true)
+        defer { try? fm.removeItem(at: root) }
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        let archive = root.appendingPathComponent("prewarmed-runtime-arm64.tar.gz")
+        let manifest = root.appendingPathComponent("prewarmed-runtime.json")
+        fm.createFile(atPath: archive.path, contents: Data("archive".utf8))
+        let commit = String(repeating: "a", count: 40)
+        let sha = String(repeating: "b", count: 64)
+        try Data("""
+        {
+          "schemaVersion": 1,
+          "appVersion": "2026.8.1",
+          "gitCommit": "\(commit)",
+          "architecture": "arm64",
+          "nodeVersion": "24.15.0",
+          "runtimeDirectory": "node-v24.15.0",
+          "archiveFile": "prewarmed-runtime-arm64.tar.gz",
+          "archiveSHA256": "\(sha)"
+        }
+        """.utf8).write(to: manifest)
+
+        let resource = try #require(CLIInstaller.prewarmedRuntimeResource(
+            manifestURL: manifest,
+            resourceDirectory: root,
+            fileManager: fm))
+        let target = try #require(CLIInstaller.prewarmedInstallTarget(
+            resource: resource,
+            appVersion: "2026.8.1",
+            appCommit: commit))
+        #expect(CLIInstaller.prewarmedInstallTarget(
+            resource: resource,
+            appVersion: "2026.8.1",
+            appCommit: String(repeating: "c", count: 40)) == nil)
+        #expect(CLIInstaller.installScriptCommand(
+            target: target,
+            prefix: "/Users/Test User/.openclaw",
+            scriptPath: "/Applications/OpenClaw.app/Contents/Resources/install-cli.sh") == [
+                "/bin/bash",
+                "/Applications/OpenClaw.app/Contents/Resources/install-cli.sh",
+                "--json",
+                "--no-onboard",
+                "--prefix",
+                "/Users/Test User/.openclaw",
+                "--prewarmed-runtime",
+                archive.path,
+                "--prewarmed-manifest",
+                manifest.path,
+            ])
+    }
+
     @Test func `channel installer checks compatibility before replacing the managed CLI`() {
         let command = CLIInstaller.installScriptCommand(
             target: .channel(.stable),
@@ -120,6 +174,8 @@ struct CLIInstallerTests {
 
     @Test func `installer events map to concise live status`() {
         let cases: [(String, String)] = [
+            (#"{"event":"step","name":"prewarmed-runtime","status":"start"}"#,
+             "Installing bundled OpenClaw runtime…"),
             (#"{"event":"step","name":"disk-space","status":"start"}"#, "Checking available disk space…"),
             (#"{"event":"step","name":"node","status":"start"}"#, "Installing Node.js runtime…"),
             (#"{"event":"step","name":"git-tools","status":"start"}"#, "Preparing Git and pnpm…"),
@@ -376,8 +432,22 @@ struct CLIInstallerTests {
             output: "2026.7.3-alpha.1\n",
             expectedVersion: "2026.7.3") == .incompatible(
             location: location,
-            found: "2026.7.3-alpha.1",
-            required: "2026.7.3"))
+                found: "2026.7.3-alpha.1",
+                required: "2026.7.3"))
+        let commit = String(repeating: "a", count: 40)
+        #expect(CLIInstaller.classifyVersion(
+            location: location,
+            output: "OpenClaw 2026.7.3 (\(commit.prefix(7)))\n",
+            expectedVersion: "2026.7.3",
+            expectedCommit: commit) == .ready(location: location, version: "2026.7.3"))
+        #expect(CLIInstaller.classifyVersion(
+            location: location,
+            output: "OpenClaw 2026.7.3 (\(String(repeating: "b", count: 40)))\n",
+            expectedVersion: "2026.7.3",
+            expectedCommit: commit) == .incompatible(
+                location: location,
+                found: "2026.7.3 (bbbbbbbbbbbb)",
+                required: "2026.7.3 (aaaaaaaaaaaa)"))
     }
 
     @Test func `channel install cannot bootstrap with an older config writer`() {
@@ -407,11 +477,17 @@ struct CLIInstallerTests {
         defer { try? FileManager().removeItem(at: root) }
         try FileManager().createDirectory(at: root, withIntermediateDirectories: true)
         let executable = root.appendingPathComponent("openclaw")
+        let node = root.appendingPathComponent("node")
         try "#!/bin/sh\necho 'OpenClaw 2026.7.3'\n".write(
             to: executable,
             atomically: true,
             encoding: .utf8)
+        try "#!/bin/sh\necho 'v24.15.0'\n".write(
+            to: node,
+            atomically: true,
+            encoding: .utf8)
         try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: node.path)
 
         let status = await CLIInstaller.status(location: executable.path)
 
