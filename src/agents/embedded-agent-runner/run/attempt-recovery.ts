@@ -163,7 +163,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     !timedOut &&
     !terminalInterrupted &&
     !hasAttemptTerminalState(attempt) &&
-    midTurnBatchSettled &&
+    settledEvidence.allToolsProvenSettled &&
     isSilentTransportDropAssistant(currentAttemptAssistant)
       ? currentAttemptAssistant
       : undefined;

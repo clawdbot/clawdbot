@@ -16,6 +16,7 @@ type TransportDropScenario = {
   content?: AssistantMessage["content"];
   diagnostics?: AssistantMessage["diagnostics"];
   activeCount?: number;
+  codeModeSuspended?: boolean;
   transportDropContinuations?: number;
 };
 
@@ -50,7 +51,12 @@ async function recoverAfterTransportDrop(scenario: TransportDropScenario = {}) {
   ] as never;
   const attempt = makeEmbeddedRunnerAttempt({
     messagesSnapshot,
-    toolMetas: toolCalls.map(() => ({ toolName: "exec", replaySafe: false })) as never,
+    toolMetas: toolCalls.map((toolCallId) => ({
+      toolCallId,
+      toolName: "exec",
+      replaySafe: false,
+      ...(scenario.codeModeSuspended ? { codeModeSuspended: true } : {}),
+    })) as never,
     lastAssistant: erroredAssistant,
     currentAttemptAssistant: erroredAssistant,
     itemLifecycle: {
@@ -145,6 +151,7 @@ describe("recoverEmbeddedRunAttempt", () => {
 
   it.each<[string, TransportDropScenario]>([
     ["the exec batch is still running", { activeCount: 1 }],
+    ["a Code Mode run is parked", { activeCount: 1, codeModeSuspended: true }],
     ["the assistant error is not transient", { errorMessage: "invalid request: bad schema" }],
     [
       "the failure is retryable but not a transport drop",
