@@ -1,7 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import {
   createChannelIngressQueue,
-  listChannelIngressQueueAccountIds,
+  listChannelIngressQueueAccountIdsReadOnly,
   type ChannelIngressQueue,
 } from "../channels/message/ingress-queue.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
@@ -226,8 +226,10 @@ function buildChannelIngressQueueAccess(
       // non-creating read-only opener as well as a listing-only projection.
       openChannelIngressQueueForInspection: (openOptions) =>
         projectIngressQueueForInspection(open(openOptions, "read-only")),
+      // Discovery runs before the inspection facade is even opened, so it takes the
+      // same non-creating path rather than the write-capable opener.
       listChannelIngressQueueAccountIds: () =>
-        listChannelIngressQueueAccountIds({ channelId, stateDir }),
+        listChannelIngressQueueAccountIdsReadOnly({ channelId, stateDir }),
     };
     if (mutation) {
       const assertCurrent = () => mutation.assertCurrent();

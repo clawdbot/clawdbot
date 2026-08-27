@@ -35,7 +35,7 @@ function contextFor(
   const access: PluginDoctorChannelIngressQueueAccess = {
     channelId: "line",
     openChannelIngressQueueForInspection: (openOptions) => open(openOptions),
-    listChannelIngressQueueAccountIds: () =>
+    listChannelIngressQueueAccountIds: async () =>
       listChannelIngressQueueAccountIdsForTests({ channelId: "line", stateDir }),
   };
   if (options?.mutable !== false) {

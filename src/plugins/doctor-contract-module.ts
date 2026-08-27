@@ -61,8 +61,9 @@ export type PluginDoctorChannelIngressQueueAccess = {
     accountId?: string;
   }) => PluginDoctorChannelIngressQueueInspection<TPayload, TMetadata>;
   /** Account ids currently holding ingress rows, so migrations also sweep
-   *  accounts retired from config. */
-  listChannelIngressQueueAccountIds: () => string[];
+   *  accounts retired from config. Async because detection resolves it through the
+   *  non-creating read-only path. */
+  listChannelIngressQueueAccountIds: () => Promise<string[]>;
   /** Present only while the host owns the exclusive Doctor maintenance lock. Every
    *  call re-asserts that authority, so a handle retained past the repair section
    *  fails instead of writing. */

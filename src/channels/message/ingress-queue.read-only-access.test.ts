@@ -4,7 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { createChannelIngressQueue } from "./ingress-queue.js";
+import {
+  createChannelIngressQueue,
+  listChannelIngressQueueAccountIdsReadOnly,
+} from "./ingress-queue.js";
 
 describe("read-only listing access", () => {
   it("lists without creating the shared state database", async () => {
@@ -21,6 +24,13 @@ describe("read-only listing access", () => {
       });
       // The read-only opener never creates, migrates or configures the file, so a
       // caller that runs before it owns the state cannot bring the store into being.
+      // Account discovery runs before the inspection facade is even opened, so it is
+      // the first thing that could create the store.
+      expect(
+        await listChannelIngressQueueAccountIdsReadOnly({ channelId: "line", stateDir }),
+      ).toEqual([]);
+      await expect(fs.access(sqlitePath)).rejects.toThrow();
+
       expect(await reader.listPending({ limit: "all" })).toEqual([]);
       expect(await reader.listClaims()).toEqual([]);
       expect(await reader.listFailed?.({ limit: "all" })).toEqual([]);
@@ -44,6 +54,9 @@ describe("read-only listing access", () => {
         access: "read-only",
       });
       expect((await after.listPending({ limit: "all" })).map((row) => row.id)).toEqual(["evt-1"]);
+      expect(
+        await listChannelIngressQueueAccountIdsReadOnly({ channelId: "line", stateDir }),
+      ).toEqual(["default"]);
     } finally {
       closeOpenClawStateDatabaseForTest();
       await fs.rm(stateDir, { recursive: true, force: true });

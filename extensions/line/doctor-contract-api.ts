@@ -32,7 +32,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     async detectLegacyState(params) {
       const spool = lineSpoolQueueAccess(params.context);
       const preview: string[] = [];
-      for (const accountId of spool.listChannelIngressQueueAccountIds()) {
+      for (const accountId of await spool.listChannelIngressQueueAccountIds()) {
         const count = await countLegacySpoolRows(
           spool.openChannelIngressQueueForInspection<LineWebhookSpoolPayload>({ accountId }),
         );
@@ -57,7 +57,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       }
       const changes: string[] = [];
       const warnings: string[] = [];
-      for (const accountId of spool.listChannelIngressQueueAccountIds()) {
+      for (const accountId of await spool.listChannelIngressQueueAccountIds()) {
         const result = await migrateLineLegacySpoolRows(
           openForMigration<LineWebhookSpoolPayload>({ accountId }),
         );

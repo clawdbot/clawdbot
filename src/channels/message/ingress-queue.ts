@@ -598,6 +598,35 @@ export function listChannelIngressQueueAccountIds(params: {
   return rows.map((row) => row.account_id);
 }
 
+/**
+ * Account discovery for callers that must not touch durable state yet. Uses the
+ * non-creating read-only opener, so an absent store yields no accounts instead of
+ * being created and migrated by the lookup itself.
+ */
+export async function listChannelIngressQueueAccountIdsReadOnly(params: {
+  channelId: string;
+  stateDir?: string;
+}): Promise<string[]> {
+  const channelId = normalizePart(params.channelId, "unknown");
+  const handle = await openChannelIngressDatabaseForListing(params.stateDir, "read-only");
+  if (!handle) {
+    return [];
+  }
+  try {
+    return executeSqliteQuerySync(
+      handle.db,
+      getChannelIngressKysely(handle.db)
+        .selectFrom("channel_ingress_events")
+        .select("account_id")
+        .distinct()
+        .where("channel_id", "=", channelId)
+        .orderBy("account_id", "asc"),
+    ).rows.map((row) => row.account_id);
+  } finally {
+    handle.release();
+  }
+}
+
 /** Creates a durable channel/account-scoped ingress queue backed by the OpenClaw state database. */
 export function createChannelIngressQueue<
   TPayload,

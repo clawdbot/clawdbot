@@ -1319,7 +1319,7 @@ describe("state migrations", () => {
                 error instanceof TypeError ? "type-error" : `other:${String(error)}`,
               );
             }
-            discovered.push(...(line?.listChannelIngressQueueAccountIds() ?? []));
+            discovered.push(...((await line?.listChannelIngressQueueAccountIds()) ?? []));
             return null;
           },
           migrateLegacyState: () => ({ changes: [], warnings: [] }),
