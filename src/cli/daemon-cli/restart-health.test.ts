@@ -299,6 +299,37 @@ describe("restart health", () => {
     expect(snapshot.buildIdMismatch).toBeUndefined();
   });
 
+  it("requires Gateway runtime build identity for a configured Control UI root", async () => {
+    probeGateway.mockResolvedValue({
+      ok: true,
+      close: null,
+      server: {
+        version: "2026.4.24",
+        buildId: "old-build",
+        controlUiBuildSource: "configured",
+        connId: "new",
+      },
+    });
+
+    const snapshot = await inspectGatewayRestartWithSnapshot({
+      runtime: { status: "running", pid: 8000 },
+      expectedBuildId: "new-build",
+      portUsage: {
+        port: 18789,
+        status: "busy",
+        listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
+        hints: [],
+      },
+    });
+
+    expect(snapshot.healthy).toBe(false);
+    expect(snapshot.controlUiBuildSource).toBe("configured");
+    expect(snapshot.gatewayBuildId).toBe("old-build");
+    expect(snapshot.expectedBuildId).toBe("new-build");
+    expect(snapshot.buildIdMismatch).toEqual({ expected: "new-build", actual: "old-build" });
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
   it("uses configured local probe auth while waiting for a matching-version restart", async () => {
     readBestEffortConfig.mockResolvedValue({
       gateway: { auth: { mode: "token", token: "probe-token" } },
