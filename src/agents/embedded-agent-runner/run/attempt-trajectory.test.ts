@@ -86,11 +86,33 @@ describe("prepareEmbeddedAttemptTrajectory", () => {
       "session.started",
       expect.objectContaining({ toolCount: 7, clientToolCount: 2 }),
     );
+    expect(recorder.recordEvent).toHaveBeenNthCalledWith(
+      1,
+      "session.started",
+      expect.not.objectContaining({ authProfileId: expect.anything() }),
+    );
     expect(recorder.recordEvent).toHaveBeenNthCalledWith(2, "trace.metadata", {
       trace: "metadata",
     });
     expect(hoisted.buildTrajectoryRunMetadata).toHaveBeenCalledWith(
       expect.objectContaining({ fastMode: true, provider: "provider-1" }),
+    );
+  });
+
+  it("records the runtime-forwarded authProfileId in session.started when present", async () => {
+    const recorder = { recordEvent: vi.fn() };
+    hoisted.createTrajectoryRuntimeRecorder.mockReturnValue(recorder);
+    const input = createInput() as never as Record<string, unknown>;
+    (input.attempt as Record<string, unknown>).runtimePlan = {
+      auth: { forwardedAuthProfileId: "profile-42" },
+    };
+
+    await prepareEmbeddedAttemptTrajectory(input as never);
+
+    expect(recorder.recordEvent).toHaveBeenNthCalledWith(
+      1,
+      "session.started",
+      expect.objectContaining({ authProfileId: "profile-42" }),
     );
   });
 
