@@ -2,11 +2,12 @@
 import type { Block, KnownBlock, WebClient } from "@slack/web-api";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
-import { resolveSlackAccount } from "./accounts.js";
+import { resolveDefaultSlackAccountId, resolveSlackAccount } from "./accounts.js";
 import { SLACK_PRIVATE_ACTION_DELIVERY_RESULT } from "./action-threading.js";
 import type { SlackAuthoredTextPlacement } from "./authored-text.js";
 import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
@@ -389,7 +390,11 @@ export async function editSlackMessage(
   content: string,
   opts: SlackActionClientOpts & { blocks?: (Block | KnownBlock)[] } = {},
 ) {
-  await editSlackRenderedMessage(channelId, messageId, normalizeSlackOutboundText(content), opts);
+  const accountId =
+    opts.accountId ?? (opts.cfg ? resolveDefaultSlackAccountId(opts.cfg) : undefined);
+  const tableMode = resolveMarkdownTableMode({ cfg: opts.cfg, channel: "slack", accountId });
+  const text = normalizeSlackOutboundText(content, { tableMode });
+  await editSlackRenderedMessage(channelId, messageId, text, opts);
 }
 
 // Finalized previews already contain Slack mrkdwn; a second Markdown render changes its meaning.
