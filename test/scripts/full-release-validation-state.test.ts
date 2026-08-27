@@ -569,7 +569,7 @@ describe("release state artifacts", () => {
 
   it("selects a fail-fast cancellation bound to its active blocked child", () => {
     const { decision, drain, sealedPlan } = blockedArtifacts();
-    decision.cancellation.cancelledRunIds = ["101"];
+    decision.cancellation = { cancelledRunIds: ["101"], requested: false };
     expect(selectPair(sealedPlan, decision, drain).decision.cancellation).toEqual({
       cancelledRunIds: ["101"],
       requested: false,
@@ -619,7 +619,7 @@ describe("release state artifacts", () => {
     const sealedPlan = executionPlan({ rerunGroup: "ci" });
     const decision = artifact("decision", 2, sealedPlan);
     const drain = artifact("drain", 2, sealedPlan);
-    decision.cancellation.requested = true;
+    decision.cancellation = { cancelledRunIds: [], requested: true };
     expect(() => selectPair(sealedPlan, decision, drain)).toThrow("cancellation differs");
     expect(() => verifyReleaseStateArtifacts(sealedPlan, decision, drain, stateExpected())).toThrow(
       "cancellation differs",
@@ -825,7 +825,10 @@ describe("release state artifacts", () => {
   ])("rejects $name", ({ cancelledRunIds, state }) => {
     const sealedPlan = executionPlan({ rerunGroup: "ci" });
     const decision = stateArtifact("decision", state, sealedPlan);
-    decision.cancellation.cancelledRunIds = cancelledRunIds;
+    decision.cancellation = {
+      cancelledRunIds,
+      requested: state === "cancelled_with_children",
+    };
     expect(() =>
       selectPair(sealedPlan, decision, stateArtifact("drain", "passed", sealedPlan)),
     ).toThrow("cancellation differs");
