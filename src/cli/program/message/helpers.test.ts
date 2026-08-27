@@ -1,6 +1,11 @@
 // Message program helper tests cover message command helper behavior and mocks.
+import { Command } from "commander";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { registerMessagePollCommand } from "./register.poll.js";
+import { registerMessageReactionsCommands } from "./register.reactions.js";
+import { registerMessageReadEditDeleteCommands } from "./register.read-edit-delete.js";
+import { registerMessageSendCommand } from "./register.send.js";
 
 const messageCommandMock = vi.fn(async (): Promise<unknown> => undefined);
 vi.mock("../../../commands/message.js", () => ({
@@ -149,6 +154,124 @@ describe("runMessageAction", () => {
     expect(exitMock).toHaveBeenCalledOnce();
     expect(exitMock).toHaveBeenCalledWith(0);
   });
+
+  it.each([
+    { name: "sent", status: "sent" as const, exitCode: 0 },
+    { name: "suppressed", status: "suppressed" as const, exitCode: 1 },
+    { name: "failed", status: "failed" as const, exitCode: 1 },
+    { name: "partial_failed", status: "partial_failed" as const, exitCode: 1 },
+    { name: "dry-run", status: undefined, dryRun: true, exitCode: 0 },
+  ])(
+    "propagates $name send outcomes through the real CLI parser",
+    async ({ status, dryRun, exitCode }) => {
+      const sendResult = {
+        channel: "discord",
+        to: "channel:123",
+        via: "direct" as const,
+        mediaUrl: null,
+        ...(status ? { deliveryStatus: status } : {}),
+        ...(status === "suppressed"
+          ? { suppressionReason: "cancelled_by_message_sending_hook" as const }
+          : {}),
+        ...(status === "failed" || status === "partial_failed"
+          ? { error: "provider rejected the message" }
+          : {}),
+        ...(status === "partial_failed"
+          ? { sentBeforeError: true as const, result: { channel: "discord", messageId: "part-1" } }
+          : {}),
+      };
+      messageCommandMock.mockResolvedValueOnce({
+        kind: "send",
+        channel: "discord",
+        action: "send",
+        to: "channel:123",
+        handledBy: "core",
+        payload: sendResult,
+        sendResult,
+        dryRun: Boolean(dryRun),
+      });
+      const program = new Command();
+      const message = program.command("message");
+      registerMessageSendCommand(message, createMessageCliHelpers(message, "discord"));
+
+      await expect(
+        program.parseAsync(
+          [
+            "message",
+            "send",
+            "--channel",
+            "discord",
+            "--target",
+            "channel:123",
+            "--message",
+            "hi",
+            ...(dryRun ? ["--dry-run"] : []),
+          ],
+          { from: "user" },
+        ),
+      ).rejects.toThrow("exit");
+
+      expect(exitMock).toHaveBeenCalledWith(exitCode);
+    },
+  );
+
+  it.each([
+    ["disabled reaction", "react", { ok: false, hint: "Reactions are disabled." }, 1],
+    ["rejected added reaction", "react", { ok: false, warning: "Unavailable", added: "✅" }, 1],
+    ["rejected delete", "delete", { ok: false, deleted: false, warning: "Not deleted" }, 1],
+    ["rejected poll", "poll", { ok: false, error: "Poll rejected" }, 1],
+    ["rejected send", "send", { ok: false, error: "Message rejected" }, 1],
+    ["successful reaction", "react", { ok: true, added: "✅" }, 0],
+    ["legacy reaction", "react", { added: "✅" }, 0],
+    ["non-boolean outcome", "react", { ok: "false", added: "✅" }, 0],
+    ["dry-run", "react", { ok: false, error: "Not executed" }, 0],
+  ] as const)(
+    "propagates %s through the real CLI parser",
+    async (name, action, payload, exitCode) => {
+      const dryRun = name === "dry-run";
+      const kind = action === "send" || action === "poll" ? action : "action";
+      messageCommandMock.mockResolvedValueOnce({
+        kind,
+        channel: "telegram",
+        action,
+        ...(kind === "action" ? {} : { to: "123" }),
+        handledBy: "plugin",
+        payload,
+        dryRun,
+      });
+      const program = new Command();
+      const message = program.command("message");
+      const helpers = createMessageCliHelpers(message, "telegram");
+      registerMessageSendCommand(message, helpers);
+      registerMessagePollCommand(message, helpers);
+      registerMessageReactionsCommands(message, helpers);
+      registerMessageReadEditDeleteCommands(message, helpers);
+      const args = {
+        react: ["--message-id", "456", "--emoji", "✅"],
+        delete: ["--message-id", "456"],
+        poll: ["--poll-question", "Ready?", "--poll-option", "Yes", "--poll-option", "No"],
+        send: ["--message", "hello"],
+      }[action];
+
+      await expect(
+        program.parseAsync(
+          [
+            "message",
+            action,
+            "--channel",
+            "telegram",
+            "--target",
+            "123",
+            ...args,
+            ...(dryRun ? ["--dry-run"] : []),
+          ],
+          { from: "user" },
+        ),
+      ).rejects.toThrow("exit");
+
+      expect(exitMock).toHaveBeenCalledWith(exitCode);
+    },
+  );
 
   it("loads configured channel plugins when no target channel is known yet", async () => {
     await runSendAction({ channel: undefined });

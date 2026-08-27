@@ -9,6 +9,38 @@ import {
 } from "./pw-role-snapshot.js";
 
 describe("pw-role-snapshot", () => {
+  describe.each([false, true])("encoded names (interactive=%s)", (interactive) => {
+    it.each([
+      ['button "Save \\"draft\\""', 'Save "draft"'],
+      ['button "Open C:\\\\draft"', "Open C:\\draft"],
+      [`'button "Save: owner''s draft"'`, "Save: owner's draft"],
+      [`'button "Issue #123"'`, "Issue #123"],
+      [`'button "Save {draft}"'`, "Save {draft}"],
+      ['button "保存 🦞 résumé"', "保存 🦞 résumé"],
+      ["button /api/v1/", "/api/v1/"],
+    ])("preserves %s through actionable refs", (key, name) => {
+      const built = buildRoleSnapshotFromAriaSnapshot(`- ${key}`, { interactive });
+      const result = finalizeRoleSnapshot(built);
+      expect(result.refs).toEqual({ e1: { role: "button", name } });
+      expect(result.stats.refs).toBe(1);
+      expect(result.snapshot).toContain(JSON.stringify(name));
+    });
+
+    it("preserves native frame refs without reading refs inside names or values", () => {
+      const snapshot = [
+        `- 'button "Save: owner''s draft" [ref=f2e3]': text [ref=e99]`,
+        '- button "Save \\"draft\\" [ref=e98]" [ref=f2e4]',
+      ].join("\n");
+      const built = buildRoleSnapshotFromAiSnapshot(snapshot, { interactive });
+      const result = finalizeRoleSnapshot(built);
+      expect(result.refs).toEqual({
+        f2e3: { role: "button", name: "Save: owner's draft" },
+        f2e4: { role: "button", name: 'Save "draft" [ref=e98]' },
+      });
+      expect(result.stats.refs).toBe(2);
+    });
+  });
+
   it("adds refs for interactive elements", () => {
     const aria = [
       '- heading "Example" [level=1]',
@@ -102,6 +134,27 @@ describe("pw-role-snapshot", () => {
 
     expect(result.refs).toEqual({ e1: { role: "button" } });
     expect(result.stats.refs).toBe(1);
+  });
+
+  it("finalizes MCP text without requiring JSON-encoded control characters", () => {
+    const name = "Edit\titem\b";
+    const result = finalizeRoleSnapshot({
+      snapshot: `- button "${name}" [ref=mcp-ref:session:3]`,
+      refs: { "mcp-ref:session:3": { role: "button", name } },
+    });
+    expect(result.refs).toEqual({ "mcp-ref:session:3": { role: "button", name } });
+  });
+
+  it.each(["\u2028", "\u2029"])("preserves MCP refs around Unicode separator %j", (separator) => {
+    for (const field of ["name", "value", "description"] as const) {
+      const name = field === "name" ? `Edit${separator}item` : "Edit item";
+      const suffix = field === "name" ? "" : ` ${field}="first${separator}second"`;
+      const result = finalizeRoleSnapshot({
+        snapshot: `- textbox "${name}" [ref=mcp-ref:session:3]${suffix}`,
+        refs: { "mcp-ref:session:3": { role: "textbox", name } },
+      });
+      expect(result.refs, field).toEqual({ "mcp-ref:session:3": { role: "textbox", name } });
+    }
   });
 
   it("uses a bounded marker for budgets too small for a snapshot line", () => {

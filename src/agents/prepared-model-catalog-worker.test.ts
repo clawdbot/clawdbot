@@ -84,6 +84,7 @@ describe("prepared model catalog worker input", () => {
     expect(cloned.input.runtimePluginSelections).toEqual([
       { provider: "selected", modelId: "model" },
     ]);
+    expect(cloned.input).not.toHaveProperty("inheritedAuthDir");
     expect(cloned.input).not.toHaveProperty("loadRuntimePlugins");
   });
 });

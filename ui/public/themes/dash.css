@@ -1,0 +1,141 @@
+/* Dash palette; selected by index.html and app/theme.ts. */
+
+:root[data-theme="dash"] {
+  /*
+   * Accent — chocolate brown on deep cocoa
+   *
+   * WCAG 2.1 AA audit (bg = #1a1210, relative luminance ≈ 0.0069):
+   *   --accent #b47840  L ≈ 0.235  contrast ≈ 5.0:1  AA text ✓  (floor: #a8703c → 4.4:1, fails)
+   *   --accent-hover #c8885a  L ≈ 0.306  contrast ≈ 6.3:1  ✓
+   *   --primary-foreground #1a1210 on #b47840 button: 5.0:1 AA ✓
+   *   --primary-foreground #1a1210 on #c8885a hover: 6.26:1 AA ✓
+   *   --destructive-foreground #fafafa on #d32f2f button: 4.77:1 AA ✓
+   *   --destructive-foreground #fafafa on #bc2a2a hover: 5.74:1 AA ✓
+   *   focus-ring at 80% opacity: ≈ 3.5:1 against bg ✓ (non-text 3:1 required)
+   */
+  --ring: #b47840;
+  --accent: #b47840;
+  --accent-hover: #c8885a;
+  --accent-muted: #b47840;
+  --accent-subtle: rgba(180, 120, 64, 0.16);
+  --accent-glow: rgba(180, 120, 64, 0.24);
+  --primary: #b47840;
+  --primary-foreground: #1a1210;
+
+  /* Deepen only the text-bearing destructive fill; keep danger accents vivid. */
+  --destructive: #d32f2f;
+  --destructive-hover: #bc2a2a;
+
+  /* Focus — match chocolate accent, slightly higher ring opacity for dark bg visibility */
+  --focus: rgba(180, 120, 64, 0.2);
+
+  /* Surfaces — deep cocoa tones */
+  --bg: #1a1210;
+  --bg-accent: #201816;
+  --bg-elevated: #28201c;
+  --bg-hover: #302822;
+  --bg-muted: #302822;
+
+  --card: #221a16;
+  --card-foreground: #ece0d8;
+  --card-highlight: rgba(255, 240, 225, 0.04);
+  --popover: #28201c;
+  --popover-foreground: #ece0d8;
+
+  --panel: #1a1210;
+  --panel-strong: #28201c;
+  --panel-hover: #302822;
+  --chrome: rgba(26, 18, 16, 0.96);
+  --chrome-strong: rgba(26, 18, 16, 0.98);
+
+  --text: #d8c8b8;
+  --text-strong: #f0e4da;
+  --chat-text: #d8c8b8;
+  --muted: #a18f80;
+  --muted-strong: #a08f7f;
+  --muted-foreground: #a18f80;
+
+  --border: #302418;
+  --border-strong: #443828;
+  --border-hover: #5a4c3a;
+  --input: #302418;
+
+  --secondary: #221a16;
+  --secondary-foreground: #ece0d8;
+  --accent-2: #a88050;
+  --accent-2-muted: rgba(168, 128, 80, 0.7);
+  --accent-2-subtle: rgba(168, 128, 80, 0.12);
+
+  --shadow-sm: 0 1px 2px rgba(10, 6, 4, 0.35);
+  --shadow-md: 0 4px 16px rgba(10, 6, 4, 0.45);
+  --shadow-lg: 0 12px 32px rgba(10, 6, 4, 0.55);
+  --overlay-shadow: var(--shadow-md);
+
+  --grid-line: rgba(255, 240, 225, 0.03);
+}
+
+:root[data-theme="dash-light"] {
+  /*
+   * Accent — deep chocolate on warm parchment
+   *
+   * WCAG 2.1 AA audit (bg = #f7f2ec, relative luminance ≈ 0.893):
+   *   --accent #6e4828  L ≈ 0.081  contrast ≈ 7.2:1  AAA text ✓
+   *   --accent-hover #5c3c20  L ≈ 0.054  contrast ≈ 8.9:1  ✓
+   *   --primary-foreground #ffffff on #6e4828 button: 8.0:1 AAA ✓
+   *   focus-ring at 70% opacity: ≈ 3.4:1 against parchment bg ✓
+   */
+  --ring: #6e4828;
+  --accent: #6e4828;
+  --accent-hover: #5c3c20;
+  --accent-muted: #6e4828;
+  --accent-subtle: rgba(110, 72, 40, 0.12);
+  --accent-glow: rgba(110, 72, 40, 0.16);
+  --primary: #6e4828;
+
+  /* Surfaces — warm parchment tones */
+  --bg: #f7f2ec;
+  --bg-accent: #f0e8e0;
+  --bg-hover: #e8ddd2;
+  --bg-muted: #e8ddd2;
+  --bg-content: #f0e8e0;
+
+  --card-foreground: #2c2118;
+  --card-highlight: rgba(80, 50, 20, 0.02);
+  --popover-foreground: #2c2118;
+  --session-hovercard-progress-surface: color-mix(
+    in srgb,
+    var(--card) 48%,
+    var(--panel-strong) 52%
+  );
+
+  --panel: #f7f2ec;
+  --panel-strong: #f0e8e0;
+  --panel-hover: #e0d4c8;
+  --chrome: rgba(247, 242, 236, 0.96);
+  --chrome-strong: rgba(247, 242, 236, 0.98);
+
+  --text: #4a3828;
+  --text-strong: #2c2118;
+  --chat-text: #4a3828;
+  --muted: #725d4d;
+  --muted-strong: #604838;
+  --muted-foreground: #725d4d;
+
+  --border: #ddd0c2;
+  --border-strong: #c8b8a6;
+  --border-hover: #b0a090;
+  --input: #ddd0c2;
+
+  --secondary: #f0e8e0;
+  --secondary-foreground: #4a3828;
+  --accent-2: #6a4e30;
+  --accent-2-muted: rgba(106, 78, 48, 0.75);
+  --accent-2-subtle: rgba(106, 78, 48, 0.1);
+
+  --shadow-sm: 0 1px 2px rgba(60, 40, 20, 0.06);
+  --shadow-md: 0 4px 12px rgba(60, 40, 20, 0.08);
+  --shadow-lg: 0 12px 28px rgba(60, 40, 20, 0.1);
+  --overlay-shadow: var(--shadow-md);
+
+  --grid-line: rgba(80, 50, 20, 0.04);
+}

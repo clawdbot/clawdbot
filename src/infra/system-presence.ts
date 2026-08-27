@@ -19,6 +19,7 @@ export type SystemPresence = {
   platform?: string;
   deviceFamily?: string;
   modelIdentifier?: string;
+  timeZone?: string;
   lastInputSeconds?: number;
   mode?: string;
   reason?: string;

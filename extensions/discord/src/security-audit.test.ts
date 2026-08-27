@@ -1,7 +1,7 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Discord tests cover security audit plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { ResolvedDiscordAccount } from "./accounts.js";
-import type { OpenClawConfig } from "./runtime-api.js";
 import { collectDiscordSecurityAuditFindings } from "./security-audit.js";
 
 type DiscordAccountConfig = ResolvedDiscordAccount["config"];

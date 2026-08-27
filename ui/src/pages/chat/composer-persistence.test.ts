@@ -66,6 +66,35 @@ afterEach(() => {
 });
 
 describe("chat composer persistence", () => {
+  it("does not persist whitespace-only drafts", () => {
+    const state = createState({ chatMessage: "  \n  " });
+
+    expect(persistChatComposerState(state)).toBe(true);
+    expect(loadChatComposerSnapshot(state, state.sessionKey)).toBeNull();
+  });
+
+  it("normalizes an existing whitespace-only stored draft during restore", () => {
+    const state = createState();
+    const gatewayUrl = state.settings?.gatewayUrl;
+    sessionStorage.setItem(
+      storageKeyForGateway(gatewayUrl),
+      JSON.stringify({
+        version: 2,
+        gatewayOwner: gatewayUrl,
+        sessions: {
+          [`${state.sessionKey}\u0000agent:lily`]: {
+            draft: "  \n  ",
+            draftRevision: 1,
+            updatedAt: 1,
+          },
+        },
+      }),
+    );
+
+    expect(restoreChatComposerState(state)).toBe(false);
+    expect(state.chatMessage).toBe("");
+  });
+
   it("loads legacy steer rows as generic mode-bearing sends and never rewrites old fields", () => {
     const state = createState();
     const gatewayUrl = state.settings?.gatewayUrl;

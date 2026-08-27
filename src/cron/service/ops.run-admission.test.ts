@@ -21,7 +21,7 @@ import { cronStoreKey } from "../store/key.js";
 import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.js";
 import { cronStreamScheduleKey } from "../stream-schedule.js";
 import { recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
-import { update } from "./ops-mutations.js";
+import { remove, update } from "./ops-mutations.js";
 import { list } from "./ops-read.js";
 import { enqueueRun, run } from "./ops-run.js";
 import { createCronServiceState } from "./state.js";
@@ -303,6 +303,91 @@ describe("cron service run admission", () => {
       .get(cronStoreKey(store.storePath), waitingJob.id) as { status: string } | undefined;
     expect(receipt?.status).toBe("skipped");
   });
+
+  it.each(["edited-and-restored", "removed"] as const)(
+    "fences and settles a queued manual run after its job is %s",
+    async (mutation) => {
+      const store = opsRegressionFixtures.makeStorePath();
+      const dueAt = Date.parse("2026-02-06T10:05:06.050Z");
+      const activeJob = createDueIsolatedJob({
+        id: `active-before-${mutation}`,
+        nowMs: dueAt,
+        nextRunAtMs: dueAt + 3_600_000,
+      });
+      const waitingJob = createDueIsolatedJob({
+        id: `queued-before-${mutation}`,
+        nowMs: dueAt,
+        nextRunAtMs: dueAt + 3_600_000,
+      });
+      await saveCronStore(store.storePath, { version: 1, jobs: [activeJob, waitingJob] });
+
+      const activeStarted = createDeferred();
+      const releaseActive = createDeferred<{ status: "ok"; summary: string }>();
+      const runIsolatedAgentJob = vi.fn(async ({ job }: { job: { id: string } }) => {
+        if (job.id === activeJob.id) {
+          activeStarted.resolve();
+          return await releaseActive.promise;
+        }
+        return { status: "ok" as const, summary: "replacement" };
+      });
+      const state = createAdmissionTestState({
+        cronEnabled: true,
+        storePath: store.storePath,
+        testAdmissionLimit: 1,
+        log: noopLogger,
+        nowMs: () => dueAt,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob,
+      });
+
+      const activeRun = run(state, activeJob.id, "force");
+      await activeStarted.promise;
+      const waitingRun = run(state, waitingJob.id, "force");
+      await vi.waitFor(() => {
+        expect(state.queuedRunReservationsByJobId.has(waitingJob.id)).toBe(true);
+      });
+      const staleReceipt = inspectActiveCronRunReceipt({
+        storePath: store.storePath,
+        jobId: waitingJob.id,
+      });
+      if (!staleReceipt) {
+        throw new Error("Expected the queued run to own a durable receipt");
+      }
+
+      if (mutation === "removed") {
+        await remove(state, waitingJob.id);
+      } else {
+        await update(state, waitingJob.id, {
+          payload: { kind: "agentTurn", message: "replacement generation" },
+        });
+        await update(state, waitingJob.id, { payload: waitingJob.payload });
+      }
+
+      releaseActive.resolve({ status: "ok", summary: "active" });
+      await activeRun;
+      await expect(waitingRun).resolves.toEqual({ ok: true, ran: false, reason: "not-due" });
+      expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+      expect(state.queuedRunReservationsByJobId.has(waitingJob.id)).toBe(false);
+      const receipt = openOpenClawStateDatabase()
+        .db.prepare("SELECT status FROM cron_run_receipts WHERE receipt_id = ?")
+        .get(staleReceipt.receiptId) as { status: string } | undefined;
+      expect(receipt?.status).toBe("skipped");
+
+      if (mutation === "edited-and-restored") {
+        const persisted = (await loadCronStore(store.storePath)).jobs.find(
+          (job) => job.id === waitingJob.id,
+        );
+        expect(persisted?.state.queuedAtMs).toBeUndefined();
+        expect(persisted?.state.runningAtMs).toBeUndefined();
+        await expect(run(state, waitingJob.id, "force")).resolves.toEqual({
+          ok: true,
+          ran: true,
+        });
+        expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
+      }
+    },
+  );
 
   it("cancels a queued stream batch after an A-to-B-to-A source replacement", async () => {
     const store = opsRegressionFixtures.makeStorePath();

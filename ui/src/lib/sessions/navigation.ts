@@ -373,8 +373,8 @@ export function resolveSessionNavigation(input: SessionNavigationInput): Session
   let activeRow = visibleSessions.find(matchesCurrentSession);
   if (!activeRow && activeSession && input.archivedFilter !== "archived") {
     // Deep-linked and archived sessions still need a visible selected row.
-    activeRow = sortedSessions.find(matchesCurrentSession) ?? activeSession;
-    visibleSessions = [activeRow, ...visibleSessions.filter((row) => row !== activeRow)];
+    activeRow = activeSession;
+    visibleSessions = [activeRow, ...visibleSessions];
   }
   return {
     currentSessionKey,

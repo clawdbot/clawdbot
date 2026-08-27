@@ -164,9 +164,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     payload: ReplyPayload,
     info: { kind: ReplyDispatchKind },
   ): Promise<{ visibleReplySent: false } | void> => {
-    if (payload.isReasoning === true) {
-      return { visibleReplySent: false };
-    }
     if (info.kind === "final" && slackStreaming.mode === "progress" && progress.isProgressMode) {
       if (progress.useNativeProgressStreaming) {
         await progress.deliverNativeFinal(payload, info.kind);
@@ -390,6 +387,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       accountId: route.accountId,
       route: { agentId: route.agentId, sessionKey: route.sessionKey },
       ctxPayload: prepared.ctxPayload,
+      dispatchReplyFromConfig: ctx.dispatchReplyFromConfig,
       dispatcherOptions: {
         ...replyPipeline,
         // A channel transform marks intentional silence before core can synthesize an empty-reply error.

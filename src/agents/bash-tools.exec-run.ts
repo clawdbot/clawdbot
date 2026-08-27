@@ -42,6 +42,7 @@ import {
 import {
   DEFAULT_MAX_OUTPUT,
   DEFAULT_PENDING_MAX_OUTPUT,
+  ExecProcessPreflightError,
   type ExecProcessHandle,
   type ExecProcessOutcome,
   normalizePathPrepend,
@@ -56,6 +57,7 @@ import {
   validateScriptFileForShellBleed,
 } from "./bash-tools.exec-script-preflight.js";
 import {
+  attachExecApprovalReview,
   buildExecForegroundResult,
   createExecHostResolver,
   resolveExecReviewerDefaults,
@@ -65,7 +67,11 @@ import {
   createBackgroundExecTask,
   finalizeBackgroundExecTask,
 } from "./bash-tools.exec-task-tracking.js";
-import type { ExecToolDefaults, ExecToolDetails } from "./bash-tools.exec-types.js";
+import type {
+  ExecToolApprovalReview,
+  ExecToolDefaults,
+  ExecToolDetails,
+} from "./bash-tools.exec-types.js";
 import { formatUnavailableWorkdirFailure, resolveExecWorkdir } from "./bash-tools.exec-workdir.js";
 import { clampWithDefault, readEnvInt, truncateMiddle } from "./bash-tools.shared.js";
 import { createModelExecAutoReviewer } from "./exec-auto-reviewer.js";
@@ -206,6 +212,7 @@ export function createExecTool(
       const startedAt = Date.now();
       let execCommandOverride: string | undefined;
       let revalidateGatewayApproval: GatewayApprovalRevalidator | undefined;
+      let approvalReview: ExecToolApprovalReview | undefined;
       const foregroundFallbackWarning =
         !allowBackground && (params.background === true || typeof params.yieldMs === "number")
           ? "Warning: continuation options are unavailable; running synchronously."
@@ -230,7 +237,8 @@ export function createExecTool(
             : elevatedDefaults?.defaultLevel === "on"
               ? "ask"
               : "off";
-      const effectiveDefaultMode = elevatedAllowed ? elevatedDefaultMode : "off";
+      const effectiveDefaultMode =
+        elevatedAllowed && !defaults?.sandboxRequired ? elevatedDefaultMode : "off";
       const elevatedMode =
         typeof params.elevated === "boolean"
           ? params.elevated
@@ -284,6 +292,7 @@ export function createExecTool(
         requestedTarget,
         elevatedRequested,
         sandboxAvailable: Boolean(defaults?.sandbox),
+        sandboxRequired: defaults?.sandboxRequired,
       });
       const host: ExecHost = target.effectiveHost;
 
@@ -504,6 +513,7 @@ export function createExecTool(
             sessionKey: defaults?.sessionKey,
             runId: defaults?.runId,
             toolCallId,
+            onApprovalReview: (review) => (approvalReview = review),
             sessionId: defaults?.sessionId,
             sessionStore: defaults?.sessionStore,
             bashElevated: elevatedDefaults,
@@ -525,11 +535,9 @@ export function createExecTool(
             processContinuationAvailable: allowBackground,
             trustedSafeBinDirs,
           });
-          if (gatewayResult.pendingResult) {
-            return gatewayResult.pendingResult;
-          }
-          if (gatewayResult.deniedResult) {
-            return gatewayResult.deniedResult;
+          const immediateResult = gatewayResult.pendingResult ?? gatewayResult.deniedResult;
+          if (immediateResult) {
+            return attachExecApprovalReview(immediateResult, approvalReview);
           }
           signal?.throwIfAborted();
           revalidateGatewayApproval = gatewayResult.revalidateBeforeExecution;
@@ -556,10 +564,6 @@ export function createExecTool(
           });
         }
 
-        const gatewayApprovalDenied = await revalidateGatewayApproval?.();
-        if (gatewayApprovalDenied) {
-          return gatewayApprovalDenied;
-        }
         signal?.throwIfAborted();
         run = await runExecProcess({
           command: params.command,
@@ -585,6 +589,7 @@ export function createExecTool(
           timeoutSec: effectiveTimeout,
           processContinuationAvailable: allowBackground,
           onUpdate,
+          beforeSpawn: revalidateGatewayApproval,
           onSettledBeforeNotify: (outcome) => {
             settledOutcome = outcome;
             finalizeBackgroundExecTask({ handle: backgroundTask, outcome });
@@ -593,7 +598,7 @@ export function createExecTool(
         discardPreparedSandboxWorkdir = null;
       } catch (error) {
         discardPreparedSandboxWorkdir?.();
-        throw error;
+        return attachExecApprovalReview(ExecProcessPreflightError.unwrap(error), approvalReview);
       }
 
       let yielded = false;
@@ -643,6 +648,8 @@ export function createExecTool(
       }
 
       return new Promise<AgentToolResult<ExecToolDetails>>((resolve, reject) => {
+        const resolveReviewed = (result: AgentToolResult<ExecToolDetails>) =>
+          resolve(attachExecApprovalReview(result, approvalReview));
         const rejectIfAborted = () => {
           if (!toolAborted) {
             return false;
@@ -653,7 +660,7 @@ export function createExecTool(
 
         const resolveRunning = () => {
           cleanupToolRunListeners();
-          resolve({
+          resolveReviewed({
             content: [
               {
                 type: "text",
@@ -679,7 +686,7 @@ export function createExecTool(
           }
           if (settledOutcome) {
             cleanupToolRunListeners();
-            resolve(
+            resolveReviewed(
               buildExecForegroundResult({
                 outcome: settledOutcome,
                 cwd: run.session.cwd,
@@ -719,7 +726,7 @@ export function createExecTool(
             if (rejectIfAborted() || yielded || run.session.backgrounded) {
               return;
             }
-            resolve(
+            resolveReviewed(
               buildExecForegroundResult({
                 outcome,
                 cwd: run.session.cwd,

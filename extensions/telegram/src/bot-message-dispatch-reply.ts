@@ -6,6 +6,7 @@ import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-ru
 import {
   isFastModeAutoProgressPayload,
   isReplyPayloadNonTerminalToolErrorWarning,
+  resolveAskUserQuestionOptionIndices,
   resolveSendableOutboundReplyParts,
   type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
@@ -44,7 +45,6 @@ import type {
 import {
   appendTelegramDroppedControlFallback,
   resolveTelegramInlineButtons,
-  resolveTelegramQuestionOptionIndices,
   type TelegramDroppedControl,
   type TelegramInlineButtons,
 } from "./button-types.js";
@@ -108,7 +108,7 @@ function resolvePayloadTelegramControls(
     {
       allowWebAppButtons: resolveTelegramTargetChatType(String(turn.context.chatId)) === "direct",
       onDroppedControl: (control) => droppedControls.push(control),
-      questionOptionIndices: resolveTelegramQuestionOptionIndices(payload),
+      questionOptionIndices: resolveAskUserQuestionOptionIndices(payload),
     },
   );
   const text = appendTelegramDroppedControlFallback(payload.text ?? "", droppedControls);
@@ -329,6 +329,7 @@ export async function deliverReply(
       const canRepresentAsTransientProgress =
         !reply.hasMedia &&
         telegramButtons === undefined &&
+        effectivePayload.channelData?.askUser === undefined &&
         !hasExecApprovalPayload(effectivePayload);
       const isFastModeProgressPayload = isFastModeAutoProgressPayload(effectivePayload);
       if (turn.streamMode === "progress") {
@@ -407,6 +408,7 @@ export async function deliverReply(
       turn.activeAnswerDraftIsToolProgressOnly = false;
       turn.progressCompositor.reset();
     }
+    const isAskUserPayload = effectivePayload.channelData?.askUser !== undefined;
     const result =
       segment.lane === "answer" && info.kind === "final"
         ? await deliverFinalAnswerText(
@@ -423,6 +425,7 @@ export async function deliverReply(
             payload: lanePayload,
             infoKind: info.kind,
             buttons: telegramButtons,
+            ...(isAskUserPayload ? { finalizePreview: true } : {}),
             allowStream: !isDurableProgressCommentary,
             onPlatformSendDispatch: info.onPlatformSendDispatch,
             bindPendingFinalDelivery: info.bindPendingFinalDelivery,
@@ -433,12 +436,11 @@ export async function deliverReply(
       (result.kind === "preview-finalized" || result.kind === "preview-finalized-partial");
     if (finalizedPreview) {
       await handlePreviewFinalizedResult(turn, result);
-    }
-    if (segment.lane === "answer" && info.kind === "tool" && result.kind === "preview-updated") {
-      const messageId = turn.answerLane.stream?.messageId();
-      const text = turn.answerLane.stream?.lastDeliveredText?.();
-      if (typeof messageId === "number" && text) {
-        registerTelegramQuestionDeliveryForMessage(turn, effectivePayload, { messageId, text });
+      if (isAskUserPayload && result.kind === "preview-finalized") {
+        registerTelegramQuestionDeliveryForMessage(turn, effectivePayload, {
+          messageId: result.delivery.messageId,
+          text: result.delivery.content,
+        });
       }
     }
     if (segment.lane === "answer" && info.kind === "block" && result.kind === "preview-updated") {

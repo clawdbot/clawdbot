@@ -14,6 +14,7 @@ import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-de
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { registerSandboxBackend } from "openclaw/plugin-sdk/sandbox";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { formatSqliteSessionFileMarker } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 // Codex tests cover run attempt.context engine plugin behavior.
@@ -1857,6 +1858,58 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
     });
+  });
+
+  it("persists the admitted user prompt before an async item buffered during turn startup", async () => {
+    const workspaceDir = path.join(tempDir, "workspace-early-async");
+    const params = await createSqliteParams(workspaceDir, "early-async-order");
+    params.onBlockReply = vi.fn();
+    const recorder = params.userTurnTranscriptRecorder;
+    if (!recorder) {
+      throw new Error("expected user turn transcript recorder");
+    }
+    recorder.markRuntimePersistencePending = vi.fn();
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "turn/start") {
+        await harness.notify({
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              type: "agentMessage",
+              id: "startup-async",
+              phase: "final_answer",
+              delivery: "async",
+              text: "Working on the request.",
+            },
+          },
+        });
+      }
+      return undefined;
+    });
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledOnce());
+    await harness.completeTurn();
+    await run;
+
+    const sessionTarget = params.sessionTarget;
+    if (!sessionTarget?.sessionId || !sessionTarget.sessionKey) {
+      throw new Error("expected a complete session transcript target");
+    }
+    const messages = (
+      await readSessionTranscriptEvents({
+        ...sessionTarget,
+        sessionId: sessionTarget.sessionId,
+        sessionKey: sessionTarget.sessionKey,
+      })
+    )
+      .map((event) => (event as { message?: { role?: string } }).message)
+      .filter((message) => message !== undefined);
+    expect(messages.slice(0, 2).map((message) => message.role)).toEqual(["user", "assistant"]);
+    expect(messages[1]).toMatchObject({ openclawAsyncDelivery: { itemId: "startup-async" } });
   });
 
   it("reloads mirrored history after bootstrap mutates the session transcript", async () => {

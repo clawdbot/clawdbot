@@ -13,6 +13,7 @@ import type { NodeDesktopStreamBroker } from "./desktop/node-stream-broker.js";
 import type { DesktopSessionRegistry } from "./desktop/session-registry.js";
 import type { GitHubPublicationCoordinator } from "./github-publication.js";
 import type { NodeWorkerSupervisorTransport } from "./node-registry-private.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
 import type { WorkerBundleProducer, WorkerNpmArtifact } from "./worker-environments/bundle.js";
 import {
   bindDeviceWorkerAvailability,
@@ -108,6 +109,7 @@ export async function loadGatewayWorkerEnvironmentStartupState(): Promise<Gatewa
 
 export async function createGatewayWorkerEnvironmentRuntime(params: {
   getPluginRegistry: () => Pick<PluginRegistry, "workerProviders">;
+  getPortalRuntime: () => Pick<GatewayRequestContext, "portalService" | "broadcast"> | undefined;
   desktopSessionRegistry: DesktopSessionRegistry;
   nodeDesktopStreamBroker?: NodeDesktopStreamBroker;
   startup: GatewayWorkerEnvironmentStartupState;
@@ -128,6 +130,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     { createNodeWorkspaceTransferHttpCallback },
     { createWorkerSessionToolExecutor },
     { createWorkerNodeDesktopCarrier },
+    { createWorkerNodePortalCarrier },
     { resolveWorkerProvider },
   ] = await Promise.all([
     import("./worker-environments/service.js"),
@@ -143,6 +146,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     import("./worker-environments/node-workspace-transfer-http.js"),
     import("./worker-environments/worker-session-tool-executor.js"),
     import("./worker-environments/node-desktop-carrier.js"),
+    import("./worker-environments/portal-node-carrier.js"),
     import("../plugins/worker-provider-registry.js"),
   ]);
   // The Gateway state-directory lock proves that executors from the previous
@@ -210,7 +214,22 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
   const workerTunnelManager = createWorkerTunnelManager({
     desktopSessionRegistry: params.desktopSessionRegistry,
   });
+  const notifyPortalChange = () => {
+    const runtime = params.getPortalRuntime();
+    const service = runtime?.portalService;
+    if (!service) {
+      return;
+    }
+    runtime.broadcast(
+      "portal.changed",
+      {
+        portals: service.list().map(({ tokenQuery: _tokenQuery, url: _url, ...portal }) => portal),
+      },
+      { dropIfSlow: true },
+    );
+  };
   const workerNodeDesktopStreamBroker = params.nodeDesktopStreamBroker;
+  const workerNodePortalCarrier = createWorkerNodePortalCarrier({ store: params.startup.store });
   const workerNodeDesktopCarrier = workerNodeDesktopStreamBroker
     ? createWorkerNodeDesktopCarrier({
         store: params.startup.store,
@@ -276,6 +295,15 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     tunnelManager: workerTunnelManager,
     nodeTunnelManager: nodeWorkerTunnelManager,
     nodeDesktopCarrier: workerNodeDesktopCarrier,
+    nodePortalCarrier: workerNodePortalCarrier,
+    closeWorkerPortals: async (environmentId, ownerEpoch) => {
+      const service = params.getPortalRuntime()?.portalService;
+      if (!service) {
+        return;
+      }
+      await service.closeWorkerPortals(environmentId, ownerEpoch);
+      notifyPortalChange();
+    },
     stopNodeWorkerBundleTransfers: () => nodeWorkerBundleTransfer.closeAll(),
     applyTranscriptCommit: createWorkerTranscriptCommitter({
       getConfig: getRuntimeConfig,
@@ -359,6 +387,11 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     githubPublication: {
       requestForClaim: (request) => githubPublication.requestForClaim(request),
     },
+    portals: {
+      getService: () => params.getPortalRuntime()?.portalService,
+      carrier: workerNodePortalCarrier,
+      onChanged: notifyPortalChange,
+    },
   });
   const bindWorkerNodeDesktopControl =
     workerNodeDesktopCarrier && workerNodeDesktopStreamBroker
@@ -379,7 +412,15 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     bindGitHubPublication: (coordinator) => {
       githubPublication = coordinator;
     },
-    bindDeviceNodeControl: deviceRuntime.bindNodeTransport,
+    bindDeviceNodeControl: (transport) => {
+      deviceRuntime.bindNodeTransport(transport);
+      if (workerNodeDesktopStreamBroker) {
+        workerNodePortalCarrier.bindRuntime({
+          transport,
+          streamBroker: workerNodeDesktopStreamBroker,
+        });
+      }
+    },
     ...(bindWorkerNodeDesktopControl ? { bindWorkerNodeDesktopControl } : {}),
     bindNodeWorkspaceBindingResolver: (resolver) =>
       nodeWorkerTunnelManager.bindWorkspaceBindingResolver(resolver),

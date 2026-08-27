@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" role="img" aria-label="Video file overlay">
+  <rect x="3.5" y="5" width="13" height="14" rx="2.5" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="m16.5 10 4-2.25v8.5l-4-2.25" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="m8.5 9 4.75 3-4.75 3Z" fill="currentColor"/>
+</svg>

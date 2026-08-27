@@ -218,6 +218,7 @@ async function updateConfiguredMcpServerTools(
         const exclude = normalizeToolSelectionList(params.tools.exclude);
         if (include || exclude) {
           server.toolFilter = {
+            ...(isRecord(server.toolFilter) ? server.toolFilter : {}),
             ...(include ? { include } : {}),
             ...(exclude ? { exclude } : {}),
           };

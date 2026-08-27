@@ -47,11 +47,13 @@ import type {
   CodexPluginsConfigBlock,
   CodexPluginsManagementIO,
 } from "./command-plugins-management.js";
+import type { CodexControlRequestOptions } from "./command-rpc.js";
 import { codexConversationBindingRuntime } from "./conversation-binding.js";
 
 type CodexPluginConfigEntry = NonNullable<CodexPluginsConfigBlock["plugins"]>[string];
 
 let tempDir: string;
+const resumeClients: CodexAppServerClient[] = [];
 
 function createContext(
   args: string,
@@ -157,6 +159,7 @@ function createThreadResumeResponse(params: {
     thread: {
       id: params.threadId,
       sessionId: params.threadId,
+      projectId: null,
       cliVersion: CODEX_APP_SERVER_VERSION,
       createdAt: 1,
       updatedAt: 1,
@@ -182,6 +185,30 @@ async function writeTestBinding(
   binding: CodexAppServerThreadBinding,
 ): Promise<void> {
   await testCodexAppServerBindingStore.mutate(identity, { kind: "set", binding });
+}
+
+function createResumeControlRequest(
+  response:
+    | ReturnType<typeof createThreadResumeResponse>
+    | (() => Promise<ReturnType<typeof createThreadResumeResponse>>),
+  auth: { authProfileId?: string } = {},
+) {
+  const harness = createClientHarness();
+  resumeClients.push(harness.client);
+  ensureCodexAppServerClientRuntime(harness.client, { agentDir: tempDir });
+  vi.spyOn(harness.client, "request").mockResolvedValue({} as never);
+  return vi.fn(
+    async (
+      _pluginConfig: unknown,
+      _method: string,
+      _params: unknown,
+      options?: CodexControlRequestOptions,
+    ) => {
+      const value = typeof response === "function" ? await response() : response;
+      await options?.onResponse?.(value, harness.client, auth);
+      return value;
+    },
+  );
 }
 
 function supervisedTestBinding(threadId = "thread-supervised"): CodexAppServerThreadBinding {
@@ -385,6 +412,9 @@ describe("codex command", () => {
   });
 
   afterEach(async () => {
+    for (const client of resumeClients.splice(0)) {
+      client.close();
+    }
     codexDiagnosticsFeedbackState.clear();
     resetSharedCodexAppServerClientForTests();
     clearRuntimeAuthProfileStoreSnapshots();
@@ -522,6 +552,59 @@ describe("codex command", () => {
     expect(codexControlRequest).not.toHaveBeenCalled();
   });
 
+  it.each(["status", "account", "threads", "sessions --host paired-node", "mcp", "skills"])(
+    "keeps host-wide /codex %s inspection owner-only",
+    async (args) => {
+      const codexControlRequest = vi.fn();
+      const safeCodexControlRequest = vi.fn();
+      const readCodexStatusProbes = vi.fn();
+      const listCodexCliSessionsOnNode = vi.fn();
+
+      const result = await runCommand(
+        args,
+        {
+          codexControlRequest,
+          safeCodexControlRequest,
+          readCodexStatusProbes,
+          listCodexCliSessionsOnNode,
+        },
+        { senderIsOwner: false, gatewayClientScopes: ["operator.write"] },
+      );
+
+      expectResultTextContains(result, "Only an owner or operator.admin");
+      expect(codexControlRequest).not.toHaveBeenCalled();
+      expect(safeCodexControlRequest).not.toHaveBeenCalled();
+      expect(readCodexStatusProbes).not.toHaveBeenCalled();
+      expect(listCodexCliSessionsOnNode).not.toHaveBeenCalled();
+    },
+  );
+
+  it("allows operator.admin to inspect host-wide Codex account state", async () => {
+    const safeCodexControlRequest = vi.fn(async () => ({ ok: true as const, value: {} }));
+
+    const result = await runCommand(
+      "account",
+      { safeCodexControlRequest },
+      { senderIsOwner: false, gatewayClientScopes: ["operator.admin"] },
+    );
+
+    expectResultTextContains(result, "Account: available");
+    expect(safeCodexControlRequest).toHaveBeenCalled();
+  });
+
+  it.each(["help", "models", "binding"])(
+    "preserves safe /codex %s inspection for authorized non-owners",
+    async (args) => {
+      const result = await runCommand(
+        args,
+        { listCodexAppServerModels: vi.fn(async () => ({ models: [] })) },
+        { senderIsOwner: false, gatewayClientScopes: ["operator.write"] },
+      );
+
+      expect(result.text).not.toContain("Only an owner or operator.admin");
+    },
+  );
+
   it("never sends a paired-node workspace to the gateway Codex app-server", async () => {
     const codexPluginsManagementIo = inMemoryCodexPluginsIO({}, { enabled: false });
     const codexControlRequest = vi.fn(async () => ({
@@ -593,37 +676,26 @@ describe("codex command", () => {
 
   it("attaches the current session to an existing Codex thread", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    const requests: Array<{ method: string; params: unknown; options: unknown }> = [];
-    const deps = createDeps({
-      codexControlRequest: vi.fn(
-        async (
-          _pluginConfig: unknown,
-          method: string,
-          requestParamsValue: unknown,
-          options: unknown,
-        ) => {
-          requests.push({ method, params: requestParamsValue, options });
-          return createThreadResumeResponse({ threadId: "thread-123" });
-        },
-      ),
-    });
+    const codexControlRequest = createResumeControlRequest(
+      createThreadResumeResponse({ threadId: "thread-123" }),
+    );
+    const deps = createDeps({ codexControlRequest });
 
     await expect(
       handleCodexCommand(createContext("resume thread-123", sessionFile), { deps }),
     ).resolves.toEqual({
-      text: "Attached this OpenClaw session to Codex thread thread-123.",
+      text: "Attached this OpenClaw session to Codex thread thread-123. The next turn will validate its tools and apply this session's configuration before continuing.",
     });
 
-    expect(requests).toEqual([
-      {
-        method: "thread/resume",
-        params: { threadId: "thread-123", excludeTurns: true },
-        options: expect.objectContaining({
-          agentDir: path.join(tempDir, "agents", "main", "agent"),
-          sessionId: "session-1",
-        }),
-      },
-    ]);
+    expect(codexControlRequest).toHaveBeenCalledExactlyOnceWith(
+      undefined,
+      "thread/resume",
+      { threadId: "thread-123", excludeTurns: true },
+      expect.objectContaining({
+        agentDir: path.join(tempDir, "agents", "main", "agent"),
+        sessionId: "session-1",
+      }),
+    );
     await expect(
       testCodexAppServerBindingStore.read({
         kind: "session",
@@ -645,11 +717,9 @@ describe("codex command", () => {
         _pluginConfig: unknown,
         _method: string,
         _params: unknown,
-        options?: {
-          onResponse?: (value: unknown, client: CodexAppServerClient) => Promise<void>;
-        },
+        options?: CodexControlRequestOptions,
       ) => {
-        await options?.onResponse?.(response, harness.client);
+        await options?.onResponse?.(response, harness.client, {});
         return response;
       },
     );
@@ -704,11 +774,9 @@ describe("codex command", () => {
         _pluginConfig: unknown,
         _method: string,
         _params: unknown,
-        options?: {
-          onResponse?: (value: unknown, client: CodexAppServerClient) => Promise<void>;
-        },
+        options?: CodexControlRequestOptions,
       ) => {
-        await options?.onResponse?.(response, harness.client);
+        await options?.onResponse?.(response, harness.client, {});
         return response;
       },
     );
@@ -782,11 +850,9 @@ describe("codex command", () => {
           _pluginConfig: unknown,
           _method: string,
           _params: unknown,
-          options?: {
-            onResponse?: (value: unknown, client: CodexAppServerClient) => Promise<void>;
-          },
+          options?: CodexControlRequestOptions,
         ) => {
-          await options?.onResponse?.(response, replacement.client);
+          await options?.onResponse?.(response, replacement.client, {});
           return response;
         },
       );
@@ -839,7 +905,9 @@ describe("codex command", () => {
       threadId: "thread-known-resume",
       clientId: harness.client.getInstanceId(),
       cwd: "/repo",
+      authProfileId: "openai:previous",
       dynamicToolsFingerprint: "known-dynamic-tools",
+      webSearchThreadConfigFingerprint: "known-web-search",
       pluginAppsFingerprint: "known-plugin-apps",
     });
     const release = vi.fn(async () => undefined);
@@ -856,11 +924,9 @@ describe("codex command", () => {
         _pluginConfig: unknown,
         _method: string,
         _params: unknown,
-        options?: {
-          onResponse?: (value: unknown, client: CodexAppServerClient) => Promise<void>;
-        },
+        options?: CodexControlRequestOptions,
       ) => {
-        await options?.onResponse?.(response, harness.client);
+        await options?.onResponse?.(response, harness.client, {});
         return response;
       },
     );
@@ -875,6 +941,7 @@ describe("codex command", () => {
         dynamicToolsFingerprint: "known-dynamic-tools",
         pluginAppsFingerprint: "known-plugin-apps",
       });
+      expect((await testCodexAppServerBindingStore.read(identity))?.authProfileId).toBeUndefined();
       await expect(
         consumeCodexAppServerLiveThread(
           harness.client,
@@ -956,15 +1023,13 @@ describe("codex command", () => {
           _pluginConfig: unknown,
           _method: string,
           _params: unknown,
-          options?: {
-            onResponse?: (value: unknown, client: CodexAppServerClient) => Promise<void>;
-          },
+          options?: CodexControlRequestOptions,
         ) => {
           const resumed = await harness.client.request("thread/resume", {
             threadId: "thread-active-resume",
             excludeTurns: true,
           });
-          await options?.onResponse?.(resumed, harness.client);
+          await options?.onResponse?.(resumed, harness.client, {});
           return response;
         },
       );
@@ -1017,7 +1082,7 @@ describe("codex command", () => {
     const resumeResponse = new Promise<ReturnType<typeof createThreadResumeResponse>>((resolve) => {
       resolveResume = resolve;
     });
-    const codexControlRequest = vi.fn(async () => {
+    const codexControlRequest = createResumeControlRequest(async () => {
       order.push("resume-start");
       const response = await resumeResponse;
       order.push("resume-done");
@@ -1037,7 +1102,7 @@ describe("codex command", () => {
 
     resolveResume(createThreadResumeResponse({ threadId: "thread-123" }));
     await expect(command).resolves.toEqual({
-      text: "Attached this OpenClaw session to Codex thread thread-123.",
+      text: "Attached this OpenClaw session to Codex thread thread-123. The next turn will validate its tools and apply this session's configuration before continuing.",
     });
     await competingOwner;
     expect(order).toEqual(["resume-start", "resume-done", "competing-owner"]);
@@ -1080,7 +1145,7 @@ describe("codex command", () => {
       sessionKey,
       entry: { sessionId: "session-new", updatedAt: Date.now() },
     });
-    const codexControlRequest = vi.fn(async () =>
+    const codexControlRequest = createResumeControlRequest(
       createThreadResumeResponse({ threadId: "thread-new" }),
     );
 
@@ -1093,7 +1158,9 @@ describe("codex command", () => {
       { deps: createDeps({ codexControlRequest }) },
     );
 
-    expect(result.text).toBe("Attached this OpenClaw session to Codex thread thread-new.");
+    expect(result.text).toBe(
+      "Attached this OpenClaw session to Codex thread thread-new. The next turn will validate its tools and apply this session's configuration before continuing.",
+    );
     expect(codexControlRequest).toHaveBeenCalledTimes(1);
     await expect(
       testCodexAppServerBindingStore.read({
@@ -1107,7 +1174,7 @@ describe("codex command", () => {
 
   it("does not report a resumed thread as attached after a generation conflict", async () => {
     const mutate = vi.fn(async () => false);
-    const codexControlRequest = vi.fn(async () =>
+    const codexControlRequest = createResumeControlRequest(
       createThreadResumeResponse({ threadId: "thread-123", model: "gpt-5.5" }),
     );
 
@@ -1144,8 +1211,9 @@ describe("codex command", () => {
         },
       },
     ]);
-    const codexControlRequest = vi.fn(async () =>
+    const codexControlRequest = createResumeControlRequest(
       createThreadResumeResponse({ threadId: "thread-123" }),
+      { authProfileId: "openai:work" },
     );
     const storePath = path.join(tempDir, "worker-sessions.json");
     await upsertSessionEntry({
@@ -1167,7 +1235,7 @@ describe("codex command", () => {
       undefined,
       CODEX_CONTROL_METHODS.resumeThread,
       expect.any(Object),
-      expect.objectContaining({ agentDir, authProfileId: "openai:work" }),
+      expect.objectContaining({ agentDir, authProfileId: undefined }),
     );
     await expect(
       testCodexAppServerBindingStore.read({
@@ -1178,15 +1246,17 @@ describe("codex command", () => {
       }),
     ).resolves.toEqual({
       threadId: "thread-123",
+      clientId: expect.any(String),
       cwd: "/repo",
       authProfileId: "openai:work",
       model: "gpt-5.4",
       historyCoveredThrough: expect.any(String),
+      pendingResumeConfiguration: true,
     });
   });
 
   it("uses the host agent for global session keys", async () => {
-    const codexControlRequest = vi.fn(async () =>
+    const codexControlRequest = createResumeControlRequest(
       createThreadResumeResponse({ threadId: "thread-work", model: "gpt-5.5" }),
     );
 
@@ -1621,7 +1691,9 @@ describe("codex command", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const unsafe = "thread-123 <@U123> [trusted](https://evil)";
     const deps = createDeps({
-      codexControlRequest: vi.fn(async () => createThreadResumeResponse({ threadId: unsafe })),
+      codexControlRequest: createResumeControlRequest(
+        createThreadResumeResponse({ threadId: unsafe }),
+      ),
     });
 
     const result = await handleCodexCommand(createContext(`resume "${unsafe}"`, sessionFile), {
@@ -4266,7 +4338,9 @@ describe("codex command", () => {
     await expect(
       handleCodexCommand(createContext("diagnostics second", sessionFile), { deps }),
     ).resolves.toEqual({
-      text: "Codex diagnostics were already sent for this account or channel recently. Try again in 60s.",
+      text: expect.stringMatching(
+        /^Codex diagnostics were already sent for this account or channel recently\. Try again in (?:[1-9]|[1-5]\d|60)s\.$/,
+      ),
     });
 
     expect(safeCodexControlRequest).toHaveBeenCalledTimes(1);
@@ -6107,6 +6181,69 @@ describe("codex command", () => {
     });
   });
 
+  it("updates a bound conversation without changing its ambient outer session", async () => {
+    const sessionKey = "agent:main:session-1";
+    const storePath = resolveStorePath(undefined, { agentId: "main" });
+    await upsertSessionEntry({
+      agentId: "main",
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "session-1",
+        updatedAt: Date.now(),
+        providerOverride: "anthropic",
+        modelOverride: "claude-sonnet-4-6",
+        agentRuntimeOverride: "claude-cli",
+        authProfileOverride: "anthropic:personal",
+        authProfileOverrideSource: "user",
+      },
+    });
+    await writeTestBinding(
+      { kind: "conversation", bindingId: "binding-data-1" },
+      { threadId: "thread-conversation", cwd: "/repo", model: "gpt-5.4", modelProvider: "openai" },
+    );
+    const getCurrentConversationBinding = async () => ({
+      bindingId: "binding-1",
+      pluginId: "codex",
+      pluginRoot: "/plugin",
+      channel: "test",
+      accountId: "default",
+      conversationId: "conversation",
+      boundAt: 1,
+      data: {
+        kind: "codex-app-server-session" as const,
+        version: 2 as const,
+        bindingId: "binding-data-1",
+        workspaceDir: "/repo",
+      },
+    });
+
+    await expect(
+      handleCodexCommand(
+        createContext("model gpt-5.5", undefined, {
+          sessionKey,
+          getCurrentConversationBinding,
+        }),
+        { deps: createDeps() },
+      ),
+    ).resolves.toEqual({ text: "Codex model set to gpt-5.5." });
+
+    await expect(
+      testCodexAppServerBindingStore.read({ kind: "conversation", bindingId: "binding-data-1" }),
+    ).resolves.toMatchObject({
+      threadId: "thread-conversation",
+      model: "gpt-5.5",
+      modelProvider: "openai",
+    });
+    expect(getSessionEntry({ storePath, sessionKey })).toMatchObject({
+      providerOverride: "anthropic",
+      modelOverride: "claude-sonnet-4-6",
+      agentRuntimeOverride: "claude-cli",
+      authProfileOverride: "anthropic:personal",
+      authProfileOverrideSource: "user",
+    });
+  });
+
   it.each([
     {
       name: "rejects owner yolo without admin scope",
@@ -6128,13 +6265,13 @@ describe("codex command", () => {
       expectedPermissionMode: "full",
     },
     {
-      name: "resets to default for an owner without admin scope",
+      name: "persists explicit guarded default for an owner without admin scope",
       mode: "default",
       senderIsOwner: true,
       gatewayClientScopes: ["operator.write"],
       initialPermissionMode: "full",
       expectedText: "Codex permissions set to default.",
-      expectedPermissionMode: undefined,
+      expectedPermissionMode: "guarded",
     },
   ] as const)("$name", async (testCase) => {
     const sessionKey = `agent:main:test:permissions-${testCase.mode}`;
@@ -6145,6 +6282,7 @@ describe("codex command", () => {
       entry: {
         sessionId: "session-1",
         updatedAt: Date.now(),
+        sessionRoot: tempDir,
         ...(testCase.initialPermissionMode
           ? { permissionMode: testCase.initialPermissionMode }
           : {}),
@@ -6167,8 +6305,13 @@ describe("codex command", () => {
         sessionKey,
         storePath,
         readConsistency: "latest",
-      })?.permissionMode,
-    ).toBe(testCase.expectedPermissionMode);
+      }),
+    ).toMatchObject({
+      ...(testCase.expectedPermissionMode
+        ? { permissionMode: testCase.expectedPermissionMode }
+        : {}),
+      sessionRoot: tempDir,
+    });
   });
 
   it("rejects model and binding replacement commands for a locked supervised session", async () => {
@@ -6276,6 +6419,83 @@ describe("codex command", () => {
 
     expect(setCodexConversationFastMode).toHaveBeenCalledOnce();
     expect(setCodexConversationPermissions).toHaveBeenCalledOnce();
+  });
+
+  it("reports the desired direct-session model before its stale native binding reloads", async () => {
+    const sessionKey = "agent:main:diverged-model";
+    const storePath = resolveStorePath(undefined, { agentId: "main" });
+    await upsertSessionEntry({
+      agentId: "main",
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "session-1",
+        updatedAt: Date.now(),
+        modelOverride: "outer-override-model",
+      },
+    });
+    await writeTestBinding(
+      { kind: "session", agentId: "main", sessionId: "session-1", sessionKey },
+      { threadId: "thread-diverged", cwd: "/repo", model: "bound-model" },
+    );
+
+    await expect(
+      handleCodexCommand(
+        createContext("model", undefined, { sessionId: "session-1", sessionKey }),
+        {
+          deps: createDeps(),
+        },
+      ),
+    ).resolves.toEqual({ text: "Codex model: outer-override-model" });
+  });
+
+  it.each([
+    { boundModel: "bound-model", expected: "Codex model: bound-model" },
+    { boundModel: undefined, expected: "Usage: /codex model <model>" },
+  ])("keeps conversation model status independent from its ambient session", async (testCase) => {
+    const sessionKey = "agent:main:conversation-model";
+    await upsertSessionEntry({
+      agentId: "main",
+      storePath: resolveStorePath(undefined, { agentId: "main" }),
+      sessionKey,
+      entry: {
+        sessionId: "session-1",
+        updatedAt: Date.now(),
+        modelOverride: "outer-override-model",
+      },
+    });
+    await writeTestBinding(
+      { kind: "conversation", bindingId: "binding-data-1" },
+      {
+        threadId: "thread-conversation",
+        cwd: "/repo",
+        ...(testCase.boundModel ? { model: testCase.boundModel } : {}),
+      },
+    );
+
+    const result = await handleCodexCommand(
+      createContext("model", undefined, {
+        sessionKey,
+        getCurrentConversationBinding: async () => ({
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: "/plugin",
+          channel: "test",
+          accountId: "default",
+          conversationId: "conversation",
+          boundAt: 1,
+          data: {
+            kind: "codex-app-server-session",
+            version: 2,
+            bindingId: "binding-data-1",
+            workspaceDir: tempDir,
+          },
+        }),
+      }),
+      { deps: createDeps() },
+    );
+
+    expect(result).toEqual({ text: testCase.expected });
   });
 
   it("escapes current bound model status before chat display", async () => {

@@ -36,12 +36,17 @@ import {
   shouldUseMainOwnerForLocalOAuthCredential,
   type PersistedAuthProfileStores,
 } from "./ownership.js";
-import { resolveSharedAuthStorePath as resolveSharedAuthPath } from "./path-resolve.js";
+import {
+  resolveSharedAuthStoreOwnership,
+  resolveSharedAuthStorePath as resolveSharedAuthPath,
+} from "./path-resolve.js";
 import {
   buildPersistedAuthProfileSecretsStore,
   loadPersistedAuthProfileStore,
+  loadPersistedSharedAuthProfileStore,
   mergeAuthProfileStores,
 } from "./persisted.js";
+import { resolveAuthProfilePortability } from "./portability.js";
 import {
   getRuntimeExternalCliProfileIds,
   mergeRuntimeExternalProfileReferences,
@@ -64,6 +69,7 @@ import {
   deferAuthProfilePostCommitPublication,
   deletePersistedAuthProfileStoreRaw,
   inspectPersistedAuthProfileStoreRaw,
+  inspectPersistedSharedAuthProfileStoreRaw,
   readPersistedAuthProfileStoreRaw,
   readPersistedAuthProfileStateRaw,
   resolveAuthProfileDatabasePath as resolveAgentAuthPath,
@@ -97,7 +103,9 @@ type SaveAuthProfileStoreOptions = {
 };
 
 const INLINE_OAUTH_TOKEN_FIELDS = ["access", "refresh", "idToken"] as const;
-type AuthProfileRuntimeMode = { kind: "env-only" } | { kind: "agent-dir"; agentDir: string };
+type AuthProfileRuntimeMode =
+  | { kind: "env-only" }
+  | { kind: "agent-dir"; agentDir: string; sharedStore?: AuthProfileStore };
 
 const authProfileRuntimeMode = new AsyncLocalStorage<AuthProfileRuntimeMode>();
 
@@ -111,8 +119,50 @@ export function withEnvOnlyAuthProfileStore<T>(run: () => T): T {
 }
 
 /** Run a bounded operation against one existing persisted auth store. */
-export function withAuthProfileStoreAgentDir<T>(agentDir: string, run: () => T): T {
-  return authProfileRuntimeMode.run({ kind: "agent-dir", agentDir }, run);
+export function withAuthProfileStoreAgentDir<T>(
+  agentDir: string,
+  sharedStateDir: string,
+  run: () => T,
+): T {
+  const env = { ...process.env, OPENCLAW_STATE_DIR: sharedStateDir };
+  let sharedStore: AuthProfileStore | undefined;
+  if (resolveSharedAuthStoreOwnership(env).location === "state-db") {
+    const shared = loadPersistedSharedAuthProfileStore(env);
+    if (!shared && inspectPersistedSharedAuthProfileStoreRaw(env).status !== "missing") {
+      throw new AuthProfileStoreUnreadableError(undefined, env);
+    }
+    sharedStore = shared ?? createEmptyAuthProfileStore();
+  }
+  // Temporary runs must not acquire a second OAuth refresh owner. Keep this
+  // read-through view in the operation scope, never in a persisted agent store.
+  if (sharedStore) {
+    sharedStore.profiles = Object.fromEntries(
+      Object.entries(sharedStore.profiles).filter(
+        ([, credential]) =>
+          resolveAuthProfilePortability(credential).reason === "portable-static-credential",
+      ),
+    );
+    pruneAuthProfileStoreReferences(sharedStore, new Set(Object.keys(sharedStore.profiles)));
+  }
+  return authProfileRuntimeMode.run({ kind: "agent-dir", agentDir, sharedStore }, run);
+}
+
+function getScopedSharedAuthStore(): AuthProfileStore | undefined {
+  const mode = authProfileRuntimeMode.getStore();
+  return mode?.kind === "agent-dir" ? mode.sharedStore : undefined;
+}
+
+function applyScopedAuthReadThrough(store: AuthProfileStore): AuthProfileStore {
+  const shared = getScopedSharedAuthStore();
+  if (!shared) {
+    return store;
+  }
+  const merged = mergeAuthProfileStores(cloneAuthProfileStore(shared), store);
+  return setRuntimeLocalProfileMetadata(
+    merged,
+    Object.keys(store.profiles),
+    runtimeStoreInheritsMainState(merged, store),
+  );
 }
 
 function isEnvOnlyAuthProfileRuntime(): boolean {
@@ -286,6 +336,11 @@ function resolveRuntimeAuthProfileStore(
   agentDir?: string,
   options?: Pick<LoadAuthProfileStoreOptions, "allowKeychainPrompt" | "inheritedAuthDir">,
 ): AuthProfileStore | null {
+  // Ambient snapshots may include non-portable shared profiles. A bounded exec
+  // scope composes its view from the actual local store and its filtered base.
+  if (getScopedSharedAuthStore()) {
+    return null;
+  }
   const mainKey = options?.inheritedAuthDir
     ? resolveAgentAuthPath(options.inheritedAuthDir)
     : resolveSharedAuthPath();
@@ -471,6 +526,18 @@ function shouldKeepProfileInLocalStore(params: {
   persistedStores: PersistedAuthProfileStores;
   externalProfiles: () => RuntimeExternalOAuthProfile[];
 }): boolean {
+  const inherited = getScopedSharedAuthStore()?.profiles[params.profileId];
+  if (inherited && !params.persistedStores.localStore?.profiles[params.profileId]) {
+    // Runtime state updates must not turn read-through credentials into local copies.
+    // Compare persisted shapes so a materialized SecretRef stays inherited too.
+    const secrets = buildPersistedAuthProfileSecretsStore({
+      version: AUTH_STORE_VERSION,
+      profiles: { [params.profileId]: params.credential },
+    });
+    if (isDeepStrictEqual(secrets.profiles[params.profileId], inherited)) {
+      return false;
+    }
+  }
   if (params.credential.type !== "oauth") {
     return true;
   }
@@ -715,9 +782,12 @@ function runtimeStoreInheritsMainState(
 }
 
 function listRuntimeLocalProfileIds(
-  store: AuthProfileStore,
+  store: RuntimeAuthProfileStore,
   mainStore?: AuthProfileStore,
 ): string[] {
+  if (store.runtimeLocalProfileIds) {
+    return store.runtimeLocalProfileIds;
+  }
   return Object.entries(store.profiles).flatMap(([profileId, credential]) =>
     mainStore &&
     shouldUseMainOwnerForLocalOAuthCredential({
@@ -917,13 +987,11 @@ export function loadAuthProfileStore(): AuthProfileStore {
     return createEmptyAuthProfileStore();
   }
   const agentDir = resolveRuntimeAuthProfileAgentDir();
-  const asStore = loadPersistedAuthProfileStore(agentDir);
-  if (asStore) {
-    return overlayExternalAuthProfiles(markRuntimePersistedProfiles(asStore), { agentDir });
-  }
-
-  const store: AuthProfileStore = { version: AUTH_STORE_VERSION, profiles: {} };
-  return overlayExternalAuthProfiles(markRuntimePersistedProfiles(store), { agentDir });
+  const store = loadPersistedAuthProfileStore(agentDir) ?? createEmptyAuthProfileStore();
+  return overlayExternalAuthProfiles(
+    applyScopedAuthReadThrough(markRuntimePersistedProfiles(store)),
+    { agentDir },
+  );
 }
 
 function loadAuthProfileStoreForAgent(
@@ -936,64 +1004,39 @@ function loadAuthProfileStoreForAgent(
   const effectiveAgentDir = resolveRuntimeAuthProfileAgentDir(agentDir);
   const effectiveOptions = resolveRuntimeAuthProfileLoadOptions(options);
   assertAuthProfileMigrationReady(effectiveAgentDir);
-  const asStore = loadPersistedAuthProfileStore(
+  const store = loadPersistedAuthProfileStore(
     effectiveAgentDir,
     resolvePersistedLoadOptions(effectiveOptions),
   );
-  if (asStore) {
-    const legacySources = listLegacyAuthProfileSources({ agentDir: effectiveAgentDir });
-    const credentialSources = legacySources.filter((source) => source.kind !== "auth-state");
-    // A populated canonical store already owns this agent's credentials, so a
-    // retired file beside it is unarchived bytes rather than pending migration.
-    // Only an empty store means the credentials still live solely in that file.
-    if (credentialSources.length > 0 && Object.keys(asStore.profiles).length === 0) {
-      const migrationError = new AuthProfileMigrationRequiredError({
-        agentDir: effectiveAgentDir,
-        sources: credentialSources,
-      });
-      markAuthProfileMigrationRequired(effectiveAgentDir, migrationError);
-      throw migrationError;
-    }
-    warnLegacyAuthProfileSourcesIgnored({
-      agentDir: effectiveAgentDir,
-      sources: legacySources,
-    });
-    clearAuthProfileMigrationRequired(effectiveAgentDir);
-    const synced = maybeSyncPersistedExternalCliAuthProfiles({
-      store: asStore,
-      agentDir: effectiveAgentDir,
-      options: effectiveOptions,
-    });
-    return markRuntimePersistedProfiles(synced.store);
-  }
-
-  const inspection = inspectPersistedAuthProfileStoreRaw(
-    effectiveAgentDir,
-    effectiveOptions?.database,
-  );
-  if (inspection.status !== "missing") {
+  if (
+    !store &&
+    inspectPersistedAuthProfileStoreRaw(effectiveAgentDir, effectiveOptions?.database).status !==
+      "missing"
+  ) {
     throw new AuthProfileStoreUnreadableError(effectiveAgentDir);
   }
   const legacySources = listLegacyAuthProfileSources({ agentDir: effectiveAgentDir });
   const credentialSources = legacySources.filter((source) => source.kind !== "auth-state");
-  if (credentialSources.length > 0) {
-    throw new AuthProfileMigrationRequiredError({
+  // A populated canonical store owns credentials; retired files beside it are
+  // unarchived bytes. An empty or absent store still requires migration.
+  if (credentialSources.length > 0 && (!store || Object.keys(store.profiles).length === 0)) {
+    const migrationError = new AuthProfileMigrationRequiredError({
       agentDir: effectiveAgentDir,
       sources: credentialSources,
     });
+    if (store) {
+      markAuthProfileMigrationRequired(effectiveAgentDir, migrationError);
+    }
+    throw migrationError;
   }
   warnLegacyAuthProfileSourcesIgnored({ agentDir: effectiveAgentDir, sources: legacySources });
   clearAuthProfileMigrationRequired(effectiveAgentDir);
-  const store: AuthProfileStore = {
-    version: AUTH_STORE_VERSION,
-    profiles: {},
-  };
   const synced = maybeSyncPersistedExternalCliAuthProfiles({
-    store,
+    store: store ?? createEmptyAuthProfileStore(),
     agentDir: effectiveAgentDir,
     options: effectiveOptions,
   });
-  return markRuntimePersistedProfiles(synced.store);
+  return applyScopedAuthReadThrough(markRuntimePersistedProfiles(synced.store));
 }
 
 /** Loads the effective runtime store for an agent, including inherited main profiles. */
@@ -1129,6 +1172,7 @@ export function ensureAuthProfileStore(
   );
   if (!runtimeStore) {
     if (
+      !getScopedSharedAuthStore() &&
       hasScopedExternalCliOverlay(externalCli) &&
       (store.runtimeExternalProfileIds?.length ?? 0) > 0
     ) {
@@ -1210,6 +1254,10 @@ export function findPersistedAuthProfileCredential(params: {
   const agentDir = resolveRuntimeAuthProfileAgentDir(params.agentDir);
   const requestedStore = loadPersistedAuthProfileStore(agentDir);
   const requestedProfile = requestedStore?.profiles[params.profileId];
+  const scopedSharedStore = getScopedSharedAuthStore();
+  if (scopedSharedStore) {
+    return requestedProfile ?? scopedSharedStore.profiles[params.profileId];
+  }
   if (requestedProfile || !agentDir) {
     return requestedProfile;
   }

@@ -1,5 +1,10 @@
 // @vitest-environment node
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { SessionsListResult } from "../../api/types.ts";
+import { createSessionCapability } from "../../lib/sessions/index.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   agentEvent,
   createHost,
@@ -180,63 +185,127 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     vi.useRealTimers();
   });
 
-  it("updates the chat model cache from session_status model changes", () => {
-    const host = createHost();
-
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 1,
-      stream: "tool",
-      ts: Date.now(),
-      sessionKey: "main",
-      data: {
-        phase: "result",
-        name: "session_status",
-        toolCallId: "status-1",
-        result: {
-          details: {
-            ok: true,
-            sessionKey: "main",
-            changedModel: true,
-            modelProvider: "anthropic",
-            model: "claude-sonnet-4-6",
-            modelOverride: "anthropic/claude-sonnet-4-6",
-          },
+  it.each([
+    ["main", "agent:main:main", "main", null],
+    ["agent:work:thread", "agent:work:thread", "work", "openai/gpt-5-mini"],
+    ["global", "global", "work", null],
+    ["agent:work:main", "global", "work", null],
+  ])(
+    "refreshes canonical selection after status changes for %s",
+    async (key, target, agentId, override) => {
+      const row = {
+        key,
+        kind: "direct" as const,
+        updatedAt: 1,
+        modelProvider: "openai",
+        model: "gpt-5.6-sol",
+        modelOverrideSource: null,
+      };
+      const result: SessionsListResult = {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [row],
+      };
+      const pendingPatch = createDeferred<unknown>();
+      const request = vi.fn(async (method: string) =>
+        method === "sessions.patch" ? pendingPatch.promise : result,
+      );
+      const sessions = createSessionCapability({
+        snapshot: {
+          client: { request } as unknown as GatewayBrowserClient,
+          phase: "connected",
+          hello: null,
+          assistantAgentId: agentId,
+          sessionKey: key,
         },
-      },
-    });
-
-    expect(host.sessions.state.modelOverrides.main).toBe("anthropic/claude-sonnet-4-6");
-  });
-
-  it("clears the chat model cache from session_status default resets", () => {
-    const host = createHost();
-    host.sessions.setModelOverride("main", "anthropic/claude-sonnet-4-6");
-
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 1,
-      stream: "tool",
-      ts: Date.now(),
-      sessionKey: "main",
-      data: {
-        phase: "result",
-        name: "session_status",
-        toolCallId: "status-1",
-        result: {
-          details: {
-            ok: true,
-            sessionKey: "main",
-            changedModel: true,
-            modelProvider: "openai",
-            model: "gpt-5.4",
-            modelOverride: null,
+        subscribe: () => () => undefined,
+        subscribeEvents: () => () => undefined,
+      });
+      const host = createHost({
+        sessionKey: key,
+        assistantAgentId: agentId,
+        agentsList: { defaultId: "main" },
+        sessions,
+      });
+      const event = {
+        ...agentEvent(
+          "run-1",
+          1,
+          "tool",
+          {
+            phase: "result",
+            name: "session_status",
+            toolCallId: "status-1",
+            result: {
+              details: { changedModel: true, sessionKey: target, agentId, modelOverride: override },
+            },
           },
-        },
-      },
-    });
+          key,
+        ),
+        agentId,
+      };
+      handleAgentEvent(host, event);
+      await waitForFast(() =>
+        expect(sessions.state.result?.sessions[0]?.model).toBe("gpt-5.6-sol"),
+      );
+      expect(request).toHaveBeenCalledWith("sessions.list", expect.objectContaining({ agentId }));
+      expect(sessions.state.modelOverrides).toEqual({});
 
-    expect(host.sessions.state.modelOverrides.main).toBeNull();
+      // Replaying an old tool result reads today's row, without replacing a newer UI intent.
+      result.sessions = [{ ...row, model: "gpt-5-mini" }];
+      const patch = sessions.patch(key, { model: "openai/gpt-5.6-luna" });
+      handleAgentEvent(
+        createHost({
+          sessionKey: key,
+          assistantAgentId: agentId,
+          agentsList: { defaultId: "main" },
+          sessions,
+        }),
+        event,
+      );
+      await waitForFast(() =>
+        expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(2),
+      );
+      await waitForFast(() => expect(sessions.state.loading).toBe(false));
+      expect(sessions.state.result?.sessions[0]?.model).toBe("gpt-5-mini");
+      expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-5.6-luna");
+      pendingPatch.resolve({ ok: true, key, entry: {} });
+      await patch;
+      expect(sessions.state.modelOverrides).toEqual({});
+      sessions.dispose();
+    },
+  );
+
+  it.each([
+    { changedModel: true, sessionKey: "global" },
+    { changedModel: false, sessionKey: "global", agentId: "work" },
+    { changedModel: true, sessionKey: "agent:work:other", agentId: "work" },
+    { changedModel: true, sessionKey: "global", agentId: "main" },
+  ])("does not refresh an unrelated/read-only status result (%j)", (details) => {
+    const host = createHost({
+      sessionKey: "global",
+      assistantAgentId: "work",
+      agentsList: { defaultId: "main" },
+    });
+    handleAgentEvent(host, {
+      ...agentEvent(
+        "run-1",
+        1,
+        "tool",
+        {
+          phase: "result",
+          name: "session_status",
+          toolCallId: "status-1",
+          result: { details },
+        },
+        "global",
+      ),
+      agentId: "work",
+    });
+    expect(host.sessions.refreshReplacement).not.toHaveBeenCalled();
+    expect(host.sessions.state.modelOverrides).toEqual({});
   });
 
   it("tags stream segments with the tool they precede without resetting elapsed time", () => {

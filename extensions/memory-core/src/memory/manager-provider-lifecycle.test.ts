@@ -1,4 +1,5 @@
 // Memory Core tests cover manager provider lifecycle availability behavior.
+import fs from "node:fs/promises";
 import path from "node:path";
 import { hashText } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it, vi } from "vitest";
@@ -72,7 +73,7 @@ describe("memory index", () => {
         provider: {
           id: string;
           model: string;
-          embedQuery: (text: string) => Promise<number[]>;
+          embed: (text: string) => Promise<number[]>;
           embedBatch: (texts: string[]) => Promise<number[][]>;
           close: () => Promise<void>;
         };
@@ -80,7 +81,7 @@ describe("memory index", () => {
     ).provider = {
       id: "local",
       model: "local-model",
-      embedQuery: async () => [1, 0],
+      embed: async () => [1, 0],
       embedBatch: async (texts: string[]) => texts.map(() => [1, 0]),
       close: async () => {},
     };
@@ -111,7 +112,7 @@ describe("memory index", () => {
       provider: {
         id: string;
         model: string;
-        embedQuery: (text: string) => Promise<number[]>;
+        embed: (text: string) => Promise<number[]>;
         embedBatch: (texts: string[]) => Promise<number[][]>;
         close: () => Promise<void>;
       } | null;
@@ -209,13 +210,13 @@ describe("memory index", () => {
     });
     const fields = manager as unknown as {
       provider: {
-        embedQuery: (text: string) => Promise<number[]>;
+        embed: (text: string) => Promise<number[]>;
       } | null;
     };
     if (!fields.provider) {
       throw new Error("Expected a test embedding provider");
     }
-    fields.provider.embedQuery = async () => {
+    fields.provider.embed = async () => {
       throw new Error("embedding provider failed");
     };
 
@@ -301,6 +302,8 @@ describe("memory index", () => {
     const indexedProviderKey = fields.providerKey;
     const firstContent = "# Log\nFirst memory line indexed during provider fallback.";
     const secondContent = "# Log\nSecond memory line indexed during provider fallback.";
+    await fs.writeFile(path.join(fixture.paths.memory, "generation-race-first.md"), firstContent);
+    await fs.writeFile(path.join(fixture.paths.memory, "generation-race-second.md"), secondContent);
 
     let releaseFirstEmbedding: () => void = () => {};
     let releaseSecondEmbedding: () => void = () => {};

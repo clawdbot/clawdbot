@@ -458,6 +458,72 @@ describe("OpenAI Responses provider prompt observer", () => {
     expect(onCompactionRejected).toHaveBeenCalledOnce();
   });
 
+  it.each(["iterator", "response.failed"] as const)(
+    "retries encrypted reasoning rejected by the SDK %s drain without dropping compaction",
+    async (failureShape) => {
+      const identity = { sessionId: "sdk-drain-session", authProfileId: "sdk-drain-profile" };
+      const model = createModel();
+      const context = createCompactionContext(model, identity, true);
+      const onResponse = vi.fn();
+      const options = { apiKey: "test-key", ...identity, onResponse };
+      const observations: ResponsesPromptObservation[] = [];
+      responsesPromptObserver.set(options, (observation) => observations.push(observation));
+      const failureMessage =
+        "400 The encrypted content [REDACTED] could not be verified. " +
+        "Reason: Encrypted content could not be decrypted or parsed.";
+      const failedResponse: SdkResponse = {
+        data: (async function* () {
+          yield { type: "response.created", response: { id: "resp_rejected" } };
+          if (failureShape === "iterator") {
+            throw new Error(failureMessage);
+          }
+          yield {
+            type: "response.failed",
+            response: {
+              id: "resp_rejected",
+              status: "failed",
+              error: { code: null, message: failureMessage },
+            },
+          };
+        })(),
+        response: new Response(null, {
+          status: 200,
+          headers: { "x-request-id": "req_rejected" },
+        }),
+      };
+      const recoveredResponse = completedSdkResponse("resp_recovered");
+      recoveredResponse.response = new Response(null, {
+        status: 200,
+        headers: { "x-request-id": "req_recovered" },
+      });
+      sdkState.outcomes = [failedResponse, recoveredResponse];
+
+      const stream = await Promise.resolve(
+        createOpenAIResponsesTransportStreamFn()(model, context, options as never),
+      );
+      const eventTypes: string[] = [];
+      for await (const event of stream) {
+        eventTypes.push(event.type);
+      }
+      expect(await stream.result()).toMatchObject({ stopReason: "stop" });
+
+      expect(sdkState.requests).toHaveLength(2);
+      expect(requestHasCompaction(sdkState.requests[0])).toBe(true);
+      expect(requestHasCompaction(sdkState.requests[1])).toBe(true);
+      expect(JSON.stringify(sdkState.requests[0]?.input)).toContain(SDK_REASONING_CIPHERTEXT);
+      expect(JSON.stringify(sdkState.requests[1]?.input)).not.toContain(SDK_REASONING_CIPHERTEXT);
+      expect(observations.map((observation) => observation.payloadVariant)).toEqual([
+        "initial",
+        "reasoning-stripped",
+      ]);
+      expect(onResponse.mock.calls.map(([response]) => response.headers["x-request-id"])).toEqual([
+        "req_rejected",
+        "req_recovered",
+      ]);
+      expect(eventTypes).toEqual(["start", "done"]);
+    },
+  );
+
   it("does not invoke the provider or retry when prompt observation throws", async () => {
     const options = { apiKey: "test-key" };
     responsesPromptObserver.set(options, () => {

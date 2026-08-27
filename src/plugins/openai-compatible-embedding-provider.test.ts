@@ -77,7 +77,7 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
 
 async function startEmbeddingServer(params?: {
   token?: string;
-  respond?: (request: CapturedRequest) => FixtureResponse | Record<string, unknown>;
+  respond?: (request: CapturedRequest) => FixtureResponse | Record<string, unknown> | null;
   status?: number;
 }): Promise<{ baseUrl: string; requests: CapturedRequest[] }> {
   const requests: CapturedRequest[] = [];
@@ -102,11 +102,13 @@ async function startEmbeddingServer(params?: {
         res.writeHead(params?.status ?? 200, { "content-type": "application/json" });
         res.end(
           JSON.stringify(
-            params?.respond?.(captured) ?? {
-              object: "list",
-              data: [{ object: "embedding", embedding: [0.1, 0.2, 0.3], index: 0 }],
-              model: body.model,
-            },
+            params?.respond
+              ? params.respond(captured)
+              : {
+                  object: "list",
+                  data: [{ object: "embedding", embedding: [0.1, 0.2, 0.3], index: 0 }],
+                  model: body.model,
+                },
           ),
         );
       } catch (error) {
@@ -457,7 +459,6 @@ describe("openai-compatible generic embedding provider", () => {
           baseUrl: `  ${server.baseUrl}/  `,
           apiKey: `  ${token}  `,
           headers: {
-            Authorization: "Bearer ignored",
             "x-local-runtime": "ollama",
           },
         },
@@ -909,16 +910,62 @@ describe("openai-compatible generic embedding provider", () => {
     ).rejects.toThrow("missing model");
   });
 
-  it("keeps remote parser failures behind the provider-specific error prefix", async () => {
-    const server = await startEmbeddingServer({ respond: () => ({ data: [] }) });
+  it.each([
+    {
+      name: "out-of-order indexed",
+      data: [
+        { index: 1, embedding: [0.2] },
+        { index: 0, embedding: [0.1] },
+      ],
+    },
+    {
+      name: "fully positional compatible-provider",
+      data: [{ embedding: [0.1] }, { embedding: [0.2] }],
+    },
+  ])("returns $name responses in original document order", async ({ data }) => {
+    const server = await startEmbeddingServer({ respond: () => ({ data }) });
+    const { provider } = await createOpenAICompatibleEmbeddingProvider(
+      createOptions({ remote: { baseUrl: server.baseUrl } }),
+    );
+
+    await expect(provider.embedBatch(["first", "second"])).resolves.toEqual([[0.1], [0.2]]);
+  });
+
+  it.each([
+    { name: "missing vectors", input: "hello", response: { data: [] } },
+    { name: "empty direct vector", input: "hello", response: { data: [{ embedding: [] }] } },
+    {
+      name: "empty batch vector",
+      input: ["hello", "world"],
+      response: { data: [{ embedding: [1] }, { embedding: [] }] },
+    },
+    {
+      name: "mixed indexed and positional vectors",
+      input: ["hello", "world"],
+      response: { data: [{ index: 0, embedding: [1] }, { embedding: [2] }] },
+    },
+    {
+      name: "duplicate vector indexes",
+      input: ["hello", "world"],
+      response: {
+        data: [
+          { index: 0, embedding: [1] },
+          { index: 0, embedding: [2] },
+        ],
+      },
+    },
+    { name: "null response root", input: "hello", response: null },
+  ])("rejects malformed $name with the provider-specific error", async ({ input, response }) => {
+    const server = await startEmbeddingServer({ respond: () => response });
     const { provider } = await createOpenAICompatibleEmbeddingProvider(
       createOptions({
         model: "text-embedding-bge-m3",
         remote: { baseUrl: server.baseUrl },
       }),
     );
+    const request = typeof input === "string" ? provider.embed(input) : provider.embedBatch(input);
 
-    await expect(provider.embed("hello")).rejects.toThrow(
+    await expect(request).rejects.toThrow(
       "openai-compatible embeddings failed: malformed JSON response",
     );
   });

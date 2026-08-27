@@ -325,6 +325,11 @@ describe("plugin session extension SessionEntry projection", () => {
           sessionEntrySlotKey: "contextTokensSource",
         });
         api.registerSessionExtension({
+          namespace: "sandbox-policy",
+          description: "reserved creation-only sandbox requirement",
+          sessionEntrySlotKey: "sandbox",
+        });
+        api.registerSessionExtension({
           namespace: "pending-final-text",
           description: "retired pending-final field",
           sessionEntrySlotKey: "pendingFinalDeliveryText",
@@ -363,6 +368,10 @@ describe("plugin session extension SessionEntry projection", () => {
       {
         pluginId: "slot-collision",
         message: "sessionEntrySlotKey is reserved by SessionEntry: contextTokensSource",
+      },
+      {
+        pluginId: "slot-collision",
+        message: "sessionEntrySlotKey is reserved by SessionEntry: sandbox",
       },
       {
         pluginId: "slot-collision",

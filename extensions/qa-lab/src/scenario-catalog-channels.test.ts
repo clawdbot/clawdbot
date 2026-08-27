@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
+import { createQaBusState } from "./bus-state.js";
 import {
   readQaScenarioById,
   readQaScenarioExecutionConfig,
   readQaScenarioPack,
   validateQaScenarioExecutionConfig,
 } from "./scenario-catalog.js";
+import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
+import { recentOutboundSummary } from "./suite-runtime-transport.js";
 
 type CatalogScenario = ReturnType<typeof readQaScenarioById>;
 type FlowCatalogScenario = CatalogScenario & {
@@ -17,6 +20,52 @@ function requireFlowScenario(scenario: CatalogScenario): FlowCatalogScenario {
     throw new Error(`expected ${scenario.id} to be a flow scenario`);
   }
   return scenario as FlowCatalogScenario;
+}
+
+const telegramStreamingFinalScenarios = [
+  {
+    scenarioId: "telegram-stream-final-single-message",
+    finalTexts: ["QA-TELEGRAM-STREAM-SINGLE-OK"],
+  },
+  {
+    scenarioId: "telegram-long-final-reuses-preview",
+    finalTexts: ["TELEGRAM-LONG-FINAL-BEGIN first", "second TELEGRAM-LONG-FINAL-END"],
+  },
+  {
+    scenarioId: "telegram-long-final-three-chunks",
+    finalTexts: [
+      "TELEGRAM-LONG-FINAL-3CHUNK-BEGIN first",
+      "second final chunk",
+      "third TELEGRAM-LONG-FINAL-3CHUNK-END",
+    ],
+  },
+] as const;
+
+function runTelegramStreamingFinalScenario(params: {
+  scenarioId: string;
+  finalTexts: readonly string[];
+  deletedPreview: boolean;
+}) {
+  return runLoadedScenarioFlow(params.scenarioId, {
+    state: createQaBusState(),
+    onWaitForOutboundMessage: ({ state }) => {
+      if (params.deletedPreview) {
+        const preview = state.addOutboundMessage({
+          accountId: "qa-channel",
+          to: "channel:telegram-stream-room",
+          text: "deleted streaming preview",
+        });
+        state.deleteMessage({ accountId: "qa-channel", messageId: preview.id });
+      }
+      for (const text of params.finalTexts) {
+        state.addOutboundMessage({
+          accountId: "qa-channel",
+          to: "channel:telegram-stream-room",
+          text,
+        });
+      }
+    },
+  });
 }
 
 describe("qa scenario catalog channel contracts", () => {
@@ -261,10 +310,110 @@ describe("qa scenario catalog channel contracts", () => {
     expect(scenario.gatewayConfigPatch).not.toHaveProperty("channels.telegram.groups");
   });
 
+  it.each(
+    telegramStreamingFinalScenarios.flatMap((scenario) => [
+      { ...scenario, deletedPreview: false },
+      { ...scenario, deletedPreview: true },
+    ]),
+  )(
+    "counts only visible Telegram finals for $scenarioId (deleted preview: $deletedPreview)",
+    async (scenario) => {
+      await expect(runTelegramStreamingFinalScenario(scenario)).resolves.toMatchObject({
+        status: "pass",
+      });
+    },
+  );
+
+  it("rejects a deleted Telegram preview standing in for a missing final chunk", async () => {
+    await expect(
+      runTelegramStreamingFinalScenario({
+        scenarioId: "telegram-long-final-three-chunks",
+        finalTexts: [
+          "TELEGRAM-LONG-FINAL-3CHUNK-BEGIN first",
+          "second TELEGRAM-LONG-FINAL-3CHUNK-END",
+        ],
+        deletedPreview: true,
+      }),
+    ).rejects.toThrow("expected three complete final chunks; saw 2");
+  });
+
   it("keeps the shared channel canary eligible for its supported channels", () => {
     const scenario = requireFlowScenario(readQaScenarioById("channel-canary"));
 
     expect(scenario.execution.channels).toEqual(["qa-channel", "telegram", "buzz", "msteams"]);
+  });
+
+  it.each([
+    {
+      label: "accepts only the authorized driver reply",
+      observerReplies: false,
+      driverReplies: true,
+      expectedFailure: null,
+    },
+    {
+      label: "rejects an observer reply when the authorized driver never replies",
+      observerReplies: true,
+      driverReplies: false,
+      expectedFailure: "waiting for outbound marker",
+    },
+    {
+      label: "rejects a late observer reply even when the authorized driver replies",
+      observerReplies: true,
+      driverReplies: true,
+      expectedFailure: "blocked sender replied",
+    },
+  ])("$label", async ({ observerReplies, driverReplies, expectedFailure }) => {
+    const state = createQaBusState();
+    const result = runLoadedScenarioFlow("channel-sender-allowlist", {
+      state,
+      api: { recentOutboundSummary },
+      onWaitForOutboundMessage: ({ state: currentState }) => {
+        for (const [senderId, replies] of [
+          ["observer", observerReplies],
+          ["driver", driverReplies],
+        ] as const) {
+          if (!replies) {
+            continue;
+          }
+          const inbound = currentState
+            .getSnapshot()
+            .messages.find(
+              (message) => message.direction === "inbound" && message.senderId === senderId,
+            );
+          if (!inbound) {
+            throw new Error(`missing ${senderId} inbound message`);
+          }
+          const marker = inbound.text.split("reply exactly: ")[1];
+          if (!marker) {
+            throw new Error(`missing ${senderId} requested reply marker`);
+          }
+          currentState.addOutboundMessage({
+            accountId: "qa-channel",
+            to: "group:qa-routing-allowlist",
+            replyToId: inbound.id,
+            text: marker,
+          });
+        }
+      },
+    });
+
+    if (expectedFailure) {
+      await expect(result).rejects.toThrow(expectedFailure);
+    } else {
+      await expect(result).resolves.toMatchObject({ status: "pass" });
+    }
+
+    const snapshot = state.getSnapshot();
+    const senderIdsByInboundId = new Map(
+      snapshot.messages
+        .filter((message) => message.direction === "inbound")
+        .map((message) => [message.id, message.senderId]),
+    );
+    expect(
+      snapshot.messages
+        .filter((message) => message.direction === "outbound")
+        .map((message) => senderIdsByInboundId.get(message.replyToId ?? "")),
+    ).toEqual([...(observerReplies ? ["observer"] : []), ...(driverReplies ? ["driver"] : [])]);
   });
 
   it("keeps transcript-role delivery on the Crabline driver", () => {

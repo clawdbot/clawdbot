@@ -18,7 +18,9 @@ const PROFILE_KEYS = new Set([
   "idleTimeout",
   "provider",
   "setup",
+  "setupEnv",
   "ttl",
+  "warmImage",
 ]);
 const GO_DURATION_PATTERN = /^\+?(?:(?:\d+(?:\.\d*)?|\.\d+)(?:ns|us|µs|μs|ms|s|m|h))+$/u;
 const GO_DURATION_TOKEN_PATTERN = /(\d+(?:\.\d*)?|\.\d+)(ns|us|µs|μs|ms|s|m|h)/gu;
@@ -45,6 +47,8 @@ type CrabboxProfile = {
   provider: string;
   ttl: string;
   setup?: string;
+  setupEnv?: string[];
+  warmImage: boolean;
 };
 
 const CRABBOX_FALLBACK_MACHINE_CLASSES = ["standard", "fast", "large", "beast"] as const;
@@ -144,6 +148,32 @@ export function parseCrabboxProfile(profile: WorkerProfile): CrabboxProfile {
   if (setupValue !== undefined && !setup) {
     throw new WorkerProviderError("Crabbox profile setup must be a non-empty command string");
   }
+  let setupEnv: string[] | undefined;
+  if (profile.setupEnv !== undefined) {
+    if (!Array.isArray(profile.setupEnv)) {
+      throw new WorkerProviderError("Crabbox profile setupEnv must be an array");
+    }
+    if (profile.setupEnv.length > 16) {
+      throw new WorkerProviderError("Crabbox profile setupEnv must contain at most 16 names");
+    }
+    setupEnv = profile.setupEnv.map((name) => {
+      if (typeof name !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(name)) {
+        throw new WorkerProviderError(
+          "Crabbox profile setupEnv must contain only valid POSIX environment variable names",
+        );
+      }
+      if (name === "CRABBOX_ENV_ALLOW") {
+        throw new WorkerProviderError(`Crabbox profile setupEnv name ${name} is reserved`);
+      }
+      return name;
+    });
+    if (new Set(setupEnv).size !== setupEnv.length) {
+      throw new WorkerProviderError("Crabbox profile setupEnv must not contain duplicate names");
+    }
+    if (setupEnv.length > 0 && !setup) {
+      throw new WorkerProviderError("Crabbox profile setupEnv requires setup");
+    }
+  }
   const desktop = profile.desktop;
   if (desktop !== undefined && typeof desktop !== "boolean") {
     throw new WorkerProviderError("Crabbox profile desktop must be a boolean");
@@ -152,6 +182,10 @@ export function parseCrabboxProfile(profile: WorkerProfile): CrabboxProfile {
     throw new WorkerProviderError(
       "Crabbox desktop profiles support only AWS and coordinator-backed Hetzner",
     );
+  }
+  const warmImage = profile.warmImage;
+  if (warmImage !== undefined && typeof warmImage !== "boolean") {
+    throw new WorkerProviderError("Crabbox profile warmImage must be a boolean");
   }
   return {
     binary,
@@ -165,8 +199,45 @@ export function parseCrabboxProfile(profile: WorkerProfile): CrabboxProfile {
     idleTimeout,
     provider,
     setup,
+    setupEnv,
     ttl,
+    warmImage: warmImage ?? false,
   };
+}
+
+function resolveCrabboxProfileSetupEnv(
+  setupEnv: readonly string[] | undefined,
+): Record<string, string> | undefined {
+  if (!setupEnv?.length) {
+    return undefined;
+  }
+  return Object.fromEntries(
+    setupEnv.map((name) => {
+      const value = process.env[name];
+      if (!Object.hasOwn(process.env, name) || value === undefined) {
+        throw new WorkerProviderError(`Crabbox profile setupEnv variable is missing: ${name}`);
+      }
+      return [name, value];
+    }),
+  );
+}
+
+export function resolveCrabboxProvisionProfile(
+  profile: WorkerProfile,
+  requestedClassValue: unknown,
+): { profile: CrabboxProfile; forwardedEnv?: Record<string, string> } {
+  const configured = parseCrabboxProfile(profile);
+  const requestedClass = nonEmptyString(requestedClassValue);
+  if (
+    requestedClassValue !== undefined &&
+    (!requestedClass || requestedClass.length > MAX_CRABBOX_MACHINE_CLASS_LENGTH)
+  ) {
+    throw new WorkerProviderError(
+      "Crabbox machine class must be a non-empty string of at most 128 characters",
+    );
+  }
+  const resolved = requestedClass ? { ...configured, class: requestedClass } : configured;
+  return { profile: resolved, forwardedEnv: resolveCrabboxProfileSetupEnv(resolved.setupEnv) };
 }
 
 export function listCrabboxMachineOptions(

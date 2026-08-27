@@ -5,7 +5,6 @@
  */
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { Type } from "typebox";
-import { getRuntimeConfig } from "../../config/config.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { capArrayByJsonBytes } from "../../gateway/session-transcript-readers.js";
@@ -39,11 +38,10 @@ import {
 } from "./scoped-session-access.js";
 import {
   createSessionVisibilityRowChecker,
-  createAgentToAgentPolicy,
-  resolveEffectiveSessionToolsVisibility,
+  formatSessionToolAccessDenial,
   resolveSessionReference,
-  resolveSandboxedSessionToolContext,
   resolveSessionToolAccess,
+  resolveSessionToolContext,
   resolveVisibleSessionReference,
   shouldResolveSessionIdInput,
 } from "./sessions-helpers.js";
@@ -338,17 +336,15 @@ function resolveSessionsHistoryPaginationMetadata(params: {
     };
   }
 
-  // Gateway offsets count newest transcript rows already returned. Recompute
-  // from the oldest surviving seq after this tool's own filter/cap passes.
-  const oldestSeq = params.messages
+  // Respect Gateway replay cursors and this tool's own byte cap while always advancing.
+  const seq = params.messages
     .map((message) => readHistoryMessageSeq(message))
-    .find((seq): seq is number => typeof seq === "number");
+    .find((value): value is number => typeof value === "number");
+  const gatewayOffset = result?.nextOffset;
   const nextOffset =
-    oldestSeq !== undefined
-      ? Math.max(offset, totalMessages - oldestSeq + 1)
-      : typeof result?.nextOffset === "number"
-        ? result.nextOffset
-        : undefined;
+    seq === undefined
+      ? gatewayOffset
+      : Math.max(offset + 1, Math.min(gatewayOffset ?? totalMessages, totalMessages - seq + 1));
   const hasMore =
     nextOffset !== undefined
       ? nextOffset < totalMessages
@@ -395,14 +391,16 @@ export function createSessionsHistoryTool(opts?: {
         throw new ToolInputError("sessionId requires messageId");
       }
       const includeTools = Boolean(params.includeTools);
-      const cfg = opts?.config ?? getRuntimeConfig();
-      const { mainKey, alias, effectiveRequesterKey, mainSessionKey, restrictToSpawned } =
-        resolveSandboxedSessionToolContext({
-          cfg,
-          agentSessionKey: opts?.agentSessionKey,
-          requesterAgentId: opts?.requesterAgentIdOverride,
-          sandboxed: opts?.sandboxed,
-        });
+      const {
+        cfg,
+        mainKey,
+        alias,
+        effectiveRequesterKey,
+        mainSessionKey,
+        restrictToSpawned,
+        sessionVisibility: visibility,
+        a2aPolicy,
+      } = resolveSessionToolContext(opts);
       const requesterAgentId = resolveSessionAgentIds({
         config: cfg,
         sessionKey: effectiveRequesterKey,
@@ -437,11 +435,6 @@ export function createSessionsHistoryTool(opts?: {
       if (!resolvedSession.ok) {
         return jsonResult({ status: resolvedSession.status, error: resolvedSession.error });
       }
-      const a2aPolicy = createAgentToAgentPolicy(cfg);
-      const visibility = resolveEffectiveSessionToolsVisibility({
-        cfg,
-        sandboxed: opts?.sandboxed === true,
-      });
       const resolutionAccess = createSessionVisibilityRowChecker({
         action: "history",
         defaultAgentId:
@@ -499,7 +492,10 @@ export function createSessionsHistoryTool(opts?: {
       if (!access.allowed) {
         return jsonResult({
           status: access.status,
-          error: access.error,
+          error: formatSessionToolAccessDenial(access, {
+            action: "history",
+            targetSessionKey: displayKey,
+          }),
         });
       }
 

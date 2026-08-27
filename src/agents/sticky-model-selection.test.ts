@@ -48,10 +48,10 @@ describe("persistStickyModelSelection", () => {
               fallbacks: ["openai/gpt-5.6-luna"],
             },
           },
-          list: [{ id: "main", default: true }],
         },
       } satisfies OpenClawConfig,
       target: "defaults" as const,
+      requestedTarget: undefined,
     },
     {
       name: "agent entry for an explicit agent model",
@@ -72,13 +72,60 @@ describe("persistStickyModelSelection", () => {
         },
       } satisfies OpenClawConfig,
       target: "agent" as const,
+      requestedTarget: undefined,
     },
-  ])("writes the $name", async ({ agentId, cfg, target }) => {
+    {
+      name: "agent entry when agent scope is explicit",
+      agentId: "main",
+      cfg: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "anthropic/claude-opus-4-6",
+              fallbacks: ["openai/gpt-5.6-luna"],
+            },
+          },
+          entries: { main: {} },
+        },
+      } satisfies OpenClawConfig,
+      target: "agent" as const,
+      requestedTarget: "agent" as const,
+    },
+    {
+      name: "shared default when global scope is explicit",
+      agentId: "work",
+      cfg: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "anthropic/claude-opus-4-6",
+              fallbacks: ["openai/gpt-5.6-luna"],
+            },
+          },
+          list: [
+            {
+              id: "work",
+              model: {
+                primary: "anthropic/claude-sonnet-4-6",
+                fallbacks: ["google/gemini-3-pro"],
+              },
+            },
+          ],
+        },
+      } satisfies OpenClawConfig,
+      target: "defaults" as const,
+      requestedTarget: "defaults" as const,
+    },
+  ])("writes the $name", async ({ agentId, cfg, target, requestedTarget }) => {
     mocks.cfg = structuredClone(cfg);
 
-    expect(persistStickyModelSelectionBestEffort({ agentId, model: " openai/gpt-5.6-sol " })).toBe(
-      "requested",
-    );
+    expect(
+      persistStickyModelSelectionBestEffort({
+        agentId,
+        model: " openai/gpt-5.6-sol ",
+        ...(requestedTarget ? { target: requestedTarget } : {}),
+      }),
+    ).toBe("requested");
     await vi.waitFor(() =>
       expect(mocks.info).toHaveBeenCalledWith(
         `persisted sticky model selection agentId=${agentId} model=openai/gpt-5.6-sol target=${target}`,
@@ -88,7 +135,12 @@ describe("persistStickyModelSelection", () => {
     const persistedPrimary =
       target === "defaults"
         ? mocks.cfg.agents?.defaults?.model
-        : mocks.cfg.agents?.list?.find((entry) => entry.id === agentId)?.model;
+        : (mocks.cfg.agents?.entries?.[agentId]?.model ??
+          mocks.cfg.agents?.list?.find((entry) => entry.id === agentId)?.model);
+    if (requestedTarget === "agent" && agentId === "main") {
+      expect(persistedPrimary).toBe("openai/gpt-5.6-sol");
+      return;
+    }
     expect(persistedPrimary).toMatchObject({
       primary: "openai/gpt-5.6-sol",
       fallbacks: ["openai/gpt-5.6-luna"],

@@ -1,12 +1,14 @@
-/** Selects stable Node runtime paths for daemon installs across platforms. */
+/** Selects stable runtime executable paths for daemon installs across platforms. */
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { isSupportedNodeVersion } from "../infra/runtime-guard.js";
+import { isSupportedBunVersion, isSupportedNodeVersion } from "../infra/runtime-guard.js";
 import { isSqliteWalResetSafeVersion } from "../infra/sqlite-runtime-version.js";
 import { resolveStableNodePath } from "../infra/stable-node-path.js";
 import { getWindowsProgramFilesRoots } from "../infra/windows-install-roots.js";
 import { runExec } from "../process/exec.js";
+import { isBunRuntime } from "./runtime-binary.js";
 
 const VERSION_MANAGER_MARKERS = [
   "/.nvm/",
@@ -72,13 +74,63 @@ function buildSystemNodeCandidates(
   return [];
 }
 
+function buildBunCandidates(
+  env: Record<string, string | undefined>,
+  platform: NodeJS.Platform,
+  execPath: string,
+): string[] {
+  const pathModule = getPathModule(platform);
+  const executable = platform === "win32" ? "bun.exe" : "bun";
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+  const addCandidate = (candidate: string | undefined) => {
+    if (!candidate || !pathModule.isAbsolute(candidate)) {
+      return;
+    }
+    const normalized = normalizeForCompare(candidate, platform);
+    if (seen.has(normalized)) {
+      return;
+    }
+    seen.add(normalized);
+    candidates.push(candidate);
+  };
+
+  const bunInstall = env.BUN_INSTALL?.trim();
+  if (bunInstall) {
+    addCandidate(pathModule.join(bunInstall, "bin", executable));
+  }
+  const home = (platform === "win32" ? env.USERPROFILE : env.HOME)?.trim();
+  if (home) {
+    addCandidate(pathModule.join(home, ".bun", "bin", executable));
+  }
+  const pathEnv = env.PATH ?? env.Path ?? env.path ?? "";
+  const delimiter = platform === "win32" ? ";" : ":";
+  for (const entry of pathEnv.split(delimiter)) {
+    const trimmed = entry.trim();
+    if (trimmed) {
+      addCandidate(pathModule.join(trimmed, executable));
+    }
+  }
+  if (isBunRuntime(execPath)) {
+    addCandidate(execPath);
+  }
+  for (const candidate of platform === "darwin"
+    ? ["/opt/homebrew/bin/bun", "/usr/local/bin/bun", "/usr/bin/bun"]
+    : platform === "linux"
+      ? ["/usr/local/bin/bun", "/usr/bin/bun"]
+      : []) {
+    addCandidate(candidate);
+  }
+  return candidates;
+}
+
 type ExecFileAsync = (
   file: string,
   args: readonly string[],
   options: { encoding: "utf8"; timeoutMs: number },
 ) => Promise<{ stdout: string; stderr: string }>;
 
-const NODE_RUNTIME_PROBE_TIMEOUT_MS = 5_000;
+const RUNTIME_PROBE_TIMEOUT_MS = 5_000;
 
 const execFileAsync: ExecFileAsync = async (file, args, options) =>
   await runExec(file, [...args], { logOutput: false, timeoutMs: options.timeoutMs });
@@ -99,6 +151,22 @@ const nodeSharedSqlite = variables.node_shared_sqlite === true || variables.node
 process.stdout.write(JSON.stringify({ nodeVersion: process.versions.node, sqliteVersion, nodeSharedSqlite }));
 `;
 
+const BUN_RUNTIME_PROBE = String.raw`
+let hasNodeSqlite = false;
+let sqliteVersion = null;
+try {
+  const { DatabaseSync } = require("node:sqlite");
+  const db = new DatabaseSync(":memory:");
+  try {
+    sqliteVersion = db.prepare("SELECT sqlite_version() AS version").get()?.version ?? null;
+    hasNodeSqlite = true;
+  } finally {
+    db.close();
+  }
+} catch {}
+process.stdout.write(JSON.stringify({ bunVersion: process.versions.bun ?? null, hasNodeSqlite, sqliteVersion }));
+`;
+
 type NodeRuntimeInfo = {
   nodeVersion: string | null;
   sqliteVersion: string | null;
@@ -113,13 +181,12 @@ async function resolveNodeRuntimeInfo(
   try {
     const { stdout } = await execFileImpl(nodePath, ["-e", NODE_RUNTIME_PROBE], {
       encoding: "utf8",
-      timeoutMs: NODE_RUNTIME_PROBE_TIMEOUT_MS,
+      timeoutMs: RUNTIME_PROBE_TIMEOUT_MS,
     });
-    const parsed = JSON.parse(stdout) as {
-      nodeVersion?: unknown;
-      sqliteVersion?: unknown;
-      nodeSharedSqlite?: unknown;
-    };
+    const parsed: unknown = JSON.parse(stdout);
+    if (!isRecord(parsed)) {
+      throw new Error("Node runtime probe returned invalid output");
+    }
     const nodeVersion = typeof parsed.nodeVersion === "string" ? parsed.nodeVersion : null;
     const sqliteVersion = typeof parsed.sqliteVersion === "string" ? parsed.sqliteVersion : null;
     const nodeSharedSqlite = parsed.nodeSharedSqlite === true || parsed.nodeSharedSqlite === "true";
@@ -134,6 +201,45 @@ async function resolveNodeRuntimeInfo(
     };
   } catch {
     return { nodeVersion: null, sqliteVersion: null, nodeSharedSqlite: false, supported: false };
+  }
+}
+
+export type BunRuntimeInfo = {
+  version: string | null;
+  hasNodeSqlite: boolean;
+  sqliteVersion: string | null;
+  supported: boolean;
+};
+
+/** Probes whether a Bun executable satisfies the managed daemon runtime contract. */
+export async function resolveBunRuntimeInfo(
+  bunPath: string,
+  execFileImpl: ExecFileAsync = execFileAsync,
+): Promise<BunRuntimeInfo> {
+  try {
+    const { stdout } = await execFileImpl(bunPath, ["-e", BUN_RUNTIME_PROBE], {
+      encoding: "utf8",
+      timeoutMs: RUNTIME_PROBE_TIMEOUT_MS,
+    });
+    const parsed: unknown = JSON.parse(stdout);
+    if (!isRecord(parsed)) {
+      throw new Error("Bun runtime probe returned invalid output");
+    }
+    const version = typeof parsed.bunVersion === "string" ? parsed.bunVersion : null;
+    const hasNodeSqlite = parsed.hasNodeSqlite === true;
+    const sqliteVersion = typeof parsed.sqliteVersion === "string" ? parsed.sqliteVersion : null;
+    return {
+      version,
+      hasNodeSqlite,
+      sqliteVersion,
+      supported:
+        isSupportedBunVersion(version) &&
+        hasNodeSqlite &&
+        sqliteVersion !== null &&
+        isSqliteWalResetSafeVersion(sqliteVersion),
+    };
+  } catch {
+    return { version: null, hasNodeSqlite: false, sqliteVersion: null, supported: false };
   }
 }
 
@@ -299,4 +405,29 @@ export async function resolvePreferredNodePath(params: {
     return undefined;
   }
   return systemNode.path;
+}
+
+/** Resolves a stable Bun binary that satisfies the daemon runtime contract. */
+export async function resolvePreferredBunPath(params: {
+  env?: Record<string, string | undefined>;
+  runtime?: string;
+  platform?: NodeJS.Platform;
+  execFile?: ExecFileAsync;
+  execPath?: string;
+}): Promise<string | undefined> {
+  if (params.runtime !== "bun") {
+    return undefined;
+  }
+
+  const env = params.env ?? process.env;
+  const platform = params.platform ?? process.platform;
+  const execFileImpl = params.execFile ?? execFileAsync;
+  const currentExecPath = params.execPath ?? process.execPath;
+  for (const candidate of buildBunCandidates(env, platform, currentExecPath)) {
+    const runtime = await resolveBunRuntimeInfo(candidate, execFileImpl);
+    if (runtime.supported) {
+      return candidate;
+    }
+  }
+  return undefined;
 }

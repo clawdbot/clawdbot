@@ -120,12 +120,10 @@ import {
 
 const {
   activateGatewayScheduledServices,
-  runGatewayPostReadyMaintenance,
   scheduleGatewayIdleTask,
   scheduleGatewayPostReadyMaintenance,
   startGatewayChannelHealthMonitor,
   startGatewayCronWithLogging,
-  startGatewayRuntimeServices,
 } = await import("./server-runtime-services.js");
 
 describe("server-runtime-services", () => {
@@ -174,32 +172,25 @@ describe("server-runtime-services", () => {
     resetGatewayWorkAdmission();
   });
 
-  it("keeps scheduled services inert during initial runtime setup", () => {
-    const services = startGatewayRuntimeServices({
-      minimalTestGateway: false,
-      cfgAtStart: {} as never,
+  it("starts channel health without activating scheduled services", () => {
+    startGatewayChannelHealthMonitor({
       channelManager: {
         getRuntimeSnapshot: vi.fn(),
         isHealthMonitorEnabled: vi.fn(),
         isManuallyStopped: vi.fn(),
       } as never,
-      log: createLog(),
     });
 
     expect(hoisted.startChannelHealthMonitor).toHaveBeenCalledTimes(1);
     expect(hoisted.startHeartbeatRunner).not.toHaveBeenCalled();
     expect(hoisted.startSessionUpstreamMonitor).not.toHaveBeenCalled();
     expect(hoisted.recoverPendingDeliveries).not.toHaveBeenCalled();
-
-    services.heartbeatRunner.stop();
-    expect(hoisted.heartbeatRunner.stop).not.toHaveBeenCalled();
   });
 
   it.each(["OPENCLAW_SKIP_CHANNELS", "OPENCLAW_SKIP_PROVIDERS"])(
     "keeps channel health recovery disabled when %s suppresses startup",
     (envKey) => {
       const monitor = startGatewayChannelHealthMonitor({
-        cfg: {} as never,
         channelManager: {} as never,
         env: { [envKey]: "1" },
       });
@@ -209,49 +200,63 @@ describe("server-runtime-services", () => {
     },
   );
 
-  it("warns when cron is disabled but scheduled heartbeats remain enabled", () => {
+  function activateCronOff(
+    cfgAtStart: Parameters<typeof activateGatewayScheduledServices>[0]["cfgAtStart"],
+  ) {
     vi.useFakeTimers();
     const warn = vi.fn();
-    const log = {
-      child: vi.fn(() => ({ info: vi.fn(), warn, error: vi.fn() })),
-      error: vi.fn(),
-    };
-
     activateGatewayScheduledServices({
       minimalTestGateway: false,
-      cfgAtStart: {} as never,
+      cfgAtStart,
       deps: {} as never,
       sessionDeliveryRecoveryMaxEnqueuedAt: 123,
       cronState: createTestCronState(createTestCron(), false),
       cronReconciliation: createTestCronReconciliation(),
       logCron: { error: vi.fn() },
-      log,
+      log: {
+        child: vi.fn(() => ({ info: vi.fn(), warn, error: vi.fn() })),
+        error: vi.fn(),
+      },
     });
+    return warn;
+  }
+
+  it("warns when cron is disabled but scheduled heartbeats remain enabled", () => {
+    const warn = activateCronOff({ skills: { workshop: { autonomous: { mode: "off" } } } });
 
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("cron scheduler is disabled"));
   });
 
   it("does not warn about disabled cron when heartbeat cadence is disabled", () => {
-    vi.useFakeTimers();
-    const warn = vi.fn();
-    const log = {
-      child: vi.fn(() => ({ info: vi.fn(), warn, error: vi.fn() })),
-      error: vi.fn(),
-    };
-
-    activateGatewayScheduledServices({
-      minimalTestGateway: false,
-      cfgAtStart: { agents: { defaults: { heartbeat: { every: "0m" } } } } as never,
-      deps: {} as never,
-      sessionDeliveryRecoveryMaxEnqueuedAt: 123,
-      cronState: createTestCronState(createTestCron(), false),
-      cronReconciliation: createTestCronReconciliation(),
-      logCron: { error: vi.fn() },
-      log,
+    const warn = activateCronOff({
+      agents: { defaults: { heartbeat: { every: "0m" } } },
+      skills: { workshop: { autonomous: { mode: "off" } } },
     });
 
     expect(warn).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ["auto", true],
+    ["off", false],
+    ["propose", false],
+  ] as const)(
+    "reports cron-disabled automatic skill collection reviews for mode %s",
+    (mode, shouldWarn) => {
+      const warn = activateCronOff({
+        agents: { defaults: { heartbeat: { every: "0m" } } },
+        skills: { workshop: { autonomous: { mode } } },
+      });
+
+      if (shouldWarn) {
+        expect(warn).toHaveBeenCalledWith(
+          expect.stringContaining("scheduled skill collection reviews are disabled"),
+        );
+      } else {
+        expect(warn).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("runs cron start, watcher reconciliation, and hook completion in order", async () => {
     const order: string[] = [];
@@ -819,24 +824,22 @@ describe("server-runtime-services", () => {
   });
 
   it("starts cron and records memory when post-ready maintenance fails", async () => {
+    vi.useFakeTimers();
     const cron = { start: vi.fn(async () => undefined) };
     const log = createLog();
     const recordPostReadyMemory = vi.fn();
 
-    await runGatewayPostReadyMaintenance({
-      startMaintenance: vi.fn(async () => {
-        throw new Error("timers unavailable");
+    scheduleGatewayPostReadyMaintenance(
+      createPostReadyMaintenanceScheduleParams({
+        startMaintenance: vi.fn(async () => {
+          throw new Error("timers unavailable");
+        }),
+        cronState: createTestCronState(cron),
+        log,
+        recordPostReadyMemory,
       }),
-      applyMaintenance: vi.fn(),
-      shouldStartCron: () => true,
-      markCronStartHandled: vi.fn(),
-      cronState: createTestCronState(cron),
-      cronReconciliation: createTestCronReconciliation(),
-      cronConfig: {} as never,
-      logCron: { error: vi.fn() },
-      log,
-      recordPostReadyMemory,
-    });
+    );
+    await vi.advanceTimersByTimeAsync(1);
 
     expect(log.warn).toHaveBeenCalledWith(
       "gateway post-ready maintenance startup failed: Error: timers unavailable",
@@ -1049,9 +1052,7 @@ function createLog() {
   };
 }
 
-function createTestCron() {
-  return { start: vi.fn<() => Promise<void>>(async () => {}) };
-}
+const createTestCron = () => ({ start: vi.fn<() => Promise<void>>(async () => {}) });
 
 function createTestCronState(
   cron: { start: () => Promise<void> } = createTestCron(),
@@ -1126,6 +1127,6 @@ function createMaintenanceHandles() {
     startMediaCleanup: vi.fn(async () => undefined),
     stopMediaCleanup: vi.fn(async () => "drained" as const),
     worktreeCleanup: setInterval(() => undefined, 60_000),
-    skillCuratorCleanup: vi.fn(),
+    skillUsageCleanup: vi.fn(),
   };
 }

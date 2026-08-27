@@ -627,7 +627,9 @@ export function tryReadReleaseDecision(
     if (result.status !== 0) {
       const stderr = stringValue(result.stderr);
       if (
-        /no valid artifacts found|artifact .* not found|could not find any artifacts/iu.test(stderr)
+        /no valid artifacts found|artifact .* not found|could not find any artifacts|no artifact matches any of the names or patterns provided/iu.test(
+          stderr,
+        )
       ) {
         return undefined;
       }
@@ -716,7 +718,7 @@ function waitForWorkflowRun(parentRunId: string, workflowSha: string) {
         );
       }
     }
-    if (suite?.status === "completed") {
+    if (suite?.status === "completed" && stringValue(suite.conclusion)) {
       if (suite.conclusion === "success") {
         return suite;
       }

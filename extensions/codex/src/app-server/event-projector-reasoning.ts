@@ -103,8 +103,7 @@ export class CodexReasoningProjection {
       .filter((part): part is string => Boolean(part))
       .join("\n");
     if (planText) {
-      // Structured turn updates are the canonical latest plan. Retain the last
-      // non-empty update so the terminal transcript proves planning occurred.
+      // Structured turn updates are the canonical latest plan for terminal classification.
       this.turnPlanText = planText;
     }
     if (source === "codex-app-server" && plan) {

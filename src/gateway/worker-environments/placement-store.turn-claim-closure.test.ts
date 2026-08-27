@@ -8,19 +8,23 @@ import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import { tryBeginGatewayRootWorkAdmission } from "../../process/gateway-work-admission.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { placementTurnOwner, type WorkerSessionPlacementIdentity } from "./placement-record.js";
 import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
 import {
+  bindWorkerTurnAdmissionContinuation,
   bindWorkerTurnExecutionIdentity,
   getWorkerTurnExecutionIdentityCapability,
+  runWorkerTurnAdmissionContinuation,
 } from "./placement-turn-claim-events.js";
 
 const SESSION: WorkerSessionPlacementIdentity = {
@@ -250,4 +254,54 @@ it("rejects retained worker lineage capabilities after either owner closes", asy
     }),
   ).rejects.toThrow("worker turn authority changed");
   store.releaseTurn(runClosedClaim);
+});
+
+it("lets an unaudited admitted worker complete the exact turn that closes its owners", async () => {
+  const active = advanceToActive();
+  const claim = store.claimTurn({
+    ...SESSION,
+    claimId: "claim-terminal-continuation",
+    runId: "run-terminal-continuation",
+    owner: {
+      kind: "worker",
+      environmentId: active.environmentId,
+      ownerEpoch: active.activeOwnerEpoch,
+    },
+  });
+  const operationalRunInstance = createOperationalRunInstanceRef(claim.runId);
+  const delegatedAuthority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+  const rootAdmission = tryBeginGatewayRootWorkAdmission();
+  if (!rootAdmission) {
+    throw new Error("expected parent worker turn root admission");
+  }
+  try {
+    await rootAdmission.run(async () =>
+      bindWorkerTurnAdmissionContinuation(store, claim, operationalRunInstance),
+    );
+    expect(getWorkerTurnExecutionIdentityCapability(store, claim)).toBeUndefined();
+    const identity: WorkerConnectionIdentity = {
+      environmentId: active.environmentId,
+      credentialHash: "worker-terminal-continuation",
+      bundleHash: "a".repeat(64),
+      sessionId: claim.sessionId,
+      runId: claim.runId,
+      turnClaim: claim,
+      ownerEpoch: active.activeOwnerEpoch,
+      rpcSetVersion: 1,
+      protocolFeatures: [],
+      credentialExpiresAtMs: Date.now() + 60_000,
+    };
+
+    await expect(
+      runWorkerTurnAdmissionContinuation(identity, async () => {
+        store.releaseTurn(claim);
+        releaseAgentRunDelegatedAuthority(delegatedAuthority);
+        return "completed";
+      }),
+    ).resolves.toBe("completed");
+    expect(runWorkerTurnAdmissionContinuation(identity, async () => "stale")).toBeNull();
+  } finally {
+    releaseAgentRunDelegatedAuthority(delegatedAuthority);
+    rootAdmission.release();
+  }
 });

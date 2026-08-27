@@ -36,6 +36,8 @@ type SystemCaWarmupOptions = {
 
 type SystemCaWarmupMessage = { ok: true; certificateCount: number } | { ok: false; error: string };
 
+let macOSSystemCaWarmupPromise: Promise<void> | undefined;
+
 function isSystemCaWarmupMessage(value: unknown): value is SystemCaWarmupMessage {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return false;
@@ -143,4 +145,12 @@ export async function warmMacOSSystemCaOffMainThread(
     // A wedged trustd lookup must not keep an otherwise stopped gateway process alive.
     worker.unref();
   });
+}
+
+/**
+ * One warmup worker runs per process, and every caller awaits its shared completion.
+ * The settled promise is retained after success or failure because warmup is only an optimization.
+ */
+export function beginMacOSSystemCaWarmupOnce(options: SystemCaWarmupOptions = {}): Promise<void> {
+  return (macOSSystemCaWarmupPromise ??= warmMacOSSystemCaOffMainThread(options));
 }

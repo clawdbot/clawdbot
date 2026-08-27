@@ -417,7 +417,9 @@ private struct ChatMessageBody: View {
 
     var body: some View {
         let text = self.primaryText
-        let textColor = self.isUser ? OpenClawChatTheme.userText : OpenClawChatTheme.assistantText
+        let textColor = self.isUser
+            ? OpenClawChatTheme.userText(on: self.userAccent)
+            : OpenClawChatTheme.assistantText
         let shouldRenderBubble = self.shouldRenderBubble
         let toolActivityItems = self.toolActivityItems
 
@@ -475,6 +477,7 @@ private struct ChatMessageBody: View {
                     AttachmentRow(
                         att: self.visibleInlineAttachments[idx],
                         isUser: self.isUser,
+                        userAccent: self.userAccent,
                         resolverReady: self.mediaArtifactResolverReady,
                         playbackAllowed: self.mediaPlaybackAllowed,
                         loadMedia: self.loadMediaArtifact)
@@ -740,6 +743,7 @@ private struct ChatMessageBody: View {
 private struct AttachmentRow: View {
     let att: OpenClawChatMessageContent
     let isUser: Bool
+    let userAccent: Color?
     let resolverReady: Bool
     let playbackAllowed: @MainActor @Sendable () -> Bool
     let loadMedia: @MainActor @Sendable (
@@ -787,13 +791,16 @@ private struct AttachmentRow: View {
             Text(self.isAudio ? "Voice note" : self.attachmentLabel)
                 .font(OpenClawChatTypography.footnote)
                 .lineLimit(1)
-                .foregroundStyle(self.isUser ? OpenClawChatTheme.userText : OpenClawChatTheme.assistantText)
+                .foregroundStyle(
+                    self.isUser
+                        ? OpenClawChatTheme.userText(on: self.userAccent)
+                        : OpenClawChatTheme.assistantText)
             if self.isAudio, let durationSeconds = self.att.durationSeconds {
                 Text(openClawVoiceNoteDurationLabel(durationSeconds))
                     .font(OpenClawChatTypography.footnote)
                     .foregroundStyle(
                         self.isUser
-                            ? OpenClawChatTheme.userText.opacity(0.72)
+                            ? OpenClawChatTheme.userText(on: self.userAccent).opacity(0.72)
                             : OpenClawChatTheme.assistantText.opacity(0.72))
             }
             Spacer()

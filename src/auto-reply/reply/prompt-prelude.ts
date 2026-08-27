@@ -12,8 +12,6 @@ import { buildInboundMediaNoteProjection } from "../media-note.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import { appendChannelPromptContext } from "./channel-prompt-context.js";
 
-const REPLY_MEDIA_HINT =
-  "To send an image back, use the message tool with structured media fields such as media, mediaUrl, path, or filePath. Keep caption in the text body.";
 const ROOM_EVENT_PROMPT = "[OpenClaw room event]";
 const RESUMABLE_ROOM_CONTEXT_OMITTED_PREFIXES = [
   "Conversation context (chronological, selected for current message):",
@@ -34,7 +32,6 @@ function buildReplyPromptBodies(params: {
   media?: readonly MediaFact[];
 }): {
   mediaNote?: string;
-  mediaReplyHint?: string;
   media?: MediaFact[];
   prefixedCommandBody: string;
   queuedBody: string;
@@ -56,12 +53,11 @@ function buildReplyPromptBodies(params: {
   const generatedMedia = buildInboundMediaNoteProjection(params.ctx);
   const mediaNote = generatedMedia.text;
   const media = [...generatedMedia.media, ...normalizeMediaFacts(params.media)];
-  const mediaReplyHint = mediaNote ? REPLY_MEDIA_HINT : undefined;
   const queuedBodyRaw = mediaNote
-    ? [mediaNote, mediaReplyHint, queueBodyBase].filter(Boolean).join("\n").trim()
+    ? [mediaNote, queueBodyBase].filter(Boolean).join("\n").trim()
     : queueBodyBase;
   const prefixedCommandBodyRaw = mediaNote
-    ? [mediaNote, mediaReplyHint, prefixedBody].filter(Boolean).join("\n").trim()
+    ? [mediaNote, prefixedBody].filter(Boolean).join("\n").trim()
     : prefixedBody;
   const transcriptBody = params.transcriptBody ?? params.effectiveBaseBody;
   const includeMediaTranscript = mediaNote && params.inboundEventKind !== "room_event";
@@ -74,7 +70,6 @@ function buildReplyPromptBodies(params: {
       : "";
   return {
     mediaNote,
-    mediaReplyHint,
     ...(media.length > 0 ? { media } : {}),
     prefixedCommandBody: annotateInterSessionPromptText(
       prefixedCommandBodyRaw,

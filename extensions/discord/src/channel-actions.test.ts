@@ -54,7 +54,6 @@ describe("discordMessageActions", () => {
     });
 
     expect(discovery?.capabilities).toEqual(["presentation"]);
-    expect(discovery?.schema).toBeUndefined();
     expect(discovery?.actions).toEqual([
       "send",
       "poll",
@@ -328,6 +327,13 @@ describe("discordMessageActions", () => {
       "event-list",
       "event-create",
     ]);
+    expect(defaultDiscovery?.schema).toBeUndefined();
+    expect(workDiscovery?.schema).toMatchObject({
+      actions: ["react", "reactions"],
+      properties: {
+        emoji: { description: expect.stringContaining('action:"emoji-list"') },
+      },
+    });
   });
 
   it("hides upload-file when Discord message actions are disabled", () => {
@@ -351,7 +357,7 @@ describe("discordMessageActions", () => {
     expect(discovery?.actions).not.toContain("delete");
   });
 
-  it("does not expose Discord-native message tool schema", () => {
+  it("describes usable custom emoji formats and available server emoji discovery", () => {
     const discovery = discordMessageActions.describeMessageTool?.({
       cfg: {
         channels: {
@@ -361,7 +367,16 @@ describe("discordMessageActions", () => {
         },
       } as OpenClawConfig,
     });
-    expect(discovery?.schema).toBeUndefined();
+    expect(discovery?.schema).toMatchObject({
+      actions: ["react", "reactions"],
+      properties: {
+        emoji: {
+          description: expect.stringMatching(
+            /Unicode.*name:id.*<:name:id>.*<a:name:id>.*emoji-list/,
+          ),
+        },
+      },
+    });
   });
 
   it.each(["read", "search", "edit", "delete", "react", "pin", "channel-info"])(

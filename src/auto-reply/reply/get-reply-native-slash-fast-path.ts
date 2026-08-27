@@ -1,5 +1,6 @@
 // Handles native slash commands before full get-reply pipeline execution.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import {
   resolveModelRefFromString,
   resolveThinkingDefaultWithRuntimeCatalog,
@@ -143,7 +144,8 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
   opts?: GetReplyOptions;
   skillFilter?: string[];
 }): Promise<
-  { handled: true; reply: ReplyPayload | ReplyPayload[] | undefined } | { handled: false }
+  | { handled: true; reply: ReplyPayload | ReplyPayload[] | undefined }
+  | { handled: false; queueModeOverride?: QueueMode }
 > {
   if (!shouldRunNativeSlashCommandFastPath(params.ctx)) {
     return { handled: false };
@@ -497,5 +499,13 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
       reply: markCommandReplyForDelivery(inlineActionResult.reply),
     };
   }
-  return { handled: false };
+  return {
+    handled: false,
+    ...((inlineActionResult.queueModeOverride ?? commandResult.queueModeOverride)
+      ? {
+          queueModeOverride:
+            inlineActionResult.queueModeOverride ?? commandResult.queueModeOverride,
+        }
+      : {}),
+  };
 }
