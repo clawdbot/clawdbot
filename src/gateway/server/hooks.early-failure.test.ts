@@ -27,10 +27,10 @@ vi.mock("../../cron/isolated-agent.js", () => ({
   runCronIsolatedAgentTurn: mocks.runCronIsolatedAgentTurn,
 }));
 vi.mock("../../infra/heartbeat-wake.js", () => ({
-  requestHeartbeatRaw: mocks.requestHeartbeat,
+  requestHeartbeat: mocks.requestHeartbeat,
 }));
 vi.mock("../../infra/system-events.js", () => ({
-  enqueueSystemEventRaw: mocks.enqueueSystemEvent,
+  enqueueSystemEvent: mocks.enqueueSystemEvent,
 }));
 
 const { createGatewayHookDispatcher, createGatewayHooksRequestHandler } =

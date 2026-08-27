@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetDelegateStoreForTests } from "../auto-reply/continuation/delegate-store.js";
 import type { FollowupRun, QueueSettings } from "../auto-reply/reply/queue.js";
 import { testing as replyRunRegistryTesting } from "../auto-reply/reply/reply-run-registry.test-support.js";
 import { createMockTypingController } from "../auto-reply/reply/test-helpers.js";
@@ -8,7 +9,9 @@ import {
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../config/config.js";
+import { resolveSessionStorePathCore } from "../config/sessions.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import {
   resetContinuationTracer,
   setContinuationTracer,
@@ -19,6 +22,10 @@ import {
   type Tracer,
 } from "../infra/continuation-tracer.js";
 import { peekSystemEventEntries, resetSystemEventsForTest } from "../infra/system-events.js";
+import {
+  configureTaskFlowRegistryRuntime,
+  resetTaskFlowRegistryForTests,
+} from "../tasks/task-runtime.test-helpers.js";
 import { abortEmbeddedAgentRun, isEmbeddedAgentRunActive } from "./embedded-agent-runner/runs.js";
 import { testing as embeddedRunTesting } from "./embedded-agent-runner/runs.test-support.js";
 
@@ -39,8 +46,42 @@ vi.mock("./model-fallback-runner.js", () => ({
   runWithModelFallback: (params: {
     provider: string;
     model: string;
-    run: (provider: string, model: string) => Promise<unknown>;
+    runCandidate: (provider: string, model: string) => Promise<unknown>;
   }) => runWithModelFallbackMock(params),
+}));
+
+vi.mock("./embedded-agent-runner/run-entry.js", () => ({
+  runEmbeddedAgentEntry: async (params: {
+    selection: { provider: string; model: string };
+    runCandidate: (
+      provider: string,
+      model: string,
+      options: Record<string, unknown>,
+    ) => Promise<unknown>;
+  }) => {
+    const { provider, model } = params.selection;
+    const fallback = await runWithModelFallbackMock({
+      provider,
+      model,
+      runCandidate: (nextProvider: string, nextModel: string) =>
+        params.runCandidate(nextProvider, nextModel, {
+          isFallbackRetry: false,
+          modelRoutingProvenance: {
+            requestedProvider: provider,
+            requestedModel: model,
+            stage: "initial",
+          },
+          contextEngineLogicalTurnLease: {},
+          onContextEngineTurnCandidate: () => {},
+        }),
+    });
+    return {
+      ...fallback,
+      outcome: "completed",
+      terminal: { metadata: {} },
+      settleSessionOverride: async () => {},
+    };
+  },
 }));
 
 vi.mock("./model-fallback-attempt.js", () => ({
@@ -136,7 +177,7 @@ import { runReplyAgent } from "../auto-reply/reply/agent-runner.js";
 type RunWithModelFallbackParams = {
   provider: string;
   model: string;
-  run: (provider: string, model: string) => Promise<unknown>;
+  runCandidate: (provider: string, model: string) => Promise<unknown>;
 };
 
 type RecordedSpan = {
@@ -246,6 +287,14 @@ function createContinuationRun(params: {
 }
 
 async function runDelegateTurn(run: ReturnType<typeof createContinuationRun>): Promise<unknown> {
+  await upsertSessionEntryCore(
+    {
+      agentId: "main",
+      sessionKey: run.sessionKey,
+      storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+    },
+    run.sessionEntry,
+  );
   setRuntimeConfigSnapshot(run.followupRun.run.config);
   return runReplyAgent({
     commandBody: "hello",
@@ -271,6 +320,16 @@ async function runDelegateTurn(run: ReturnType<typeof createContinuationRun>): P
 }
 
 beforeEach(() => {
+  resetTaskFlowRegistryForTests({ persist: false });
+  configureTaskFlowRegistryRuntime({
+    store: {
+      loadSnapshot: () => ({ flows: new Map() }),
+      saveSnapshot: () => {},
+      upsertFlow: () => {},
+      deleteFlow: () => {},
+    },
+  });
+  resetDelegateStoreForTests();
   embeddedRunTesting.resetActiveEmbeddedRuns();
   replyRunRegistryTesting.resetReplyRunRegistry();
   runEmbeddedAgentMock.mockReset();
@@ -294,8 +353,8 @@ beforeEach(() => {
   });
   runWithModelFallbackMock
     .mockReset()
-    .mockImplementation(async ({ provider, model, run }: RunWithModelFallbackParams) => ({
-      result: await run(provider, model),
+    .mockImplementation(async ({ provider, model, runCandidate }: RunWithModelFallbackParams) => ({
+      result: await runCandidate(provider, model),
       provider,
       model,
       attempts: [],
@@ -309,6 +368,8 @@ afterEach(() => {
   resetSystemEventsForTest();
   replyRunRegistryTesting.resetReplyRunRegistry();
   embeddedRunTesting.resetActiveEmbeddedRuns();
+  resetDelegateStoreForTests();
+  resetTaskFlowRegistryForTests({ persist: false });
 });
 
 describe("continuation cross-session targeting bracket gate", () => {

@@ -65,28 +65,20 @@ vi.mock("../auto-reply/continuation/state.js", async (importOriginal) => ({
   unregisterContinuationTimerHandle: vi.fn(),
 }));
 
-vi.mock("../auto-reply/continuation/delegate-store.js", () => ({
-  annotateQueuedDelegatesChainTokensFold: vi.fn(() => 0),
-  clearQueuedDelegatesChainTokensFold: vi.fn(() => 0),
-  consumePendingDelegates: vi.fn(() => []),
-  enqueuePendingDelegate: vi.fn(),
-  hasRecoverablePendingDelegate: vi.fn(() => false),
-  markPendingDelegateFailed: vi.fn(),
-  markPendingDelegateSpawnAccepted: vi.fn(),
-  peekEarliestQueuedDelegateDueAt: vi.fn(() => undefined),
-  revalidatePendingDelegateForSpawn: vi.fn(() => ({ allowed: true })),
-}));
-
-vi.mock("../auto-reply/continuation/delegate-store-post-compaction.js", () => ({
-  failStagedPostCompactionDelegatesForCleanup: vi.fn(() => 0),
-  stagePostCompactionDelegate: vi.fn(),
-}));
+vi.mock("../auto-reply/continuation/delegate-store-post-compaction.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../auto-reply/continuation/delegate-store-post-compaction.js")
+    >();
+  return {
+    ...actual,
+    failStagedPostCompactionDelegatesForCleanup: vi.fn(() => 0),
+    stagePostCompactionDelegate: vi.fn(actual.stagePostCompactionDelegate),
+  };
+});
 
 import { stagePostCompactionDelegate } from "../auto-reply/continuation/delegate-store-post-compaction.js";
-import {
-  consumePendingDelegates,
-  markPendingDelegateFailed,
-} from "../auto-reply/continuation/delegate-store.js";
+import * as delegateStore from "../auto-reply/continuation/delegate-store.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -100,10 +92,32 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { drainSystemEventEntries } from "../infra/system-events.js";
-import { runSubagentAnnounceFlow } from "./subagents/announce/subagent-announce.js";
+import {
+  configureTaskFlowRegistryRuntime,
+  resetTaskFlowRegistryForTests,
+} from "../tasks/task-runtime.test-helpers.js";
+import { runSubagentAnnounceFlow as runSubagentAnnounceFlowCore } from "./subagents/announce/subagent-announce.js";
 import * as subagentSpawn from "./subagents/spawn/subagent-spawn.js";
 
-type AnnounceFlowParams = Parameters<typeof runSubagentAnnounceFlow>[0];
+type AnnounceFlowParams = Parameters<typeof runSubagentAnnounceFlowCore>[0];
+
+beforeEach(() => {
+  resetTaskFlowRegistryForTests({ persist: false });
+  configureTaskFlowRegistryRuntime({
+    store: {
+      loadSnapshot: () => ({ flows: new Map() }),
+      saveSnapshot: () => {},
+      upsertFlow: () => {},
+      deleteFlow: () => {},
+    },
+  });
+  delegateStore.resetDelegateStoreForTests();
+});
+
+afterEach(() => {
+  delegateStore.resetDelegateStoreForTests();
+  resetTaskFlowRegistryForTests({ persist: false });
+});
 
 function makeConfig(
   overrides: {
@@ -157,6 +171,22 @@ async function writeSessionStore(data: Record<string, unknown>) {
           : `session-${sessionKey}`,
     } as SessionEntry);
   }
+}
+
+async function runSubagentAnnounceFlow(params: AnnounceFlowParams) {
+  const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
+  const existingKeys = new Set(
+    listSessionEntriesCore({ agentId: "main", storePath }).map(({ sessionKey }) => sessionKey),
+  );
+  for (const sessionKey of [params.childSessionKey, params.requesterSessionKey]) {
+    if (!existingKeys.has(sessionKey)) {
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey, storePath },
+        { sessionId: `session-${sessionKey}`, updatedAt: Date.now() },
+      );
+    }
+  }
+  return await runSubagentAnnounceFlowCore(params);
 }
 
 function buildChainShardParams(hopIndex: number): AnnounceFlowParams {
@@ -379,8 +409,14 @@ async function buildToolDelegateParams(hopIndex: number): Promise<AnnounceFlowPa
   return params;
 }
 
-const mockedConsumePendingDelegates = vi.mocked(consumePendingDelegates);
-const mockedMarkPendingDelegateFailed = vi.mocked(markPendingDelegateFailed);
+const consumePendingDelegates = delegateStore.consumePendingDelegates;
+const markPendingDelegateFailed = delegateStore.markPendingDelegateFailed;
+const mockedConsumePendingDelegates = vi
+  .spyOn(delegateStore, "consumePendingDelegates")
+  .mockImplementation(consumePendingDelegates);
+const mockedMarkPendingDelegateFailed = vi
+  .spyOn(delegateStore, "markPendingDelegateFailed")
+  .mockImplementation(markPendingDelegateFailed);
 
 describe("tool-delegate chain guard (nextToolHop > toolMaxChainLength)", () => {
   let spawnSpy: ReturnType<typeof vi.spyOn>;
@@ -397,7 +433,7 @@ describe("tool-delegate chain guard (nextToolHop > toolMaxChainLength)", () => {
 
   afterEach(() => {
     spawnSpy.mockRestore();
-    mockedConsumePendingDelegates.mockReturnValue([]);
+    mockedConsumePendingDelegates.mockImplementation(consumePendingDelegates);
     mockedMarkPendingDelegateFailed.mockClear();
     clearRuntimeConfigSnapshot();
   });
@@ -540,7 +576,7 @@ describe("tool-delegate chain guard (nextToolHop > toolMaxChainLength)", () => {
   });
 
   it("marks forbidden consumed tool delegate spawn failed as rejected", async () => {
-    const delegate = { task: "forbidden spawned delegate", flowId: "flow-1", expectedRevision: 2 };
+    const delegate = { task: "forbidden spawned delegate" };
     mockedConsumePendingDelegates.mockReturnValueOnce([delegate]);
     spawnSpy.mockResolvedValue({
       status: "forbidden",
@@ -633,7 +669,7 @@ describe("announce-path post-compaction routing (stage at seam, skip spawn)", ()
       mockedStagePostCompactionDelegate.mock.calls.at(0),
       "staged post-compaction delegate call",
     );
-    expect(stagedSessionKey).toBe(params.requesterSessionKey);
+    expect(stagedSessionKey).toBe(params.childSessionKey);
     expect(stagedDelegate).toMatchObject({ task: "resume migration step 3" });
     // Mutual exclusion: staging at-seam must NOT also chain-spawn now.
     expect(spawnSpy).not.toHaveBeenCalled();

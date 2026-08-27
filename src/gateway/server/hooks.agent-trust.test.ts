@@ -33,10 +33,10 @@ const resolveOutboundChannelPluginMock = vi.fn(() => ({ id: "telegram" }));
 const resolveChannelDefaultAccountIdMock = vi.fn(() => "default");
 
 vi.mock("../../infra/system-events.js", () => ({
-  enqueueSystemEventRaw: enqueueSystemEventMock,
+  enqueueSystemEvent: enqueueSystemEventMock,
 }));
 vi.mock("../../infra/heartbeat-wake.js", () => ({
-  requestHeartbeatRaw: requestHeartbeatMock,
+  requestHeartbeat: requestHeartbeatMock,
 }));
 vi.mock("../../cron/isolated-agent.js", () => ({
   runCronIsolatedAgentTurn: runCronIsolatedAgentTurnMock,

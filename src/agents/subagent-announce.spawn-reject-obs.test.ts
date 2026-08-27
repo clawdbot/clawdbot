@@ -2,14 +2,7 @@
  * Regression tests for surfacing `spawnResult.error` across the
  * subagent-announce rejection paths.
  *
- * Pins observability contracts at two rejection sites in
- * `src/agents/subagent-announce.ts`:
- *
- *   1. Chain-delegate (bracket) rejection-path (~line 1079)
- *      - log line includes `reason=<text>` with `spawnResult.error` when present
- *      - log line falls back to `reason=no reason given` when absent
- *
- *   2. Tool-delegate sister rejection-path (~line 1244)
+ * Pins observability contracts at the canonical tool-delegate rejection path:
  *      - log line includes `reason=<text>` with `spawnResult.error` when present
  *      - `markPendingDelegateFailed` summary surfaces real reason text
  *      - Both fall back to `delegation was not accepted.` when error absent
@@ -22,8 +15,6 @@
  * policy, sandbox policy, allowAgents target-policy, cwd policy, capability
  * gate, etc).
  */
-import fs from "node:fs";
-import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { dispatchToolDelegates } from "../auto-reply/continuation/delegate-dispatch.js";
@@ -131,7 +122,6 @@ import {
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../config/config.js";
-import { resolveSessionStorePathCore } from "../config/sessions.js";
 import { defaultRuntime } from "../runtime.js";
 import { runSubagentAnnounceFlow } from "./subagents/announce/subagent-announce.js";
 import * as subagentSpawn from "./subagents/spawn/subagent-spawn.js";
@@ -156,28 +146,6 @@ function makeConfig(): OpenClawConfig {
   };
 }
 
-function writeSessionStore(data: Record<string, unknown>) {
-  const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
-  fs.mkdirSync(path.dirname(storePath), { recursive: true });
-  fs.writeFileSync(storePath, JSON.stringify(data), "utf8");
-}
-
-function buildChainDelegateParams(): AnnounceFlowParams {
-  return {
-    childSessionKey: "agent:main:subagent:shard-reject-chain",
-    childRunId: "run-reject-chain",
-    requesterSessionKey: "agent:main:discord:dm:test-reject",
-    requesterDisplayKey: "test-reject",
-    task: "[continuation:chain-hop:1] Delegated task: do research",
-    roundOneReply: "Research result.\n[[CONTINUE_DELEGATE: continue next step]]",
-    timeoutMs: 30_000,
-    cleanup: "delete",
-    outcome: { status: "ok" as const },
-    silentAnnounce: true,
-    wakeOnReturn: true,
-  };
-}
-
 function buildToolDelegateParams(): AnnounceFlowParams {
   return {
     childSessionKey: "agent:main:subagent:shard-reject-tool",
@@ -197,66 +165,11 @@ function buildToolDelegateParams(): AnnounceFlowParams {
 const mockedConsumePendingDelegates = vi.mocked(consumePendingDelegates);
 const mockedMarkPendingDelegateFailed = vi.mocked(markPendingDelegateFailed);
 
-describe("subagent-announce chain-delegate rejection observability", () => {
-  let spawnSpy: ReturnType<typeof vi.spyOn>;
-  let logSpy: ReturnType<typeof vi.spyOn>;
-
-  beforeEach(() => {
-    writeSessionStore({});
-    setRuntimeConfigSnapshot(makeConfig());
-    spawnSpy = vi.spyOn(subagentSpawn, "spawnSubagentDirect");
-    logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-    mockedConsumePendingDelegates.mockReturnValue([]);
-    mockedMarkPendingDelegateFailed.mockClear();
-  });
-
-  afterEach(() => {
-    spawnSpy.mockRestore();
-    logSpy.mockRestore();
-    clearRuntimeConfigSnapshot();
-  });
-
-  it("surfaces spawnResult.error in `reason=...` log line when error present", async () => {
-    const REASON = "child cap exceeded for sandbox policy";
-    spawnSpy.mockResolvedValue({ status: "forbidden", error: REASON });
-
-    await runSubagentAnnounceFlow(buildChainDelegateParams());
-    await new Promise((r) => {
-      setTimeout(r, 50);
-    });
-
-    expect(spawnSpy).toHaveBeenCalledTimes(1);
-    const rejectionLogs = logSpy.mock.calls
-      .map((c: unknown[]) => String(c[0]))
-      .filter((m: string) => m.includes("[subagent-chain-hop] Spawn rejected"));
-    expect(rejectionLogs).toHaveLength(1);
-    expect(rejectionLogs[0]).toContain("reason=" + REASON);
-    expect(rejectionLogs[0]).toContain("(forbidden)");
-  });
-
-  it("falls back to `reason=no reason given` when spawnResult.error is absent", async () => {
-    spawnSpy.mockResolvedValue({ status: "forbidden" });
-
-    await runSubagentAnnounceFlow(buildChainDelegateParams());
-    await new Promise((r) => {
-      setTimeout(r, 50);
-    });
-
-    expect(spawnSpy).toHaveBeenCalledTimes(1);
-    const rejectionLogs = logSpy.mock.calls
-      .map((c: unknown[]) => String(c[0]))
-      .filter((m: string) => m.includes("[subagent-chain-hop] Spawn rejected"));
-    expect(rejectionLogs).toHaveLength(1);
-    expect(rejectionLogs[0]).toContain("reason=no reason given");
-  });
-});
-
 describe("subagent-announce tool-delegate rejection observability", () => {
   let spawnSpy: ReturnType<typeof vi.spyOn>;
   let logSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
-    writeSessionStore({});
     setRuntimeConfigSnapshot(makeConfig());
     spawnSpy = vi.spyOn(subagentSpawn, "spawnSubagentDirect");
     logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});

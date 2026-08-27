@@ -61,28 +61,33 @@ vi.mock("../auto-reply/continuation/state.js", async (importOriginal) => ({
   unregisterContinuationTimerHandle: vi.fn(),
 }));
 
-vi.mock("../auto-reply/continuation/delegate-store.js", () => ({
-  annotateQueuedDelegatesChainTokensFold: vi.fn(() => 0),
-  clearQueuedDelegatesChainTokensFold: vi.fn(() => 0),
-  consumePendingDelegates: vi.fn(() => []),
-  enqueuePendingDelegate: vi.fn(),
-  hasRecoverablePendingDelegate: vi.fn(() => false),
-  markPendingDelegateFailed: vi.fn(),
-  markPendingDelegateSpawnAccepted: vi.fn(),
-  peekEarliestQueuedDelegateDueAt: vi.fn(() => undefined),
-}));
-
-vi.mock("../auto-reply/continuation/delegate-store-post-compaction.js", () => ({
-  failStagedPostCompactionDelegatesForCleanup: vi.fn(() => 0),
-  stagePostCompactionDelegate: vi.fn(),
-}));
+vi.mock("../auto-reply/continuation/delegate-store-post-compaction.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../auto-reply/continuation/delegate-store-post-compaction.js")
+    >();
+  return {
+    ...actual,
+    failStagedPostCompactionDelegatesForCleanup: vi.fn(() => 0),
+    stagePostCompactionDelegate: vi.fn(actual.stagePostCompactionDelegate),
+  };
+});
 
 import { stagePostCompactionDelegate } from "../auto-reply/continuation/delegate-store-post-compaction.js";
+import { resetDelegateStoreForTests } from "../auto-reply/continuation/delegate-store.js";
 import { setRuntimeConfigSnapshot, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { resolveSessionStorePathCore } from "../config/sessions.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
-import { saveLegacySessionStore as saveSessionStore } from "../infra/state-migrations.legacy-session-store.js";
+import {
+  applySessionEntryLifecycleMutation,
+  listSessionEntriesCore,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { drainSystemEventEntries, resetSystemEventsForTest } from "../infra/system-events.js";
+import {
+  configureTaskFlowRegistryRuntime,
+  resetTaskFlowRegistryForTests,
+} from "../tasks/task-runtime.test-helpers.js";
 import { runSubagentAnnounceFlow } from "./subagents/announce/subagent-announce.js";
 import * as subagentSpawn from "./subagents/spawn/subagent-spawn.js";
 
@@ -108,10 +113,22 @@ function makeConfig() {
 
 async function writeSessionStore(data: Record<string, unknown>) {
   const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
-  await saveSessionStore(storePath, data as Parameters<typeof saveSessionStore>[1], {
-    skipMaintenance: true,
-  });
-  clearSessionStoreCacheForTest();
+  const removals = listSessionEntriesCore({ agentId: "main", storePath }).map(({ sessionKey }) => ({
+    sessionKey,
+  }));
+  if (removals.length > 0) {
+    await applySessionEntryLifecycleMutation({ agentId: "main", storePath, removals });
+  }
+  for (const [sessionKey, entry] of Object.entries(data)) {
+    const record = entry as SessionEntry;
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      {
+        ...record,
+        sessionId: record.sessionId ?? `session-${sessionKey}`,
+      },
+    );
+  }
 }
 
 function buildLeafParams(bracket: string): AnnounceFlowParams {
@@ -135,9 +152,23 @@ describe("announce-path post-compaction routing", () => {
   const stageMock = vi.mocked(stagePostCompactionDelegate);
 
   beforeEach(async () => {
-    await writeSessionStore({});
+    resetTaskFlowRegistryForTests({ persist: false });
+    configureTaskFlowRegistryRuntime({
+      store: {
+        loadSnapshot: () => ({ flows: new Map() }),
+        saveSnapshot: () => {},
+        upsertFlow: () => {},
+        deleteFlow: () => {},
+      },
+    });
+    resetDelegateStoreForTests();
+    const params = buildLeafParams("");
+    await writeSessionStore({
+      [params.childSessionKey]: { sessionId: "session-child", updatedAt: Date.now() },
+      [params.requesterSessionKey]: { sessionId: "session-requester", updatedAt: Date.now() },
+    });
     setRuntimeConfigSnapshot(makeConfig() as never);
-    stageMock.mockReset();
+    stageMock.mockClear();
     spawnSpy = vi.spyOn(subagentSpawn, "spawnSubagentDirect").mockResolvedValue({
       status: "accepted",
       childSessionKey: "agent:main:subagent:chain-next",
@@ -148,8 +179,9 @@ describe("announce-path post-compaction routing", () => {
   afterEach(() => {
     spawnSpy.mockRestore();
     clearRuntimeConfigSnapshot();
-    clearSessionStoreCacheForTest();
     resetSystemEventsForTest();
+    resetDelegateStoreForTests();
+    resetTaskFlowRegistryForTests({ persist: false });
   });
 
   it("post-compaction bracket → stagePostCompactionDelegate, NOT chain-spawn (the lifeboat-drop fix)", async () => {
@@ -161,16 +193,9 @@ describe("announce-path post-compaction routing", () => {
 
     // The :995 fix: post-compaction routes to staging...
     expect(stageMock).toHaveBeenCalledTimes(1);
-    // ...under the REQUESTER (parent) session key — NOT the leaf's childSessionKey.
-    // This is the documented semantic-timing limitation: the
-    // announce path catches the bracket on the LEAF's COMPLETION, when the leaf
-    // is already terminating, so the lifeboat can only stage under the parent's
-    // session (consumed at the PARENT's next compaction, not the leaf's own).
-    // Caught-on-completion != staged-in-turn — doc names this. Asserting
-    // the sessionKey here pins the behavior so a future change is visible.
+    // The staged TaskFlow remains child-owned until the post-compaction seam releases it.
     const stagedSessionKey = stageMock.mock.calls[0]?.[0];
-    expect(stagedSessionKey).toBe("agent:main:discord:dm:test-route"); // requesterSessionKey
-    expect(stagedSessionKey).not.toBe("agent:main:subagent:postcompaction-route"); // NOT childSessionKey
+    expect(stagedSessionKey).toBe("agent:main:subagent:postcompaction-route");
     const stagedArg = stageMock.mock.calls[0]?.[1] as { task?: string };
     expect(stagedArg.task).toContain("lifeboat leaf");
     // ...AND the normal chain-spawn is NOT taken (mutual exclusion).
@@ -211,8 +236,8 @@ describe("announce-path post-compaction routing", () => {
     });
 
     expect(stageMock).toHaveBeenCalledTimes(1);
-    // The staged event is enqueued under the requester session key.
-    const events = drainSystemEventEntries("agent:main:discord:dm:test-route");
+    // The event follows the same child-owned post-compaction queue.
+    const events = drainSystemEventEntries("agent:main:subagent:postcompaction-route");
     const stagedEvent = events.find((e) =>
       (e.text ?? "").includes("[continuation:delegate-staged-post-compaction]"),
     );

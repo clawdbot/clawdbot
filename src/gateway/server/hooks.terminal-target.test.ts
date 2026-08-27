@@ -10,10 +10,10 @@ const loadConfigMock = vi.fn<() => OpenClawConfig>();
 const logHooksWarnMock = vi.fn();
 
 vi.mock("../../infra/system-events.js", () => ({
-  enqueueSystemEventRaw: enqueueSystemEventMock,
+  enqueueSystemEvent: enqueueSystemEventMock,
 }));
 vi.mock("../../infra/heartbeat-wake.js", () => ({
-  requestHeartbeatRaw: requestHeartbeatMock,
+  requestHeartbeat: requestHeartbeatMock,
 }));
 vi.mock("../../cron/isolated-agent.js", () => ({
   runCronIsolatedAgentTurn: runCronIsolatedAgentTurnMock,

@@ -68,7 +68,8 @@ const inProcessDispatchMock = vi.hoisted(() =>
 vi.mock("../gateway/call.js", () => ({
   callGateway: (...args: [GatewayRequest]) => callGatewayMock(...args),
 }));
-vi.mock("../gateway/server-plugin-in-process-dispatch.js", () => ({
+vi.mock("../gateway/server-plugin-in-process-dispatch.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../gateway/server-plugin-in-process-dispatch.js")>()),
   dispatchGatewayMethodInProcess: (
     method: string,
     params: Record<string, unknown>,

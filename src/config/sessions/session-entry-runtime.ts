@@ -157,6 +157,11 @@ function mergeSessionEntryWithPolicy(
   if (existing.createdActor !== undefined) {
     next.createdActor = existing.createdActor;
   }
+  if (existing.sandbox === "required") {
+    next.sandbox = existing.sandbox;
+  } else {
+    delete next.sandbox;
+  }
   if (existing.createdAt !== undefined) {
     next.createdAt = existing.createdAt;
   }
@@ -180,11 +185,10 @@ function mergeSessionEntryWithPolicy(
 }
 
 function stripRetiredSessionEntryLocators(entry: SessionEntry): SessionEntry {
-  // Legacy persisted entries may still carry these retired locator fields even
-  // though SessionEntry no longer declares them; Reflect.deleteProperty removes
-  // them without needing to widen entry's static shape.
-  Reflect.deleteProperty(entry, "sessionFile");
-  Reflect.deleteProperty(entry, "transcriptPath");
+  // SAFETY: persisted entries can retain these retired fields even though the current type omits them.
+  const mutable = entry as SessionEntry & { sessionFile?: unknown; transcriptPath?: unknown };
+  delete mutable.sessionFile;
+  delete mutable.transcriptPath;
   return entry;
 }
 

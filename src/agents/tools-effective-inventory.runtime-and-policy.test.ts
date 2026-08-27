@@ -3,6 +3,7 @@
  * Verifies grouped tool sources, plugin registry inputs, and session-context filters.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { createOpenClawCodingTools } from "./agent-tools.js";
@@ -228,7 +229,7 @@ describe("resolveEffectiveToolInventory", () => {
     );
   });
 
-  it("uses dynamic provider model context before quarantining runtime-normalized tools", async () => {
+  it("uses resolved provider model context before quarantining runtime-normalized tools", async () => {
     const normalizeToolsMock = vi.fn((options: { tools: AnyAgentTool[]; modelApi?: string }) =>
       options.tools.map((entry) =>
         entry.name === "parameter_free" && options.modelApi === "openai-responses"
@@ -258,18 +259,25 @@ describe("resolveEffectiveToolInventory", () => {
         normalizeToolsMock,
       },
     );
-    effectiveInventoryState.dynamicModelMock.mockReturnValue({
+    const runtimeModel = {
       id: "chat-latest",
       name: "chat-latest",
       provider: "openai",
       api: "openai-responses",
       baseUrl: "https://api.openai.com/v1",
-    });
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 16_384,
+    } satisfies ProviderRuntimeModel;
 
     const result = resolveEffectiveToolInventoryInner({
       cfg: {},
       modelProvider: "openai",
       modelId: "chat-latest",
+      modelApi: runtimeModel.api,
+      runtimeModel,
     });
 
     expect(result.groups[0]?.tools[0]).toMatchObject({
@@ -278,14 +286,6 @@ describe("resolveEffectiveToolInventory", () => {
       pluginId: "normalized-plugin",
     });
     expect(result.notices).toBeUndefined();
-    expect(effectiveInventoryState.dynamicModelMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "openai",
-        modelId: "chat-latest",
-        agentDir: "/tmp/agents/main/agent",
-        options: expect.objectContaining({ workspaceDir: "/tmp/workspace-main" }),
-      }),
-    );
     expect(normalizeToolsMock).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "openai",
