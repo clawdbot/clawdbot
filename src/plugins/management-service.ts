@@ -1,4 +1,5 @@
 // Structured plugin catalog and lifecycle operations shared by Gateway-facing surfaces.
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -1064,7 +1065,7 @@ export async function inspectManagedPlugin(params: {
     const source: PluginInspectSource | undefined = installRecord
       ? {
           kind: installRecord.source,
-          ...(spec ? { spec } : {}),
+          ...(spec ? { spec: redactSensitiveUrlLikeString(spec) } : {}),
           ...(packageName ? { packageName } : {}),
           ...resolvePluginInstallRecordIntegrity(installRecord),
         }
@@ -1138,7 +1139,7 @@ export async function inspectManagedPlugin(params: {
     },
     source: {
       kind: "official-catalog",
-      ...(spec ? { spec } : {}),
+      ...(spec ? { spec: redactSensitiveUrlLikeString(spec) } : {}),
       ...(packageName ? { packageName } : {}),
       ...(install?.expectedIntegrity
         ? {

@@ -109,9 +109,10 @@ the operator grants that apply to hooks, model access, and subagents.
 
 The review token hashes the exact declared capability surface, not the plugin's
 executable files. Acceptance separately records installer-provided artifact
-integrity when available. Enabling an installed plugin requires acceptance for
-its current surface. Updates of enabled plugins require fresh consent
-when the new artifact declares additional capabilities; unchanged or narrower
+integrity when available. Re-enabling an installed plugin reuses acceptance
+when its declared surface and recorded integrity are unchanged. Updates of
+enabled plugins require fresh consent when the new artifact declares additional
+capabilities; unchanged or narrower
 surfaces can refresh an existing valid acceptance. Updating a disabled
 plugin preserves disablement and defers any required consent until enablement.
 Reinstalling through `plugins install` activates the plugin and must satisfy
@@ -163,8 +164,8 @@ with `--accept-capabilities`:
 Bundled plugins are exempt because they ship with the OpenClaw release rather
 than arriving as separately installed artifacts. Plugins discovered directly
 in a workspace or through `plugins.load.paths`, without a managed install
-record, cannot persist capability acceptance. The Control UI can still present
-their declared capabilities before enabling them.
+record, cannot persist capability acceptance. Their details in the Control UI
+still show declared capabilities.
 
 `openclaw plugins install --link <path>` creates a managed install record and
 requires capability consent even though it loads the plugin from its source

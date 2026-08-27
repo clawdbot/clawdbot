@@ -232,12 +232,12 @@ describe("PluginsPage consent", () => {
   });
 
   it.each([
-    { origin: "global", initiallyEnabled: false, expectsConsent: true },
-    { origin: "bundled", initiallyEnabled: false, expectsConsent: false },
-    { origin: "global", initiallyEnabled: true, expectsConsent: false },
+    { label: "accepted external enable", origin: "global", initiallyEnabled: false },
+    { label: "bundled enable", origin: "bundled", initiallyEnabled: false },
+    { label: "external disable", origin: "global", initiallyEnabled: true },
   ])(
-    "requires consent only when enabling external plugins ($origin, enabled=$initiallyEnabled)",
-    async ({ origin, initiallyEnabled, expectsConsent }) => {
+    "applies a server-approved $label without another capability review",
+    async ({ origin, initiallyEnabled }) => {
       const plugin = createPlugin({
         origin,
         enabled: initiallyEnabled,
@@ -249,9 +249,6 @@ describe("PluginsPage consent", () => {
         state: !initiallyEnabled ? "enabled" : "disabled",
       });
       const { client, request } = createClient(async (method) => {
-        if (method === "plugins.inspect") {
-          return createInspectResult();
-        }
         if (method === "plugins.setEnabled") {
           return { ok: true, plugin: updated, restartRequired: true };
         }
@@ -272,34 +269,20 @@ describe("PluginsPage consent", () => {
         initiallyEnabled ? "Disable" : "Enable",
       );
 
-      if (expectsConsent) {
-        await waitForFast(() =>
-          expect(request).toHaveBeenCalledWith("plugins.inspect", { pluginId: "workboard" }),
-        );
-        expect(page.querySelector('[data-plugin-consent="enable"]')).not.toBeNull();
-        expect(request.mock.calls.some(([method]) => method === "plugins.setEnabled")).toBe(false);
-        page
-          .querySelector<HTMLButtonElement>('[data-plugin-consent="enable"] .btn.primary')
-          ?.click();
-      }
-
       await waitForFast(() =>
         expect(request).toHaveBeenCalledWith("plugins.setEnabled", {
           pluginId: "workboard",
           enabled: !initiallyEnabled,
-          ...(expectsConsent
-            ? { acknowledgeCapabilities: { reviewToken: "review-token-workboard" } }
-            : {}),
         }),
       );
-      expect(request.mock.calls.filter(([method]) => method === "plugins.inspect")).toHaveLength(
-        expectsConsent ? 1 : 0,
-      );
+      await waitForFast(() => expect(page.result?.plugins[0]?.enabled).toBe(!initiallyEnabled));
+      expect(request.mock.calls.some(([method]) => method === "plugins.inspect")).toBe(false);
+      expect(page.querySelector("[data-plugin-consent]")).toBeNull();
     },
   );
 
   it("hydrates a compact consent error through inspection and acknowledges its reviewed token", async () => {
-    const plugin = createPlugin({ origin: "bundled", enabled: false, state: "disabled" });
+    const plugin = createPlugin({ origin: "global", enabled: false, state: "disabled" });
     const updated = createPlugin({ ...plugin, enabled: true, state: "enabled" });
     const inspection = createInspectResult({
       plugin: {
@@ -317,17 +300,14 @@ describe("PluginsPage consent", () => {
       widened: { tools: ["workboard_review"] },
       acceptedAt: "2026-08-20T14:03:00Z",
     });
+    const enableAttempt = deferred<never>();
     const { client, request } = createClient(async (method, params) => {
       if (method === "plugins.inspect") {
         return inspection;
       }
       if (method === "plugins.setEnabled") {
         if (typeof params !== "object" || !params || !("acknowledgeCapabilities" in params)) {
-          throw new GatewayRequestError({
-            code: "INVALID_REQUEST",
-            message: "Capability consent required",
-            details,
-          });
+          return enableAttempt.promise;
         }
         return { ok: true, plugin: updated, restartRequired: true };
       }
@@ -343,6 +323,21 @@ describe("PluginsPage consent", () => {
     );
 
     await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
+    await waitForFast(() =>
+      expect(request).toHaveBeenCalledWith("plugins.setEnabled", {
+        pluginId: "workboard",
+        enabled: true,
+      }),
+    );
+    expect(request.mock.calls.some(([method]) => method === "plugins.inspect")).toBe(false);
+    expect(page.querySelector("[data-plugin-consent]")).toBeNull();
+    enableAttempt.reject(
+      new GatewayRequestError({
+        code: "INVALID_REQUEST",
+        message: "Capability consent required",
+        details,
+      }),
+    );
     await waitForFast(() => {
       const dialog = page.querySelector('[data-plugin-consent="enable"]');
       expect(dialog?.textContent).toContain("Authoritative Workboard");
@@ -364,7 +359,7 @@ describe("PluginsPage consent", () => {
   });
 
   it("reopens consent with a fresh inspection when an acknowledged surface changes", async () => {
-    const plugin = createPlugin({ origin: "bundled", enabled: false, state: "disabled" });
+    const plugin = createPlugin({ origin: "global", enabled: false, state: "disabled" });
     const inspection = createInspectResult();
     const details = buildCapabilityConsentErrorDetails({
       pluginId: "workboard",
@@ -418,6 +413,16 @@ describe("PluginsPage consent", () => {
     const plugin = createPlugin({ origin: "global" });
     let attempts = 0;
     const { client, request } = createClient(async (method) => {
+      if (method === "plugins.setEnabled") {
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: "Capability consent required",
+          details: buildCapabilityConsentErrorDetails({
+            pluginId: "workboard",
+            reviewToken: "review-token-workboard",
+          }),
+        });
+      }
       if (method === "plugins.inspect") {
         attempts += 1;
         if (attempts === 1) {
@@ -463,7 +468,7 @@ describe("PluginsPage consent", () => {
       const plugin = createPlugin({ origin: "global", enabled: false, state: "disabled" });
       const pendingInspection = deferred<ReturnType<typeof createInspectResult>>();
       let inspections = 0;
-      const { client, request } = createClient(async (method) => {
+      const { client, request } = createClient(async (method, params) => {
         if (method === "plugins.inspect") {
           inspections += 1;
           return inspections === 1
@@ -471,6 +476,16 @@ describe("PluginsPage consent", () => {
             : createInspectResult({ reviewToken: "fresh-review" });
         }
         if (method === "plugins.setEnabled") {
+          if (typeof params !== "object" || !params || !("acknowledgeCapabilities" in params)) {
+            throw new GatewayRequestError({
+              code: "INVALID_REQUEST",
+              message: "Capability consent required",
+              details: buildCapabilityConsentErrorDetails({
+                pluginId: "workboard",
+                reviewToken: "fresh-review",
+              }),
+            });
+          }
           return {
             ok: true,
             plugin: createPlugin({ ...plugin, enabled: true, state: "enabled" }),
@@ -506,7 +521,11 @@ describe("PluginsPage consent", () => {
       await page.updateComplete;
 
       expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
-      expect(request.mock.calls.some(([method]) => method === "plugins.setEnabled")).toBe(false);
+      expect(
+        request.mock.calls
+          .filter(([method]) => method === "plugins.setEnabled")
+          .map(([, params]) => params),
+      ).toEqual(overlay === "consent" ? [{ pluginId: "workboard", enabled: true }] : []);
       await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
       await waitForFast(() =>
         expect(

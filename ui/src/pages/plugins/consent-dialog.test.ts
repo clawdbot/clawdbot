@@ -50,97 +50,115 @@ describe("renderPluginConsentDialog", () => {
     vi.restoreAllMocks();
   });
 
-  it("presents manifest capabilities, effective grants, provenance, and the trust verdict before install", () => {
-    const inspection = createInspectResult({
-      plugin: {
-        id: "calendar-runtime",
-        name: "Calendar Plus",
-        version: "2.0.0",
-        origin: "global",
-        installed: false,
-        enabled: false,
-      },
+  it.each([
+    {
       source: {
         kind: "clawhub",
         packageName: "@openclaw/calendar-plus",
         integrity: "sha256-0123456789abcdefghijklmnop",
         integrityKind: "ssri",
       },
-      declared: {
-        channels: ["calendar-channel"],
-        providers: ["calendar-provider"],
-        tools: ["calendar_create"],
-        contracts: ["gatewayMethodDispatch: calendar.dispatch"],
-        hooks: ["before_prompt_build"],
-        mcpServers: ["calendar-mcp"],
-        cliCommands: ["calendar"],
-        cliBackends: ["calendar-cli"],
-        skills: ["schedule"],
-        dangerousConfigFlags: ["calendar.allowShell"],
+      provenance: "ClawHub · @openclaw/calendar-plus",
+      integrityLabel: "Integrity: sha256-0123456789abc…",
+    },
+    {
+      source: {
+        kind: "git",
+        spec: "https://***:***@example.com/calendar.git?token=***#main",
+        integrity: "0123456789abcdef0123456789abcdef01234567",
+        integrityKind: "git-commit",
       },
-      grants: {
-        hooks: {
-          allowPromptInjection: { effective: false, configured: false },
-          allowConversationAccess: { effective: false },
+      provenance: "Git · https://***:***@example.com/calendar.git?token=***#main",
+      integrityLabel: "Commit: 0123456789abcdef0123…",
+    },
+  ] as const)(
+    "presents capabilities, grants, safe $source.kind provenance, and trust before install",
+    ({ source, provenance, integrityLabel }) => {
+      const inspection = createInspectResult({
+        plugin: {
+          id: "calendar-runtime",
+          name: "Calendar Plus",
+          version: "2.0.0",
+          origin: "global",
+          installed: false,
+          enabled: false,
         },
-        llm: { allowedModels: ["model-a", "model-b"] },
-        subagent: { allowModelOverride: true },
-      },
-      trust: {
-        disposition: "review-required",
-        reasons: ["Requests an elevated permission"],
-        checkedAt: "2026-08-25",
-      },
-    });
-    const onConfirm = vi.fn();
-    const container = mount({
-      consent: {
-        intent: {
-          kind: "install",
-          request: { source: "clawhub", packageName: "@openclaw/calendar-plus" },
-          installIdentity: "plugin:calendar-runtime",
+        source,
+        declared: {
+          channels: ["calendar-channel"],
+          providers: ["calendar-provider"],
+          tools: ["calendar_create"],
+          contracts: ["gatewayMethodDispatch: calendar.dispatch"],
+          hooks: ["before_prompt_build"],
+          mcpServers: ["calendar-mcp"],
+          cliCommands: ["calendar"],
+          cliBackends: ["calendar-cli"],
+          skills: ["schedule"],
+          dangerousConfigFlags: ["calendar.allowShell"],
         },
-        pluginId: "calendar-runtime",
-        fallback: { name: "Calendar Plus", version: "2.0.0" },
-      },
-      inspection,
-      onConfirm,
-    });
+        grants: {
+          hooks: {
+            allowPromptInjection: { effective: false, configured: false },
+            allowConversationAccess: { effective: false },
+          },
+          llm: { allowedModels: ["model-a", "model-b"] },
+          subagent: { allowModelOverride: true },
+        },
+        trust: {
+          disposition: "review-required",
+          reasons: ["Requests an elevated permission"],
+          checkedAt: "2026-08-25",
+        },
+      });
+      const onConfirm = vi.fn();
+      const container = mount({
+        consent: {
+          intent: {
+            kind: "install",
+            request: { source: "clawhub", packageName: "@openclaw/calendar-plus" },
+            installIdentity: "plugin:calendar-runtime",
+          },
+          pluginId: "calendar-runtime",
+          fallback: { name: "Calendar Plus", version: "2.0.0" },
+        },
+        inspection,
+        onConfirm,
+      });
 
-    const dialog = container.querySelector('[data-plugin-consent="install"]');
-    const text = normalizedText(dialog);
-    for (const value of [
-      "Calendar Plus",
-      "v2.0.0",
-      "@openclaw/calendar-plus",
-      "Integrity: sha256-0123456789abc…",
-      "Review required",
-      "Requests an elevated permission",
-      "Scanned 2026-08-25",
-      "calendar-channel",
-      "calendar-provider",
-      "calendar_create",
-      "Contracts gatewayMethodDispatch: calendar.dispatch",
-      "before_prompt_build",
-      "calendar-mcp",
-      "calendar-cli",
-      "schedule",
-      "Dangerous config flags calendar.allowShell",
-      "Prompt injection Blocked (set in config)",
-      "Conversation access Off (default)",
-      "Off by default for external plugins.",
-      "Allowed models: model-a, model-b",
-      "Subagent model overrides Model override: Allowed",
-      "Install Calendar Plus",
-    ]) {
-      expect(text).toContain(value);
-    }
-    expect(dialog?.querySelector("[title]")?.getAttribute("title")).toBe(
-      "sha256-0123456789abcdefghijklmnop",
-    );
-    dialog?.querySelector<HTMLButtonElement>(".btn.primary")?.click();
-    expect(onConfirm).toHaveBeenCalledOnce();
-  });
+      const dialog = container.querySelector('[data-plugin-consent="install"]');
+      const text = normalizedText(dialog);
+      for (const value of [
+        "Calendar Plus",
+        "v2.0.0",
+        "@openclaw/calendar-plus",
+        provenance,
+        integrityLabel,
+        "Review required",
+        "Requests an elevated permission",
+        "Scanned 2026-08-25",
+        "calendar-channel",
+        "calendar-provider",
+        "calendar_create",
+        "Contracts gatewayMethodDispatch: calendar.dispatch",
+        "before_prompt_build",
+        "calendar-mcp",
+        "calendar-cli",
+        "schedule",
+        "Dangerous config flags calendar.allowShell",
+        "Prompt injection Blocked (set in config)",
+        "Conversation access Off (default)",
+        "Off by default for external plugins.",
+        "Allowed models: model-a, model-b",
+        "Subagent model overrides Model override: Allowed",
+        "Install Calendar Plus",
+      ]) {
+        expect(text).toContain(value);
+      }
+      expect(dialog?.querySelector("[title]")?.getAttribute("title")).toBe(source.integrity);
+      dialog?.querySelector<HTMLButtonElement>(".btn.primary")?.click();
+      expect(onConfirm).toHaveBeenCalledOnce();
+    },
+  );
 
   it("explains an empty manifest and preserves external-plugin grants", () => {
     const container = mount();

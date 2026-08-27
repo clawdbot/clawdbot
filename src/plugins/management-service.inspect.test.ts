@@ -159,6 +159,36 @@ describe("managed plugin inspection", () => {
     });
   });
 
+  it.each(["spec", "resolvedSpec"] as const)(
+    "redacts credentials from the persisted %s without changing the install record",
+    async (field) => {
+      const url = new URL("https://example.invalid/plugins/demo.git");
+      url.username = "fixture-user";
+      url.password = "fixture-password";
+      url.searchParams.set("token", "fixture-token");
+      url.searchParams.set("ref", "stable");
+      const spec = `git:${url.href}`;
+      const metadata = metadataSnapshot({
+        id: "community-plugin",
+        origin: "global",
+        enabled: false,
+        installRecord: { source: "git", installPath: "/tmp/community-plugin", [field]: spec },
+      });
+      mocks.metadata.mockReturnValue(metadata);
+
+      const inspection = await inspectManagedPlugin({
+        config: {},
+        env: {},
+        pluginId: "community-plugin",
+      });
+
+      expect(inspection.source?.spec).toBe(
+        "git:https://***:***@example.invalid/plugins/demo.git?token=***&ref=stable",
+      );
+      expect(metadata.index.installRecords["community-plugin"]?.[field]).toBe(spec);
+    },
+  );
+
   it("inspects official catalog manifests and their actual pinned install candidate", async () => {
     mocks.metadata.mockReturnValue(emptyMetadataSnapshot());
     mocks.officialCatalog.mockResolvedValue({ source: "hosted", entries: [hostedFeedDiffsEntry] });

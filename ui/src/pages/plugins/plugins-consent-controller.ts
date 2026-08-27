@@ -204,7 +204,7 @@ export class PluginsConsentController {
         intent.installIdentity,
       );
     } else {
-      void this.setEnabled(intent.pluginId, true, intent.rowKey, {
+      void this.updateEnabled(intent.pluginId, true, intent.rowKey, {
         acknowledgeCapabilities: { reviewToken },
       });
     }
@@ -270,22 +270,9 @@ export class PluginsConsentController {
     pluginId: string,
     enabled: boolean,
     key = pluginRowKey(pluginId),
-  ): Promise<void> {
-    const plugin = this.host.getResult()?.plugins.find((entry) => entry.id === pluginId);
-    // Bundled code ships with the release; external code needs an explicit consent moment.
-    if (enabled && plugin && plugin.origin !== "bundled") {
-      this.open({ kind: "enable", pluginId, rowKey: key }, pluginId);
-      return;
-    }
-    await this.setEnabled(pluginId, enabled, key);
-  }
-
-  private async setEnabled(
-    pluginId: string,
-    enabled: boolean,
-    key: string,
     options: Parameters<typeof setPluginEnabled>[3] = {},
   ): Promise<void> {
+    // The server owns whether stored acceptance still covers the installed artifact.
     await this.runMutation(
       key,
       (client) => setPluginEnabled(client, pluginId, enabled, options),

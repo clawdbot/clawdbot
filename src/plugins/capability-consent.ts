@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { PLUGIN_DECLARED_SURFACE_GROUPS } from "../../packages/gateway-protocol/src/schema/plugin-declared-surface-groups.js";
 import type {
   PluginInspectSource,
@@ -353,7 +354,8 @@ export function buildPluginCapabilityConsentReview(params: {
     reviewToken: computeDeclaredSurfaceHash(declared),
     source: {
       kind: record.source,
-      ...(spec ? { spec } : {}),
+      // Keep operational specs in install records; prompts and RPCs receive display-safe copies.
+      ...(spec ? { spec: redactSensitiveUrlLikeString(spec) } : {}),
       ...(packageName ? { packageName } : {}),
       ...resolvePluginInstallRecordIntegrity(record),
     },

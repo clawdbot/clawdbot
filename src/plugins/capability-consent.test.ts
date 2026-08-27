@@ -6,6 +6,7 @@ import type {
   PluginInstallRecord,
 } from "../config/types.plugins.js";
 import {
+  buildPluginCapabilityConsentReview,
   computeDeclaredSurfaceHash,
   createManagedPluginArtifactConsentHandler,
   diffDeclaredSurfaceWidening,
@@ -388,6 +389,26 @@ describe("plugin capability consent", () => {
     };
 
     expect(resolveAcceptedSurfaceCurrent(installRecord, surface)).toBe(current);
+  });
+
+  it("redacts source credentials before a capability review reaches a prompt or pending inspection", () => {
+    const url = new URL("https://example.invalid/plugins/demo.git");
+    url.username = "fixture-user";
+    url.password = "fixture-password";
+    url.searchParams.set("token", "fixture-token");
+    const record: PluginInstallRecord = { source: "git", spec: `git:${url.href}` };
+
+    const review = buildPluginCapabilityConsentReview({
+      pluginId: "plugin",
+      manifest: {},
+      config: {},
+      record,
+    });
+
+    expect(review.source?.spec).toBe(
+      "git:https://***:***@example.invalid/plugins/demo.git?token=***",
+    );
+    expect(record.spec).toBe(`git:${url.href}`);
   });
 
   it("selects the canonical installed artifact integrity in precedence order", () => {
