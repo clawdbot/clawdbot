@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -62,36 +62,40 @@ suite.define(() => {
     expect(await thread.locator(".chat-virtual-row").count()).toBeLessThan(30);
 
     const checkPlacement = async (edge: "first" | "last", sparse: boolean) => {
-      const placement = await thread.evaluate((element, placementEdge) => {
-        const rows = [...element.querySelectorAll<HTMLElement>(".chat-virtual-row")];
-        const sizer = element.querySelector<HTMLElement>(".chat-virtual-sizer")!;
-        const focused = document.activeElement?.closest<HTMLElement>(".chat-virtual-row");
-        const edgeRow = placementEdge === "first" ? rows[0]! : rows.at(-1)!;
-        const gaps = rows.slice(1).map((row, index) => ({
-          skipped: Number(row.dataset.index) - Number(rows[index]!.dataset.index) - 1,
-          pixels: row.getBoundingClientRect().top - rows[index]!.getBoundingClientRect().bottom,
-        }));
-        return {
-          focused: focused === edgeRow,
-          edgeDelta:
-            placementEdge === "first"
-              ? edgeRow.getBoundingClientRect().top - sizer.getBoundingClientRect().top
-              : sizer.getBoundingClientRect().bottom - edgeRow.getBoundingClientRect().bottom,
-          gaps,
-          count: rows.length,
-        };
-      }, edge);
-      expect(placement.focused).toBe(true);
-      expect(Math.abs(placement.edgeDelta)).toBeLessThanOrEqual(2);
-      expect(placement.count).toBeLessThan(30);
-      expect(placement.gaps.filter((gap) => gap.skipped > 0)).toHaveLength(sparse ? 1 : 0);
-      for (const gap of placement.gaps) {
-        if (gap.skipped > 0) {
-          expect(gap.pixels).toBeGreaterThan(1000);
-        } else {
-          expect(Math.abs(gap.pixels)).toBeLessThanOrEqual(1);
+      // Focused outliers stay mounted, so text visibility can precede the new
+      // virtual range. Wait for placement, keeping the same geometry bounds.
+      await vi.waitFor(async () => {
+        const placement = await thread.evaluate((element, placementEdge) => {
+          const rows = [...element.querySelectorAll<HTMLElement>(".chat-virtual-row")];
+          const sizer = element.querySelector<HTMLElement>(".chat-virtual-sizer")!;
+          const focused = document.activeElement?.closest<HTMLElement>(".chat-virtual-row");
+          const edgeRow = placementEdge === "first" ? rows[0]! : rows.at(-1)!;
+          const gaps = rows.slice(1).map((row, index) => ({
+            skipped: Number(row.dataset.index) - Number(rows[index]!.dataset.index) - 1,
+            pixels: row.getBoundingClientRect().top - rows[index]!.getBoundingClientRect().bottom,
+          }));
+          return {
+            focused: focused === edgeRow,
+            edgeDelta:
+              placementEdge === "first"
+                ? edgeRow.getBoundingClientRect().top - sizer.getBoundingClientRect().top
+                : sizer.getBoundingClientRect().bottom - edgeRow.getBoundingClientRect().bottom,
+            gaps,
+            count: rows.length,
+          };
+        }, edge);
+        expect(placement.focused).toBe(true);
+        expect(Math.abs(placement.edgeDelta)).toBeLessThanOrEqual(2);
+        expect(placement.count).toBeLessThan(30);
+        expect(placement.gaps.filter((gap) => gap.skipped > 0)).toHaveLength(sparse ? 1 : 0);
+        for (const gap of placement.gaps) {
+          if (gap.skipped > 0) {
+            expect(gap.pixels).toBeGreaterThan(1000);
+          } else {
+            expect(Math.abs(gap.pixels)).toBeLessThanOrEqual(1);
+          }
         }
-      }
+      });
     };
     await checkPlacement("last", true);
     await thread.evaluate((element) => {

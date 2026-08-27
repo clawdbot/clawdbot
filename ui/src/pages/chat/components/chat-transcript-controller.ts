@@ -456,9 +456,13 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
   }
 
   get isProgrammaticScroll(): boolean {
+    const element = this.scrollElement;
+    // Lit's scroll listener can precede TanStack's offset observer. Read the
+    // committed viewport so the final event publishes the settled end policy.
+    const distanceFromEnd = (maxTranscriptScrollOffset(element) ?? 0) - (element?.scrollTop ?? 0);
     return (
       this.pendingScrollOffset !== null ||
-      (this.endScrollBehavior !== null && !this.virtualizerController.getVirtualizer().isAtEnd())
+      (this.endScrollBehavior !== null && distanceFromEnd > CHAT_TRANSCRIPT_END_THRESHOLD_PX)
     );
   }
 
