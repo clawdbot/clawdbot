@@ -327,6 +327,16 @@ const feishuMessageAdapter = defineChannelMessageAdapter({
     capabilities: {
       text: true,
       media: true,
+      // Declare the durable-final capabilities Feishu already supports at
+      // runtime so the core delivery layer does not reject durable sends that
+      // carry these requirements (reply context, thread, structured payload,
+      // sending hooks). Capabilities Feishu lacks (silent, batch, poll,
+      // nativeQuote) stay absent so core never assumes them. Parity with the
+      // Telegram outbound adapter's deliveryCapabilities.durableFinal.
+      payload: true,
+      replyTo: true,
+      thread: true,
+      messageSendingHooks: true,
     },
   },
   send: {
