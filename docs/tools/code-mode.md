@@ -186,8 +186,9 @@ try {
 
 JavaScript syntax errors, TypeScript transform errors, and tool failures proven
 to occur before execution become failed `exec` results that the model can read
-and correct across successive turns. A failed tool call does not automatically
-end the agent run when OpenClaw can prove that no nested action started.
+and correct across successive turns. A failed `exec` or `wait` does not automatically
+end the agent run when OpenClaw's host execution record proves that no potentially
+mutating nested action started, including before a suspended run resumed.
 
 Catalog search, handle `describe()`, `skills.list()`, and `skills.read()` are
 read-only discovery. A guest error after only these operations still allows
@@ -991,13 +992,15 @@ code-mode tool call and the nested tool id.
 
 Nested tool failures cross into the guest as catchable JavaScript errors. If
 guest code does not catch an error, `exec` or `wait` returns a failed tool
-result. In `exec`, proven no-start failures and guest-only errors, including
-errors after read-only discovery, allow ordinary model recovery. A failed `wait`
-still ends ordinary continuation. Possible nested side effects require authorized
-read-only reconciliation before any further action. Network-controlled tool output and
-errors retain their existing untrusted-content wrapping and sanitization;
-recovering from a failure does not grant new permissions or replay completed
-side effects.
+result. Proven no-start failures and errors after only audited read-only work
+allow ordinary model recovery, including when `wait` resumes a suspended cell.
+This proof covers the cell's entire execution, not just the latest resume.
+Failed waits without that host proof remain terminal; serialized result fields
+cannot grant recovery. Possible nested side effects in a failed `exec` require
+authorized read-only reconciliation before any further action. Network-controlled
+tool output and errors retain their existing untrusted-content wrapping and
+sanitization; recovering from a failure does not grant new permissions or replay
+completed side effects.
 
 Parallel nested calls are allowed up to `maxPendingToolCalls`.
 
