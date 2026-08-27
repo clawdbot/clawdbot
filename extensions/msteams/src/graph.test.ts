@@ -261,6 +261,25 @@ describe("msteams graph helpers", () => {
     expect(fetchWithSsrFGuardMock.mock.calls[0]?.[0]).not.toHaveProperty("fetchImpl");
   });
 
+  it("passes a host-scoped RFC2544 SSRF policy to relative Graph requests", async () => {
+    mockGraphCollection();
+
+    await fetchGraphJson({
+      token: graphToken,
+      path: "/groups",
+    });
+
+    expect(fetchWithSsrFGuardMock.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        url: "https://graph.microsoft.com/v1.0/groups",
+        policy: {
+          hostnameAllowlist: ["graph.microsoft.com"],
+          allowRfc2544BenchmarkRange: true,
+        },
+      }),
+    );
+  });
+
   it("fetches Graph JSON and surfaces Graph errors with response text", async () => {
     mockGraphCollection(groupOne);
 
@@ -346,7 +365,28 @@ describe("msteams graph helpers", () => {
     });
 
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({ timeoutMs: 30_000 }),
+      expect.objectContaining({
+        timeoutMs: 30_000,
+        policy: {
+          hostnameAllowlist: ["graph.microsoft.com"],
+          allowRfc2544BenchmarkRange: true,
+        },
+      }),
+    );
+  });
+
+  it("does not add the RFC2544 Graph policy to non-Graph absolute URLs", async () => {
+    mockGraphCollection(groupOne);
+
+    await fetchGraphAbsoluteUrl({
+      token: graphToken,
+      url: "https://example.com/not-graph",
+    });
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        policy: expect.anything(),
+      }),
     );
   });
 

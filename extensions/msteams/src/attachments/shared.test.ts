@@ -127,6 +127,7 @@ describe("msteams attachment allowlists", () => {
   it("builds shared SSRF policy from suffix allowlist", () => {
     expect(resolveMediaSsrfPolicy(["sharepoint.com"])).toEqual({
       hostnameAllowlist: ["sharepoint.com", "*.sharepoint.com"],
+      allowRfc2544BenchmarkRange: true,
     });
     expect(resolveMediaSsrfPolicy(["*"])).toBeUndefined();
   });

@@ -1,7 +1,7 @@
 // Msteams plugin module implements graph behavior.
 import { responseWithRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
-import { fetchWithSsrFGuard, type MSTeamsConfig } from "../runtime-api.js";
+import { fetchWithSsrFGuard, type MSTeamsConfig, type SsrFPolicy } from "../runtime-api.js";
 import { GRAPH_ROOT } from "./attachments/shared.js";
 import { resolveMSTeamsSdkCloudOptions } from "./cloud.js";
 import { createMSTeamsHttpError } from "./http-error.js";
@@ -17,6 +17,31 @@ import { resolveDelegatedAccessToken, resolveMSTeamsCredentials } from "./token.
 import { buildUserAgent } from "./user-agent.js";
 
 const GRAPH_BETA = "https://graph.microsoft.com/beta";
+const GRAPH_RFC2544_HOSTNAME_ALLOWLIST = new Set([
+  "graph.microsoft.com",
+  "graph.microsoft.us",
+  "graph.microsoft.de",
+  "graph.microsoft.cn",
+]);
+
+function resolveGraphSsrfPolicy(url: string): SsrFPolicy | undefined {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return undefined;
+    }
+    const hostname = parsed.hostname.toLowerCase();
+    if (!GRAPH_RFC2544_HOSTNAME_ALLOWLIST.has(hostname)) {
+      return undefined;
+    }
+    return {
+      hostnameAllowlist: [hostname],
+      allowRfc2544BenchmarkRange: true,
+    };
+  } catch {
+    return undefined;
+  }
+}
 
 export type GraphUser = {
   id?: string;
@@ -70,6 +95,7 @@ async function requestGraph(params: {
       body: hasBody ? JSON.stringify(params.body) : undefined,
     },
     auditContext: "msteams.graph",
+    policy: resolveGraphSsrfPolicy(url),
     timeoutMs: resolveMSTeamsRequestTimeoutMs(params.deadline),
   });
   let releaseInFinally = true;
@@ -150,6 +176,7 @@ export async function fetchGraphAbsoluteUrl<T>(params: {
       },
     },
     auditContext: "msteams.graph.absolute",
+    policy: resolveGraphSsrfPolicy(params.url),
     timeoutMs: MSTEAMS_REQUEST_TIMEOUT_MS,
   });
   try {
