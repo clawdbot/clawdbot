@@ -25,6 +25,11 @@ downloads Gemma 4 E4B IT Q4_K_M (approximately 5.0 GB) plus EmbeddingGemma
 (approximately 0.3 GB). The default chat download is offered only on machines
 with at least 16 GiB of RAM.
 
+When local memory search is configured and chat setup is unavailable or
+declined, OpenClaw offers a separate embedding-only setup. After explicit
+consent, it installs only the server and EmbeddingGemma. It leaves the current
+chat model unchanged.
+
 Custom GGUF models remain supported through `params.modelPath`. Rerun llama.cpp
 setup after changing the model so OpenClaw can verify the file and regenerate
 the managed router preset.

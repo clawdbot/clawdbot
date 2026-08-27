@@ -155,6 +155,63 @@ describe("llama.cpp managed setup", () => {
     expect(mocks.ensureModel).not.toHaveBeenCalledWith(expect.objectContaining({ download: true }));
   });
 
+  it("offers embedding-only setup for local memory below the chat RAM floor", async () => {
+    vi.mocked(os.totalmem).mockReturnValue(8 * GIB);
+    const ctx = authContext(true);
+    ctx.config.memory = { search: { provider: "local" } };
+    ctx.config.agents = { defaults: { model: { primary: "openai/gpt-5.4" } } };
+
+    const result = await runLlamaCppSetup(ctx);
+
+    expect(ctx.prompter.confirm).toHaveBeenCalledWith({
+      message:
+        "OpenClaw can install a verified llama.cpp server and download only the local embedding model (about 0.3 GB). This will not install or change your chat model. Continue?",
+      initialValue: false,
+    });
+    expect(result.defaultModel).toBeUndefined();
+    expect(result.configPatch?.models?.providers?.[LLAMA_CPP_PROVIDER_ID]?.models).toEqual([]);
+    expect(ctx.config.agents.defaults.model).toEqual({ primary: "openai/gpt-5.4" });
+    expect(
+      mocks.ensureModel.mock.calls.filter(([options]) => options.download === true),
+    ).toHaveLength(1);
+    expect(mocks.prepareServer).toHaveBeenCalledWith({
+      chatModel: { mode: "remove" },
+      embeddingModelIsDefault: true,
+      embeddingModelPath: path.join(tempRoot, "embedding.gguf"),
+      port: undefined,
+    });
+  });
+
+  it("requires consent before embedding-only setup", async () => {
+    vi.mocked(os.totalmem).mockReturnValue(8 * GIB);
+    const ctx = authContext(false);
+    ctx.config.memory = { search: { provider: "local" } };
+
+    await expect(runLlamaCppSetup(ctx)).resolves.toEqual({ profiles: [] });
+
+    expect(ctx.prompter.confirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("only the local embedding model"),
+      }),
+    );
+    expect(mocks.ensureModel).not.toHaveBeenCalledWith(expect.objectContaining({ download: true }));
+  });
+
+  it("offers embedding-only setup after the chat download is declined", async () => {
+    const ctx = authContext(false);
+    ctx.config.memory = { search: { provider: "local" } };
+    vi.mocked(ctx.prompter.confirm).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+
+    const result = await runLlamaCppSetup(ctx);
+
+    expect(ctx.prompter.confirm).toHaveBeenCalledTimes(2);
+    expect(result.defaultModel).toBeUndefined();
+    expect(result.configPatch?.models?.providers?.[LLAMA_CPP_PROVIDER_ID]?.models).toEqual([]);
+    expect(
+      mocks.ensureModel.mock.calls.filter(([options]) => options.download === true),
+    ).toHaveLength(1);
+  });
+
   it("requires consent before installing and downloading", async () => {
     const ctx = authContext(false);
 
@@ -193,7 +250,7 @@ describe("llama.cpp managed setup", () => {
     ).toHaveLength(2);
     expect(mocks.prepareServer).toHaveBeenCalledWith(
       expect.objectContaining({
-        chatModelPath: modelPath,
+        chatModel: expect.objectContaining({ mode: "configure", path: modelPath }),
         embeddingModelPath: path.join(tempRoot, "embedding.gguf"),
       }),
     );
@@ -232,7 +289,13 @@ describe("llama.cpp managed setup", () => {
     expect(managed?.timeoutSeconds).toBe(321);
     expect(managed?.models[0]).toEqual(provider.models[0]);
     expect(mocks.prepareServer).toHaveBeenCalledWith(
-      expect.objectContaining({ chatModelId: "custom", chatModelPath: customModelPath }),
+      expect.objectContaining({
+        chatModel: expect.objectContaining({
+          mode: "configure",
+          id: "custom",
+          path: customModelPath,
+        }),
+      }),
     );
   });
 

@@ -128,19 +128,25 @@ function buildDefaultLlamaCppModel(): ModelDefinitionConfig {
 }
 
 export function buildLlamaCppProviderConfig(
-  existing?: ModelProviderConfig,
-  managed?: {
-    baseUrl: string;
-    command: string;
-    args: string[];
-    healthUrl: string;
-  },
+  params: {
+    existing?: ModelProviderConfig;
+    managed?: {
+      baseUrl: string;
+      command: string;
+      args: string[];
+      healthUrl: string;
+    };
+    modelInventory?: ModelDefinitionConfig[];
+  } = {},
 ): ModelProviderConfig {
+  const { existing, managed, modelInventory } = params;
   const defaultModel = buildDefaultLlamaCppModel();
   const configuredModels = existing?.models ?? [];
-  const models = configuredModels.some((model) => model.id === defaultModel.id)
-    ? configuredModels
-    : [...configuredModels, defaultModel];
+  const models =
+    modelInventory ??
+    (configuredModels.some((model) => model.id === defaultModel.id)
+      ? configuredModels
+      : [...configuredModels, defaultModel]);
   return {
     ...existing,
     baseUrl:
