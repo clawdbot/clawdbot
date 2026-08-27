@@ -220,6 +220,17 @@ suite.define(() => {
         const installed = await hubGeometry(page);
         expect(installed.title).toBe("Plugins");
         expect(installed.titleVisible).toBe(true);
+        if (label === "desktop") {
+          const [headerLeft, contentLeft] = await Promise.all([
+            page
+              .locator(".hub-page-header__title")
+              .evaluate((element) => element.getBoundingClientRect().left),
+            page
+              .getByRole("searchbox", { name: "Search plugins" })
+              .evaluate((element) => element.getBoundingClientRect().left),
+          ]);
+          expect(Math.abs(headerLeft - contentLeft)).toBeLessThanOrEqual(1);
+        }
         await captureScreenshot(page, `${label}-01-installed.png`);
 
         await selectHubTab(page, "Discover", {
