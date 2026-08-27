@@ -18,7 +18,7 @@ vi.mock("./attempt-transcript-helpers.js", () => ({
 
 import { prepareEmbeddedAttemptTrajectory } from "./attempt-trajectory.js";
 
-function createInput(disableTrajectory = false, extraAttempt: Record<string, unknown> = {}) {
+function createInput(disableTrajectory = false) {
   return {
     activeSession: { sessionId: "session-1" },
     attempt: {
@@ -40,7 +40,6 @@ function createInput(disableTrajectory = false, extraAttempt: Record<string, unk
       thinkLevel: "medium",
       trigger: "user",
       workspaceDir: "/tmp/workspace",
-      ...extraAttempt,
     },
     clientToolCount: 2,
     effectiveToolCount: 7,
@@ -103,11 +102,14 @@ describe("prepareEmbeddedAttemptTrajectory", () => {
   it("records the runtime-forwarded authProfileId in session.started when present", async () => {
     const recorder = { recordEvent: vi.fn() };
     hoisted.createTrajectoryRuntimeRecorder.mockReturnValue(recorder);
-    const result = await prepareEmbeddedAttemptTrajectory(
-      createInput(false, {
+    const base = createInput();
+    const result = await prepareEmbeddedAttemptTrajectory({
+      ...base,
+      attempt: {
+        ...base.attempt,
         runtimePlan: { auth: { forwardedAuthProfileId: "profile-42" } },
-      }),
-    );
+      },
+    } as never);
 
     expect(result).toBe(recorder);
 
