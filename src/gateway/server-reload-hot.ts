@@ -4,7 +4,6 @@ import { warmCurrentProviderAuthStateOffMainThread } from "../agents/model-provi
 import {
   markPreparedModelRuntimeSnapshotsStale,
   rejectPendingPreparedModelRuntimeReplacement,
-  refreshPreparedModelRuntimeSnapshots,
   type PreparedModelRuntimeReplacementGateId,
 } from "../agents/prepared-model-runtime.js";
 import { isRestartEnabled } from "../config/commands.flags.js";
@@ -38,7 +37,7 @@ import {
   type GatewayReloadHandlerParams,
   type GatewayRestartTransactionResult,
 } from "./server-reload-contracts.js";
-import { resolveModelRuntimeAgentIdsFromChangedPaths } from "./server-reload-model-runtime-scope.js";
+import * as mrReload from "./server-reload-model-runtime-scope.js";
 import { createGatewayRestartCoordinator } from "./server-reload-restart.js";
 import {
   assertIrreversibleReloadPlanHasRecoveryOwner,
@@ -103,7 +102,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       !isRestartRetryStopped() && (publication?.isCurrent?.() ?? true);
     const state = params.getState();
     const nextState = { ...state };
-    const modelRuntimeAgentIds = resolveModelRuntimeAgentIdsFromChangedPaths(plan.changedPaths);
+    const modelRuntimeAgentIds = mrReload.resolveReloadAgentIds(plan.changedPaths);
     const modelRuntimeRefreshScope = modelRuntimeAgentIds ? { agentIds: modelRuntimeAgentIds } : {};
 
     resetPreparedModelRuntimeStateForHotReload();
@@ -614,12 +613,10 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
 
     try {
-      const pluginMetadataSnapshot = params.getPluginMetadataSnapshot?.();
-      await refreshPreparedModelRuntimeSnapshots(nextConfig, {
-        catalogMode: "static",
-        allowGatewaySubagentBinding: true,
-        ...modelRuntimeRefreshScope,
-        ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
+      await mrReload.refreshModelRuntimeAfterHotReload({
+        config: nextConfig,
+        agentIds: modelRuntimeAgentIds,
+        pluginMetadataSnapshot: params.getPluginMetadataSnapshot?.(),
       });
     } catch (err) {
       scheduleRecoveryRestart("prepared model runtime reload", err);
