@@ -217,14 +217,22 @@ export function resolveProtectionFastPath(
       break;
     }
   }
+  // Callers only ever query at successive candidate offsets from a single left-to-right
+  // scan (findPotentialCallStart), so offsets seen here are non-decreasing. A cursor that
+  // only advances keeps total lookup work linear in lineStarts across the whole scan; a
+  // fresh scan from the start on every call would make a large authoritative snapshot with
+  // many candidates quadratic (lines x candidates) instead.
+  let cursor = -1;
+  let isProtected = false;
   return (offset: number) => {
     // Candidate offsets sit at a line start; the nearest preceding start owns the verdict.
-    let isProtected = false;
-    for (const [start, verdict] of lineStarts) {
-      if (start > offset) {
+    while (cursor + 1 < lineStarts.length) {
+      const next = lineStarts[cursor + 1];
+      if (next === undefined || next[0] > offset) {
         break;
       }
-      isProtected = verdict;
+      cursor += 1;
+      isProtected = next[1];
     }
     return isProtected;
   };

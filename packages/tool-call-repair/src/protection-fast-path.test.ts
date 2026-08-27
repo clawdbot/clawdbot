@@ -93,4 +93,54 @@ describe("protection fast path", () => {
     // A delimiter that could not be classified leaves parity unknown for good.
     expect(verdictFor("- item\n```\n\nplain\n", "[read]\n")).toBeUndefined();
   });
+
+  it("answers successive increasing offsets correctly, including a query before the first line", () => {
+    // findPotentialCallStart queries the returned closure at successive candidate offsets
+    // from a single left-to-right scan, so this exercises the same non-decreasing-offset
+    // pattern a real caller uses.
+    const verdict = verdictFor(
+      "",
+      ["plain", "```toml", "[a]", "[b]", "```", "plain2"].join("\n") + "\n",
+    );
+    const plainLen = "plain\n".length;
+    const fenceOpenLen = plainLen + "```toml\n".length;
+    const aLineStart = fenceOpenLen;
+    const bLineStart = aLineStart + "[a]\n".length;
+    const fenceCloseStart = bLineStart + "[b]\n".length;
+    const plain2Start = fenceCloseStart + "```\n".length;
+
+    expect(verdict?.(0)).toBe(false);
+    // The fence-opening delimiter line itself sits inside the code region it opens.
+    expect(verdict?.(plainLen)).toBe(true);
+    expect(verdict?.(aLineStart)).toBe(true);
+    expect(verdict?.(bLineStart)).toBe(true);
+    expect(verdict?.(fenceCloseStart)).toBe(true);
+    expect(verdict?.(plain2Start)).toBe(false);
+  });
+
+  it("keeps successive lookups linear instead of rescanning from the start each time", () => {
+    // codex review: the returned closure used to rescan every recorded line start from
+    // index 0 on every call. Querying every candidate offset in a large fenced snapshot
+    // with many literal calls made a single left-to-right scan Θ(lines x candidates)
+    // instead of Θ(lines). A monotonic cursor keeps total lookup work linear.
+    const lineCount = 20_000;
+    const body = Array.from({ length: lineCount }, (_, index) => `[read.${index}]`).join("\n");
+    const incoming = `\`\`\`toml\n${body}\n\`\`\`\n`;
+    const verdict = verdictFor("", incoming);
+    expect(verdict).toBeDefined();
+
+    let offset = 0;
+    const start = performance.now();
+    for (let index = 0; index < lineCount; index += 1) {
+      verdict?.(offset);
+      offset = incoming.indexOf("\n", offset) + 1;
+    }
+    const elapsedMs = performance.now() - start;
+
+    // A quadratic rescan over 20,000 lines takes hundreds of milliseconds on this
+    // hardware; a linear cursor finishes in low single-digit milliseconds. This
+    // threshold sits comfortably between the two so it only fails for the quadratic
+    // shape, not for ordinary timing noise.
+    expect(elapsedMs).toBeLessThan(50);
+  });
 });
