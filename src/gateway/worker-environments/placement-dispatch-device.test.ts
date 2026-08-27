@@ -707,7 +707,10 @@ describe("device worker placement dispatch", () => {
 
   it("never hands a descriptor to a same-version local worker with the older strict parser", async () => {
     const harness = createHarness(placementStore);
-    bindDeviceWorkerAvailability(harness.environments, async () => ({ available: true }));
+    bindDeviceWorkerAvailability(harness.environments, async () => ({
+      available: true,
+      node: deviceProof(),
+    }));
     vi.mocked(harness.environments.createFromProfileSnapshot).mockResolvedValue({
       ...harness.ready,
       providerId: "device",
@@ -728,6 +731,7 @@ describe("device worker placement dispatch", () => {
       ...REQUEST,
       profileId: "device:device-1",
       deviceId: "device-1",
+      devicePlacement: OPENCLAW_DEVICE_REQUIREMENT,
       inheritedProfile: {
         providerId: "device",
         profileSnapshot: { install: "bundle" as const, settings: { device: "device-1" } },
