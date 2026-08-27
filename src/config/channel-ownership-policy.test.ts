@@ -150,6 +150,78 @@ describe("createConfiguredChannelOwnershipPolicy", () => {
     expect(policy.isPluginActive("zzmem-fallback", "zzmemchat")).toBe(true);
   });
 
+  // Codex P2 3874949805, on the fix above. `normalizePluginsConfigWithResolverCore` runs the alias
+  // resolver over `entries`/`allow`/`deny` but NOT over `slots.memory`, so the loader compares the
+  // AUTHORED slot against `record.id` exactly (`resolveMemorySlotDecisionShared`). Canonicalizing
+  // the slot here reported a claimant active that the loader disables before registration -- the
+  // same crown-a-plugin-that-never-loads defect the filter exists to prevent, reintroduced through
+  // one side of the comparison. Predict the loader; do not improve on it.
+  it("keeps a memory claimant inactive when the slot names it by a legacy alias", () => {
+    const aliasMemoryRegistry = {
+      diagnostics: [],
+      plugins: [
+        {
+          id: "zzmem-engine",
+          origin: "config",
+          kind: ["memory"],
+          channels: ["zzaliaschat"],
+          legacyPluginIds: ["zzmem-old"],
+        },
+        { id: "zzmem-fallback", origin: "config", channels: ["zzaliaschat"] },
+      ],
+    } as unknown as PluginManifestRegistry;
+    const config = {
+      channels: { zzaliaschat: { token: "t" } },
+      plugins: {
+        entries: { "zzmem-engine": { enabled: true } },
+        // An alias of zzmem-engine, not its manifest id. The loader will not match it.
+        slots: { memory: "zzmem-old" },
+      },
+    } as unknown as OpenClawConfig;
+
+    const policy = createConfiguredChannelOwnershipPolicy({
+      config,
+      sourceConfig: config,
+      registry: aliasMemoryRegistry,
+      env: {},
+    });
+
+    expect(policy.isPluginActive("zzmem-engine", "zzaliaschat")).toBe(false);
+    expect(policy.isPluginActive("zzmem-fallback", "zzaliaschat")).toBe(true);
+  });
+
+  // And the exact-id spelling still selects it, so the filter is not simply rejecting everything.
+  it("keeps a memory claimant active when the slot names its exact manifest id", () => {
+    const exactRegistry = {
+      diagnostics: [],
+      plugins: [
+        {
+          id: "zzmem-engine",
+          origin: "config",
+          kind: ["memory"],
+          channels: ["zzexactchat"],
+          legacyPluginIds: ["zzmem-old"],
+        },
+      ],
+    } as unknown as PluginManifestRegistry;
+    const config = {
+      channels: { zzexactchat: { token: "t" } },
+      plugins: {
+        entries: { "zzmem-engine": { enabled: true } },
+        slots: { memory: "zzmem-engine" },
+      },
+    } as unknown as OpenClawConfig;
+
+    const policy = createConfiguredChannelOwnershipPolicy({
+      config,
+      sourceConfig: config,
+      registry: exactRegistry,
+      env: {},
+    });
+
+    expect(policy.isPluginActive("zzmem-engine", "zzexactchat")).toBe(true);
+  });
+
   // The other side of the same rule: a dual-kind plugin keeps its non-memory role when the slot
   // passes it over, so it stays a live claimant and must not be filtered out here.
   it("keeps a dual-kind claimant active when the memory slot names another plugin", () => {

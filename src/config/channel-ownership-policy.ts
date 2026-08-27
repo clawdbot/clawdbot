@@ -173,24 +173,34 @@ export function createConfiguredChannelOwnershipPolicy(params: {
   //
   // Collected once rather than scanned per call: `isPluginActive` runs for every claimant of every
   // contested channel, and a linear manifest walk on each of those is a per-load cost this policy
-  // does not need to pay.
-  const singleKindMemoryAliases = new Set(
-    params.registry.plugins
-      .filter(
-        (entry) =>
-          hasKind(entry.kind, "memory") && !(Array.isArray(entry.kind) && entry.kind.length > 1),
-      )
-      .map((entry) => canonicalId(entry.id)),
-  );
+  // does not need to pay. Keyed by canonical alias because that is how claimants arrive here, and
+  // valued by the MANIFEST id because that is what the loader compares against.
+  const singleKindMemoryManifestIds = new Map<string, string>();
+  for (const entry of params.registry.plugins) {
+    if (!hasKind(entry.kind, "memory") || (Array.isArray(entry.kind) && entry.kind.length > 1)) {
+      continue;
+    }
+    const key = canonicalId(entry.id);
+    if (!singleKindMemoryManifestIds.has(key)) {
+      singleKindMemoryManifestIds.set(key, entry.id);
+    }
+  }
   const isRejectedByMemorySlot = (alias: string): boolean => {
-    if (!singleKindMemoryAliases.has(alias)) {
+    const manifestId = singleKindMemoryManifestIds.get(alias);
+    if (manifestId === undefined) {
       return false;
     }
     const slot = params.config.plugins?.slots?.memory;
     if (slot === null) {
       return true;
     }
-    return typeof slot === "string" && canonicalId(slot) !== alias;
+    // Exactly the loader's comparison, alias resolution and all. `resolveMemorySlotDecisionShared`
+    // tests `slot === id` against the authored spelling, because
+    // `normalizePluginsConfigWithResolverCore` runs the alias resolver over `entries`, `allow` and
+    // `deny` but leaves `slots.memory` as written. Canonicalizing the slot here would report a
+    // claimant active that the loader disables before it registers -- the exact defect this filter
+    // exists to prevent. This predicts the loader's answer; it does not improve on it.
+    return typeof slot === "string" && slot !== manifestId;
   };
 
   return {
