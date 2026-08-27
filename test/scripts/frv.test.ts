@@ -11,10 +11,12 @@ import {
   validateLegacySource,
 } from "../../scripts/frv.mjs";
 import {
+  buildReleaseExecutionPlan,
   buildReleaseExecutionPlanArtifact,
   HISTORICAL_CONTINUATION_SOURCE_MODE,
   releaseChildSpec,
   releaseCompositeJobsSha256,
+  releaseExecutionPlanSha256,
   verifyReleaseContinuationSource,
 } from "../../scripts/full-release-validation-policy.mjs";
 import { resolveReleaseToolingIdentity } from "../../scripts/release-tooling-identity.mjs";
@@ -127,19 +129,38 @@ process.exit(1);
   });
 });
 
-function sealedContinuationPlan(selected = child("normalCi", "101"), parentRunId = "88") {
+function requiredContinuationChildren() {
+  return [
+    child("normalCi", "101"),
+    child("pluginPrerelease", "202"),
+    child("releaseChecks", "303"),
+    child("productPerformance", "404"),
+  ];
+}
+
+function sealedContinuationPlan(
+  selected: ReturnType<typeof child>[] | ReturnType<typeof child> = requiredContinuationChildren(),
+  parentRunId = "88",
+) {
   const source = continuation();
   const branch = continuationBranchName(source.sourceRunId, source.toolingSha);
+  const selectedChildren = Array.isArray(selected) ? selected : [selected];
+  const completeChildren = [
+    ...selectedChildren,
+    ...requiredContinuationChildren().filter(
+      (entry) => !selectedChildren.some((selectedEntry) => selectedEntry.key === entry.key),
+    ),
+  ];
+  const built = buildReleaseExecutionPlan({
+    children: Object.fromEntries(completeChildren.map((entry) => [entry.key, entry])),
+    continuation: source,
+    parentRunAttempt: 1,
+    parentRunId,
+    rerunGroup: "all",
+  });
   return buildReleaseExecutionPlanArtifact({
     attemptEvidenceVersion: 1,
-    children: [
-      {
-        ...selected,
-        dispatchName: "Dispatch CI",
-        result: "success",
-        source: "continuation",
-      },
-    ],
+    children: built.children,
     continuation: source,
     evidenceReuse: { requested: false },
     expected: {
@@ -720,14 +741,16 @@ describe("frv continuation controller", () => {
       toolingSha: SHA,
       validationInputs: VALIDATION_INPUTS,
     };
+    const built = buildReleaseExecutionPlan({
+      children: Object.fromEntries(children.map((entry) => [entry.key, entry])),
+      continuation: legacyContinuation,
+      parentRunAttempt: 1,
+      parentRunId: "88",
+      rerunGroup: "all",
+    });
     const finalPlan = buildReleaseExecutionPlanArtifact({
       attemptEvidenceVersion: 1,
-      children: children.map((entry) => ({
-        ...entry,
-        dispatchName: releaseChildSpec(entry.key).dispatchName,
-        result: "success",
-        source: "continuation",
-      })),
+      children: built.children,
       continuation: legacyContinuation,
       evidenceReuse: { requested: false },
       expected: {
@@ -769,16 +792,20 @@ describe("frv continuation controller", () => {
       verify: async () => "{}",
       repository: "openclaw/openclaw",
     };
-    await continueFailed(continuationPlan(children, legacyContinuation), "77", client, {
+    const operationDeadline = Date.now() + 10_000;
+    const reviewedChildren = children.toReversed();
+    await continueFailed(continuationPlan(reviewedChildren, legacyContinuation), "77", client, {
       loadExecutionPlan: async () => finalPlanPayload,
+      operationDeadline,
     });
     expect(dispatched).toBe(1);
     expect(deletedBranch).toBe("release-ci/current");
     expect(parentReruns).toBe(0);
     finalPlanPayload = undefined;
     await expect(
-      continueFailed(continuationPlan(children, legacyContinuation), "77", client, {
+      continueFailed(continuationPlan(reviewedChildren, legacyContinuation), "77", client, {
         loadExecutionPlan: async () => finalPlanPayload,
+        operationDeadline: Date.now() + 10_000,
       }),
     ).rejects.toThrow(
       "exact continuation parent 88 terminated with conclusion success without a valid immutable execution plan",
@@ -1589,8 +1616,9 @@ describe("frv continuation controller", () => {
   });
 
   it("uses frozen tooling, adopts the same parent on restart, and never reselects main", async () => {
+    const selected = requiredContinuationChildren().toReversed();
     const reviewed = {
-      children: { normalCi: child("normalCi", "101") },
+      children: Object.fromEntries(selected.map((entry) => [entry.key, entry])),
       continuation: continuation(),
       legacy: true,
       releaseProfile: "beta",
@@ -1598,7 +1626,7 @@ describe("frv continuation controller", () => {
       targetSha: TARGET_SHA,
     };
     const branch = continuationBranchName("77", SHA);
-    const sealed = sealedContinuationPlan(child("normalCi", "101"));
+    const sealed = sealedContinuationPlan(requiredContinuationChildren());
     const reads: string[] = [];
     const mutations: string[][] = [];
     const client = createClient("openclaw/openclaw", {
@@ -1651,6 +1679,117 @@ describe("frv continuation controller", () => {
     expect(
       reads.every((path) => !path.includes("origin/main") && !path.endsWith("?ref=main")),
     ).toBe(true);
+  });
+
+  it("rejects genuine child identity drift while accepting equivalent child order", async () => {
+    const selected = requiredContinuationChildren().toReversed();
+    const reviewed = {
+      children: Object.fromEntries(selected.map((entry) => [entry.key, entry])),
+      continuation: continuation(),
+      legacy: true,
+      releaseProfile: "beta",
+      rerunGroup: "all",
+      targetSha: TARGET_SHA,
+    };
+    const sealed = structuredClone(sealedContinuationPlan(requiredContinuationChildren()));
+    const releaseChecks = sealed.children.find(
+      (entry: Record<string, unknown>) => entry.key === "releaseChecks",
+    );
+    if (!releaseChecks) {
+      throw new Error("release checks child is missing");
+    }
+    releaseChecks.runId = "999";
+    sealed.sha256 = releaseExecutionPlanSha256(sealed);
+    const branch = continuationBranchName("77", SHA);
+    const client = createClient("openclaw/openclaw", {
+      apiJson: async (path: string) => {
+        if (path === `compare/${SHA}...main`) {
+          return { status: "ahead" };
+        }
+        if (path.startsWith("contents/")) {
+          return { content: Buffer.from("continuation_plan_json:").toString("base64") };
+        }
+        if (path.startsWith("git/ref/")) {
+          return { object: { sha: SHA } };
+        }
+        if (path.startsWith("actions/workflows/")) {
+          return {
+            workflow_runs: [
+              {
+                event: "workflow_dispatch",
+                head_branch: branch,
+                head_sha: SHA,
+                id: 88,
+                path: ".github/workflows/full-release-validation.yml",
+              },
+            ],
+          };
+        }
+        if (path === "actions/runs/88") {
+          return {
+            event: "workflow_dispatch",
+            head_branch: branch,
+            head_sha: SHA,
+            id: 88,
+            path: ".github/workflows/full-release-validation.yml",
+            repository: { full_name: "openclaw/openclaw" },
+          };
+        }
+        throw new Error(`unexpected read: ${path}`);
+      },
+      loadExecutionPlan: async () => sealed,
+    });
+    await expect(client.dispatchContinuation(reviewed)).rejects.toThrow(
+      "existing continuation parent differs from the reviewed source plan",
+    );
+  });
+
+  it("starts direct verification with a fresh operation budget beyond the command default", async () => {
+    let timeoutMs = 0;
+    const previousTimeout = process.env.OPENCLAW_FRV_TIMEOUT_MS;
+    process.env.OPENCLAW_FRV_TIMEOUT_MS = "120000";
+    const client = createClient("openclaw/openclaw", {
+      execCommand: async (_command: string, _args: string[], options: { timeoutMs: number }) => {
+        timeoutMs = options.timeoutMs;
+        return "{}";
+      },
+    });
+    try {
+      await expect(client.verify("77", plan(requiredContinuationChildren()))).resolves.toBe("{}");
+      expect(timeoutMs).toBeGreaterThan(60_000);
+      expect(timeoutMs).toBeLessThanOrEqual(120_000);
+    } finally {
+      restoreEnv("OPENCLAW_FRV_TIMEOUT_MS", previousTimeout);
+    }
+  });
+
+  it("fails expired verification before spawning the verifier", async () => {
+    let spawns = 0;
+    const client = createClient("openclaw/openclaw", {
+      execCommand: async () => {
+        spawns += 1;
+        return "{}";
+      },
+    });
+    await expect(
+      client.verify("77", plan(requiredContinuationChildren()), Date.now() - 1),
+    ).rejects.toThrow("FRV verification timed out");
+    expect(spawns).toBe(0);
+  });
+
+  it("bounds a near-expired verifier to the positive remaining operation time", async () => {
+    let timeoutMs = 0;
+    const client = createClient("openclaw/openclaw", {
+      execCommand: async (_command: string, _args: string[], options: { timeoutMs: number }) => {
+        timeoutMs = options.timeoutMs;
+        throw new Error("fake verifier deadline reached");
+      },
+    });
+    await expect(
+      client.verify("77", plan(requiredContinuationChildren()), Date.now() + 100),
+    ).rejects.toThrow("fake verifier deadline reached");
+    expect(timeoutMs).toBeGreaterThan(0);
+    expect(timeoutMs).toBeLessThanOrEqual(100);
   });
 
   it("adopts an exact active continuation parent before its plan artifact exists", async () => {

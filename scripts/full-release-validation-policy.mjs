@@ -1193,6 +1193,62 @@ function candidatePreparationRequired(input) {
   return input.rerunGroup === "live-e2e" && !stringValue(input.liveSuiteFilter).trim();
 }
 
+function canonicalSkippedContinuationChild(spec, continuation) {
+  const sourceRunAttempt = positiveInteger(continuation?.sourceRunAttempt);
+  const sourceRunId = stringValue(continuation?.sourceRunId).trim();
+  return {
+    dispatchName: spec.dispatchName,
+    displayTitle: `${spec.displayName} full-release-validation-${sourceRunId}-${sourceRunAttempt ?? ""}${spec.suffix}`,
+    key: spec.key,
+    required: false,
+    result: "skipped",
+    runAttempt: null,
+    runId: "",
+    selected: false,
+    source: "continuation",
+    sourceParentAttempt: sourceRunAttempt ?? null,
+    url: "",
+    workflow: spec.workflow,
+    workflowRef: stringValue(continuation?.sourceWorkflowRef).trim(),
+    workflowSha: stringValue(continuation?.sourceWorkflowSha).trim(),
+  };
+}
+
+function canonicalSkippedPlanChild(spec, { continuation, evidenceReuse, expected }) {
+  if (continuation) {
+    return canonicalSkippedContinuationChild(spec, continuation);
+  }
+  return {
+    dispatchName: spec.dispatchName,
+    displayTitle: `${spec.displayName} full-release-validation-${expected.parentRunId}-${expected.parentRunAttempt}${spec.suffix}`,
+    key: spec.key,
+    required: false,
+    result: "skipped",
+    runAttempt: null,
+    runId: "",
+    selected: false,
+    source: evidenceReuse.requested ? "reused" : "fresh",
+    sourceParentAttempt: null,
+    url: "",
+    workflow: spec.workflow,
+    workflowRef: stringValue(expected.workflowRef).trim(),
+    workflowSha: stringValue(expected.workflowSha).trim(),
+  };
+}
+
+function executionPlanChildRequired(spec, rerunGroup, continuation) {
+  if (spec.key !== "npmTelegram") {
+    return spec.rerunGroups.includes(rerunGroup);
+  }
+  if (continuation) {
+    return Boolean(
+      continuation.validationInputs.npmTelegramPackageSpec ||
+      continuation.validationInputs.releasePackageSpec,
+    );
+  }
+  return rerunGroup === "all" || rerunGroup === "npm-telegram";
+}
+
 export function buildReleaseExecutionPlan(input) {
   const parentRunId = stringValue(input.parentRunId).trim();
   const parentRunAttempt = positiveInteger(input.parentRunAttempt);
@@ -1218,6 +1274,9 @@ export function buildReleaseExecutionPlan(input) {
       spec.key === "npmTelegram"
         ? rerunGroup === "npm-telegram" || npmTelegramForAll
         : spec.rerunGroups.includes(rerunGroup);
+    if (continuation && !required) {
+      return canonicalSkippedContinuationChild(spec, input.continuation);
+    }
     const dispatchId = `full-release-validation-${parentRunId}-${parentRunAttempt}${spec.suffix}`;
     return {
       dispatchName: spec.dispatchName,
@@ -1226,7 +1285,7 @@ export function buildReleaseExecutionPlan(input) {
         : `${spec.displayName} ${dispatchId}`,
       key: spec.key,
       required,
-      result: continuation && required ? "success" : stringValue(raw.result, "skipped"),
+      result: continuation ? "success" : stringValue(raw.result, "skipped"),
       runAttempt: positiveInteger(raw.runAttempt) ?? null,
       runId: stringValue(raw.runId).trim(),
       selected: required,
@@ -1374,7 +1433,26 @@ export function buildReleaseExecutionPlanArtifact({
     throw new Error("release execution plan evidence reuse binding is invalid");
   }
   const normalizedPlanContinuation = normalizedContinuation(continuation);
-  const normalizedChildren = children.map(normalizedPlanChild);
+  const normalizedChildren = children.map((child) => {
+    const spec = releaseChildSpec(child.key);
+    return normalizedPlanChild({ ...child, dispatchName: spec.dispatchName });
+  });
+  for (const spec of CHILD_SPECS) {
+    if (
+      !normalizedChildren.some((child) => child.key === spec.key) &&
+      !executionPlanChildRequired(spec, rerunGroup, normalizedPlanContinuation)
+    ) {
+      normalizedChildren.push(
+        normalizedPlanChild(
+          canonicalSkippedPlanChild(spec, {
+            continuation: normalizedPlanContinuation,
+            evidenceReuse: normalizedReuse,
+            expected,
+          }),
+        ),
+      );
+    }
+  }
   if (
     normalizedPlanContinuation &&
     normalizedChildren

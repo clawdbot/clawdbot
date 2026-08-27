@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   composeReleaseAttemptJobs,
   isReleaseGhArtifactMissingError,
+  releaseChildSpec,
   releaseExecutionPlanSha256,
 } from "../../scripts/full-release-validation-policy.mjs";
 import {
@@ -30,6 +31,115 @@ const SCRIPT = resolve("scripts/full-release-validation-state.mjs");
 const SHA = "a".repeat(40);
 const TARGET_SHA = "b".repeat(40);
 const TRUSTED_MAIN = { fullRef: "refs/heads/main", ref: "main", sha: SHA };
+
+function continuationCandidate() {
+  return {
+    imageArchiveSha256: "1".repeat(64),
+    imageArtifactDigest: "2".repeat(64),
+    imageArtifactId: "12",
+    imageArtifactName: "image-77-1",
+    imageArtifactRunAttempt: "1",
+    imageArtifactRunId: "77",
+    packageArtifactDigest: "3".repeat(64),
+    packageArtifactId: "13",
+    packageArtifactName: "package-77-1",
+    packageArtifactRunAttempt: "1",
+    packageArtifactRunId: "77",
+    packageFileName: "openclaw-current.tgz",
+    packageSha256: "4".repeat(64),
+    packageSourceSha: TARGET_SHA,
+    packageVersion: "2026.8.1-beta.3",
+    prepublishPluginRegistryArtifactDigest: "5".repeat(64),
+    prepublishPluginRegistryArtifactId: "14",
+    prepublishPluginRegistryArtifactName: "plugins-77-1",
+    prepublishPluginRegistryArtifactRunAttempt: "1",
+    prepublishPluginRegistryArtifactRunId: "77",
+    prepublishPluginRegistryManifestSha256: "6".repeat(64),
+  };
+}
+
+function continuationIdentity() {
+  return {
+    candidate: continuationCandidate(),
+    publicationEnabled: false,
+    releaseProfile: "stable",
+    rerunGroup: "all",
+    runReleaseSoak: "false",
+    sourceDisplayTitle: "Full Release Validation",
+    sourceEvent: "workflow_dispatch",
+    sourceRepository: "openclaw/openclaw",
+    sourceRunAttempt: 1,
+    sourceRunId: "77",
+    sourceWorkflowPath: ".github/workflows/full-release-validation.yml",
+    sourceWorkflowRef: "release-ci/source",
+    sourceWorkflowSha: SHA,
+    toolingSha: SHA,
+    validationInputs: {
+      allowUnreleasedChangelog: "false",
+      codexPluginSpec: "",
+      crossOsSuiteFilter: "",
+      liveSuiteFilter: "",
+      mode: "both",
+      npmTelegramPackageSpec: "",
+      npmTelegramProviderMode: "mock-openai",
+      npmTelegramScenario: "",
+      packageAcceptancePackageSpec: "",
+      pluginPrereleaseNodeExcludePatternsJson: "[]",
+      provider: "openai",
+      releasePackageSpec: "",
+      skipPackageTelegramE2e: "false",
+      targetContextRef: "",
+    },
+  };
+}
+
+function continuationChild(key: string, runId: string) {
+  const spec = releaseChildSpec(key);
+  return {
+    displayTitle: `${spec.displayName} full-release-validation-77-1${spec.suffix}`,
+    result: "success",
+    runAttempt: 1,
+    runId,
+    sourceParentAttempt: 1,
+    url: `https://example.invalid/runs/${runId}`,
+    workflow: spec.workflow,
+    workflowRef: "release-ci/source",
+    workflowSha: SHA,
+  };
+}
+
+function continuationExecutionPlan() {
+  const continuation = continuationIdentity();
+  const built = buildReleaseExecutionPlan({
+    children: {
+      normalCi: continuationChild("normalCi", "101"),
+      pluginPrerelease: continuationChild("pluginPrerelease", "202"),
+      productPerformance: continuationChild("productPerformance", "303"),
+      releaseChecks: continuationChild("releaseChecks", "404"),
+    },
+    continuation,
+    parentRunAttempt: 1,
+    parentRunId: "88",
+    rerunGroup: "all",
+  });
+  return buildReleaseExecutionPlanArtifact({
+    attemptEvidenceVersion: 1,
+    children: built.children,
+    continuation,
+    evidenceReuse: { requested: false },
+    expected: {
+      parentRunAttempt: 1,
+      parentRunId: "88",
+      targetSha: TARGET_SHA,
+      workflowRef: "release-ci/continuation",
+      workflowSha: SHA,
+    },
+    gates: built.gates,
+    releaseProfile: "stable",
+    rerunGroup: "all",
+    trustedWorkflow: TRUSTED_MAIN,
+  });
+}
 
 function evidenceManifest() {
   return { runAttempt: 1, runId: "99", targetSha: TARGET_SHA };
@@ -290,6 +400,91 @@ describe("full release execution plan", () => {
     };
     expect(() => validateReleaseExecutionPlanArtifact(digestValidArtifact)).toThrow(
       "release execution plan evidence reuse binding is invalid",
+    );
+  });
+
+  it("round-trips a continuation plan without optional npm Telegram", () => {
+    const artifact = continuationExecutionPlan();
+    const validated = validateReleaseExecutionPlanArtifact(artifact, {
+      parentRunId: "88",
+      releaseProfile: "stable",
+      rerunGroup: "all",
+      sourceParentRunAttempt: 1,
+      targetSha: TARGET_SHA,
+      workflowRef: "release-ci/continuation",
+      workflowSha: SHA,
+    });
+    expect(validated.children.find((entry) => entry.key === "npmTelegram")).toMatchObject({
+      displayTitle: "NPM Telegram Beta E2E full-release-validation-77-1-npm-telegram",
+      required: false,
+      result: "skipped",
+      runAttempt: null,
+      runId: "",
+      selected: false,
+      source: "continuation",
+      sourceParentAttempt: 1,
+      url: "",
+      workflow: "npm-telegram-beta-e2e.yml",
+      workflowRef: "release-ci/source",
+      workflowSha: SHA,
+    });
+  });
+
+  it("keeps selected npm Telegram continuation identity strict", () => {
+    const continuation = continuationIdentity();
+    continuation.validationInputs.npmTelegramPackageSpec = "openclaw@2026.8.1-beta.3";
+    const built = buildReleaseExecutionPlan({
+      children: {
+        normalCi: continuationChild("normalCi", "101"),
+        pluginPrerelease: continuationChild("pluginPrerelease", "202"),
+        productPerformance: continuationChild("productPerformance", "303"),
+        releaseChecks: continuationChild("releaseChecks", "404"),
+      },
+      continuation,
+      npmTelegramPackageSpec: continuation.validationInputs.npmTelegramPackageSpec,
+      parentRunAttempt: 1,
+      parentRunId: "88",
+      rerunGroup: "all",
+    });
+    expect(() =>
+      buildReleaseExecutionPlanArtifact({
+        attemptEvidenceVersion: 1,
+        children: built.children,
+        continuation,
+        evidenceReuse: { requested: false },
+        expected: {
+          parentRunAttempt: 1,
+          parentRunId: "88",
+          targetSha: TARGET_SHA,
+          workflowRef: "release-ci/continuation",
+          workflowSha: SHA,
+        },
+        gates: built.gates,
+        releaseProfile: "stable",
+        rerunGroup: "all",
+        trustedWorkflow: TRUSTED_MAIN,
+      }),
+    ).toThrow("release execution plan continuation child binding is invalid");
+  });
+
+  it.each([
+    ["display title", (entry: Record<string, unknown>) => (entry.displayTitle = "nearby")],
+    ["workflow", (entry: Record<string, unknown>) => (entry.workflow = "ci.yml")],
+    ["workflow ref", (entry: Record<string, unknown>) => (entry.workflowRef = "main")],
+    ["workflow SHA", (entry: Record<string, unknown>) => (entry.workflowSha = "f".repeat(40))],
+    ["source parent attempt", (entry: Record<string, unknown>) => (entry.sourceParentAttempt = 2)],
+  ])("rejects tampered synthesized npm Telegram $s", (_name, mutate) => {
+    const artifact = structuredClone(continuationExecutionPlan());
+    const npmTelegram = artifact.children.find(
+      (entry: Record<string, unknown>) => entry.key === "npmTelegram",
+    );
+    if (!npmTelegram) {
+      throw new Error("npm Telegram child is missing");
+    }
+    mutate(npmTelegram);
+    artifact.sha256 = releaseExecutionPlanSha256(artifact);
+    expect(() => validateReleaseExecutionPlanArtifact(artifact)).toThrow(
+      "release execution plan child identity is invalid: npmTelegram",
     );
   });
 });

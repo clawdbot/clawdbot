@@ -54,6 +54,33 @@ function positiveInteger(value, label) {
   return normalized;
 }
 
+function configuredTimeout(name, fallback) {
+  return positiveInteger(process.env[name] || fallback, name);
+}
+
+function createOperationDeadline() {
+  const deadline = Date.now() + configuredTimeout("OPENCLAW_FRV_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
+  if (!Number.isSafeInteger(deadline)) {
+    throw new Error("FRV operation deadline is invalid");
+  }
+  return deadline;
+}
+
+function validateOperationDeadline(deadline) {
+  if (!Number.isSafeInteger(deadline) || deadline < 1) {
+    throw new Error("FRV operation deadline must be a positive integer");
+  }
+  return deadline;
+}
+
+function remainingOperationTime(deadline, label = "FRV operation") {
+  const remaining = validateOperationDeadline(deadline) - Date.now();
+  if (remaining < 1) {
+    throw new Error(`${label} timed out`);
+  }
+  return remaining;
+}
+
 function canonicalJson(value) {
   if (Array.isArray(value)) {
     return value.map(canonicalJson);
@@ -654,27 +681,29 @@ export function continuationBranchName(sourceRunId, toolingSha) {
 
 function continuationPlanIdentity(plan) {
   return canonicalJson({
-    children: selectedChildren(plan).map(
-      ({
-        displayTitle,
-        key,
-        runAttempt,
-        runId,
-        sourceParentAttempt,
-        workflow,
-        workflowRef,
-        workflowSha,
-      }) => ({
-        displayTitle,
-        key,
-        runAttempt,
-        runId,
-        sourceParentAttempt,
-        workflow,
-        workflowRef,
-        workflowSha,
-      }),
-    ),
+    children: selectedChildren(plan)
+      .map(
+        ({
+          displayTitle,
+          key,
+          runAttempt,
+          runId,
+          sourceParentAttempt,
+          workflow,
+          workflowRef,
+          workflowSha,
+        }) => ({
+          displayTitle,
+          key,
+          runAttempt,
+          runId,
+          sourceParentAttempt,
+          workflow,
+          workflowRef,
+          workflowSha,
+        }),
+      )
+      .toSorted((left, right) => left.key.localeCompare(right.key)),
     continuation: plan.continuation,
     releaseProfile: plan.releaseProfile,
     rerunGroup: plan.rerunGroup,
@@ -723,6 +752,7 @@ export function createClient(repository, dependencies = {}) {
       ));
   const mutate = dependencies.mutate ?? ((args) => execGh(args));
   const git = dependencies.git ?? ((args) => execCommand("git", args));
+  const execute = dependencies.execCommand ?? execCommand;
   const report = dependencies.report ?? ((message) => console.error(message));
   const loadExecutionPlan =
     dependencies.loadExecutionPlan ?? ((runId) => downloadExecutionPlan(repository, runId));
@@ -844,7 +874,9 @@ export function createClient(repository, dependencies = {}) {
         );
       }
     },
-    async dispatchContinuation(plan) {
+    async dispatchContinuation(plan, operationDeadline = createOperationDeadline()) {
+      validateOperationDeadline(operationDeadline);
+      remainingOperationTime(operationDeadline, "FRV continuation dispatch");
       const workflowSha = plan.continuation.toolingSha;
       await client.verifyTrustedToolingSha(workflowSha);
       const file = await apiJson(
@@ -861,6 +893,7 @@ export function createClient(repository, dependencies = {}) {
       await client.ensureWorkflowRef(branch, workflowSha);
       let existing = await client.findContinuationParent(plan, branch, workflowSha);
       if (existing) {
+        remainingOperationTime(operationDeadline, "FRV continuation adoption");
         if (existing.pending && existing.run.status === "completed") {
           throw continuationParentPlanError(existing.run);
         }
@@ -918,6 +951,7 @@ export function createClient(repository, dependencies = {}) {
       }
       let dispatchError;
       if (!existing) {
+        remainingOperationTime(operationDeadline, "FRV continuation dispatch");
         try {
           await mutate(args);
         } catch (error) {
@@ -930,18 +964,22 @@ export function createClient(repository, dependencies = {}) {
           dispatchError = error;
         }
       }
-      const deadline =
-        Date.now() + Number(process.env.OPENCLAW_FRV_TIMEOUT_MS || DEFAULT_TIMEOUT_MS);
-      while (Date.now() < deadline) {
+      while (Date.now() < operationDeadline) {
         existing = await client.findContinuationParent(plan, branch, workflowSha);
         if (existing) {
+          remainingOperationTime(operationDeadline, "FRV continuation adoption");
           if (existing.pending && existing.run.status === "completed") {
             throw continuationParentPlanError(existing.run);
           }
           report(`adopting exact continuation parent ${existing.run.id} on ${branch}`);
           return { branch, runId: String(existing.run.id), workflowSha };
         }
-        await sleep(Number(process.env.OPENCLAW_FRV_POLL_MS || DEFAULT_POLL_MS));
+        await sleep(
+          Math.min(
+            configuredTimeout("OPENCLAW_FRV_POLL_MS", DEFAULT_POLL_MS),
+            remainingOperationTime(operationDeadline, "FRV continuation adoption"),
+          ),
+        );
       }
       if (dispatchError) {
         const message =
@@ -1035,35 +1073,41 @@ export function createClient(repository, dependencies = {}) {
       await mutate(["run", "rerun", runId, "--repo", repository]);
       return runId;
     },
-    async verify(runId, plan) {
+    async verify(runId, plan, operationDeadline = createOperationDeadline()) {
       const sourceSha = plan.trustedWorkflow?.sha ?? plan.continuation?.toolingSha;
-      return execCommand(process.execPath, [
-        "scripts/release-ci-summary.mjs",
-        "--validate-run",
-        runId,
-        "--repo",
-        repository,
-        "--trusted-workflow-ref",
-        plan.trustedWorkflow?.ref ?? "main",
-        "--trusted-workflow-full-ref",
-        plan.trustedWorkflow?.fullRef ?? "refs/heads/main",
-        "--trusted-workflow-sha",
-        sourceSha,
-        "--verifier-source-sha",
-        sourceSha,
-        "--verifier-source-file",
-        "scripts/release-ci-summary.mjs",
-        "--json",
-      ]);
+      return execute(
+        process.execPath,
+        [
+          "scripts/release-ci-summary.mjs",
+          "--validate-run",
+          runId,
+          "--repo",
+          repository,
+          "--trusted-workflow-ref",
+          plan.trustedWorkflow?.ref ?? "main",
+          "--trusted-workflow-full-ref",
+          plan.trustedWorkflow?.fullRef ?? "refs/heads/main",
+          "--trusted-workflow-sha",
+          sourceSha,
+          "--verifier-source-sha",
+          sourceSha,
+          "--verifier-source-file",
+          "scripts/release-ci-summary.mjs",
+          "--json",
+        ],
+        {
+          timeoutMs: remainingOperationTime(operationDeadline, "FRV verification"),
+        },
+      );
     },
   };
   return client;
 }
 
-async function waitForTerminal(runIds, client, minimumAttempts = new Map()) {
-  const deadline = Date.now() + Number(process.env.OPENCLAW_FRV_TIMEOUT_MS || DEFAULT_TIMEOUT_MS);
-  const pollMs = Number(process.env.OPENCLAW_FRV_POLL_MS || DEFAULT_POLL_MS);
-  while (Date.now() < deadline) {
+async function waitForTerminal(runIds, client, operationDeadline, minimumAttempts = new Map()) {
+  validateOperationDeadline(operationDeadline);
+  const pollMs = configuredTimeout("OPENCLAW_FRV_POLL_MS", DEFAULT_POLL_MS);
+  while (Date.now() < operationDeadline) {
     const runs = await Promise.all(runIds.map((runId) => client.getRun(runId)));
     const ready = runs.every(
       (run) =>
@@ -1073,19 +1117,24 @@ async function waitForTerminal(runIds, client, minimumAttempts = new Map()) {
     if (ready) {
       return runs;
     }
-    await new Promise((resolvePromise) => {
-      setTimeout(resolvePromise, pollMs);
-    });
+    await sleep(Math.min(pollMs, remainingOperationTime(operationDeadline)));
   }
   throw new Error(`timed out waiting for runs: ${runIds.join(", ")}`);
 }
 
-async function reconcileAttemptStarts(minimumAttempts, client, mutationResults) {
-  const deadline =
-    Date.now() +
-    Number(process.env.OPENCLAW_FRV_RECONCILE_TIMEOUT_MS || DEFAULT_RECONCILE_TIMEOUT_MS);
+async function reconcileAttemptStarts(minimumAttempts, client, mutationResults, operationDeadline) {
+  validateOperationDeadline(operationDeadline);
+  const reconcileStartedAt = Date.now();
+  const reconcileTimeoutMs = configuredTimeout(
+    "OPENCLAW_FRV_RECONCILE_TIMEOUT_MS",
+    DEFAULT_RECONCILE_TIMEOUT_MS,
+  );
   const pending = new Set(minimumAttempts.keys());
-  while (pending.size > 0 && Date.now() < deadline) {
+  while (
+    pending.size > 0 &&
+    Date.now() < operationDeadline &&
+    Date.now() - reconcileStartedAt < reconcileTimeoutMs
+  ) {
     const runs = await Promise.all([...pending].map((runId) => client.getRun(runId)));
     for (const run of runs) {
       const runId = String(run.id);
@@ -1094,9 +1143,20 @@ async function reconcileAttemptStarts(minimumAttempts, client, mutationResults) 
       }
     }
     if (pending.size > 0) {
-      await sleep(Number(process.env.OPENCLAW_FRV_POLL_MS || DEFAULT_POLL_MS));
+      const remainingReconcileTime = reconcileTimeoutMs - (Date.now() - reconcileStartedAt);
+      if (remainingReconcileTime < 1) {
+        break;
+      }
+      await sleep(
+        Math.min(
+          configuredTimeout("OPENCLAW_FRV_POLL_MS", DEFAULT_POLL_MS),
+          remainingOperationTime(operationDeadline),
+          remainingReconcileTime,
+        ),
+      );
     }
   }
+  remainingOperationTime(operationDeadline);
   if (pending.size > 0) {
     const failures = mutationResults
       .map((result, index) =>
@@ -1135,9 +1195,10 @@ function exactTerminalRunState(run, runId) {
   return state;
 }
 
-async function rerunWithTransientRetry(runId, priorRun, mutation, client) {
+async function rerunWithTransientRetry(runId, priorRun, mutation, client, operationDeadline) {
   const prior = exactTerminalRunState(priorRun, runId);
   for (let attempt = 1; attempt <= 2; attempt += 1) {
+    remainingOperationTime(operationDeadline);
     try {
       await mutation(runId);
       return;
@@ -1164,6 +1225,10 @@ async function rerunWithTransientRetry(runId, priorRun, mutation, client) {
 }
 
 export async function continueFailed(plan, rootRunId, client, options = {}) {
+  const operationDeadline =
+    options.operationDeadline === undefined
+      ? createOperationDeadline()
+      : validateOperationDeadline(options.operationDeadline);
   if (plan.legacy) {
     if (typeof client.verifyTrustedToolingSha !== "function") {
       throw new Error("legacy continuation client cannot verify its frozen Tooling SHA");
@@ -1176,6 +1241,7 @@ export async function continueFailed(plan, rootRunId, client, options = {}) {
     await waitForTerminal(
       status.active.map((child) => child.runId),
       client,
+      operationDeadline,
     );
     status = await inspectContinuation(plan, client);
   }
@@ -1208,13 +1274,15 @@ export async function continueFailed(plan, rootRunId, client, options = {}) {
           priorRuns.get(child.runId),
           client.rerunFailed.bind(client),
           client,
+          operationDeadline,
         ),
       ),
     );
-    await reconcileAttemptStarts(minimumAttempts, client, mutationResults);
+    await reconcileAttemptStarts(minimumAttempts, client, mutationResults, operationDeadline);
     await waitForTerminal(
       status.failed.map((child) => child.runId),
       client,
+      operationDeadline,
       minimumAttempts,
     );
     status = await inspectContinuation(plan, client);
@@ -1226,8 +1294,8 @@ export async function continueFailed(plan, rootRunId, client, options = {}) {
     return { action: plan.legacy ? "would-dispatch-parent" : "would-rerun-parent", status };
   }
   if (plan.legacy) {
-    const dispatched = await client.dispatchContinuation(plan);
-    await waitForTerminal([dispatched.runId], client);
+    const dispatched = await client.dispatchContinuation(plan, operationDeadline);
+    await waitForTerminal([dispatched.runId], client, operationDeadline);
     const run = await client.getRun(dispatched.runId);
     const finalPlanPayload = await options.loadExecutionPlan(dispatched.runId);
     let finalPlan;
@@ -1247,13 +1315,13 @@ export async function continueFailed(plan, rootRunId, client, options = {}) {
     ) {
       throw new Error("continuation parent execution plan differs from the reviewed source plan");
     }
-    await client.verify(dispatched.runId, finalPlan);
+    await client.verify(dispatched.runId, finalPlan, operationDeadline);
     await client.deleteWorkflowRef(dispatched.branch, dispatched.workflowSha);
     return { action: "dispatched-parent", finalRunId: dispatched.runId, status };
   }
   const parent = await client.getRun(rootRunId);
   if (parent.status !== "completed") {
-    await waitForTerminal([rootRunId], client);
+    await waitForTerminal([rootRunId], client, operationDeadline);
   }
   const completedParent = await client.getRun(rootRunId);
   let parentReran = false;
@@ -1262,17 +1330,23 @@ export async function continueFailed(plan, rootRunId, client, options = {}) {
       [rootRunId, positiveInteger(completedParent.run_attempt, "parent run attempt") + 1],
     ]);
     const mutationResults = await Promise.allSettled([
-      rerunWithTransientRetry(rootRunId, completedParent, client.rerunParent.bind(client), client),
+      rerunWithTransientRetry(
+        rootRunId,
+        completedParent,
+        client.rerunParent.bind(client),
+        client,
+        operationDeadline,
+      ),
     ]);
-    await reconcileAttemptStarts(minimumAttempts, client, mutationResults);
+    await reconcileAttemptStarts(minimumAttempts, client, mutationResults, operationDeadline);
     parentReran = true;
-    await waitForTerminal([rootRunId], client, minimumAttempts);
+    await waitForTerminal([rootRunId], client, operationDeadline, minimumAttempts);
   }
   const finalParent = await client.getRun(rootRunId);
   if (finalParent.conclusion !== "success") {
     throw new Error(`final parent rerun failed: ${rootRunId}`);
   }
-  await client.verify(rootRunId, plan);
+  await client.verify(rootRunId, plan, operationDeadline);
   return {
     action: parentReran ? "reran-parent" : "verified-parent",
     finalRunId: rootRunId,
@@ -1328,7 +1402,7 @@ async function main() {
   const client = createClient(options.repository);
   if (options.command === "verify") {
     const plan = await loadPlan(options);
-    const evidence = await client.verify(options.runId, plan);
+    const evidence = await client.verify(options.runId, plan, createOperationDeadline());
     console.log(evidence);
     return;
   }
