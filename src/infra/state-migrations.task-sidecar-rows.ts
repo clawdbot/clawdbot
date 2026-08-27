@@ -173,10 +173,11 @@ export function readLegacyTaskRowsWithSettlements(sourcePath: string): {
     if (columns.size === 0) {
       return { rows: [], settledLostTaskIds };
     }
-    for (const raw of db
-      // SAFETY: the SELECT projects only the two TEXT columns referenced below.
+    const rawReconciling = db
       .prepare(`SELECT task_id FROM task_runs WHERE runtime = 'cron' AND status = 'reconciling'`)
-      .all() as Array<Record<string, unknown>>) {
+      // SAFETY: the SELECT projects only the TEXT task_id column read below.
+      .all() as Array<Record<string, unknown>>;
+    for (const raw of rawReconciling) {
       const taskId = legacyStringValue(raw.task_id);
       if (taskId) {
         settledLostTaskIds.add(taskId);
