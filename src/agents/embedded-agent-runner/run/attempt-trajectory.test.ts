@@ -102,12 +102,16 @@ describe("prepareEmbeddedAttemptTrajectory", () => {
   it("records the runtime-forwarded authProfileId in session.started when present", async () => {
     const recorder = { recordEvent: vi.fn() };
     hoisted.createTrajectoryRuntimeRecorder.mockReturnValue(recorder);
-    const input = createInput() as never as Record<string, unknown>;
-    (input.attempt as Record<string, unknown>).runtimePlan = {
-      auth: { forwardedAuthProfileId: "profile-42" },
+    const baseInput = createInput() as never;
+    const input = {
+      ...baseInput,
+      attempt: {
+        ...(baseInput as { attempt: Record<string, unknown> }).attempt,
+        runtimePlan: { auth: { forwardedAuthProfileId: "profile-42" } },
+      },
     };
 
-    await prepareEmbeddedAttemptTrajectory(input as never);
+    await prepareEmbeddedAttemptTrajectory(input);
 
     expect(recorder.recordEvent).toHaveBeenNthCalledWith(
       1,
