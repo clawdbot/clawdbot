@@ -377,23 +377,22 @@ export function getSessionWorkAdmissionRelease(
   );
 }
 
-/** Active session identities for one store/lifecycle scope. */
-export function collectActiveSessionWorkAdmissionIdentities(scope: string): Set<string> {
-  const normalizedScope = scope.trim();
-  if (!normalizedScope) {
-    throw new Error("session lifecycle scope is required");
-  }
-  const identities = new Set<string>();
+/** Active session identities grouped by their authoritative store/lifecycle scope. */
+export function collectActiveSessionWorkAdmissions(): Map<string, Set<string>> {
+  const targets = new Map<string, Set<string>>();
   for (const [normalizedIdentity, admissions] of ACTIVE_SESSION_WORK_ADMISSIONS) {
     if (admissions.size === 0) {
       continue;
     }
     const decoded = decodeSessionIdentity(normalizedIdentity);
-    if (decoded?.scope === normalizedScope) {
-      identities.add(decoded.identity);
+    if (!decoded) {
+      continue;
     }
+    const identities = targets.get(decoded.scope) ?? new Set<string>();
+    identities.add(decoded.identity);
+    targets.set(decoded.scope, identities);
   }
-  return identities;
+  return targets;
 }
 
 /** Unique admitted turns; one lease can be indexed under several identities. */

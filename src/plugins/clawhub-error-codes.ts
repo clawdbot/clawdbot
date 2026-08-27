@@ -23,3 +23,15 @@ export const CLAWHUB_INSTALL_ERROR_CODE = {
 /** Union of stable ClawHub install error code values. */
 export type ClawHubInstallErrorCode =
   (typeof CLAWHUB_INSTALL_ERROR_CODE)[keyof typeof CLAWHUB_INSTALL_ERROR_CODE];
+
+/**
+ * Detects ClawHub failures caused by a target that is not published, as opposed
+ * to a broken install. Channel-aware installs use this to widen the selector
+ * instead of failing when the requested release has no artifact.
+ */
+export function isUnavailableClawHubTarget(result: { ok: false; code?: string }): boolean {
+  return (
+    result.code === CLAWHUB_INSTALL_ERROR_CODE.PACKAGE_NOT_FOUND ||
+    result.code === CLAWHUB_INSTALL_ERROR_CODE.VERSION_NOT_FOUND
+  );
+}

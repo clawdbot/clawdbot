@@ -374,8 +374,9 @@ suite.define(() => {
           await page.screenshot({ path: path.join(artifactDir, `terminal-partial-${label}.png`) });
         }
         const alert = page.locator(".chat-error");
-        await alert.getByText(errorText).waitFor({ timeout: 10_000 });
-        expect(await alert.locator("button").count()).toBe(0);
+        await alert.locator("summary").getByText(errorText).waitFor({ timeout: 10_000 });
+        expect(await alert.getByRole("button", { name: "Dismiss error" }).count()).toBe(0);
+        expect(await alert.getByRole("button", { name: "Retry", exact: true }).count()).toBe(0);
         expect(await page.locator(".chat-thread-inner").getByText(errorText).count()).toBe(0);
         const [alertBox, composerBox] = await Promise.all([
           alert.boundingBox(),

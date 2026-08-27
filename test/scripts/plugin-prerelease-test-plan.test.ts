@@ -594,8 +594,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       OPENCLAW_CI_TARGET_CONTEXT_TARGET:
         "${{ steps.target_context_target.outputs.eligible || 'false' }}",
       OPENCLAW_CI_REPOSITORY: "${{ github.repository }}",
-      OPENCLAW_CI_RUNNER_BACKEND:
-        "${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)) && 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND }}",
+      OPENCLAW_CI_RUNNER_PROFILE: "${{ steps.runner_profile.outputs.runner_profile }}",
       OPENCLAW_CI_RUN_ANDROID:
         "${{ github.event_name == 'workflow_dispatch' && (inputs.release_gate || inputs.include_android) && 'true' || steps.changed_scope.outputs.run_android || 'false' }}",
       OPENCLAW_CI_RUN_CONTROL_UI_I18N:

@@ -40,9 +40,9 @@ export type RoleSnapshotOptions = {
   compact?: boolean;
 };
 
-function findSnapshotLineRef(line: string): string | undefined {
-  // Names and scalar values are page content, never formatter-owned refs.
-  return parseSnapshotLine(line)?.suffix.match(/^[^:]*?\[ref=([^\]]+)\]/)?.[1];
+/** Read formatter-owned refs without interpreting names or scalar page content. */
+export function findRoleSnapshotLineRef(line: string): string | undefined {
+  return parseSnapshotLine(line)?.ref;
 }
 
 function getRoleSnapshotIdentityKey(
@@ -74,7 +74,7 @@ function annotateRoleSnapshotDelta<T extends RoleRef>(params: {
 }): boolean {
   const markedKeys = new Set<string>();
   for (const [index, line] of params.lines.entries()) {
-    const ref = findSnapshotLineRef(line);
+    const ref = findRoleSnapshotLineRef(line);
     const value = ref && Object.hasOwn(params.refs, ref) ? params.refs[ref] : undefined;
     if (!ref || !value) {
       continue;
@@ -146,7 +146,7 @@ export function finalizeRoleSnapshot<T extends RoleRef>(params: {
   const outputLines = truncated ? snapshot.split("\n") : sourceLines;
   const visibleRefs = new Set<string>();
   for (const line of outputLines) {
-    const ref = findSnapshotLineRef(line);
+    const ref = findRoleSnapshotLineRef(line);
     if (ref) {
       visibleRefs.add(ref);
     }
@@ -214,17 +214,22 @@ function parseSnapshotLine(line: string) {
   // unquoted YAML value cannot be part of that name (even if it contains '/').
   if (nameToken === undefined && suffix.startsWith(" /")) {
     const header = quoted ? suffix : suffix.split(/:(?=\s|$)/, 1)[0]!;
-    const literal = header.match(/^ (\/.*\/)/s);
+    const literal = header.match(/^ (\/(?:.*\/)?)/s);
     if (literal) {
       nameToken = literal[1]!;
       suffix = suffix.slice(literal[0].length);
     }
   }
+  // Only consecutive bracket attributes inside the key belong to the formatter.
+  // Values, descriptions, nested brackets, and the quoted key's tail are page text.
+  const attributes = suffix.match(/^(?:\s+\[[^\][]*\])*/)?.[0];
+  const ref = attributes?.match(/\[ref=([^\][]+)\]/)?.[1];
   return {
     prefix,
     roleRaw,
     role: normalizeLowercaseStringOrEmpty(roleRaw),
     nameToken,
+    ref,
     suffix: suffix + (quoted?.[2] ?? ""),
   };
 }
@@ -313,10 +318,11 @@ function compactTree(tree: string) {
       }
       finishEntry();
     }
+    const hasRef = Boolean(findRoleSnapshotLineRef(line));
     const entry = {
       line,
-      keep: line.includes("[ref=") || (line.includes(":") && !line.trimEnd().endsWith(":")),
-      hasRef: line.includes("[ref="),
+      keep: hasRef || (line.includes(":") && !line.trimEnd().endsWith(":")),
+      hasRef,
       indent,
     };
     entries.push(entry);
@@ -513,9 +519,9 @@ export function buildRoleSnapshotFromAriaSnapshot(
   };
 }
 
-function parseAiSnapshotRef(suffix: string): string | null {
+function parseAiSnapshotRef(ref: string | undefined): string | null {
   // Playwright's page-wide AI snapshots qualify element refs with a frame seq.
-  return suffix.match(/^[^:]*?\[ref=((?:f\d+)?e\d+|\d{1,9})\]/i)?.[1] ?? null;
+  return ref && /^(?:f\d+)?e\d+$|^\d{1,9}$/i.test(ref) ? ref : null;
 }
 
 /**
@@ -534,8 +540,8 @@ export function buildRoleSnapshotFromAiSnapshot(
     const out = buildInteractiveSnapshotLines({
       lines,
       options,
-      resolveRef: ({ suffix }) => {
-        const ref = parseAiSnapshotRef(suffix);
+      resolveRef: (parsed) => {
+        const ref = parseAiSnapshotRef(parsed.ref);
         return ref ? { ref } : null;
       },
       recordRef: ({ role, name }, ref) => {
@@ -561,7 +567,7 @@ export function buildRoleSnapshotFromAiSnapshot(
       out.push(line);
       continue;
     }
-    const { role, suffix } = parsed;
+    const { role } = parsed;
     const name = decodeSnapshotName(parsed.nameToken);
     const isStructural = STRUCTURAL_ROLES.has(role);
 
@@ -569,7 +575,7 @@ export function buildRoleSnapshotFromAiSnapshot(
       continue;
     }
 
-    const ref = parseAiSnapshotRef(suffix);
+    const ref = parseAiSnapshotRef(parsed.ref);
     if (ref) {
       refs[ref] = { role, ...(name ? { name } : {}) };
     }

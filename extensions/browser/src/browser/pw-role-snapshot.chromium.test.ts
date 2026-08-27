@@ -42,6 +42,12 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
             const input = document.createElement("input");
             input.setAttribute("aria-label", inputLabel);
             document.querySelector("main")!.append(input);
+            const slash = document.createElement("button");
+            slash.textContent = "/";
+            slash.addEventListener("click", () => {
+              document.querySelector("output")!.textContent = "/";
+            });
+            document.querySelector("main")!.append(slash);
             document.querySelector("iframe")!.srcdoc =
               "<button onclick=\"this.textContent='Frame clicked'\">Frame: action</button>";
           },
@@ -77,6 +83,10 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
           expect(input, mode).toBeDefined();
           await typeViaPlaywright({ ...target, ref: input![0], text: mode, timeoutMs: 1_000 });
           expect(await page.getByRole("textbox").inputValue()).toBe(mode);
+          const slash = Object.entries(snapshot.refs).find(([, value]) => value.name === "/");
+          expect(slash, mode).toBeDefined();
+          await clickViaPlaywright({ ...target, ref: slash![0], timeoutMs: 1_000 });
+          expect(await page.locator("output").textContent(), mode).toBe("/");
         }
         const snapshot = await snapshotAiViaPlaywright(target);
         const nested = Object.entries(snapshot.refs).find(

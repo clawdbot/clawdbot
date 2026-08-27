@@ -56,6 +56,12 @@ type PendingRequest = {
   cleanup: () => void;
 };
 
+type RequestOptions = {
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  assertCurrent?: () => void;
+};
+
 /** Process-local generation fence for bindings tied to one app-server client instance. */
 export function getCodexAppServerClientInstanceId(client: object): string {
   const current = CODEX_APP_SERVER_CLIENT_INSTANCE_IDS.get(client);
@@ -357,20 +363,19 @@ export class CodexAppServerClient {
   request<M extends CodexAppServerRequestMethod>(
     method: M,
     params: CodexAppServerRequestParams<M>,
-    options?: { timeoutMs?: number; signal?: AbortSignal },
+    options?: RequestOptions,
   ): Promise<CodexAppServerRequestResult<M>>;
   request<T = JsonValue | undefined>(
     method: string,
     params?: unknown,
-    options?: { timeoutMs?: number; signal?: AbortSignal },
+    options?: RequestOptions,
   ): Promise<T>;
   request<T = JsonValue | undefined>(
     method: string,
     params?: unknown,
-    optionsInput?: { timeoutMs?: number; signal?: AbortSignal },
+    optionsInput?: RequestOptions,
   ): Promise<T> {
-    let options = optionsInput;
-    options ??= {};
+    const options = optionsInput ?? {};
     if (this.closed) {
       return Promise.reject(this.closeError ?? new Error("codex app-server client is closed"));
     }
@@ -434,15 +439,15 @@ export class CodexAppServerClient {
           if (remainingTimeoutMs !== undefined && remainingTimeoutMs <= 0) {
             throw new CodexAppServerLocalRequestCancellationError(method, "timed out", false);
           }
-          return await this.requestWithoutThreadSessionGuard<T>(
+          return await this.requestWithOverloadRetry<T>(
             method,
             params,
             {
               ...options,
               ...(remainingTimeoutMs !== undefined ? { timeoutMs: remainingTimeoutMs } : {}),
             },
-            () => {
-              requestMayHaveWritten = true;
+            (mayHaveWritten) => {
+              requestMayHaveWritten = mayHaveWritten;
             },
           );
         } catch (error) {
@@ -461,23 +466,14 @@ export class CodexAppServerClient {
         }
       })();
     }
-    return this.requestWithoutThreadSessionGuard<T>(method, params, options);
-  }
-
-  private requestWithoutThreadSessionGuard<T>(
-    method: string,
-    params: unknown,
-    options: { timeoutMs?: number; signal?: AbortSignal },
-    onWriteAttempt?: () => void,
-  ): Promise<T> {
-    return this.requestWithOverloadRetry(method, params, options, onWriteAttempt);
+    return this.requestWithOverloadRetry<T>(method, params, options);
   }
 
   private async requestWithOverloadRetry<T>(
     method: string,
     params: unknown,
-    options: { timeoutMs?: number; signal?: AbortSignal },
-    onWriteAttempt?: () => void,
+    options: RequestOptions,
+    onWriteStateChange?: (mayHaveWritten: boolean) => void,
   ): Promise<T> {
     const deadline =
       options.timeoutMs !== undefined && Number.isFinite(options.timeoutMs)
@@ -499,7 +495,7 @@ export class CodexAppServerClient {
             ...options,
             ...(remainingTimeoutMs !== undefined ? { timeoutMs: remainingTimeoutMs } : {}),
           },
-          onWriteAttempt,
+          onWriteStateChange,
         );
       } catch (error) {
         // Codex emits -32001 only when ingress rejects a request before enqueue,
@@ -511,6 +507,9 @@ export class CodexAppServerClient {
         ) {
           throw error;
         }
+        // Ingress rejected this attempt, so cancellation before the retry
+        // must not retire a shared client with no outstanding native request.
+        onWriteStateChange?.(false);
         const backoffMs = Math.round(
           CODEX_APP_SERVER_OVERLOAD_RETRY_BASE_MS * 2 ** retry * (0.75 + Math.random() * 0.5),
         );
@@ -557,8 +556,8 @@ export class CodexAppServerClient {
   private requestOnce<T>(
     method: string,
     params: unknown,
-    options: { timeoutMs?: number; signal?: AbortSignal },
-    onWriteAttempt?: () => void,
+    options: RequestOptions,
+    onWriteStateChange?: (mayHaveWritten: boolean) => void,
   ): Promise<T> {
     if (this.closed) {
       return Promise.reject(this.closeError ?? new Error("codex app-server client is closed"));
@@ -639,8 +638,11 @@ export class CodexAppServerClient {
         return;
       }
       try {
+        // Config-fence waits and overload retries can outlive the caller's
+        // ownership. Revalidate before each physical write, without an await.
+        options.assertCurrent?.();
         mayHaveWritten = true;
-        onWriteAttempt?.();
+        onWriteStateChange?.(true);
         this.writeMessage(message, (error) => rejectPending(error));
       } catch (error) {
         rejectPending(toStringifiedError(error));

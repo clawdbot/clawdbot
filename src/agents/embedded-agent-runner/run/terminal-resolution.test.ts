@@ -662,6 +662,60 @@ describe("terminal resolution", () => {
     ).toBeNull();
   });
 
+  it("keeps explicit silence terminal only for reply-optional settled turns", () => {
+    const toolUseAssistant = buildEmbeddedRunnerAssistant({
+      stopReason: "toolUse",
+      content: [{ type: "toolCall", id: "tool-1", name: "write", arguments: {} }],
+    });
+    const silentAssistant = buildEmbeddedRunnerAssistant({
+      stopReason: "stop",
+      content: [{ type: "text", text: SILENT_REPLY_TOKEN }],
+    });
+    const attempt = makeEmbeddedRunnerAttempt({
+      assistantTexts: [SILENT_REPLY_TOKEN],
+      toolMetas: [{ toolName: "write", toolCallId: "tool-1", replaySafe: false }],
+      itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+      messagesSnapshot: [
+        { role: "user", content: [{ type: "text", text: "[OpenClaw heartbeat poll]" }] },
+        toolUseAssistant,
+        { role: "toolResult", toolCallId: "tool-1", toolName: "write", isError: false },
+        silentAssistant,
+      ] as never,
+      lastAssistant: silentAssistant,
+      currentAttemptAssistant: silentAssistant,
+      replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+    });
+
+    const request = (runParams: {
+      trigger: "heartbeat" | "user";
+      terminalReplyExpectation?: "required";
+    }) =>
+      resolveSettledTurnFinalizationRequest({
+        runParams: {
+          sessionId: "session:settled-silent",
+          runId: "run:settled-silent",
+          ...runParams,
+        } as never,
+        attempt,
+        activeErrorContext: { provider: "openai", model: "gpt-5.6-luna" },
+        modelApi: "openai-responses",
+        executionContract: undefined,
+        payloadsWithToolMedia: [],
+        hasTerminalToolPresentation: false,
+        terminalState: resolveEmbeddedRunAttemptTerminalState({
+          attempt,
+          assistant: silentAssistant,
+        }),
+        settledTurnFinalizationAvailable: true,
+      });
+
+    expect(request({ trigger: "heartbeat" })).toBeNull();
+    expect(request({ trigger: "user", terminalReplyExpectation: "required" })).toBe(
+      SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION,
+    );
+  });
+
   it("requires an available finalizer and no visible structured error", () => {
     const assistant = buildEmbeddedRunnerAssistant({
       stopReason: "toolUse",

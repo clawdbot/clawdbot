@@ -74,6 +74,9 @@ public final class TalkSystemSpeechSynthesizer: NSObject {
             }
         }, onCancel: {
             Task { @MainActor in
+                // A replacement may start before this actor hop runs. Cancellation
+                // must stop only the utterance owned by the canceled call.
+                guard self.currentToken == token else { return }
                 self.stop()
             }
         })

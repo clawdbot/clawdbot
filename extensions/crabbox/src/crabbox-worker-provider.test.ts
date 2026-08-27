@@ -166,25 +166,34 @@ function hasLoneSurrogate(value: string): boolean {
 }
 
 describe("Crabbox worker provider", () => {
-  it("derives ordered machine classes and shapes while preserving configured defaults", async () => {
+  it("reads large machine catalogs while preserving shapes, order, and configured defaults", async () => {
     const calls: string[][] = [];
-    const provider = providerWithRunner(async (argv) => {
+    const provider = providerWithRunner(async (argv, options) => {
       calls.push(argv);
-      return commandResult({
-        stdout: JSON.stringify([
-          {
-            provider: "aws",
-            classes: [
-              { class: "tiny", type: "c7a.2xlarge", vcpu: 8, memoryGb: 16 },
-              { class: "small", type: "c7a.4xlarge", vcpu: 16, memoryGb: 32 },
-              { class: "standard", type: "c7a.8xlarge", vcpu: 32, memoryGb: 64 },
-              { class: "fast", type: "c7a.16xlarge", vcpu: 64, memoryGb: 128 },
-              { class: "large", type: "c7a.24xlarge", vcpu: 96, memoryGb: 192 },
-              { class: "beast", type: "c7a.48xlarge", vcpu: 192, memoryGb: 384 },
-            ],
-          },
-        ]),
-      });
+      return processRuntime.runCommandWithTimeout(
+        [process.execPath, "-e", "process.stdin.pipe(process.stdout)"],
+        {
+          ...options,
+          input: JSON.stringify([
+            {
+              provider: "unrelated",
+              classCatalog: { metadata: "x".repeat(65_536) },
+            },
+            {
+              provider: "aws",
+              classes: [
+                { class: "tiny", type: "c7a.2xlarge", vcpu: 8, memoryGb: 16 },
+                { class: "small", type: "c7a.4xlarge", vcpu: 16, memoryGb: 32 },
+                { class: "standard", type: "c7a.8xlarge", vcpu: 32, memoryGb: 64 },
+                { class: "fast", type: "c7a.16xlarge", vcpu: 64, memoryGb: 128 },
+                { class: "large", type: "c7a.24xlarge", vcpu: 96, memoryGb: 192 },
+                { class: "beast", type: "c7a.48xlarge", vcpu: 192, memoryGb: 384 },
+              ],
+            },
+            { provider: "machine0", classCatalog: { disposition: "unmapped", profiles: [] } },
+          ]),
+        },
+      );
     });
     expect(provider.supportedExecutionModes).toEqual(["worker-turn", "remote-exec"]);
     expect(await provider.listMachineOptions?.(PROFILE)).toEqual([
@@ -215,6 +224,12 @@ describe("Crabbox worker provider", () => {
       },
     ]);
     await provider.listMachineOptions?.(PROFILE);
+    expect(await provider.listMachineOptions?.({ ...PROFILE, provider: "machine0" })).toEqual([
+      { id: "standard", label: "Standard", default: true },
+      { id: "fast", label: "Fast" },
+      { id: "large", label: "Large" },
+      { id: "beast", label: "Beast" },
+    ]);
     expect(calls.filter((argv) => argv[1] === "providers")).toHaveLength(1);
   });
 

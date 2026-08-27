@@ -3,7 +3,7 @@ import path from "node:path";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
-  collectActiveSessionWorkAdmissionIdentities,
+  collectActiveSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../../shared/store-writer-queue.js";
@@ -230,7 +230,8 @@ export function collectAdmissionProtectedSessionIds(params: {
   storePath: string;
 }): Set<string> {
   const protectedSessionIds = new Set<string>();
-  const admissionIdentities = collectActiveSessionWorkAdmissionIdentities(params.storePath);
+  const admissionIdentities =
+    collectActiveSessionWorkAdmissions().get(params.storePath) ?? new Set<string>();
   if (admissionIdentities.size === 0) {
     return protectedSessionIds;
   }

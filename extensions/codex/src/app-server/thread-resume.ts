@@ -19,6 +19,7 @@ export async function resumeCodexAppServerThread(params: {
   request: CodexThreadResumeParams;
   timeoutMs?: number;
   signal?: AbortSignal;
+  assertCurrent?: () => void;
 }): Promise<CodexThreadResumeResponse> {
   const threadId = params.request.threadId;
   let response: CodexThreadResumeResponse;
@@ -27,10 +28,12 @@ export async function resumeCodexAppServerThread(params: {
       await params.client.request("thread/resume", params.request, {
         ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
         ...(params.signal ? { signal: params.signal } : {}),
+        assertCurrent: params.assertCurrent,
       }),
     );
     assertCodexThreadResumeSubscription(threadId, response.thread.id);
   } catch (error) {
+    params.assertCurrent?.();
     if (
       isCodexAppServerStartSelectionChangedError(error) ||
       isCodexAppServerPrewriteRequestCancellationError(error)

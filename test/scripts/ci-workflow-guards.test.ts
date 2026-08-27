@@ -96,11 +96,14 @@ function evaluateWorkflowExpression(
     // to CONTRIBUTOR: same-repo PRs always come from someone with write access.
     authorAssociation?: string;
     eventName: "pull_request" | "push" | "workflow_dispatch";
+    frozenTarget?: boolean;
     headRepository?: string;
+    hostedRunnerProfileContract?: boolean;
     matrix?: Record<string, unknown>;
     repository: string;
     runCheck?: boolean;
     runnerBackend?: "" | "blacksmith" | "github" | "hybrid";
+    runnerProfile?: "blacksmith" | "github" | "hybrid";
     runAttempt: number;
   },
 ) {
@@ -140,7 +143,10 @@ function evaluateWorkflowExpression(
     needs: {
       preflight: {
         outputs: {
+          frozen_target: String(context.frozenTarget ?? false),
+          hosted_runner_profile_contract: String(context.hostedRunnerProfileContract ?? true),
           run_check: String(context.runCheck ?? true),
+          runner_profile: context.runnerProfile ?? context.runnerBackend ?? "blacksmith",
         },
       },
     },
@@ -231,6 +237,8 @@ function runCiManifestFixture(options: {
   nodeFastCiRouting?: boolean;
   runNode?: boolean;
   runnerBackend?: "blacksmith" | "github" | "hybrid";
+  runnerProfile?: "blacksmith" | "github" | "hybrid";
+  targetHostedRunnerProfileContract?: boolean;
 }) {
   const root = mkdtempSync(path.join(tmpdir(), "openclaw-ci-manifest-"));
   try {
@@ -391,6 +399,9 @@ function runCiManifestFixture(options: {
           ? ["openclawkit-tests-contract-v1"]
           : []),
         ...(options.bundledPlanner ? ["docker-seed-e2e-contract-v1"] : []),
+        ...((options.targetHostedRunnerProfileContract ?? options.bundledPlanner)
+          ? ["hosted-runner-profile-contract-v1"]
+          : []),
       ].join("\n"),
     );
     const outputPath = path.join(root, "manifest.out");
@@ -430,7 +441,8 @@ function runCiManifestFixture(options: {
         OPENCLAW_CI_RUN_NODE_FAST_PLUGIN_CONTRACTS: String(
           options.nodeFastPluginContracts ?? false,
         ),
-        OPENCLAW_CI_RUNNER_BACKEND: options.runnerBackend ?? "",
+        OPENCLAW_CI_RUNNER_BACKEND: options.runnerBackend ?? options.runnerProfile ?? "",
+        OPENCLAW_CI_RUNNER_PROFILE: options.runnerProfile ?? options.runnerBackend ?? "blacksmith",
         OPENCLAW_CI_RUN_SKILLS_PYTHON: "true",
         OPENCLAW_CI_RUN_WINDOWS: "true",
         OPENCLAW_CI_WORKFLOW_REVISION: "b".repeat(40),
@@ -446,6 +458,61 @@ function runCiManifestFixture(options: {
         }),
     );
     return { output: `${run.stdout}${run.stderr}`, outputs, status: run.status };
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+}
+
+function runRunnerProfileFixture(options: {
+  authorAssociation?: string;
+  configuredProfile?: string;
+  eventName: "pull_request" | "push" | "workflow_dispatch";
+  headRepository?: string;
+  repository?: string;
+  runAttempt?: number;
+  targetSupportsContract: boolean;
+}) {
+  const root = mkdtempSync(path.join(tmpdir(), "openclaw-ci-runner-profile-"));
+  try {
+    const workflowPath = path.join(root, ".github", "workflows", "ci.yml");
+    mkdirSync(path.dirname(workflowPath), { recursive: true });
+    writeFileSync(
+      workflowPath,
+      options.targetSupportsContract ? "hosted-runner-profile-contract-v1\n" : "name: legacy\n",
+      "utf8",
+    );
+    const outputPath = path.join(root, "profile.out");
+    writeFileSync(outputPath, "", "utf8");
+    const step = expectDefined(
+      readCiWorkflow().jobs.preflight.steps.find(
+        (candidate: WorkflowStep) => candidate.name === "Resolve logical runner profile",
+      ),
+      "logical runner profile preflight step",
+    );
+    const result = runWorkflowShellScript(expectDefined(step.run, "runner profile script"), {
+      cwd: root,
+      env: {
+        ...process.env,
+        AUTHOR_ASSOCIATION: options.authorAssociation ?? "",
+        CONFIGURED_RUNNER_PROFILE: options.configuredProfile ?? "",
+        GITHUB_EVENT_NAME: options.eventName,
+        GITHUB_OUTPUT: outputPath,
+        GITHUB_REPOSITORY: options.repository ?? "openclaw/openclaw",
+        HEAD_REPOSITORY: options.headRepository ?? options.repository ?? "openclaw/openclaw",
+        GITHUB_RUN_ATTEMPT: String(options.runAttempt ?? 1),
+      },
+    });
+    const outputs = Object.fromEntries(
+      readFileSync(outputPath, "utf8")
+        .trim()
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => {
+          const separator = line.indexOf("=");
+          return [line.slice(0, separator), line.slice(separator + 1)];
+        }),
+    );
+    return { output: `${result.stdout}${result.stderr}`, outputs, status: result.status };
   } finally {
     rmSync(root, { force: true, recursive: true });
   }
@@ -2942,7 +3009,7 @@ NODE
     const nodeMaxParallel =
       workflow.jobs["checks-node-core-test-nondist-shard"].strategy["max-parallel"];
     expect(nodeMaxParallel).toBe(
-      "${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 96 || 28 }}",
+      "${{ (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && 96 || 28 }}",
     );
     expect(
       evaluateWorkflowExpression(nodeMaxParallel, {
@@ -3388,6 +3455,151 @@ NODE
     expect(workflow.jobs.preflight["runs-on"]).toContain("blacksmith-4vcpu-ubuntu-2404");
     expect(workflow.jobs["security-fast"]["runs-on"]).toBe("ubuntu-24.04");
     expect(workflow.jobs["pnpm-store-warmup"]["runs-on"]).toContain("blacksmith-4vcpu-ubuntu-2404");
+  });
+
+  it("resolves one event-aware logical runner profile without changing physical routing", () => {
+    const scenarios = [
+      {
+        expected: "github",
+        name: "current manual dispatch ignores configured Blacksmith",
+        options: {
+          configuredProfile: "blacksmith",
+          eventName: "workflow_dispatch" as const,
+          targetSupportsContract: true,
+        },
+      },
+      {
+        expected: "blacksmith",
+        name: "canonical trusted push keeps the default",
+        options: {
+          eventName: "push" as const,
+          targetSupportsContract: true,
+        },
+      },
+      {
+        expected: "github",
+        name: "canonical trusted push keeps configured GitHub",
+        options: {
+          configuredProfile: "github",
+          eventName: "push" as const,
+          targetSupportsContract: true,
+        },
+      },
+      {
+        expected: "hybrid",
+        name: "canonical trusted hybrid retry keeps the hybrid workload shape",
+        options: {
+          authorAssociation: "CONTRIBUTOR",
+          configuredProfile: "hybrid",
+          eventName: "pull_request" as const,
+          runAttempt: 2,
+          targetSupportsContract: true,
+        },
+      },
+      {
+        expected: "github",
+        name: "fork pull request is hosted",
+        options: {
+          configuredProfile: "hybrid",
+          eventName: "pull_request" as const,
+          headRepository: "contributor/openclaw",
+          targetSupportsContract: true,
+        },
+      },
+      {
+        expected: "github",
+        name: "untrusted same-repository pull request is hosted",
+        options: {
+          authorAssociation: "NONE",
+          configuredProfile: "blacksmith",
+          eventName: "pull_request" as const,
+          targetSupportsContract: true,
+        },
+      },
+      {
+        expected: "github",
+        name: "noncanonical repository is hosted",
+        options: {
+          configuredProfile: "blacksmith",
+          eventName: "push" as const,
+          repository: "fork/openclaw",
+          targetSupportsContract: true,
+        },
+      },
+      {
+        expected: "blacksmith",
+        name: "frozen target without the marker keeps legacy dispatch behavior",
+        options: {
+          configuredProfile: "blacksmith",
+          eventName: "workflow_dispatch" as const,
+          targetSupportsContract: false,
+        },
+      },
+      {
+        expected: "github",
+        name: "frozen target with the marker uses event-aware dispatch behavior",
+        options: {
+          configuredProfile: "blacksmith",
+          eventName: "workflow_dispatch" as const,
+          targetSupportsContract: true,
+        },
+      },
+    ];
+
+    for (const { expected, name, options } of scenarios) {
+      const result = runRunnerProfileFixture(options);
+      expect(result.status, `${name}: ${result.output}`).toBe(0);
+      expect(result.outputs.runner_profile, name).toBe(expected);
+      expect(result.outputs.hosted_runner_profile_contract, name).toBe(
+        String(options.targetSupportsContract),
+      );
+    }
+
+    const invalid = runRunnerProfileFixture({
+      configuredProfile: "other",
+      eventName: "push",
+      targetSupportsContract: true,
+    });
+    expect(invalid.status).toBe(1);
+    expect(invalid.output).toContain(
+      "OPENCLAW_CI_RUNNER_BACKEND must be github, hybrid, or blacksmith",
+    );
+
+    const workflow = readCiWorkflow();
+    expect(workflow.jobs.preflight.outputs.runner_profile).toBe(
+      "${{ steps.runner_profile.outputs.runner_profile }}",
+    );
+    expect(workflow.jobs.preflight["runs-on"]).toContain("vars.OPENCLAW_CI_RUNNER_BACKEND");
+
+    const dispatchManifest = runCiManifestFixture({
+      bundledPlanner: true,
+      eventName: "workflow_dispatch",
+      historicalCompatibility: false,
+      runnerBackend: "blacksmith",
+      runnerProfile: "github",
+    });
+    expect(dispatchManifest.status, dispatchManifest.output).toBe(0);
+    expect(
+      JSON.parse(expectDefined(dispatchManifest.outputs.ui_e2e_matrix, "dispatch UI E2E matrix"))
+        .include,
+    ).toHaveLength(12);
+    expect(
+      JSON.parse(
+        expectDefined(dispatchManifest.outputs.qa_smoke_ci_matrix, "dispatch QA smoke matrix"),
+      ).include,
+    ).toHaveLength(6);
+    expect(
+      evaluateWorkflowExpression(
+        workflow.jobs["checks-node-core-test-nondist-shard"].strategy["max-parallel"],
+        {
+          eventName: "workflow_dispatch",
+          repository: "openclaw/openclaw",
+          runnerBackend: "blacksmith",
+          runnerProfile: "github",
+          runAttempt: 1,
+        },
+      ),
+    ).toBe(96);
   });
 
   it("encodes GitHub, Blacksmith, and hybrid runner-backend shapes", () => {
@@ -4012,10 +4224,10 @@ NODE
     expect(preflightRestore?.step.if).toContain("vars.OPENCLAW_CI_RUNNER_BACKEND != 'github'");
     expect(preflightRestore?.step.if).toContain("vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid'");
     expect(workflow.jobs["pnpm-store-warmup"].if).toContain(
-      "vars.OPENCLAW_CI_RUNNER_BACKEND == 'github'",
+      "needs.preflight.outputs.runner_profile == 'github'",
     );
     expect(workflow.jobs["pnpm-store-warmup"].if).toContain(
-      "vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid'",
+      "needs.preflight.outputs.runner_profile == 'hybrid'",
     );
     const consumers = dependencySetups.filter(({ jobName }) => jobName !== "preflight");
     expect(consumers.map(({ jobName }) => jobName).toSorted()).toEqual([
@@ -4582,7 +4794,7 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
       (step: WorkflowStep) => step.name === "Restore build-all step cache",
     );
     const hostedTestCacheInput =
-      "${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'true' || 'false' }}";
+      "${{ (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && 'true' || 'false' }}";
     const hostedTestCacheJobs = [
       "checks-ui",
       "checks-ui-e2e",
@@ -4591,7 +4803,7 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
       "checks-fast-channel-contracts-shard",
     ];
     const hostedFastCoreTestCacheInput =
-      "${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && (matrix.task == 'bundled-protocol' || matrix.task == 'contracts-plugins-ci-routing' || matrix.task == 'ci-routing' || matrix.task == 'bun-launcher') && 'true' || 'false' }}";
+      "${{ (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && (matrix.task == 'bundled-protocol' || matrix.task == 'contracts-plugins-ci-routing' || matrix.task == 'ci-routing' || matrix.task == 'bun-launcher') && 'true' || 'false' }}";
 
     expect(setupNodeStep.with).toMatchObject({
       "cache-mode": "${{ needs.preflight.outputs.cache_mode }}",
@@ -4946,7 +5158,7 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
       expect(gate.if).toContain("vars.OPENCLAW_CI_RUNNER_BACKEND != 'github'");
     }
     expect(hostedLintCache.if).toBe(
-      "needs.preflight.outputs.cache_mode != 'off' && matrix.task == 'lint' && (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository))",
+      "needs.preflight.outputs.cache_mode != 'off' && matrix.task == 'lint' && (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid')",
     );
     expect(hostedLintCache.uses).toBe(CACHE_V5);
     expect(hostedLintCache.with).toEqual(boundaryCache.with);
@@ -6479,42 +6691,16 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const checkShardRun = checkShardStep.run;
     const hostedCoreLint = workflow.jobs["check-lint-hosted-core-shard"];
     const hostedCoreTypes = workflow.jobs["check-test-types-hosted-core-shard"];
-    const manualDispatch = {
-      eventName: "workflow_dispatch",
-      repository: "openclaw/openclaw",
-      runnerBackend: "blacksmith",
-      runAttempt: 1,
-    } as const;
-    const untrustedForkPullRequest = {
-      authorAssociation: "NONE",
-      eventName: "pull_request",
-      headRepository: "contributor/openclaw",
-      repository: "openclaw/openclaw",
-      runnerBackend: "",
-      runAttempt: 1,
-    } as const;
-
-    expect(manifestStep.env.OPENCLAW_CI_RUNNER_BACKEND).toBe(
-      "${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)) && 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND }}",
+    expect(manifestStep.env.OPENCLAW_CI_RUNNER_PROFILE).toBe(
+      "${{ steps.runner_profile.outputs.runner_profile }}",
     );
-    expect(
-      evaluateWorkflowExpression(manifestStep.env.OPENCLAW_CI_RUNNER_BACKEND, manualDispatch),
-    ).toBe("github");
-    expect(
-      evaluateWorkflowExpression(
-        manifestStep.env.OPENCLAW_CI_RUNNER_BACKEND,
-        untrustedForkPullRequest,
-      ),
-    ).toBe("github");
-    expect(
-      evaluateWorkflowExpression(checkShardStep.env.RUNNER_BACKEND, untrustedForkPullRequest),
-    ).toBe("github");
-    expect(evaluateWorkflowExpression(checkShardStep.env.RUNNER_BACKEND, manualDispatch)).toBe(
-      "github",
+    expect(manifestStep.run).toContain("runnerBackend: runnerProfile");
+    expect(checkShardStep.env.RUNNER_PROFILE).toBe("${{ needs.preflight.outputs.runner_profile }}");
+    expect(checkShardStep.env.HOSTED_RUNNER_STRIPES).toContain(
+      "needs.preflight.outputs.hosted_runner_profile_contract == 'true'",
     );
+    expect(checkShardRun).toContain('if [ "$HOSTED_RUNNER_STRIPES" = "true" ]; then');
     expect(checkShardStep.env.RELEASE_GATE).toBe("${{ inputs.release_gate && 'true' || 'false' }}");
-    expect(manifestStep.run).toContain("runnerBackend: process.env.OPENCLAW_CI_RUNNER_BACKEND");
-    expect(checkShardRun).toContain('if [ "$RUNNER_BACKEND" = "github" ]; then');
     expect(checkShardRun).toContain("lint_args=(--only=extensions --only=scripts --threads=1)");
     expect(checkShardRun).toContain('if [ "$RELEASE_GATE" = "true" ]; then');
     expect(checkShardRun).toContain("lint_args=(--only=scripts --threads=1)");
@@ -6526,15 +6712,31 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(checkShardRun).toContain(
       'node --import tsx scripts/run-oxlint-shards.mts "${lint_args[@]}"',
     );
-    expect(hostedCoreLint.if).toContain("vars.OPENCLAW_CI_RUNNER_BACKEND == 'github'");
-    expect(hostedCoreLint.if).toContain(
-      "github.event.pull_request.head.repo.full_name != github.repository",
-    );
-    expect(hostedCoreTypes.if).toContain(
-      "github.event.pull_request.head.repo.full_name != github.repository",
-    );
-    expect(evaluateWorkflowExpression(hostedCoreLint.if, manualDispatch)).toBe(true);
-    expect(evaluateWorkflowExpression(hostedCoreTypes.if, manualDispatch)).toBe(true);
+    for (const job of [hostedCoreLint, hostedCoreTypes]) {
+      expect(job.if).toContain("needs.preflight.outputs.runner_profile == 'github'");
+      expect(job.if).toContain("needs.preflight.outputs.runner_profile == 'hybrid'");
+      expect(job.if).toContain("needs.preflight.outputs.hosted_runner_profile_contract == 'true'");
+      expect(
+        evaluateWorkflowExpression(job.if, {
+          eventName: "workflow_dispatch",
+          frozenTarget: true,
+          hostedRunnerProfileContract: false,
+          repository: "openclaw/openclaw",
+          runnerProfile: "blacksmith",
+          runAttempt: 1,
+        }),
+      ).toBe(false);
+      expect(
+        evaluateWorkflowExpression(job.if, {
+          eventName: "workflow_dispatch",
+          frozenTarget: true,
+          hostedRunnerProfileContract: true,
+          repository: "openclaw/openclaw",
+          runnerProfile: "github",
+          runAttempt: 1,
+        }),
+      ).toBe(true);
+    }
     expect(hostedCoreLint["runs-on"]).toBe("ubuntu-24.04");
     expect(hostedCoreLint.strategy).toEqual({
       "fail-fast": false,
@@ -6696,6 +6898,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       eventName: "workflow_dispatch",
       historicalCompatibility: false,
       releaseGate: true,
+      runnerProfile: "github",
     });
     expect(releaseGate.status, releaseGate.output).toBe(0);
     expect(
@@ -6823,7 +7026,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         check_name: "bundled-node-plan",
         env: {
           OPENCLAW_CI_TEST_COMPACT_MODE: "full",
-          OPENCLAW_CI_TEST_RUNNER_BACKEND: "",
+          OPENCLAW_CI_TEST_RUNNER_BACKEND: "blacksmith",
         },
         shard_name: "bundled-node-plan",
       }),
@@ -6848,7 +7051,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           check_name: "bundled-node-plan",
           env: {
             OPENCLAW_CI_TEST_COMPACT_MODE: "push",
-            OPENCLAW_CI_TEST_RUNNER_BACKEND: runnerBackend ?? "",
+            OPENCLAW_CI_TEST_RUNNER_BACKEND: runnerBackend ?? "blacksmith",
           },
         }),
       );
@@ -6912,7 +7115,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           check_name: "bundled-node-plan",
           env: {
             OPENCLAW_CI_TEST_COMPACT_MODE: "pull-request",
-            OPENCLAW_CI_TEST_RUNNER_BACKEND: "",
+            OPENCLAW_CI_TEST_RUNNER_BACKEND: "blacksmith",
           },
         }),
         expect.objectContaining({ check_name: "changed-extension-fallback-plan" }),
@@ -7222,7 +7425,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(uiE2e.env).toEqual({ OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1" });
     expect(uiE2e.strategy["fail-fast"]).toBe(false);
     expect(uiE2e.strategy["max-parallel"]).toBe(
-      "${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 12 || 4 }}",
+      "${{ (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && 12 || 4 }}",
     );
     expect(uiE2e.strategy.matrix).toBe("${{ fromJson(needs.preflight.outputs.ui_e2e_matrix) }}");
     const expectedUiE2eMatrix = (shardCount: number) => ({
@@ -7284,7 +7487,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const expectedUiE2eSetup = {
       ...expectedSharedUiE2eSetup,
       "restore-test-caches":
-        "${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'true' || 'false' }}",
+        "${{ (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && 'true' || 'false' }}",
     } as const;
     expect(uiE2eSetup.with).toEqual(expectedUiE2eSetup);
     const realGatewaySetup = expectDefined(
@@ -9638,7 +9841,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(workflow.jobs["qa-smoke-ci"]).toBeUndefined();
     expect(smokeProfileJob.needs).toEqual(["preflight"]);
     expect(smokeProfileJob.strategy["max-parallel"]).toBe(
-      "${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 6 || 4 }}",
+      "${{ (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && 6 || 4 }}",
     );
     expect(smokeProfileJob.strategy.matrix).toBe(
       "${{ fromJson(needs.preflight.outputs.qa_smoke_ci_matrix) }}",
@@ -9728,14 +9931,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     expect(smokeRunStep.run).toContain("--qa-profile smoke-ci");
     expect(smokeRunStep.run).toContain("--concurrency 10");
-    expect(smokeRunStep.env.OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS).toContain(
-      "github.event_name != 'workflow_dispatch'",
-    );
-    expect(smokeRunStep.env.OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS).toContain(
-      "vars.OPENCLAW_CI_RUNNER_BACKEND != 'github'",
-    );
-    expect(smokeRunStep.env.OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS).toContain(
-      "github.repository == 'openclaw/openclaw'",
+    expect(smokeRunStep.env.OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS).toBe(
+      "${{ needs.preflight.outputs.runner_profile == 'blacksmith' && '0' || '1500' }}",
     );
     expect(smokeRunStep.env.OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS).toContain("'0'");
     expect(smokeRunStep.env.OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS).toContain("'1500'");

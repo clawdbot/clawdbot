@@ -58,14 +58,10 @@ type CopilotModelEntry = {
 };
 
 type GitHubCopilotEmbeddingClient = {
-  githubToken: string;
   model: string;
-  runtimeAuth?: { apiKey: string; baseUrl: string };
-  baseUrl?: string;
-  headers?: Record<string, string>;
-  env?: NodeJS.ProcessEnv;
-  fetchImpl?: typeof fetch;
-  githubDomain?: string;
+  baseUrl: string;
+  headers: Record<string, string>;
+  fetchImpl: typeof fetch;
 };
 
 function isCopilotSetupError(err: unknown): boolean {
@@ -221,48 +217,23 @@ function parseGitHubCopilotEmbeddingPayload(payload: unknown, expectedCount: num
   return vectors as number[][];
 }
 
-async function resolveGitHubCopilotEmbeddingSession(client: GitHubCopilotEmbeddingClient): Promise<{
-  baseUrl: string;
-  headers: Record<string, string>;
-}> {
-  const auth =
-    client.runtimeAuth ??
-    (await resolveCopilotRuntimeAuth({
-      githubToken: client.githubToken,
-      env: client.env,
-      fetchImpl: client.fetchImpl,
-      githubDomain: client.githubDomain,
-    }));
-  const baseUrl = client.baseUrl?.trim() || auth.baseUrl || DEFAULT_COPILOT_API_BASE_URL;
-  return {
-    baseUrl,
-    headers: {
-      ...COPILOT_HEADERS_STATIC,
-      ...client.headers,
-      Authorization: `Bearer ${auth.apiKey}`,
-    },
-  };
-}
-
-async function createGitHubCopilotEmbeddingProvider(
+function createGitHubCopilotEmbeddingProvider(
   client: GitHubCopilotEmbeddingClient,
-): Promise<{ provider: MemoryEmbeddingProvider; client: GitHubCopilotEmbeddingClient }> {
-  const initialSession = await resolveGitHubCopilotEmbeddingSession(client);
-
+): MemoryEmbeddingProvider {
   const embedMany = async (input: string[], signal?: AbortSignal): Promise<number[][]> => {
     if (input.length === 0) {
       return [];
     }
 
-    const url = `${initialSession.baseUrl.replace(/\/$/, "")}/embeddings`;
+    const url = `${client.baseUrl.replace(/\/$/, "")}/embeddings`;
     return await withRemoteHttpResponse({
       url,
       fetchImpl: client.fetchImpl,
-      ssrfPolicy: buildRemoteBaseUrlPolicy(initialSession.baseUrl),
+      ssrfPolicy: buildRemoteBaseUrlPolicy(client.baseUrl),
       signal,
       init: {
         method: "POST",
-        headers: initialSession.headers,
+        headers: client.headers,
         body: JSON.stringify({ model: client.model, input }),
       },
       onResponse: async (response) => {
@@ -282,29 +253,23 @@ async function createGitHubCopilotEmbeddingProvider(
   };
 
   return {
-    provider: {
-      id: COPILOT_EMBEDDING_PROVIDER_ID,
-      model: client.model,
-      embed: async (input, options) => {
-        const [vector] = await embedMany(
-          [typeof input === "string" ? input : input.text],
-          options?.signal,
-        );
-        return vector ?? [];
-      },
-      embedBatch: async (inputs, options) => {
-        const texts = inputs.map((input) => (typeof input === "string" ? input : input.text));
-        if (options?.inputType === "query") {
-          return await Promise.all(
-            texts.map(async (text) => (await embedMany([text], options.signal))[0] ?? []),
-          );
-        }
-        return await embedMany(texts, options?.signal);
-      },
+    id: COPILOT_EMBEDDING_PROVIDER_ID,
+    model: client.model,
+    embed: async (input, options) => {
+      const [vector] = await embedMany(
+        [typeof input === "string" ? input : input.text],
+        options?.signal,
+      );
+      return vector ?? [];
     },
-    client: {
-      ...client,
-      baseUrl: initialSession.baseUrl,
+    embedBatch: async (inputs, options) => {
+      const texts = inputs.map((input) => (typeof input === "string" ? input : input.text));
+      if (options?.inputType === "query") {
+        return await Promise.all(
+          texts.map(async (text) => (await embedMany([text], options.signal))[0] ?? []),
+        );
+      }
+      return await embedMany(texts, options?.signal);
     },
   };
 }
@@ -375,14 +340,14 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
     const userModel = options.model?.trim() || undefined;
     const model = pickBestModel(availableModels, userModel);
 
-    const { provider } = await createGitHubCopilotEmbeddingProvider({
+    const provider = createGitHubCopilotEmbeddingProvider({
       baseUrl,
-      env: process.env,
       fetchImpl: fetch,
-      githubToken: value,
-      runtimeAuth,
-      githubDomain,
-      headers: options.remote?.headers,
+      headers: {
+        ...COPILOT_HEADERS_STATIC,
+        ...options.remote?.headers,
+        Authorization: `Bearer ${runtimeAuth.apiKey}`,
+      },
       model,
     });
 

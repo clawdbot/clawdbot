@@ -535,9 +535,6 @@ export async function prepareGatewayLifecycle(params: {
         reason,
         isActiveRun,
       }) => {
-        if (sessionKeys.size === 0 && sessionIds.size === 0) {
-          return;
-        }
         await shutdownRuntime.markRestartAbortedMainSessions({
           cfg: getRuntimeConfig(),
           sessionKeys,

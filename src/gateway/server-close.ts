@@ -375,9 +375,6 @@ async function markActiveRunsForRestartRecovery(
   }
   await settleTerminalSessionPersistenceForRestart(params.chatAbortControllers);
   const refs = collectActiveRestartSessionRefs(params);
-  if (refs.sessionKeys.size === 0 && refs.sessionIds.size === 0) {
-    return;
-  }
   try {
     const markerTimeout = createTimeoutRace(
       RESTART_MARKER_SLOW_WARNING_MS,
@@ -521,14 +518,6 @@ async function drainRestartPendingRepliesForShutdown(
   const abortedQueuedTurns = abortQueuedTurnsForRestart(params);
   if (abortedQueuedTurns > 0) {
     shutdownLog.warn(`aborted ${abortedQueuedTurns} queued turn(s) during restart shutdown`);
-  }
-
-  if (
-    drainResult.counts.activeRuns <= 0 &&
-    (params.restartRecoveryCandidates?.size ?? 0) === 0 &&
-    listRestartRecoveryRuns(params.chatAbortControllers).length === 0
-  ) {
-    return;
   }
 
   await markActiveRunsForRestartRecovery({

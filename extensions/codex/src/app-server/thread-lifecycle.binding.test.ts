@@ -12,7 +12,8 @@ import {
 } from "./client-runtime.js";
 import { CodexAppServerClient, CodexAppServerRpcError } from "./client.js";
 import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
-import type { CodexDynamicToolFunctionSpec, JsonValue } from "./protocol.js";
+import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
+import type { CodexDynamicToolFunctionSpec, JsonValue, RpcRequest } from "./protocol.js";
 import {
   createParams as createRunAttemptParams,
   setupRunAttemptTestHooks,
@@ -28,8 +29,10 @@ import {
 import {
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
+  resolveCodexNativeConfigFenceKey,
   retainSharedCodexAppServerClientIfCurrent,
 } from "./shared-client.js";
+import { createClientHarness } from "./test-support.js";
 import { fingerprintEnvironmentSelection } from "./thread-fingerprints.js";
 import {
   buildThreadResumeParams,
@@ -309,6 +312,7 @@ async function createManualResumeFixture(
     missingMetadata?: boolean;
     omitCatalog?: boolean;
     competingLease?: "read" | "release" | "resume";
+    wireClient?: boolean;
   } = {},
 ) {
   const dynamicTools = options.dynamicTools ?? [];
@@ -333,7 +337,7 @@ async function createManualResumeFixture(
   const compete = () => {
     // A sibling can start and finish between reads; sole ownership at the
     // final snapshot must not erase that intervening native runtime activity.
-    const release = retainSharedCodexAppServerClientIfCurrent(harness.client);
+    const release = retainSharedCodexAppServerClientIfCurrent(client);
     expect(release).toBeTypeOf("function");
     release?.();
   };
@@ -383,13 +387,39 @@ async function createManualResumeFixture(
     }
     throw new Error(`unexpected method: ${method}`);
   });
-  const { client } = harness;
-  Object.assign(client, {
-    initialize: async () => undefined,
-    addTransportExitHandler: () => () => undefined,
-    setThreadSessionRequestGuard: () => undefined,
-    close: () => harness.close(),
-  });
+  const wire = options.wireClient ? createClientHarness() : undefined;
+  const client = wire?.client ?? harness.client;
+  if (wire) {
+    // Keep the existing native response fixture behind the real wire client so
+    // its async request guard and synchronous write edge remain under test.
+    const appendWrites = wire.writes.push.bind(wire.writes);
+    vi.spyOn(wire.writes, "push").mockImplementation((...messages) => {
+      const count = appendWrites(...messages);
+      for (const message of messages) {
+        const request = JSON.parse(message) as RpcRequest;
+        void Promise.resolve(harness.request(request.method, request.params)).then(
+          (result) => wire.send({ id: request.id, result }),
+          (error: unknown) =>
+            wire.send({
+              id: request.id,
+              error: { code: -32603, message: String(error) },
+            }),
+        );
+      }
+      return count;
+    });
+    vi.spyOn(harness, "notify").mockImplementation(async (notification) => {
+      wire.send(notification);
+    });
+    vi.spyOn(client, "initialize").mockResolvedValue(undefined);
+  } else {
+    Object.assign(client, {
+      initialize: async () => undefined,
+      addTransportExitHandler: () => () => undefined,
+      setThreadSessionRequestGuard: () => undefined,
+      close: () => harness.close(),
+    });
+  }
   const start = vi.spyOn(CodexAppServerClient, "start").mockReturnValueOnce(client);
   try {
     await getLeasedSharedCodexAppServerClient({
@@ -407,7 +437,9 @@ async function createManualResumeFixture(
     resolveCodexCommandDeps({
       bindingStore: testCodexAppServerBindingStore,
       codexControlRequest: async (_pluginConfig, method, requestParams, requestOptions) => {
-        const result = await client.request<JsonValue>(method, requestParams);
+        const result = await client.request<JsonValue>(method, requestParams, {
+          timeoutMs: 60_000,
+        });
         await requestOptions?.onResponse?.(result, client, { authProfileId: undefined });
         return result;
       },
@@ -438,9 +470,15 @@ async function createManualResumeFixture(
   };
   return {
     ...harness,
+    client,
+    wire,
     close: () => {
       releaseLeasedSharedCodexAppServerClient(client);
-      harness.close();
+      if (wire) {
+        wire.client.close();
+      } else {
+        harness.close();
+      }
     },
     common,
     sessionFile,
@@ -993,6 +1031,51 @@ describe("Codex app-server thread lifecycle bindings", () => {
       }
     },
   );
+
+  it("does not write a pending resume after its sole client lease changes behind the native config fence", async () => {
+    const fixture = await createManualResumeFixture({ wireClient: true });
+    const before = await readCodexAppServerBinding(fixture.sessionFile);
+    const fenceKey = resolveCodexNativeConfigFenceKey({ client: fixture.client });
+    expect(fenceKey).toBeTypeOf("string");
+    const releaseFence = await acquireCodexNativeConfigFence(fenceKey!);
+    const guardEntered = createDeferred<void>();
+    const abort = new AbortController();
+    fixture.client.setThreadSessionRequestGuard(async (options) => {
+      guardEntered.resolve();
+      return await acquireCodexNativeConfigFence(fenceKey!, options);
+    });
+    const starting = fixture.start({ signal: abort.signal });
+    const settled = starting.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    try {
+      await Promise.race([
+        guardEntered.promise,
+        settled.then(() => {
+          throw new Error("manual resume settled before reaching its native config fence");
+        }),
+      ]);
+      const releaseSibling = retainSharedCodexAppServerClientIfCurrent(fixture.client);
+      expect(releaseSibling).toBeTypeOf("function");
+      releaseSibling?.();
+      releaseFence();
+
+      await expect(starting).rejects.toThrow("another runner");
+      expect(await readCodexAppServerBinding(fixture.sessionFile)).toEqual(before);
+      expect(fixture.client.getCloseError()).toBeUndefined();
+      expect(
+        fixture
+          .wire!.writes.map((message) => (JSON.parse(message) as RpcRequest).method)
+          .filter((method) => method === "thread/resume"),
+      ).toEqual(["thread/resume"]);
+    } finally {
+      abort.abort();
+      releaseFence();
+      await settled;
+      fixture.close();
+    }
+  });
 
   it("rejects a pending binding deleted while waiting for the native owner queue", async () => {
     const fixture = await createManualResumeFixture();
