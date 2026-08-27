@@ -545,6 +545,9 @@ export function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "gateway_restart_sentinel", "doctor_hint TEXT");
   ensureColumn(db, "gateway_restart_sentinel", "stats_json TEXT");
   ensureColumn(db, "gateway_boot_lifecycle", "startup_reason TEXT");
+  // Distinguishes "the gateway process died" from "the host rebooted under us"
+  // when a later boot attributes orphaned work to an abrupt boot end.
+  ensureColumn(db, "gateway_boot_lifecycle", "host_boot_id TEXT");
   ensureColumn(db, "official_external_plugin_catalog_snapshots", "trust_mode TEXT");
   ensureColumn(db, "official_external_plugin_catalog_snapshots", "trust_key_id TEXT");
   ensureColumn(db, "official_external_plugin_catalog_snapshots", "trust_signature_count INTEGER");

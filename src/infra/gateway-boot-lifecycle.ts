@@ -1,5 +1,7 @@
 // Persists gateway boot outcomes for supervisor crash-loop decisions.
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { uptime as osUptimeSeconds } from "node:os";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
@@ -48,6 +50,97 @@ export function formatGatewayCrashLoopManualChannelStartHint(target?: {
 }
 
 const gatewayLifecycleLog = createSubsystemLogger("gateway/lifecycle");
+
+/**
+ * Identifies the host boot the gateway process is running on. Two boot rows
+ * carrying different host boot ids were separated by a host reboot; two rows
+ * carrying the same id were separated by a process death while the host stayed
+ * up. The remedies differ, so the recorded cause has to tell them apart.
+ *
+ * The kernel value is authoritative. The uptime fallback is only a coarse
+ * bucket of the host start time, so anything derived from it is reported as
+ * inferred rather than observed.
+ */
+const HOST_BOOT_ID_KERNEL_PREFIX = "kernel:";
+const HOST_BOOT_ID_UPTIME_PREFIX = "uptime:";
+// Wide enough to absorb ordinary clock discipline, narrow enough that a real
+// reboot always lands in a different bucket.
+const HOST_BOOT_ID_UPTIME_BUCKET_MS = 5 * 60_000;
+
+let cachedHostBootId: string | undefined;
+
+export function isInferredHostBootId(hostBootId: string | null | undefined): boolean {
+  return typeof hostBootId === "string" && hostBootId.startsWith(HOST_BOOT_ID_UPTIME_PREFIX);
+}
+
+export function resolveHostBootId(nowMs = Date.now()): string {
+  if (cachedHostBootId) {
+    return cachedHostBootId;
+  }
+  try {
+    const kernelBootId = readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
+    if (kernelBootId) {
+      cachedHostBootId = `${HOST_BOOT_ID_KERNEL_PREFIX}${kernelBootId}`;
+      return cachedHostBootId;
+    }
+  } catch {
+    // Not Linux, or /proc is not readable: fall through to the uptime estimate.
+  }
+  const hostStartedAtMs = nowMs - Math.round(osUptimeSeconds() * 1000);
+  const bucket = Math.floor(hostStartedAtMs / HOST_BOOT_ID_UPTIME_BUCKET_MS);
+  cachedHostBootId = `${HOST_BOOT_ID_UPTIME_PREFIX}${bucket}`;
+  return cachedHostBootId;
+}
+
+/** Test seam: the host boot id is process-stable, so it is resolved once. */
+export function resetHostBootIdCacheForTests(): void {
+  cachedHostBootId = undefined;
+}
+
+/** One persisted gateway lifetime, as needed to attribute orphaned work. */
+export type GatewayBootLifecycleSegment = {
+  bootId: string;
+  pid: number;
+  startedAtMs: number;
+  completedAtMs: number | null;
+  outcome: string | null;
+  hostBootId: string | null;
+};
+
+/**
+ * Reads recent boot segments oldest-first. Callers correlate their own
+ * timestamps against these rows; this function makes no judgement about them.
+ */
+export function readGatewayBootLifecycleSegments(params?: {
+  env?: NodeJS.ProcessEnv;
+  sinceMs?: number;
+  limit?: number;
+}): GatewayBootLifecycleSegment[] {
+  try {
+    const { db } = openOpenClawStateDatabase({ env: params?.env ?? process.env });
+    const kysely = getNodeSqliteKysely<GatewayBootLifecycleDatabase>(db);
+    let query = kysely
+      .selectFrom("gateway_boot_lifecycle")
+      .select([
+        "boot_id as bootId",
+        "pid",
+        "started_at_ms as startedAtMs",
+        "completed_at_ms as completedAtMs",
+        "outcome",
+        "host_boot_id as hostBootId",
+      ])
+      .orderBy("started_at_ms", "desc")
+      .limit(params?.limit ?? 64);
+    if (typeof params?.sinceMs === "number") {
+      query = query.where("started_at_ms", ">=", params.sinceMs);
+    }
+    const { rows } = executeSqliteQuerySync<GatewayBootLifecycleSegment>(db, query);
+    return rows.toSorted((left, right) => left.startedAtMs - right.startedAtMs);
+  } catch (err) {
+    gatewayLifecycleLog.warn(`boot lifecycle history unavailable; fail-open: ${String(err)}`);
+    return [];
+  }
+}
 
 type GatewayBootLifecycleDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_boot_lifecycle">;
 
@@ -177,6 +270,7 @@ export function recordGatewayBootStart(
             outcome: null,
             startup_reason: reason ?? null,
             reason: null,
+            host_boot_id: resolveHostBootId(nowMs),
           }),
         );
       },
@@ -227,6 +321,7 @@ export function recordGatewayCrashLoopRecovery(
             outcome: null,
             startup_reason: GATEWAY_CRASH_LOOP_RECOVERED_REASON,
             reason: null,
+            host_boot_id: resolveHostBootId(nowMs),
           }),
         );
       },

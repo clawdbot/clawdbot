@@ -155,7 +155,15 @@ export function resolveSubagentRunOrphanReason(params: {
 export function resolveCompletionFromSessionEntry(
   sessionEntry: SessionEntry | undefined,
   fallbackEndedAt: number,
-  opts?: { notBeforeMs?: number },
+  opts?: {
+    notBeforeMs?: number;
+    /**
+     * Replaces the generic failure wording when the caller has established why
+     * the run actually stopped — a gateway death looks identical to a plain
+     * session failure from inside this function.
+     */
+    failedRunError?: string;
+  },
 ): SubagentSessionCompletion | null {
   const status = sessionEntry?.status;
   const startedAt = freshSessionStartedAt(sessionEntry, opts?.notBeforeMs);
@@ -193,7 +201,10 @@ export function resolveCompletionFromSessionEntry(
     return {
       startedAt,
       endedAt,
-      outcome: { status: "error", error: "session completed before registry settled" },
+      outcome: {
+        status: "error",
+        error: opts?.failedRunError?.trim() || "session completed before registry settled",
+      },
       reason: SUBAGENT_ENDED_REASON_ERROR,
     };
   }
