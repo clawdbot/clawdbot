@@ -2949,6 +2949,36 @@ describe("updateNpmInstalledPlugins", () => {
     ]);
   });
 
+  it("skips globally disabled installs before network or capability consent", async () => {
+    capabilityConsentMode.real = true;
+    const onCapabilityConsent = vi.fn();
+    const config = createNpmInstallConfig({
+      pluginId: "demo",
+      spec: "@acme/demo",
+      installPath: "/tmp/demo",
+    });
+    config.plugins = { ...config.plugins, enabled: false };
+
+    const result = await updateNpmInstalledPlugins({
+      config,
+      skipDisabledPlugins: true,
+      onCapabilityConsent,
+    });
+
+    expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+    expect(onCapabilityConsent).not.toHaveBeenCalled();
+    expect(result.changed).toBe(false);
+    expect(result.config).toBe(config);
+    expect(result.outcomes).toEqual([
+      {
+        pluginId: "demo",
+        status: "skipped",
+        message: 'Skipping "demo" (plugins disabled).',
+      },
+    ]);
+  });
+
   it("updates disabled trusted official npm installs from the channel spec when requested", async () => {
     const installPath = createInstalledPackageDir({
       name: "@openclaw/codex",

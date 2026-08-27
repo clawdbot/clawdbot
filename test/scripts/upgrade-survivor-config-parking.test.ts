@@ -60,6 +60,7 @@ describe("upgrade survivor config parking", () => {
     expect(park.status, park.stderr).toBe(0);
     expect(readFileSync(snapshotPath, "utf8")).toBe(authoredConfig);
     expect(JSON.parse(readFileSync(configPath, "utf8"))).toEqual({
+      plugins: { enabled: false },
       gateway: {
         port: 19876,
         mode: "local",

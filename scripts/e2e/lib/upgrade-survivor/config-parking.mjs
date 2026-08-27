@@ -77,6 +77,7 @@ function parkRestartProbe(configPath, snapshotPath, rawPort) {
   const authoredConfig = fs.readFileSync(configPath);
   requireObject(JSON.parse(authoredConfig.toString("utf8")), "restart probe config");
   snapshotAndReplace(configPath, snapshotPath, authoredConfig, {
+    plugins: { enabled: false },
     gateway: {
       port,
       mode: "local",
