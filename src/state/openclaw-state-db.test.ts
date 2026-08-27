@@ -2261,6 +2261,20 @@ describe("openclaw state database", () => {
         "sort_order",
         "updated_at",
       ]);
+      expect(
+        migrated.db
+          .prepare(
+            `SELECT name FROM sqlite_master
+              WHERE type = 'index'
+                AND name IN (
+                  'idx_cron_jobs_store_updated',
+                  'idx_cron_jobs_enabled_next_run',
+                  'idx_cron_jobs_store_order'
+                )
+              ORDER BY name`,
+          )
+          .all(),
+      ).toEqual([{ name: "idx_cron_jobs_store_order" }]);
       const runColumns = migrated.db.prepare("PRAGMA table_info(subagent_runs)").all() as Array<{
         name: string;
       }>;

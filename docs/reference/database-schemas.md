@@ -129,7 +129,7 @@ Version 3 was an unshipped development step folded into version 4.
 | 10      | Six dead tables retired (agent_model_catalogs, android_notification_recent_packages, command_log_entries, diagnostic_stability_bundles, media_blobs, model_capability_cache)                                                                                                                  | Unreleased          |
 | 11      | Legacy skill curator lifecycle table and never-read proposal origin-run projection retired                                                                                                                                                                                                    | Unreleased          |
 | 12      | Thirteen singleton/cache tables retired; durable state folded into config_machine_state                                                                                                                                                                                                       | Unreleased          |
-| 13      | State consolidation: cron jobs and subagent runs become JSON-canonical (113 projection columns, four unused indexes removed); installed_plugin_index folds into config_machine_state; workspace_attestations merges into workspace_setup_state; gateway origin device tokens become canonical | Unreleased          |
+| 13      | State consolidation: cron jobs and subagent runs become JSON-canonical (113 projection columns, five unused indexes removed); installed_plugin_index folds into config_machine_state; workspace_attestations merges into workspace_setup_state; gateway origin device tokens become canonical | Unreleased          |
 
 ### State schema 13
 
@@ -196,7 +196,7 @@ The general procedure is:
 
 ### Example: state schema 13 to 12
 
-Schema 13 removed 60 cron-job projection columns, 53 subagent-run projection columns, and four unused indexes. A schema 12 build still expects the exact original column definitions, ordering, and indexes. Adding the removed required columns with defaults produces a different schema that older builds reject, so rebuild both tables instead. Nullable projections restart as `NULL`; required projections restart as empty strings or zero while the canonical JSON records are copied intact.
+Schema 13 removed 60 cron-job projection columns, 53 subagent-run projection columns, and five unused indexes. A schema 12 build still expects the exact original column definitions, ordering, and indexes. Adding the removed required columns with defaults produces a different schema that older builds reject, so rebuild both tables instead. Nullable projections restart as `NULL`; required projections restart as empty strings or zero while the canonical JSON records are copied intact.
 
 Disable foreign-key enforcement before starting the transaction. The cron-runtime authority table references `cron_jobs` with `ON DELETE CASCADE`, so dropping the original table while enforcement is active would silently delete its authority rows. Re-enable enforcement after the rebuild commits, and verify that `PRAGMA foreign_key_check;` returns no rows before starting the older build.
 
