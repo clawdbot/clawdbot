@@ -42,6 +42,8 @@ import { resolveSessionDeliveryTarget, type SessionDeliveryTarget } from "./targ
 type OutboundTarget = {
   channel: string;
   to?: string;
+  /** Candidate conversation session for post-send heartbeat awareness. */
+  targetSessionKey?: string;
   chatType?: ChatType;
   reason?: string;
   accountId?: string;
@@ -570,9 +572,6 @@ export async function resolveHeartbeatDeliveryTargetWithSessionRoute(params: {
       lastAccountId: delivery.lastAccountId,
     });
   }
-  if (!resolveSessionRoute) {
-    return delivery;
-  }
   const route = await (async () => {
     try {
       return await resolveOutboundSessionRoute({
@@ -618,9 +617,13 @@ export async function resolveHeartbeatDeliveryTargetWithSessionRoute(params: {
   }
   return {
     ...delivery,
-    to: route.to,
-    chatType: route.chatType,
-    threadId: route.threadId ?? delivery.threadId,
+    // Core fallback routes synthesize `user:`/`channel:` addresses for session
+    // identity only. Keep the plugin's raw delivery address unless its own
+    // route hook explicitly owns transport canonicalization.
+    to: resolveSessionRoute ? route.to : delivery.to,
+    chatType: resolveSessionRoute ? route.chatType : delivery.chatType,
+    threadId: resolveSessionRoute ? (route.threadId ?? delivery.threadId) : delivery.threadId,
+    targetSessionKey: route.sessionKey,
   };
 }
 

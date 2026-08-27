@@ -1,7 +1,13 @@
 // Covers isolated heartbeat outbound session routing and base-session bookkeeping.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { heartbeatRunnerWhatsAppPlugin } from "../../test/helpers/infra/heartbeat-runner-channel-plugins.js";
+import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { resolveHeartbeatPreflight } from "./heartbeat-runner-prompt.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import {
@@ -10,9 +16,26 @@ import {
   seedSessionStore,
   withTempHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
+import { resetSystemEventsForTest } from "./system-events.js";
 
+type MockDeliveryRequest = {
+  payloads?: Array<{ text?: string; mediaUrl?: string; mediaUrls?: string[] }>;
+  onDeliveredPayload?: (payload: { text: string; mediaUrls: string[] }) => void;
+};
+
+const beforeMockDeliveryCompletion = vi.hoisted(() => vi.fn(async () => {}));
 const deliverOutboundPayloadsInternal = vi.hoisted(() =>
-  vi.fn().mockResolvedValue([{ channel: "whatsapp", messageId: "msg-1" }]),
+  vi.fn(async (request: MockDeliveryRequest) => {
+    const payload = request.payloads?.[0];
+    request.onDeliveredPayload?.({
+      text: payload?.text ?? "",
+      mediaUrls: [payload?.mediaUrl, ...(payload?.mediaUrls ?? [])].filter((url): url is string =>
+        Boolean(url),
+      ),
+    });
+    await beforeMockDeliveryCompletion();
+    return [{ channel: "whatsapp", messageId: "msg-1" }];
+  }),
 );
 
 vi.mock("./outbound/deliver.js", () => ({
@@ -23,7 +46,10 @@ vi.mock("./outbound/deliver.js", () => ({
 installHeartbeatRunnerTestRuntime();
 
 afterEach(() => {
+  beforeMockDeliveryCompletion.mockReset();
+  beforeMockDeliveryCompletion.mockResolvedValue(undefined);
   deliverOutboundPayloadsInternal.mockClear();
+  resetSystemEventsForTest();
 });
 
 type DeliveryRequest = {
@@ -59,6 +85,45 @@ function makeIsolatedLastTargetConfig(tmpDir: string, storePath: string): OpenCl
     channels: { whatsapp: { allowFrom: ["*"] } },
     session: { store: storePath },
   };
+}
+
+function installTargetResolverOnlyWhatsApp() {
+  const plugin: ChannelPlugin = {
+    ...heartbeatRunnerWhatsAppPlugin,
+    capabilities: {
+      ...heartbeatRunnerWhatsAppPlugin.capabilities,
+      chatTypes: ["direct"],
+    },
+    messaging: {
+      ...heartbeatRunnerWhatsAppPlugin.messaging,
+      targetResolver: { looksLikeId: () => true },
+    },
+  };
+  setActivePluginRegistry(createTestRegistry([{ pluginId: "whatsapp", plugin, source: "test" }]));
+}
+
+async function seedExistingHeartbeatTarget(params: { tmpDir: string; storePath: string }) {
+  installTargetResolverOnlyWhatsApp();
+  const cfg = makeIsolatedLastTargetConfig(params.tmpDir, params.storePath);
+  cfg.session = { ...cfg.session, dmScope: "per-channel-peer" };
+  const baseSessionKey = resolveMainSessionKey(cfg);
+  const target = "+15551234567";
+  const targetSessionKey = `agent:main:whatsapp:direct:${target}`;
+  const nowMs = Date.now();
+  const delivery = {
+    updatedAt: nowMs - 1_000,
+    lastChannel: "whatsapp",
+    lastProvider: "whatsapp",
+    lastTo: target,
+  };
+  await seedSessionStore(params.storePath, baseSessionKey, {
+    ...delivery,
+    sessionId: "base-session",
+  });
+  const replaceTargetSession = (sessionId: string) =>
+    seedSessionStore(params.storePath, targetSessionKey, { ...delivery, sessionId });
+  await replaceTargetSession("target-session");
+  return { cfg, nowMs, target, targetSessionKey, replaceTargetSession };
 }
 
 describe("runHeartbeatOnce - isolated heartbeat outbound session mirror", () => {
@@ -158,6 +223,120 @@ describe("runHeartbeatOnce - isolated heartbeat outbound session mirror", () => 
           policyKey: baseSessionKey,
         },
       });
+    });
+  });
+
+  it("queues a successful direct alert for the next ordinary target turn", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const { cfg, nowMs, target, targetSessionKey } = await seedExistingHeartbeatTarget({
+        tmpDir,
+        storePath,
+      });
+      replySpy.mockResolvedValueOnce({ text: "Status needs attention." });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: {
+          getReplyFromConfig: replySpy,
+          getQueueSize: () => 0,
+          nowMs: () => nowMs,
+        },
+      });
+
+      expect(result.status).toBe("ran");
+      const deliveryRequest = latestDeliveryRequest();
+      expect(deliveryRequest).toMatchObject({
+        channel: "whatsapp",
+        to: target,
+      });
+      const nextHeartbeatPreflight = await resolveHeartbeatPreflight({
+        cfg,
+        agentId: "main",
+        heartbeat: { isolatedSession: true },
+        sessionKey: targetSessionKey,
+      });
+      expect(nextHeartbeatPreflight.pendingEventEntries).toHaveLength(0);
+      await expect(
+        drainFormattedSystemEvents({
+          cfg,
+          agentId: "main",
+          sessionKey: targetSessionKey,
+          isMainSession: false,
+          isNewSession: false,
+          suppressHeartbeatOwnedEvents: true,
+        }),
+      ).resolves.toBeUndefined();
+      const awareness = await drainFormattedSystemEvents({
+        cfg,
+        agentId: "main",
+        sessionKey: targetSessionKey,
+        isMainSession: false,
+        isNewSession: false,
+      });
+      expect(awareness).toContain("A heartbeat delivered this message to this channel:");
+      expect(awareness).toContain("Status needs attention.");
+    });
+  });
+
+  it("does not project a direct alert when platform delivery fails", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const { cfg, nowMs, targetSessionKey } = await seedExistingHeartbeatTarget({
+        tmpDir,
+        storePath,
+      });
+      replySpy.mockResolvedValueOnce({ text: "Status needs attention." });
+      deliverOutboundPayloadsInternal.mockRejectedValueOnce(new Error("channel unavailable"));
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: {
+          getReplyFromConfig: replySpy,
+          getQueueSize: () => 0,
+          nowMs: () => nowMs,
+        },
+      });
+
+      expect(result.status).toBe("failed");
+      await expect(
+        drainFormattedSystemEvents({
+          cfg,
+          agentId: "main",
+          sessionKey: targetSessionKey,
+          isMainSession: false,
+          isNewSession: false,
+        }),
+      ).resolves.toBeUndefined();
+    });
+  });
+
+  it("does not attach an alert to a target session reset during delivery", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const { cfg, nowMs, targetSessionKey, replaceTargetSession } =
+        await seedExistingHeartbeatTarget({ tmpDir, storePath });
+      replySpy.mockResolvedValueOnce({ text: "Status needs attention." });
+      beforeMockDeliveryCompletion.mockImplementationOnce(() =>
+        replaceTargetSession("replacement-session"),
+      );
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: {
+          getReplyFromConfig: replySpy,
+          getQueueSize: () => 0,
+          nowMs: () => nowMs,
+        },
+      });
+
+      expect(result.status).toBe("ran");
+      await expect(
+        drainFormattedSystemEvents({
+          cfg,
+          agentId: "main",
+          sessionKey: targetSessionKey,
+          isMainSession: false,
+          isNewSession: false,
+        }),
+      ).resolves.toBeUndefined();
     });
   });
 });
