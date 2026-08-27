@@ -1963,17 +1963,17 @@ describe("gateway/node-registry", () => {
     vi.setSystemTime(1_000);
     const { registry, frames, release } = registerPairingWait();
     const onDispatchReady = vi.fn();
+    const runParams = { runId: "run-budget", timeoutMs: 5_000 };
     try {
       const invoke = registry.invoke({
         nodeId: "node-1",
         command: "system.run",
         timeoutMs: 100,
         params: {
-          runId: "run-budget",
-          timeoutMs: 5_000,
+          ...runParams,
           toJSON() {
             vi.setSystemTime(Date.now() + 10);
-            return { runId: this.runId, timeoutMs: this.timeoutMs };
+            return runParams;
           },
         },
         onDispatchReady,
