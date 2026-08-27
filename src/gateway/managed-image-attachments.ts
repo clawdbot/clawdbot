@@ -5,7 +5,7 @@ import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { maxBytesForKind, mediaKindFromMime, type MediaKind } from "@openclaw/media-core/constants";
-import { mimeTypeFromFilePath } from "@openclaw/media-core/mime";
+import { mimeTypeFromFilePath, normalizeMimeType } from "@openclaw/media-core/mime";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
   asDateTimestampMs,
@@ -113,14 +113,29 @@ type ManagedImageAttachmentLimitsConfig = Partial<
 
 type ManagedMediaKind = Extract<MediaKind, "image" | "audio" | "video" | "document">;
 
+const MANAGED_DOCUMENT_MIME_TYPES = new Set([
+  "application/json",
+  "application/pdf",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/yaml",
+  "application/zip",
+  "text/csv",
+  "text/html",
+  "text/markdown",
+  "text/plain",
+]);
+
 function resolveManagedMediaKind(contentType: string | undefined): ManagedMediaKind | null {
-  if (contentType === "image/svg+xml") {
-    return "document";
+  const normalized = normalizeMimeType(contentType);
+  if (normalized === "image/svg+xml") {
+    return null;
   }
-  const kind = mediaKindFromMime(contentType);
-  return kind === "image" || kind === "audio" || kind === "video" || kind === "document"
-    ? kind
-    : null;
+  const kind = mediaKindFromMime(normalized);
+  if (kind === "image" || kind === "audio" || kind === "video") {
+    return kind;
+  }
+  return normalized && MANAGED_DOCUMENT_MIME_TYPES.has(normalized) ? "document" : null;
 }
 
 type ParsedMediaDataUrl =
@@ -1846,6 +1861,11 @@ export async function handleManagedOutgoingMediaHttpRequest(
     sendStatus(res, 404, "not found");
     return true;
   }
+  const mediaKind = resolveManagedRecordKind(record);
+  if (!mediaKind) {
+    sendStatus(res, 404, "not found");
+    return true;
+  }
 
   let opened: Awaited<ReturnType<typeof openLocalFileSafely>>;
   try {
@@ -1860,7 +1880,6 @@ export async function handleManagedOutgoingMediaHttpRequest(
 
   let responseContentType = record.original.contentType || "application/octet-stream";
   let responseFilename = record.original.filename;
-  const mediaKind = resolveManagedRecordKind(record);
   if (variant === "thumbnail") {
     if (mediaKind !== "image") {
       await opened.handle.close();

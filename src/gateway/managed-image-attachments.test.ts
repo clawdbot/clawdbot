@@ -2032,11 +2032,12 @@ describe("createManagedOutgoingImageBlocks", () => {
       mimeType: "application/octet-stream",
       body: Buffer.from([0, 1, 2, 3]),
     },
-  ])("creates a visible document card for $mimeType metadata", async (fixture) => {
+  ])("rejects unsupported $mimeType metadata before persistence", async (fixture) => {
     const sourcePath = path.join(stateDir, "workspace", fixture.fileName);
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
     await fs.writeFile(sourcePath, fixture.body);
 
+    const onPrepareError = vi.fn();
     const blocks = await createManagedOutgoingImageBlocksActual({
       sessionKey: "agent:main:main",
       items: [
@@ -2049,18 +2050,53 @@ describe("createManagedOutgoingImageBlocks", () => {
       ],
       stateDir,
       localRoots: [path.dirname(sourcePath)],
+      continueOnPrepareError: true,
+      onPrepareError,
     });
 
-    expect(blocks).toEqual([
-      {
-        type: "attachment",
-        attachment: expect.objectContaining({
-          kind: "document",
-          label: fixture.fileName,
-          mimeType: fixture.expectedMimeType ?? fixture.mimeType,
-        }),
-      },
-    ]);
+    expect(blocks).toEqual([]);
+    expect(onPrepareError).toHaveBeenCalledOnce();
+    expect(listManagedImageRecordEntries({ stateDir })).toEqual([]);
+    const originalsDir = path.join(stateDir, "media", MANAGED_OUTGOING_ORIGINALS_SUBDIR);
+    await expectPathMissing(originalsDir);
+  });
+
+  it.each(["GET", "HEAD"])("does not serve legacy SVG records over %s", async (method) => {
+    const body = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script/></svg>');
+    const { attachmentId, sessionKey } = await createFixture(stateDir, {
+      filename: "vector.svg",
+      contentType: "image/svg+xml",
+      body,
+    });
+    const pathName = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
+
+    const { result } = await requestManagedImage({
+      stateDir,
+      pathName,
+      method,
+      authResponse: { authMethod: "token" },
+      transcriptMessages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "attachment",
+              attachment: {
+                kind: "document",
+                label: "vector.svg",
+                mimeType: "image/svg+xml",
+                url: pathName,
+              },
+            },
+          ],
+          __openclaw: { id: "msg-1" },
+        },
+      ],
+    });
+
+    expect(result.statusCode).toBe(404);
+    expect(result.headers["content-disposition"]).toBeUndefined();
+    expect(result.body).toEqual(method === "HEAD" ? Buffer.alloc(0) : Buffer.from("not found"));
   });
 
   it("rolls back earlier managed artifacts when a later item fails", async () => {

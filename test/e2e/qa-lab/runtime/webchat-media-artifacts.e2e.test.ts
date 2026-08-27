@@ -51,6 +51,8 @@ const FIXTURES = [
 ] as const;
 const MEDIA_FAILURE_WARNING =
   "Media failed. Try sending a smaller supported file or a different format.";
+const ARTIFACT_FIXTURES = FIXTURES.filter((fixture) => fixture[3] === "artifact");
+const REJECTED_FIXTURES = FIXTURES.filter((fixture) => fixture[3] === "visible-error");
 
 let harness: Awaited<ReturnType<typeof startQaLiveLaneGateway>> | undefined;
 let bus: Awaited<ReturnType<typeof startQaBusServer>> | undefined;
@@ -183,6 +185,31 @@ async function connectWebchat(url: string, token: string): Promise<GatewayClient
   });
 }
 
+async function sendMediaReply(
+  gatewayClient: GatewayClient,
+  sessionKey: string,
+  fixtureNames: readonly string[],
+): Promise<unknown[]> {
+  const runId = randomUUID();
+  const exactReply = `Artifacts ready\n${fixtureNames.map((name) => `MEDIA:./${name}`).join("\n")}`;
+  const started = await gatewayClient.request<{ runId?: string }>("chat.send", {
+    sessionKey,
+    message: `Reply exactly \`${exactReply}\``,
+    deliver: false,
+    idempotencyKey: runId,
+  });
+  await gatewayClient.request(
+    "agent.wait",
+    { runId: started.runId ?? runId, timeoutMs: 120_000 },
+    { timeoutMs: 125_000 },
+  );
+  const history = await gatewayClient.request<{
+    messages?: Array<{ role?: string; content?: unknown }>;
+  }>("chat.history", { sessionKey, limit: 20 });
+  const assistant = history.messages?.findLast((message) => message.role === "assistant");
+  return Array.isArray(assistant?.content) ? assistant.content : [];
+}
+
 describe("WebChat managed media artifact matrix", () => {
   it(
     "renders every supported MEDIA reference or a visible failure",
@@ -204,41 +231,50 @@ describe("WebChat managed media artifact matrix", () => {
       await transport.waitReady({ gateway: harness.gateway });
       await writeFixtures(harness.gateway.workspaceDir);
       client = await connectWebchat(harness.gateway.wsUrl, harness.gateway.token);
-      const runId = randomUUID();
-      const exactReply = `Artifacts ready\n${FIXTURES.map(([name]) => `MEDIA:./${name}`).join("\n")}`;
-      const started = await client.request<{ runId?: string }>("chat.send", {
-        sessionKey: SESSION_KEY,
-        message: `Reply exactly \`${exactReply}\``,
-        deliver: false,
-        idempotencyKey: runId,
-      });
-      await client.request(
-        "agent.wait",
-        { runId: started.runId ?? runId, timeoutMs: 120_000 },
-        { timeoutMs: 125_000 },
+      const content = await sendMediaReply(
+        client,
+        SESSION_KEY,
+        ARTIFACT_FIXTURES.map((fixture) => fixture[0]),
       );
-      const history = await client.request<{
-        messages?: Array<{ role?: string; content?: unknown }>;
-      }>("chat.history", { sessionKey: SESSION_KEY, limit: 20 });
-      const assistant = history.messages?.findLast((message) => message.role === "assistant");
-      const content = Array.isArray(assistant?.content) ? assistant.content : [];
-      const serialized = JSON.stringify(content);
-      const hasVisibleFailure = serialized.includes(MEDIA_FAILURE_WARNING);
-      const observed = FIXTURES.map((fixture) => ({
+      const accepted = ARTIFACT_FIXTURES.map((fixture) => ({
         name: fixture[0],
         mimeType: fixture[1],
         type: fixture[2],
         outcome: fixture[3],
-        present:
-          fixture[3] === "artifact"
-            ? content.some((block) => isExpectedMediaBlock(block, fixture))
-            : hasVisibleFailure,
+        present: content.some((block) => isExpectedMediaBlock(block, fixture)),
       }));
+      const rejected: Array<{
+        name: string;
+        mimeType: string;
+        type: string;
+        outcome: string;
+        present: boolean;
+      }> = [];
+      for (const fixture of REJECTED_FIXTURES) {
+        const sessionKey = `agent:qa:rejected-${fixture[0].replace(/[^a-z0-9]+/giu, "-")}`;
+        const rejectedContent = await sendMediaReply(client, sessionKey, [fixture[0]]);
+        const serialized = JSON.stringify(rejectedContent);
+        expect(serialized, fixture[0]).toContain(MEDIA_FAILURE_WARNING);
+        expect(rejectedContent.some((block) => isExpectedMediaBlock(block, fixture))).toBe(false);
+        expect(serialized).not.toContain("MEDIA:./");
+        const artifactList = await client.request<{ artifacts?: unknown[] }>("artifacts.list", {
+          sessionKey,
+        });
+        expect(artifactList.artifacts ?? [], fixture[0]).toEqual([]);
+        rejected.push({
+          name: fixture[0],
+          mimeType: fixture[1],
+          type: fixture[2],
+          outcome: fixture[3],
+          present: true,
+        });
+      }
+      const observed = [...accepted, ...rejected];
       const verdict = {
         expected: FIXTURES.length,
         observed: observed.filter((entry) => entry.present).length,
         missing: observed.filter((entry) => !entry.present).map((entry) => entry.name),
-        rawMediaVisible: serialized.includes("MEDIA:./"),
+        rawMediaVisible: JSON.stringify(content).includes("MEDIA:./"),
       };
 
       expect(verdict).toEqual({ expected: 20, observed: 20, missing: [], rawMediaVisible: false });
