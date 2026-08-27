@@ -2609,7 +2609,6 @@ export const en: TranslationMap = {
   },
   cloudWorkersPage: {
     intro: "Run agent sessions on ephemeral cloud machines instead of this gateway.",
-    documentation: "Cloud worker documentation",
     sectionTitle: "Profiles",
     sectionDescription: "Each profile defines how its provider provisions and retires a worker.",
     empty: "No cloud worker profiles are configured.",
