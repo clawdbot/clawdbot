@@ -165,7 +165,10 @@ export type CronServiceDeps = {
   }) => DeliveryContext | undefined;
   /** Runs timer and startup work inside the owning Gateway's detached scope. */
   runSchedulerOwned?: <T>(run: () => Promise<T>) => Promise<T>;
-  requestHeartbeat: (opts: HeartbeatWakeRequest) => void;
+  requestHeartbeat: (
+    opts: HeartbeatWakeRequest,
+    retry?: Extract<HeartbeatRunResult, { status: "skipped" }>,
+  ) => void;
   runHeartbeatOnce?: (opts?: {
     source?: HeartbeatWakeRequest["source"];
     intent?: HeartbeatWakeRequest["intent"];

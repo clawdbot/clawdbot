@@ -10,6 +10,7 @@ import type {
   HeartbeatWakeHandler,
   HeartbeatWakeIntent,
   HeartbeatWakeOverride,
+  HeartbeatWakeRequest,
   HeartbeatWakeSource,
 } from "./heartbeat-wake-contracts.js";
 import {
@@ -408,7 +409,7 @@ function queuePendingWakeReason(params: {
 }
 
 function resolveHeartbeatRetrySchedule(
-  pendingWake: PendingWakeReason,
+  pendingWake: Pick<HeartbeatWakeRequest, "intent">,
   result: Extract<HeartbeatRunResult, { status: "skipped" }>,
 ): { delayMs: number; deferWakeOnly: boolean } {
   const now = Date.now();
@@ -429,7 +430,7 @@ function resolveHeartbeatRetrySchedule(
 }
 
 function retryPendingWake(
-  pendingWake: PendingWakeReason,
+  pendingWake: Parameters<typeof queuePendingWakeReason>[0],
   retrySchedule: { delayMs: number; deferWakeOnly: boolean } = {
     delayMs: DEFAULT_RETRY_MS,
     deferWakeOnly: false,
@@ -750,5 +751,15 @@ export function requestHeartbeat(opts: {
       readyAtMs: requestedAt + resolveTimerTimeoutMs(coalesceMs, DEFAULT_COALESCE_MS, 0),
     });
     schedule(coalesceMs);
+  });
+}
+
+/** Transfers a direct attempt to the wake owner's existing retry lifecycle. */
+export function requestHeartbeatRetry(
+  wake: HeartbeatWakeRequest,
+  result: Extract<HeartbeatRunResult, { status: "skipped" }>,
+) {
+  runWithoutOwnedSessionTranscriptWrites(() => {
+    retryPendingWake(wake, resolveHeartbeatRetrySchedule(wake, result));
   });
 }

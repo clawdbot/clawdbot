@@ -1283,9 +1283,23 @@ describe("cron service timer regressions", () => {
       explicitDeadline: true,
       expectedCalls: 3,
     },
+    {
+      label: "hands off a deadline beyond the remaining wait budget",
+      staysSkipped: true,
+      explicitDeadline: true,
+      maxWaitMs: 90_000,
+      expectedCalls: 2,
+    },
+    {
+      label: "hands off a deadline beyond the entire wait budget",
+      staysSkipped: true,
+      explicitDeadline: true,
+      maxWaitMs: 30_000,
+      expectedCalls: 1,
+    },
   ])(
     "$label for a wake-now heartbeat",
-    async ({ staysSkipped, explicitDeadline, expectedCalls }) => {
+    async ({ staysSkipped, explicitDeadline, maxWaitMs, expectedCalls }) => {
       vi.useFakeTimers();
       try {
         let heartbeatAttempt = 0;
@@ -1323,7 +1337,7 @@ describe("cron service timer regressions", () => {
           enqueueSystemEvent: vi.fn(),
           requestHeartbeat,
           runHeartbeatOnce,
-          wakeNowHeartbeatBusyMaxWaitMs: 2 * HEARTBEAT_IDLE_RETRY_GRACE_MS,
+          wakeNowHeartbeatBusyMaxWaitMs: maxWaitMs ?? 2 * HEARTBEAT_IDLE_RETRY_GRACE_MS,
           wakeNowHeartbeatBusyRetryDelayMs: 1,
           runIsolatedAgentJob: createDefaultIsolatedRunner(),
         });
@@ -1341,6 +1355,13 @@ describe("cron service timer regressions", () => {
         await expect(resultPromise).resolves.toMatchObject({ status: "ok" });
         expect(runHeartbeatOnce).toHaveBeenCalledTimes(expectedCalls);
         expect(requestHeartbeat).toHaveBeenCalledTimes(staysSkipped ? 1 : 0);
+        if (staysSkipped && explicitDeadline) {
+          const finalSkip = await runHeartbeatOnce.mock.results.at(-1)?.value;
+          expect(requestHeartbeat).toHaveBeenCalledWith(
+            expect.objectContaining({ reason: `cron:${mainJob.id}`, intent: "immediate" }),
+            finalSkip,
+          );
+        }
       } finally {
         vi.useRealTimers();
       }
@@ -1437,6 +1458,7 @@ describe("cron service timer regressions", () => {
           agentId: "main",
           reason: "cron:main-session-cancel-boundary",
         }),
+        { status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT },
       );
       expect(requestHeartbeat.mock.calls[0]?.[0]).not.toHaveProperty("sessionKey");
     } finally {
@@ -1612,6 +1634,7 @@ describe("cron service timer regressions", () => {
         expect.objectContaining({
           reason: "cron:main-session-generation-visible",
         }),
+        { status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT },
       );
       expect(isCronJobActive(cronJob.id)).toBe(false);
     } finally {

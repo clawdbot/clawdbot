@@ -136,6 +136,7 @@ function commitStartupCatchupRows(params: {
           job.state.nextRunAtMs === deferred.nextRunAtMs &&
           job.state.lastRunAtMs === deferred.lastRunAtMs &&
           job.state.lastRunStatus === deferred.lastRunStatus &&
+          job.state.scheduleActivatedAtMs === deferred.scheduleActivatedAtMs &&
           job.createdAtMs === deferred.createdAtMs &&
           job.payload.kind === deferred.payloadKind &&
           deferred.scheduleIdentity !== undefined &&
@@ -307,6 +308,7 @@ async function planStartupCatchup(
       scheduleIdentity: tryCronScheduleIdentity(job),
       createdAtMs: job.createdAtMs,
       payloadKind: job.payload.kind,
+      scheduleActivatedAtMs: job.state.scheduleActivatedAtMs,
       nextRunAtMs: job.state.nextRunAtMs,
       lastRunAtMs: job.state.lastRunAtMs,
       lastRunStatus: job.state.lastRunStatus,
