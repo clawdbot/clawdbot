@@ -6,7 +6,7 @@ import { normalizePluginsConfigWithResolver } from "../plugins/config-policy.js"
 import { isActivatedManifestOwner } from "../plugins/manifest-owner-policy.js";
 import { createManifestPluginAliasResolver } from "../plugins/manifest-plugin-alias.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import { hasKind } from "../plugins/slots.js";
+import { hasKind, resolveSlotSelection } from "../plugins/slots.js";
 import {
   collectAutoEnableConfiguredChannelIds,
   collectConfiguredChannelCandidateSet,
@@ -165,11 +165,10 @@ export function createConfiguredChannelOwnershipPolicy(params: {
 
   // The memory slot decides a single-kind memory plugin's fate before it ever registers:
   // `loader-runtime-candidate.ts` calls `resolveMemorySlotDecision` and disables the record when
-  // the slot is off or names someone else. Only those two arms are config-decided -- the
-  // `selectedId` arm depends on which memory plugin the load reached first, which no static
-  // policy can know -- and a multi-kind plugin stays enabled for its other role, so neither is
-  // filtered here. Reporting a slot-rejected claimant active let cede planning crown a plugin
-  // that never registers and suppress the fallback, leaving the channel with no runtime owner.
+  // the slot names someone else or is off. A multi-kind plugin stays enabled for its other role,
+  // so it is not filtered here. Reporting a slot-rejected claimant active let cede planning crown
+  // a plugin that never registers and suppress the fallback, leaving the channel with no runtime
+  // owner.
   //
   // Collected once rather than scanned per call: `isPluginActive` runs for every claimant of every
   // contested channel, and a linear manifest walk on each of those is a per-load cost this policy
@@ -185,22 +184,22 @@ export function createConfiguredChannelOwnershipPolicy(params: {
       singleKindMemoryManifestIds.set(key, entry.id);
     }
   }
+  // Read through `resolveSlotSelection`, which is what `normalizePluginsConfigWithResolverCore`
+  // feeds the loader: it trims, reads "none" as off, and resolves an unset slot to the DEFAULT
+  // owner. Reading `plugins.slots.memory` raw got both ends of that wrong -- an unset slot is not
+  // "no constraint on anyone", it pins the default memory plugin and disables every other
+  // single-kind one, and an authored "  memory-lancedb  " selects the plugin the raw comparison
+  // rejects. Aliases stay unresolved on purpose: the loader compares `slot === record.id` against
+  // the authored spelling, because that same normalizer runs the alias resolver over `entries`,
+  // `allow` and `deny` but leaves `slots.memory` as written. This predicts the loader's answer; it
+  // does not improve on it.
   const isRejectedByMemorySlot = (alias: string): boolean => {
     const manifestId = singleKindMemoryManifestIds.get(alias);
     if (manifestId === undefined) {
       return false;
     }
-    const slot = params.config.plugins?.slots?.memory;
-    if (slot === null) {
-      return true;
-    }
-    // Exactly the loader's comparison, alias resolution and all. `resolveMemorySlotDecisionShared`
-    // tests `slot === id` against the authored spelling, because
-    // `normalizePluginsConfigWithResolverCore` runs the alias resolver over `entries`, `allow` and
-    // `deny` but leaves `slots.memory` as written. Canonicalizing the slot here would report a
-    // claimant active that the loader disables before it registers -- the exact defect this filter
-    // exists to prevent. This predicts the loader's answer; it does not improve on it.
-    return typeof slot === "string" && slot !== manifestId;
+    const selection = resolveSlotSelection("memory", params.config.plugins?.slots?.memory);
+    return selection.kind === "off" ? true : selection.pluginId !== manifestId;
   };
 
   return {

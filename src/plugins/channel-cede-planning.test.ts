@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { collectCededChannelIdsByPlugin } from "./channel-cede-planning.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
+import { defaultSlotIdForKey } from "./slots.js";
 
 const manifestRecord = {
   id: "example",
@@ -78,56 +79,72 @@ describe("collectCededChannelIdsByPlugin", () => {
     return { ...ringClaimant(id, preferOver), kind: ["memory"] } as PluginManifestRecord;
   }
 
-  // Codex P2 3875710886. With `plugins.slots.memory` UNSET, the runtime slot goes to whichever
-  // single-kind memory plugin the load reaches first, and every later one is disabled by the
-  // `selectedId` arm of `resolveMemorySlotDecision` before it registers. Crowning a later declarer
-  // therefore cedes the earlier claimant to a winner the load then switches off, and the
-  // configured channel is left with no owner at all. No static policy can predict that order, so
-  // the cede is declined rather than guessed.
-  it("declines the cede when an unset memory slot decides the winner by load order", () => {
-    const { cededChannelIdsByPlugin, cededChannelOwners } = cededFor([
-      memoryClaimant("zz-mem-early"),
-      memoryClaimant("zz-mem-late", ["zz-mem-early"]),
-    ]);
-
-    expect(cededChannelOwners.has("zzalpha")).toBe(false);
-    expect(cededChannelIdsByPlugin.has("zz-mem-early")).toBe(false);
-  });
-
-  // The contest is only order-dependent while two single-kind memory plugins compete for the slot.
-  // A lone memory claimant always wins it, so its declaration must still cede normally.
-  it("still cedes when only one claimant competes for the memory slot", () => {
+  // Codex P2 3875710886 / 3875920566 / 3876244165 / 3876244172, all one defect. These four
+  // reports circled a guard built on a false premise: that an UNSET `plugins.slots.memory` hands
+  // the slot to whichever single-kind memory plugin the load reaches first. It does not.
+  // `normalizePluginsConfigWithResolverCore` resolves the slot through `resolveSlotSelection`
+  // before the loader ever asks, and an unset slot there means the DEFAULT memory plugin, not "no
+  // constraint" -- so the outcome is decided by config, and the `selectedId` arm the guard was
+  // written against is unreachable from every normalized call site. The guard is gone; what
+  // replaces it is the ownership policy reading the slot the same way the loader does.
+  it("declines the cede to a memory plugin the unset slot leaves disabled", () => {
     const { cededChannelIdsByPlugin, cededChannelOwners } = cededFor([
       ringClaimant("zz-plain-early"),
       memoryClaimant("zz-mem-solo", ["zz-plain-early"]),
     ]);
 
-    expect(cededChannelOwners.get("zzalpha")).toBe("zz-mem-solo");
+    // The unset slot belongs to the default memory plugin, so zz-mem-solo never registers.
+    // Crowning it would cede zz-plain-early to a winner the load switches off, and leave the
+    // configured channel with no runtime owner at all.
+    expect(cededChannelOwners.has("zzalpha")).toBe(false);
+    expect(cededChannelIdsByPlugin.has("zz-plain-early")).toBe(false);
+  });
+
+  // The other half of "unset means the default owner": the default memory plugin is SELECTED by
+  // an unset slot, not held back by it. Reading unset as "slot off" would decline this cede too,
+  // and would disable memory for every operator who never configured a slot.
+  it("cedes to the default memory plugin when the slot is unset", () => {
+    const { cededChannelIdsByPlugin, cededChannelOwners } = cededFor([
+      ringClaimant("zz-plain-early"),
+      memoryClaimant(defaultSlotIdForKey("memory"), ["zz-plain-early"]),
+    ]);
+
+    expect(cededChannelOwners.get("zzalpha")).toBe(defaultSlotIdForKey("memory"));
     expect(cededChannelIdsByPlugin.get("zz-plain-early")).toEqual(["zzalpha"]);
   });
 
-  // Codex P2 3875920566, on the guard above. The contention set counted every single-kind memory
-  // plugin in the REGISTRY, so an unrelated one the operator disabled -- which can never take the
-  // slot -- made the contest look order-dependent and declined a cede that was in fact
-  // deterministic, leaving the earlier claimant serving a channel schema ownership had moved.
-  // Contention is only real among plugins that can actually participate in this load.
-  it("ignores a policy-disabled memory plugin when judging slot contention", () => {
-    const disabledElsewhere = {
-      ...memoryClaimant("zz-mem-off"),
-      channels: [] as string[],
-      channelConfigs: {},
-    } as PluginManifestRecord;
+  it("cedes to a memory plugin the configured slot selects", () => {
     const { cededChannelIdsByPlugin, cededChannelOwners } = cededFor(
-      [
-        ringClaimant("zz-plain-early"),
-        memoryClaimant("zz-mem-solo", ["zz-plain-early"]),
-        disabledElsewhere,
-      ],
-      { plugins: { entries: { "zz-mem-off": { enabled: false } } } },
+      [ringClaimant("zz-plain-early"), memoryClaimant("zz-mem-solo", ["zz-plain-early"])],
+      { plugins: { slots: { memory: "zz-mem-solo" } } },
     );
 
     expect(cededChannelOwners.get("zzalpha")).toBe("zz-mem-solo");
     expect(cededChannelIdsByPlugin.get("zz-plain-early")).toEqual(["zzalpha"]);
+  });
+
+  // The loader compares the TRIMMED slot: `resolveSlotSelection` runs `normalizeOptionalString`
+  // first. Comparing the authored spelling instead rejected a plugin the loader selects.
+  it("selects the memory slot owner the way the loader does, whitespace and all", () => {
+    const { cededChannelIdsByPlugin, cededChannelOwners } = cededFor(
+      [ringClaimant("zz-plain-early"), memoryClaimant("zz-mem-solo", ["zz-plain-early"])],
+      { plugins: { slots: { memory: "  zz-mem-solo  " } } },
+    );
+
+    expect(cededChannelOwners.get("zzalpha")).toBe("zz-mem-solo");
+    expect(cededChannelIdsByPlugin.get("zz-plain-early")).toEqual(["zzalpha"]);
+  });
+
+  // "none" is the only spelling that turns the slot off, and it disables every single-kind memory
+  // plugin -- including one that would otherwise win a channel by declaration.
+  it("declines the cede when the memory slot is turned off", () => {
+    const { cededChannelIdsByPlugin, cededChannelOwners } = cededFor(
+      [ringClaimant("zz-plain-early"), memoryClaimant("zz-mem-solo", ["zz-plain-early"])],
+      { plugins: { slots: { memory: "none" } } },
+    );
+
+    expect(cededChannelOwners.has("zzalpha")).toBe(false);
+    expect(cededChannelIdsByPlugin.has("zz-plain-early")).toBe(false);
   });
 
   // Codex P2 3876090875, the mirror of the singleton namesake fix. A declaration only entitles its
