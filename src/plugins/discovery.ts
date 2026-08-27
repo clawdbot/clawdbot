@@ -45,6 +45,7 @@ import { createPluginCacheKey, PluginLruCache } from "./plugin-cache-primitives.
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
+import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import { withPluginScanExistenceCache } from "./plugin-scan-existence-cache.js";
 import { resolvePluginSourceRoots } from "./roots.js";
 import {
@@ -404,16 +405,19 @@ function addMissingRequiredPluginDiagnostics(
   result: PluginDiscoveryResult,
   params: { env: NodeJS.ProcessEnv; realpathCache: Map<string, string> },
 ): void {
-  const candidateIds = new Set(result.candidates.map((candidate) => candidate.idHint));
+  const candidatePolicyIds = new Set(
+    result.candidates.map((candidate) => normalizePluginPolicyId(candidate.idHint)),
+  );
   const seen = new Set<string>();
-  let configuredFileManifestIds: Set<string> | undefined;
+  let configuredFileManifestPolicyIds: Set<string> | undefined;
   for (const candidate of result.candidates) {
     for (const requiredPluginId of candidate.requiredPluginIds ?? []) {
-      if (candidateIds.has(requiredPluginId) || requiredPluginId === candidate.idHint) {
+      const requiredPolicyId = normalizePluginPolicyId(requiredPluginId);
+      if (candidatePolicyIds.has(requiredPolicyId)) {
         continue;
       }
-      if (!configuredFileManifestIds) {
-        configuredFileManifestIds = new Set();
+      if (!configuredFileManifestPolicyIds) {
+        configuredFileManifestPolicyIds = new Set();
         // Explicit files keep filename hints; only a validated root manifest
         // can establish their canonical identity for a missing dependency.
         for (const configuredCandidate of result.candidates) {
@@ -428,14 +432,14 @@ function addMissingRequiredPluginDiagnostics(
           });
           const manifest = resolveCandidateManifest(configuredCandidate.rootDir, rejectHardlinks);
           if (manifest) {
-            configuredFileManifestIds.add(manifest.manifest.id);
+            configuredFileManifestPolicyIds.add(normalizePluginPolicyId(manifest.manifest.id));
           }
         }
       }
-      if (configuredFileManifestIds.has(requiredPluginId)) {
+      if (configuredFileManifestPolicyIds.has(requiredPolicyId)) {
         continue;
       }
-      const key = `${candidate.idHint}\0${requiredPluginId}`;
+      const key = `${normalizePluginPolicyId(candidate.idHint)}\0${requiredPolicyId}`;
       if (seen.has(key)) {
         continue;
       }

@@ -588,37 +588,103 @@ describe("discoverOpenClawPlugins", () => {
     });
   });
 
-  it("recognizes the validated manifest id of an explicitly configured plugin file", async () => {
-    const stateDir = makeTempDir();
-    const coreDir = path.join(stateDir, "configured-plugins", "acme-core");
-    const coreEntry = path.join(coreDir, "index.ts");
-    mkdirSafe(coreDir);
-    writePluginManifest({ pluginDir: coreDir, id: "acme-core" });
-    writePluginEntry(coreEntry);
+  it.each([
+    { installedPluginId: "Core-Mixed", requiredPluginId: "core-mixed" },
+    { installedPluginId: "core-mixed", requiredPluginId: "CORE-MIXED" },
+  ])(
+    "matches installed plugin dependency ids case-insensitively ($installedPluginId -> $requiredPluginId)",
+    async ({ installedPluginId, requiredPluginId }) => {
+      const stateDir = makeTempDir();
+      const extensionsDir = path.join(stateDir, "extensions");
+      createPackagePluginWithEntry({
+        packageDir: path.join(extensionsDir, "core"),
+        packageName: "@openclaw/core",
+        pluginId: installedPluginId,
+      });
+      const addonDir = path.join(extensionsDir, "addon");
+      createPackagePluginWithEntry({
+        packageDir: addonDir,
+        packageName: "@openclaw/addon",
+        pluginId: "addon",
+      });
+      writePluginManifest({
+        pluginDir: addonDir,
+        id: "addon",
+        requiresPlugins: [requiredPluginId],
+      });
 
-    const dependentDir = path.join(stateDir, "extensions", "acme-addon");
+      const result = await discoverWithStateDir(stateDir, {});
+
+      expectCandidatePresence(result, { present: [installedPluginId, "addon"] });
+      expectNoDiagnostic({
+        diagnostics: result.diagnostics,
+        pluginId: "addon",
+        messageIncludes: "requires plugin",
+      });
+    },
+  );
+
+  it.each([
+    { manifestId: "acme-core", requiredPluginId: "acme-core" },
+    { manifestId: "Acme-Core", requiredPluginId: "acme-core" },
+    { manifestId: "acme-core", requiredPluginId: "ACME-CORE" },
+  ])(
+    "recognizes the validated manifest id of an explicitly configured plugin file ($manifestId -> $requiredPluginId)",
+    async ({ manifestId, requiredPluginId }) => {
+      const stateDir = makeTempDir();
+      const coreDir = path.join(stateDir, "configured-plugins", "acme-core");
+      const coreEntry = path.join(coreDir, "index.ts");
+      mkdirSafe(coreDir);
+      writePluginManifest({ pluginDir: coreDir, id: manifestId });
+      writePluginEntry(coreEntry);
+
+      const dependentDir = path.join(stateDir, "extensions", "acme-addon");
+      createPackagePluginWithEntry({
+        packageDir: dependentDir,
+        packageName: "@acme/acme-addon",
+        pluginId: "acme-addon",
+      });
+      writePluginManifest({
+        pluginDir: dependentDir,
+        id: "acme-addon",
+        requiresPlugins: [requiredPluginId],
+      });
+
+      const result = await discoverWithStateDir(stateDir, { extraPaths: [coreEntry] });
+
+      expectCandidatePresence(result, {
+        present: ["index", "acme-addon"],
+        absent: ["acme-core"],
+      });
+      expectNoDiagnostic({
+        diagnostics: result.diagnostics,
+        pluginId: "acme-addon",
+        messageIncludes: "requires plugin",
+      });
+    },
+  );
+
+  it("reports one actionable warning for repeated missing dependency casing", async () => {
+    const stateDir = makeTempDir();
+    const addonDir = path.join(stateDir, "extensions", "addon");
     createPackagePluginWithEntry({
-      packageDir: dependentDir,
-      packageName: "@acme/acme-addon",
-      pluginId: "acme-addon",
+      packageDir: addonDir,
+      packageName: "@openclaw/addon",
+      pluginId: "addon",
     });
     writePluginManifest({
-      pluginDir: dependentDir,
-      id: "acme-addon",
-      requiresPlugins: ["acme-core"],
+      pluginDir: addonDir,
+      id: "addon",
+      requiresPlugins: ["Missing-Core", "missing-core"],
     });
 
-    const result = await discoverWithStateDir(stateDir, { extraPaths: [coreEntry] });
+    const result = await discoverWithStateDir(stateDir, {});
+    const missingWarnings = result.diagnostics.filter(
+      (entry) => entry.pluginId === "addon" && entry.message.includes("requires plugin"),
+    );
 
-    expectCandidatePresence(result, {
-      present: ["index", "acme-addon"],
-      absent: ["acme-core"],
-    });
-    expectNoDiagnostic({
-      diagnostics: result.diagnostics,
-      pluginId: "acme-addon",
-      messageIncludes: 'requires plugin "acme-core"',
-    });
+    expect(missingWarnings).toHaveLength(1);
+    expect(missingWarnings[0]?.message).toContain('requires plugin "Missing-Core"');
   });
 
   it.skipIf(!canCreateDirectorySymlinks)(
