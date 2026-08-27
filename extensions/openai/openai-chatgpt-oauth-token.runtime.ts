@@ -1,4 +1,8 @@
 import {
+  shouldUseEnvHttpProxyForUrl,
+  withTrustedEnvProxyGuardedFetchMode,
+} from "openclaw/plugin-sdk/fetch-runtime";
+import {
   resolveOAuthTokenExpiresAt,
   resolveOAuthTokenLifetimeMs,
   throwIfOAuthLoginAborted,
@@ -68,7 +72,7 @@ async function postTokenForm(
 ): Promise<Response> {
   const timeoutMs = options.timeoutMs ?? TOKEN_REQUEST_TIMEOUT_MS;
   throwIfOAuthLoginAborted(options.signal);
-  const { response, release } = await fetchWithSsrFGuard({
+  const guardedOptions = {
     url: TOKEN_URL,
     // Fake-IP proxies map public hosts into these ranges. The exact-host allowlist
     // keeps redirects and every other hostname fail-closed.
@@ -81,7 +85,12 @@ async function postTokenForm(
     timeoutMs,
     signal: options.signal,
     auditContext: "openai-chatgpt-oauth-token",
-  });
+  };
+  const { response, release } = await fetchWithSsrFGuard(
+    shouldUseEnvHttpProxyForUrl(TOKEN_URL)
+      ? withTrustedEnvProxyGuardedFetchMode(guardedOptions)
+      : guardedOptions,
+  );
   try {
     const responseBody = await readResponseWithLimit(
       response,

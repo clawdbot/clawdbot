@@ -9,6 +9,25 @@ const ssrfMocks = vi.hoisted(() => ({
   fetchWithSsrFGuard: vi.fn(),
 }));
 
+const fetchRuntimeMocks = vi.hoisted(() => ({
+  shouldUseEnvHttpProxyForUrl: vi.fn(() => false),
+  withTrustedEnvProxyGuardedFetchMode: vi.fn((params: Record<string, unknown>) => ({
+    ...params,
+    mode: "trusted_env_proxy",
+  })),
+}));
+
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/fetch-runtime")>(
+    "openclaw/plugin-sdk/fetch-runtime",
+  );
+  return {
+    ...actual,
+    shouldUseEnvHttpProxyForUrl: fetchRuntimeMocks.shouldUseEnvHttpProxyForUrl,
+    withTrustedEnvProxyGuardedFetchMode: fetchRuntimeMocks.withTrustedEnvProxyGuardedFetchMode,
+  };
+});
+
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
     "openclaw/plugin-sdk/ssrf-runtime",
@@ -119,6 +138,9 @@ function mockFakeIpTokenResponse(params: { address: string; family: 4 | 6 }): vo
 
 afterEach(() => {
   ssrfMocks.fetchWithSsrFGuard.mockReset();
+  fetchRuntimeMocks.shouldUseEnvHttpProxyForUrl.mockReset();
+  fetchRuntimeMocks.shouldUseEnvHttpProxyForUrl.mockReturnValue(false);
+  fetchRuntimeMocks.withTrustedEnvProxyGuardedFetchMode.mockClear();
   vi.unstubAllGlobals();
 });
 
@@ -283,6 +305,37 @@ describe("OpenAI Codex OAuth flow", () => {
     expect(result).toMatchObject({
       type: "failed",
       message: "OpenAI Codex token exchange timed out after 5ms",
+    });
+  });
+
+  it("uses trusted env proxy mode for OpenAI token requests when proxy env applies", async () => {
+    fetchRuntimeMocks.shouldUseEnvHttpProxyForUrl.mockReturnValueOnce(true);
+    mockTokenResponse({
+      access_token: "test-access-token",
+      refresh_token: "test-refresh-token",
+      expires_in: 3600,
+    });
+
+    const result = await exchangeOpenAIAuthorizationCode(
+      "code",
+      "verifier",
+      resolveOpenAIRedirectUri("localhost"),
+    );
+
+    expect(fetchRuntimeMocks.shouldUseEnvHttpProxyForUrl).toHaveBeenCalledWith(
+      "https://auth.openai.com/oauth/token",
+    );
+    expect(fetchRuntimeMocks.withTrustedEnvProxyGuardedFetchMode).toHaveBeenCalledOnce();
+    expect(ssrfMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        auditContext: "openai-chatgpt-oauth-token",
+        mode: "trusted_env_proxy",
+      }),
+    );
+    expect(result).toMatchObject({
+      type: "success",
+      access: "test-access-token",
+      refresh: "test-refresh-token",
     });
   });
 
