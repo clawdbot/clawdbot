@@ -11,140 +11,33 @@
     "type": "function"
   },
   {
-    "description": "Send/manage channel messages. Supports actions: send.",
+    "description": "Send a text reply to the current source conversation. Load openclaw.message for media, rich presentation, message management, or another destination.",
     "inputSchema": {
+      "additionalProperties": false,
       "properties": {
-        "accountId": {
-          "type": "string"
-        },
         "action": {
-          "description": "Select one action. For action=\"send\", provide message or another send payload; fields for other actions do not count as send content.",
+          "description": "Send a text reply to the current source conversation.",
           "enum": ["send"],
           "type": "string"
         },
-        "asDocument": {
-          "description": "Alias for forceDocument.",
+        "final": {
+          "description": "True for the completed reply; false for progress.",
           "type": "boolean"
-        },
-        "asVoice": {
-          "description": "Send audio as a voice note; combines with voiceText.",
-          "type": "boolean"
-        },
-        "attachments": {
-          "description": "Attachments; each uses media.",
-          "items": {
-            "properties": {
-              "media": {
-                "type": "string"
-              },
-              "mimeType": {
-                "type": "string"
-              },
-              "name": {
-                "type": "string"
-              },
-              "type": {
-                "enum": ["image", "audio", "video", "file"],
-                "type": "string"
-              }
-            },
-            "type": "object"
-          },
-          "type": "array"
-        },
-        "buffer": {
-          "description": "Base64/data-URL attachment.",
-          "type": "string"
-        },
-        "caption": {
-          "type": "string"
-        },
-        "channel": {
-          "type": "string"
-        },
-        "contentType": {
-          "type": "string"
-        },
-        "dryRun": {
-          "type": "boolean"
-        },
-        "effect": {
-          "description": "Alias for effectId.",
-          "type": "string"
-        },
-        "effectId": {
-          "description": "sendWithEffect id/name.",
-          "type": "string"
-        },
-        "filename": {
-          "type": "string"
-        },
-        "forceDocument": {
-          "description": "Send media as document; no compression.",
-          "type": "boolean"
-        },
-        "gatewayToken": {
-          "type": "string"
-        },
-        "gatewayUrl": {
-          "type": "string"
-        },
-        "gifPlayback": {
-          "type": "boolean"
-        },
-        "media": {
-          "description": "Media URL/path. data: use buffer.",
-          "type": "string"
         },
         "message": {
-          "description": "Text for action=\"send\". A send needs message or another send payload such as media, attachments, or presentation.",
-          "type": "string"
-        },
-        "mimeType": {
-          "type": "string"
-        },
-        "quoteText": {
-          "description": "Telegram reply quote text.",
+          "description": "Visible reply text.",
           "type": "string"
         },
         "replyTo": {
+          "description": "Optional current-conversation message id to reply to.",
           "type": "string"
-        },
-        "silent": {
-          "type": "boolean"
-        },
-        "target": {
-          "description": "Recipient/channel: E.164 for WhatsApp/Signal, Telegram chat id/@username, Discord/Slack/Mattermost <channelId|user:ID|channel:ID>, or iMessage handle/chat_id",
-          "type": "string"
-        },
-        "targets": {
-          "items": {
-            "description": "Recipient/channel targets (same format as --target); accepts ids or names when the directory is available.",
-            "type": "string"
-          },
-          "type": "array"
         },
         "threadId": {
-          "type": "string"
-        },
-        "timeoutMs": {
-          "minimum": 1,
-          "type": "integer"
-        },
-        "voiceId": {
-          "description": "Per-send speech voice override.",
-          "type": "string"
-        },
-        "voiceProvider": {
-          "description": "Per-send speech provider override.",
-          "type": "string"
-        },
-        "voiceText": {
-          "description": "Text to synthesize; message remains visible.",
+          "description": "Optional current-conversation thread id.",
           "type": "string"
         }
       },
-      "required": ["action"],
+      "required": ["action", "message"],
       "type": "object"
     },
     "name": "message",
@@ -846,6 +739,147 @@
           "type": "object"
         },
         "name": "gateway",
+        "type": "function"
+      },
+      {
+        "deferLoading": true,
+        "description": "Send/manage channel messages. Supports actions: send.",
+        "inputSchema": {
+          "properties": {
+            "accountId": {
+              "type": "string"
+            },
+            "action": {
+              "description": "Select one action. For action=\"send\", provide message or another send payload; fields for other actions do not count as send content.",
+              "enum": ["send"],
+              "type": "string"
+            },
+            "asDocument": {
+              "description": "Alias for forceDocument.",
+              "type": "boolean"
+            },
+            "asVoice": {
+              "description": "Send audio as a voice note; combines with voiceText.",
+              "type": "boolean"
+            },
+            "attachments": {
+              "description": "Attachments; each uses media.",
+              "items": {
+                "properties": {
+                  "media": {
+                    "type": "string"
+                  },
+                  "mimeType": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "enum": ["image", "audio", "video", "file"],
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "buffer": {
+              "description": "Base64/data-URL attachment.",
+              "type": "string"
+            },
+            "caption": {
+              "type": "string"
+            },
+            "channel": {
+              "type": "string"
+            },
+            "contentType": {
+              "type": "string"
+            },
+            "dryRun": {
+              "type": "boolean"
+            },
+            "effect": {
+              "description": "Alias for effectId.",
+              "type": "string"
+            },
+            "effectId": {
+              "description": "sendWithEffect id/name.",
+              "type": "string"
+            },
+            "filename": {
+              "type": "string"
+            },
+            "forceDocument": {
+              "description": "Send media as document; no compression.",
+              "type": "boolean"
+            },
+            "gatewayToken": {
+              "type": "string"
+            },
+            "gatewayUrl": {
+              "type": "string"
+            },
+            "gifPlayback": {
+              "type": "boolean"
+            },
+            "media": {
+              "description": "Media URL/path. data: use buffer.",
+              "type": "string"
+            },
+            "message": {
+              "description": "Text for action=\"send\". A send needs message or another send payload such as media, attachments, or presentation.",
+              "type": "string"
+            },
+            "mimeType": {
+              "type": "string"
+            },
+            "quoteText": {
+              "description": "Telegram reply quote text.",
+              "type": "string"
+            },
+            "replyTo": {
+              "type": "string"
+            },
+            "silent": {
+              "type": "boolean"
+            },
+            "target": {
+              "description": "Recipient/channel: E.164 for WhatsApp/Signal, Telegram chat id/@username, Discord/Slack/Mattermost <channelId|user:ID|channel:ID>, or iMessage handle/chat_id",
+              "type": "string"
+            },
+            "targets": {
+              "items": {
+                "description": "Recipient/channel targets (same format as --target); accepts ids or names when the directory is available.",
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "threadId": {
+              "type": "string"
+            },
+            "timeoutMs": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "voiceId": {
+              "description": "Per-send speech voice override.",
+              "type": "string"
+            },
+            "voiceProvider": {
+              "description": "Per-send speech provider override.",
+              "type": "string"
+            },
+            "voiceText": {
+              "description": "Text to synthesize; message remains visible.",
+              "type": "string"
+            }
+          },
+          "required": ["action"],
+          "type": "object"
+        },
+        "name": "message",
         "type": "function"
       },
       {

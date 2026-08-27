@@ -737,17 +737,55 @@ describe("createCodexDynamicToolBridge", () => {
 
   it("keeps configured direct tools in the initial Codex tool context", () => {
     const bridge = createCodexDynamicToolBridge({
-      tools: [createTool({ name: "message" }), createTool({ name: "web_search" })],
+      tools: [
+        createTool({
+          name: "message",
+          description: "Full message manager.",
+          parameters: {
+            type: "object",
+            properties: {
+              action: { type: "string" },
+              message: { type: "string" },
+              media: { type: "string" },
+              pollId: { type: "string" },
+            },
+          },
+        }),
+        createTool({ name: "web_search" }),
+      ],
       signal: new AbortController().signal,
       directToolNames: ["message"],
     });
 
     const specs = flattenSpecsWithNamespace(bridge.specs);
-    expect(bridge.specs).toHaveLength(2);
-    expectDynamicSpec(
-      specs.find((tool) => tool.name === "message"),
-      { name: "message" },
+    const directMessage = specs.find(
+      (tool) => tool.name === "message" && tool.namespace === undefined,
     );
+    const deferredMessage = specs.find(
+      (tool) => tool.name === "message" && tool.namespace === CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+    );
+    expect(bridge.specs).toHaveLength(2);
+    expectDynamicSpec(directMessage, { name: "message" });
+    expect(directMessage?.description).toContain("current source conversation");
+    expect(directMessage?.inputSchema).toEqual(
+      expect.objectContaining({
+        type: "object",
+        required: ["action", "message"],
+        properties: expect.objectContaining({
+          action: expect.objectContaining({ enum: ["send"] }),
+          message: expect.objectContaining({ type: "string" }),
+          final: expect.objectContaining({ type: "boolean" }),
+        }),
+      }),
+    );
+    expect(JSON.stringify(directMessage?.inputSchema)).not.toContain("pollId");
+    expectDynamicSpec(deferredMessage, {
+      name: "message",
+      namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+      deferLoading: true,
+    });
+    expect(deferredMessage?.description).toBe("Full message manager.");
+    expect(JSON.stringify(deferredMessage?.inputSchema)).toContain("pollId");
     expectDynamicSpec(
       specs.find((tool) => tool.name === "web_search"),
       {
@@ -756,7 +794,115 @@ describe("createCodexDynamicToolBridge", () => {
         deferLoading: true,
       },
     );
-    expectNoNamespace(specs.find((tool) => tool.name === "message"));
+    expectNoNamespace(directMessage);
+  });
+
+  it("enforces the root source-reply contract while retaining deferred rich actions", async () => {
+    const execute = vi.fn(async () => textToolResult("message accepted"));
+    const prepareArguments = vi.fn((arguments_: unknown) => arguments_);
+    const bridge = createCodexDynamicToolBridge({
+      tools: [
+        createTool({
+          name: "message",
+          description: "Full message manager.",
+          parameters: {
+            type: "object",
+            properties: {
+              action: { type: "string", enum: ["send", "react"] },
+              message: { type: "string" },
+              emoji: { type: "string" },
+              target: { type: "string" },
+            },
+            required: ["action"],
+            additionalProperties: false,
+          },
+          prepareArguments,
+          execute,
+        }),
+      ],
+      signal: new AbortController().signal,
+      directToolNames: ["message"],
+    });
+
+    const richRootResult = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-root-rich",
+      namespace: null,
+      tool: "message",
+      arguments: { action: "react", emoji: "✅" },
+    });
+    expectSchemaRejection(richRootResult, execute, "action");
+
+    const routedRootResult = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-root-routed",
+      namespace: null,
+      tool: "message",
+      arguments: { action: "send", message: "hello", target: "other-destination" },
+    });
+    expectSchemaRejection(routedRootResult, execute, "additional properties");
+    expect(prepareArguments).not.toHaveBeenCalled();
+
+    const directResult = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-root-send",
+      namespace: null,
+      tool: "message",
+      arguments: { action: "send", message: "hello", final: true },
+    });
+    expect(directResult.success).toBe(true);
+
+    const deferredResult = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-deferred-rich",
+      namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+      tool: "message",
+      arguments: { action: "react", emoji: "✅" },
+    });
+    expect(deferredResult.success).toBe(true);
+    expect(prepareArguments).toHaveBeenCalledTimes(2);
+    expect(execute).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the full message schema directly visible in compatibility direct mode", async () => {
+    const execute = vi.fn(async () => textToolResult("compatibility message accepted"));
+    const bridge = createCodexDynamicToolBridge({
+      tools: [
+        createTool({
+          name: "message",
+          description: "Full message manager.",
+          parameters: {
+            type: "object",
+            properties: { pollId: { type: "string" } },
+          },
+          execute,
+        }),
+      ],
+      signal: new AbortController().signal,
+      loading: "direct",
+      directToolNames: ["message"],
+    });
+
+    const specs = flattenSpecsWithNamespace(bridge.specs);
+    expect(specs).toHaveLength(1);
+    expectNoNamespace(specs[0]);
+    expect(specs[0]?.description).toBe("Full message manager.");
+    expect(JSON.stringify(specs[0]?.inputSchema)).toContain("pollId");
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-direct-compatibility",
+      namespace: null,
+      tool: "message",
+      arguments: { pollId: "poll-1" },
+    });
+    expect(result.success).toBe(true);
+    expect(execute).toHaveBeenCalledOnce();
   });
 
   it("keeps progress_card direct when searchable loading defers broad tools", () => {

@@ -2163,7 +2163,7 @@ describe("runCodexAppServerAttempt", () => {
       "Deferred searchable OpenClaw dynamic tools available: heartbeat_respond",
     );
     expect(heartbeatInstructions).toContain(
-      "Deferred searchable OpenClaw dynamic tools available: heartbeat_respond.",
+      "Deferred searchable OpenClaw dynamic tools available: heartbeat_respond, message.",
     );
     for (const bridge of [normalBridge, heartbeatBridge, nextNormalBridge]) {
       const heartbeat = flattenSpecsWithNamespace(bridge.specs).find(

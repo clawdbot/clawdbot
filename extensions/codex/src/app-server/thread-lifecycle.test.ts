@@ -1109,6 +1109,8 @@ describe("Codex app-server native code mode config", () => {
       "On code-mode-only models, use `exec` instead: filter `ALL_TOOLS` by name and description",
     );
     expect(instructions).toContain("call the matching entry through `tools`");
+    expect(instructions).toContain("batch them within one `exec` evaluation with `Promise.all`");
+    expect(instructions).toContain("set output limits to the smallest useful size");
     expect(instructions).toContain(
       "Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent` on internal legwork.",
     );

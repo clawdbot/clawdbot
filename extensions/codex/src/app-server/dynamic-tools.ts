@@ -471,6 +471,36 @@ const ALWAYS_DIRECT_DYNAMIC_TOOL_NAMES = new Set([
   "sessions_spawn",
   "sessions_yield",
 ]);
+const DIRECT_SOURCE_REPLY_MESSAGE_DESCRIPTION =
+  "Send a text reply to the current source conversation. Load openclaw.message for media, rich presentation, message management, or another destination.";
+const DIRECT_SOURCE_REPLY_MESSAGE_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    action: {
+      type: "string",
+      enum: ["send"],
+      description: "Send a text reply to the current source conversation.",
+    },
+    message: {
+      type: "string",
+      description: "Visible reply text.",
+    },
+    final: {
+      type: "boolean",
+      description: "True for the completed reply; false for progress.",
+    },
+    replyTo: {
+      type: "string",
+      description: "Optional current-conversation message id to reply to.",
+    },
+    threadId: {
+      type: "string",
+      description: "Optional current-conversation thread id.",
+    },
+  },
+  required: ["action", "message"],
+} satisfies JsonValue;
 const EXPLICIT_MESSAGE_PROVIDER_KEYS = ["channel", "provider"];
 const EXPLICIT_MESSAGE_TARGET_KEYS = ["target", "to", "channelId"];
 const EXPLICIT_MESSAGE_THREAD_KEYS = ["threadId", "thread_id", "messageThreadId", "topicId"];
@@ -592,17 +622,18 @@ export function createCodexDynamicToolBridge(params: {
     ...ALWAYS_DIRECT_DYNAMIC_TOOL_NAMES,
     ...(params.directToolNames ?? []),
   ]);
+  const loading = params.loading ?? "searchable";
   let readRemoteWorkspaceFile: CodexRemoteWorkspaceFileReader | undefined;
   return {
     availableTools: availableTools.map((entry) => entry.tool),
     availableSpecs: createCodexDynamicToolSpecs({
       entries: availableTools,
-      loading: params.loading ?? "searchable",
+      loading,
       directToolNames,
     }),
     specs: createCodexDynamicToolSpecs({
       entries: registeredSpecTools,
-      loading: params.loading ?? "searchable",
+      loading,
       directToolNames,
     }),
     resultContentSourceForTool: (toolName) => toolMap.get(toolName)?.tool.resultContentSource,
@@ -652,6 +683,14 @@ export function createCodexDynamicToolBridge(params: {
       const { tool, name: toolName } = toolEntry;
       const rawArguments = call.arguments;
       const args = asNonArrayRecord(rawArguments);
+      const usesDirectSourceReplySchema =
+        toolName === "message" &&
+        loading !== "direct" &&
+        directToolNames.has(toolName) &&
+        (call.namespace === null || call.namespace === undefined);
+      const executionInputSchema = usesDirectSourceReplySchema
+        ? DIRECT_SOURCE_REPLY_MESSAGE_SCHEMA
+        : toolEntry.inputSchema;
       const startedAt = Date.now();
       const signal = composeAbortSignals(params.signal, options?.signal);
       let didStartExecution = false;
@@ -685,6 +724,16 @@ export function createCodexDynamicToolBridge(params: {
         }
       };
       try {
+        // The root source-reply schema is an execution boundary, not only catalog
+        // guidance. Reject forged rich/routed root calls before message-specific
+        // preparation can read media; the wrapper validates hook-adjusted args again.
+        if (usesDirectSourceReplySchema) {
+          assertCodexDynamicToolInputMatchesSchema({
+            toolName,
+            schema: executionInputSchema,
+            value: rawArguments,
+          });
+        }
         // Compatibility preparation owns raw arguments; record coercion must not run first.
         const prepare = tool.prepareArguments;
         const toolArgs = prepare ? Reflect.apply(prepare, tool, [rawArguments]) : args;
@@ -720,7 +769,7 @@ export function createCodexDynamicToolBridge(params: {
               validate: (value) =>
                 assertCodexDynamicToolInputMatchesSchema({
                   toolName,
-                  schema: toolEntry.inputSchema,
+                  schema: executionInputSchema,
                   value,
                 }),
             }),
@@ -1119,8 +1168,24 @@ function createCodexDynamicToolSpecs(params: {
       directOnlyNamespaceTools.push(functionSpec);
       continue;
     }
-    if (params.loading === "direct" || params.directToolNames.has(entry.name)) {
+    if (params.loading === "direct") {
       specs.push(functionSpec);
+      continue;
+    }
+    if (params.directToolNames.has(entry.name)) {
+      if (entry.name === "message") {
+        specs.push({
+          ...functionSpec,
+          description: DIRECT_SOURCE_REPLY_MESSAGE_DESCRIPTION,
+          inputSchema: DIRECT_SOURCE_REPLY_MESSAGE_SCHEMA,
+        });
+        // Keep the complete message manager searchable under openclaw.message.
+        // The small root schema is the hot path for ordinary source replies;
+        // advanced actions retain their existing runtime and policy contract.
+        namespaceTools.push({ ...functionSpec, deferLoading: true });
+      } else {
+        specs.push(functionSpec);
+      }
       continue;
     }
     namespaceTools.push({ ...functionSpec, deferLoading: true });
