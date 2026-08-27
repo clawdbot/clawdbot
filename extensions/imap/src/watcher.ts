@@ -94,6 +94,11 @@ export class ImapAccountWatcher {
   }
 
   private async connect(): Promise<void> {
+    // Finish the previous connection's admission before reinitializing its cursor.
+    await this.activeSweep;
+    if (this.stopping) {
+      return;
+    }
     const { account } = this.options;
     const client = new ImapFlow({
       host: account.host,
@@ -133,6 +138,9 @@ export class ImapAccountWatcher {
       mailbox.uidValidity.toString(),
       mailbox.uidNext,
     );
+    if (this.stopping || this.client !== client) {
+      return;
+    }
     if (initialized.kind !== "resume") {
       this.options.context.logger.info(
         `imap: account=${this.options.accountId} cursor=${initialized.kind} uidValidity=${initialized.cursor.uidValidity} uid=${initialized.cursor.lastSeenUid}`,
@@ -156,13 +164,13 @@ export class ImapAccountWatcher {
         this.requestSweep();
       });
     }
-    if (!push) {
-      this.pollTimer = setInterval(() => this.requestSweep(), account.watch.pollSeconds * 1_000);
-      this.pollTimer.unref();
-    }
+    // IDLE reports mailbox changes, not retry readiness. Reconcile on the same
+    // cadence in both modes so a quiet inbox cannot strand a rejected admission.
+    this.pollTimer = setInterval(() => this.requestSweep(), account.watch.pollSeconds * 1_000);
+    this.pollTimer.unref();
     // Reconnect always sweeps persisted state, closing the notification gap during disconnect.
     if (initialized.kind === "resume") {
-      await this.sweep(client);
+      this.requestSweep();
     }
   }
 
@@ -261,7 +269,11 @@ export class ImapAccountWatcher {
       }
     }
     for (const message of messages.toSorted((left, right) => left.uid - right.uid)) {
-      if (this.stopping || !(await this.processMessage(message, cursor.uidValidity))) {
+      if (
+        this.stopping ||
+        this.client !== client ||
+        !(await this.processMessage(message, cursor.uidValidity))
+      ) {
         break;
       }
       await advanceImapCursor(
@@ -309,6 +321,11 @@ export class ImapAccountWatcher {
       await this.recordSkip(message.uid, verdict.sender, verdict.reason);
       return true;
     }
+    const messageRing = mail.messageId ? await state.messageIds.lookup(accountId) : undefined;
+    if (mail.messageId && messageRing?.messageIds.includes(mail.messageId)) {
+      await this.recordSkip(message.uid, verdict.sender, "duplicate-message-id");
+      return true;
+    }
     if (
       !(await state.claims.registerIfAbsent(key, {
         accountId,
@@ -319,24 +336,28 @@ export class ImapAccountWatcher {
       await this.recordSkip(message.uid, verdict.sender, "duplicate-uid");
       return true;
     }
-    const messageRing = mail.messageId ? await state.messageIds.lookup(accountId) : undefined;
-    if (mail.messageId && messageRing?.messageIds.includes(mail.messageId)) {
-      await this.recordSkip(message.uid, verdict.sender, "duplicate-message-id");
-      return true;
-    }
     const sessionKey = `hook:imap:${key}`;
-    const result = await this.options.runtime.hooks.dispatchHookAgentTurn({
-      name: `IMAP ${accountId}`,
-      agentId: account.agentId,
-      sessionKey,
-      message: renderImapPrompt(mail, account, (message.size ?? 0) > MAX_SOURCE_BYTES),
-      externalContentSource: "email",
-      deliver: account.deliver,
-      idempotencyKey: sessionKey,
-      ...(account.model ? { model: account.model } : {}),
-      ...(account.thinking ? { thinking: account.thinking } : {}),
-      ...(account.timeoutSeconds ? { timeoutSeconds: account.timeoutSeconds } : {}),
-    });
+    let result: Awaited<
+      ReturnType<ImapWatcherOptions["runtime"]["hooks"]["dispatchHookAgentTurn"]>
+    >;
+    try {
+      result = await this.options.runtime.hooks.dispatchHookAgentTurn({
+        name: `IMAP ${accountId}`,
+        agentId: account.agentId,
+        sessionKey,
+        message: renderImapPrompt(mail, account, (message.size ?? 0) > MAX_SOURCE_BYTES),
+        externalContentSource: "email",
+        deliver: account.deliver,
+        idempotencyKey: sessionKey,
+        ...(account.model ? { model: account.model } : {}),
+        ...(account.thinking ? { thinking: account.thinking } : {}),
+        ...(account.timeoutSeconds ? { timeoutSeconds: account.timeoutSeconds } : {}),
+      });
+    } catch (error) {
+      // Gateway preflight can throw before admission. Release its claim through
+      // the same bounded retry path; post-admission failures are reported separately.
+      result = { ok: false, reason: formatErrorMessage(error) };
+    }
     if (result.ok) {
       if (mail.messageId) {
         await rememberImapMessage(state, accountId, mail.messageId);

@@ -30,6 +30,7 @@ import { createBundleLspToolRuntime } from "../agent-bundle-lsp-runtime.js";
 import { createBundleMcpToolRuntime } from "../agent-bundle-mcp-tools.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
 import { createOpenClawCodingTools } from "../agent-tools.js";
+import { createSkillInstructionDeliveryCache } from "../agent-tools.read.js";
 import { listActiveProcessSessionReferences } from "../bash-process-references.js";
 import { resolveProcessToolScopeKey } from "../bash-process-scope.js";
 import {
@@ -328,6 +329,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       pluginMetadataSnapshot: params.preparedModelRuntime.metadataSnapshot,
     });
     const toolsEnabled = supportsModelTools(effectiveModel);
+    const skillInstructionDeliveryCache = createSkillInstructionDeliveryCache();
     const toolsRaw = toolsEnabled
       ? createOpenClawCodingTools({
           exec: {
@@ -374,6 +376,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
           modelContextWindowTokens: contextTokenBudget,
           skillsSnapshot: skillsSnapshotForRun,
           skillUsagePaths,
+          skillInstructionDeliveryCache,
           conversationCapabilityProfile: runtimeCapabilityProfile,
           preparedModelRuntime: params.preparedModelRuntime,
           modelAuthMode: resolveModelAuthMode(effectiveModel.provider, params.config, undefined, {

@@ -35,6 +35,7 @@ import {
   shouldStartTransientNoToolThread,
 } from "./thread-fingerprints.js";
 import {
+  assertAdoptedCodexThreadResumeAllowed,
   resumePendingCodexThread,
   withCodexThreadLifecycleBinding,
 } from "./thread-lifecycle-adoption.js";
@@ -680,6 +681,11 @@ export async function startOrResumeThread(
         });
         if (warmReuse.binding) {
           return warmReuse.binding;
+        }
+        // Native adoption must be checked before releasing any retained owner;
+        // a passive refusal neither acquires nor authorizes dropping a subscription.
+        if (binding.preserveNativeModel === true) {
+          await assertAdoptedCodexThreadResumeAllowed(params, binding.threadId, requestContext);
         }
         // Codex cold-resumes a changed idle thread after its last subscriber
         // leaves; resume_running_thread shuts down the old cached session.

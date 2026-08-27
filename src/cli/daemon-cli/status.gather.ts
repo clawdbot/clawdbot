@@ -68,6 +68,7 @@ import {
 } from "../../plugins/plugin-version-drift.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { VERSION } from "../../version.js";
+import { resolveGatewayLocalPortOverride } from "../gateway-port-option.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
 import { normalizeListenerAddress, parsePortFromArgs, pickProbeHostForBind } from "./shared.js";
 import type { GatewayRpcOpts } from "./types.js";
@@ -87,7 +88,7 @@ type GatewayStatusSummary = {
   customBindHost?: string;
   tlsEnabled?: boolean;
   port: number;
-  portSource: "service args" | "env/config";
+  portSource: "cli" | "service args" | "env/config";
   probeUrl: string;
   controlUiLinks?: { httpUrl: string; wsUrl: string };
   probeNote?: string;
@@ -433,12 +434,15 @@ async function resolveGatewayStatusSummary(params: {
   mergedDaemonEnv: Record<string, string | undefined>;
   commandProgramArguments?: string[];
   rpcUrlOverride?: string;
+  localPortOverride?: number;
 }): Promise<ResolvedGatewayStatus> {
   const portFromArgs = parsePortFromArgs(params.commandProgramArguments);
-  const daemonPort = portFromArgs ?? resolveGatewayPort(params.daemonCfg, params.mergedDaemonEnv);
-  const portSource: GatewayStatusSummary["portSource"] = portFromArgs
-    ? "service args"
-    : "env/config";
+  const daemonPort =
+    params.localPortOverride ??
+    portFromArgs ??
+    resolveGatewayPort(params.daemonCfg, params.mergedDaemonEnv);
+  const portSource: GatewayStatusSummary["portSource"] =
+    params.localPortOverride !== undefined ? "cli" : portFromArgs ? "service args" : "env/config";
   const bindMode: GatewayBindMode = params.daemonCfg.gateway?.bind ?? "loopback";
   const customBindHost = params.daemonCfg.gateway?.customBindHost;
   const { bindHost, warning: bindHostWarning } = await resolveBestEffortGatewayBindHostForDisplay({
@@ -449,7 +453,10 @@ async function resolveGatewayStatusSummary(params: {
   const { tailnetIPv4, warning: tailnetWarning } = inspectBestEffortPrimaryTailnetIPv4({
     warningPrefix: "Status could not inspect tailnet addresses",
   });
-  const probeHost = pickProbeHostForBind(bindMode, tailnetIPv4, customBindHost);
+  const probeHost =
+    params.localPortOverride !== undefined
+      ? "127.0.0.1"
+      : pickProbeHostForBind(bindMode, tailnetIPv4, customBindHost);
   const probeUrlOverride = trimToUndefined(params.rpcUrlOverride) ?? null;
   const tlsEnabled = params.daemonCfg.gateway?.tls?.enabled === true;
   const scheme = tlsEnabled ? "wss" : "ws";
@@ -595,6 +602,7 @@ export async function gatherDaemonStatus(
     allowExecSecretRefs?: boolean;
   } & FindExtraGatewayServicesOptions,
 ): Promise<DaemonStatus> {
+  const localPortOverride = resolveGatewayLocalPortOverride(opts.rpc);
   const timeoutMs = parseTimeoutMsWithFallback(opts.rpc.timeout, 10_000, {
     invalidType: "error",
   });
@@ -605,10 +613,12 @@ export async function gatherDaemonStatus(
   });
   const { command, env: serviceEnv, loadState, runtime } = serviceState;
   const loaded = loadState.status === "loaded";
-  // A non-default or externally supervised process does not own the host's
-  // native service. Keep that service visible, but do not let it retarget probes.
+  // An explicit local port or separate process context does not select the
+  // native service. Keep that service visible without borrowing its target or auth.
   const useNativeServiceTargetContext =
-    isDefaultInstallIdentity(process.env) && !isGatewayExternallySupervised(process.env);
+    localPortOverride === undefined &&
+    isDefaultInstallIdentity(process.env) &&
+    !isGatewayExternallySupervised(process.env);
   const targetServiceCommand = useNativeServiceTargetContext ? command : null;
   const restartHandoff = opts.deep ? readGatewayRestartHandoffSync(serviceEnv) : null;
   const configAudit: ServiceConfigAudit = command
@@ -635,9 +645,12 @@ export async function gatherDaemonStatus(
       mergedDaemonEnv,
       commandProgramArguments: targetServiceCommand?.programArguments,
       rpcUrlOverride: opts.rpc.url,
+      localPortOverride,
     });
+  const probeMode =
+    localPortOverride === undefined && daemonCfg.gateway?.mode === "remote" ? "remote" : "local";
   const serviceTargetsProbe = useNativeServiceTargetContext && !probeUrlOverride;
-  const shouldInspectLocalGateway = daemonCfg.gateway?.mode !== "remote" && !probeUrlOverride;
+  const shouldInspectLocalGateway = probeMode === "local" && !probeUrlOverride;
   const windowsFirewall =
     opts.deep === true && shouldInspectLocalGateway
       ? await inspectWindowsGatewayFirewall({
@@ -655,7 +668,7 @@ export async function gatherDaemonStatus(
   const establishedClients = await inspectEstablishedGatewayClients({
     daemonPort,
     deep: opts.deep,
-    gatewayMode: daemonCfg.gateway?.mode,
+    gatewayMode: probeMode,
   });
 
   const extraServices = opts.deep
@@ -688,7 +701,6 @@ export async function gatherDaemonStatus(
   let allowRpcConfigCredentials = true;
   let skippedProbeAuthForDisabledExecSecretRef = false;
   if (opts.probe) {
-    const probeMode = daemonCfg.gateway?.mode === "remote" ? "remote" : "local";
     const explicitAuth = {
       token: opts.rpc.token,
       password: opts.rpc.password,
@@ -725,6 +737,7 @@ export async function gatherDaemonStatus(
     ? await loadDaemonProbeModule().then(({ probeGatewayStatus }) =>
         probeGatewayStatus({
           url: probeUrl,
+          localPortOverride,
           token: daemonProbeAuth?.token,
           password: daemonProbeAuth?.password,
           config: daemonCfg,

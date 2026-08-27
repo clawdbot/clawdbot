@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import {
@@ -400,6 +401,53 @@ describe("normalizeSessionsGroupBy", () => {
 });
 
 describe("groupSessionRows", () => {
+  it.each(["UTC", "America/Los_Angeles", "America/Santiago"])(
+    "groups complete local calendar days in %s",
+    (timeZone) => {
+      // Worker-thread TZ mutations do not reliably change V8's timezone. Start a
+      // process in the requested zone so real calendar/DST behavior owns the proof.
+      const output = execFileSync(
+        process.execPath,
+        [
+          "--import",
+          "tsx",
+          "--input-type=module",
+          "--eval",
+          `
+          import { groupSessionRows } from ${JSON.stringify(new URL("./grouping.ts", import.meta.url).href)};
+          const dates = [[2026, 0, 1], [2026, 2, 9], [2026, 10, 2], [2026, 8, 6], [2026, 8, 7]];
+          const results = dates.map(([year, month, day]) => {
+            const at = (daysAgo, hour = 0, minute = 0) =>
+              new Date(year, month, day - daysAgo, hour, minute).getTime();
+            const rows = [
+              ["today", at(0)], ["yesterday", at(1)],
+              ["two-days-ago", at(2, 23, 59)], ["six-days-ago", at(6)],
+              ["older", at(7, 23, 59)], ["unknown", null],
+            ].map(([key, updatedAt]) => ({ key, updatedAt, kind: "direct" }));
+            return groupSessionRows({ mode: "date", now: at(0, 12), rows })
+              .map((group) => [group.id, group.rows.map((row) => row.key)]);
+          });
+          process.stdout.write(JSON.stringify(results));
+        `,
+        ],
+        {
+          cwd: new URL("../../../../", import.meta.url),
+          env: { ...process.env, TZ: timeZone },
+          encoding: "utf8",
+          timeout: 10_000,
+        },
+      );
+      const expected = [
+        ["today", ["today"]],
+        ["yesterday", ["yesterday"]],
+        ["week", ["two-days-ago", "six-days-ago"]],
+        ["older", ["older"]],
+        [UNGROUPED_ID, ["unknown"]],
+      ];
+      expect(JSON.parse(output)).toEqual(Array.from({ length: 5 }, () => expected));
+    },
+  );
+
   it("keeps known categories in order, appends extras, and puts ungrouped last", () => {
     const rows = [
       row({ key: "a", category: "Zulu" }),

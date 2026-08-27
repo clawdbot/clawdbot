@@ -254,7 +254,7 @@ function renderChatQueueItem(
   const failed = item.sendState === "failed" || item.sendState === "unconfirmed";
   const reconnecting = !failed && (props.offline || item.sendState === "waiting-reconnect");
   const stateLabel = sendStateLabel(item, props.offline === true);
-  const steered = item.queueMode === "steer" && !failed;
+  const steered = item.queueMode === "steer" && stateLabel === null;
   const busy = item.sendState === "executing-command";
   const editing = props.editingId === item.id;
   const canSteer =

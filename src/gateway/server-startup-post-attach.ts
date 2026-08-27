@@ -921,7 +921,6 @@ export async function startGatewaySidecars(params: {
           await startGmailWatcherWithLogs({
             cfg: params.cfg,
             log: params.logHooks,
-            isCancelled: isStopped,
             signal,
           });
         },

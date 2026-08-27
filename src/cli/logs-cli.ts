@@ -507,7 +507,7 @@ async function emitGatewayError(
     return;
   }
 
-  if (!errorLine(colorize(rich, theme.error, message))) {
+  if (!errorLine(colorize(rich, theme.error, errorText))) {
     return;
   }
   if (!errorLine(details.message)) {

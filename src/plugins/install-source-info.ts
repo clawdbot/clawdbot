@@ -1,7 +1,11 @@
 /** Describes package-authored plugin install source metadata and pinning warnings. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
-import { parseRegistryNpmSpec, type ParsedRegistryNpmSpec } from "../infra/npm-registry-spec.js";
+import {
+  isExactSemverVersion,
+  parseRegistryNpmSpec,
+  type ParsedRegistryNpmSpec,
+} from "../infra/npm-registry-spec.js";
 import type { PluginPackageInstall } from "./manifest.js";
 import { normalizePluginInstallDefaultChoice } from "./plugin-install-default-choice.js";
 
@@ -103,14 +107,15 @@ export function describePluginInstallSource(
   if (clawhubSpec) {
     const parsed = parseClawHubPluginSpec(clawhubSpec);
     if (parsed) {
-      if (!parsed.version) {
+      const exactVersion = parsed.version ? isExactSemverVersion(parsed.version) : false;
+      if (!exactVersion) {
         warnings.push("clawhub-spec-floating");
       }
       clawhub = {
         spec: clawhubSpec,
         packageName: parsed.name,
         ...(parsed.version ? { version: parsed.version } : {}),
-        exactVersion: Boolean(parsed.version),
+        exactVersion,
       };
     } else {
       warnings.push("invalid-clawhub-spec");

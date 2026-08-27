@@ -112,25 +112,27 @@ export function resolveSessionCatalogAgentId(
   return selected && selected !== helloDefault ? null : helloDefault;
 }
 
-function requestSessionCatalogRefresh(owner: SessionCatalogDataOwner): void {
-  const snapshot = owner.context?.gateway.snapshot;
-  owner.sessionCatalogLive.requestRefresh({
-    visible: document.visibilityState !== "hidden",
-    connected:
-      owner.isSessionDataHostConnected &&
-      owner.sessionCatalogAgentId !== null &&
-      Boolean(sessionCatalogListClient(snapshot, owner.sessionDataHostConnected)),
-    generation: owner.sessionScopeGeneration,
-    refresh: () => void owner.refreshSessionCatalogs(),
-  });
-}
-
-export function scheduleSessionCatalogRefresh(owner: SessionCatalogDataOwner): void {
+export function scheduleSessionCatalogRefresh(
+  owner: SessionCatalogDataOwner,
+  queueIfActive = false,
+): void {
   if (document.visibilityState === "hidden") {
     owner.sessionCatalogLive.cancelScheduledRefreshes();
     return;
   }
-  owner.sessionCatalogLive.scheduleActivation(() => requestSessionCatalogRefresh(owner));
+  owner.sessionCatalogLive.scheduleActivation(queueIfActive, (shouldQueue) => {
+    const snapshot = owner.context?.gateway.snapshot;
+    owner.sessionCatalogLive.requestRefresh({
+      visible: document.visibilityState !== "hidden",
+      connected:
+        owner.isSessionDataHostConnected &&
+        owner.sessionCatalogAgentId !== null &&
+        Boolean(sessionCatalogListClient(snapshot, owner.sessionDataHostConnected)),
+      generation: owner.sessionScopeGeneration,
+      queueIfActive: shouldQueue,
+      refresh: () => void owner.refreshSessionCatalogs(),
+    });
+  });
 }
 
 export function updateSessionCatalogData(owner: SessionCatalogDataOwner, defer = false): void {
@@ -156,7 +158,7 @@ export function applySessionCatalogPresence(
   payload: unknown,
 ): void {
   if (owner.sessionCatalogLive.observePresence(payload)) {
-    scheduleSessionCatalogRefresh(owner);
+    scheduleSessionCatalogRefresh(owner, true);
   }
 }
 

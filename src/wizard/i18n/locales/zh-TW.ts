@@ -250,7 +250,7 @@ export const zh_TW = {
       directAccessTitle: "直接遠端存取",
       enterUrlManually: "手動輸入 URL",
       foundGateways: "找到 {count} 個 Gateway",
-      fingerprintMissing: "未公布（連線不會固定指紋）",
+      fingerprintMissing: "未公布",
       gatewayPasswordStoredMessage: "這個 Gateway 密碼存在哪裡？",
       gatewayTokenStoredMessage: "這個 Gateway 權杖存在哪裡？",
       insecureRemoteUrl:

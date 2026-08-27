@@ -70,7 +70,10 @@ describe("runMessageAction plugin dispatch", () => {
       vi.clearAllMocks();
       vi.unstubAllEnvs();
     });
-    it("preserves buffer-only send bytes for gateway-side materialization", async () => {
+    it.each([
+      { name: "raw base64", buffer: "SGVsbG8=" },
+      { name: "data URL", buffer: "data:application/octet-stream;base64,SGVsbG8=" },
+    ])("preserves $name bytes and MIME for gateway-side materialization", async ({ buffer }) => {
       const gatewayPlugin = createGatewayActionPlugin({
         pluginId: "gatewaychat",
         label: "Gateway Chat",
@@ -101,9 +104,9 @@ describe("runMessageAction plugin dispatch", () => {
         params: {
           channel: "gatewaychat",
           target: "user-123",
-          buffer: Buffer.from("gateway bytes").toString("base64"),
+          buffer,
           filename: "gateway.txt",
-          contentType: "text/plain",
+          mimeType: "text/plain",
         },
         gateway: {
           clientName: "cli",
@@ -123,7 +126,7 @@ describe("runMessageAction plugin dispatch", () => {
           media: "buffer://message-send/attachment",
           mediaUrl: "buffer://message-send/attachment",
           mediaUrls: ["buffer://message-send/attachment"],
-          buffer: Buffer.from("gateway bytes").toString("base64"),
+          buffer,
           filename: "gateway.txt",
           contentType: "text/plain",
         },
@@ -132,7 +135,10 @@ describe("runMessageAction plugin dispatch", () => {
       expect(mocks.executeSendAction).not.toHaveBeenCalled();
     });
 
-    it("preserves buffer-only send bytes for gateway delivery-mode channels", async () => {
+    it.each([
+      { name: "raw base64", buffer: "SGVsbG8=" },
+      { name: "data URL", buffer: "data:application/octet-stream;base64,SGVsbG8=" },
+    ])("preserves $name bytes and MIME for gateway delivery-mode channels", async ({ buffer }) => {
       const gatewayDeliveryPlugin: ChannelPlugin = {
         id: "gatewaydeliver",
         meta: {
@@ -175,9 +181,9 @@ describe("runMessageAction plugin dispatch", () => {
         params: {
           channel: "gatewaydeliver",
           target: "user-123",
-          buffer: Buffer.from("gateway delivery bytes").toString("base64"),
+          buffer,
           filename: "delivery.txt",
-          contentType: "text/plain",
+          mimeType: "text/plain",
         },
         gateway: {
           clientName: "cli",
@@ -191,7 +197,7 @@ describe("runMessageAction plugin dispatch", () => {
         {
           mediaUrl: "buffer://message-send/attachment",
           mediaUrls: ["buffer://message-send/attachment"],
-          buffer: Buffer.from("gateway delivery bytes").toString("base64"),
+          buffer,
           filename: "delivery.txt",
           contentType: "text/plain",
         },

@@ -60,7 +60,10 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
     await expect(runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture())).resolves.toMatchObject(
       { status: "ok" },
     );
-    expect(preparedRuntimeMocks.loadDispatchRuntime).toHaveBeenCalledWith({ agentId: "default" });
+    const dispatchAdmission = preparedRuntimeMocks.loadDispatchRuntime.mock.calls[0]?.[0] as {
+      abortSignal: AbortSignal;
+    };
+    expect(dispatchAdmission).toMatchObject({ agentId: "default", abortSignal: expect.anything() });
     expect(preparedRuntimeMocks.acquireRuntime).toHaveBeenCalledWith(
       {
         config,
@@ -69,7 +72,7 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
         allowGatewaySubagentBinding: true,
         workspaceDir: "/tmp/workspace",
       },
-      { catalogMode: "static", pluginGeneration },
+      { catalogMode: "static", pluginGeneration, abortSignal: dispatchAdmission.abortSignal },
     );
     expect(embeddedRunGeneration).toBe(pluginGeneration);
     expect(release).toHaveBeenCalledOnce();

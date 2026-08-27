@@ -474,6 +474,7 @@ export async function runCopilotExecution(context: {
         abortActiveSession,
         bridge,
         canAcceptSteering: () => initialSdkUserValidated,
+        startedAtMs: input.startedAtMs,
         input,
         isAborted: () => aborted,
         isSettled: () => settled,

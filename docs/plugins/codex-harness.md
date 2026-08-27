@@ -4,7 +4,7 @@ title: "Codex harness"
 read_when:
   - You want to use the official Codex app-server harness
   - You need Codex harness config examples
-  - You want Codex-only deployments to fail instead of falling back to OpenClaw
+  - You need explicit Codex runtime policy and fallback rules
 ---
 
 The official `codex` plugin runs embedded OpenAI agent turns through Codex
@@ -91,8 +91,8 @@ channel is the communication surface.
 
 - The official `@openclaw/codex` plugin installed. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
-- Managed Codex app-server `0.149.1`. The plugin ships and manages
-  `@openai/codex` `0.149.1` by default, so a `codex` command on `PATH` does not
+- Managed Codex app-server `0.150.1`. The plugin ships and manages
+  `@openai/codex` `0.150.1` by default, so a `codex` command on `PATH` does not
   affect normal startup. Explicit custom, remote, and macOS desktop-owned
   app-servers must report a parseable semantic version of `0.149.0` or newer.
   Newer versions continue with a compatibility warning and normal runtime
@@ -735,13 +735,13 @@ Keep provider refs and runtime policy separate:
 | Send Codex feedback only                                   | `/codex diagnostics [note]`                                                                           |
 | Start an ACP/acpx task                                     | ACP/acpx session commands, not `/codex`                                                               |
 
-| Use case                                        | Configure                                                                                                            | Verify                                  | Notes                                                   |
-| ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | --------------------------------------- | ------------------------------------------------------- |
-| Eligible OpenAI route with native Codex runtime | Exact official HTTPS Responses/ChatGPT route with no authored provider request override, plus enabled `codex` plugin | `/status` shows `Runtime: OpenAI Codex` | Valid Fast runtime controls do not disqualify this path |
-| Fail closed if Codex is unavailable             | Provider or model `agentRuntime.id: "codex"`                                                                         | Turn fails instead of embedded fallback | Use for Codex-only deployments                          |
-| Direct OpenAI API-key traffic through OpenClaw  | Provider or model `agentRuntime.id: "openclaw"` and normal OpenAI auth                                               | `/status` shows OpenClaw runtime        | Use only when OpenClaw is intentional                   |
-| Legacy config                                   | legacy Codex GPT refs                                                                                                | `openclaw doctor --fix` rewrites it     | Do not write new config this way                        |
-| ACP/acpx Codex adapter                          | ACP `sessions_spawn({ runtime: "acp" })`                                                                             | ACP task/session status                 | Separate from native Codex harness                      |
+| Use case                                        | Configure                                                                                                            | Verify                                  | Notes                                                      |
+| ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | --------------------------------------- | ---------------------------------------------------------- |
+| Eligible OpenAI route with native Codex runtime | Exact official HTTPS Responses/ChatGPT route with no authored provider request override, plus enabled `codex` plugin | `/status` shows `Runtime: OpenAI Codex` | Valid Fast runtime controls do not disqualify this path    |
+| Fail closed if Codex is unavailable             | Provider or model `agentRuntime.id: "codex"`                                                                         | Missing harness fails the turn          | Authored request overrides may still use declared fallback |
+| Direct OpenAI API-key traffic through OpenClaw  | Provider or model `agentRuntime.id: "openclaw"` and normal OpenAI auth                                               | `/status` shows OpenClaw runtime        | Use only when OpenClaw is intentional                      |
+| Legacy config                                   | legacy Codex GPT refs                                                                                                | `openclaw doctor --fix` rewrites it     | Do not write new config this way                           |
+| ACP/acpx Codex adapter                          | ACP `sessions_spawn({ runtime: "acp" })`                                                                             | ACP task/session status                 | Separate from native Codex harness                         |
 
 `agents.defaults.imageModel` follows the same prefix split. Use `openai/gpt-*`
 for the normal OpenAI route and `codex/gpt-*` only when image understanding
@@ -837,9 +837,12 @@ fail-closed rule:
 }
 ```
 
-With Codex forced, OpenClaw fails early if the effective route is not declared
-Codex-compatible, the plugin is disabled, the app-server is too old, or the
-app-server cannot start.
+With Codex forced, OpenClaw fails early if the plugin is disabled, the app-server
+is too old or cannot start, or route/auth support is rejected without a declared
+fallback. Authored request overrides may instead use the
+[selection-time OpenClaw fallback](/concepts/agent-runtimes#runtime-selection)
+that preserves the exact request. Once Codex starts, its failures are not replayed
+through OpenClaw.
 
 ## App-server policy
 
@@ -1004,6 +1007,10 @@ It also needs exclusive use of that app-server while applying configuration;
 if another turn or native child is active, wait for it to finish and retry.
 Use [Codex supervision](/plugins/codex-supervision) or native Codex to continue
 threads in a shared user home or on another app-server.
+
+Native child threads controlled by a parent cannot be attached with `/codex
+resume` or `/codex bind`. OpenClaw reports that restriction and keeps the current
+binding. Continue the child through its native parent instead.
 
 Codex cannot replace a thread's dynamic tool catalog during resume. If that
 catalog differs from the current harness tools, its metadata cannot be read,
@@ -1501,10 +1508,15 @@ configs. Select an `openai/gpt-*` model, enable
 
 **OpenClaw uses the built-in harness instead of Codex:** confirm the effective
 route is an exact official HTTPS Platform Responses or ChatGPT Responses route,
-has no authored provider request override, and that the Codex plugin is installed and
-enabled. The `openai/gpt-*` prefix alone is not enough. For strict proof while
-testing, set provider or model `agentRuntime.id: "codex"`; forced Codex fails
-instead of falling back when the route or harness is incompatible.
+has no authored provider request override, and that the Codex plugin is installed
+and enabled. Affirmative reasoning support and native reasoning-effort metadata
+do not count as request overrides. Headers, request parameters, timeouts, and
+payload compatibility switches still do: Codex declares an OpenClaw fallback
+that preserves the exact request, including for explicit runtime selections.
+Other unsupported routes/authentication and missing explicit harnesses fail
+closed. The `openai/gpt-*` prefix and `agentRuntime.id: "codex"` alone are not
+execution proof; inspect the actual harness in the completed result. See
+[Runtime selection](/concepts/agent-runtimes#runtime-selection).
 
 **OpenAI Codex runtime falls back to the API-key path:** collect a redacted
 gateway excerpt that shows the model, runtime, selected provider, and

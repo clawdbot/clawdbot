@@ -13,8 +13,100 @@ import {
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
+const remoteSearchResult = {
+  credential: "missing",
+  projects: [
+    {
+      name: "openclaw",
+      fullName: "openclaw/openclaw",
+      description: "Personal AI assistant",
+      cloneUrl: "https://github.com/openclaw/openclaw.git",
+      webUrl: "https://github.com/openclaw/openclaw",
+      private: false,
+    },
+  ],
+};
 
 suite.define(() => {
+  it("offers a worktree for a GitHub result and materializes its project before session creation", async () => {
+    await prepareProjectUiProof();
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        ...(captureUiProofEnabled
+          ? {
+              recordVideo: { dir: projectProofArtifactDir, size: { height: 900, width: 1280 } },
+              viewport: { height: 900, width: 1280 },
+            }
+          : {}),
+      },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          workspace: WORKSPACE,
+          workspaceGit: false,
+          featureMethods: [
+            "chat.metadata",
+            "chat.startup",
+            "projects.add",
+            "projects.list",
+            "projects.searchRemote",
+            "sessions.create",
+          ],
+          methodResponses: {
+            "projects.list": { projects: [] },
+            "projects.searchRemote": remoteSearchResult,
+            "projects.add": { id: "cloned-worktree-project" },
+            "sessions.create": { key: "agent:main:github-worktree-e2e" },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}new`);
+        await gateway.waitForRequest("projects.list");
+        await page.locator("#new-session-project-trigger").click();
+        const projects = page.locator("wa-popover.new-session-page__project-popover");
+        await projects
+          .getByRole("searchbox", { name: "Search projects or paste a Git URL" })
+          .fill("openclaw");
+        await projects.getByRole("button", { name: /openclaw\/openclaw/u }).click();
+
+        await captureProjectUiProof(page, "github-worktree-direct.png");
+        const detail = page.locator("#new-session-detail-trigger");
+        await expect.poll(() => detail.isVisible()).toBe(true);
+        await pollLocatorText(detail).toContain("Runs directly");
+        await detail.click();
+        const branches = page.locator("wa-popover.new-session-page__detail-popover");
+        await branches.getByRole("button", { name: "Worktree", exact: true }).click();
+        await expect.poll(() => detail.getAttribute("data-worktree")).toBe("true");
+        const baseRef = branches.getByLabel("Base branch");
+        expect(await baseRef.getAttribute("placeholder")).toBe("Base branch");
+        expect(await baseRef.inputValue()).toBe("");
+        expect(await branches.locator("datalist option").count()).toBe(0);
+        await captureProjectUiProof(page, "github-worktree-selected.png");
+        await page.locator(".new-session-page__message").fill("inspect the worktree");
+        await page.getByRole("button", { name: "Start session" }).click();
+
+        const create = await gateway.waitForRequest("sessions.create");
+        expect(create.params).toMatchObject({
+          projectId: "cloned-worktree-project",
+          worktree: true,
+          message: "inspect the worktree",
+        });
+        expect(create.params).not.toHaveProperty("projectGitUrl");
+        expect(create.params).not.toHaveProperty("worktreeBaseRef");
+        const materialization = (await gateway.getRequests()).filter(
+          (request) => request.method === "projects.add" || request.method === "sessions.create",
+        );
+        expect(materialization.map((request) => request.method)).toEqual([
+          "projects.add",
+          "sessions.create",
+        ]);
+        expect(materialization[0]?.params).toEqual({
+          gitUrl: "https://github.com/openclaw/openclaw.git",
+        });
+      },
+    );
+  });
+
   it.each([
     { name: "shows workspace preparation in the admitted session", failure: null },
     {
@@ -98,19 +190,7 @@ suite.define(() => {
       ],
       methodResponses: {
         "projects.list": { projects: [] },
-        "projects.searchRemote": {
-          credential: "missing",
-          projects: [
-            {
-              name: "openclaw",
-              fullName: "openclaw/openclaw",
-              description: "Personal AI assistant",
-              cloneUrl: "https://github.com/openclaw/openclaw.git",
-              webUrl: "https://github.com/openclaw/openclaw",
-              private: false,
-            },
-          ],
-        },
+        "projects.searchRemote": remoteSearchResult,
         "worktrees.branches": {
           branches: [{ kind: "local", name: "main" }],
           defaultBranch: "main",

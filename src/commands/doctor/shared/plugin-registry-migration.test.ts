@@ -121,19 +121,27 @@ function requirePlugin(index: InstalledPluginIndex | null | undefined, pluginId:
 function insertStalePersistedIndexRow(stateDir: string, installRecordsJson = "{}") {
   runOpenClawStateWriteTransaction(
     ({ db }) => {
+      const valueJson = JSON.stringify({
+        revision: 123,
+        index: {
+          version: 1,
+          warning: null,
+          hostContractVersion: "2026.4.25",
+          compatRegistryVersion: "compat-v1",
+          migrationVersion: 0,
+          policyHash: "stale-policy",
+          generatedAtMs: 123,
+          installRecords: JSON.parse(installRecordsJson) as unknown,
+          plugins: [],
+          diagnostics: [],
+        },
+      });
       db.prepare(
         `
-          INSERT OR REPLACE INTO installed_plugin_index (
-            index_key, version, host_contract_version, compat_registry_version,
-            migration_version, policy_hash, generated_at_ms, refresh_reason,
-            install_records_json, plugins_json, diagnostics_json, warning, updated_at_ms
-          ) VALUES (
-            'installed-plugin-index', 1, '2026.4.25', 'compat-v1',
-            0, 'stale-policy', 123, NULL,
-            @install_records_json, '[]', '[]', NULL, 123
-          )
+          INSERT OR REPLACE INTO config_machine_state (state_key, value_json, updated_at_ms)
+          VALUES ('plugins.installedIndex', ?, 123)
         `,
-      ).run({ install_records_json: installRecordsJson });
+      ).run(valueJson);
     },
     { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
   );
@@ -198,29 +206,28 @@ describe("plugin registry install migration", () => {
         env: hermeticEnv(),
       }),
     ).rejects.toThrow(
-      "delete only the installed_plugin_index row with index_key='installed-plugin-index'",
+      "delete only the config_machine_state row with state_key='plugins.installedIndex'",
     );
 
     const row = runOpenClawStateWriteTransaction(
       ({ db }) =>
         db
           .prepare(
-            `SELECT migration_version, install_records_json, updated_at_ms
-               FROM installed_plugin_index
-              WHERE index_key = 'installed-plugin-index'`,
+            `SELECT value_json, updated_at_ms
+               FROM config_machine_state
+              WHERE state_key = 'plugins.installedIndex'`,
           )
-          .get() as {
-          migration_version: number | bigint;
-          install_records_json: string;
-          updated_at_ms: number | bigint;
-        },
+          .get() as { value_json: string; updated_at_ms: number | bigint },
       { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
     );
-    expect(row).toEqual({
-      migration_version: 0,
-      install_records_json: installRecordsJson,
-      updated_at_ms: 123,
-    });
+    expect(row.updated_at_ms).toBe(123);
+    const persistedValue = JSON.parse(row.value_json) as {
+      index: { migrationVersion: number; installRecords: unknown };
+    };
+    expect(persistedValue.index.migrationVersion).toBe(0);
+    expect(JSON.stringify(persistedValue.index.installRecords)).toBe(
+      JSON.stringify(JSON.parse(installRecordsJson)),
+    );
   });
 
   it("rejects invalid config install records before recovery or persistence", async () => {

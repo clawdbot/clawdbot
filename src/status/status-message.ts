@@ -47,6 +47,7 @@ import { resolveSessionLifecycleTimestamps } from "../config/sessions/lifecycle.
 import {
   hasSessionActiveAutoModelFallback,
   hasSessionAutoModelFallbackProvenance,
+  hasUserPinnedModelSelection,
 } from "../config/sessions/model-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readRecentSessionUsageFromTranscript } from "../gateway/session-transcript-readers.js";
@@ -560,19 +561,6 @@ function resolveChannelModelNote(params: {
     return undefined;
   }
   return "channel override";
-}
-
-function hasUserPinnedModelSelection(entry: SessionEntry | undefined): boolean {
-  if (!entry?.modelOverride) {
-    return false;
-  }
-  if (entry.modelOverrideSource === "user") {
-    return true;
-  }
-  if (entry.modelOverrideSource === "auto") {
-    return false;
-  }
-  return !hasSessionAutoModelFallbackProvenance(entry);
 }
 
 export type StatusMessageParts = {

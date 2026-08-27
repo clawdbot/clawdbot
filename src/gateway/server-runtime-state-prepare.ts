@@ -157,6 +157,7 @@ export async function prepareGatewayKernelState(params: {
           return await workerModule.createGatewayWorkerEnvironmentRuntime({
             getPluginRegistry: () => pluginRuntime.registry,
             getPortalRuntime: () => pluginGatewayContext.current,
+            resolveGatewayContext: () => pluginGatewayContext.current,
             desktopSessionRegistry,
             ...(nodeDesktopStreamBroker ? { nodeDesktopStreamBroker } : {}),
             startup: workerEnvironmentStartup,

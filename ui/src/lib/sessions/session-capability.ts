@@ -188,6 +188,7 @@ export type SessionCapability = {
     options?: { agentId?: string | null },
   ) => Promise<SessionOwner | null>;
   retireModelOverride: (key: string) => void;
+  think: (key: string, agentId?: string | null) => string | undefined;
   /** Keep optimistic row changes in the published snapshot through later publishes. */
   patchRowLocal: (key: string, patch: Partial<GatewaySessionRow>) => void;
   /** True while a just-created work session awaits its canonical placement row. */

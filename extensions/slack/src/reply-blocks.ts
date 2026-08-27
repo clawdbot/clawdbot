@@ -121,7 +121,7 @@ export function resolveSlackReplyDeliveryMessages(params: {
     });
   }
   if (outsideText) {
-    messages.push({ text: outsideText });
+    messages.push({ text: outsideText, authoredTextPlacement: "outside-blocks" });
   }
   return messages;
 }

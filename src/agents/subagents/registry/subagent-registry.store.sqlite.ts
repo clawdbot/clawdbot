@@ -1,7 +1,6 @@
 /**
- * Persists subagent run records in the shared sqlite state database. The
- * store preserves typed columns for hot delivery state while retaining the
- * normalized payload JSON for forward-compatible record hydration.
+ * Persists subagent run records in the shared sqlite state database, with
+ * query-bearing identity columns indexing canonical normalized payload JSON.
  */
 import { safeParseJson } from "@openclaw/normalization-core";
 import { asFiniteNumber as normalizeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
@@ -26,20 +25,16 @@ type SubagentRunSqliteInsert = BoundSubagentRunRecord;
 type SubagentRunSqliteUpdate = Updateable<SubagentRunsTable>;
 type SubagentRunReadSqliteRow = Pick<
   SubagentRunSqliteRow,
-  | "run_id"
-  | "child_session_key"
-  | "controller_session_key"
-  | "requester_session_key"
-  | "model"
-  | "run_timeout_seconds"
-  | "created_at"
-  | "started_at"
-  | "session_started_at"
-  | "accumulated_runtime_ms"
-  | "ended_at"
-  | "ended_reason"
-  | "cleanup_completed_at"
+  "run_id" | "child_session_key" | "controller_session_key" | "requester_session_key" | "created_at"
 > & {
+  model: string | null;
+  run_timeout_seconds: number | null;
+  started_at: number | null;
+  session_started_at: number | null;
+  accumulated_runtime_ms: number | null;
+  ended_at: number | null;
+  ended_reason: string | null;
+  cleanup_completed_at: number | null;
   generation: number | null;
   outcome_status: string | null;
   delivery_status: string | null;
@@ -75,16 +70,8 @@ function isCanonicalSubagentRunRecord(value: unknown): value is CanonicalSubagen
   );
 }
 
-function jsonStringify(value: unknown): string | null {
-  return value === undefined ? null : JSON.stringify(value);
-}
-
 function parseJson(raw: string | null): unknown {
   return raw ? safeParseJson(raw) : undefined;
-}
-
-function boolToSqlite(value: boolean | undefined): number | null {
-  return value === undefined ? null : value ? 1 : 0;
 }
 
 /** Rehydrates one sqlite row into the normalized subagent run record shape. */
@@ -120,70 +107,12 @@ export function bindSubagentRunRecord(entry: SubagentRunRecord): BoundSubagentRu
   if (!isCanonicalSubagentRunRecord(normalized)) {
     throw new Error("subagent run is missing canonical nested state");
   }
-  const delivery = normalized.delivery;
-  const completion = normalized.completion;
-  const requesterSettleWake = normalized.requesterSettleWake;
   return {
     run_id: normalized.runId,
     child_session_key: normalized.childSessionKey,
     controller_session_key: normalized.controllerSessionKey?.trim() || null,
     requester_session_key: normalized.requesterSessionKey,
-    requester_display_key: normalized.requesterDisplayKey,
-    requester_origin_json: jsonStringify(normalized.requesterOrigin),
-    task: normalized.task,
-    task_name: normalized.taskName ?? null,
-    cleanup: normalized.cleanup,
-    label: normalized.label ?? null,
-    model: normalized.model ?? null,
-    agent_dir: normalized.agentDir ?? null,
-    workspace_dir: normalized.workspaceDir ?? null,
-    run_timeout_seconds: normalized.runTimeoutSeconds ?? null,
-    spawn_mode: normalized.spawnMode ?? null,
     created_at: normalized.createdAt,
-    started_at: normalized.execution.startedAt ?? null,
-    session_started_at: normalized.sessionStartedAt ?? null,
-    accumulated_runtime_ms: normalized.accumulatedRuntimeMs ?? null,
-    ended_at: normalized.execution.endedAt ?? null,
-    outcome_json: jsonStringify(normalized.execution.outcome),
-    archive_at_ms: normalized.archiveAtMs ?? null,
-    cleanup_completed_at: normalized.cleanupCompletedAt ?? null,
-    cleanup_handled: boolToSqlite(normalized.cleanupHandled),
-    suppress_announce_reason: normalized.suppressAnnounceReason ?? null,
-    expects_completion_message: boolToSqlite(normalized.expectsCompletionMessage),
-    announce_retry_count: delivery?.attemptCount ?? null,
-    last_announce_retry_at: delivery?.lastAttemptAt ?? null,
-    last_announce_delivery_error: delivery?.lastError ?? null,
-    ended_reason: normalized.endedReason ?? null,
-    pause_reason: normalized.pauseReason ?? null,
-    wake_on_descendant_settle: boolToSqlite(normalized.wakeOnDescendantSettle),
-    requester_settle_wake_status: requesterSettleWake?.status ?? null,
-    requester_settle_wake_attempt_count: requesterSettleWake?.attemptCount ?? null,
-    requester_settle_wake_replay_count: requesterSettleWake?.replayCount ?? null,
-    requester_settle_wake_next_attempt_at: requesterSettleWake?.nextAttemptAt ?? null,
-    requester_settle_wake_batch_run_ids_json: jsonStringify(requesterSettleWake?.batchRunIds),
-    requester_settle_wake_last_error: requesterSettleWake?.lastError ?? null,
-    requester_settle_wake_retire_after: boolToSqlite(requesterSettleWake?.retireAfterSettle),
-    frozen_result_text: completion?.resultText ?? null,
-    frozen_result_captured_at: completion?.capturedAt ?? null,
-    fallback_frozen_result_text: completion?.fallbackResultText ?? null,
-    fallback_frozen_result_captured_at: completion?.fallbackCapturedAt ?? null,
-    ended_hook_emitted_at: normalized.endedHookEmittedAt ?? null,
-    pending_final_delivery: boolToSqlite(
-      delivery?.status === "pending" || Boolean(delivery?.payload),
-    ),
-    pending_final_delivery_created_at: delivery?.createdAt ?? null,
-    pending_final_delivery_last_attempt_at: delivery?.lastAttemptAt ?? null,
-    pending_final_delivery_attempt_count: delivery?.attemptCount ?? null,
-    pending_final_delivery_last_error: delivery?.lastError ?? null,
-    pending_final_delivery_payload_json: jsonStringify(delivery?.payload),
-    completion_announced_at: delivery?.announcedAt ?? null,
-    swarm_group_id: normalized.groupId ?? null,
-    swarm_collector: boolToSqlite(normalized.collect),
-    swarm_output_schema_json: jsonStringify(normalized.outputSchema),
-    swarm_completion_status: normalized.collectorCompletion?.status ?? null,
-    swarm_structured_json: jsonStringify(normalized.collectorCompletion?.structured),
-    swarm_schema_error: normalized.collectorCompletion?.schemaError ?? null,
-    swarm_usage_json: jsonStringify(normalized.collectorCompletion?.usage),
     payload_json: JSON.stringify(normalized),
   };
 }
@@ -306,15 +235,17 @@ function readSubagentSessionListRows(): SubagentRunReadSqliteRow[] {
         "child_session_key",
         "controller_session_key",
         "requester_session_key",
-        "model",
-        "run_timeout_seconds",
         "created_at",
-        "started_at",
-        "session_started_at",
-        "accumulated_runtime_ms",
-        "ended_at",
-        "ended_reason",
-        "cleanup_completed_at",
+        subagentPayloadJsonValue<string | null>("$.model").as("model"),
+        subagentPayloadJsonValue<number | null>("$.runTimeoutSeconds").as("run_timeout_seconds"),
+        subagentPayloadJsonValue<number | null>("$.execution.startedAt").as("started_at"),
+        subagentPayloadJsonValue<number | null>("$.sessionStartedAt").as("session_started_at"),
+        subagentPayloadJsonValue<number | null>("$.accumulatedRuntimeMs").as(
+          "accumulated_runtime_ms",
+        ),
+        subagentPayloadJsonValue<number | null>("$.execution.endedAt").as("ended_at"),
+        subagentPayloadJsonValue<string | null>("$.endedReason").as("ended_reason"),
+        subagentPayloadJsonValue<number | null>("$.cleanupCompletedAt").as("cleanup_completed_at"),
         subagentPayloadJsonValue<number | null>("$.generation").as("generation"),
         subagentPayloadJsonValue<string | null>("$.execution.outcome.status").as("outcome_status"),
         subagentPayloadJsonValue<string | null>("$.delivery.status").as("delivery_status"),

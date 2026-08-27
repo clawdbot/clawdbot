@@ -167,9 +167,7 @@ type SubscriptionParams = Parameters<typeof startGatewayEventSubscriptions>[0];
 type LifecycleOwnerCallbacks = Required<
   Pick<
     AgentEventHandlerOptions,
-    | "clearTrackedActiveRun"
-    | "markTrackedRunTerminalPersisted"
-    | "trackTrackedRunTerminalPersistence"
+    "clearTrackedActiveRun" | "settleTrackedTerminal" | "trackTrackedRunTerminalPersistence"
   >
 >;
 type LifecycleTransition = { state: string; lifecycle?: ReturnType<typeof readLifecycleState> };
@@ -209,14 +207,14 @@ function requireLifecycleOwnerCallbacks(): LifecycleOwnerCallbacks {
     | undefined;
   if (
     !options?.clearTrackedActiveRun ||
-    !options.markTrackedRunTerminalPersisted ||
+    !options.settleTrackedTerminal ||
     !options.trackTrackedRunTerminalPersistence
   ) {
     throw new Error("expected lifecycle owner callbacks");
   }
   return {
     clearTrackedActiveRun: options.clearTrackedActiveRun,
-    markTrackedRunTerminalPersisted: options.markTrackedRunTerminalPersisted,
+    settleTrackedTerminal: options.settleTrackedTerminal,
     trackTrackedRunTerminalPersistence: options.trackTrackedRunTerminalPersistence,
   };
 }
@@ -470,7 +468,7 @@ describe("startGatewayEventSubscriptions", () => {
 
     terminalPersistence.resolve();
     await terminalPersistence.promise;
-    callbacks.markTrackedRunTerminalPersisted({ runId, clientRunId: runId, sessionKey });
+    callbacks.settleTrackedTerminal({ runId, clientRunId: runId, sessionKey });
     transitions.push({ state: "Persisted", lifecycle: readLifecycleState(entry) });
 
     registration.cleanup();
@@ -482,11 +480,11 @@ describe("startGatewayEventSubscriptions", () => {
       { state: "Terminal-observed", lifecycle: lifecycleState(true, true, 3_000) },
       {
         state: "Projection-cleared",
-        lifecycle: lifecycleState(false, false, 3_000, undefined, false),
+        lifecycle: lifecycleState(false, true, 3_000, undefined, false),
       },
       {
         state: "Persisting",
-        lifecycle: lifecycleState(false, false, 3_000, terminalPersistence.promise, false),
+        lifecycle: lifecycleState(false, true, 3_000, terminalPersistence.promise, false),
       },
       { state: "Persisted", lifecycle: lifecycleState(false, false, 3_000, undefined, true) },
       { state: "Removed" },
@@ -586,14 +584,14 @@ describe("startGatewayEventSubscriptions", () => {
       persistence: terminalPersistence.promise,
     });
     void terminalPersistence.promise.then(() => {
-      callbacks.markTrackedRunTerminalPersisted({ runId, clientRunId: runId, sessionKey });
+      callbacks.settleTrackedTerminal({ runId, clientRunId: runId, sessionKey });
     });
 
     await Promise.resolve();
     expect(params.chatAbortControllers.get(runId)).toBe(entry);
     expect(readLifecycleState(entry)).toMatchObject({
       projectSessionActive: false,
-      projectSessionTerminalPending: false,
+      projectSessionTerminalPending: true,
       projectSessionTerminalPersistence: terminalPersistence.promise,
       projectSessionTerminalPersisted: false,
       registrationCleanupRequested: true,

@@ -714,7 +714,7 @@ describe("shared Codex app-server client", () => {
     const startOptions = configureManagedDesktopFallback();
 
     const acquire = getSharedCodexAppServerClient({ startOptions, timeoutMs: 1_000 });
-    await sendInitializeResult(desktop, "openclaw/0.150.0-alpha.23 (macOS; test)");
+    await sendInitializeResult(desktop, "openclaw/0.151.0-alpha.4 (macOS; test)");
     const client = await acquire;
 
     expect(client).toBe(desktop.client);
@@ -728,7 +728,7 @@ describe("shared Codex app-server client", () => {
     expect(mocks.embeddedAgentLog.warn).toHaveBeenCalledWith(
       "codex app-server is newer than OpenClaw's managed runtime; continuing with normal startup validation",
       {
-        detectedVersion: "0.150.0-alpha.23",
+        detectedVersion: "0.151.0-alpha.4",
         validatedVersion: CODEX_APP_SERVER_VERSION,
       },
     );

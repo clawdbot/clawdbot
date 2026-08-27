@@ -369,6 +369,20 @@ catalog, API-key auth, and dynamic model resolution.
     upstream response is not an OpenAI-compatible `{ data: [{ id, object }] }`
     shape.
 
+    For a separate authoritative metadata feed, the same
+    `provider-catalog-live-runtime` subpath exposes `ProviderCatalogSnapshot`:
+    each entry pairs a runtime model with its lifecycle status.
+    `projectUpstreamProviderCatalogSnapshot` rebuilds that snapshot from a
+    trusted seed and accepted upstream rows, dropping withdrawn upstream-only
+    models. `projectProviderCatalogSnapshotRows` intersects advertised IDs with
+    active snapshot entries, deduplicating in endpoint order;
+    `listProviderCatalogSnapshotEntries` projects the same lifecycle facts for
+    catalog consumers. Keep seed lifecycle policy and model-specific decoration
+    in the owning plugin. Derive static fallback eligibility after refreshing
+    metadata so the first failed or fully filtered discovery uses current status.
+    Public metadata never establishes account entitlement or expands the
+    credential scope of discovery.
+
     When `ctx.providerIds` is present, it contains the normalized provider
     identities selected for that catalog owner. Return `null` before resolving
     credentials or making network requests when the hook serves none of them;

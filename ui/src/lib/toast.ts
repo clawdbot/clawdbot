@@ -29,6 +29,12 @@ function activeModalToastLayer() {
   return [...(document.openClawModalLayers ?? [])].findLast((candidate) => candidate.isConnected);
 }
 
+function restingToastLayer() {
+  return (
+    document.querySelector(".shell-nav[aria-modal='true']") ?? document.querySelector(".shell")
+  );
+}
+
 // Outcomes reported during startup (a restored post-update result, for example)
 // race the shell that owns the host element. Hold the latest one instead of
 // dropping it, so no caller's message disappears because it arrived too early.
@@ -51,7 +57,7 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
   }
 
   override disconnectedCallback() {
-    const target = activeModalToastLayer() ?? document.querySelector(".shell");
+    const target = activeModalToastLayer() ?? restingToastLayer();
     if (!this.isConnected && this.parentElement?.localName === "openclaw-modal-dialog" && target) {
       target.append(this);
     } else {
@@ -208,7 +214,7 @@ export function showToast(options: ToastOptions): boolean {
       }
       modal.removeEventListener("wa-after-hide", handoff);
       queueMicrotask(() =>
-        (activeModalToastLayer() ?? document.querySelector(".shell"))?.moveBefore(host, null),
+        (activeModalToastLayer() ?? restingToastLayer())?.moveBefore(host, null),
       );
     };
     modal.addEventListener("wa-after-hide", handoff);

@@ -6,10 +6,12 @@ import { modelSelectionShouldEnsureCodexPlugin } from "../agents/openai-routing.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { redactToolPayloadText } from "../logging/redact.js";
-import { enablePluginInConfig } from "../plugins/enable.js";
+import type { PluginCapabilityConsentHandler } from "../plugins/capability-consent.js";
+import { enablePluginWithCapabilityConsent } from "../plugins/enable.js";
 import { loadInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
+import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { createNonInteractiveLoggingPrompter } from "./non-interactive-prompter.js";
 
@@ -44,6 +46,7 @@ type RuntimePluginEnsureParams = {
   runtime: RuntimeEnv;
   workspaceDir?: string;
   output?: "interactive" | "silent";
+  beforePersistentEffect?: () => void | Promise<void>;
 };
 
 type RuntimePluginRepairParams = {
@@ -51,6 +54,7 @@ type RuntimePluginRepairParams = {
   model?: string;
   agentId?: string;
   env?: NodeJS.ProcessEnv;
+  onCapabilityConsent?: PluginCapabilityConsentHandler;
 };
 
 export const CODEX_RUNTIME_PLUGIN_ID = "codex";
@@ -144,10 +148,15 @@ async function ensureRuntimePluginForModelSelection(
     return { ok: true, cfg: params.cfg, required: false };
   }
   const io = adaptRuntimePluginInstallIo(params);
+  const onCapabilityConsent =
+    params.output === "silent"
+      ? async () => undefined
+      : createPluginCapabilityConsentPrompter(params.prompter, params.beforePersistentEffect);
   const existingRecords = await loadInstalledPluginIndexInstallRecords({ env: process.env });
   if (isInstalledRecordPresentOnDisk(existingRecords[params.descriptor.pluginId], process.env)) {
     // A recorded install with package.json on disk can be repaired/enabled
     // without re-downloading the plugin during setup.
+    await params.beforePersistentEffect?.();
     const repair = await repairRuntimePluginInstallForModelSelection({
       cfg: params.cfg,
       model: params.model,
@@ -155,6 +164,7 @@ async function ensureRuntimePluginForModelSelection(
       env: process.env,
       descriptor: params.descriptor,
       shouldEnsure: params.shouldEnsure,
+      onCapabilityConsent,
     });
     for (const change of repair.changes) {
       io.runtime.log?.(change);
@@ -162,7 +172,11 @@ async function ensureRuntimePluginForModelSelection(
     for (const warning of repair.warnings) {
       io.runtime.log?.(`${params.descriptor.warningLabel} update warning: ${warning}`);
     }
-    const enableResult = enablePluginInConfig(params.cfg, params.descriptor.pluginId);
+    const enableResult = await enablePluginWithCapabilityConsent(
+      params.cfg,
+      params.descriptor.pluginId,
+      { workspaceDir: params.workspaceDir, onCapabilityConsent },
+    );
     return finalizeRequiredRuntimePluginInstall(params.descriptor, {
       cfg: enableResult.config,
       installed: enableResult.enabled,
@@ -190,6 +204,8 @@ async function ensureRuntimePluginForModelSelection(
     ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
     promptInstall: false,
     autoConfirmSingleSource: true,
+    onCapabilityConsent,
+    beforePersistentEffect: params.beforePersistentEffect,
   });
   return finalizeRequiredRuntimePluginInstall(params.descriptor, {
     cfg: result.cfg,
@@ -205,6 +221,7 @@ async function repairRuntimePluginInstallForModelSelection(params: {
   model?: string;
   agentId?: string;
   env?: NodeJS.ProcessEnv;
+  onCapabilityConsent?: PluginCapabilityConsentHandler;
   descriptor: RuntimePluginInstallDescriptor;
   shouldEnsure: RuntimePluginSelection;
 }): Promise<{ required: boolean; changes: string[]; warnings: string[] }> {
@@ -223,6 +240,7 @@ async function repairRuntimePluginInstallForModelSelection(params: {
     cfg: params.cfg,
     pluginIds: [params.descriptor.pluginId],
     ...(params.env !== undefined ? { env: params.env } : {}),
+    ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
   });
   return {
     required: true,

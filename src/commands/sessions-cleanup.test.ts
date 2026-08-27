@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   enforceSessionDiskBudget: vi.fn(),
   resolveSessionCleanupAction: vi.fn(),
   runSessionsCleanup: vi.fn(),
+  runLocalSessionsCleanup: vi.fn(),
   serializeSessionCleanupResult: vi.fn(),
   callGateway: vi.fn(),
 }));
@@ -26,6 +27,10 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: mocks.loadConfig,
   loadConfig: mocks.loadConfig,
+}));
+
+vi.mock("./sessions-cleanup.runtime.js", () => ({
+  runLocalSessionsCleanup: mocks.runLocalSessionsCleanup,
 }));
 
 vi.mock("./session-store-targets.js", () => ({
@@ -85,6 +90,7 @@ function gatewayTransportError(kind: "closed" | "timeout", code?: number): Gatew
 describe("sessionsCleanupCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.runLocalSessionsCleanup.mockImplementation((params) => mocks.runSessionsCleanup(params));
     mocks.loadConfig.mockReturnValue({ session: { store: "/cfg/sessions.json" } });
     mocks.resolveSessionStoreTargets.mockReturnValue([
       { agentId: "main", storePath: "/resolved/sessions.json" },
@@ -286,6 +292,7 @@ describe("sessionsCleanupCommand", () => {
 
     expect(mocks.callGateway).toHaveBeenCalledOnce();
     expect(mocks.runSessionsCleanup).not.toHaveBeenCalled();
+    expect(mocks.runLocalSessionsCleanup).not.toHaveBeenCalled();
   });
 
   it("keeps explicit offline store cleanup local", async () => {
@@ -330,6 +337,7 @@ describe("sessionsCleanupCommand", () => {
     expect(gatewayCall?.method).toBe("sessions.cleanup");
     expect(gatewayCall?.params.enforce).toBe(true);
     expect(gatewayCall?.requiredMethods).toEqual(["sessions.cleanup"]);
+    expect(mocks.runLocalSessionsCleanup).not.toHaveBeenCalled();
     expect(mocks.updateSessionStore).not.toHaveBeenCalled();
     expect(logs).toHaveLength(1);
     expect(JSON.parse(logs[0] ?? "{}")).toEqual({
@@ -452,6 +460,7 @@ describe("sessionsCleanupCommand", () => {
       wouldMutate: true,
     });
     expect(mocks.runSessionsCleanup).toHaveBeenCalled();
+    expect(mocks.runLocalSessionsCleanup).not.toHaveBeenCalled();
     expect(mocks.callGateway).not.toHaveBeenCalled();
     expect(mocks.updateSessionStore).not.toHaveBeenCalled();
   });

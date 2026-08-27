@@ -28,7 +28,11 @@ import {
   withCdpSocket,
 } from "./cdp.helpers.js";
 import { assertBrowserNavigationAllowed, withBrowserNavigationPolicy } from "./navigation-guard.js";
-import { finalizeRoleSnapshot, type RoleSnapshotIdentityMode } from "./pw-role-snapshot.js";
+import {
+  finalizeRoleSnapshot,
+  findRoleSnapshotLineRef,
+  type RoleSnapshotIdentityMode,
+} from "./pw-role-snapshot.js";
 import {
   appendRoleSnapshotDepthTruncationMarker,
   ROLE_SNAPSHOT_MAX_DEPTH,
@@ -572,14 +576,6 @@ function cursorSuffix(info?: CursorInteractiveInfo): string {
   return parts.length ? ` [${parts.join(", ")}]` : "";
 }
 
-function escapeRoleSnapshotValue(value: string): string {
-  return value
-    .replaceAll("\\", "\\\\")
-    .replaceAll('"', '\\"')
-    .replaceAll("\r", "\\r")
-    .replaceAll("\n", "\\n");
-}
-
 function renderRoleTree(
   tree: RoleTreeNode[],
   index: number,
@@ -602,10 +598,10 @@ function renderRoleTree(
   }
   if (shouldIncludeRoleNode(node, options)) {
     const indent = "  ".repeat(effectiveDepth);
-    const name = node.name ? ` "${escapeRoleSnapshotValue(node.name)}"` : "";
+    const name = node.name ? ` ${JSON.stringify(node.name)}` : "";
     const ref = node.ref ? ` [ref=${node.ref}]` : "";
     const nth = node.nth !== undefined && node.nth > 0 ? ` [nth=${node.nth}]` : "";
-    const value = node.value ? ` value="${escapeRoleSnapshotValue(node.value)}"` : "";
+    const value = node.value ? ` value=${JSON.stringify(node.value)}` : "";
     const url = node.url ? ` [url=${node.url}]` : "";
     output.push(
       `${indent}- ${node.role}${name}${ref}${nth}${value}${url}${cursorSuffix(node.cursorInfo)}`,
@@ -897,8 +893,7 @@ async function buildCdpRoleSnapshot(params: {
   if (params.recurseIframes) {
     const iframeNodes = tree.filter((node) => node.ref && node.frameId);
     for (const iframe of iframeNodes) {
-      const marker = `[ref=${iframe.ref}]`;
-      const lineIndex = lines.findIndex((line) => line.includes(marker));
+      const lineIndex = lines.findIndex((line) => findRoleSnapshotLineRef(line) === iframe.ref);
       if (lineIndex < 0 || !iframe.frameId) {
         continue;
       }

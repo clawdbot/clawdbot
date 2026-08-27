@@ -51,6 +51,9 @@ export function createEmbeddedRunSessionPromptState(input: {
       }
     : undefined;
   let sessionTargetAdopted = false;
+  // Only retries after this run mutates its transcript may wait for deferred projection work.
+  // Fresh attempts retain the projection owner's bounded, retryable failure contract.
+  let settleOwnedTranscriptProjection = false;
   let suppressNextUserMessagePersistence = params.suppressNextUserMessagePersistence ?? false;
   let activePrompt: ActivePrompt = {
     persisted: suppressNextUserMessagePersistence,
@@ -173,12 +176,29 @@ export function createEmbeddedRunSessionPromptState(input: {
     adoptSessionId,
     adoptSessionTarget,
     activateInternalPrompt,
-    continueFromCurrentTranscript: () =>
-      activateInternalPrompt(MID_TURN_PRECHECK_CONTINUATION_PROMPT),
+    markOwnedTranscriptRetry: () => {
+      settleOwnedTranscriptProjection = true;
+    },
+    settleOwnedTranscriptProjection: async (
+      target: AgentRunSessionTarget | undefined,
+      abortSignal?: AbortSignal,
+    ) => {
+      const sessionId = target?.sessionId ?? activeSessionId;
+      if (settleOwnedTranscriptProjection && target && sessionId) {
+        settleOwnedTranscriptProjection = false;
+        const { waitForSessionTranscriptProjection } =
+          await import("../../../config/sessions/session-transcript-reconcile.js");
+        await waitForSessionTranscriptProjection({ ...target, sessionId }, abortSignal);
+      }
+    },
+    continueFromCurrentTranscript: () => {
+      activateInternalPrompt(MID_TURN_PRECHECK_CONTINUATION_PROMPT);
+    },
     onUserMessagePersisted,
     waitForCurrentUserMessagePersistence,
     prepareCompactedTranscriptRetry: async () => {
       await waitForCurrentUserMessagePersistence();
+      settleOwnedTranscriptProjection = true;
       if (activePrompt.internal) {
         suppressNextUserMessagePersistence = activePrompt.persisted;
       } else if (activePrompt.persisted) {

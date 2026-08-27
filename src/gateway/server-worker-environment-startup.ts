@@ -13,7 +13,7 @@ import type { NodeDesktopStreamBroker } from "./desktop/node-stream-broker.js";
 import type { DesktopSessionRegistry } from "./desktop/session-registry.js";
 import type { GitHubPublicationCoordinator } from "./github-publication.js";
 import type { NodeWorkerSupervisorTransport } from "./node-registry-private.js";
-import type { GatewayRequestContext } from "./server-methods/types.js";
+import type { GatewayContextResolver, GatewayRequestContext } from "./server-methods/types.js";
 import type { WorkerBundleProducer, WorkerNpmArtifact } from "./worker-environments/bundle.js";
 import {
   bindDeviceWorkerAvailability,
@@ -110,6 +110,7 @@ export async function loadGatewayWorkerEnvironmentStartupState(): Promise<Gatewa
 export async function createGatewayWorkerEnvironmentRuntime(params: {
   getPluginRegistry: () => Pick<PluginRegistry, "workerProviders">;
   getPortalRuntime: () => Pick<GatewayRequestContext, "portalService" | "broadcast"> | undefined;
+  resolveGatewayContext: GatewayContextResolver;
   desktopSessionRegistry: DesktopSessionRegistry;
   nodeDesktopStreamBroker?: NodeDesktopStreamBroker;
   startup: GatewayWorkerEnvironmentStartupState;
@@ -246,6 +247,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
   const nodeWorkerTunnelManager = createNodeWorkerTunnelManager({
     gatewayDeviceId,
     getEnvironment: (environmentId) => params.startup.store.get(environmentId),
+    listEnvironments: () => params.startup.store.list(),
     getTransport: () => deviceRuntime.getNodeTransport(),
     launchNodeWorker: async (request) => await deviceRuntime.launchNodeWorker(request),
     validateWorkerTurn: (binding) => placementGate.validateWorkerTurn(binding),
@@ -381,6 +383,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     return environmentIds;
   });
   executeSessionTool = createWorkerSessionToolExecutor({
+    resolveGatewayContext: params.resolveGatewayContext,
     placements: params.startup.placementStore,
     environments: workerEnvironmentService,
     dispatchChild: (request) => dispatchChild(request),

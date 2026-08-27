@@ -112,20 +112,10 @@ export async function fishAudioTtsStream(params: FishAudioTtsRequest): Promise<{
       createOverflowError: ({ maxBytes }) =>
         new Error(`Fish Audio TTS API error: audio response exceeds ${maxBytes} bytes`),
       createReleaseError: () => new Error("Fish Audio TTS stream released"),
+      cleanup: release,
     });
-    let releasePromise: Promise<void> | undefined;
-    const releaseAll = () => {
-      releasePromise ??= (async () => {
-        try {
-          await bounded.release();
-        } finally {
-          await release();
-        }
-      })();
-      return releasePromise;
-    };
     handedOff = true;
-    return { audioStream: bounded.stream, release: releaseAll };
+    return { audioStream: bounded.stream, release: bounded.release };
   } finally {
     if (!handedOff) {
       await release();

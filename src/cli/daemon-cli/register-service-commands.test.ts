@@ -144,4 +144,30 @@ describe("addGatewayServiceCommands", () => {
 
     expect(expectSingleDaemonCall(runner).json).toBe(true);
   });
+
+  it("inherits an explicit parent port instead of a status leaf default", async () => {
+    const gateway = createGatewayParentLikeCommand().enablePositionalOptions();
+    const status = gateway.commands.find((command) => command.name() === "status")!;
+    status.setOptionValueWithSource("port", "19003", "default");
+
+    await gateway.parseAsync(["--port", "19002", "status"], { from: "user" });
+
+    expect(expectSingleDaemonCall(runDaemonStatus).rpc).toMatchObject({
+      port: "19002",
+      localPortOverride: 19002,
+    });
+  });
+
+  it.each([
+    { argv: ["status", "--port", "0"], error: "--port must be an integer between 1 and 65535." },
+    {
+      argv: ["--port", "19002", "status", "--url", "ws://localhost:19002"],
+      error: "Use either --url or --port, not both.",
+    },
+  ])("rejects invalid status options $argv", async ({ argv, error }) => {
+    const gateway = createGatewayParentLikeCommand().enablePositionalOptions().exitOverride();
+
+    await expect(gateway.parseAsync(argv, { from: "user" })).rejects.toThrow(error);
+    expect(runDaemonStatus).not.toHaveBeenCalled();
+  });
 });

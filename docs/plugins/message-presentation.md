@@ -15,9 +15,12 @@ intent once, while each channel plugin renders the best native shape it can.
 Use presentation for portable message UI: text sections, small context/footer
 text, dividers, charts, tables, buttons, select menus, and card title/tone.
 
-Do not add new provider-native fields such as Discord `components`, Slack
-`blocks`, Telegram `buttons`, Teams `card`, or Feishu `card` to the shared
-message tool. Those are renderer outputs owned by the channel plugin.
+Do not add provider-native fields to the shared message tool by default. A
+native extension requires explicit maintainer approval, a channel-owned schema,
+documented cross-channel behavior, and capabilities that `presentation` cannot
+express. Discord `components` is the approved built-in exception for modal
+forms, media galleries, file blocks, sections with accessories, and styled
+containers. Use `presentation` for portable rich messages.
 
 ## Contract
 
@@ -596,7 +599,7 @@ Current bundled renderers:
 
 | Channel         | Native render target                      | Notes                                                                                                                                                                                                             |
 | --------------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Discord         | Components and component containers       | Preserves legacy `channelData.discord.components` for existing provider-native payload producers, but new shared sends should use `presentation`.                                                                 |
+| Discord         | Components and component containers       | Supports the documented Discord-specific `components` extension for native layouts that `presentation` cannot express. Portable shared sends should use `presentation`.                                           |
 | Feishu          | Interactive cards                         | Card header uses `title` once. Within native cards, disabled or unsupported buttons retain label-only text; rejected URL targets and opaque callback values are omitted.                                          |
 | Matrix          | Text fallback plus structured event field | Buttons/selects advertise as supported, but every block currently renders as `renderMessagePresentationFallbackText` output carried in a `com.openclaw.presentation` event field, not native interactive widgets. |
 | Mattermost      | Text plus interactive props               | Selects and dividers are not supported; those blocks degrade to text.                                                                                                                                             |
@@ -606,7 +609,7 @@ Current bundled renderers:
 | Plain channels  | Text fallback                             | Channels without a renderer still get readable output.                                                                                                                                                            |
 
 Provider-native payload compatibility is a transition affordance for existing
-reply producers. It is not a reason to add new shared native fields.
+reply producers. New native fields require the explicit exception review above.
 
 ## Presentation vs InteractiveReply
 
@@ -746,8 +749,8 @@ messages where the provider supports those operations.
   sends.
 - Add delivery pin support through `deliveryCapabilities.pin` and
   `pinDeliveredMessage` only when the provider can pin the sent message id.
-- Do not expose new provider-native card/block/component/button fields through
-  the shared message action schema.
+- Do not expose provider-native card/block/component/button fields through the
+  shared message action schema without the explicit exception review above.
 
 ## Related docs
 

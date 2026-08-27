@@ -189,7 +189,9 @@ describe("SessionDiffPanel", () => {
       await vi.waitFor(() => expect(button?.getAttribute("aria-label")).toBe(feedback));
 
       expect(writeText).toHaveBeenCalledWith(surface === "file" ? "example.txt" : "/workspace");
-      expect(button?.dataset[failed ? "error" : "copied"]).toBe("1");
+      const status = button?.parentElement?.querySelector<HTMLElement>('[role="status"]');
+      expect(status?.textContent).toBe(feedback);
+      expect(status?.hidden).toBe(false);
       expect(panel.querySelector("openclaw-session-diff-menu")).toBe(menu);
     },
   );

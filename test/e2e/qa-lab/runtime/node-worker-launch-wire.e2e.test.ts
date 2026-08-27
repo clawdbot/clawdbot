@@ -2,7 +2,9 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import type { AuditRunInspectResult } from "../../../../packages/gateway-protocol/src/index.js";
@@ -91,6 +93,8 @@ describe("node worker launch wire", () => {
       let finalizationStartedAt: number | undefined;
       let resolveWaveFinalizationStarted: ((startedAt: number) => void) | undefined;
       let workerAuditBeforeRestart: string | undefined;
+      let testFailure: { error: unknown } | undefined;
+      let cleanupFailures: unknown[];
 
       try {
         gateway = await startPairedNodeWorkerGateway({
@@ -166,7 +170,10 @@ describe("node worker launch wire", () => {
           state: "active",
           workerBundleHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
         });
-        const remoteWorkspaceDir = String(placement?.remoteWorkspaceDir ?? "");
+        const remoteWorkspaceDir = placement?.remoteWorkspaceDir;
+        if (typeof remoteWorkspaceDir !== "string" || !remoteWorkspaceDir) {
+          throw new Error("active worker placement did not expose a remote workspace directory");
+        }
         const baseManifestRef = placement?.workspaceBaseManifestRef;
         await expect(
           fs.readFile(path.join(remoteWorkspaceDir, "gateway-push.txt"), "utf8"),
@@ -304,11 +311,14 @@ describe("node worker launch wire", () => {
           fs.readFile(path.join(permissionLocalDir!, "worker-permission-in-root.txt"), "utf8"),
         ).resolves.toBe("worker permission proof\n");
 
+        // Simulate the old capability declaration with the current supervisor over real wire.
+        // This proves negotiation and same-identity reconnect, not an older binary upgrade.
         legacyWorkerNode = await createPairedNodeWorkerHost({
           gateway,
           operator,
           root,
           label: "legacy-node",
+          environmentSession: false,
           onInvoke: (frame) => {
             if (frame.command === NODE_WORKER_BUNDLE_INSTALL_COMMAND && frame.paramsJSON) {
               legacyBundlePrewarm = (JSON.parse(frame.paramsJSON) as { bundlePrewarm?: unknown })
@@ -330,6 +340,35 @@ describe("node worker launch wire", () => {
           { key: legacySessionKey, deviceId: legacyWorkerNode.identity.deviceId },
           { timeoutMs: PROOF_TIMEOUT_MS },
         );
+        const unsupportedRunId = `node-worker-lifetime-unsupported-${Date.now()}`;
+        await expect(
+          operator.request("chat.send", {
+            sessionKey: legacySessionKey,
+            message: BASELINE_PROMPT,
+            deliver: false,
+            idempotencyKey: unsupportedRunId,
+          }),
+        ).resolves.toMatchObject({ runId: unsupportedRunId, status: "started" });
+        await expect(
+          operator.request(
+            "agent.wait",
+            { runId: unsupportedRunId, timeoutMs: PROOF_TIMEOUT_MS },
+            { timeoutMs: PROOF_TIMEOUT_MS + 5_000 },
+          ),
+        ).resolves.toMatchObject({
+          status: "error",
+          error: expect.stringMatching(
+            /requires an update.*openclaw update.*reconnect.*openclaw node restart/su,
+          ),
+        });
+        await legacyWorkerNode.waitForInvokes();
+        expect(legacyWorkerNode.commands).not.toContain(NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND);
+        await expect(
+          gateway.call("sessions.describe", { key: legacySessionKey }),
+        ).resolves.toMatchObject({ session: { placement: { state: "active" } } });
+
+        await legacyWorkerNode.disconnect();
+        await legacyWorkerNode.connect({ environmentSession: true });
         const legacyRunId = `node-worker-launch-wire-legacy-${Date.now()}`;
         await operator.request("chat.send", {
           sessionKey: legacySessionKey,
@@ -348,6 +387,18 @@ describe("node worker launch wire", () => {
         expect(legacyWorkerNode.invokeErrors).toEqual([]);
         expect(legacyWorkerNode.commands).toContain(NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND);
         expect(legacyBundlePrewarm).toBeUndefined();
+        const legacyHistory = await operator.request<{ messages?: unknown[] }>("chat.history", {
+          sessionKey: legacySessionKey,
+          limit: 20,
+        });
+        expect(
+          legacyHistory.messages?.filter(
+            (message) =>
+              isRecord(message) &&
+              message.role === "assistant" &&
+              wireMessageText(message).includes(BASELINE_REPLY),
+          ),
+        ).toHaveLength(1);
 
         const loadSessions: string[] = [];
         for (let index = 0; index < FINALIZATION_LOAD_CONCURRENCY; index += 1) {
@@ -369,10 +420,10 @@ describe("node worker launch wire", () => {
         }
         observeFinalizationLoad = true;
         const readyzSamples: Array<{ atMs: number; latencyMs: number; status: number }> = [];
-        let loadSettled = false;
+        const samplerAbort = new AbortController();
         const httpOrigin = gateway.wsUrl.replace(/^ws/u, "http");
         const sampler = (async () => {
-          while (!loadSettled) {
+          while (!samplerAbort.signal.aborted) {
             const startedAt = performance.now();
             try {
               const response = await fetch(`${httpOrigin}/readyz`, {
@@ -390,7 +441,7 @@ describe("node worker launch wire", () => {
                 status: 0,
               });
             }
-            await new Promise((resolve) => setTimeout(resolve, 50));
+            await delay(50);
           }
         })();
         const freshConnectionSamples: number[] = [];
@@ -401,25 +452,25 @@ describe("node worker launch wire", () => {
             });
             const loadRunIds = await Promise.all(
               loadSessions.map(async (sessionKey, index) => {
-                const runId = `node-worker-finalization-load-${wave}-${index}-${Date.now()}`;
-                const started = await operator!.request<{ runId?: string; status?: string }>(
+                const loadRunId = `node-worker-finalization-load-${wave}-${index}-${Date.now()}`;
+                const loadStarted = await operator!.request<{ runId?: string; status?: string }>(
                   "chat.send",
                   {
                     sessionKey,
                     message: BASELINE_PROMPT,
                     deliver: false,
-                    idempotencyKey: runId,
+                    idempotencyKey: loadRunId,
                   },
                 );
-                expect(started).toMatchObject({ runId, status: "started" });
-                return runId;
+                expect(loadStarted).toMatchObject({ runId: loadRunId, status: "started" });
+                return loadRunId;
               }),
             );
             const waits = Promise.all(
-              loadRunIds.map(async (runId) => {
+              loadRunIds.map(async (loadRunId) => {
                 const completedLoad = await operator!.request<{ status?: string }>(
                   "agent.wait",
-                  { runId, timeoutMs: PROOF_TIMEOUT_MS },
+                  { runId: loadRunId, timeoutMs: PROOF_TIMEOUT_MS },
                   { timeoutMs: PROOF_TIMEOUT_MS + 5_000 },
                 );
                 expect(completedLoad.status).toBe("ok");
@@ -438,7 +489,7 @@ describe("node worker launch wire", () => {
             await waits;
           }
         } finally {
-          loadSettled = true;
+          samplerAbort.abort();
           await Promise.allSettled([sampler]);
         }
         const finalizationSamples = readyzSamples.filter(
@@ -470,6 +521,8 @@ describe("node worker launch wire", () => {
           JSON.parse(workerAuditAfterRestart) as AuditRunInspectResult,
         );
         expect(workerAuditAfterRestart).toBe(workerAuditBeforeRestart);
+      } catch (error) {
+        testFailure = { error };
       } finally {
         const cleanup = await Promise.allSettled([
           workerNode?.stop() ?? Promise.resolve(),
@@ -479,15 +532,16 @@ describe("node worker launch wire", () => {
           provider.stop(),
           closeWireServer(published.server),
         ]);
-        const failures = cleanup.flatMap((result) =>
+        cleanupFailures = cleanup.flatMap((result) =>
           result.status === "rejected" ? [result.reason] : [],
         );
-        if (failures.length === 1) {
-          throw failures[0];
-        }
-        if (failures.length > 1) {
-          throw new AggregateError(failures, "node worker launch wire cleanup failed");
-        }
+      }
+      const failures = [...(testFailure ? [testFailure.error] : []), ...cleanupFailures];
+      if (failures.length === 1) {
+        throw failures[0];
+      }
+      if (failures.length > 1) {
+        throw new AggregateError(failures, "node worker launch wire test failed");
       }
     },
   );

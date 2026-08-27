@@ -85,6 +85,12 @@ type SkillReadContent = {
   readContent?: string;
 };
 
+export type SkillInstructionDeliveryCache = Map<string, Promise<boolean>>;
+
+export function createSkillInstructionDeliveryCache(): SkillInstructionDeliveryCache {
+  return new Map();
+}
+
 /** Erase a schema-specific session tool only after its input passes that owned schema. */
 function eraseSessionFileTool<TParameters extends TSchema, TDetails>(
   tool: AgentTool<TParameters, TDetails>,
@@ -1090,6 +1096,7 @@ export function wrapReadToolWithSkillContent(
     cwd?: string;
     containerWorkdir?: string;
     instructionPaths?: readonly string[];
+    instructionDeliveryCache?: SkillInstructionDeliveryCache;
   },
 ): AnyAgentTool {
   const cwd = options?.cwd ?? process.cwd();
@@ -1119,6 +1126,15 @@ export function wrapReadToolWithSkillContent(
   if (instructionContent.size === 0) {
     return tool;
   }
+  const instructionDeliveryCache = options?.instructionDeliveryCache;
+  const alreadyDeliveredResult = (): AgentToolResult<unknown> => {
+    const text =
+      "Skill instructions were already served whole earlier in the current model context. Reuse that content; the full document will be served again if compaction removes it.";
+    return {
+      content: [{ type: "text", text }],
+      details: { kind: "text", content: text },
+    };
+  };
   const readContent = (filePath: string): string => {
     const content = instructionContent.get(filePath);
     if (content === undefined) {
@@ -1136,16 +1152,42 @@ export function wrapReadToolWithSkillContent(
       const rawPath = record?.path;
       const normalizedPath =
         typeof rawPath === "string" ? normalizeFileToolPathParam(rawPath) : undefined;
-      if (!normalizedPath || !instructionContent.has(resolveInstructionPath(normalizedPath))) {
+      const instructionPath = normalizedPath ? resolveInstructionPath(normalizedPath) : undefined;
+      if (!normalizedPath || !instructionPath || !instructionContent.has(instructionPath)) {
         return tool.execute(toolCallId, args, signal, onUpdate);
       }
-      if (record && ["offset", "limit", "cursor"].some((key) => record[key] !== undefined)) {
-        throw new Error(
-          "Skill instructions must be read whole; offset, limit, and cursor windows are not allowed.",
-        );
+      for (;;) {
+        const priorDelivery = instructionDeliveryCache?.get(instructionPath);
+        if (!priorDelivery) {
+          break;
+        }
+        const delivered = await priorDelivery;
+        if (instructionDeliveryCache?.get(instructionPath) !== priorDelivery) {
+          continue;
+        }
+        if (delivered) {
+          return alreadyDeliveredResult();
+        }
+        instructionDeliveryCache?.delete(instructionPath);
       }
+      let settleDelivery = (_delivered: boolean): void => undefined;
+      let delivery: Promise<boolean> | undefined;
+      if (instructionDeliveryCache) {
+        delivery = new Promise<boolean>((resolve) => {
+          settleDelivery = resolve;
+        });
+        // The resolved promise covers sequential and concurrent reads without
+        // changing prior transcript bytes. The compaction owner clears it.
+        instructionDeliveryCache.set(instructionPath, delivery);
+      }
+      const resetDelivery = () => {
+        settleDelivery(false);
+        if (delivery && instructionDeliveryCache?.get(instructionPath) === delivery) {
+          instructionDeliveryCache.delete(instructionPath);
+        }
+      };
       const instructionTool =
-        typeof instructionContent.get(normalizedPath) === "string"
+        typeof instructionContent.get(instructionPath) === "string"
           ? (virtualRead ??= createOpenClawReadTool(
               eraseSessionFileTool(
                 createReadTool("/", {
@@ -1160,23 +1202,40 @@ export function wrapReadToolWithSkillContent(
               options,
             ))
           : tool;
-      const instructionArgs =
-        normalizedPath === rawPath || !record ? args : { ...record, path: normalizedPath };
-      const result = await instructionTool.execute(toolCallId, instructionArgs, signal, onUpdate);
-      const details = result.details;
-      if (
-        details &&
-        typeof details === "object" &&
-        "kind" in details &&
-        details.kind === "truncated"
-      ) {
-        const text = `Skill instructions cannot be partially served: the whole document exceeds the ${formatBytes(resolveAdaptiveReadMaxBytes(options))} read budget. Ask the operator to reduce the document or increase the model context.`;
-        return {
-          content: [{ type: "text", text }],
-          details: { kind: "text", content: text },
-        };
+      // Skill instructions are served whole. Some models still send paging arguments,
+      // so windows are dropped rather than rejected.
+      const instructionArgs: Record<string, unknown> = { ...record, path: normalizedPath };
+      for (const key of ["offset", "limit", "cursor"]) {
+        delete instructionArgs[key];
       }
-      return result;
+      try {
+        const result = await instructionTool.execute(toolCallId, instructionArgs, signal, onUpdate);
+        const details = result.details;
+        const detailsKind =
+          details &&
+          typeof details === "object" &&
+          "kind" in details &&
+          typeof details.kind === "string"
+            ? details.kind
+            : undefined;
+        if (detailsKind === "truncated") {
+          resetDelivery();
+          const text = `Skill instructions cannot be partially served: the whole document exceeds the ${formatBytes(resolveAdaptiveReadMaxBytes(options))} read budget. Ask the operator to reduce the document or increase the model context.`;
+          return {
+            content: [{ type: "text", text }],
+            details: { kind: "text", content: text },
+          };
+        }
+        if (detailsKind !== "text") {
+          resetDelivery();
+          return result;
+        }
+        settleDelivery(true);
+        return result;
+      } catch (error) {
+        resetDelivery();
+        throw error;
+      }
     },
   };
 }

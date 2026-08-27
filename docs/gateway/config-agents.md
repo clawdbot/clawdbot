@@ -445,6 +445,8 @@ date context. Falls back to the host timezone.
 - Config writers that mutate these fields (for example `/models set`, `/models set-image`, and fallback add/remove commands) save canonical object form and preserve existing fallback lists when possible.
 - `maxConcurrent`: max parallel agent runs across sessions (each session still serialized). By default, OpenClaw uses `min(16, max(8, available CPU parallelism))`, based on `os.availableParallelism()` with `os.cpus().length` as a fallback.
 
+<a id="agentsdefaultsmodelselectionscope" />
+
 ### `agents.defaults.modelSelectionScope`
 
 Optional scope for chat commands and Gateway session model updates without an explicit scope.
@@ -772,7 +774,7 @@ Optional sandboxing for the embedded agent. See [Sandboxing](/gateway/sandboxing
     defaults: {
       sandbox: {
         mode: "non-main", // off (default) | non-main | all
-        backend: "docker", // docker (default) | podman | openshell | ssh
+        backend: "docker", // docker (default) | daytona | openshell | podman | ssh
         scope: "agent", // session | agent (default) | shared
         workspaceAccess: "none", // none (default) | ro | rw
         workspaceRoot: "~/.openclaw/sandboxes",
@@ -866,12 +868,16 @@ Defaults shown above (`off`/`docker`/`agent`/`none`/`bookworm-slim` image/`none`
 
 **Backend:**
 
+- `daytona`: Daytona-managed cloud runtime
 - `docker`: local Docker runtime (default)
-- `ssh`: generic SSH-backed remote runtime
 - `openshell`: OpenShell-managed local or remote runtime
+- `podman`: local Podman runtime using Docker-compatible settings
+- `ssh`: generic SSH-backed remote runtime
 
-When `backend: "openshell"` is selected, runtime-specific settings move to
-`plugins.entries.openshell.config`.
+Plugin-managed backends keep runtime-specific settings under their plugin entries:
+
+- Daytona: `plugins.entries.daytona.config`; see [Daytona](/gateway/daytona)
+- OpenShell: `plugins.entries.openshell.config`; see [OpenShell](/gateway/openshell)
 
 **SSH backend config:**
 
@@ -1004,6 +1010,8 @@ scripts/sandbox-browser-setup.sh   # optional browser image
 ```
 
 For npm installs without a source checkout, see [Sandboxing § Images and setup](/gateway/sandboxing#images-and-setup) for inline `docker build` commands.
+
+<a id="agentsentries-per-agent-overrides" />
 
 ### `agents.entries` (per-agent overrides)
 

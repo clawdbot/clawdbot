@@ -13,9 +13,9 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-chunking";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { MatrixClient } from "../sdk.js";
-import { chunkMatrixText, sendMessageMatrix } from "../send.js";
+import { sendMessageMatrix } from "../send.js";
 import type { MatrixSendResult } from "../send/types.js";
-import type { MarkdownTableMode, OpenClawConfig, ReplyPayload, RuntimeEnv } from "./runtime-api.js";
+import type { OpenClawConfig, ReplyPayload, RuntimeEnv } from "./runtime-api.js";
 
 export type MatrixReplyDeliveryResult = {
   messageIds?: string[];
@@ -114,23 +114,14 @@ export async function deliverMatrixReplies(params: {
   roomId: string;
   client: MatrixClient;
   runtime: RuntimeEnv;
-  textLimit: number;
   replyToMode: "off" | "first" | "all" | "batched";
   hasRepliedRef?: { value: boolean };
   threadId?: string;
   replyToId?: string;
   accountId?: string;
   mediaLocalRoots?: readonly string[];
-  tableMode?: MarkdownTableMode;
 }): Promise<MatrixReplyDeliveryResult> {
   const core = getMatrixRuntime();
-  const tableMode =
-    params.tableMode ??
-    core.channel.text.resolveMarkdownTableMode({
-      cfg: params.cfg,
-      channel: "matrix",
-      accountId: params.accountId,
-    });
   const logVerbose = (message: string) => {
     if (core.logging.shouldLogVerbose()) {
       params.runtime.log?.(message);
@@ -173,25 +164,15 @@ export async function deliverMatrixReplies(params: {
       };
 
       if (mediaUrls.length === 0) {
-        const { chunks } = chunkMatrixText(rawText, {
+        // The send owner prepares native formatting and reports each accepted chunk.
+        await sendMessageMatrix(params.roomId, rawText, {
+          client: params.client,
           cfg: params.cfg,
+          replyToId: replyToIdForReply,
+          threadId: params.threadId,
           accountId: params.accountId,
-          tableMode,
-          preserveWhitespace: true,
+          onDeliveryResult,
         });
-        for (const chunk of chunks) {
-          if (!chunk.trim()) {
-            continue;
-          }
-          await sendMessageMatrix(params.roomId, chunk, {
-            client: params.client,
-            cfg: params.cfg,
-            replyToId: replyToIdForReply,
-            threadId: params.threadId,
-            accountId: params.accountId,
-            onDeliveryResult,
-          });
-        }
         continue;
       }
 

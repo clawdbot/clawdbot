@@ -2898,7 +2898,7 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
       normalizeAgentRunTerminalReceipt(Reflect.get(prepared.agentMeta, "terminalReceipt"))
         ?.successfulToolNames,
     ).toEqual([]);
-    expect(ctx.state.deterministicApprovalPromptSent).toBe(true);
+    expect(ctx.state.deterministicApprovalPromptSent).toBe(false);
   });
 
   it("emits the shared approver-DM notice when another approval client received the request", async () => {
@@ -2923,7 +2923,7 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
     expect(requireMockCallArg(onToolResult, 0, "tool result").text).toBe(
       "Approval required. I sent approval DMs to the approvers for this account.",
     );
-    expect(ctx.state.deterministicApprovalPromptSent).toBe(true);
+    expect(ctx.state.deterministicApprovalPromptSent).toBe(false);
   });
 
   it("records an actionable failure when deterministic approval delivery rejects", async () => {

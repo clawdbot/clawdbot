@@ -7,6 +7,7 @@ import {
 import { resolveSessionModelRef } from "openclaw/plugin-sdk/model-session-runtime";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { closeCodexStartupClientBestEffort } from "./app-server/attempt-client-cleanup.js";
 import { prepareCodexAppServerAuthBinding } from "./app-server/auth-binding.js";
 import {
   resolveCodexAppServerAuthProfileId,
@@ -32,7 +33,13 @@ import type {
   CodexAppServerRequestResult,
   JsonValue,
 } from "./app-server/protocol.js";
-import { requestCodexAppServerJson, withCodexAppServerJsonClient } from "./app-server/request.js";
+import { isJsonObject } from "./app-server/protocol.js";
+import {
+  requestCodexAppServerJson,
+  withCodexAppServerJsonClient,
+  type CodexAppServerScopedRequest,
+} from "./app-server/request.js";
+import { resumeCodexAppServerThread } from "./app-server/thread-resume.js";
 
 export type SafeValue<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -50,10 +57,11 @@ export type CodexControlRequestOptions = {
   isolated?: boolean;
   startOptions?: CodexAppServerStartOptions;
   timeoutMs?: number;
+  beforeRequest?: (request: CodexAppServerScopedRequest) => Promise<void>;
   onResponse?: (
     response: unknown,
     client: CodexAppServerClient,
-    auth: { authProfileId?: string },
+    auth: { authProfileId?: string; assertCurrent: () => void },
   ) => Promise<void>;
 };
 
@@ -213,14 +221,36 @@ export async function codexControlRequest(
     isolated: options.isolated,
     ...auth.clientOptions,
   };
-  if (options.onResponse) {
-    return await withCodexAppServerJsonClient(controlRequestOptions, async (request, client) => {
-      const response = await request({ method, requestParams });
-      // Subscription-producing control requests must publish their exact
-      // physical-client ownership before this shared lease can be released.
-      await options.onResponse!(response, client, { authProfileId: auth.authProfileId });
-      return response;
-    });
+  if (options.onResponse || options.beforeRequest) {
+    return await withCodexAppServerJsonClient(
+      controlRequestOptions,
+      async (request, client, scope) => {
+        await options.beforeRequest?.(request);
+        scope.assertCurrent();
+        let response: unknown;
+        if (method === "thread/resume") {
+          if (!isJsonObject(requestParams) || typeof requestParams.threadId !== "string") {
+            throw new Error("Codex thread/resume requires a thread id.");
+          }
+          response = await resumeCodexAppServerThread({
+            client,
+            request: { ...requestParams, threadId: requestParams.threadId },
+            requestResume: () => request({ method, requestParams }),
+            abandonClient: () => closeCodexStartupClientBestEffort(client),
+          });
+        } else {
+          response = await request({ method, requestParams });
+        }
+        // Subscription-producing control requests must publish their exact
+        // physical-client ownership before this shared lease can be released.
+        await options.onResponse?.(response, client, {
+          authProfileId: auth.authProfileId,
+          assertCurrent: scope.assertCurrent,
+        });
+        scope.assertCurrent();
+        return response;
+      },
+    );
   }
   return await requestCodexAppServerJson({ method, requestParams, ...controlRequestOptions });
 }

@@ -1,6 +1,8 @@
+import { createServer } from "node:http";
 // Configure gateway auth prompt tests cover interactive auth selection and model-aware auth config.
 import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -143,7 +145,6 @@ const mocks = vi.hoisted(() => ({
       };
     },
   ),
-  promptCustomApiConfig: vi.fn(),
   resolvePluginProvidersCore: vi.fn(() => []),
   resolveProviderPluginChoiceCore: vi.fn<() => unknown>(() => null),
   loadStaticManifestCatalogRowsForList: vi.fn<() => readonly NormalizedModelCatalogRow[]>(() => []),
@@ -188,10 +189,6 @@ vi.mock("./model-picker.js", () => ({
   applyPrimaryModel: mocks.applyPrimaryModel,
   promptModelAllowlist: mocks.promptModelAllowlist,
   promptDefaultModel: mocks.promptDefaultModel,
-}));
-
-vi.mock("./onboard-custom.js", () => ({
-  promptCustomApiConfig: mocks.promptCustomApiConfig,
 }));
 
 vi.mock("../plugins/providers.runtime.js", () => ({
@@ -857,46 +854,115 @@ describe("promptAuthConfig", () => {
     expect(result.agents?.entries?.ops).toBeUndefined();
   });
 
-  it("projects custom-provider model metadata onto the explicit target", async () => {
-    vi.clearAllMocks();
-    mocks.promptAuthChoiceGrouped.mockResolvedValue("custom-api-key");
-    mocks.promptCustomApiConfig.mockResolvedValue({
-      config: {
+  it.each<{
+    name: string;
+    explicit?: boolean;
+    defaultModel?: AgentModelConfig;
+    agentModel?: AgentModelConfig;
+    expectedModel: AgentModelConfig | undefined;
+  }>([
+    {
+      name: "preserves the existing primary and fallbacks",
+      defaultModel: { primary: "openai/gpt-5.6-luna", fallbacks: ["anthropic/sonnet-4.6"] },
+      expectedModel: { primary: "openai/gpt-5.6-luna", fallbacks: ["anthropic/sonnet-4.6"] },
+    },
+    {
+      name: "preserves a string primary",
+      defaultModel: "openai/gpt-5.6-luna",
+      expectedModel: "openai/gpt-5.6-luna",
+    },
+    {
+      name: "sets the primary when none exists",
+      expectedModel: { primary: "custom/llama3" },
+    },
+    {
+      name: "sets the primary while keeping existing fallbacks",
+      defaultModel: { fallbacks: ["anthropic/sonnet-4.6"] },
+      expectedModel: { primary: "custom/llama3", fallbacks: ["anthropic/sonnet-4.6"] },
+    },
+    {
+      name: "preserves the explicit target's primary",
+      explicit: true,
+      agentModel: { primary: "openai/gpt-5.6-luna", fallbacks: ["anthropic/sonnet-4.6"] },
+      expectedModel: { primary: "openai/gpt-5.6-luna", fallbacks: ["anthropic/sonnet-4.6"] },
+    },
+    {
+      name: "preserves the explicit target's inherited primary",
+      explicit: true,
+      defaultModel: { primary: "openai/gpt-5.6-luna" },
+      expectedModel: undefined,
+    },
+    {
+      name: "preserves inherited primary with agent-only fallbacks",
+      explicit: true,
+      defaultModel: { primary: "openai/gpt-5.6-luna" },
+      agentModel: { fallbacks: ["anthropic/sonnet-4.6"] },
+      expectedModel: { fallbacks: ["anthropic/sonnet-4.6"] },
+    },
+    {
+      name: "sets the explicit target's primary when none exists",
+      explicit: true,
+      expectedModel: { primary: "custom/llama3" },
+    },
+  ])(
+    "custom-provider setup $name",
+    async ({ explicit, defaultModel, agentModel, expectedModel }) => {
+      vi.clearAllMocks();
+      mocks.promptAuthChoiceGrouped.mockResolvedValue("custom-api-key");
+      await using server = createServer((_req, res) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end("{}");
+      });
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Expected a TCP listener");
+      }
+      const baseUrl = `http://127.0.0.1:${address.port}/v1`;
+      const prompter: WizardPrompter = {
+        intro: vi.fn(),
+        outro: vi.fn(),
+        note: vi.fn(),
+        select: vi.fn().mockResolvedValueOnce("plaintext").mockResolvedValueOnce("openai"),
+        multiselect: vi.fn(),
+        text: vi
+          .fn()
+          .mockResolvedValueOnce(baseUrl)
+          .mockResolvedValueOnce("")
+          .mockResolvedValueOnce("llama3")
+          .mockResolvedValueOnce("custom")
+          .mockResolvedValueOnce("Custom"),
+        confirm: vi.fn().mockResolvedValue(false),
+        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+      };
+
+      const config: OpenClawConfig = {
         agents: {
-          ownership: "explicit" as const,
-          entries: {
-            main: {},
-            OPS: {
-              model: { primary: "custom/model" },
-              models: { "custom/model": { alias: "Custom" } },
-            },
-          },
+          ...(explicit ? { ownership: "explicit" } : {}),
+          defaults: { systemAgent: { agentId: "ops" }, model: defaultModel },
+          entries: { OPS: { model: agentModel } },
         },
-        models: { providers: { custom: { models: [{ id: "model" }] } } },
-      },
-      providerId: "custom",
-      modelId: "model",
-    });
+      };
+      const result = await promptAuthConfig(config, makeRuntime(), prompter, {
+        agentId: "ops",
+        agentDir: "/tmp/ops-agent",
+        workspaceDir: "/tmp/ops-workspace",
+      });
 
-    const config = {
-      agents: {
-        ownership: "explicit" as const,
-        defaults: { systemAgent: { agentId: "ops" } },
-        entries: { main: {}, OPS: {} },
-      },
-    };
-    const result = await promptAuthConfig(config, makeRuntime(), noopPrompter, {
-      agentId: "ops",
-      agentDir: "/tmp/ops-agent",
-      workspaceDir: "/tmp/ops-workspace",
-    });
-
-    expect(mocks.promptCustomApiConfig).toHaveBeenCalledWith(
-      expect.objectContaining({ target: expect.objectContaining({ agentId: "ops" }) }),
-    );
-    expect(result.agents?.entries?.OPS?.model).toEqual({ primary: "custom/model" });
-    expect(result.agents?.entries?.OPS?.models).toEqual({ "custom/model": { alias: "Custom" } });
-    expect(result.agents?.defaults?.model).toBeUndefined();
-    expect(result.models?.providers?.custom?.models).toEqual([{ id: "model" }]);
-  });
+      const modelOwner = explicit ? result.agents?.entries?.OPS : result.agents?.defaults;
+      expect(modelOwner?.model).toEqual(expectedModel);
+      expect(modelOwner?.models?.["custom/llama3"]).toEqual({ alias: "Custom" });
+      if (explicit) {
+        expect(result.agents?.defaults?.model).toEqual(defaultModel);
+        expect(result.agents?.defaults?.models).toBeUndefined();
+      }
+      expect(result.models?.providers?.custom).toMatchObject({
+        baseUrl,
+        api: "openai-completions",
+        models: [{ id: "llama3" }],
+      });
+    },
+  );
 });

@@ -1,6 +1,7 @@
 // Non-interactive plugin provider auth tests cover provider choice setup and runtime plugin install requirements.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
+import * as pluginEnable from "../../../plugins/enable.js";
 import { applyNonInteractivePluginProviderChoice } from "./auth-choice.plugin-providers.js";
 
 type ModelSelectionRuntimePluginsResult =
@@ -160,6 +161,38 @@ async function applyProviderModelChoice(params: {
 }
 
 describe("applyNonInteractivePluginProviderChoice", () => {
+  it("requires capability consent before loading a disabled provider in noninteractive setup", async () => {
+    const config: OpenClawConfig = { plugins: { entries: { example: { enabled: false } } } };
+    resolveManifestProviderAuthChoice.mockReturnValue({ pluginId: "example" } as never);
+    const enable = vi
+      .spyOn(pluginEnable, "enablePluginWithCapabilityConsent")
+      .mockResolvedValueOnce({
+        config,
+        enabled: false,
+        pluginId: "example",
+        reason: "Plugin requires capability consent.",
+      });
+    const runtime = createRuntime();
+    try {
+      const result = await applyNonInteractivePluginProviderChoice({
+        nextConfig: config,
+        authChoice: "example-api-key",
+        opts: {},
+        runtime,
+        baseConfig: config,
+        target,
+        resolveApiKey: vi.fn(),
+        toApiKeyCredential: vi.fn(),
+      });
+      expect(result).toBeNull();
+      expectRuntimeErrorIncludes(runtime, "capability consent");
+      expect(resolvePluginProvidersCore).not.toHaveBeenCalled();
+      expect(resolveProviderPluginChoice).not.toHaveBeenCalled();
+    } finally {
+      enable.mockRestore();
+    }
+  });
+
   it.each(["nvidia", "google"])(
     "keeps %s provider model selection on the configured explicit-fleet agent",
     async (providerId) => {

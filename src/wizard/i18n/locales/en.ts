@@ -252,7 +252,7 @@ export const en = {
       directAccessTitle: "Direct remote",
       enterUrlManually: "Enter URL manually",
       foundGateways: "Found {count} gateway(s)",
-      fingerprintMissing: "not advertised (connection will not be pinned)",
+      fingerprintMissing: "not advertised",
       gatewayPasswordStoredMessage: "Where is this gateway password stored?",
       gatewayTokenStoredMessage: "Where is this gateway token stored?",
       insecureRemoteUrl:

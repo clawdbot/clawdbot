@@ -29,6 +29,7 @@ import {
   resolveToolSections,
 } from "../../lib/agents/display.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
+import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import type { SkillGroup } from "../../lib/skills-grouping.ts";
 import { groupSkills } from "../../lib/skills-grouping.ts";
 import {
@@ -172,12 +173,9 @@ function handleRuntimeToolJump(event: Event, anchorId: string) {
   window.history.replaceState(null, "", nextUrl);
 
   requestAnimationFrame(() => {
-    const reducedMotion =
-      typeof window.matchMedia === "function" &&
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     target.scrollIntoView?.({
       block: "center",
-      behavior: reducedMotion ? "auto" : "smooth",
+      behavior: resolveScrollBehavior(),
     });
     target.querySelector<HTMLElement>("summary")?.focus();
   });

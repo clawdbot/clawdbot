@@ -96,43 +96,42 @@ async function renderAssistantProse(
 }
 
 suite.define(() => {
-  it("paints Absolutely chrome and chat prose in its own faces", async () => {
-    if (captureUiProof) {
-      await mkdir(proofDirectory, { recursive: true });
-    }
-    const { themeRequests, gateway, page } = await openThemedChat("absolutely", "dark");
-    await page.goto(`${suite.server.baseUrl}chat`);
-    await renderAssistantProse(gateway, page);
-
-    const report = await page.evaluate(async () => {
-      await document.fonts.ready;
-      const chats = document.querySelectorAll(".chat-text");
-      const chat = chats[chats.length - 1];
-      // Computed families come back quoted ('"Space Grotesk", -apple-system…');
-      // the first entry is the one that actually paints.
-      const primary = (value: string) =>
-        (value.split(",")[0] ?? "").trim().replace(/^["']|["']$/gu, "");
-      return {
-        chatFontFamily: chat ? primary(getComputedStyle(chat).fontFamily) : null,
-        bodyFontFamily: primary(getComputedStyle(document.body).fontFamily),
-        linkHref: document.getElementById("openclaw-theme-fonts")?.getAttribute("href") ?? null,
-        loaded: [...document.fonts].filter((f) => f.status === "loaded").map((f) => f.family),
-      };
-    });
-
-    expect(report.linkHref).toBe("/fonts/absolutely.css");
-    // The declared face must win, not merely appear somewhere in the stack.
-    expect(report.bodyFontFamily).toBe("Space Grotesk");
-    expect(report.chatFontFamily).toBe("Lora");
-    expect(new Set(report.loaded)).toEqual(new Set(["Space Grotesk", "Lora"]));
-    expect(themeRequests.every((entry) => entry.endsWith(" 200"))).toBe(true);
-
-    if (captureUiProof) {
-      await page.screenshot({ path: path.join(proofDirectory, "absolutely-chat-dark.png") });
-    }
-  });
-
   it.each([
+    {
+      body: "Instrument Sans",
+      chat: "Instrument Sans",
+      families: ["Instrument Sans"],
+      sheet: "/fonts/claw.css",
+      theme: "claw",
+    },
+    {
+      body: "Geist",
+      chat: "Geist",
+      families: ["Geist"],
+      sheet: "/fonts/knot.css",
+      theme: "knot",
+    },
+    {
+      body: "DM Sans",
+      chat: "Fraunces",
+      families: ["DM Sans", "Fraunces"],
+      sheet: "/fonts/dash.css",
+      theme: "dash",
+    },
+    {
+      body: "Space Grotesk",
+      chat: "Lora",
+      families: ["Space Grotesk", "Lora"],
+      sheet: "/fonts/absolutely.css",
+      theme: "absolutely",
+    },
+    {
+      body: "IBM Plex Sans",
+      chat: "IBM Plex Sans",
+      families: ["IBM Plex Sans"],
+      sheet: "/fonts/tide.css",
+      theme: "tide",
+    },
     {
       body: "Atkinson Hyperlegible Next",
       chat: "Atkinson Hyperlegible Next",
@@ -342,33 +341,7 @@ suite.define(() => {
     await expect.poll(() => requested).toContain(`${basePath}/fonts/absolutely.css`);
   });
 
-  it("leaves themes without declared faces on the system stack", async () => {
-    if (captureUiProof) {
-      await mkdir(proofDirectory, { recursive: true });
-    }
-    const { themeRequests, gateway, page } = await openThemedChat("claw", "dark");
-    await page.goto(`${suite.server.baseUrl}chat`);
-    await renderAssistantProse(gateway, page);
-
-    const report = await page.evaluate(async () => {
-      await document.fonts.ready;
-      const primary = (value: string) =>
-        (value.split(",")[0] ?? "").trim().replace(/^["']|["']$/gu, "");
-      return {
-        bodyFontFamily: primary(getComputedStyle(document.body).fontFamily),
-        linkHref: document.getElementById("openclaw-theme-fonts")?.getAttribute("href") ?? null,
-        loaded: [...document.fonts].filter((f) => f.status === "loaded").map((f) => f.family),
-      };
-    });
-
-    expect(report.linkHref).toBeNull();
-    expect(report.loaded).toEqual([]);
-    expect(report.bodyFontFamily).not.toBe("Space Grotesk");
-    // The default path must not fetch a font asset at all.
-    expect(themeRequests).toEqual([]);
-
-    if (captureUiProof) {
-      await page.screenshot({ path: path.join(proofDirectory, "claw-chat-dark.png") });
-    }
-  });
+  // Every built-in family ships faces now; the faceless path (an imported
+  // custom theme) is unit-covered by app/theme-fonts.test.ts, which asserts
+  // syncThemeFontStylesheet drops the link so no theme pays for another's fonts.
 });

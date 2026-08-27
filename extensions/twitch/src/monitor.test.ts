@@ -17,7 +17,7 @@ const mocks = vi.hoisted(() => ({
   getRuntime: vi.fn(),
   ingressAccept: vi.fn<(message: TwitchChatMessage) => Promise<void>>(),
   ingressStart: vi.fn(),
-  ingressStop: vi.fn(async () => undefined),
+  ingressStop: vi.fn<() => Promise<void>>(),
   onMessage: vi.fn(),
   runInbound: vi.fn(),
   sendMessage: vi.fn(),

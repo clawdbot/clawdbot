@@ -267,7 +267,7 @@ describe("Twitch registered participant provenance", () => {
     ),
   )(
     "preserves $accountId $name sender through actual ingress and reply",
-    async ({ accountId, policy, coverage }) => {
+    async ({ accountId, policy, coverage, name }) => {
       await withTwitchMonitor(accountId, policy, async ({ client, evidence, waitForReply }) => {
         client.receive(nativeMessage());
         await waitForReply();
@@ -281,6 +281,7 @@ describe("Twitch registered participant provenance", () => {
             },
             assuranceRef: "channel-admission",
             decisionCoverage: coverage,
+            identifierAuthentication: name === "open" ? "not-evaluated" : "evaluated",
           },
         ]);
       });
@@ -297,7 +298,12 @@ describe("Twitch registered participant provenance", () => {
         client.receive(message);
         await waitForReply();
         expect(evidence).toEqual([
-          { ingressState: "unknown", invoker: { state: "unknown" }, decisionCoverage: "unknown" },
+          {
+            ingressState: "unknown",
+            invoker: { state: "unknown" },
+            decisionCoverage: "unknown",
+            identifierAuthentication: "unknown",
+          },
         ]);
       },
     );
@@ -316,7 +322,12 @@ describe("Twitch registered participant provenance", () => {
         }
         expect(readChannelContextAdmissionEvidence(context)).toBeUndefined();
         expect(evidence).toEqual([
-          { ingressState: "unknown", invoker: { state: "unknown" }, decisionCoverage: "unknown" },
+          {
+            ingressState: "unknown",
+            invoker: { state: "unknown" },
+            decisionCoverage: "unknown",
+            identifierAuthentication: "unknown",
+          },
         ]);
       },
       false,

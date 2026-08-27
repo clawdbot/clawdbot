@@ -39,6 +39,9 @@ export type ChatState = {
   chatAttachments: ChatAttachment[];
   chatQueue: ChatQueueItem[];
   chatRunId: string | null;
+  /** True when the active run was recovered from the embedded-run registry and
+   * Stop must use the session-owned abort path (sessions.abort), not chat.abort. */
+  chatRunSessionAbortable?: boolean;
   chatRunUsageById?: Map<string, number>;
   chatStream: string | null;
   chatStreamStartedAt: number | null;

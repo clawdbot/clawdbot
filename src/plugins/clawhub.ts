@@ -53,6 +53,7 @@ import { CLAWHUB_INSTALL_ERROR_CODE, type ClawHubInstallErrorCode } from "./claw
 import type { ClawHubPluginInstallRecordFields } from "./clawhub-install-records.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.js";
 import { copyPluginInstallTransactionRequest } from "./install-transaction.js";
+import type { PluginInstallArtifactConsentHandler } from "./install-types.js";
 import {
   installPluginFromArchive,
   PLUGIN_INSTALL_ERROR_CODE,
@@ -1235,6 +1236,7 @@ export async function installPluginFromClawHub(
     env?: RuntimeVersionEnv;
     acknowledgeClawHubRisk?: boolean;
     onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
+    onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
   },
 ): Promise<
   | ({
@@ -1470,6 +1472,7 @@ export async function installPluginFromClawHub(
         timeoutMs: params.timeoutMs,
         dryRun: params.dryRun,
         expectedPluginId: runtimeIdResolution.expectedPluginId,
+        onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
         installPolicyRequest: {
           kind: "plugin-archive",
           requestedSpecifier: params.spec,

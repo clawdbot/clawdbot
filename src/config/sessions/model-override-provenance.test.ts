@@ -1,8 +1,38 @@
 import { describe, expect, it } from "vitest";
 import {
   hasSessionActiveAutoModelFallback,
+  hasUserPinnedModelSelection,
   resolveSessionModelOverrideSource,
 } from "./model-override-provenance.js";
+
+describe("hasUserPinnedModelSelection", () => {
+  it.each([
+    {
+      name: "legacy user override",
+      entry: { providerOverride: "openai", modelOverride: "gpt-5.6-sol" },
+      expected: true,
+    },
+    {
+      name: "legacy fallback provenance",
+      entry: {
+        providerOverride: "fallback",
+        modelOverride: "secondary",
+        modelOverrideFallbackOriginProvider: "primary",
+        modelOverrideFallbackOriginModel: "main",
+      },
+      expected: false,
+    },
+  ])("returns $expected for $name", ({ entry, expected }) => {
+    expect(hasUserPinnedModelSelection(entry)).toBe(expected);
+  });
+
+  it("preserves truthy status classification before resolver normalization", () => {
+    const entry = { modelOverride: "  ", modelOverrideSource: "user" as const };
+
+    expect(hasUserPinnedModelSelection(entry)).toBe(true);
+    expect(resolveSessionModelOverrideSource(entry)).toBeNull();
+  });
+});
 
 describe("resolveSessionModelOverrideSource", () => {
   it.each([

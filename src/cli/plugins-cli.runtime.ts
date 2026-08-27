@@ -21,6 +21,7 @@ import { defaultRuntime } from "../runtime.js";
 import { shortenHomeInString } from "../utils.js";
 import { formatMissingPluginMessage } from "./error-format.js";
 import { ExpectedCliError } from "./failure-output.js";
+import { resolvePluginCapabilityConsentCliOptions } from "./plugin-capability-consent.js";
 import type {
   PluginDoctorOptions,
   PluginMarketplaceEntriesOptions,
@@ -30,6 +31,7 @@ import type {
 } from "./plugins-cli.js";
 
 type PluginInstallActionOptions = {
+  acceptCapabilities?: boolean;
   acknowledgeClawHubRisk?: boolean;
   dangerouslyForceUnsafeInstall?: boolean;
   force?: boolean;
@@ -180,15 +182,21 @@ function collectConfiguredRuntimePluginWarnings(params: {
 }
 
 /** Enable a plugin in config and refresh the registry snapshot for the changed policy. */
-export async function runPluginsEnableCommand(idInput: string): Promise<void> {
+export async function runPluginsEnableCommand(
+  idInput: string,
+  opts: { acceptCapabilities?: boolean } = {},
+): Promise<void> {
   assertConfigWriteAllowedInCurrentMode();
   return await withPluginLifecycleLease(
     {},
-    async () => await runPluginsEnableCommandUnlocked(idInput),
+    async () => await runPluginsEnableCommandUnlocked(idInput, opts),
   );
 }
 
-async function runPluginsEnableCommandUnlocked(idInput: string): Promise<void> {
+async function runPluginsEnableCommandUnlocked(
+  idInput: string,
+  opts: { acceptCapabilities?: boolean },
+): Promise<void> {
   let id = idInput;
   assertConfigWriteAllowedInCurrentMode();
 
@@ -199,7 +207,8 @@ async function runPluginsEnableCommandUnlocked(idInput: string): Promise<void> {
   const cfg = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
   const report = buildPluginRegistrySnapshotReport({ config: cfg });
   id = normalizePluginId(id);
-  if (!report.plugins.some((plugin) => plugin.id === id)) {
+  const plugin = report.plugins.find((entry) => entry.id === id);
+  if (!plugin) {
     return reportMissingPlugin(id);
   }
   const enableResult = enableExplicitlySelectedPluginInConfig(cfg, id, {
@@ -211,6 +220,28 @@ async function runPluginsEnableCommandUnlocked(idInput: string): Promise<void> {
       `Plugin "${id}" could not be enabled (${enableResult.reason ?? "unknown reason"}).`,
     );
     return defaultRuntime.exit(1);
+  }
+  if (!plugin.enabled) {
+    const { resolvePluginCapabilityConsent } = await import("../plugins/capability-consent.js");
+    const { ManagedPluginLifecycleError } =
+      await import("../plugins/management-lifecycle-error.js");
+    const consent = resolvePluginCapabilityConsentCliOptions({
+      acceptCapabilities: opts.acceptCapabilities,
+      action: "enable",
+    });
+    try {
+      await resolvePluginCapabilityConsent({
+        config: cfg,
+        pluginId: id,
+        ...consent,
+      });
+    } catch (error) {
+      if (!(error instanceof ManagedPluginLifecycleError) || !error.capabilityConsent) {
+        throw error;
+      }
+      defaultRuntime.error(error.message);
+      return defaultRuntime.exit(1);
+    }
   }
 
   const { applySlotSelectionForPlugin } = await loadPluginSlotSelection();

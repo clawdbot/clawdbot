@@ -18,18 +18,14 @@ function normalizeLmstudioBaseUrl(baseUrl: string): string {
   return trimmed.replace(/\/api\/v1$/, "").replace(/\/v1$/, "") + "/v1";
 }
 
-vi.mock("./models-config.providers.policy.runtime.js", () => {
+vi.mock("./models-config.providers.policy.js", () => {
   return {
-    applyProviderNativeStreamingUsagePolicy: () => undefined,
-    normalizeProviderConfigPolicy: (
-      providerKey: string,
-      provider: { baseUrl?: unknown } | undefined,
-    ) =>
+    normalizeProviderSpecificConfig: (providerKey: string, provider: { baseUrl?: unknown }) =>
       // Keep the test focused on normalizeProviders while preserving LM Studio policy behavior.
       providerKey === "lmstudio" && typeof provider?.baseUrl === "string"
         ? { ...provider, baseUrl: normalizeLmstudioBaseUrl(provider.baseUrl) }
-        : undefined,
-    resolveProviderConfigApiKeyPolicy: () => undefined,
+        : provider,
+    resolveProviderConfigApiKeyResolver: () => undefined,
   };
 });
 

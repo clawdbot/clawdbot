@@ -167,6 +167,10 @@ suite.define(() => {
         if (!button) {
           throw new Error(`Missing ${surface} copy button`);
         }
+        const hasAccessibleName = (name: string) =>
+          page
+            .getByRole(surface === "selection" ? "menuitem" : "button", { name, exact: true })
+            .evaluate((element, original) => element === original, button);
         await button.click();
         await expect
           .poll(async () => (await readClipboardFailureProof(page)).legacyAttempts)
@@ -178,7 +182,7 @@ suite.define(() => {
           });
         }
         expect(await button.evaluate((element) => element.isConnected)).toBe(true);
-        expect(await button.getAttribute("aria-label")).toBe("Copy failed");
+        expect(await hasAccessibleName("Copy failed")).toBe(true);
         const copiedValue = (await readClipboardFailureProof(page)).value;
         expect(copiedValue).toBe(
           surface === "tool-diff" ? "-before\n+after" : surface === "selection" ? text : "main",
@@ -196,11 +200,11 @@ suite.define(() => {
         if (surface === "selection") {
           await expect.poll(() => page.locator(".chat-reply-context-menu").count()).toBe(0);
         } else {
-          await expect.poll(() => button.getAttribute("aria-label")).toBe("Copied!");
+          await expect.poll(() => hasAccessibleName("Copied!")).toBe(true);
           expect(await button.isDisabled()).toBe(false);
           await expect
-            .poll(() => button.getAttribute("aria-label"))
-            .toBe(surface === "agent-id" ? "Copy ID" : "Copy");
+            .poll(() => hasAccessibleName(surface === "agent-id" ? "Copy ID" : "Copy"))
+            .toBe(true);
         }
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       } finally {
@@ -462,4 +466,54 @@ suite.define(() => {
       await suite.closeBrowserContext(context);
     }
   });
+
+  it.each([1280, 390])(
+    "keeps message-copy failure readable after leaving the control at %dpx",
+    async (width) => {
+      const context = await suite.newBrowserContext({
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width },
+      });
+      const page = await context.newPage();
+      await installDeniedClipboard(page);
+      await installMockGateway(page, {
+        historyMessages: [
+          { content: [{ text: "Copy this complete message.", type: "text" }], role: "assistant" },
+        ],
+      });
+      try {
+        await page.goto(`${suite.server.baseUrl}chat`);
+        const message = page.locator(".chat-group.assistant").filter({
+          hasText: "Copy this complete message.",
+        });
+        await message.locator(".chat-text").click();
+        await message.hover();
+        const copy = message.getByRole("button", { name: "Copy as markdown", exact: true });
+        await copy.click();
+        await page.locator(".agent-chat__composer-combobox textarea").focus();
+        await page.mouse.move(0, 0);
+        const feedback = message.getByRole("status").filter({ hasText: "Copy failed" });
+        await feedback.waitFor({ state: "visible" });
+        expect(
+          await feedback.evaluate((element) =>
+            element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }),
+          ),
+        ).toBe(true);
+        const bounds = await feedback.boundingBox();
+        expect(bounds).not.toBeNull();
+        expect(bounds!.x).toBeGreaterThanOrEqual(0);
+        expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
+        expect(await readClipboardFailureProof(page)).toEqual({
+          asyncAttempts: 1,
+          legacyAttempts: 1,
+          value: "Copy this complete message.",
+        });
+        await feedback.waitFor({ state: "hidden" });
+        await expect.poll(() => copy.getAttribute("aria-label")).toBe("Copy as markdown");
+      } finally {
+        await suite.closeBrowserContext(context);
+      }
+    },
+  );
 });

@@ -51,9 +51,11 @@
   --chrome: rgba(16, 21, 27, 0.96);
   --chrome-strong: rgba(16, 21, 27, 0.98);
 
-  --text: #dce3ea;
+  /* 12:1 on slate: the old #dce3ea sat at 14.2:1 and read glary on the cold
+     canvas; --text-strong keeps the bright step for emphasis. */
+  --text: #c9d2da;
   --text-strong: #f2f6fa;
-  --chat-text: #dce3ea;
+  --chat-text: #c9d2da;
   --muted: #9dabb9;
   --muted-strong: #aab7c4;
   --muted-foreground: #9dabb9;
@@ -75,6 +77,9 @@
   --overlay-shadow: var(--shadow-md);
 
   --grid-line: rgba(210, 232, 255, 0.03);
+  /* Typography — IBM Plex Sans (fonts/tide.css): an engineered humanist sans
+     for the steel-cyan identity. Fallbacks keep text painting on failure. */
+  --font-body: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
 
 :root[data-theme="tide-light"] {
@@ -145,4 +150,6 @@
   --overlay-shadow: var(--shadow-md);
 
   --grid-line: rgba(20, 40, 60, 0.04);
+  /* Typography — IBM Plex Sans (fonts/tide.css); see the dark block. */
+  --font-body: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }

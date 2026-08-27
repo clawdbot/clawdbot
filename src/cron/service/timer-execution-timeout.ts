@@ -1,3 +1,4 @@
+import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
@@ -49,6 +50,7 @@ export type TimedCronRunOutcome = CronRunOutcome &
     delivered?: boolean;
     deliveryAttempted?: boolean;
     deliveryError?: string;
+    deliverySuppressionReason?: NormalizeReplySkipReason;
     delivery?: CronDeliveryTrace;
     isolatedAgentSetupTimeout?: IsolatedAgentSetupTimeoutSignal;
     activeJobMarker?: CronActiveJobMarker;
@@ -68,6 +70,7 @@ export type CronJobRunResult = CronRunOutcome &
     completionStatus?: CronCompletionStatus;
     deliveryState?: CronResolvedDeliveryState;
     deliveryError?: string;
+    deliverySuppressionReason?: NormalizeReplySkipReason;
     delivery?: CronDeliveryTrace;
     delivered?: boolean;
     deliveryAttempted?: boolean;

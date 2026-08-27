@@ -79,6 +79,12 @@ reconcile dependencies before the remote wrapper starts.
 
 ## Core commands
 
+Maintained JavaScript tooling wrappers and root package commands use tsx's
+in-process transform cache. They skip its shared disk cache before the loader
+starts, and child tooling inherits that policy. This does not relocate or clean
+temporary directories, Node or Vitest caches, or other global caches. Raw external
+`tsx` and `node --import tsx` invocations outside these launchers are unchanged.
+
 Test wrapper runs end with a short `[test] passed|failed|skipped ... in ...` summary; Vitest's own duration line stays the per-shard detail.
 
 | Command                                           | What it does                                                                                                                                                                                                                                                                                                                                          |

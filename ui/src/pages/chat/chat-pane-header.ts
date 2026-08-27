@@ -2,10 +2,10 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { html, nothing } from "lit";
 import { buildControlUiResourcePath } from "../../../../src/gateway/control-ui-resource-routes.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { isDesktopPanelAvailable } from "../../app/app-shell-chrome.ts";
 import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
 import { isNativeLocalGateway } from "../../app/native-editor-locality.runtime.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
 import { COMMAND_PALETTE_OPEN_EVENT } from "../../components/command-palette-contract.ts";
 import { icons } from "../../components/icons.ts";
 import {
@@ -145,11 +145,14 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       this.context.gateway.snapshot,
       Boolean(this.state?.chatRunId),
     ).branchSwitch;
-    const branchSwitchDisabledReason = !branchSwitchAccess.allowed
-      ? branchSwitchAccess.reason
-      : branchSwitchWorking
-        ? t("chat.sessionHeader.branchSwitchUnavailable")
-        : null;
+    const branchSwitchDisabledReason =
+      this.state && this.isCurrentSessionArchived(this.state)
+        ? t("chat.archivedSessionDisabled")
+        : !branchSwitchAccess.allowed
+          ? branchSwitchAccess.reason
+          : branchSwitchWorking
+            ? t("chat.sessionHeader.branchSwitchUnavailable")
+            : null;
     const sharingSnapshot = this.context.gateway.snapshot;
     // Sharing was introduced behind this advertised method. Keep the control
     // hidden for older Gateways that omit method metadata.
@@ -396,7 +399,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       ownerViewing,
       personActivity,
       catalog,
-      editing: this.headerEditing && this.headerRenameSessionKey === row?.key,
+      editing: this.headerEditing && this.headerRenameSession?.key === row?.key,
       renameValue: this.headerRenameValue,
       workspaceRoot: workspace.root,
       workspaceLabel: workspace.label,

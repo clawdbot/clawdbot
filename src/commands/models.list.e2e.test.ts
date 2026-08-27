@@ -26,7 +26,6 @@ const loadModelCatalog = vi.fn<(_params?: unknown) => Promise<Array<Record<strin
   async () => [],
 );
 const shouldSuppressBuiltInModelCore = vi.fn().mockReturnValue(false);
-const shouldSuppressBuiltInModelFromManifest = vi.fn().mockReturnValue(false);
 const normalizeProviderResolvedModelWithPlugin = vi.hoisted(() =>
   vi.fn(({ context }) => {
     if (context?.provider === "anthropic" && context?.modelId === "claude-sonnet-5") {
@@ -192,7 +191,6 @@ vi.mock("../agents/agent-model-discovery.js", () => ({
 }));
 
 vi.mock("../plugins/provider-runtime.js", () => ({
-  applyProviderNativeStreamingUsageCompatWithPlugin: vi.fn(() => undefined),
   buildProviderMissingAuthMessageWithPlugin: vi.fn(() => undefined),
   normalizeProviderConfigWithPlugin: vi.fn(() => undefined),
   normalizeProviderResolvedModelWithPlugin,
@@ -208,7 +206,6 @@ vi.mock("../plugins/synthetic-auth.runtime.js", () => ({
 vi.mock("../agents/model-suppression.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/model-suppression.js")>()),
   shouldSuppressBuiltInModelCore,
-  shouldSuppressBuiltInModelFromManifest,
 }));
 
 function makeRuntime() {
@@ -842,9 +839,8 @@ describe("models list/status", () => {
   it("filters stale spark rows from models list and registry views", async () => {
     const suppressSpark = ({ provider, id }: { provider?: string | null; id?: string | null }) =>
       id === "gpt-5.3-codex-spark" &&
-      (provider === "openai" || provider === "azure-openai-responses" || provider === "openai");
+      (provider === "openai" || provider === "azure-openai-responses");
     shouldSuppressBuiltInModelCore.mockImplementation(suppressSpark);
-    shouldSuppressBuiltInModelFromManifest.mockImplementation(suppressSpark);
     setDefaultModel("openai/gpt-5.5");
     modelRegistryState.models = [OPENAI_MODEL, OPENAI_SPARK_MODEL, AZURE_OPENAI_SPARK_MODEL];
     modelRegistryState.available = [OPENAI_MODEL, OPENAI_SPARK_MODEL, AZURE_OPENAI_SPARK_MODEL];

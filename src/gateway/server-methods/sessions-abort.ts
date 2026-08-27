@@ -8,7 +8,10 @@ import {
   errorShape,
   validateSessionsAbortParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { abortEmbeddedAgentRun } from "../../agents/embedded-agent-runner/runs.js";
+import {
+  abortEmbeddedAgentRun,
+  resolveActiveEmbeddedRunOwnerByRunId,
+} from "../../agents/embedded-agent-runner/runs.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import {
   isConfiguredSessionStoreAgentId,
@@ -141,6 +144,10 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
     const workerRunTarget = workerRunSessionId
       ? resolveWorkerSessionTarget(cfg, workerRunSessionId)
       : undefined;
+    const embeddedRun = requestedRunId
+      ? resolveActiveEmbeddedRunOwnerByRunId(requestedRunId)
+      : undefined;
+    const embeddedRunSessionKey = embeddedRun?.sessionKey;
     const scopedRequestedKey = resolveScopedAbortKey({
       cfg,
       key: requestedKey,
@@ -165,7 +172,8 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
       activeRunAgentId ??
       requestedKeyAgentId ??
       workerRunTarget?.agentId ??
-      resolveSessionKeyAgentId(activeRunSessionKey, cfg);
+      resolveSessionKeyAgentId(activeRunSessionKey, cfg) ??
+      resolveSessionKeyAgentId(embeddedRunSessionKey, cfg);
     if (requestedRunId && !inferredRunAgentId) {
       const runOwner = resolveRequestedGlobalAgentId(
         cfg,
@@ -198,7 +206,8 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
             requestedRunAgentId ? { agentId: requestedRunAgentId } : undefined,
           )
         : undefined) ??
-      workerRunTarget?.sessionKey;
+      workerRunTarget?.sessionKey ??
+      embeddedRunSessionKey;
     if (!keyCandidate && requestedRunId) {
       respond(true, { ok: true, abortedRunId: null, status: "no-active-run" });
       return;
@@ -226,12 +235,14 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
       : resolveExistingAgentSessionStoreTargetsSync(cfg, targetAgentId);
     const stableTargetOwner = tryResolveSessionCompatibilityOwnerAgentId(cfg, key);
     const hasExactActiveRun = requestedRunId
-      ? scopedActiveRunSessionKey === key &&
-        resolveChatRunOwnerAgentId({
-          agentId: activeRunAgentId,
-          sessionKey: activeRunSessionKey,
-          defaultAgentId: stableTargetOwner,
-        }) === normalizeAgentId(targetAgentId)
+      ? (scopedActiveRunSessionKey === key &&
+          resolveChatRunOwnerAgentId({
+            agentId: activeRunAgentId,
+            sessionKey: activeRunSessionKey,
+            defaultAgentId: stableTargetOwner,
+          }) === normalizeAgentId(targetAgentId)) ||
+        (embeddedRun !== undefined &&
+          resolveSessionKeyAgentId(embeddedRunSessionKey, cfg) === normalizeAgentId(targetAgentId))
       : [...context.chatAbortControllers.values()].some(
           (entry) =>
             entry.controlUiVisible !== false &&
@@ -264,6 +275,21 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
         ...(requestedGlobalAgentId ? { storeAgentId: requestedGlobalAgentId } : {}),
       });
     const sessionEntry = loadedSession?.entry;
+    const embeddedRunMatchesSession = Boolean(
+      embeddedRun &&
+      resolveSessionKeyAgentId(embeddedRun.sessionKey, cfg) === normalizeAgentId(targetAgentId) &&
+      (embeddedRun.sessionKey === key ||
+        embeddedRun.sessionKey === canonicalKey ||
+        sessionEntry?.sessionId === embeddedRun.sessionId),
+    );
+    if (embeddedRun && !embeddedRunMatchesSession) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "runId does not match session"),
+      );
+      return;
+    }
     const requestedKeyAliases =
       requestedKey &&
       requestedKey !== key &&
@@ -282,6 +308,22 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
     const abortSessionKey =
       canonicalKey === "global" && requestedGlobalAgentId ? "global" : resolvedAbortSessionKey;
     const abortAgentId = requestedGlobalAgentId ?? activeRunAgentId;
+    if (embeddedRun) {
+      const aborted = embeddedRun.abort();
+      respond(true, {
+        ok: true,
+        abortedRunId: aborted ? embeddedRun.runId : null,
+        status: aborted ? "aborted" : "no-active-run",
+      });
+      if (aborted) {
+        emitSessionsChanged(context, {
+          sessionKey: canonicalKey,
+          ...(abortAgentId ? { agentId: abortAgentId } : {}),
+          reason: "abort",
+        });
+      }
+      return;
+    }
     // Capture run kinds before the abort because abortChatRunById deletes entries
     // from chatAbortControllers synchronously. We use this snapshot to choose the
     // correct dedupe namespace: agent-kind runs use "agent:" (their runId equals

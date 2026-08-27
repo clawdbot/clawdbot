@@ -27,6 +27,7 @@ splits formatting mid-span.
 
 | Channel                                                          | Renderer                                                                             | Notes                                                                                    |
 | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
+| Matrix                                                           | HTML tags, including native tables                                                   | Automatic replies, direct sends, and media captions use the same formatter               |
 | Slack                                                            | mrkdwn tokens (`*bold*`, `_italic_`, `` `code` ``, code fences)                      | Links become `<url\|label>`; autolink disabled during parse to avoid double-linking      |
 | Telegram                                                         | HTML tags (`<b>`, `<i>`, `<s>`, `<code>`, `<pre><code>`, `<a href>`, `<tg-spoiler>`) | Also supports rich-message tables and headings (`<h1>`-`<h6>`) when `richMessages` is on |
 | Signal                                                           | plain text + `text-style` ranges                                                     | Links render as `label (url)` when the label differs from the URL                        |
@@ -62,9 +63,10 @@ channel and optionally per account:
 | `block`   | Keep native tables where the transport supports them; falls back to `code` otherwise |
 | `off`     | Disable table parsing; raw table text passes through unchanged                       |
 
-Per-channel plugin defaults: Signal, WhatsApp, and Matrix default to
-`bullets`; Mattermost defaults to `off`; Telegram defaults to `block` (which
-resolves to `code` unless the account has `richMessages` enabled). Any
+Per-channel plugin defaults: Matrix defaults to `block` (native tables);
+Mattermost defaults to `off`; Signal and WhatsApp default to `bullets`;
+Telegram defaults to `block` (which resolves to `code` unless the account
+has `richMessages` enabled). Any
 channel without an explicit plugin default falls back to `code`.
 
 ```yaml

@@ -427,7 +427,7 @@ describe("monitorSlackProvider tool results", () => {
     }
 
     expect(replyMock).toHaveBeenCalledTimes(1);
-    expect(latestCtx?.RawBody).toBe("caption\n\n[slack forwarded image unavailable]");
+    expect(latestCtx?.RawBody).toBe("caption\n\n[slack attachment unavailable]");
     expect(mockFetch).toHaveBeenCalledOnce();
 
     if (process.env.OPENCLAW_SLACK_FORWARDED_IMAGE_PROOF === "1") {

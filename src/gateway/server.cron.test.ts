@@ -1331,7 +1331,7 @@ describe("gateway server cron", () => {
     }
   });
 
-  test("keeps delivery updates valid for main jobs owned by an explicit default agent", async () => {
+  test("atomically rejects chat delivery for main jobs owned by an explicit default agent", async () => {
     const { prevSkipCron } = await setupCronTestRun({
       tempPrefix: "openclaw-gw-cron-main-default-agent-delivery-",
       cronEnabled: false,
@@ -1368,16 +1368,25 @@ describe("gateway server cron", () => {
       const jobId = typeof jobIdValue === "string" ? jobIdValue : "";
       expect(jobId.length > 0).toBe(true);
 
+      const before = await directCronReq(cronState, "cron.get", { id: jobId });
       const updateRes = await directCronReq(cronState, "cron.update", {
         id: jobId,
         patch: {
+          name: "must not persist",
           delivery: { mode: "announce", channel: "telegram", to: "19098680" },
         },
       });
 
-      expect(updateRes.ok).toBe(true);
-      const updated = updateRes.payload as { delivery?: unknown } | undefined;
-      expect(updated?.delivery).toBeUndefined();
+      expect(updateRes.ok).toBe(false);
+      expect(updateRes.error?.message).toContain("cron channel delivery config");
+      expect(await directCronReq(cronState, "cron.get", { id: jobId })).toEqual(before);
+
+      const renamed = await directCronReq(cronState, "cron.update", {
+        id: jobId,
+        patch: { name: "renamed main job" },
+      });
+      expect(renamed.ok).toBe(true);
+      expect(renamed.payload).toMatchObject({ name: "renamed main job", agentId: "ops" });
     } finally {
       await cleanupCronTestRun({ cronState, prevSkipCron });
     }
@@ -1427,7 +1436,7 @@ describe("gateway server cron", () => {
     }
   });
 
-  test("keeps delivery updates valid after gateway config changes the default agent", async () => {
+  test("atomically rejects chat delivery after gateway config changes the default agent", async () => {
     const { prevSkipCron } = await setupCronTestRun({
       tempPrefix: "openclaw-gw-cron-main-default-agent-drift-",
       cronEnabled: false,
@@ -1482,17 +1491,28 @@ describe("gateway server cron", () => {
       expect(agentIds).toContain("main");
       expect(agentIds).toContain("ops");
 
+      const before = await directCronReq(cronState, "cron.get", { id: jobId });
       const updateRes = await directCronReq(cronState, "cron.update", {
         id: jobId,
         patch: {
+          name: "must not persist",
           delivery: { mode: "announce", channel: "telegram", to: "19098680" },
         },
       });
 
-      if (!updateRes.ok) {
-        throw new Error(updateRes.error?.message ?? "cron.update failed");
-      }
-      expect(updateRes.ok).toBe(true);
+      expect(updateRes.ok).toBe(false);
+      expect(updateRes.error?.message).toContain("cron channel delivery config");
+      expect(await directCronReq(cronState, "cron.get", { id: jobId })).toEqual(before);
+
+      const renamed = await directCronReq(cronState, "cron.update", {
+        id: jobId,
+        patch: { name: "renamed after default drift" },
+      });
+      expect(renamed.ok).toBe(true);
+      expect(renamed.payload).toMatchObject({
+        name: "renamed after default drift",
+        agentId: "ops",
+      });
     } finally {
       await cleanupCronTestRun({ cronState, prevSkipCron });
     }

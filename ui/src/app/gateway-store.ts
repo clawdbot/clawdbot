@@ -21,6 +21,7 @@ import { bumpCanvasWidgetFrameConnectionGeneration } from "../lib/chat/canvas-wi
 import { formatUiError, formatUiExternalText } from "../lib/format-error.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar.ts";
 import { resolveSessionKey } from "../lib/sessions/index.ts";
+import { readSessionDefaults } from "../lib/sessions/session-key.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import { clearStoredChatSnapshots } from "../pages/chat/session-snapshot-invalidation.runtime.ts";
 import type {
@@ -440,7 +441,7 @@ export function createApplicationGateway(
         if (persistConnectionSettings) {
           settings = loadSettings();
         }
-        const sessionDefaults = readSessionDefaults(hello);
+        const sessionDefaults = readSessionDefaults({ hello });
         const sessionKey = resolveSessionKey(snapshot.sessionKey, hello);
         const lastActiveSessionKey = resolveSessionKey(settings.lastActiveSessionKey, hello);
         if (
@@ -669,17 +670,4 @@ function isSameOriginGateway(gatewayUrl: string): boolean {
 function normalizeCanvasPluginSurfaceUrl(value: string | undefined): string | null {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
-}
-
-export function readSessionDefaults(
-  hello: GatewayHelloOk,
-): { defaultAgentId?: string | null; modelConfigured?: boolean } | undefined {
-  const snapshot = hello.snapshot;
-  if (!snapshot || typeof snapshot !== "object" || !("sessionDefaults" in snapshot)) {
-    return undefined;
-  }
-  const defaults = snapshot.sessionDefaults;
-  return defaults && typeof defaults === "object"
-    ? (defaults as { defaultAgentId?: string | null; modelConfigured?: boolean })
-    : undefined;
 }
