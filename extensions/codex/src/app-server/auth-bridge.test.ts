@@ -340,9 +340,16 @@ describe("bridgeCodexAppServerStartOptions", () => {
     }
   });
 
-  it.each(["subscription", "api-key"] as const)(
-    "rejects an unimported agent-scoped Codex auth file for a %s route without fallback",
-    async (authRequirement) => {
+  it.each(
+    (["subscription", "api-key"] as const).flatMap((authRequirement) =>
+      (["managed", "config", "env"] as const).map((commandSource) => ({
+        authRequirement,
+        commandSource,
+      })),
+    ),
+  )(
+    "rejects an unimported agent-scoped Codex auth file for $commandSource/$authRequirement without fallback",
+    async ({ authRequirement, commandSource }) => {
       await withTempDir("openclaw-codex-unimported-auth-", async (agentDir) => {
         const codexHome = resolveCodexAppServerHomeDir(agentDir);
         await writeCodexCliAuthFile(codexHome);
@@ -353,7 +360,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
 
         await expect(
           bridgeCodexAppServerStartOptions({
-            startOptions: createStartOptions({ headers: {} }),
+            startOptions: createStartOptions({ headers: {}, commandSource }),
             agentDir,
             agentId: "research",
             authRequirement,
@@ -3231,7 +3238,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
             authProfileId: "openai:work",
             previousAccountId: "workspace-original",
           }),
-        ).rejects.toThrow("ChatGPT workspace changed");
+        ).rejects.toThrow(/ChatGPT workspace changed.*[Rr]etry/);
         expect(oauthMocks.refreshOpenAICodexToken).not.toHaveBeenCalled();
       } finally {
         await fs.rm(agentDir, { recursive: true, force: true });

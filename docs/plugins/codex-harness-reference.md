@@ -535,7 +535,12 @@ an `account/chatgptAuthTokens/refresh` request back to OpenClaw over the same
 connection. OpenClaw refreshes against its own auth profile store and returns a
 fresh access token, so the refresh token stays in SQLite. A refresh that does
 not answer within the app-server's timeout fails that turn rather than falling
-back to another credential.
+back to another credential. A failed refresh retires the shared client from
+reuse; existing leases drain, and the next request starts a fresh client. If the
+workspace changed, retry the request. If credentials cannot refresh, sign in
+again with `openclaw models auth login --provider openai` and select that profile.
+Shared clients recheck the selected profile before reuse so changing accounts
+under the same profile ID also selects a new client.
 
 When OpenClaw sees a ChatGPT subscription-style Codex auth profile (OAuth or
 token credential type), it removes `CODEX_API_KEY` and `OPENAI_API_KEY` from
