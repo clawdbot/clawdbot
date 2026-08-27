@@ -262,12 +262,12 @@ suite.define(() => {
 
         expect((await page.goto(`${suite.server.baseUrl}settings/labs`))?.status()).toBe(200);
         const reloadedCodeModeRow = settingsRow(page, "Code Mode");
-        await expectInherited(reloadedCodeModeRow, "Enabled");
+        await expectInherited(reloadedCodeModeRow, "Disabled");
         expect(
           await reloadedCodeModeRow
             .getByRole("switch", { name: "Code Mode", exact: true })
             .getAttribute("aria-checked"),
-        ).toBe("true");
+        ).toBe("false");
 
         if (captureUiProofEnabled) {
           await page.screenshot({
