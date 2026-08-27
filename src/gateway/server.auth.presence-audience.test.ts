@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { once } from "node:events";
 import path from "node:path";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { Type } from "typebox";
@@ -167,6 +168,15 @@ describe("gateway presence audience", () => {
       try {
         const watcher = await openRecipient("watcher", ["operator.admin"]);
         const idle = await openRecipient("idle", ["operator.read"]);
+        // A response on the watcher is a transport barrier, not a presence refresh.
+        expect((await rpcReq(watcher.ws, "health")).ok).toBe(true);
+        expect
+          .soft(watcher.events.at(-1), "first connect publishes without activity")
+          .toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({ instanceId: "presence-idle", reason: "connect" }),
+            ]),
+          );
         for (const sessionKeys of [[sharedKey], []]) {
           expect(await rpcReq(idle.ws, "sessions.viewers.set", { sessionKeys })).toMatchObject({
             ok: true,
@@ -303,6 +313,50 @@ describe("gateway presence audience", () => {
         expect(preauthRead.ok).toBe(false);
         expect(preauthRead.payload).toBeUndefined();
         expect(unauthenticatedEvents).toEqual([]);
+
+        const liveIdleRows = async () => {
+          expect((await rpcReq(watcher.ws, "health")).ok).toBe(true);
+          return watcher.events
+            .at(-1)!
+            .filter(
+              (entry) => entry.user?.id === idlePerson.user?.id && entry.reason !== "disconnect",
+            );
+        };
+        const overlap = await openRecipient("idle", ["operator.read"]);
+        const overlappingRows = await liveIdleRows();
+        expect.soft(overlappingRows, "overlapping connect publishes both sockets").toHaveLength(2);
+        for (const entry of overlappingRows) {
+          expect(entry.onlineSince).toBe(idlePerson.onlineSince);
+          expect(entry.lastActivityAt).toBe(idlePerson.lastActivityAt);
+        }
+        for (const [connection, remaining] of [
+          [idle, 1],
+          [overlap, 0],
+        ] as const) {
+          const closed = once(connection.ws, "close");
+          connection.ws.close();
+          await closed;
+          const rows = await liveIdleRows();
+          expect(rows, "disconnect publishes only the surviving sockets").toHaveLength(remaining);
+          if (remaining) {
+            expect(rows[0]?.onlineSince).toBe(idlePerson.onlineSince);
+          }
+        }
+        const reconnected = await openRecipient("idle", ["operator.read"]);
+        const returnedPerson = reconnected.hello.snapshot.presence.find(
+          (entry) => entry.user?.id === idlePerson.user?.id && entry.reason === "connect",
+        )!;
+        expect(returnedPerson.onlineSince).toBeGreaterThan(idlePerson.onlineSince!);
+        expect(returnedPerson.lastActivityAt).toBeUndefined();
+        expect(returnedPerson.watchedSessions).toBeUndefined();
+        expect(
+          await liveIdleRows(),
+          "reconnect publishes without profile edit or activity",
+        ).toEqual([returnedPerson]);
+        for (const recipient of recipients.filter(({ canRead }) => !canRead)) {
+          expect((await rpcReq(recipient.ws, "health")).ok).toBe(true);
+          expect(recipient.events, `${recipient.name} connection-driven frames`).toEqual([]);
+        }
 
         const rejected = await openWs(port, { origin: BROWSER_ORIGIN });
         sockets.push(rejected);

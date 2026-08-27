@@ -277,14 +277,13 @@ describe("AppSidebar viewer presence", () => {
         createSessions("main", ["agent:main:work"]),
       );
       sidebar.connected = true;
+      const person = {
+        ts: Date.now(),
+        user: { id: "alice", name: "Alice" },
+        onlineSince: Date.now() - 90_000,
+      };
       gateway.publishEvent("presence", {
-        presence: [
-          {
-            ts: Date.now(),
-            user: { id: "alice", name: "Alice" },
-            onlineSince: Date.now() - 90_000,
-          },
-        ],
+        presence: [person],
       });
       await sidebar.updateComplete;
       vi.useFakeTimers();
@@ -313,7 +312,7 @@ describe("AppSidebar viewer presence", () => {
           .click();
       }
       if (reason === "remove") {
-        gateway.publishEvent("presence", { presence: [] });
+        gateway.publishEvent("presence", { presence: [{ ...person, reason: "disconnect" }] });
       }
       if (reason === "teardown") {
         provider.remove();
@@ -325,6 +324,21 @@ describe("AppSidebar viewer presence", () => {
       await vi.advanceTimersByTimeAsync(1_000);
       await elapsed.updateComplete;
       expect(elapsed.textContent).toBe(elapsedBeforeDismissal);
+      if (reason === "remove") {
+        expect(sidebar.querySelector(".sidebar-online")).toBeNull();
+        const returned = { ...person, ts: Date.now(), onlineSince: Date.now() };
+        gateway.publishEvent("presence", {
+          presence: [{ ...person, reason: "disconnect" }, returned],
+        });
+        await sidebar.updateComplete;
+        sidebar.querySelector<HTMLButtonElement>(".sidebar-online__details")!.click();
+        await vi.waitFor(() =>
+          expect(
+            document.querySelector(".person-activity-hovercard time")?.getAttribute("datetime"),
+          ).toBe(new Date(returned.onlineSince).toISOString()),
+        );
+        expect(document.querySelector(".person-activity-hovercard h2")?.textContent).toBe("Alice");
+      }
     },
   );
 

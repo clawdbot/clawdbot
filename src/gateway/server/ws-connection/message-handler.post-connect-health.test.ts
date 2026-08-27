@@ -127,6 +127,7 @@ vi.mock("../../../config/io.js", () => ({
 }));
 vi.mock("../../../infra/system-presence.js", () => ({
   upsertPresence: upsertPresenceMock,
+  listSystemPresence: vi.fn(() => []),
 }));
 
 vi.mock("../../server-methods.js", () => ({
@@ -137,7 +138,6 @@ vi.mock("../health-state.js", () => ({
   buildGatewaySnapshot: buildGatewaySnapshotMock,
   getHealthCache: getHealthCacheMock,
   getHealthVersion: getHealthVersionMock,
-  incrementPresenceVersion: incrementPresenceVersionMock,
 }));
 
 import { attachGatewayWsMessageHandler } from "./message-handler.js";
@@ -361,7 +361,13 @@ function attachGatewayHarness(options: {
     gatewayMethods: [],
     events: [],
     extraHandlers: {},
-    buildRequestContext: () => ({ refreshConnectedUserProfile }) as never,
+    buildRequestContext: () =>
+      ({
+        refreshConnectedUserProfile,
+        broadcast: vi.fn(),
+        incrementPresenceVersion: incrementPresenceVersionMock,
+        getHealthVersion: getHealthVersionMock,
+      }) as never,
     nodeLifecycleDispatch: new GatewayNodeLifecycleDispatchTracker(),
     refreshHealthSnapshot:
       options.refreshHealthSnapshot ?? vi.fn(async () => createHealthSummary()),

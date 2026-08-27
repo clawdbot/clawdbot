@@ -53,7 +53,7 @@ import {
 import { MAX_PAYLOAD_BYTES, WEBSOCKET_OPEN_READY_STATE } from "../../server-constants.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
-import { incrementPresenceVersion } from "../health-state.js";
+import { broadcastPresenceSnapshot } from "../presence-events.js";
 import type { GatewayWsClient } from "../ws-types.js";
 import { resolveEffectiveConnectionScopes } from "./connect-admission.js";
 import { sendGatewayHello } from "./connect-hello.js";
@@ -607,7 +607,9 @@ export async function attachAuthenticatedGatewayConnect(
       ...(authenticatedPresenceUser ? { user: authenticatedPresenceUser } : {}),
       reason: "connect",
     });
-    incrementPresenceVersion();
+    // Publish the completed row before hello snapshots it; existing readers do
+    // not receive this connection's hello and must not wait for later activity.
+    broadcastPresenceSnapshot(buildRequestContext());
   }
   if (admittedNodePairing) {
     const pairingGeneration = admittedNodePairing.generation?.key;
