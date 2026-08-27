@@ -2285,6 +2285,8 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
       "src/dockerfile.test.ts",
       "full-release-validation-state",
       "full-release-validation-at-sha",
+      "find-reusable-release-validation",
+      "openclaw-npm-extended-stable-full-validation-workflow",
       "release-ci-summary",
       packageAcceptance,
       pluginPrerelease,
