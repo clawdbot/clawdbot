@@ -19,7 +19,7 @@
 }
 
 .plugins-hub-header + .settings-workspace {
-  margin-top: 0;
+  margin-top: var(--space-2);
 }
 
 @media (max-width: 400px) {
