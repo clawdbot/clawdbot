@@ -1,3 +1,4 @@
+import path from "node:path";
 /**
  * pdf built-in tool.
  *
@@ -8,7 +9,6 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
-import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { bindModelLlmRuntime } from "../../llm/model-runtime-binding.js";
 import { complete } from "../../llm/stream.js";
