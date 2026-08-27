@@ -265,7 +265,6 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   const dmPolicyRaw = dmConfig?.policy ?? "pairing";
   const dmPolicy = allowlistOnly && dmPolicyRaw !== "disabled" ? "allowlist" : dmPolicyRaw;
   const dmSessionScope = dmConfig?.sessionScope ?? "per-user";
-  const textLimit = core.channel.text.resolveTextChunkLimit(cfg, "matrix", effectiveAccountId);
   const globalGroupChatHistoryLimit = (
     cfg.messages as { groupChat?: { historyLimit?: number } } | undefined
   )?.groupChat?.historyLimit;
@@ -423,7 +422,6 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       blockStreamingEnabled,
       dmEnabled,
       dmPolicy,
-      textLimit,
       mediaMaxBytes,
       historyLimit,
       startupMs,
