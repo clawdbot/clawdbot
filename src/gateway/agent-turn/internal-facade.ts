@@ -11,6 +11,7 @@ import {
   resolveGatewayDispatchDeadlineMs,
   resolveRemainingGatewayDispatchTimeoutMs,
   throwIfGatewayDispatchAborted,
+  throwIfGatewayDispatchDeadlineExpired,
   waitForGatewayDispatchDeadline,
   unwrapGatewayMethodDispatchResponse,
 } from "../server-in-process-dispatch.js";
@@ -75,6 +76,7 @@ export function createInternalAgentTurnFacade(
       signal,
       onSignalAbort,
     );
+    throwIfGatewayDispatchDeadlineExpired(method, deadlineMs);
     if (authorization.error) {
       return throwEnvelopeRejection(method, authorization.error);
     }
@@ -137,6 +139,7 @@ export function createInternalAgentTurnFacade(
       dispatchOptions.signal,
       dispatchOptions.onSignalAbort,
     );
+    throwIfGatewayDispatchDeadlineExpired(method, deadlineMs);
     if (authorization.error) {
       return { ok: false, error: authorization.error };
     }

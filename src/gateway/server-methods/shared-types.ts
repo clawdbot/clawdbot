@@ -53,6 +53,7 @@ import type {
   GatewayModelCatalogSnapshot,
   PreparedGatewayModelCatalog,
 } from "../server-model-catalog.types.js";
+import type { PreparedReplyDispatchRuntime } from "../../agents/prepared-model-runtime.types.js";
 import type { DedupeEntry } from "../server-shared.js";
 import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
 import type { SessionObserverService } from "../session-observer-contract.js";
@@ -217,6 +218,14 @@ type GatewayKernelContext = {
     readOnly?: boolean;
     workspaceDir?: string;
   }) => Promise<GatewayModelCatalogSnapshot>;
+  /**
+   * Gateway-owned prepared reply dispatch lookup. Kept on the live context so
+   * loader-local plugin module graphs cannot read a second runtime singleton.
+   */
+  loadPublishedGatewayReplyDispatchRuntime?: (params: {
+    agentId: string;
+    abortSignal?: AbortSignal;
+  }) => Promise<PreparedReplyDispatchRuntime | undefined>;
   readPreparedGatewayModelCatalog?: (params?: {
     agentId?: string;
     agentDir?: string;
