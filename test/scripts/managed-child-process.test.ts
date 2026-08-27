@@ -47,6 +47,15 @@ function expectProcessPid(pid: number | undefined): number {
   return pid;
 }
 
+// Call after installing handlers and keepalive: existence must mean a complete, ready PID.
+function publishReadyPidScript(argIndex: number): string {
+  return `
+const pidPath = process.argv[${argIndex}];
+fs.writeFileSync(pidPath + ".tmp", String(process.pid));
+fs.renameSync(pidPath + ".tmp", pidPath);
+`;
+}
+
 describe("managed-child-process", () => {
   it("maps forwarded signals to shell-compatible exit codes", () => {
     expect(signalExitCode("SIGHUP")).toBe(129);
@@ -427,12 +436,18 @@ import fs from "node:fs";
 
 spawn(process.execPath, [
   "-e",
-  "require('node:fs').writeFileSync(process.argv[1], String(process.pid)); process.on('SIGTERM', () => {}); setTimeout(() => process.exit(0), 5_000); setInterval(() => {}, 1000);",
+  ${JSON.stringify(`
+const fs = require("node:fs");
+process.on("SIGTERM", () => {});
+setTimeout(() => process.exit(0), 5_000);
+setInterval(() => {}, 1000);
+${publishReadyPidScript(1)}
+`)},
   process.argv[3],
 ], { stdio: "ignore" });
-fs.writeFileSync(process.argv[2], String(process.pid));
 process.on("SIGTERM", () => {});
 setInterval(() => {}, 1_000);
+${publishReadyPidScript(2)}
 `,
       "utf8",
     );
@@ -734,14 +749,19 @@ child.once("message", () => process.exit(0));
 
 	spawn(process.execPath, [
 	  "-e",
-	  "require('node:fs').writeFileSync(process.argv[1], String(process.pid)); process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
+	  ${JSON.stringify(`
+const fs = require("node:fs");
+process.on("SIGTERM", () => {});
+setInterval(() => {}, 1000);
+${publishReadyPidScript(1)}
+`)},
 	  process.argv[3],
 	], { stdio: "ignore" });
-	fs.writeFileSync(process.argv[2], String(process.pid));
 	for (const signal of ["SIGHUP", "SIGINT", "SIGTERM"]) {
 	  process.on(signal, () => process.exit(0));
 	}
 setInterval(() => {}, 1_000);
+${publishReadyPidScript(2)}
 `,
         "utf8",
       );
