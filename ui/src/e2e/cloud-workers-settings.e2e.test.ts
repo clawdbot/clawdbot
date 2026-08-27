@@ -168,6 +168,11 @@ suite.define(() => {
         { locator: page.getByLabel("Crabbox binary"), value: "/opt/bin/crabbox" },
       ]);
       const saveButton = page.getByRole("button", { name: "Save" });
+      // The patch schedules an applied-revision poll. Let it settle before
+      // deferring config.get so the background read cannot consume the gate.
+      await expect
+        .poll(() => page.getByRole("button", { name: "Apply changes", exact: true }).count())
+        .toBe(0);
       const configGetCount = (await gateway.getRequests("config.get")).length;
       await gateway.deferNext("config.get");
       await gateway.emitGatewayEvent("config.changed", {
