@@ -381,7 +381,10 @@ export function normalizeExtensionInstallWaitMs(value: unknown): number {
   if (value === undefined) {
     return BROWSER_EXTENSION_INSTALL_WAIT_DEFAULT_MS;
   }
-  const parsed = typeof value === "number" ? value : Number(value);
+  const parsed =
+    typeof value === "number" || (typeof value === "string" && /^\d+$/u.test(value))
+      ? Number(value)
+      : Number.NaN;
   if (
     !Number.isInteger(parsed) ||
     parsed < BROWSER_EXTENSION_INSTALL_WAIT_MIN_MS ||

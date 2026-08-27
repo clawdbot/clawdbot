@@ -84,34 +84,11 @@ Keep the token out of repository config and shell arguments.
 
 ### Daytona
 
-The bundled Crabbox provider can also lease [Daytona](https://www.daytona.io) sandboxes as cloud workers (`settings.provider: "daytona"`). Unlike AWS, Daytona needs no separate `crabbox login` step: export `DAYTONA_API_KEY` (from the [Daytona dashboard](https://app.daytona.io/dashboard/keys)) in the Gateway process's environment before Crabbox allocates a lease. Verify it without provisioning anything:
+<Warning>
+Direct Daytona cloud-worker dispatch is currently unsupported. OpenClaw requires a non-empty `settings.class` and forwards it as `--class`, but Crabbox's direct Daytona backend rejects that flag because the snapshot controls sizing. Omitting the class fails OpenClaw's profile validation; setting it to `beast` or another value does not resolve the incompatibility.
+</Warning>
 
-```bash
-DAYTONA_API_KEY=<key> crabbox doctor --provider daytona --json
-```
-
-A `daytona-fallback auth=ready control_plane=ready inventory=ready` finding confirms the key authenticates; `mutation=false` means the check is read-only. Daytona leases are Linux-only (`target: linux`) and reachable over SSH like any other Crabbox `ssh-lease` provider. Crabbox's default Daytona snapshot already ships Node.js and `npx`, so `settings.setup` is optional here — keep it only if your own snapshot needs it, as an idempotent guard like the AWS example above.
-
-```json
-{
-  "cloudWorkers": {
-    "profiles": {
-      "daytona": {
-        "provider": "crabbox",
-        "install": "bundle",
-        "settings": {
-          "provider": "daytona",
-          "class": "beast",
-          "ttl": "8h",
-          "idleTimeout": "45m"
-        }
-      }
-    }
-  }
-}
-```
-
-`class` defaults to `beast` (Crabbox's own default for this provider) when omitted; `crabbox providers describe daytona --json` lists the full flag set. Provide `DAYTONA_API_KEY` as an environment variable on the Gateway process (for example through a systemd `EnvironmentFile`), the same way other credential-bearing provider secrets are supplied — never in `openclaw.json` itself.
+Use another supported backend, such as the AWS profile in [Configuration](/gateway/cloud-workers#configuration), for cloud-worker sessions until this integration is compatible. For standalone Crabbox usage, see its [Daytona provider documentation](https://github.com/openclaw/crabbox/blob/main/docs/providers/daytona.md); those instructions are not an OpenClaw cloud-worker setup recipe.
 
 ## Configuration
 
@@ -328,6 +305,8 @@ openclaw gateway call sessions.dispatch \
 ```
 
 The bundled Crabbox provider advertises usable legacy `classes` reported by `crabbox providers --json` for the selected backend, preserving their order and marking the configured class as the default. The picker includes at most 32 options; it appends the configured class only when a usable advertised list exists. Reported vCPU and RAM appear independently; missing dimensions stay unknown. An explicit `classCatalog.disposition: unmapped` suppresses class choices even if legacy `classes` are also present. Missing, failed, empty, or unusable metadata produces no machine selector, not generic fallback choices. The cloud profile remains selectable, and dispatch or Move without an override preserves its configuration.
+
+Successful catalogs, including valid empty catalogs, are cached for the Gateway lifetime. Failed probes are retried by the next discovery request; a Gateway restart is not needed to recover.
 
 A rich static `classCatalog` or a provider-native size catalog alone does not establish a usable picker override. For example, newer Crabbox versions report mapped Machine0 aliases but deliberately omit legacy `classes` because an explicitly configured native size takes precedence. OpenClaw does not flatten those profiles or translate native sizes into classes. Keep native size selection in Crabbox's configuration; the picker cannot override it or promise a resize. Acceptance of native server types through `machineClass` is backend-specific, not a universal Crabbox contract. An admitted machine choice remains fixed for that placement and is reused by provisioning retries; catalog changes do not rewrite it. `machineClass` is valid only with `profileId`, not `deviceId`.
 

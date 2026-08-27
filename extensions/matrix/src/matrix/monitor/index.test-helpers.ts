@@ -87,9 +87,6 @@ const hoisted = vi.hoisted(() => {
     aliasesResolved: true,
   }));
   const getMemberDisplayName = vi.fn(async () => "Bot");
-  const resolveTextChunkLimit = vi.fn<
-    (cfg: unknown, channel: unknown, accountId?: unknown) => number
-  >(() => 4000);
   const logger = {
     info: vi.fn(),
     warn: vi.fn(),
@@ -208,7 +205,6 @@ const hoisted = vi.hoisted(() => {
     releaseSharedClientInstance,
     resolveSharedMatrixClient: lease.start,
     resolveSharedMatrixClientImpl,
-    resolveTextChunkLimit,
     runMatrixStartupMaintenance,
     runRegisteredMonitorRetirement,
     setMatrixRuntime,
@@ -259,10 +255,6 @@ vi.mock("../../runtime.js", () => ({
     channel: {
       mentions: {
         buildMentionRegexes: () => [],
-      },
-      text: {
-        resolveTextChunkLimit: (cfg: unknown, channel: unknown, accountId?: unknown) =>
-          hoisted.resolveTextChunkLimit(cfg, channel, accountId),
       },
     },
     system: {

@@ -198,7 +198,7 @@ sandbox the installed handler.
 
 | Option                                 | Effect for hook packs                                                                                                                       |
 | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `-l, --link`                           | Add a local directory to `hooks.internal.load.extraDirs` instead of copying it. See the layout limitation below.                            |
+| `-l, --link`                           | Add the exact local hook or pack root to `hooks.internal.load.extraDirs` instead of copying it. Single hooks and nested pack layouts work.  |
 | `--pin`                                | Record the resolved exact npm `name@version` in install state when available; does not apply to local paths.                                |
 | `--force`                              | Acknowledge a non-ClawHub source and allow replacement of an existing copied install. For links it acknowledges the source without copying. |
 | `--acknowledge-install-policy-warning` | Acknowledge an operator `security.installPolicy` warning without its prompt. Blocks and policy failures still stop the install.             |
@@ -209,13 +209,17 @@ installs require `--force`; global `--yes` is not a substitute for that gate.
 Review the source before supplying either acknowledgement.
 
 <Warning>
-A linked hook path is a **scan directory**, not a symlink install. The scanner
-looks at its immediate child directories, not the linked root's own `HOOK.md`
-or `openclaw.hooks` declaration. A linked pack works with hook directories as
-direct children; a single-hook root or a pack with only nested `hooks/<name>`
-directories can install successfully yet remain undiscovered. Prefer copied
-installation for those layouts, and always verify `hooks list` after linking.
-Extra directories also make directory-hook name selection open-ended.
+A linked hook runs directly from the supplied path; linking does not copy it
+or create a symlink. A single-hook root loads its own `HOOK.md` and handler.
+A pack loads only the hook directories listed in `openclaw.hooks`, including
+nested paths such as `./hooks/my-hook`. Declared paths must stay inside the
+pack and point directly to hooks; discovery does not recurse into nested packs
+or collections, or scan unlisted children, even when all declared paths are rejected.
+
+Only link trusted code. Extra directories still make directory-hook name
+selection open-ended across discovery sources, not just within the linked
+pack. Restart the Gateway after linking or editing hook code, check
+`hooks list`, and [verify the handler's actual side effect](/automation/hooks#quick-start).
 </Warning>
 
 ### Update behavior

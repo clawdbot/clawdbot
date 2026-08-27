@@ -15,7 +15,7 @@ import type {
   SpeechTelephonySynthesisRequest,
 } from "openclaw/plugin-sdk/speech-core";
 import { asOptionalRecord, filterStringRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 const log = createSubsystemLogger("tts-local-cli");
@@ -27,9 +27,9 @@ type SourceFormat = OutputFormat | "ogg" | "m4a";
 
 type CliConfig = {
   command: string;
-  args?: string[];
-  outputFormat?: OutputFormat;
-  timeoutMs?: number;
+  args: string[];
+  outputFormat: OutputFormat;
+  timeoutMs: number;
   cwd?: string;
   env?: Record<string, string>;
 };
@@ -65,7 +65,7 @@ function getConfig(cfg: SpeechProviderConfig): CliConfig | null {
   }
   return {
     command,
-    args: asStringArray(cfg.args),
+    args: asStringArray(cfg.args) ?? [],
     outputFormat: normalizeOutputFormat(cfg.outputFormat),
     timeoutMs: typeof cfg.timeoutMs === "number" ? cfg.timeoutMs : DEFAULT_TIMEOUT_MS,
     cwd: typeof cfg.cwd === "string" ? cfg.cwd : undefined,
@@ -213,22 +213,17 @@ function readAudioFile(filePath: string): Buffer {
 }
 
 async function runCli(params: {
-  command: string;
-  args: string[];
-  cwd?: string;
-  env?: Record<string, string>;
-  timeoutMs: number;
+  config: CliConfig;
   text: string;
   outputDir: string;
   filePrefix: string;
-  outputFormat?: OutputFormat;
 }): Promise<{ buffer: Buffer; actualFormat: SourceFormat; audioPath?: string }> {
   const cleanText = stripEmojis(params.text);
   if (!cleanText) {
     throw new Error("CLI TTS: text is empty after removing emojis");
   }
 
-  const outputExt = getFileExt(params.outputFormat ?? "wav");
+  const outputExt = getFileExt(params.config.outputFormat);
   const ctx: Record<string, string | undefined> = {
     Text: cleanText,
     OutputPath: path.join(params.outputDir, `${params.filePrefix}${outputExt}`),
@@ -236,26 +231,26 @@ async function runCli(params: {
     OutputBase: params.filePrefix,
   };
 
-  const { cmd, initialArgs } = parseCommand(params.command);
+  const { cmd, initialArgs } = parseCommand(params.config.command);
   if (!cmd) {
     throw new Error("CLI TTS: invalid command");
   }
 
-  const baseArgs = [...initialArgs, ...params.args];
+  const baseArgs = [...initialArgs, ...params.config.args];
   const args = baseArgs.map((a) => applyTemplate(a, ctx));
   const input = baseArgs.some((a) => /{{\s*text\s*}}/i.test(a)) ? "" : cleanText;
   const result = await runCommandBuffered([cmd, ...args], {
-    cwd: params.cwd,
-    env: params.env,
+    cwd: params.config.cwd,
+    env: params.config.env,
     input,
     maxOutputBytes: {
       stdout: MAX_AUDIO_OUTPUT_BYTES,
       stderr: MAX_CLI_STDERR_BYTES,
     },
-    timeoutMs: params.timeoutMs,
+    timeoutMs: params.config.timeoutMs,
   });
   if (result.termination === "timeout") {
-    throw new Error(`CLI TTS timed out after ${params.timeoutMs}ms`);
+    throw new Error(`CLI TTS timed out after ${params.config.timeoutMs}ms`);
   }
   if (result.termination === "output-limit") {
     const stream = result.outputLimitStream ?? "stdout";
@@ -380,49 +375,42 @@ export function buildCliSpeechProvider(): SpeechProviderPlugin {
 
       log.debug(`synthesize: text=${truncateUtf16Safe(req.text, 50)}...`);
 
-      const temp = await tempWorkspace({
-        rootDir: resolvePreferredOpenClawTmpDir(),
-        prefix: "openclaw-cli-tts-",
-      });
-      const tempDir = temp.dir;
+      return await withTempWorkspace(
+        {
+          rootDir: resolvePreferredOpenClawTmpDir(),
+          prefix: "openclaw-cli-tts-",
+        },
+        async (temp) => {
+          const tempDir = temp.dir;
+          const result = await runCli({
+            config,
+            text: req.text,
+            outputDir: tempDir,
+            filePrefix: "speech",
+          });
 
-      try {
-        const result = await runCli({
-          command: config.command,
-          args: config.args ?? [],
-          cwd: config.cwd,
-          env: config.env,
-          timeoutMs: config.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-          text: req.text,
-          outputDir: tempDir,
-          filePrefix: "speech",
-          outputFormat: config.outputFormat,
-        });
+          log.debug(`synthesize: format=${result.actualFormat}, size=${result.buffer.length}`);
 
-        log.debug(`synthesize: format=${result.actualFormat}, size=${result.buffer.length}`);
-
-        const format: OutputFormat =
-          req.target === "voice-note" ? "opus" : (config.outputFormat ?? "mp3");
-        let buffer = result.buffer;
-        if (result.actualFormat !== format) {
-          const inputName = `input${getFileExt(result.actualFormat)}`;
-          const inputFile = result.audioPath ?? path.join(tempDir, inputName);
-          if (!result.audioPath) {
-            await temp.write(inputName, result.buffer);
+          const format: OutputFormat = req.target === "voice-note" ? "opus" : config.outputFormat;
+          let buffer = result.buffer;
+          if (result.actualFormat !== format) {
+            const inputName = `input${getFileExt(result.actualFormat)}`;
+            const inputFile = result.audioPath ?? path.join(tempDir, inputName);
+            if (!result.audioPath) {
+              await temp.write(inputName, result.buffer);
+            }
+            buffer = await convertAudio(inputFile, tempDir, format);
           }
-          buffer = await convertAudio(inputFile, tempDir, format);
-        }
 
-        const fileExtension = format === "opus" ? ".ogg" : `.${format}`;
-        return {
-          audioBuffer: buffer,
-          outputFormat: format,
-          fileExtension,
-          voiceCompatible: req.target === "voice-note" && format === "opus",
-        };
-      } finally {
-        await temp.cleanup();
-      }
+          const fileExtension = format === "opus" ? ".ogg" : `.${format}`;
+          return {
+            audioBuffer: buffer,
+            outputFormat: format,
+            fileExtension,
+            voiceCompatible: req.target === "voice-note" && format === "opus",
+          };
+        },
+      );
     },
 
     async synthesizeTelephony(req: SpeechTelephonySynthesisRequest) {
@@ -433,42 +421,36 @@ export function buildCliSpeechProvider(): SpeechProviderPlugin {
 
       log.debug(`synthesizeTelephony: text=${truncateUtf16Safe(req.text, 50)}...`);
 
-      const temp = await tempWorkspace({
-        rootDir: resolvePreferredOpenClawTmpDir(),
-        prefix: "openclaw-cli-tts-",
-      });
-      const tempDir = temp.dir;
+      return await withTempWorkspace(
+        {
+          rootDir: resolvePreferredOpenClawTmpDir(),
+          prefix: "openclaw-cli-tts-",
+        },
+        async (temp) => {
+          const tempDir = temp.dir;
+          const result = await runCli({
+            config,
+            text: req.text,
+            outputDir: tempDir,
+            filePrefix: "telephony",
+          });
 
-      try {
-        const result = await runCli({
-          command: config.command,
-          args: config.args ?? [],
-          cwd: config.cwd,
-          env: config.env,
-          timeoutMs: config.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-          text: req.text,
-          outputDir: tempDir,
-          filePrefix: "telephony",
-          outputFormat: config.outputFormat,
-        });
+          const inputFile =
+            result.audioPath ?? path.join(tempDir, `input${getFileExt(result.actualFormat)}`);
+          if (!result.audioPath) {
+            await temp.write(`input${getFileExt(result.actualFormat)}`, result.buffer);
+          }
 
-        const inputFile =
-          result.audioPath ?? path.join(tempDir, `input${getFileExt(result.actualFormat)}`);
-        if (!result.audioPath) {
-          await temp.write(`input${getFileExt(result.actualFormat)}`, result.buffer);
-        }
+          // Convert to raw 16kHz mono PCM for telephony (no WAV headers)
+          const pcmBuffer = await convertToRawPcm(inputFile, tempDir);
 
-        // Convert to raw 16kHz mono PCM for telephony (no WAV headers)
-        const pcmBuffer = await convertToRawPcm(inputFile, tempDir);
-
-        return {
-          audioBuffer: pcmBuffer,
-          outputFormat: "pcm",
-          sampleRate: 16000,
-        };
-      } finally {
-        await temp.cleanup();
-      }
+          return {
+            audioBuffer: pcmBuffer,
+            outputFormat: "pcm",
+            sampleRate: 16000,
+          };
+        },
+      );
     },
   };
 }

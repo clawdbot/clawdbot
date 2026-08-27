@@ -1225,6 +1225,16 @@ describePosix("scripts/pr per-PR operation lock", () => {
     ({ wrapper, command, failure }) => {
       const repoDir = createRepo();
       const { binDir, cli } = installPrCliFixture(repoDir);
+      const rg = writeFixtureFile(binDir, "rg", [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        'if [ "$#" -ne 4 ] || [ "$1" != "-n" ] || [ "$2" != "-i" ]; then',
+        '  echo "unexpected fixture rg call: $*" >&2',
+        "  exit 99",
+        "fi",
+        'exec grep -n -i -E -- "$3" "$4"',
+      ]);
+      chmodSync(rg, 0o755);
       const worktreeDir = join(repoDir, ".worktrees", "pr-42");
       const lifecycle = join(repoDir, "lifecycle.log");
       const ownerFile = join(repoDir, "owner-oid");
@@ -1339,8 +1349,9 @@ describePosix("scripts/pr per-PR operation lock", () => {
         },
       );
       const output = `${result.stdout}\n${result.stderr}`;
-      const events = readFileSync(lifecycle, "utf8");
       expect(result.error, output).toBeUndefined();
+      expect(existsSync(lifecycle), output).toBe(true);
+      const events = readFileSync(lifecycle, "utf8");
       expect(git("rev-parse", "HEAD")).toBe(canonicalHead);
       expect(existsSync(worktreeDir)).toBe(failure === "merge");
       if (failure === "merge") {

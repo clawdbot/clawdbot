@@ -343,34 +343,36 @@ function completedWorkSpacingHtml() {
     <div class="chat-thread" role="log">
       <div class="chat-thread-inner chat-thread-inner--virtual">
         <div class="chat-virtual-sizer" style="height: 400px;">
-          <div class="chat-virtual-row" data-spacing-row="prompt">
-            <div class="chat-group user chat-group--with-footer">
-              <div class="chat-group-messages">
-                <div class="chat-bubble"><div class="chat-text">Prompt</div></div>
+          <div class="chat-virtual-block">
+            <div class="chat-virtual-row" data-spacing-row="prompt">
+              <div class="chat-group user chat-group--with-footer">
+                <div class="chat-group-messages">
+                  <div class="chat-bubble"><div class="chat-text">Prompt</div></div>
+                </div>
+                <div class="chat-group-footer"><span class="chat-sender-name">You</span></div>
               </div>
-              <div class="chat-group-footer"><span class="chat-sender-name">You</span></div>
             </div>
-          </div>
-          <div class="chat-virtual-row" data-spacing-row="work">
-            <div class="chat-group tool chat-group--work">
-              <div class="chat-group-messages">
-                <div class="chat-activity-group chat-work-group">
-                  <button class="chat-inline-disclosure chat-activity-group__summary" type="button">
-                    <span class="chat-tool-disclosure__content">
-                      <span class="chat-activity-group__label">Worked for 10s</span>
-                    </span>
-                  </button>
-                  <div class="chat-work-group__separator"></div>
+            <div class="chat-virtual-row" data-spacing-row="work">
+              <div class="chat-group tool chat-group--work">
+                <div class="chat-group-messages">
+                  <div class="chat-activity-group chat-work-group">
+                    <button class="chat-inline-disclosure chat-activity-group__summary" type="button">
+                      <span class="chat-tool-disclosure__content">
+                        <span class="chat-activity-group__label">Worked for 10s</span>
+                      </span>
+                    </button>
+                    <div class="chat-work-group__separator"></div>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
-          <div class="chat-virtual-row" data-spacing-row="reply">
-            <div class="chat-group assistant chat-group--with-footer">
-              <div class="chat-group-messages">
-                <div class="chat-bubble"><div class="chat-text">Final reply</div></div>
+            <div class="chat-virtual-row" data-spacing-row="reply">
+              <div class="chat-group assistant chat-group--with-footer">
+                <div class="chat-group-messages">
+                  <div class="chat-bubble"><div class="chat-text">Final reply</div></div>
+                </div>
+                <div class="chat-group-footer"><span class="chat-sender-name">Assistant</span></div>
               </div>
-              <div class="chat-group-footer"><span class="chat-sender-name">Assistant</span></div>
             </div>
           </div>
         </div>
@@ -1475,12 +1477,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       await waitForLayoutSettled(page, "[data-spacing-row], .chat-group--work");
 
       const gaps = await page.evaluate(() => {
-        const rows = [...document.querySelectorAll<HTMLElement>("[data-spacing-row]")];
-        let offset = 0;
-        for (const row of rows) {
-          row.style.transform = `translateY(${offset}px)`;
-          offset += row.getBoundingClientRect().height;
-        }
         const prompt = document.querySelector<HTMLElement>(
           '[data-spacing-row="prompt"] .chat-group',
         )!;
@@ -2003,30 +1999,32 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           <div class="chat-thread" style="width: 220px; height: 400px;">
             <div class="chat-thread-inner chat-thread-inner--virtual" style="width: 220px;">
               <div class="chat-virtual-sizer" style="height: 400px;">
-                <div class="chat-virtual-row" data-first-row style="transform: translateY(0px);">
-                  <div
-                    class="chat-group assistant chat-group--with-footer"
-                    style="--chat-message-max-width: 120px;"
-                  >
-                    <div class="chat-avatar assistant">A</div>
-                    <div class="chat-group-messages">
-                      <div class="chat-bubble"><div class="chat-text">A narrow assistant message.</div></div>
-                    </div>
-                    <div class="chat-group-footer">
-                      <div class="chat-group-footer__meta">
-                        <span class="chat-sender-name">Assistant</span>
-                        <span class="chat-group-timestamp">9:41 PM</span>
+                <div class="chat-virtual-block">
+                  <div class="chat-virtual-row" data-first-row >
+                    <div
+                      class="chat-group assistant chat-group--with-footer"
+                      style="--chat-message-max-width: 120px;"
+                    >
+                      <div class="chat-avatar assistant">A</div>
+                      <div class="chat-group-messages">
+                        <div class="chat-bubble"><div class="chat-text">A narrow assistant message.</div></div>
                       </div>
-                      <div class="chat-group-footer-actions">
-                        <button type="button">${iconSvg()}</button>
-                        <button type="button">${iconSvg()}</button>
-                        <button type="button">${iconSvg()}</button>
+                      <div class="chat-group-footer">
+                        <div class="chat-group-footer__meta">
+                          <span class="chat-sender-name">Assistant</span>
+                          <span class="chat-group-timestamp">9:41 PM</span>
+                        </div>
+                        <div class="chat-group-footer-actions">
+                          <button type="button">${iconSvg()}</button>
+                          <button type="button">${iconSvg()}</button>
+                          <button type="button">${iconSvg()}</button>
+                        </div>
                       </div>
                     </div>
                   </div>
-                </div>
-                <div class="chat-virtual-row" data-second-row>
-                  <div class="chat-group user"><div class="chat-group-messages">Next row</div></div>
+                  <div class="chat-virtual-row" data-second-row>
+                    <div class="chat-group user"><div class="chat-group-messages">Next row</div></div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -2041,7 +2039,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         const avatar = first.querySelector<HTMLElement>(".chat-avatar")!;
         const bubble = first.querySelector<HTMLElement>(".chat-bubble")!;
         const footer = first.querySelector<HTMLElement>(".chat-group-footer")!;
-        second.style.transform = `translateY(${first.getBoundingClientRect().height}px)`;
         const firstRect = first.getBoundingClientRect();
         const secondRect = second.getBoundingClientRect();
         const avatarRect = avatar.getBoundingClientRect();
@@ -2060,7 +2057,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       expect(layout.footerHeight).toBeGreaterThan(24);
       expect(layout.bubbleBottom - layout.avatarBottom).toBeCloseTo(4, 0);
       expect(layout.footerBottom).toBeLessThanOrEqual(layout.firstBottom + 1);
-      expect(layout.secondTop).toBeGreaterThanOrEqual(layout.firstBottom - 1);
+      expect(Math.abs(layout.secondTop - layout.firstBottom)).toBeLessThanOrEqual(1);
     } finally {
       await closeBrowserPage(page);
     }
@@ -2074,37 +2071,39 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           <div class="chat-thread chat-thread--direct" style="width: 720px; height: 400px;">
             <div class="chat-thread-inner chat-thread-inner--virtual" style="width: 720px;">
               <div class="chat-virtual-sizer" style="height: 400px;">
-                <div
-                  class="chat-virtual-row"
-                  data-previous-row
-                  style="height: 100px; transform: translateY(0px);"
-                >
-                  <div class="chat-group tool">
-                    <div class="chat-group-messages">Previous transcript row</div>
+                <div class="chat-virtual-block">
+                  <div
+                    class="chat-virtual-row"
+                    data-previous-row
+                    style="height: 100px;"
+                  >
+                    <div class="chat-group tool">
+                      <div class="chat-group-messages">Previous transcript row</div>
+                    </div>
                   </div>
-                </div>
-                <div
-                  class="chat-virtual-row"
-                  data-context-row
-                  style="transform: translateY(100px); contain-intrinsic-block-size: auto 28px;"
-                >
-                  <div class="chat-group assistant chat-group--with-footer">
-                    <div class="chat-group-messages"></div>
-                    <div class="chat-group-footer">
-                      <div class="chat-group-footer__meta">
-                        <span class="chat-sender-name">Assistant</span>
-                        <details class="msg-meta" open>
-                          <summary class="msg-meta__summary">
-                            <time class="chat-group-timestamp">just now</time>
-                          </summary>
-                          <span class="msg-meta__details">
-                            <span class="msg-meta__time">Aug 24, 2026, 1:15 PM UTC</span>
-                            <span class="msg-meta__tokens">↑19.6k</span>
-                            <span class="msg-meta__tokens">↓126</span>
-                            <span class="msg-meta__cache">R2.4k</span>
-                            <span class="msg-meta__model">gpt-5.5</span>
-                          </span>
-                        </details>
+                  <div
+                    class="chat-virtual-row"
+                    data-context-row
+                    style="contain-intrinsic-block-size: auto 28px;"
+                  >
+                    <div class="chat-group assistant chat-group--with-footer">
+                      <div class="chat-group-messages"></div>
+                      <div class="chat-group-footer">
+                        <div class="chat-group-footer__meta">
+                          <span class="chat-sender-name">Assistant</span>
+                          <details class="msg-meta" open>
+                            <summary class="msg-meta__summary">
+                              <time class="chat-group-timestamp">just now</time>
+                            </summary>
+                            <span class="msg-meta__details">
+                              <span class="msg-meta__time">Aug 24, 2026, 1:15 PM UTC</span>
+                              <span class="msg-meta__tokens">↑19.6k</span>
+                              <span class="msg-meta__tokens">↓126</span>
+                              <span class="msg-meta__cache">R2.4k</span>
+                              <span class="msg-meta__model">gpt-5.5</span>
+                            </span>
+                          </details>
+                        </div>
                       </div>
                     </div>
                   </div>
