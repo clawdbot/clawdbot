@@ -335,7 +335,7 @@ function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]
     changes.push("Removed messages.removeAckAfterReply; acknowledgements are retained.");
   }
 
-  const unrepresentableWhatsAppAckPaths: string[] = [];
+  const legacyWhatsAppAckSources: Array<{ path: string; scope: string | undefined }> = [];
   visitChannelEntries(raw, "whatsapp", (entry, path) => {
     moveKey(entry, "messagePrefix", "responsePrefix", path, changes);
     const ack = getRecord(entry.ackReaction);
@@ -377,22 +377,32 @@ function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]
     if (messages.ackReactionScope === undefined && scope) {
       messages.ackReactionScope = scope;
     }
-    if (!scope && direct && group === "mentions") {
-      unrepresentableWhatsAppAckPaths.push(`${path}.ackReaction`);
+    if (scope || (direct && group === "mentions")) {
+      legacyWhatsAppAckSources.push({ path: `${path}.ackReaction`, scope });
     }
     delete entry.ackReaction;
     changes.push(`Moved translatable ${path}.ackReaction settings to messages ack settings.`);
   });
-  // Account migrations run after the channel root and can set the shared scope.
-  // Report only after traversal so recovery guidance names the final runtime value.
-  for (const path of unrepresentableWhatsAppAckPaths) {
-    const finalScope = messages?.ackReactionScope;
+  // Every legacy entry collapses into one global scope, and accounts run after the root.
+  // Compare only after traversal so every dropped intent names the final runtime value.
+  const configuredFinalScope = messages?.ackReactionScope;
+  const finalScope = configuredFinalScope ?? "group-mentions";
+  for (const source of legacyWhatsAppAckSources) {
+    if (source.scope === finalScope) {
+      continue;
+    }
+    if (source.scope) {
+      changes.push(
+        `${source.path} requested the ${JSON.stringify(source.scope)} scope, but the final messages.ackReactionScope is ${JSON.stringify(finalScope)}. The final global scope now decides WhatsApp acknowledgements for every migrated legacy entry; review messages.ackReactionScope if this source should win.`,
+      );
+      continue;
+    }
     const effectiveScope =
-      finalScope === undefined
+      configuredFinalScope === undefined
         ? 'The default "group-mentions" scope now applies and stops acknowledging direct messages.'
-        : `The final messages.ackReactionScope value ${JSON.stringify(finalScope)} now decides WhatsApp acknowledgements instead of the deleted legacy pair.`;
+        : `The final messages.ackReactionScope value ${JSON.stringify(configuredFinalScope)} now decides WhatsApp acknowledgements instead of the deleted legacy pair.`;
     changes.push(
-      `${path} acknowledged direct messages plus mentioned groups, and messages.ackReactionScope has no value for that combination. ${effectiveScope} No shared scope keeps both: "direct" acknowledges direct messages but stops acknowledging mentioned groups, and "all" acknowledges direct messages but also acknowledges every group message. messages.ackReactionScope is the global fallback for channels without an acknowledgement scope of their own.`,
+      `${source.path} acknowledged direct messages plus mentioned groups, and messages.ackReactionScope has no value for that combination. ${effectiveScope} No shared scope keeps both: "direct" acknowledges direct messages but stops acknowledging mentioned groups, and "all" acknowledges direct messages but also acknowledges every group message. messages.ackReactionScope is the global fallback for channels without an acknowledgement scope of their own.`,
     );
   }
 
