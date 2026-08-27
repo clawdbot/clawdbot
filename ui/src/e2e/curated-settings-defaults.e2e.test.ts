@@ -88,7 +88,7 @@ suite.define(() => {
           },
           browser: { enabled: false },
           tools: {
-            codeMode: { enabled: false },
+            codeMode: { enabled: "auto" },
             profile: "minimal",
           },
         };
@@ -107,8 +107,8 @@ suite.define(() => {
         const codeModeRow = settingsRow(page, "Code Mode");
         const codeModeSwitch = codeModeRow.getByRole("switch", { name: "Code Mode", exact: true });
         await codeModeSwitch.waitFor();
-        expect(await codeModeSwitch.getAttribute("aria-checked")).toBe("false");
-        await expect.poll(() => codeModeRow.textContent()).toContain("Default: Enabled");
+        expect(await codeModeSwitch.getAttribute("aria-checked")).toBe("true");
+        await expect.poll(() => codeModeRow.textContent()).toContain("Default: Disabled");
 
         if (captureUiProofEnabled) {
           await mkdir(uiProofArtifactDir, { recursive: true });
@@ -130,8 +130,8 @@ suite.define(() => {
         await expect
           .poll(async () => (await gateway.getRequests("config.get")).length)
           .toBe(configGetsBeforeLabsReset + 1);
-        await expectInherited(codeModeRow, "Enabled");
-        expect(await codeModeSwitch.getAttribute("aria-checked")).toBe("true");
+        await expectInherited(codeModeRow, "Disabled");
+        expect(await codeModeSwitch.getAttribute("aria-checked")).toBe("false");
 
         if (captureUiProofEnabled) {
           await codeModeRow.screenshot({

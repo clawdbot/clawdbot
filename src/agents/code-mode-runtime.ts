@@ -122,9 +122,7 @@ function readCodeModeRawConfig(config?: OpenClawConfig, agentId?: string): Recor
 }
 
 function readEnabled(value: unknown): boolean | "auto" {
-  // Shipped default is "auto": code mode engages only for catalog-preferred
-  // models, so unevaluated models keep normal tool exposure by construction.
-  return typeof value === "boolean" || value === "auto" ? value : "auto";
+  return typeof value === "boolean" || value === "auto" ? value : false;
 }
 
 export function readPositiveInteger(value: unknown, fallback: number): number {

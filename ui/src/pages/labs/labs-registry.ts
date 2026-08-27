@@ -64,23 +64,12 @@ export const LAB_FEATURES = [
     description: () => t("labsPage.codeMode.description"),
     docsUrl: "https://docs.openclaw.ai/tools/code-mode",
     configPath: ["tools", "codeMode", "enabled"],
-    // The on position writes the shipped "auto" tier, never `true`: Labs offers
+    // The on position writes the "auto" tier, never `true`: Labs offers
     // Auto/Off, and force-on for unevaluated models stays a config-only choice.
     onValue: "auto",
     offValue: false,
     activeValues: [true, "auto"],
-    // Mirrors resolveCodeModeConfig: the shipped default is "auto", so an unset
-    // gate reads as on; only an explicit `false` (shorthand or leaf) reads off.
-    // `true` remains a valid config-only force-on and must also read as on.
-    readEnabled: (raw) => {
-      if (typeof raw === "boolean") {
-        return raw;
-      }
-      if (isRecord(raw)) {
-        return raw.enabled !== false;
-      }
-      return true;
-    },
+    readEnabled: null,
     enableAlso: null,
     resetScope: "gate",
     restartHint: null,
@@ -269,10 +258,10 @@ function readEnabledFromParent(feature: LabFeature, parent: unknown): boolean {
   if (feature.readEnabled) {
     return feature.readEnabled(parent);
   }
-  // Feature gates accept the shipped boolean shorthand as well as the object
-  // form. A registry path ending in `enabled` must reflect either shape.
-  if (key === "enabled" && typeof parent === "boolean") {
-    return parent;
+  // Feature gates can accept a boolean or mode shorthand as well as the object
+  // form. A registry path ending in `enabled` must reflect every active shape.
+  if (key === "enabled" && (typeof parent === "boolean" || typeof parent === "string")) {
+    return feature.activeValues.includes(parent);
   }
   if (!isRecord(parent) || !key) {
     return false;

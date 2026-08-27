@@ -14,7 +14,7 @@ describe("Code Mode configuration", () => {
         },
       },
     } as never);
-    expect(resolved.enabled).toBe("auto");
+    expect(resolved.enabled).toBe(false);
     expect(resolveCodeModeConfig({ tools: { codeMode: { enabled: true } } } as never).enabled).toBe(
       true,
     );
