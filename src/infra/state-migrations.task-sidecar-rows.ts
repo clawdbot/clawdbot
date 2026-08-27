@@ -171,19 +171,6 @@ function readNormalizedLegacyTaskRows(
     });
 }
 
-function readLegacyTaskRows(sourcePath: string): SqliteBindRow[] {
-  const db = openNodeSqliteDatabase(sourcePath, { readOnly: true });
-  try {
-    const columns = listSqliteColumns(db, "task_runs");
-    if (columns.size === 0) {
-      return [];
-    }
-    return readNormalizedLegacyTaskRows(db, columns);
-  } finally {
-    db.close();
-  }
-}
-
 /**
  * Reads normalized task rows plus the ids this migration settles as lost.
  * Both results come from the same single-pass snapshot so delivery-state
