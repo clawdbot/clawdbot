@@ -17,6 +17,54 @@ const deviceTargets = [
 ];
 
 suite.define(() => {
+  it("spaces destination section headings consistently", async () => {
+    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      operatorScopes: ["operator.admin", "operator.read", "operator.write"],
+      workspace: WORKSPACE,
+      workspaceGit: true,
+      methodResponses: {
+        "environments.list": {
+          environments: [
+            {
+              id: "node:paired-runner",
+              type: "node",
+              label: "Paired runner",
+              status: "available",
+              sessionHost: true,
+              workerSlots: { total: 2, available: 1 },
+            },
+          ],
+          profiles: [{ id: "aws", providerId: "aws" }],
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}new`);
+      await gateway.waitForRequest("environments.list");
+      await page.locator("#new-session-where-trigger").click();
+
+      const headings = page.locator(
+        ".new-session-page__where-popover .new-session-page__menu-title",
+      );
+      await expect
+        .poll(() => headings.allTextContents())
+        .toEqual(["Environments", "Your devices", "Cloud"]);
+      const spacing = await page.evaluate(() =>
+        getComputedStyle(document.documentElement).getPropertyValue("--space-2").trim(),
+      );
+      expect(
+        await headings.evaluateAll((elements) =>
+          elements.map((element) => getComputedStyle(element).marginTop),
+        ),
+      ).toEqual(["0px", spacing, spacing]);
+    } finally {
+      await context.close();
+    }
+  });
+
   it.each(deviceTargets)("dispatches the $name device", async ({ value, target }) => {
     const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
     const page = await context.newPage();
