@@ -86,3 +86,18 @@ export function latestTranscriptAnnouncement(
   }
   return null;
 }
+
+export class TranscriptAnnouncementState {
+  private key: string | null | undefined;
+  text = "";
+
+  sync(announcement: TranscriptAnnouncement | null, announce: boolean): void {
+    if (this.key === undefined || !announce) {
+      this.key = announcement?.key ?? null;
+      this.text = "";
+    } else if (announcement && announcement.key !== this.key) {
+      this.key = announcement.key;
+      this.text = announcement.text;
+    }
+  }
+}

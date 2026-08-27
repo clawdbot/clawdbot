@@ -683,15 +683,29 @@ openclaw-chat-page {
   margin: 8px auto;
 }
 
+/* Virtual geometry must commit with its rows. A global reduced-motion duration
+   otherwise activates the default "all" transition for offsets and height. */
+.chat-virtual-sizer,
+.chat-virtual-block {
+  transition-property: none;
+}
+
 .chat-virtual-sizer {
   position: relative;
   width: 100%;
 }
 
-.chat-virtual-row {
+.chat-virtual-block {
   position: absolute;
   top: 0;
   left: 0;
+  width: 100%;
+}
+
+/* Browser flow preserves adjacency even when smooth scrolling skips a row's
+   measurement. flow-root includes child margins in each measured row. */
+.chat-virtual-row {
+  position: relative;
   display: flow-root;
   width: 100%;
   content-visibility: auto;
