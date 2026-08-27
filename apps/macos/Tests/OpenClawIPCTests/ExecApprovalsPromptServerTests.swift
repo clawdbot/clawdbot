@@ -191,6 +191,30 @@ struct ExecApprovalsPromptServerTests {
     }
 
     @Test
+    func `prompt server sends no decision when presentation closes without a choice`() async throws {
+        let root = try self.makeShortSocketRoot()
+        let socketPath = root.appendingPathComponent("exec-approvals.sock").path
+        defer { try? FileManager().removeItem(at: root) }
+
+        let server = ExecApprovalsPromptServer(
+            retryDelay: .milliseconds(10),
+            resolveSocketCredentials: { (socketPath, "current-token") },
+            onPrompt: { _ in nil })
+        defer { server.stop() }
+
+        server.start()
+        #expect(await self.waitUntil { FileManager().fileExists(atPath: socketPath) })
+
+        let decision = await ExecApprovalsSocketClient.requestDecision(
+            socketPath: socketPath,
+            token: "current-token",
+            request: ExecApprovalPromptRequest(command: "echo no-decision"),
+            timeoutMs: 250)
+
+        #expect(decision == nil)
+    }
+
+    @Test
     func `prompt server restarts after its active listener stops unexpectedly`() async throws {
         let root = try self.makeShortSocketRoot()
         let socketPath = root.appendingPathComponent("exec-approvals.sock").path

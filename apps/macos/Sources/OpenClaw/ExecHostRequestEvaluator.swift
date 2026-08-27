@@ -15,6 +15,13 @@ enum ExecHostPolicyDecision {
 }
 
 enum ExecHostRequestEvaluator {
+    static func promptClosedError() -> ExecHostError {
+        ExecHostError(
+            code: "UNAVAILABLE",
+            message: "SYSTEM_RUN_DENIED: approval prompt closed without decision",
+            reason: "approval-cancelled")
+    }
+
     static func validateRequest(_ request: ExecHostRequest) -> Result<ExecHostValidatedRequest, ExecHostError> {
         let approvalSource: ExecApprovalRequestSource?
         switch request.approvalSource {
