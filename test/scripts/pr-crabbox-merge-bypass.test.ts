@@ -8,6 +8,12 @@ const ciRunId = 7001;
 const ciGateJobId = 7002;
 const failedJobId = 7003;
 
+type WorkflowStep = {
+  conclusion: string;
+  name: string;
+  status: string;
+};
+
 function input() {
   return {
     actor: { login: "maintainer" },
@@ -54,7 +60,7 @@ function input() {
           name: "check",
           runner_name: null as string | null,
           status: "completed",
-          steps: [],
+          steps: [] as WorkflowStep[],
         },
       ],
     },
