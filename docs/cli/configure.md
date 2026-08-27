@@ -34,6 +34,12 @@ Selecting `gateway`, `daemon`, or `health` (or running the full wizard with no `
 `openclaw configure` requires an interactive terminal (both stdin and stdout must be TTYs). Without one it prints the equivalent non-interactive `openclaw config get|set|patch|validate` commands and exits with an error instead of partially running.
 </Note>
 
+## Gateway section
+
+For **Trusted Proxy** auth, entering a loopback proxy address shows a security warning and asks for explicit consent before setting `gateway.auth.trustedProxy.allowLoopback`. Declining leaves it unset and warns that loopback proxy requests will be rejected at runtime. See [Trusted proxy auth](/gateway/trusted-proxy-auth#configure-with-the-wizard) for the trust requirements.
+
+Reconfiguring trusted-proxy mode defaults the loopback prompt to the existing opt-in and preserves `deviceAutoApprove` unchanged. An explicit refusal revokes loopback consent; without a loopback address, the existing setting is retained.
+
 ## Model section
 
 <Note>

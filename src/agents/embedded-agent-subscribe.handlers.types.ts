@@ -178,6 +178,7 @@ export type EmbeddedAgentSubscribeState = {
   lastReasoningSent?: string;
   pendingAssistantUsage?: NormalizedUsage;
   assistantUsageCommitted: boolean;
+  retryUsage?: NormalizedUsage;
 
   compactionInFlight: boolean;
   lastCompactionTokensAfter?: number;

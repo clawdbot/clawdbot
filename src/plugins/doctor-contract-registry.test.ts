@@ -28,7 +28,7 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => {
 let applyPluginDoctorCompatibilityMigrations: typeof import("./doctor-contract-registry.js").applyPluginDoctorCompatibilityMigrations;
 let clearPluginDoctorContractRegistryCache: typeof import("./doctor-contract-registry.test-fixtures.js").clearPluginDoctorContractRegistryCache;
 let collectRelevantDoctorPluginIds: typeof import("./doctor-contract-registry.js").collectRelevantDoctorPluginIds;
-let collectRelevantDoctorPluginIdsForTouchedPaths: typeof import("./doctor-contract-registry.js").collectRelevantDoctorPluginIdsForTouchedPaths;
+let collectDoctorConfigRepairPluginIds: typeof import("./doctor-contract-registry.js").collectDoctorConfigRepairPluginIds;
 let listPluginDoctorLegacyConfigRules: typeof import("./doctor-contract-registry.js").listPluginDoctorLegacyConfigRules;
 let listPluginDoctorSessionRouteStateOwners: typeof import("./doctor-contract-registry.js").listPluginDoctorSessionRouteStateOwners;
 let listPluginDoctorSessionStoreAgentIds: typeof import("./doctor-contract-registry.js").listPluginDoctorSessionStoreAgentIds;
@@ -56,12 +56,13 @@ afterEach(() => {
 describe("doctor-contract-registry module loader", () => {
   beforeEach(async () => {
     resetRegistryJitiMocks();
+    mocks.loadPluginManifestRegistry.mockReturnValue({ plugins: [], diagnostics: [] });
     doctorContractWarnMock.mockReset();
     vi.resetModules();
     ({
       applyPluginDoctorCompatibilityMigrations,
       collectRelevantDoctorPluginIds,
-      collectRelevantDoctorPluginIdsForTouchedPaths,
+      collectDoctorConfigRepairPluginIds,
       listPluginDoctorLegacyConfigRules,
       listPluginDoctorSessionRouteStateOwners,
       listPluginDoctorSessionStoreAgentIds,
@@ -555,6 +556,63 @@ describe("doctor-contract-registry module loader", () => {
     expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledTimes(2);
   });
 
+  it.each([
+    { name: "full scan", touchedPaths: undefined, configRepair: true, expected: true },
+    { name: "parent edit", touchedPaths: [["legacyRoots"]], configRepair: true, expected: true },
+    {
+      name: "dotted owner edit",
+      touchedPaths: [["legacyRoots", "store.with.dots", "root"]],
+      configRepair: true,
+      expected: true,
+    },
+    {
+      name: "unrelated edit",
+      touchedPaths: [["gateway", "port"]],
+      configRepair: true,
+      expected: false,
+    },
+    { name: "empty edit", touchedPaths: [], configRepair: true, expected: false },
+    { name: "undeclared repair", touchedPaths: undefined, configRepair: false, expected: false },
+  ])(
+    "discovers declared config migration sources without plugin entries: $name",
+    async ({ touchedPaths, configRepair, expected }) => {
+      const pluginRoot = makeTempDir();
+      fs.writeFileSync(path.join(pluginRoot, "doctor-contract-api.ts"), "export {};\n", "utf-8");
+      const rule = {
+        path: ["legacyRoots", "store.with.dots", "root"],
+        message: "Migrate legacy root",
+      };
+      mocks.createJiti.mockImplementation(() => () => ({
+        legacyConfigRules: [rule],
+        resolveSessionStoreAgentIds: () => ["unexpected-owner"],
+      }));
+      mocks.loadPluginManifestRegistry.mockReturnValue({
+        plugins: [
+          {
+            id: "root-owner",
+            rootDir: pluginRoot,
+            channels: [],
+            providers: [],
+            doctorContract: { configRepair, resolveSessionStoreAgentIds: true },
+            configContracts: { compatibilityMigrationPaths: ["legacyRoots.*.root"] },
+          },
+        ],
+        diagnostics: [],
+      });
+      const raw = { legacyRoots: { "store.with.dots": { root: "/legacy/documents" } } };
+      const { findDoctorLegacyConfigIssues } =
+        await import("../commands/doctor/shared/legacy-config-issues.js");
+      expect(findDoctorLegacyConfigIssues(raw, raw, touchedPaths)).toEqual(
+        expected ? [{ path: rule.path.join("."), message: rule.message }] : [],
+      );
+      expect(mocks.createJiti).toHaveBeenCalledTimes(expected ? 1 : 0);
+      // Config migration declarations must not select new session-store owners.
+      const pluginIds = collectRelevantDoctorPluginIds(raw);
+      expect(pluginIds).toEqual([]);
+      expect(listPluginDoctorSessionStoreAgentIds({ pluginIds })).toEqual([]);
+    },
+  );
+
   it("collects model provider ids for doctor compatibility migrations", () => {
     expect(
       collectRelevantDoctorPluginIds({
@@ -720,14 +778,9 @@ describe("doctor-contract-registry module loader", () => {
 
     expect(collectRelevantDoctorPluginIds(raw)).toEqual(["discord", "openai"]);
     expect(
-      collectRelevantDoctorPluginIdsForTouchedPaths({
-        raw,
-        touchedPaths: [["channels", "modelByChannel", "discord", "guild"]],
-      }),
+      collectDoctorConfigRepairPluginIds(raw, [["channels", "modelByChannel", "discord", "guild"]]),
     ).toStrictEqual(["openai"]);
-    expect(
-      collectRelevantDoctorPluginIdsForTouchedPaths({ raw, touchedPaths: [["channels"]] }),
-    ).toEqual(["discord", "openai"]);
+    expect(collectDoctorConfigRepairPluginIds(raw, [["channels"]])).toEqual(["discord", "openai"]);
   });
 
   it("collects provider ids from media model entries", () => {
@@ -747,10 +800,7 @@ describe("doctor-contract-registry module loader", () => {
 
     expect(collectRelevantDoctorPluginIds(raw)).toEqual(["gemini", "openai", "xai"]);
     expect(
-      collectRelevantDoctorPluginIdsForTouchedPaths({
-        raw,
-        touchedPaths: [["tools", "media", "models", "2", "model"]],
-      }),
+      collectDoctorConfigRepairPluginIds(raw, [["tools", "media", "models", "2", "model"]]),
     ).toEqual(["gemini", "openai", "xai"]);
   });
 
@@ -852,8 +902,8 @@ describe("doctor-contract-registry module loader", () => {
 
   it("narrows touched-path doctor ids for scoped dry-run validation", () => {
     expect(
-      collectRelevantDoctorPluginIdsForTouchedPaths({
-        raw: {
+      collectDoctorConfigRepairPluginIds(
+        {
           channels: {
             discord: {},
             telegram: {},
@@ -872,20 +922,20 @@ describe("doctor-contract-registry module loader", () => {
             voiceId: "legacy-voice",
           },
         },
-        touchedPaths: [
+        [
           ["channels", "discord", "token"],
           ["plugins", "entries", "memory-wiki", "enabled"],
           ["models", "providers", "ollama-cloud", "baseUrl"],
           ["talk", "voiceId"],
         ],
-      }),
+      ),
     ).toEqual(["discord", "elevenlabs", "memory-wiki", "ollama-cloud"]);
   });
 
   it("keeps all configured model and policy providers active during touched scans", () => {
     expect(
-      collectRelevantDoctorPluginIdsForTouchedPaths({
-        raw: {
+      collectDoctorConfigRepairPluginIds(
+        {
           agents: {
             defaults: {
               model: { primary: "agent-primary/model", fallbacks: ["agent-fallback/model"] },
@@ -901,13 +951,13 @@ describe("doctor-contract-registry module loader", () => {
             discord: { voice: { model: "untouched-voice/model" } },
           },
         },
-        touchedPaths: [
+        [
           ["agents", "defaults", "model"],
           ["agents", "entries", "worker", "modelPolicy", "allow", "0"],
           ["hooks", "gmail", "model"],
           ["channels", "modelByChannel", "slack", "room"],
         ],
-      }),
+      ),
     ).toEqual([
       "agent-fallback",
       "agent-primary",
@@ -921,20 +971,20 @@ describe("doctor-contract-registry module loader", () => {
 
   it("does not infer touched-path ownership from dotted configured ids", () => {
     expect(
-      collectRelevantDoctorPluginIdsForTouchedPaths({
-        raw: {
+      collectDoctorConfigRepairPluginIds(
+        {
           agents: { entries: { "worker.blue": { model: "provider.with.dots/model" } } },
           plugins: { entries: { other: {} } },
         },
-        touchedPaths: [["plugins", "entries", "other", "enabled"]],
-      }),
+        [["plugins", "entries", "other", "enabled"]],
+      ),
     ).toEqual(["other", "provider.with.dots"]);
   });
 
   it("falls back to the full doctor-id set when touched paths are too broad", () => {
     expect(
-      collectRelevantDoctorPluginIdsForTouchedPaths({
-        raw: {
+      collectDoctorConfigRepairPluginIds(
+        {
           channels: {
             discord: {},
             telegram: {},
@@ -945,8 +995,8 @@ describe("doctor-contract-registry module loader", () => {
             },
           },
         },
-        touchedPaths: [["channels"]],
-      }),
+        [["channels"]],
+      ),
     ).toEqual(["discord", "memory-wiki", "telegram"]);
   });
 });

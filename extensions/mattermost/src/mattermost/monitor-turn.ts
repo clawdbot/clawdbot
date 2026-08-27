@@ -19,7 +19,7 @@ import {
   createMattermostDraftPreviewBoundaryController,
   createMattermostDraftStream,
 } from "./draft-stream.js";
-import { normalizeMattermostAllowEntry } from "./monitor-auth.js";
+import { normalizeMattermostAllowEntry } from "./ingress-identity.js";
 import {
   formatMattermostFinalDeliveryOutcomeLog,
   resolveMattermostReplyRootId,

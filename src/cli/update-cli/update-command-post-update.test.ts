@@ -7,6 +7,8 @@ import { defaultRuntime } from "../../runtime.js";
 
 const mocks = vi.hoisted(() => ({
   completePluginUpdate: vi.fn(),
+  leaseActive: false,
+  loadPluginRecords: vi.fn(),
   markSentinelFailure: vi.fn(async () => undefined),
   printResult: vi.fn(),
   readConfig: vi.fn(),
@@ -30,7 +32,17 @@ vi.mock("../../daemon/service.js", async (importOriginal) => ({
   readGatewayServiceState: mocks.readServiceState,
 }));
 vi.mock("../../plugins/plugin-lifecycle-lease.js", () => ({
-  withPluginLifecycleLease: async (_params: unknown, callback: () => unknown) => callback(),
+  withPluginLifecycleLease: async (_params: unknown, callback: () => unknown) => {
+    mocks.leaseActive = true;
+    try {
+      return await callback();
+    } finally {
+      mocks.leaseActive = false;
+    }
+  },
+}));
+vi.mock("../../plugins/installed-plugin-index-records.js", () => ({
+  loadInstalledPluginIndexInstallRecords: mocks.loadPluginRecords,
 }));
 vi.mock("./update-command-config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-config.js")>()),
@@ -223,6 +235,8 @@ describe("retireStandaloneGitWrapper", () => {
 describe("successful update finalization ordering", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.leaseActive = false;
+    mocks.loadPluginRecords.mockResolvedValue({});
     mocks.readConfig.mockResolvedValue(validConfigSnapshot);
     mocks.updatePlugins.mockResolvedValue(successfulPluginUpdate);
     mocks.completePluginUpdate.mockResolvedValue({
@@ -265,6 +279,77 @@ describe("successful update finalization ordering", () => {
       process.env.PATH = previousPath;
       await fs.rm(home, { recursive: true, force: true });
     }
+  });
+
+  it("releases the plugin lifecycle lease before fresh doctor completion", async () => {
+    const pluginInstallRecords = {
+      demo: {
+        source: "npm",
+        spec: "@acme/demo",
+        installPath: "/tmp/demo",
+      },
+    };
+    const ownedManagedUpdateEnv = {
+      ...process.env,
+      OPENCLAW_LIFECYCLE_TEST_MARKER: "owned",
+    };
+    mocks.readConfig.mockImplementationOnce(async () => {
+      expect(mocks.leaseActive).toBe(true);
+      expect(process.env.OPENCLAW_LIFECYCLE_TEST_MARKER).toBe("owned");
+      return validConfigSnapshot;
+    });
+    mocks.loadPluginRecords.mockImplementationOnce(async () => {
+      expect(mocks.leaseActive).toBe(true);
+      expect(process.env.OPENCLAW_LIFECYCLE_TEST_MARKER).toBe("owned");
+      return pluginInstallRecords;
+    });
+    mocks.updatePlugins.mockImplementationOnce(
+      async (params: { pluginInstallRecords: unknown }) => {
+        expect(mocks.leaseActive).toBe(true);
+        expect(process.env.OPENCLAW_LIFECYCLE_TEST_MARKER).toBe("owned");
+        expect(params.pluginInstallRecords).toBe(pluginInstallRecords);
+        return successfulPluginUpdate;
+      },
+    );
+    mocks.completePluginUpdate.mockImplementationOnce(async () => {
+      expect(mocks.leaseActive).toBe(false);
+      expect(process.env.OPENCLAW_LIFECYCLE_TEST_MARKER).toBe("owned");
+      return {
+        pluginUpdate: successfulPluginUpdate,
+        configSnapshot: validConfigSnapshot,
+      };
+    });
+
+    await finishUpdate({
+      result: {
+        status: "ok",
+        mode: "npm",
+        root: "/tmp/openclaw-update",
+        steps: [],
+        durationMs: 1,
+      },
+      root: "/tmp/openclaw-update",
+      installKindChanged: false,
+      configSnapshot: validConfigSnapshot,
+      requestedChannel: null,
+      storedChannel: null,
+      channel: "stable",
+      downgradeRisk: false,
+      shouldRestart: false,
+      opts: {},
+      showProgress: false,
+      ownedManagedUpdateEnv,
+      controlPlaneUpdateSentinelMeta: {},
+      preUpdatePluginInstallRecords: {},
+      startedAt: Date.now(),
+      updateStepTimeoutMs: 1_000,
+    } as unknown as FinishUpdateParams);
+
+    expect(mocks.readConfig).toHaveBeenCalledOnce();
+    expect(mocks.loadPluginRecords).toHaveBeenCalledOnce();
+    expect(mocks.updatePlugins).toHaveBeenCalledOnce();
+    expect(mocks.completePluginUpdate).toHaveBeenCalledOnce();
+    expect(mocks.leaseActive).toBe(false);
   });
 
   it("marks and prints an error without persisting success when retirement fails", async () => {

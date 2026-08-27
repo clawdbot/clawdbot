@@ -3202,6 +3202,48 @@ describe("doctor health contributions", () => {
     });
   });
 
+  it("defers channel package-state loading only until post-core plugin convergence", async () => {
+    const contribution = requireDoctorContribution("doctor:channel-package-state-capabilities");
+    mocks.collectBundledChannelPackageStateLoadFailures.mockReturnValue([
+      {
+        detail: "plugin module path not found: /plugins/example-chat/auth-presence",
+        metadataKey: "persistedAuthState",
+        pluginId: "example-chat",
+      },
+    ]);
+    mocks.runDoctorHealthRepairs.mockImplementation(async (ctx, options) => {
+      const findings = await options.checks[0]!.detect(ctx);
+      return {
+        config: ctx.cfg,
+        findings,
+        remainingFindings: findings,
+        changes: [],
+        warnings: [],
+        diffs: [],
+        effects: [],
+        checksRun: 1,
+        checksRepaired: 0,
+        checksValidated: 0,
+      };
+    });
+    vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
+    vi.stubEnv("OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR", "1");
+    const ctx = createDoctorContext();
+
+    await contribution.run(ctx);
+
+    expect(mocks.collectBundledChannelPackageStateLoadFailures).not.toHaveBeenCalled();
+
+    vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_CONVERGENCE", "1");
+
+    await contribution.run(ctx);
+
+    expect(mocks.collectBundledChannelPackageStateLoadFailures).toHaveBeenCalledOnce();
+    expect(ctx.runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("core/doctor/channel-package-state-capabilities"),
+    );
+  });
+
   it("keeps channel preview warnings opt-in for default lint selection", async () => {
     const contribution = requireDoctorContribution("doctor:startup-channel-maintenance");
     expect(contribution.healthCheckIds).toEqual([
