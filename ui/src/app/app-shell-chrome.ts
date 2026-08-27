@@ -20,7 +20,7 @@ import {
 } from "../components/panel-toggle-contract.ts";
 import { rememberSessionPanelToggle } from "../components/session-panel-toggle-buffer.ts";
 import type { BoardFace } from "../lib/board/settings.ts";
-import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
@@ -51,7 +51,7 @@ import {
   type NativeHistoryState,
 } from "./native-web-chrome.ts";
 import type { NavDrawerSwipeOwner } from "./nav-drawer-swipe.ts";
-import { hasOperatorAdminAccess } from "./operator-access.ts";
+import { isBrowserPanelAvailable, isDesktopPanelAvailable } from "./panel-availability.ts";
 import { NAV_WIDTH_MAX, NAV_WIDTH_MIN } from "./settings.ts";
 
 type AppSidebarElement = HTMLElement & {
@@ -66,26 +66,6 @@ type KeyboardShortcutsDialogElement = HTMLElement & {
   isOpen: boolean;
   toggle: () => void;
 };
-
-export function isBrowserPanelAvailable(
-  snapshot: ApplicationContext["gateway"]["snapshot"],
-): boolean {
-  return (
-    snapshot.phase === "connected" &&
-    hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
-    isGatewayMethodAdvertised(snapshot, "browser.request") === true
-  );
-}
-
-export function isDesktopPanelAvailable(
-  snapshot: ApplicationContext["gateway"]["snapshot"],
-): boolean {
-  return (
-    snapshot.phase === "connected" &&
-    hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
-    isGatewayMethodAdvertised(snapshot, "desktop.observe") === true
-  );
-}
 
 export interface ShellChromeHost extends HTMLElement {
   readonly context: ApplicationContext<RouteId> | undefined;
@@ -121,18 +101,19 @@ export interface ShellChromeHost extends HTMLElement {
 
 export class ShellChromeOwner {
   private pendingLazyAction = readLazyShellAction();
-<<<<<<< HEAD
   private listeners: AbortController | undefined;
-  private navDrawerSwipe: NavDrawerSwipe | null = null;
-  private navDrawerSwipeFrame: number | null = null;
-  private navDrawerSwipeDeltaX = 0;
-  private navDrawerSettleGeneration = 0;
-  private navDrawerSettling = false;
-  private navDrawerSettleCleanup: (() => void) | null = null;
-=======
   private navDrawerSwipeOwner: NavDrawerSwipeOwner | null = null;
-  private navDrawerSwipeOwnerLoad: Promise<NavDrawerSwipeOwner> | null = null;
->>>>>>> 757b15976d9 (fix(ui): align drawer gesture with mobile layout)
+  private readonly navDrawerSwipeOwnerLoad = import("./nav-drawer-swipe.ts").then(
+    ({ NavDrawerSwipeOwner }) => {
+      const owner = new NavDrawerSwipeOwner(
+        this.host,
+        () => isMobileNavLayout() && !this.host.navDrawerOpen && !this.host.onboardingMode,
+        () => this.toggleNavigationSurface(),
+      );
+      this.navDrawerSwipeOwner = owner;
+      return owner;
+    },
+  );
 
   constructor(private readonly host: ShellChromeHost) {}
 
@@ -170,7 +151,6 @@ export class ShellChromeOwner {
     window.addEventListener("drop", this.handleUnhandledFileDrag, options);
     window.addEventListener(NATIVE_HISTORY_STATE_EVENT, this.handleNativeHistoryState, options);
     // Shipped Mac hosts use these same events even when native web chrome is absent.
-<<<<<<< HEAD
     window.addEventListener(
       "openclaw:native-toggle-sidebar",
       this.handleNativeToggleSidebar,
@@ -197,88 +177,14 @@ export class ShellChromeOwner {
       options,
     );
     window.addEventListener(SHELL_APPROVALS_OPEN_EVENT, this.handleApprovalsOpen, options);
-    host.addEventListener("touchstart", this.handleNavDrawerSwipeStart, {
-      passive: true,
-      signal: this.listeners.signal,
-    });
-    host.addEventListener("touchmove", this.handleNavDrawerSwipeMove, {
-      passive: false,
-      signal: this.listeners.signal,
-    });
-    host.addEventListener("touchend", this.handleNavDrawerSwipeEnd, {
-      passive: true,
-      signal: this.listeners.signal,
-    });
-    host.addEventListener("touchcancel", this.handleNavDrawerSwipeCancel, {
-      passive: true,
-      signal: this.listeners.signal,
-    });
+    void this.navDrawerSwipeOwnerLoad.then((owner) => host.isConnected && owner.connect());
   }
 
   disconnect(): void {
     this.listeners?.abort();
     this.listeners = undefined;
-    this.clearNavDrawerSwipe();
-=======
-    window.addEventListener("openclaw:native-toggle-sidebar", this.handleNativeToggleSidebar);
-    window.addEventListener("openclaw:native-open-search", this.handleNativeOpenSearch);
-    window.addEventListener("openclaw:native-toggle-search", this.handleNativeToggleSearch);
-    window.addEventListener("openclaw:native-new-session", this.handleNativeNewSession);
-    window.addEventListener("openclaw:native-navigate", this.handleNativeNavigate);
-    window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.handleDeferredTerminalToggle);
-    window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleDeferredBrowserToggle);
-    window.addEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.handleDeferredDesktopToggle);
-    window.addEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, this.handleDeferredCustodianToggle);
-    window.addEventListener(SHELL_APPROVALS_OPEN_EVENT, this.handleApprovalsOpen);
-    void this.loadNavDrawerSwipeOwner();
-  }
-
-  disconnect(): void {
-    const host = this.host;
-    host.removeEventListener(COMMAND_PALETTE_TARGET_EVENT, this.handleCommandPaletteTarget);
-    window.removeEventListener(COMMAND_PALETTE_OPEN_EVENT, this.handleCommandPaletteOpen);
-    window.removeEventListener(SHELL_NAV_DRAWER_TOGGLE_EVENT, this.handleShellNavDrawerToggle);
-    window.removeEventListener(DEBUG_OVERLAY_REQUEST_EVENT, this.handleDebugOverlayRequest);
-    window.removeEventListener(
-      KEYBOARD_SHORTCUTS_REQUEST_EVENT,
-      this.handleKeyboardShortcutsRequest,
-    );
-    document.removeEventListener("keydown", this.handleDocumentKeydown);
-    window.removeEventListener("resize", this.handleWindowResize);
-    window.removeEventListener("dragover", this.handleUnhandledFileDrag);
-    window.removeEventListener("drop", this.handleUnhandledFileDrag);
-    window.removeEventListener(NATIVE_HISTORY_STATE_EVENT, this.handleNativeHistoryState);
-    window.removeEventListener("openclaw:native-toggle-sidebar", this.handleNativeToggleSidebar);
-    window.removeEventListener("openclaw:native-open-search", this.handleNativeOpenSearch);
-    window.removeEventListener("openclaw:native-toggle-search", this.handleNativeToggleSearch);
-    window.removeEventListener("openclaw:native-new-session", this.handleNativeNewSession);
-    window.removeEventListener("openclaw:native-navigate", this.handleNativeNavigate);
-    window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.handleDeferredTerminalToggle);
-    window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleDeferredBrowserToggle);
-    window.removeEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.handleDeferredDesktopToggle);
-    window.removeEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, this.handleDeferredCustodianToggle);
-    window.removeEventListener(SHELL_APPROVALS_OPEN_EVENT, this.handleApprovalsOpen);
     this.navDrawerSwipeOwner?.disconnect();
     this.navDrawerSwipeOwner = null;
-    this.navDrawerSwipeOwnerLoad = null;
->>>>>>> 757b15976d9 (fix(ui): align drawer gesture with mobile layout)
-  }
-
-  private loadNavDrawerSwipeOwner(): Promise<NavDrawerSwipeOwner> {
-    return (this.navDrawerSwipeOwnerLoad ??= import("./nav-drawer-swipe.ts").then(
-      ({ NavDrawerSwipeOwner }) => {
-        const owner = new NavDrawerSwipeOwner(
-          this.host,
-          () => isMobileNavLayout() && !this.host.navDrawerOpen && !this.host.onboardingMode,
-          () => this.toggleNavigationSurface(),
-        );
-        this.navDrawerSwipeOwner = owner;
-        if (this.host.isConnected) {
-          owner.connect();
-        }
-        return owner;
-      },
-    ));
   }
 
   toggleNavigationSurface(trigger?: HTMLElement): void {
@@ -294,7 +200,7 @@ export class ShellChromeOwner {
         return;
       }
       host.navDrawerTrigger = trigger ?? this.visibleNavDrawerToggle() ?? null;
-      void this.loadNavDrawerSwipeOwner().then(async (owner) => {
+      void this.navDrawerSwipeOwnerLoad.then(async (owner) => {
         if (!host.isConnected || host.navDrawerOpen || !isMobileNavLayout()) {
           return;
         }

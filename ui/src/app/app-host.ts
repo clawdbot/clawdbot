@@ -47,12 +47,7 @@ import type { ChatPage } from "../pages/chat/chat-page.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { selectShellRouteState, type ShellRouteState } from "./app-host-route-state.ts";
 import { OpenClawApp } from "./app-root.ts";
-import {
-  isBrowserPanelAvailable,
-  isDesktopPanelAvailable,
-  ShellChromeOwner,
-  type ShellChromeHost,
-} from "./app-shell-chrome.ts";
+import { ShellChromeOwner, type ShellChromeHost } from "./app-shell-chrome.ts";
 import {
   ShellGatewayOwner,
   type OutboxStoreRuntime,
@@ -79,6 +74,7 @@ import { hasStoredLazyShellAction } from "./lazy-shell-action.ts";
 import { postNativeNavState, type NativeNavState } from "./native-nav-state.ts";
 import { readNativeHistoryState, type NativeHistoryState } from "./native-web-chrome.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
+import { isBrowserPanelAvailable, isDesktopPanelAvailable } from "./panel-availability.ts";
 import {
   changedServerUiPrefs,
   isApplyingServerUiPrefs,

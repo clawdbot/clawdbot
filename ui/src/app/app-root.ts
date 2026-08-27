@@ -18,7 +18,6 @@ import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import type { ChatRouteData } from "../pages/chat/route-loader.ts";
-import { isDesktopPanelAvailable } from "./app-shell-chrome.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import { applicationContext, type ApplicationContext } from "./context.ts";
 import {
@@ -32,6 +31,7 @@ import {
   TERMINAL_PANEL_ELEMENT,
 } from "./lazy-custom-element.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
+import { isDesktopPanelAvailable } from "./panel-availability.ts";
 
 type FocusDashboardRouteState =
   | { kind: "loading" }

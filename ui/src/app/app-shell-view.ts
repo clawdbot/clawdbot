@@ -26,7 +26,6 @@ import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
-import { isBrowserPanelAvailable, isDesktopPanelAvailable } from "./app-shell-chrome.ts";
 import type { OutboxStoreRuntime, StoredOutboxScopeHost } from "./app-shell-gateway.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
@@ -47,6 +46,7 @@ import {
   renderFloatingUpdateCard,
 } from "./navigation-surface.ts";
 import { readGatewayOperatorAccess } from "./operator-access.ts";
+import { isBrowserPanelAvailable, isDesktopPanelAvailable } from "./panel-availability.ts";
 import {
   NAV_WIDTH_MAX,
   NAV_WIDTH_MIN,

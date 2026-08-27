@@ -569,7 +569,6 @@ suite.define(() => {
       width: 900,
     });
     const navigation = page.locator(".shell-nav");
-    const drawer = navigation.locator(".sidebar");
     const dialog = page.getByRole("dialog", { name: "Navigation" });
     const trigger = page.locator(".chat-pane__nav-toggle").first();
     const readFocusLocation = () =>

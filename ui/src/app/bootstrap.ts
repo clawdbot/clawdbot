@@ -32,7 +32,6 @@ import {
   startModelSetupFirstRunRedirectAfterLocation,
 } from "../pages/model-setup/first-run.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
-import { isBrowserPanelAvailable } from "./app-shell-chrome.ts";
 import { resolveControlUiDocumentMode, type ControlUiDocumentMode } from "./approval-deep-link.ts";
 import { createBrowserHistory, resolveControlUiPaths } from "./browser.ts";
 import { createChatAttachmentHandoff } from "./chat-attachment-handoff.ts";
@@ -54,6 +53,7 @@ import { createNativeChatDrafts } from "./native-bridge.ts";
 import { startNativeLinkRouting } from "./native-link-routing.ts";
 import { createNativeNotificationsCapability } from "./native-notifications.ts";
 import { createApplicationOverlays } from "./overlays.ts";
+import { isBrowserPanelAvailable } from "./panel-availability.ts";
 import { createApplicationPlacementStartup } from "./session-placement-startup.ts";
 import {
   loadSettings,

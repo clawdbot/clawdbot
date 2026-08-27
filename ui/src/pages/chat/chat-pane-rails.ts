@@ -1,4 +1,4 @@
-import { isDesktopPanelAvailable } from "../../app/app-shell-chrome.ts";
+import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
 import { openTaskDetailId } from "./components/chat-detail-slot.ts";
