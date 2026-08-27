@@ -56,14 +56,12 @@ export async function storeMemoryPreimage(params: {
     workspaceDir: params.workspaceDir,
     entries,
   });
-  const retainedKeys = new Set(
-    entries.flatMap(({ value }) => [...extractPromotionKeys(value.content)]),
-  );
+  const retainedKeys = new Set(entries.flatMap(({ value }) => extractPromotionKeys(value.content)));
   // Rotation releases only expired backup references. The current preimage and
   // staged keys still protect live content if the following MEMORY write fails.
   pruneMemoryEntryOrigins({
     agentIds: params.agentIds,
-    entryKeys: current.flatMap(({ value }) => [...extractPromotionKeys(value.content)]),
+    entryKeys: current.flatMap(({ value }) => extractPromotionKeys(value.content)),
     retainedEntryKeys: new Set([...retainedKeys, ...params.retainedEntryKeys]),
   });
   return retainedKeys;

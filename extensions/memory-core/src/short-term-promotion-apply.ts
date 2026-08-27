@@ -371,7 +371,7 @@ export async function applyShortTermPromotions(
     }
     throw err;
   });
-  let existingMarkers = extractPromotionKeys(existingMemory);
+  let existingMarkers = new Set(extractPromotionKeys(existingMemory));
   let alreadyWritten = rehydratedSelected.filter((candidate) => existingMarkers.has(candidate.key));
   let toAppend = rehydratedSelected.filter((candidate) => !existingMarkers.has(candidate.key));
   const consolidationBaseMemoryHash = hashMemoryContent(existingMemory);
@@ -460,7 +460,7 @@ export async function applyShortTermPromotions(
         }
         throw err;
       });
-      existingMarkers = extractPromotionKeys(existingMemory);
+      existingMarkers = new Set(extractPromotionKeys(existingMemory));
       alreadyWritten = authoritativeSelected.filter((candidate) =>
         existingMarkers.has(candidate.key),
       );
@@ -550,7 +550,7 @@ export async function applyShortTermPromotions(
               : "the MEMORY.md directory blocked atomic replacement";
           consolidationResult = null;
           existingMemory = await readMemoryContent(memoryWritePath);
-          existingMarkers = extractPromotionKeys(existingMemory);
+          existingMarkers = new Set(extractPromotionKeys(existingMemory));
           alreadyWritten = authoritativeSelected.filter((candidate) =>
             existingMarkers.has(candidate.key),
           );
@@ -627,9 +627,9 @@ export async function applyShortTermPromotions(
       await writeStore(workspaceDir, latestStore);
       if (options.agentId && committedMemoryContent) {
         retainedPreimageKeys ??= new Set(
-          (await readMemoryPreimages(workspaceDir)).flatMap(({ value }) => [
-            ...extractPromotionKeys(value.content),
-          ]),
+          (await readMemoryPreimages(workspaceDir)).flatMap(({ value }) =>
+            extractPromotionKeys(value.content),
+          ),
         );
         pruneMemoryEntryOrigins({
           agentIds: originAgentIds,

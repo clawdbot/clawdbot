@@ -69,17 +69,6 @@ function openMemoryOriginDatabase(agentId: string): DatabaseSync {
   return db;
 }
 
-function originRow(origin: MemoryEntryOrigin): MemoryEntryOriginRow {
-  return {
-    entry_key: origin.entryKey,
-    agent_id: origin.agentId,
-    session_id: origin.sessionId,
-    session_key: origin.sessionKey,
-    origin_class: origin.originClass,
-    observed_at: origin.observedAt,
-  };
-}
-
 function readOrigin(row: MemoryEntryOriginRow): MemoryEntryOrigin {
   return {
     entryKey: row.entry_key,
@@ -230,6 +219,7 @@ export function hasMemorySessionTombstone(
 export function recordMemoryEntryOrigins(params: {
   agentId: string;
   origins: readonly MemoryEntryOrigin[];
+  entryKey?: string;
 }): MemoryEntryOrigin[] {
   if (params.origins.length === 0) {
     return [];
@@ -245,7 +235,14 @@ export function recordMemoryEntryOrigins(params: {
         db,
         kysely
           .insertInto("memory_entry_origins")
-          .values(originRow(origin))
+          .values({
+            entry_key: params.entryKey ?? origin.entryKey,
+            agent_id: origin.agentId,
+            session_id: origin.sessionId,
+            session_key: origin.sessionKey,
+            origin_class: origin.originClass,
+            observed_at: origin.observedAt,
+          })
           .onConflict((conflict) =>
             conflict.columns(["entry_key", "agent_id", "session_id"]).doNothing(),
           )
@@ -314,9 +311,8 @@ export function reserveMemoryEntryOrigins(params: {
       for (const { operation, parentKeys } of operationParents) {
         const added = recordMemoryEntryOrigins({
           agentId,
-          origins: origins
-            .filter((origin) => parentKeys.has(origin.entryKey))
-            .map((origin) => ({ ...origin, entryKey: operation.candidateKey })),
+          origins: origins.filter((origin) => parentKeys.has(origin.entryKey)),
+          entryKey: operation.candidateKey,
         });
         if (added.length > 0) {
           reservations.push({
@@ -358,7 +354,7 @@ export function pruneMemoryEntryOrigins(params: {
               .select("text")
               .where("source", "=", "memory")
               .where("text", "like", "%openclaw-memory-promotion:%"),
-          ).rows.flatMap(({ text }) => [...extractPromotionKeys(text)]),
+          ).rows.flatMap(({ text }) => extractPromotionKeys(text)),
         ),
       { agentId },
     );

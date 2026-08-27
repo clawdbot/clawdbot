@@ -148,7 +148,7 @@ describe("memory entry origins", () => {
     pruneMemoryEntryOrigins({
       agentIds: ["main"],
       entryKeys: extractPromotionKeys(previousMemory),
-      retainedEntryKeys: extractPromotionKeys(currentMemory),
+      retainedEntryKeys: new Set(extractPromotionKeys(currentMemory)),
     });
 
     expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual([
@@ -181,7 +181,7 @@ describe("memory entry origins", () => {
     pruneMemoryEntryOrigins({
       agentIds: ["main"],
       entryKeys: extractPromotionKeys(previousMemory),
-      retainedEntryKeys: extractPromotionKeys(currentMemory),
+      retainedEntryKeys: new Set(extractPromotionKeys(currentMemory)),
     });
 
     expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual([
