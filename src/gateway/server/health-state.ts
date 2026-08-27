@@ -15,7 +15,9 @@ import type { GatewayConfigRevisionProjector } from "../config-revision-token.js
 import { projectUpdateAvailable } from "../events.js";
 import { collectGatewayHealthSnapshot } from "../health/collector.js";
 import type { HealthSummary } from "../health/types.js";
+import { createPresenceRecipientProjection } from "../presence-projection.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
+import type { GatewayClient } from "../server-methods/types.js";
 import type { GatewayEventLoopHealth } from "./event-loop-health.js";
 
 let presenceVersion = 1;
@@ -49,6 +51,7 @@ const healthRefreshStates: Record<HealthAudience, HealthRefreshState> = {
 };
 
 export function buildGatewaySnapshot(opts: {
+  client: GatewayClient | null;
   includeSensitive?: boolean;
   includeUpdateDetails?: boolean;
   revisionProjector: GatewayConfigRevisionProjector;
@@ -60,7 +63,9 @@ export function buildGatewaySnapshot(opts: {
   const scope = cfg.session?.scope ?? "per-sender";
   const mainSessionKey =
     scope === "global" ? "global" : resolveAgentMainSessionKey({ cfg, agentId: defaultAgentId });
-  const presence = listSystemPresence();
+  const presence = createPresenceRecipientProjection({ cfg, presence: listSystemPresence() })(
+    opts.client,
+  );
   const uptimeMs = Math.round(process.uptime() * 1000);
   const includeUpdateDetails = opts?.includeUpdateDetails === true;
   const updateAvailable =

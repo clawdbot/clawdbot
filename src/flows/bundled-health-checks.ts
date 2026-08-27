@@ -26,6 +26,7 @@ type EmbeddingProviderSetupInspectionResult =
 // Bridges bundled plugin doctor checks into the core health registry.
 type BundledHealthApi = {
   registerCodexManagedAppServerDoctorChecks?: (host: {
+    getHealthCheck: typeof getHealthCheck;
     registerHealthCheck: typeof registerHealthCheck;
   }) => void;
   pluginStateIsolatedDoctorCheckIds?: readonly string[];
@@ -45,6 +46,7 @@ type BundledHealthApi = {
 
 type WorkerProviderHealthApi = {
   registerWorkerProviderDoctorChecks?: (host: {
+    getHealthCheck: typeof getHealthCheck;
     registerHealthCheck: typeof registerHealthCheck;
   }) => void;
 };
@@ -127,7 +129,7 @@ export function registerBundledHealthChecks(params: {
     loadBundledPluginPublicArtifactModuleSync<BundledHealthApi>({
       dirName: "codex",
       artifactBasename: "api.js",
-    }).registerCodexManagedAppServerDoctorChecks?.({ registerHealthCheck });
+    }).registerCodexManagedAppServerDoctorChecks?.({ getHealthCheck, registerHealthCheck });
   }
   if (shouldRegisterPolicyHealth(params)) {
     loadBundledPluginPublicArtifactModuleSync<BundledHealthApi>({
@@ -160,7 +162,7 @@ function registerBundledWorkerProviderHealthChecks(
     loadBundledPluginPublicArtifactModuleFromCandidatesSync<WorkerProviderHealthApi>({
       dirName: pluginId,
       artifactCandidates: ["doctor-health-api.js"],
-    })?.registerWorkerProviderDoctorChecks?.({ registerHealthCheck });
+    })?.registerWorkerProviderDoctorChecks?.({ getHealthCheck, registerHealthCheck });
   }
 }
 

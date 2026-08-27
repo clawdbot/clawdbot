@@ -42,7 +42,10 @@ export function createCrabboxNodeEnrollmentSetup(params: {
     if (executionMode !== "remote-exec") {
       return [];
     }
+    // Uncaught node -e errors dump source and append a stack to the diagnosis,
+    // pushing the actionable message out of the bounded provider error tail.
     const inspectPlugin = [
+      "try{",
       'const fs=require("node:fs"),path=require("node:path"),module=require("node:module");',
       'const inspection=JSON.parse(fs.readFileSync(0,"utf8")),plugin=inspection.plugin;',
       `const version=${JSON.stringify(enrollment.openclawVersion)};`,
@@ -69,6 +72,7 @@ export function createCrabboxNodeEnrollmentSetup(params: {
       'if(!existing.isSymbolicLink()||fs.realpathSync(projected)!==root){throw new Error("Codex node plugin path is occupied")}',
       '}catch(error){if(error.code!=="ENOENT"){throw error}fs.symlinkSync(root,projected)}',
       "}",
+      "}catch(error){console.error(String(error));process.exitCode=1}",
     ].join("");
     return [
       `"$@" plugins inspect codex --json | node -e ${shellQuote(inspectPlugin)} "$state_dir"`,

@@ -1111,6 +1111,51 @@ describe("finalizeSetupWizard", () => {
     expect(gatewayServiceInstall).not.toHaveBeenCalled();
   });
 
+  it.each(
+    (["linux", "win32"] as const).flatMap((platform) =>
+      (["installed", "restarted", "restart-scheduled", "reused", "failed", "skipped"] as const).map(
+        (action) => ({ platform, action }),
+      ),
+    ),
+  )("uses the $platform readiness budget after service $action", async ({ platform, action }) => {
+    await withPlatform(platform, async () => {
+      gatewayServiceIsLoaded.mockResolvedValue(action !== "installed");
+      gatewayServiceRestart.mockResolvedValue({
+        outcome: action === "restart-scheduled" ? "scheduled" : "completed",
+      });
+      if (action === "failed") {
+        buildGatewayInstallPlan.mockRejectedValueOnce(new Error("replacement plan failed"));
+      }
+      const choice = action === "reused" ? "skip" : action === "failed" ? "reinstall" : "restart";
+      const prompter = buildWizardPrompter({ select: vi.fn(async () => choice) as never });
+
+      await finalizeSetupWizard(
+        createFinalizeArgs("quickstart", {
+          opts: { installDaemon: action !== "skipped", skipHealth: false, skipUi: true },
+          prompter,
+        }),
+      );
+
+      if (action === "failed") {
+        expect(waitForGatewayReachable).not.toHaveBeenCalled();
+        expect(probeGatewayReachable).toHaveBeenCalledOnce();
+        return;
+      }
+      const managedStartup = action !== "reused" && action !== "skipped";
+      expect(waitForGatewayReachable).toHaveBeenCalledOnce();
+      const timing = requireMockArg(waitForGatewayReachable) as {
+        deadlineMs?: number;
+        probeTimeoutMs?: number;
+      };
+      expect(timing.deadlineMs).toBe(
+        managedStartup ? (platform === "win32" ? 90_000 : 45_000) : 15_000,
+      );
+      expect(timing.probeTimeoutMs ?? 1_500).toBe(
+        managedStartup ? (platform === "win32" ? 15_000 : 10_000) : 1_500,
+      );
+    });
+  });
+
   it.each([false, true])(
     "detects the surviving gateway after failed reinstall (skipHealth=%s)",
     async (skipHealth) => {

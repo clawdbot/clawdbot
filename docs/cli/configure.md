@@ -56,6 +56,7 @@ When configure starts from a provider auth choice, the default-model and model-p
 - After local config writes, configure installs selected downloadable plugins when the chosen setup path requires them. Remote gateway config does not install local plugin packages.
 - Channel-oriented services (Slack/Discord/Matrix/Microsoft Teams) prompt for channel/room allowlists during setup. You can enter names or IDs; the wizard resolves names to IDs when possible.
 - Choosing **Reinstall** keeps the existing Gateway service in place while you select its runtime and configure validates authentication and prepares the replacement. Cancelling or failing during preparation leaves the existing service installed.
+- After successful daemon setup, the final Gateway status uses the same platform-specific startup grace period as onboarding before reporting reachability. Service installation and Gateway reachability are separate outcomes; if the Gateway is still not detected, run `openclaw health` to check it again.
 - If you run the daemon install step, token auth requires a token. If `gateway.auth.token` is SecretRef-managed, configure validates the SecretRef but does not persist resolved plaintext token values into supervisor service environment metadata; if the SecretRef is unresolved, configure blocks daemon install with actionable remediation guidance.
 - If both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, configure blocks daemon install until you set the mode explicitly.
 

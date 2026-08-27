@@ -133,11 +133,9 @@ suite.define(() => {
         await userBubble.click({ button: "right" });
         const initialMenu = page.locator(".chat-reply-context-menu");
         await initialMenu.waitFor({ state: "visible" });
-        const initialLabels = await initialMenu
-          .locator("button")
-          .evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label")));
-        expect(initialLabels).toContain("Rewind to here");
-        await initialMenu.locator('[aria-label="Rewind to here"]').click();
+        const rewind = initialMenu.getByRole("menuitem", { name: "Rewind to here", exact: true });
+        expect(await rewind.count()).toBe(1);
+        await rewind.click();
         await page.locator(".chat-confirm-popover").waitFor({ state: "visible" });
 
         await gateway.emitGatewayEvent("sessions.changed", {
@@ -168,11 +166,18 @@ suite.define(() => {
         await userBubble.click({ button: "right" });
         const menu = page.locator(".chat-reply-context-menu");
         await menu.waitFor({ state: "visible" });
-        expect(
-          await menu
-            .locator("button")
-            .evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label"))),
-        ).toEqual(["Copy", "Fork from here"]);
+        const actions = menu.locator("button");
+        expect(await actions.count()).toBe(2);
+        for (const [index, name] of ["Copy", "Fork from here"].entries()) {
+          expect(
+            await menu
+              .getByRole("menuitem", { name, exact: true })
+              .evaluate(
+                (element, expected) => element === expected,
+                await actions.nth(index).elementHandle(),
+              ),
+          ).toBe(true);
+        }
         await captureUiProof(page, `archived-actions-${viewport.label}.png`);
         expect(
           await page.evaluate(() => {
@@ -190,7 +195,7 @@ suite.define(() => {
           }),
         ).toEqual({ documentOverflows: false, menuFits: true });
 
-        await menu.locator('[aria-label="Copy"]').click();
+        await menu.getByRole("menuitem", { name: "Copy", exact: true }).click();
         await expect
           .poll(() => page.evaluate(() => navigator.clipboard.readText()))
           .toBe(messageText);
@@ -198,7 +203,7 @@ suite.define(() => {
         await userBubble.click({ button: "right" });
         await page
           .locator(".chat-reply-context-menu")
-          .locator('[aria-label="Fork from here"]')
+          .getByRole("menuitem", { name: "Fork from here", exact: true })
           .click();
         const fork = await gateway.waitForRequest("sessions.fork");
         expect(requireRecord(fork.params)).toMatchObject({

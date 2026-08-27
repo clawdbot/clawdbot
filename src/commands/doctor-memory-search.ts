@@ -16,7 +16,10 @@ import {
   hasAuthProfileStoreSourceForProvider,
   isConfiguredAwsSdkAuthProfileForProvider,
 } from "../agents/auth-profiles.js";
-import { resolveMemorySearchConfig } from "../agents/memory-search.js";
+import {
+  DEFAULT_MEMORY_EMBEDDING_PROVIDER,
+  resolveMemorySearchConfig,
+} from "../agents/memory-search.js";
 import {
   resolveApiKeyForProviderCore,
   resolveEnvApiKey,
@@ -74,13 +77,6 @@ function formatAgentMessage(agentId: string, labelAgent: boolean, message: strin
   return `${labelAgent ? `Agent "${agentId}": ` : ""}${message}`;
 }
 
-type MemoryEmbeddingProviderDoctorMetadata = {
-  providerId: string;
-  authProviderId: string;
-  transport: "local" | "remote";
-  autoSelectPriority?: number;
-};
-
 function formatLocalRuntimeDoctorNote(facts: DoctorMemoryEmbeddingRuntimePayload): string {
   const backend = facts.backend ?? "unknown";
   const build = facts.buildInfo ? `, ${facts.buildInfo}` : "";
@@ -104,85 +100,16 @@ function formatLocalRuntimeDoctorNote(facts: DoctorMemoryEmbeddingRuntimePayload
   return `llama.cpp server: ${backend}${build}${state}${model}${capabilities}${endpoints}${loadError}`;
 }
 
-const BUNDLED_MEMORY_EMBEDDING_PROVIDER_DOCTOR_METADATA: MemoryEmbeddingProviderDoctorMetadata[] = [
-  {
-    providerId: "github-copilot",
-    authProviderId: "github-copilot",
-    transport: "remote",
-    autoSelectPriority: 15,
-  },
-  {
-    providerId: "openai",
-    authProviderId: "openai",
-    transport: "remote",
-    autoSelectPriority: 20,
-  },
-  {
-    providerId: "gemini",
-    authProviderId: "google",
-    transport: "remote",
-    autoSelectPriority: 30,
-  },
-  {
-    providerId: "voyage",
-    authProviderId: "voyage",
-    transport: "remote",
-    autoSelectPriority: 40,
-  },
-  {
-    providerId: "mistral",
-    authProviderId: "mistral",
-    transport: "remote",
-    autoSelectPriority: 50,
-  },
-  {
-    providerId: "bedrock",
-    authProviderId: "amazon-bedrock",
-    transport: "remote",
-    autoSelectPriority: 60,
-  },
-];
-const DEFAULT_MEMORY_EMBEDDING_PROVIDER = "openai";
+const MEMORY_EMBEDDING_PROVIDER_AUTH_IDS = new Map([
+  ["github-copilot", "github-copilot"],
+  ["openai", "openai"],
+  ["gemini", "google"],
+  ["voyage", "voyage"],
+  ["mistral", "mistral"],
+  ["bedrock", "amazon-bedrock"],
+]);
 const OPENAI_COMPATIBLE_MEMORY_EMBEDDING_PROVIDER = "openai-compatible";
 const OPENAI_COMPATIBLE_MODEL_APIS = new Set(["openai-completions", "openai-responses"]);
-
-function resolveMemoryEmbeddingProviderDoctorMetadata(
-  providerId: string,
-): (MemoryEmbeddingProviderDoctorMetadata & { envVars: string[] }) | null {
-  const metadata =
-    BUNDLED_MEMORY_EMBEDDING_PROVIDER_DOCTOR_METADATA.find(
-      (candidate) => candidate.providerId === providerId,
-    ) ?? null;
-  if (!metadata) {
-    return null;
-  }
-  return {
-    ...metadata,
-    envVars: getProviderEnvVars(metadata.authProviderId),
-  };
-}
-
-function listAutoSelectMemoryEmbeddingProviderDoctorMetadata(): Array<
-  MemoryEmbeddingProviderDoctorMetadata & { envVars: string[] }
-> {
-  return BUNDLED_MEMORY_EMBEDDING_PROVIDER_DOCTOR_METADATA.filter(
-    (provider) => typeof provider.autoSelectPriority === "number",
-  )
-    .toSorted((a, b) => (a.autoSelectPriority ?? 0) - (b.autoSelectPriority ?? 0))
-    .map((provider) => ({
-      providerId: provider.providerId,
-      authProviderId: provider.authProviderId,
-      transport: provider.transport,
-      autoSelectPriority: provider.autoSelectPriority,
-      envVars: getProviderEnvVars(provider.authProviderId),
-    }));
-}
-
-function resolveSuggestedRemoteMemoryProvider(): string | undefined {
-  return listAutoSelectMemoryEmbeddingProviderDoctorMetadata().find(
-    (provider) => provider.transport === "remote",
-  )?.providerId;
-}
 
 function hasConfiguredAwsSdkAuthForProvider(provider: string, cfg: OpenClawConfig): boolean {
   const providerConfig = findNormalizedProviderValue(cfg.models?.providers, provider);
@@ -202,11 +129,7 @@ function isOpenAICompatibleMemoryProvider(providerId: string, cfg: OpenClawConfi
   if (normalizedProviderId === OPENAI_COMPATIBLE_MEMORY_EMBEDDING_PROVIDER) {
     return true;
   }
-  if (
-    BUNDLED_MEMORY_EMBEDDING_PROVIDER_DOCTOR_METADATA.some(
-      (provider) => provider.providerId === normalizedProviderId,
-    )
-  ) {
+  if (MEMORY_EMBEDDING_PROVIDER_AUTH_IDS.has(normalizedProviderId)) {
     return false;
   }
   const providerConfig = findNormalizedProviderValue(cfg.models?.providers, providerId);
@@ -614,8 +537,7 @@ async function noteMemorySearchHealthForAgent(
     );
     return;
   }
-  const provider =
-    resolved.provider === "auto" ? DEFAULT_MEMORY_EMBEDDING_PROVIDER : resolved.provider;
+  const provider = resolved.provider;
 
   const backendConfig = resolveActiveMemoryBackendConfig({ cfg, agentId });
   if (!backendConfig) {
@@ -633,7 +555,6 @@ async function noteMemorySearchHealthForAgent(
   }
 
   if (provider === "local") {
-    const suggestedRemoteProvider = resolveSuggestedRemoteMemoryProvider();
     const runtimeFacts = opts?.gatewayMemoryProbe?.runtimeFacts;
     if (opts?.gatewayMemoryProbe?.checked && opts.gatewayMemoryProbe.ready) {
       if (runtimeFacts) {
@@ -661,9 +582,7 @@ async function noteMemorySearchHealthForAgent(
         "Fix (pick one):",
         `- Install the llama.cpp provider plugin: ${formatCliCommand("openclaw plugins install @openclaw/llama-cpp-provider")}`,
         `- Set a local GGUF model path in config`,
-        suggestedRemoteProvider
-          ? `- Switch to a remote provider: ${formatCliCommand(`openclaw config set memory.search.provider ${suggestedRemoteProvider}`)}`
-          : `- Switch to a remote embedding provider in config`,
+        `- Switch to a remote provider: ${formatCliCommand(`openclaw config set memory.search.provider ${DEFAULT_MEMORY_EMBEDDING_PROVIDER}`)}`,
         "",
         `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
       ]
@@ -739,7 +658,7 @@ async function noteMemorySearchHealthForAgent(
     return;
   }
 
-  // Remote provider — check for API key. Legacy provider: "auto" resolves to OpenAI.
+  // Remote provider — check for API key.
   if (
     hasRemoteApiKey ||
     (await hasApiKeyForProvider(provider, cfg, agentDir, {
@@ -809,8 +728,7 @@ async function hasApiKeyForProvider(
   agentDir: string,
   opts?: { skipProfileResolution?: boolean },
 ): Promise<boolean> {
-  const metadata = resolveMemoryEmbeddingProviderDoctorMetadata(provider);
-  const authProviderId = metadata?.authProviderId ?? provider;
+  const authProviderId = MEMORY_EMBEDDING_PROVIDER_AUTH_IDS.get(provider) ?? provider;
   if (
     resolveEnvApiKey(authProviderId) ||
     resolveUsableCustomProviderApiKey({ cfg, provider: authProviderId })
@@ -847,8 +765,9 @@ function resolvePrimaryMemoryProviderEnvVar(provider: string): string {
   if (provider === "openai") {
     return "OPENAI_API_KEY";
   }
-  const metadata = resolveMemoryEmbeddingProviderDoctorMetadata(provider);
-  return metadata?.envVars[0] ?? `${provider.toUpperCase()}_API_KEY`;
+  const authProviderId = MEMORY_EMBEDDING_PROVIDER_AUTH_IDS.get(provider);
+  const envVar = authProviderId ? getProviderEnvVars(authProviderId)[0] : undefined;
+  return envVar ?? `${provider.toUpperCase()}_API_KEY`;
 }
 
 function buildGatewayProbeWarning(

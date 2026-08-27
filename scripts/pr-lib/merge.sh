@@ -251,31 +251,42 @@ merge_run() {
   fi
 
   delete_remote_pr_head_branch_after_merge() {
-    local head_json
-    head_json=$(gh pr view "$pr" --json headRefName,headRepository,headRepositoryOwner,isCrossRepository,maintainerCanModify)
-
-    local head_ref
+    local head_json head_ref
+    if ! head_json=$(gh pr view "$pr" --json headRefName,headRepository,headRepositoryOwner); then
+      echo "Warning: unable to read PR head metadata for remote branch cleanup"
+      return 0
+    fi
     head_ref=$(printf '%s\n' "$head_json" | jq -r '.headRefName // ""')
     if [ -z "$head_ref" ]; then
       return 0
     fi
 
-    local repo_owner
+    local repo_owner repo_name
     repo_owner=$(printf '%s\n' "$head_json" | jq -r '.headRepositoryOwner.login // ""')
-    local repo_name
     repo_name=$(printf '%s\n' "$head_json" | jq -r '.headRepository.name // ""')
     if [ -z "$repo_owner" ] || [ -z "$repo_name" ]; then
       echo "Warning: unable to resolve head repository for remote branch cleanup"
       return 0
     fi
 
-    local encoded_ref
+    local encoded_ref delete_error matching_refs
     encoded_ref=$(jq -rn --arg value "heads/$head_ref" '$value|@uri')
-    if gh_plain api -X DELETE "repos/$repo_owner/$repo_name/git/refs/$encoded_ref" >/dev/null 2>&1; then
+    if delete_error=$(gh_plain api -X DELETE "repos/$repo_owner/$repo_name/git/refs/$encoded_ref" 2>&1); then
+      return 0
+    fi
+
+    # GitHub may auto-delete the head before cleanup. Only a fresh, valid ref
+    # listing proves absence; longer prefix siblings are not the target.
+    if matching_refs=$(gh_plain api -X GET "repos/$repo_owner/$repo_name/git/matching-refs/$encoded_ref") &&
+      printf '%s\n' "$matching_refs" | jq -se --arg ref "refs/heads/$head_ref" '
+        length == 1 and (.[0] | type == "array" and
+          all(.[]; (.ref | type == "string" and startswith($ref)) and .ref != $ref))
+      ' >/dev/null; then
       return 0
     fi
 
     echo "Warning: failed to delete remote branch $repo_owner/$repo_name:$head_ref"
+    printf '%s\n' "$delete_error" >&2
     return 0
   }
 

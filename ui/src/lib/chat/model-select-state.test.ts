@@ -268,35 +268,57 @@ describe("chat-model-select-state", () => {
     ]);
   });
 
-  it("keeps an available OpenAI route when an unavailable legacy route has the same model id", () => {
-    const state = createChatModelState({
-      chatModelCatalog: createModelCatalog(
-        {
-          id: "gpt-5.5",
-          name: "GPT-5.5",
-          provider: "openai",
-          available: true,
-        },
-        {
-          id: "gpt-5.5",
-          name: "GPT-5.5",
-          provider: "codex",
-          available: false,
-        },
-      ),
-      sessionsResult: createSessionsListResult({
-        model: "gpt-5.5",
-        modelProvider: "codex",
-        defaultsModel: "gpt-5.5",
-        defaultsProvider: "codex",
-      }),
-    });
+  it.each([
+    {
+      name: "available",
+      available: true,
+      options: [{ value: "openai/gpt-5.5", label: "GPT-5.5" }],
+    },
+    {
+      name: "indeterminate",
+      available: undefined,
+      options: [{ value: "openai/gpt-5.5", label: "GPT-5.5" }],
+    },
+    {
+      name: "all-cold",
+      available: false,
+      options: [
+        { value: "openai/gpt-5.5", label: "GPT-5.5 · openai", disabled: true },
+        { value: "codex/gpt-5.5", label: "GPT-5.5 · codex", disabled: true },
+      ],
+    },
+  ])(
+    "preserves $name route labels and options beside a cold legacy alias",
+    ({ available, options }) => {
+      const state = createChatModelState({
+        chatModelCatalog: createModelCatalog(
+          {
+            id: "gpt-5.5",
+            name: "GPT-5.5",
+            provider: "openai",
+            available,
+          },
+          {
+            id: "gpt-5.5",
+            name: "GPT-5.5",
+            provider: "codex",
+            available: false,
+          },
+        ),
+        sessionsResult: createSessionsListResult({
+          model: "gpt-5.5",
+          modelProvider: "codex",
+          defaultsModel: "gpt-5.5",
+          defaultsProvider: "codex",
+        }),
+      });
 
-    const resolved = resolveChatModelSelectState(state);
-    expect(resolved.currentOverride).toBe("openai/gpt-5.5");
-    expect(resolved.defaultModel).toBe("openai/gpt-5.5");
-    expect(resolved.options).toEqual([{ value: "openai/gpt-5.5", label: "GPT-5.5" }]);
-  });
+      const resolved = resolveChatModelSelectState(state);
+      expect(resolved.currentOverride).toBe("openai/gpt-5.5");
+      expect(resolved.defaultModel).toBe("openai/gpt-5.5");
+      expect(resolved.options).toEqual(options);
+    },
+  );
 
   it("preserves an exact available OpenAI route when a legacy route is also available", () => {
     const state = createChatModelState({
@@ -384,20 +406,24 @@ describe("chat-model-select-state", () => {
     ).toBe(true);
   });
 
-  it("uses the session provider for fast mode with a slash-containing raw model id", () => {
+  it.each([
+    { name: "missing", providers: [] },
+    { name: "ambiguous", providers: ["xai", "proxy"] },
+  ])("uses the session provider with a $name raw-id catalog", ({ providers }) => {
+    const model = "google/gemma-4-26b-a4b-it";
     const sessionsResult = createSessionsListResult({
-      model: "google/gemma-4-26b-a4b-it",
+      model,
       modelProvider: "xai",
-      defaultsModel: "google/gemma-4-26b-a4b-it",
+      defaultsModel: model,
       defaultsProvider: "xai",
     });
 
     expect(
       resolveChatFastModeSelectState({
         activeRunId: null,
-        catalog: [],
+        catalog: providers.map((provider) => ({ id: model, name: "Gemma", provider })),
         connected: true,
-        currentModelOverride: "google/gemma-4-26b-a4b-it",
+        currentModelOverride: model,
         gatewayAvailable: true,
         loading: false,
         sending: false,

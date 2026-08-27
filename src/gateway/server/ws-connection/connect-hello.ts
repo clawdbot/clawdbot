@@ -101,6 +101,7 @@ export async function sendGatewayHello(
       : undefined;
   const canMigrateRecovery = role === "operator" && !authenticatedPrincipal && Boolean(deviceToken);
   const snapshot = buildGatewaySnapshot({
+    client: context.handler.getClient(),
     includeSensitive: scopes.includes(ADMIN_SCOPE),
     includeUpdateDetails: canReadDetailedUpdateMetadata(role, scopes),
     revisionProjector: buildRequestContext().configRevisionProjector,
