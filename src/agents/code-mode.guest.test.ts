@@ -492,6 +492,12 @@ describe("Code Mode guest execution", () => {
       sessionKey: "agent:main:main",
       runId: "run-code-mode",
       catalogRef,
+      toolHookContext: {
+        agentId: "main",
+        sessionId: "session-code-mode",
+        sessionKey: "agent:main:main",
+        runId: "run-code-mode",
+      },
     });
 
     let result = await expectDefined(tools[0], "exec tool").execute("code-call-network-error", {

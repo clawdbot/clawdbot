@@ -4,6 +4,7 @@ import type { AnyAgentTool } from "./tools/common.js";
 export type BeforeToolCallDiagnosticOptions = {
   emitDiagnostics: boolean;
   protectNetworkErrors?: boolean;
+  approvalMode?: "request" | "report" | "deny";
 };
 
 export const BEFORE_TOOL_CALL_WRAPPED = Symbol("beforeToolCallWrapped");
@@ -45,6 +46,12 @@ export function setBeforeToolCallDiagnosticsEnabled(tool: AnyAgentTool, enabled:
   if (options) {
     options.emitDiagnostics = enabled;
   }
+}
+
+export function getBeforeToolCallDiagnosticOptions(
+  tool: AnyAgentTool,
+): BeforeToolCallDiagnosticOptions | undefined {
+  return withBeforeToolCallMetadata(tool)[BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS];
 }
 
 /** Copy before_tool_call marker metadata when another wrapper replaces a tool. */
