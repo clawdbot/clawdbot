@@ -8,6 +8,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { DeviceIdentity } from "../infra/device-identity.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import { inheritOptionFromParent } from "./command-options.js";
+import { resolveGatewayLocalPortOverride } from "./gateway-port-option.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.types.js";
 export type { GatewayRpcOpts } from "./gateway-rpc.types.js";
 
@@ -30,6 +32,34 @@ export function addGatewayClientOptions(cmd: Command, defaults?: { timeoutMs?: n
     .option("--password <password>", "Gateway password (if required)")
     .option("--timeout <ms>", "Timeout in ms", String(defaults?.timeoutMs ?? 30_000))
     .option("--expect-final", "Wait for final response (agent)", false);
+}
+
+export function resolveGatewayRpcOptions<T extends { token?: string; password?: string }>(
+  opts: T,
+  command?: Command,
+): T {
+  return {
+    ...opts,
+    token: opts.token ?? inheritOptionFromParent<string>(command, "token"),
+    password: opts.password ?? inheritOptionFromParent<string>(command, "password"),
+  };
+}
+
+export function resolveGatewayRpcOptionsWithLocalPort<
+  T extends Pick<GatewayRpcOpts, "url" | "port" | "token" | "password"> & {
+    localPortOverride?: number;
+  },
+>(opts: T, command?: Command) {
+  // Leaf defaults must not hide an explicit port supplied before the subcommand.
+  const port = command?.getOptionValueSource("port") === "default" ? undefined : opts.port;
+  const rpcOpts = {
+    ...resolveGatewayRpcOptions(opts, command),
+    port: port ?? inheritOptionFromParent<string>(command, "port"),
+  };
+  return {
+    ...rpcOpts,
+    localPortOverride: resolveGatewayLocalPortOverride(rpcOpts),
+  };
 }
 
 export async function callGatewayFromCli(

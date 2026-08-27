@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
@@ -10,6 +11,8 @@ import type { GatewayRestartHandoff } from "../../infra/restart-handoff.js";
 import { defaultRuntime } from "../../runtime.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { VERSION } from "../../version.js";
+import { registerGatewayCli } from "../gateway-cli/register.js";
+import { registerDaemonCli } from "./register.js";
 import type { GatewayRestartSnapshot } from "./restart-health.js";
 import { gatherDaemonStatus, renderPortDiagnosticsForCli } from "./status.gather.js";
 import { printDaemonStatus } from "./status.print.js";
@@ -491,6 +494,95 @@ describe("gatherDaemonStatus", () => {
     }
     expect(inspectGatewayRestart).not.toHaveBeenCalled();
     expect(inspectWindowsGatewayFirewall).not.toHaveBeenCalled();
+  });
+
+  it.each(
+    [
+      ["gateway", "status", "--port", "19002"],
+      ["gateway", "--port", "19002", "status"],
+      ["gateway", "--port", "19003", "status", "--port", "19002"],
+      ["daemon", "status", "--port", "19002"],
+    ].map((argv) => ({ name: argv.join(" "), argv })),
+  )("targets the selected local port for $name", async ({ argv }) => {
+    const program = new Command().enablePositionalOptions().exitOverride();
+    program.configureOutput({ writeErr: () => {} });
+    registerGatewayCli(program);
+    registerDaemonCli(program);
+    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    try {
+      await program.parseAsync([...argv, "--json"], { from: "user" });
+
+      expect(callGatewayStatusProbe).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: "ws://127.0.0.1:19002",
+          localPortOverride: 19002,
+          config: cliLoadedConfig,
+          configPath: "/tmp/openclaw-cli/openclaw.json",
+        }),
+      );
+      expect(writeJson).toHaveBeenCalledWith(
+        expect.objectContaining({
+          gateway: expect.objectContaining({
+            port: 19002,
+            portSource: "cli",
+            probeUrl: "ws://127.0.0.1:19002",
+          }),
+          rpc: expect.objectContaining({ url: "ws://127.0.0.1:19002" }),
+          service: expect.objectContaining({ targetRole: "diagnostic-only" }),
+        }),
+      );
+    } finally {
+      writeJson.mockRestore();
+    }
+  });
+
+  it.each([true, false])(
+    "keeps an explicit local port in remote config with probe=%s",
+    async (probe) => {
+      cliLoadedConfig = {
+        gateway: {
+          mode: "remote",
+          bind: "tailnet",
+          tls: { enabled: true },
+          auth: { token: "local-token" },
+          remote: { url: "wss://gateway.example", token: "remote-token" },
+        },
+      };
+      const status = await gatherStatus({ rpc: { localPortOverride: 19002 }, probe, deep: true });
+
+      expect(status.gateway).toMatchObject({
+        port: 19002,
+        portSource: "cli",
+        probeUrl: "wss://127.0.0.1:19002",
+      });
+      expect(inspectPortConnections).toHaveBeenCalledWith(19002);
+      expect(status.service.targetRole).toBe("diagnostic-only");
+      expect(inspectGatewayRestart).not.toHaveBeenCalled();
+      if (probe) {
+        expect(callGatewayStatusProbe).toHaveBeenCalledWith(
+          expect.objectContaining({
+            url: "wss://127.0.0.1:19002",
+            token: "local-token",
+            tlsFingerprint: "sha256:11:22:33:44",
+          }),
+        );
+      } else {
+        expect(callGatewayStatusProbe).not.toHaveBeenCalled();
+        expect(status.rpc).toBeUndefined();
+      }
+    },
+  );
+
+  it.each([
+    { rpc: { port: "65536" }, message: "--port must be an integer between 1 and 65535." },
+    {
+      rpc: { port: "19002", url: "ws://localhost:19002" },
+      message: "Use either --url or --port, not both.",
+    },
+  ])("rejects invalid status target $rpc before service reads", async ({ rpc, message }) => {
+    await expect(gatherStatus({ rpc })).rejects.toThrow(message);
+    expect(serviceReadCommand).not.toHaveBeenCalled();
+    expect(callGatewayStatusProbe).not.toHaveBeenCalled();
   });
 
   it("batches daemon and CLI port status inspection when ports differ", async () => {
