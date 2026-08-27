@@ -8,6 +8,12 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
+  createEmptyPluginRegistry,
+  getActivePluginRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
   clearSessionStoreCacheForTest,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
@@ -29,9 +35,19 @@ describe("Codex command RPC helpers", () => {
   let agentDir: string;
   let config: OpenClawConfig;
   let harness: ReturnType<typeof createClientHarness>;
+  let previousPluginRegistry: ReturnType<typeof getActivePluginRegistry>;
   const sessionKey = "agent:main:control";
 
   beforeEach(async () => {
+    previousPluginRegistry = getActivePluginRegistry();
+    const registry = createEmptyPluginRegistry();
+    // Provide the provider hook contract; source discovery is outside this control-auth fixture.
+    registry.providers.push({
+      pluginId: "openai",
+      provider: { id: "openai", label: "OpenAI", auth: [] },
+      source: "test",
+    });
+    setActivePluginRegistry(registry);
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-control-auth-"));
     agentDir = path.join(tempDir, "agents", "main", "agent");
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
@@ -52,6 +68,11 @@ describe("Codex command RPC helpers", () => {
   });
 
   afterEach(async () => {
+    if (previousPluginRegistry) {
+      setActivePluginRegistry(previousPluginRegistry);
+    } else {
+      resetPluginRuntimeStateForTest();
+    }
     harness.client.close();
     clearRuntimeAuthProfileStoreSnapshots();
     clearSessionStoreCacheForTest();
