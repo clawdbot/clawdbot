@@ -365,6 +365,44 @@ describe("createPdfTool", () => {
     });
   });
 
+  it("resolves workspace-relative references against workspaceDir like the image tool", async () => {
+    await withTempPdfAgentDir(async (agentDir) => {
+      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pdf-ws-"));
+      try {
+        await fs.mkdir(path.join(workspaceDir, "docs"), { recursive: true });
+        await fs.writeFile(
+          path.join(workspaceDir, "docs", "guide.pdf"),
+          FAKE_PDF_MEDIA.buffer,
+        );
+        const { loadSpy } = await stubPdfToolInfra(agentDir, {
+          mockLoad: false,
+          provider: "anthropic",
+          input: ["text", "document"],
+        });
+        vi.spyOn(pdfNativeProviders, "anthropicAnalyzePdf").mockResolvedValue("native summary");
+        const tool = requirePdfTool(
+          (await loadCreatePdfTool())({
+            config: withPdfModel(ANTHROPIC_PDF_MODEL),
+            agentDir,
+            workspaceDir,
+            fsPolicy: { workspaceOnly: true },
+          }),
+        );
+
+        const result = await tool.execute("t1", {
+          prompt: "summarize",
+          pdf: "docs/guide.pdf",
+        });
+
+        const [loadRef] = firstMockCall(loadSpy, "loadWebMediaRaw");
+        expect(loadRef).toBe(path.join(workspaceDir, "docs", "guide.pdf"));
+        expect(result.content).toEqual([{ type: "text", text: "native summary" }]);
+      } finally {
+        await fs.rm(workspaceDir, { recursive: true, force: true });
+      }
+    });
+  });
+
   it("rejects unsupported scheme references", async () => {
     await withConfiguredPdfTool(async (tool) => {
       const result = await tool.execute("t1", {

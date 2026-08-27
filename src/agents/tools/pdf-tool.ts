@@ -8,6 +8,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
+import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { bindModelLlmRuntime } from "../../llm/model-runtime-binding.js";
 import { complete } from "../../llm/stream.js";
@@ -531,6 +532,20 @@ export function createPdfTool(options?: {
           }
           if (trimmed.startsWith("~")) {
             return resolveUserPath(trimmed);
+          }
+          // Resolve relative paths against workspaceDir so agents can reference
+          // workspace-relative PDFs (e.g. "docs/report.pdf") — matching the
+          // image tool behaviour.
+          if (
+            !isHttpUrl &&
+            !refInfo.isFileUrl &&
+            !refInfo.isDataUrl &&
+            !refInfo.isMediaStoreUrl &&
+            !refInfo.looksLikeWindowsDrivePath &&
+            !path.isAbsolute(trimmed) &&
+            options?.workspaceDir
+          ) {
+            return path.resolve(options.workspaceDir, trimmed);
           }
           return trimmed;
         })();
