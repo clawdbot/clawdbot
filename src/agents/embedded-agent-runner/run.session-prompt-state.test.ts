@@ -93,6 +93,9 @@ describe("embedded run session prompt state", () => {
       await state.prepareCompactedTranscriptRetry();
       await state.settleOwnedTranscriptProjection(BASE_RUN_PARAMS.sessionTarget);
       expect(waitForProjection).toHaveBeenCalledWith(BASE_RUN_PARAMS.sessionTarget);
+
+      await state.settleOwnedTranscriptProjection(BASE_RUN_PARAMS.sessionTarget);
+      expect(waitForProjection).toHaveBeenCalledOnce();
     } finally {
       waitForProjection.mockRestore();
     }

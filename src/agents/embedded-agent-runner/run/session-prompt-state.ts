@@ -182,6 +182,7 @@ export function createEmbeddedRunSessionPromptState(input: {
     settleOwnedTranscriptProjection: async (target: AgentRunSessionTarget | undefined) => {
       const sessionId = target?.sessionId ?? activeSessionId;
       if (settleOwnedTranscriptProjection && target && sessionId) {
+        settleOwnedTranscriptProjection = false;
         const { waitForSessionTranscriptProjection } =
           await import("../../../config/sessions/session-transcript-reconcile.js");
         await waitForSessionTranscriptProjection({ ...target, sessionId });
