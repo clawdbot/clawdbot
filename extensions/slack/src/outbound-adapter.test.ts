@@ -1,11 +1,33 @@
 // Slack tests cover outbound adapter plugin behavior.
 import { presentationToInteractiveControlsReply } from "openclaw/plugin-sdk/interactive-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { SLACK_QUESTION_FINALIZATION_BLOCKS } from "./reply-action-ids.js";
 
 const sendMessageSlackMock = vi.hoisted(() => vi.fn());
+const updateMessageSlackMock = vi.hoisted(() => vi.fn());
+const registerChannelDeliveryMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./send.js", () => ({
   sendMessageSlack: (...args: unknown[]) => sendMessageSlackMock(...args),
+}));
+
+vi.mock("./send.runtime.js", () => ({
+  sendMessageSlack: (...args: unknown[]) => sendMessageSlackMock(...args),
+  updateMessageSlack: (...args: unknown[]) => updateMessageSlackMock(...args),
+}));
+
+vi.mock("openclaw/plugin-sdk/question-gateway-runtime", () => ({
+  questionGatewayRuntime: {
+    readAskUserQuestionId: (payload: { channelData?: { askUser?: unknown } }) => {
+      const askUser = payload.channelData?.askUser;
+      if (!askUser || typeof askUser !== "object" || Array.isArray(askUser)) {
+        return undefined;
+      }
+      const questionId = (askUser as { questionId?: unknown }).questionId;
+      return typeof questionId === "string" && questionId ? questionId : undefined;
+    },
+    registerChannelDelivery: (...args: unknown[]) => registerChannelDeliveryMock(...args),
+  },
 }));
 
 const { slackOutbound } = await import("./outbound-adapter.js");
@@ -27,6 +49,8 @@ describe("slackOutbound", () => {
 
   beforeEach(() => {
     sendMessageSlackMock.mockReset();
+    updateMessageSlackMock.mockReset();
+    registerChannelDeliveryMock.mockReset();
   });
 
   it("sends mirrored question controls once at the Slack message block limit", async () => {
@@ -530,5 +554,294 @@ describe("slackOutbound", () => {
         },
       }),
     );
+  });
+
+  it("delivers a TTS voice note as a captioned media upload when no rendered blocks are present", async () => {
+    sendMessageSlackMock.mockResolvedValueOnce({ messageId: "m-voice" });
+
+    const result = await slackOutbound.sendPayload!({
+      cfg,
+      to: "C123",
+      text: "",
+      payload: {
+        text: "Spoken summary of the deploy.",
+        mediaUrl: "file:///tmp/tts/deploy.ogg",
+        audioAsVoice: true,
+        spokenText: "Spoken summary of the deploy.",
+        trustedLocalMedia: true,
+      },
+      mediaLocalRoots: ["/tmp"],
+      accountId: "default",
+    });
+
+    expect(sendMessageSlackMock).toHaveBeenCalledOnce();
+    expect(sendMessageSlackMock).toHaveBeenCalledWith(
+      "C123",
+      "Spoken summary of the deploy.",
+      expect.objectContaining({
+        mediaUrl: "file:///tmp/tts/deploy.ogg",
+        mediaLocalRoots: ["/tmp"],
+      }),
+    );
+    expect(sendMessageSlackMock.mock.calls[0]?.[2]).not.toHaveProperty("blocks");
+    expect(result).toMatchObject({ channel: "slack", messageId: "m-voice" });
+  });
+
+  it("preserves rendered blocks alongside a TTS voice-note media upload", async () => {
+    sendMessageSlackMock
+      .mockResolvedValueOnce({ messageId: "m-voice" })
+      .mockResolvedValueOnce({ messageId: "m-blocks" });
+
+    const result = await slackOutbound.sendPayload!({
+      cfg,
+      to: "C123",
+      text: "",
+      payload: {
+        text: "Spoken summary of the deploy.",
+        mediaUrl: "file:///tmp/tts/deploy.ogg",
+        audioAsVoice: true,
+        spokenText: "Spoken summary of the deploy.",
+        trustedLocalMedia: true,
+        presentation: {
+          blocks: [{ type: "text", text: "Block body that must accompany the voice note" }],
+        },
+      },
+      mediaLocalRoots: ["/tmp"],
+      accountId: "default",
+    });
+
+    expect(sendMessageSlackMock).toHaveBeenCalledTimes(2);
+    expect(sendMessageSlackMock).toHaveBeenNthCalledWith(
+      1,
+      "C123",
+      "Spoken summary of the deploy.",
+      {
+        cfg,
+        threadTs: undefined,
+        accountId: "default",
+        mediaUrl: "file:///tmp/tts/deploy.ogg",
+        mediaAccess: undefined,
+        mediaLocalRoots: ["/tmp"],
+        mediaReadFile: undefined,
+      },
+    );
+    expect(sendMessageSlackMock.mock.calls[0]?.[2]).not.toHaveProperty("blocks");
+    expect(sendMessageSlackMock).toHaveBeenNthCalledWith(
+      2,
+      "C123",
+      "Block body that must accompany the voice note",
+      expect.objectContaining({
+        blocks: [
+          {
+            type: "section",
+            text: { type: "mrkdwn", text: "Block body that must accompany the voice note" },
+          },
+        ],
+      }),
+    );
+    expect(sendMessageSlackMock.mock.calls[1]?.[2]?.blocks).not.toContainEqual(
+      expect.objectContaining({
+        text: expect.objectContaining({ text: "Spoken summary of the deploy." }),
+      }),
+    );
+    expect(result).toMatchObject({
+      channel: "slack",
+      receipt: {
+        platformMessageIds: ["m-voice", "m-blocks"],
+        primaryPlatformMessageId: "m-voice",
+      },
+    });
+  });
+
+  it("does not take the voice path when audioAsVoice is set but no media is present", async () => {
+    sendMessageSlackMock.mockResolvedValueOnce({ messageId: "m-blocks" });
+
+    await slackOutbound.sendPayload!({
+      cfg,
+      to: "C123",
+      text: "",
+      payload: {
+        text: "fallback text",
+        audioAsVoice: true,
+        channelData: {
+          slack: {
+            blocks: [{ type: "divider" }],
+          },
+        },
+      },
+      accountId: "default",
+    });
+
+    expect(sendMessageSlackMock).toHaveBeenCalledOnce();
+    expect(sendMessageSlackMock.mock.calls[0]?.[2]).toHaveProperty("blocks");
+  });
+
+  it("keeps authored text visible when audioAsVoice is set with rendered blocks but no media", async () => {
+    sendMessageSlackMock.mockResolvedValueOnce({ messageId: "m-blocks" });
+
+    await slackOutbound.sendPayload!({
+      cfg,
+      to: "C123",
+      text: "",
+      payload: {
+        text: "Spoken summary that must still appear.",
+        audioAsVoice: true,
+        presentation: {
+          blocks: [{ type: "text", text: "Auxiliary block body" }],
+        },
+      },
+      accountId: "default",
+    });
+
+    expect(sendMessageSlackMock).toHaveBeenCalledOnce();
+    const call = sendMessageSlackMock.mock.calls[0];
+    expect(call?.[1]).toContain("Spoken summary that must still appear.");
+    expect(call?.[2]?.blocks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "section",
+          text: expect.objectContaining({ text: "Spoken summary that must still appear." }),
+        }),
+      ]),
+    );
+  });
+
+  it("does not duplicate caption text in rendered blocks across render-then-send", async () => {
+    sendMessageSlackMock
+      .mockResolvedValueOnce({ messageId: "m-voice" })
+      .mockResolvedValueOnce({ messageId: "m-blocks" });
+
+    const payload = {
+      text: "Spoken summary of the deploy.",
+      mediaUrl: "file:///tmp/tts/deploy.ogg",
+      audioAsVoice: true,
+      spokenText: "Spoken summary of the deploy.",
+      trustedLocalMedia: true,
+      presentation: {
+        blocks: [{ type: "text" as const, text: "Block body that must accompany the voice note" }],
+      },
+    };
+    const rendered = await slackOutbound.renderPresentation!({
+      payload,
+      presentation: payload.presentation,
+      ctx: { cfg, to: "C123", text: "", payload },
+    });
+
+    await slackOutbound.sendPayload!({
+      cfg,
+      to: "C123",
+      text: "",
+      payload: rendered ?? payload,
+      mediaLocalRoots: ["/tmp"],
+      accountId: "default",
+    });
+
+    expect(sendMessageSlackMock).toHaveBeenCalledTimes(2);
+    // The audio upload carries the spoken text as its caption.
+    expect(sendMessageSlackMock).toHaveBeenNthCalledWith(
+      1,
+      "C123",
+      "Spoken summary of the deploy.",
+      expect.objectContaining({ mediaUrl: "file:///tmp/tts/deploy.ogg" }),
+    );
+    expect(sendMessageSlackMock.mock.calls[0]?.[2]).not.toHaveProperty("blocks");
+    // The follow-up block message carries only the auxiliary content; the
+    // spoken summary is not materialized into a section block.
+    const blockCall = sendMessageSlackMock.mock.calls[1]?.[2];
+    expect(blockCall?.blocks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "section",
+          text: expect.objectContaining({ text: "Block body that must accompany the voice note" }),
+        }),
+      ]),
+    );
+    expect(blockCall?.blocks).not.toContainEqual(
+      expect.objectContaining({
+        text: expect.objectContaining({ text: "Spoken summary of the deploy." }),
+      }),
+    );
+  });
+
+  it("keeps voice caption out of question-card finalization text", async () => {
+    // The question-card finalization path rebuilds the delivered card from the
+    // signed rendered resolution. For voice media the authored text is the
+    // upload caption, so finalization must not write it back as the card's
+    // message text/accessibility fallback after the user answers.
+    let capturedFinalize: ((statusLine: string) => Promise<void>) | undefined;
+    registerChannelDeliveryMock.mockImplementation(
+      (params: { finalize: (statusLine: string) => Promise<void> }) => {
+        capturedFinalize = params.finalize;
+      },
+    );
+    updateMessageSlackMock.mockResolvedValue({ ok: true });
+
+    const presentation = { blocks: [] as [] };
+    const basePayload = {
+      text: "Spoken summary of the deploy.",
+      mediaUrl: "file:///tmp/tts/deploy.ogg",
+      audioAsVoice: true,
+      spokenText: "Spoken summary of the deploy.",
+      trustedLocalMedia: true,
+      presentation,
+      channelData: {
+        askUser: { questionId: "q-1", optionValues: ["Yes"] },
+        slack: {
+          blocks: [
+            {
+              type: "actions" as const,
+              elements: [
+                {
+                  type: "button" as const,
+                  action_id: "openclaw:question_button",
+                  text: { type: "plain_text" as const, text: "Yes" },
+                },
+              ],
+            },
+          ],
+        },
+      },
+    };
+    const rendered = await slackOutbound.renderPresentation!({
+      payload: basePayload,
+      presentation,
+      ctx: { cfg, to: "C123", text: "", payload: basePayload },
+    });
+    // Sanity: renderPresentation must produce a signed resolution for the
+    // finalization path to read back.
+    expect(rendered).not.toBeNull();
+    const renderedPayload = rendered!;
+    const renderedSlackData = renderedPayload.channelData?.slack as
+      | Record<string, unknown>
+      | undefined;
+    expect(renderedSlackData?.renderedPresentationSegments).toBeDefined();
+
+    await slackOutbound.afterDeliverPayload!({
+      cfg,
+      target: { channel: "slack", to: "C123", accountId: "default" },
+      payload: renderedPayload,
+      results: [
+        {
+          channel: "slack",
+          messageId: "m-card",
+          target: { kind: "channel" as const, id: "C123" },
+          meta: {
+            slackQuestionActionIds: ["openclaw:question_button"],
+            [SLACK_QUESTION_FINALIZATION_BLOCKS]: [
+              { type: "section", text: { type: "mrkdwn", text: "Pick an option" } },
+            ],
+          },
+        },
+      ],
+    });
+
+    expect(registerChannelDeliveryMock).toHaveBeenCalledOnce();
+    expect(capturedFinalize).toBeDefined();
+    await capturedFinalize!("Answered: yes");
+
+    expect(updateMessageSlackMock).toHaveBeenCalledOnce();
+    const finalizedText = updateMessageSlackMock.mock.calls[0]?.[0]?.text ?? "";
+    expect(finalizedText).not.toContain("Spoken summary");
+    expect(finalizedText).toContain("Answered: yes");
   });
 });
