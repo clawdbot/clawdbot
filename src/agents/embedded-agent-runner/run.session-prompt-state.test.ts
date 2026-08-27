@@ -79,6 +79,25 @@ function createState(overrides: Partial<PreparedEmbeddedRunInput["runParams"]> =
 }
 
 describe("embedded run session prompt state", () => {
+  it("settles projection maintenance only for an owned transcript retry", async () => {
+    const reconcile = await import("../../config/sessions/session-transcript-reconcile.js");
+    const waitForProjection = vi
+      .spyOn(reconcile, "waitForSessionTranscriptProjection")
+      .mockResolvedValue();
+    const state = createState();
+
+    try {
+      await state.settleOwnedTranscriptProjection(BASE_RUN_PARAMS.sessionTarget);
+      expect(waitForProjection).not.toHaveBeenCalled();
+
+      await state.prepareCompactedTranscriptRetry();
+      await state.settleOwnedTranscriptProjection(BASE_RUN_PARAMS.sessionTarget);
+      expect(waitForProjection).toHaveBeenCalledWith(BASE_RUN_PARAMS.sessionTarget);
+    } finally {
+      waitForProjection.mockRestore();
+    }
+  });
+
   it("records canonical runtime persistence without mutating recorder lifecycle state", async () => {
     const persistedMessage = makeUserMessage();
     const persistApproved = vi.fn(async () => ({

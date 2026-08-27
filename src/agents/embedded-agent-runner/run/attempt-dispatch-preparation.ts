@@ -141,6 +141,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
           ...sessionPromptState.sessionWriterFence,
         }
       : undefined;
+  await sessionPromptState.settleOwnedTranscriptProjection(resolvedSessionTarget);
   const trajectorySessionFile = resolvedSessionTarget?.sessionKey ?? sessionPromptState.sessionFile;
   if (!input.startupStagesEmitted) {
     startupStages.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.prompt);
