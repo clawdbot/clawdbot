@@ -93,9 +93,11 @@ LINE-specific settings:
   policy as any other failure: the event returns to pending with its attempt count
   incremented and `handler-timeout` recorded as its last error, and it keeps its
   place at the head of its lane. A stall is not itself a dead letter — only the
-  retry limit above ends the event, as `retry-limit-exceeded`. Adoption that
-  arrives after the watchdog fires is fenced off, so a late turn cannot claim an
-  event that has already been handed back.
+  retry limit above ends the event, as `retry-limit-exceeded`. The watchdog only
+  covers the window between claim and adoption: adoption clears it, so a long
+  agent turn is never interrupted by it. Adoption that arrives after the watchdog
+  fires is fenced off, so a late turn cannot claim an event that has already been
+  handed back.
 - **Crash recovery.** Every drain pass opens with a recovery sweep that reclaims
   any claim whose owning Gateway process is no longer running, so a delivery lost
   to a hard crash is retried on the next sweep rather than after a timeout. The
@@ -360,14 +362,18 @@ Generic media sends without LINE-specific options use the image route.
   re-enqueuing repeats the committed work — for example a second visible reply.
   `openclaw health` reports dead-letter counts and `openclaw doctor` names
   affected accounts.
-- **`handler-timeout` retries:** the delivery was claimed but no agent turn
-  adopted it within 5 minutes, usually a hung agent run or a stalled provider.
-  This does not dead-letter the event; `openclaw logs` shows
+- **`handler-timeout` retries:** the delivery was claimed but never reached
+  agent-turn adoption within 5 minutes. This is a stall _before_ the turn starts —
+  adoption clears the watchdog, so a turn that is already running is never the
+  cause and is never cut off by it. Look at the dispatch path instead: the
+  delivery preparation that runs between claim and adoption, such as inbound
+  media download or a Gateway that is not accepting new work. This does not
+  dead-letter the event; `openclaw logs` shows
   `applying retry policy (handler-timeout)` and the event waits out its backoff
   with `handler-timeout` as its last error. A stall that keeps repeating is what
   eventually exhausts the retry limit, so an event that stalls its way to a dead
   letter lands under `retry-limit-exceeded`, not under a timeout reason. Check
-  `openclaw logs --follow` around the affected event to find the stalled turn.
+  `openclaw logs --follow` around the affected event id.
 
 ## Related
 
