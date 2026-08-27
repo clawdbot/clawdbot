@@ -15,6 +15,16 @@ const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
 const RUN_ID_PATTERN = /^run_[a-z0-9]+$/u;
 const LEASE_ID_PATTERN = /^cbx_[a-z0-9]+$/u;
 const MAX_PROOF_AGE_MS = 2 * 60 * 60 * 1000;
+const TEST_ENV = "CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_VITEST_MAX_WORKERS=1";
+const TOOLING_TEST_FILES = [
+  "test/scripts/pr-ci-dispatch.test.ts",
+  "test/scripts/pr-crabbox-gate-publisher.test.ts",
+  "test/scripts/pr-merge.test.ts",
+  "test/scripts/pr-prepare-gates.test.ts",
+  "test/scripts/pr-wrappers.test.ts",
+].join(" ");
+const WORKFLOW_GUARD_NAME =
+  "keeps the Crabbox gate publisher on protected main with minimal permissions";
 const EXPECTED_MARKERS = [
   "OPENCLAW_CRABBOX_GATE_VERSION=1",
   "OPENCLAW_CRABBOX_GATE_MODE=remote_crabbox_aws",
@@ -70,7 +80,9 @@ export function buildCrabboxGateCommand(headSha, bootstrapSha256) {
     "printf '%s\\n' 'OPENCLAW_CRABBOX_GATE_STAGE=build:ok' 'OPENCLAW_CRABBOX_GATE_STAGE=check:start'",
     "pnpm check",
     "printf '%s\\n' 'OPENCLAW_CRABBOX_GATE_STAGE=check:ok' 'OPENCLAW_CRABBOX_GATE_STAGE=test:start'",
-    "CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test",
+    `${TEST_ENV} node scripts/run-vitest.mjs run --config test/vitest/vitest.tooling.config.ts ${TOOLING_TEST_FILES} --reporter=verbose`,
+    `${TEST_ENV} node scripts/run-vitest.mjs run --config test/vitest/vitest.unit-fast.config.ts test/scripts/pr-crabbox-merge-bypass.test.ts --reporter=verbose`,
+    `${TEST_ENV} node scripts/run-vitest.mjs run --config test/vitest/vitest.tooling.config.ts test/scripts/ci-workflow-guards.test.ts --testNamePattern '${WORKFLOW_GUARD_NAME}' --reporter=verbose`,
     "printf '%s\\n' 'OPENCLAW_CRABBOX_GATE_STAGE=test:ok' 'OPENCLAW_CRABBOX_GATE_RESULT=success'",
   ].join("; ");
 }
@@ -347,7 +359,7 @@ export async function runPublisher({ broker, event, github, organization, env, n
       head_sha: context.headSha,
       name: CHECK_NAME,
       output: {
-        summary: `Trusted Crabbox AWS proof ${context.runId} / ${context.leaseId}; build, check, and full test passed on exact head ${context.headSha}.`,
+        summary: `Trusted Crabbox AWS proof ${context.runId} / ${context.leaseId}; build, check, and focused PR-tooling changed-surface tests passed on exact head ${context.headSha}.`,
         title: "Crabbox AWS exact-head gate passed",
       },
       status: "completed",

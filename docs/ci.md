@@ -814,10 +814,12 @@ For an explicitly authorized admin-only PR landing fallback, set
 The mode does not replace the default hosted aggregate gate. After the exact
 prep head is pushed, the trusted wrapper downloads
 checksum-verified Crabbox v0.46, runs sanitized brokered AWS with `umask 022`,
-the canonical untrusted bootstrap, `pnpm build`, `pnpm check`, and the full
-`pnpm test` suite under the bounded remote profile
-`CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1`,
-then dispatches the protected-main
+the canonical untrusted bootstrap, `pnpm build`, `pnpm check`, and focused
+PR-tooling changed-surface tests. The test proof runs the complete dispatch,
+publisher, merge-bypass, merge, prepare-gates, and wrapper test files plus the
+single protected-main publisher workflow guard; it does not claim the
+environment-sensitive monolithic test suite. The AWS lease uses a 90-minute
+idle timeout and 240-minute TTL before dispatching the protected-main
 `pr-crabbox-gate-publisher.yml` workflow. That workflow accepts an open draft
 because proof runs during prepare-push, then rereads the live same-repository
 PR and the exact active organization-admin membership object using the repo-native

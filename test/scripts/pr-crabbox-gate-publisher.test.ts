@@ -372,6 +372,9 @@ describe("Crabbox gate publisher mutation boundary", () => {
         conclusion: "success",
         head_sha: headSha,
         name: "openclaw/crabbox-gate",
+        output: {
+          summary: expect.stringContaining("focused PR-tooling changed-surface tests passed"),
+        },
         status: "completed",
       },
       method: "POST",

@@ -318,7 +318,7 @@ run_remote_crabbox_aws_gate() {
     node "$script_parent_dir/pr-crabbox-gate-publisher.mjs" --print-command "$head_sha" "$bootstrap_sha"
   )
   log_file=".local/gates-crabbox-aws.log"
-  echo "Running exact-head Crabbox AWS build, check, and full test proof as active org admin $actor." >&2
+  echo "Running exact-head Crabbox AWS build, check, and focused PR-tooling proof as active org admin $actor." >&2
   run_quiet_logged "Crabbox AWS exact-head gates" "$log_file" \
     env \
     -u AWS_ACCESS_KEY_ID \
@@ -604,8 +604,8 @@ prepare_gates() {
     source .local/gates.env
     previous_last_verified_head="${LAST_VERIFIED_HEAD_SHA:-}"
     previous_full_gates_head="${FULL_GATES_HEAD_SHA:-}"
-    # Carried alongside FULL_GATES_HEAD_SHA: they describe how that full-suite
-    # proof was produced; a fresh full run below overwrites them.
+    # Carried alongside FULL_GATES_HEAD_SHA: they describe how that exact-head
+    # proof was produced; a fresh gate run below overwrites them.
     remote_gates_provider="${REMOTE_GATES_PROVIDER:-}"
     remote_gates_run_id="${REMOTE_GATES_RUN_ID:-}"
     remote_gates_lease_id="${REMOTE_GATES_LEASE_ID:-}"

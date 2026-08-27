@@ -291,13 +291,28 @@ describe("remote Crabbox AWS gate contract", () => {
     expect(result.stdout).toContain("umask 022");
     expect(result.stdout).toContain("pnpm build");
     expect(result.stdout).toContain("pnpm check");
+    for (const testFile of [
+      "test/scripts/pr-ci-dispatch.test.ts",
+      "test/scripts/pr-crabbox-gate-publisher.test.ts",
+      "test/scripts/pr-crabbox-merge-bypass.test.ts",
+      "test/scripts/pr-merge.test.ts",
+      "test/scripts/pr-prepare-gates.test.ts",
+      "test/scripts/pr-wrappers.test.ts",
+    ]) {
+      expect(result.stdout).toContain(testFile);
+    }
     expect(result.stdout).toContain(
-      "CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test",
+      "--config test/vitest/vitest.unit-fast.config.ts test/scripts/pr-crabbox-merge-bypass.test.ts",
     );
+    expect(result.stdout).toContain(
+      "test/scripts/ci-workflow-guards.test.ts --testNamePattern 'keeps the Crabbox gate publisher on protected main with minimal permissions'",
+    );
+    expect(result.stdout).not.toContain("OPENCLAW_TEST_PROJECTS_PARALLEL");
+    expect(result.stdout).not.toContain("pnpm test");
     expect(result.stdout).not.toContain("pnpm check:changed");
   });
 
-  it("bounds the direct AWS lease for the full test proof", () => {
+  it("bounds the direct AWS lease for the focused PR-tooling proof", () => {
     const dir = tempDirs.make("openclaw-pr-gates-aws-run-");
     const workDir = join(dir, "work");
     const crabbox = join(dir, "crabbox");
