@@ -64,6 +64,7 @@ import { renderApplicationShell, type ShellViewHost } from "./app-shell-view.ts"
 import { ShellWorkboardOwner, type ShellWorkboardHost } from "./app-shell-workboard.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
+import { syncControlUiSystemChrome } from "./control-ui-presentation.ts";
 import {
   BROWSER_PANEL_ELEMENT,
   COMMAND_PALETTE_ELEMENT,
@@ -628,11 +629,7 @@ class OpenClawShell
   readonly handleCommandPaletteSlashCommand = (command: string) =>
     this.shellChrome.handleCommandPaletteSlashCommand(command);
   readonly restorePendingLazyAction = () => this.shellChrome.restorePendingLazyAction();
-
-  nativeNavCollapsed(): boolean {
-    return this.shellChrome.nativeNavCollapsed();
-  }
-
+  nativeNavCollapsed = () => this.shellChrome.nativeNavCollapsed();
   /** Keep the tab/window title on the active destination. Runs after every
    * render so route changes and locale switches both refresh it; before the
    * first committed route the static boot title from index.html stays. */
@@ -667,6 +664,7 @@ class OpenClawShell
 
   override updated() {
     this.syncDocumentTitle();
+    syncControlUiSystemChrome();
     // Render-gated pending lazy actions replay on the update that first
     // renders their element, independent of further context updates.
     this.restorePendingLazyAction();

@@ -1015,7 +1015,7 @@ describe("normalizeInitialApplicationLocation", () => {
     }
   });
 
-  it("refreshes browser chrome when the mobile breakpoint changes", () => {
+  it("refreshes chat browser chrome on route and breakpoint changes", () => {
     const previousSettings = loadSettings();
     const listeners = new Set<() => void>();
     let mobile = false;
@@ -1044,6 +1044,7 @@ describe("normalizeInitialApplicationLocation", () => {
         document.documentElement.style.getPropertyValue("--control-ui-system-chrome-background"),
       ).toBe("#123456");
 
+      document.body.innerHTML = '<div class="shell--chat"></div>';
       mobile = true;
       for (const listener of listeners) {
         listener();
@@ -1053,6 +1054,18 @@ describe("normalizeInitialApplicationLocation", () => {
         document.documentElement.style.getPropertyValue("--control-ui-system-chrome-background"),
       ).toBe("#abcdef");
 
+      document.body.replaceChildren();
+      for (const listener of listeners) {
+        listener();
+      }
+      expect(meta.content).toBe("#123456");
+
+      document.body.innerHTML = '<div class="shell--chat"></div>';
+      for (const listener of listeners) {
+        listener();
+      }
+      expect(meta.content).toBe("#abcdef");
+
       mobile = false;
       for (const listener of listeners) {
         listener();
@@ -1060,6 +1073,7 @@ describe("normalizeInitialApplicationLocation", () => {
       expect(meta.content).toBe("#123456");
     } finally {
       runtime.stop();
+      document.body.replaceChildren();
       expect(removeEventListener).toHaveBeenCalled();
       style.remove();
       meta.remove();

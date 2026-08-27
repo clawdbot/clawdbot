@@ -25,9 +25,10 @@ export function syncControlUiSystemChrome(): void {
   const computedStyle = getComputedStyle(root);
   const pageBackground = computedStyle.getPropertyValue("--bg").trim();
   const narrow = globalThis.matchMedia?.("(max-width: 768px)").matches;
-  const background = narrow
-    ? computedStyle.getPropertyValue("--bg-content").trim() || pageBackground
-    : pageBackground;
+  const background =
+    narrow && document.querySelector(".shell--chat")
+      ? computedStyle.getPropertyValue("--bg-content").trim() || pageBackground
+      : pageBackground;
   if (!background) {
     return;
   }
