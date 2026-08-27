@@ -311,32 +311,50 @@ describe("buildMarkdown", () => {
   });
 
   it("does not compare v2 SQLite scenarios with different workloads", () => {
-    const sourceDir = mkTmpRoot();
-    const baselineDir = mkTmpRoot();
-    writeSourceFixture(sourceDir);
-    writeSourceFixture(baselineDir);
-    writeSqliteV2Fixture(sourceDir);
-    writeSqliteV2Fixture(baselineDir, [
+    for (const baselineQuery of [
       {
         database: "state",
-        id: "delivery.pending.load",
-        p50Ms: 18,
-        p95Ms: 20,
-        plan: {
-          fullTableScans: [],
-          indexes: ["idx_delivery_queue_pending"],
-          raw: ["SEARCH delivery_queue_entries USING INDEX idx_delivery_queue_pending"],
-          tempSorts: [],
-        },
         rows: 999,
         runs: 20,
+        sql: "SELECT id FROM delivery_queue_entries WHERE queue_name = ? AND status = ?",
+      },
+      {
+        database: "agent",
+        rows: 1000,
+        runs: 12,
+        sql: "SELECT id FROM delivery_queue_entries WHERE queue_name = ? AND status = ?",
+      },
+      {
+        database: "state",
+        rows: 1000,
+        runs: 12,
         sql: "SELECT id FROM delivery_queue_entries WHERE status = ?",
       },
-    ]);
+    ]) {
+      const sourceDir = mkTmpRoot();
+      const baselineDir = mkTmpRoot();
+      writeSourceFixture(sourceDir);
+      writeSourceFixture(baselineDir);
+      writeSqliteV2Fixture(sourceDir);
+      writeSqliteV2Fixture(baselineDir, [
+        {
+          ...baselineQuery,
+          id: "delivery.pending.load",
+          p50Ms: 18,
+          p95Ms: 20,
+          plan: {
+            fullTableScans: [],
+            indexes: ["idx_delivery_queue_pending"],
+            raw: ["SEARCH delivery_queue_entries USING INDEX idx_delivery_queue_pending"],
+            tempSorts: [],
+          },
+        },
+      ]);
 
-    expect(buildMarkdown(sourceDir, baselineDir)).toContain(
-      "| delivery.pending.load | state | 1000 | 12 | 10.0ms | 12.0ms | 999 | 20 | 20.0ms | n/a (workload differs) |",
-    );
+      expect(buildMarkdown(sourceDir, baselineDir)).toContain(
+        `| delivery.pending.load | state | 1000 | 12 | 10.0ms | 12.0ms | ${baselineQuery.rows} | ${baselineQuery.runs} | 20.0ms | n/a (workload differs) |`,
+      );
+    }
   });
 
   it("rejects duplicate and empty v2 SQLite scenario IDs", () => {

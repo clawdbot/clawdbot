@@ -804,7 +804,11 @@ function buildSqliteScenarioRows(current: JsonValue, baseline: JsonValue) {
     const id = currentIsV2 ? entry.id : `legacy query ${index + 1}`;
     const before = currentIsV2 ? baselineById.get(entry.id) : undefined;
     const comparable =
-      before !== undefined && before.rows === entry.rows && before.runs === entry.runs;
+      before !== undefined &&
+      before.database === entry.database &&
+      before.sql === entry.sql &&
+      before.rows === entry.rows &&
+      before.runs === entry.runs;
     return [
       id ?? "unknown",
       currentIsV2 ? (entry.database ?? "unknown") : "unknown",
