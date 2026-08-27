@@ -2048,7 +2048,7 @@ async function verifyCodexNativeSubagentBridgeProbe(params: {
         keyStartInclusive: "session-key:dev:",
         keyEndExclusive: "session-key:dev;",
         limit: 100,
-      }).find((row) => asOptionalRecord(row.value)?.sessionId === sessionId);
+      }).find((entry) => asOptionalRecord(entry.value)?.sessionId === sessionId);
       // Lease acquisition refreshes the KV write timestamp even when binding content is unchanged.
       return row ? { key: row.key, value: row.value } : undefined;
     };
