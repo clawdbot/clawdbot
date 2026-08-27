@@ -62,7 +62,7 @@ export async function loadCronExternalContentRuntime() {
   return await cronExternalContentRuntimeLoader.load();
 }
 
-export async function loadCronAuthProfileRuntime() {
+async function loadCronAuthProfileRuntime() {
   return await cronAuthProfileRuntimeLoader.load();
 }
 
@@ -70,7 +70,7 @@ export async function loadCronModelPreflightRuntime() {
   return await cronModelPreflightRuntimeLoader.load();
 }
 
-export function hasConfiguredAuthProfiles(cfg: OpenClawConfig): boolean {
+function hasConfiguredAuthProfiles(cfg: OpenClawConfig): boolean {
   return (
     Boolean(cfg.auth?.profiles && Object.keys(cfg.auth.profiles).length > 0) ||
     Boolean(cfg.auth?.order && Object.keys(cfg.auth.order).length > 0)
