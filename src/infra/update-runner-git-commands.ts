@@ -1,3 +1,4 @@
+import { hasRawNpmConfigKey } from "./npm-install-env.js";
 import { DEV_BRANCH } from "./update-channels.js";
 import type { UpdateStepResult } from "./update-runner-types.js";
 
@@ -45,20 +46,31 @@ export function resolveBuildEnv(
 export function resolveInstallEnv(
   manager: "pnpm" | "bun" | "npm",
   env?: NodeJS.ProcessEnv,
+  cwd?: string,
 ): NodeJS.ProcessEnv | undefined {
   if (manager !== "pnpm") {
     return env;
   }
-  const preferOffline =
-    env?.PNPM_CONFIG_PREFER_OFFLINE ?? env?.pnpm_config_prefer_offline ?? "true";
-  return {
+  const effectiveEnv = env ?? process.env;
+  const explicitPreferOffline =
+    effectiveEnv.PNPM_CONFIG_PREFER_OFFLINE ?? effectiveEnv.pnpm_config_prefer_offline;
+  const hasConfigPreferOffline = hasRawNpmConfigKey(effectiveEnv, "prefer-offline", {
+    npmConfigCwd: cwd,
+  });
+  const installEnv = {
     ...env,
     PNPM_CONFIG_RESOLUTION_MODE: env?.PNPM_CONFIG_RESOLUTION_MODE ?? "highest",
     npm_config_resolution_mode: env?.npm_config_resolution_mode ?? "highest",
     pnpm_config_resolution_mode: env?.pnpm_config_resolution_mode ?? "highest",
-    PNPM_CONFIG_PREFER_OFFLINE: preferOffline,
-    pnpm_config_prefer_offline: preferOffline,
   };
+  if (explicitPreferOffline !== undefined) {
+    installEnv.PNPM_CONFIG_PREFER_OFFLINE = explicitPreferOffline;
+    installEnv.pnpm_config_prefer_offline = explicitPreferOffline;
+  } else if (!hasConfigPreferOffline) {
+    installEnv.PNPM_CONFIG_PREFER_OFFLINE = "true";
+    installEnv.pnpm_config_prefer_offline = "true";
+  }
+  return installEnv;
 }
 
 function isSupersededInstallFailure(

@@ -13,6 +13,7 @@ import { pathExists } from "../utils.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
 import type { UpdateChannel } from "./update-channels.js";
 import type { DevUpdateTarget } from "./update-dev-target.js";
+import { resolveInstallEnv } from "./update-runner-git-commands.js";
 import {
   resolveUpdateDoctorExecutionPolicy,
   resolveUpdateInstallSurface,
@@ -1371,6 +1372,58 @@ describe("runGatewayUpdate", () => {
       });
     },
   );
+
+  it("preserves an explicit project npmrc prefer-offline setting", async () => {
+    await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
+    await fs.writeFile(path.join(tempDir, ".npmrc"), "prefer-offline=false\n", "utf-8");
+    await setupUiIndex();
+    const stableTag = "v1.0.1-1";
+    const installEnvs: NodeJS.ProcessEnv[] = [];
+    const doctorNodePath = await resolveStableNodePath(process.execPath);
+    const { runCommand } = createGitInstallRunner({
+      stableTag,
+      installCommand: "pnpm install",
+      buildCommand: "pnpm build",
+      uiBuildCommand: "pnpm ui:build",
+      doctorCommand: `${doctorNodePath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive --fix`,
+      onCommand: (key, options) => {
+        if (key === "pnpm install") {
+          installEnvs.push(options?.env ?? {});
+        }
+        return undefined;
+      },
+    });
+
+    const result = await runWithCommand(runCommand, { channel: "stable" });
+
+    expect(result.status).toBe("ok");
+    expect(installEnvs).toHaveLength(1);
+    expect(installEnvs[0]).not.toHaveProperty("PNPM_CONFIG_PREFER_OFFLINE");
+    expect(installEnvs[0]).not.toHaveProperty("pnpm_config_prefer_offline");
+  });
+
+  it("preserves an explicit user npmrc prefer-offline setting", async () => {
+    const userNpmrc = path.join(tempDir, "user.npmrc");
+    await fs.writeFile(userNpmrc, "prefer-offline=false\n", "utf-8");
+
+    const installEnv = resolveInstallEnv(
+      "pnpm",
+      {
+        HOME: path.join(tempDir, "home"),
+        NPM_CONFIG_USERCONFIG: userNpmrc,
+        NPM_CONFIG_GLOBALCONFIG: path.join(tempDir, "global.npmrc"),
+      },
+      tempDir,
+    );
+
+    expect(installEnv).toMatchObject({
+      PNPM_CONFIG_RESOLUTION_MODE: "highest",
+      npm_config_resolution_mode: "highest",
+      pnpm_config_resolution_mode: "highest",
+    });
+    expect(installEnv).not.toHaveProperty("PNPM_CONFIG_PREFER_OFFLINE");
+    expect(installEnv).not.toHaveProperty("pnpm_config_prefer_offline");
+  });
 
   it("marks git update doctor passes for configured-plugin repair deferral when requested", async () => {
     await setupGitCheckout({ packageManager: "pnpm@8.0.0" });

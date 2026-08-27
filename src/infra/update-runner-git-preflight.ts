@@ -350,6 +350,7 @@ async function testPreflightCandidates(params: {
       const installEnv = resolveInstallEnv(
         manager.manager,
         manager.env ?? params.defaultCommandEnv,
+        params.worktreeDir,
       );
       const installStep = await runStep(
         params.step(installName, installArgv, params.worktreeDir, installEnv),

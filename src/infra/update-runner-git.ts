@@ -413,7 +413,11 @@ export async function updateGitCheckout(params: {
     return await rollbackError(manager.reason);
   }
   try {
-    const installEnv = resolveInstallEnv(manager.manager, manager.env ?? defaultCommandEnv);
+    const installEnv = resolveInstallEnv(
+      manager.manager,
+      manager.env ?? defaultCommandEnv,
+      gitRoot,
+    );
     let installStep = await runStep(
       step(
         "deps install",

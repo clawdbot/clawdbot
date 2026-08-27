@@ -39,7 +39,7 @@ const NPM_FRESHNESS_BYPASS_KEYS = [
 
 type NpmFreshnessBypassMode = "before" | "min-release-age";
 
-type NpmFreshnessConfigScope = {
+export type NpmConfigScope = {
   npmConfigCwd?: string;
   npmConfigPrefix?: string | null;
 };
@@ -105,10 +105,7 @@ function createNpmConfigPathProbeEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv 
   return probeEnv;
 }
 
-function readNpmGlobalConfigPath(
-  env: NodeJS.ProcessEnv,
-  scope: NpmFreshnessConfigScope,
-): string | null {
+function readNpmGlobalConfigPath(env: NodeJS.ProcessEnv, scope: NpmConfigScope): string | null {
   const scopedGlobalConfig = resolveScopedGlobalNpmrc(scope);
   if (scopedGlobalConfig) {
     return scopedGlobalConfig;
@@ -148,10 +145,7 @@ function readNpmGlobalConfigPath(
   }
 }
 
-function buildNpmGlobalConfigPathCacheKey(
-  env: NodeJS.ProcessEnv,
-  scope: NpmFreshnessConfigScope,
-): string {
+function buildNpmGlobalConfigPathCacheKey(env: NodeJS.ProcessEnv, scope: NpmConfigScope): string {
   const configFiles = uniqueStrings(
     [
       resolveScopedProjectNpmrc(scope),
@@ -209,10 +203,7 @@ function resolveScopedGlobalNpmrc(scope: NpmFreshnessConfigScope): string | null
   return prefix ? path.join(prefix, "etc", "npmrc") : null;
 }
 
-function resolveNpmConfigFiles(
-  env: NodeJS.ProcessEnv,
-  scope: NpmFreshnessConfigScope = {},
-): string[] {
+function resolveNpmConfigFiles(env: NodeJS.ProcessEnv, scope: NpmConfigScope = {}): string[] {
   const files = [
     resolveScopedProjectNpmrc(scope),
     resolveEnvPath(env, "NPM_CONFIG_USERCONFIG", "npm_config_userconfig") ?? resolveHomeNpmrc(env),
@@ -234,17 +225,17 @@ function hasNpmrcConfigKey(filePath: string, key: string): boolean {
   }
 }
 
-function hasRawNpmConfigKey(
+export function hasRawNpmConfigKey(
   env: NodeJS.ProcessEnv,
-  key: "before" | "min-release-age",
-  scope: NpmFreshnessConfigScope,
+  key: string,
+  scope: NpmConfigScope = {},
 ): boolean {
   return resolveNpmConfigFiles(env, scope).some((file) => hasNpmrcConfigKey(file, key));
 }
 
 function resolveNpmFreshnessBypassMode(
   env: NodeJS.ProcessEnv,
-  scope: NpmFreshnessConfigScope,
+  scope: NpmConfigScope,
 ): NpmFreshnessBypassMode {
   if (process.platform === "win32") {
     return "before";
@@ -262,7 +253,7 @@ function resolveNpmFreshnessBypassMode(
 export function createNpmFreshnessBypassArgs(
   env: NodeJS.ProcessEnv = process.env,
   now = new Date(),
-  scope: NpmFreshnessConfigScope = {},
+  scope: NpmConfigScope = {},
 ): string[] {
   if (resolveNpmFreshnessBypassMode(env, scope) === "min-release-age") {
     return ["--min-release-age=0"];
@@ -274,7 +265,7 @@ export function createNpmFreshnessBypassArgs(
 export function applyNpmFreshnessBypassEnv(
   env: NodeJS.ProcessEnv,
   now = new Date(),
-  scope: NpmFreshnessConfigScope = {},
+  scope: NpmConfigScope = {},
 ): void {
   const [arg] = createNpmFreshnessBypassArgs(env, now, scope);
   for (const key of NPM_FRESHNESS_BYPASS_KEYS) {

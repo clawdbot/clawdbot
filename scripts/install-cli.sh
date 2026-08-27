@@ -838,7 +838,11 @@ run_pnpm() {
 }
 
 should_prefer_offline_pnpm_install() {
-  [[ -z "${PNPM_CONFIG_PREFER_OFFLINE+x}" && -z "${pnpm_config_prefer_offline+x}" ]]
+  local project_dir="${1:-$PWD}"
+  [[ -z "${PNPM_CONFIG_PREFER_OFFLINE+x}" && -z "${pnpm_config_prefer_offline+x}" ]] || return 1
+  local npm_cmd=""
+  npm_cmd="$(npm_command_path npm 2>/dev/null || true)"
+  [[ -z "$npm_cmd" ]] || ! npm_config_has_raw_key "$npm_cmd" "prefer[-_]offline" "$project_dir"
 }
 
 to_lowercase_ascii() {
@@ -1305,9 +1309,14 @@ npm_builtin_config_path() {
 npm_config_has_raw_key() {
   local npm_cmd="$1"
   local key="$2"
+  local project_dir="${3:-}"
   local raw=""
   local file=""
   local -a files=()
+
+  if [[ -n "$project_dir" ]]; then
+    files+=("${project_dir}/.npmrc")
+  fi
 
   raw="${NPM_CONFIG_USERCONFIG:-${npm_config_userconfig:-}}"
   if [[ -n "$raw" ]]; then
@@ -1655,7 +1664,7 @@ install_openclaw_from_git() {
   local install_lockfile_flag
   install_lockfile_flag="$(git_install_lockfile_flag "$repo_dir" "$git_ref")"
   local -a pnpm_prefer_offline_args=()
-  if should_prefer_offline_pnpm_install; then
+  if should_prefer_offline_pnpm_install "$repo_dir"; then
     pnpm_prefer_offline_args=(--prefer-offline)
   fi
   emit_json step name dependencies status start

@@ -3684,6 +3684,43 @@ EOF
     );
   });
 
+  it("preserves explicit pnpm prefer-offline settings from npmrc files", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-prefer-offline-npmrc-"));
+    const project = join(tmp, "project");
+    const userNpmrc = join(tmp, "user.npmrc");
+    mkdirSync(project, { recursive: true });
+    writeFileSync(join(project, ".npmrc"), "prefer-offline=false\n");
+    writeFileSync(userNpmrc, "prefer-offline=false\n");
+
+    try {
+      const projectResult = runInstallShell(
+        [
+          "set -euo pipefail",
+          `source "${SCRIPT_PATH}"`,
+          "unset PNPM_CONFIG_PREFER_OFFLINE pnpm_config_prefer_offline",
+          'if should_prefer_offline_pnpm_install "$PROJECT"; then printf "project=true\\n"; else printf "project=false\\n"; fi',
+        ].join("\n"),
+        { PROJECT: project },
+      );
+      const userResult = runInstallShell(
+        [
+          "set -euo pipefail",
+          `source "${SCRIPT_PATH}"`,
+          "unset PNPM_CONFIG_PREFER_OFFLINE pnpm_config_prefer_offline",
+          'if should_prefer_offline_pnpm_install "$PROJECT"; then printf "user=true\\n"; else printf "user=false\\n"; fi',
+        ].join("\n"),
+        { PROJECT: tmp, NPM_CONFIG_USERCONFIG: userNpmrc },
+      );
+
+      expect(projectResult.status).toBe(0);
+      expect(projectResult.stdout).toContain("project=false");
+      expect(userResult.status).toBe(0);
+      expect(userResult.stdout).toContain("user=false");
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+  });
+
   it("uses the repo Corepack pnpm when a global pnpm version is already present", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-pnpm-version-"));
     const bin = join(tmp, "bin");
