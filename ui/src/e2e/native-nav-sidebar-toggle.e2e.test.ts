@@ -611,9 +611,8 @@ suite.define(() => {
         const [originX, originY] = getComputedStyle(popupSurface)
           .transformOrigin.split(" ")
           .map(Number.parseFloat);
-        const animation = popupSurface.getAnimations()[0];
         return {
-          animationDuration: animation?.effect?.getTiming().duration,
+          animationDuration: getComputedStyle(popupSurface).animationDuration,
           popupHeight: popupSurface.offsetHeight,
           popupWidth: popupSurface.offsetWidth,
           originX,
@@ -635,7 +634,7 @@ suite.define(() => {
     expect(paletteAnimationName).toBe("none");
     expect(paletteDialogAnimationDuration).toBe("0s");
     expect(drawerAnimationName).toBe("none");
-    expect(hoverCardMotion.animationDuration).toBe(140);
+    expect(hoverCardMotion.animationDuration).toBe("0.14s");
     expect(hoverCardMotion.placement).toMatch(/^top(?:-|$)/u);
     expect(hoverCardMotion.originX).toBeGreaterThan(hoverCardMotion.popupWidth * 0.45);
     expect(hoverCardMotion.originX).toBeLessThan(hoverCardMotion.popupWidth * 0.55);
