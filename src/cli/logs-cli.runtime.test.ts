@@ -40,7 +40,7 @@ describe("execFileUtf8Tail", () => {
   it("keeps a bounded stderr tail for failed commands", async () => {
     const result = await execFileUtf8Tail(
       process.execPath,
-      ["-e", "process.stderr.write('😀' + 'x'.repeat(64 * 1024)); process.exit(1)"],
+      ["-e", "process.stderr.write('😀' + 'x'.repeat(64 * 1024)); process.exitCode = 1"],
       { maxBytes: 1024 },
     );
     expect(result.code).toBe(1);

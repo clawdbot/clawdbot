@@ -39,7 +39,7 @@ async function getContextModule() {
   return await contextModuleLoader.load();
 }
 
-function resolvePositiveInteger(value: number | undefined): number | undefined {
+export function normalizeSessionTokenCount(value: number | undefined): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     return undefined;
   }
@@ -105,7 +105,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
   const modelUsed = result.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
   const providerUsed = result.meta.agentMeta?.provider ?? fallbackProvider ?? defaultProvider;
   const agentHarnessId = normalizeOptionalString(result.meta.agentMeta?.agentHarnessId);
-  const runtimeContextTokens = resolvePositiveInteger(result.meta.agentMeta?.contextTokens);
+  const runtimeContextTokens = normalizeSessionTokenCount(result.meta.agentMeta?.contextTokens);
   const contextBudgetStatus = result.meta.agentMeta?.contextBudgetStatus;
   const contextTokens =
     runtimeContextTokens !== undefined

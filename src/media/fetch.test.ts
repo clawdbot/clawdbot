@@ -1,5 +1,6 @@
 // Media fetch tests cover remote media download limits and validation.
 import fs from "node:fs/promises";
+import { createServer } from "node:http";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -745,6 +746,61 @@ describe("readRemoteMediaBuffer", () => {
       }),
     ).rejects.toMatchObject({ code: "fetch_failed" });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    {
+      name: "buffer reads",
+      fetchMedia: (options: Parameters<ReadRemoteMediaBuffer>[0]) => readRemoteMediaBuffer(options),
+    },
+    {
+      name: "store writes",
+      fetchMedia: (options: Parameters<ReadRemoteMediaBuffer>[0]) => saveRemoteMedia(options),
+    },
+  ])("cancels retry backoff for $name", async ({ fetchMedia }) => {
+    let requests = 0;
+    const server = createServer((_request, response) => {
+      requests += 1;
+      response.writeHead(503).end("busy");
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected a local media test server address");
+      }
+      const controller = new AbortController();
+      const operation = fetchMedia({
+        url: `http://127.0.0.1:${address.port}/retry.bin`,
+        requestInit: { signal: controller.signal },
+        retry: {
+          attempts: 2,
+          minDelayMs: 25,
+          maxDelayMs: 25,
+          jitter: 0,
+          onRetry: () => {
+            setImmediate(() => controller.abort());
+          },
+        },
+      });
+
+      await expect(operation).rejects.toMatchObject({
+        name: "MediaFetchError",
+        code: "fetch_failed",
+        cause: { name: "AbortError" },
+      });
+      expect(requests).toBe(1);
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
   });
 
   it("does not retry SSRF guard blocks", async () => {

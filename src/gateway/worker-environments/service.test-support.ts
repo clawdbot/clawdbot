@@ -503,6 +503,7 @@ export function placementHarness(
   identity.credentialHash = credentialHash;
   const placementStore = {
     readWorkerTurnClaim: vi.fn(() => claim),
+    readWorkerTurnLiveAckCursor: vi.fn(() => 0),
     validateWorkerTurn: vi.fn(() => true),
     isWorkerTurnToolAuthorized: vi.fn(() => true),
     updateAckCursors: vi.fn(),

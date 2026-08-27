@@ -10,6 +10,8 @@ import {
   getGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { finalizeTaskRunByRunId } from "../../../tasks/detached-task-runtime.js";
+import { setCanonicalTaskBackingDetail } from "../../../tasks/task-backing-authority-write.js";
+import { createSubagentTaskBackingDetail } from "../../../tasks/task-backing-authority.js";
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.js";
 import {
@@ -292,6 +294,29 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
       nextRunId,
       ...[...killReconciliationSnapshots.keys()].map((entry) => entry.runId),
     ];
+    // Revoke the prior task projection before the successor becomes durable.
+    // A crash between stores then fails closed instead of preserving stale authority.
+    const taskBindingResult =
+      source.expectsCompletionMessage === false
+        ? "missing"
+        : setCanonicalTaskBackingDetail({
+            runtime: "subagent",
+            childSessionKey: next.childSessionKey,
+            runId: next.taskRunId ?? next.runId,
+            detail: createSubagentTaskBackingDetail(generation),
+          });
+    if (taskBindingResult === "persist_failed") {
+      this.restoreKillReconciliationSnapshots(killReconciliationSnapshots);
+      this.options.runs.delete(nextRunId);
+      this.options.runs.set(previousRunId, source);
+      log.warn("failed to bind replacement subagent task generation; restored source lease", {
+        runId: next.runId,
+      });
+      if (replaceParams.persistenceFailure === "throw") {
+        throw new Error(`failed to bind replacement subagent task generation for ${next.runId}`);
+      }
+      return false;
+    }
     try {
       this.options.persistOrThrow(...changedRunIds);
     } catch (error) {

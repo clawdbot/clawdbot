@@ -1,4 +1,4 @@
-// Maintenance command registration: doctor, dashboard, reset, and uninstall.
+// Maintenance command registration: doctor, triage, dashboard, reset, and uninstall.
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
@@ -144,6 +144,12 @@ export function registerMaintenanceCommands(program: Command) {
           opts.json === true || !process.stdout.isTTY,
         );
       }
+      if (opts.lint !== true && hasLintOnlyDoctorOptions(opts)) {
+        return exitDoctorError(
+          "doctor lint options require --lint. Use `openclaw doctor --lint ...`.",
+          opts.json === true,
+        );
+      }
       if (lintMode) {
         await runCommandWithRuntime(
           defaultRuntime,
@@ -163,12 +169,6 @@ export function registerMaintenanceCommands(program: Command) {
           (err) => exitDoctorError(formatError(err), opts.json === true || !process.stdout.isTTY),
         );
         return;
-      }
-      if (hasLintOnlyDoctorOptions(opts)) {
-        return exitDoctorError(
-          "doctor lint options require --lint. Use `openclaw doctor --lint ...`.",
-          opts.json === true,
-        );
       }
       await runCommandWithRuntime(
         defaultRuntime,
@@ -207,6 +207,35 @@ export function registerMaintenanceCommands(program: Command) {
       );
     });
   setCommandJsonMode(doctor, "output", isDoctorMachineOutput);
+
+  program
+    .command("triage")
+    .description("Collect sanitized diagnostics and prepare an agent debugging handoff")
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/triage", "docs.openclaw.ai/cli/triage")}\n`,
+    )
+    .option("--json", "Output sanitized handoff paths, finding counts, and commands as JSON", false)
+    .option("--no-export", "Skip the sanitized diagnostics archive")
+    .option("--run", "Run one embedded agent turn after verifying model inference", false)
+    .action(async (opts) => {
+      if (opts.json === true && opts.run === true) {
+        return exitDoctorError("triage --json cannot be combined with --run.", true);
+      }
+      await runCommandWithRuntime(
+        defaultRuntime,
+        async () => {
+          const { triageCommand } = await import("../../commands/triage.js");
+          await triageCommand(defaultRuntime, {
+            json: opts.json === true,
+            noExport: opts.export === false,
+            run: opts.run === true,
+          });
+        },
+        opts.json ? (err: unknown) => exitDoctorError(formatError(err), true) : undefined,
+      );
+    });
 
   program
     .command("dashboard")

@@ -595,10 +595,9 @@ export async function runSetupInferenceTest(params: {
         reasoningLevel: "off",
         verboseLevel: "off",
         disableTrajectory: true,
-        // The 32-token probe cap is sized for the "reply OK" verification
-        // prompt only. Custom completions pass no explicit cap: the stream
-        // layer then applies the resolved model's own required maxTokens
-        // budget, which both bounds output and never exceeds provider limits.
+        // Keep the "reply OK" probe bounded while leaving room for reasoning.
+        // Custom completions pass no explicit cap: the stream layer applies the
+        // resolved model's own maxTokens budget without exceeding its limits.
         ...(params.prompt === undefined
           ? resolveSetupInferenceProbeStreamParams(plan.agentHarnessRuntimeOverride)
           : {}),

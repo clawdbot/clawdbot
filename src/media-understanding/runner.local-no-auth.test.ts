@@ -55,6 +55,12 @@ vi.mock("../plugins/providers.js", async (importOriginal) => ({
   resolveOwningPluginIdsForProviderRef: () => [],
 }));
 
+vi.mock("../plugins/provider-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/provider-runtime.js")>()),
+  // This plugin-free suite must not load bundled plugins to find retired profiles.
+  resolveProviderDeprecatedAuthProfileIds: () => [],
+}));
+
 const AUTH_ENV = {
   LOCAL_AUDIO_API_KEY: undefined,
   REMOTE_AUDIO_API_KEY: undefined,
@@ -293,7 +299,8 @@ describe("runCapability local no-auth audio providers", () => {
           provider: "openai",
           access: "oauth-chat-token",
           refresh: "oauth-refresh-token",
-          expires: Date.now() + 60_000,
+          // Stay outside the five-minute refresh window to exercise API-key selection.
+          expires: Date.now() + 10 * 60_000,
         },
       },
     };

@@ -1,6 +1,6 @@
 // Wizard prompter test helper provides mocked wizard prompt responses.
 import { vi } from "vitest";
-import type { WizardPrompter } from "../../src/wizard/prompts.js";
+import type { WizardPrompter, WizardSelectParams } from "../../src/wizard/prompts.js";
 
 // Vitest mock prompter for wizard tests.
 
@@ -10,9 +10,17 @@ export function createWizardPrompter(
   options?: { defaultSelect?: string; selectValues?: string[] },
 ): WizardPrompter {
   const selectValues = [...(options?.selectValues ?? [])];
-  const select = vi.fn(
-    async () => selectValues.shift() ?? options?.defaultSelect ?? "quickstart",
-  ) as unknown as WizardPrompter["select"];
+  const select = vi.fn(async (params: WizardSelectParams<unknown>) => {
+    // Consent is a distinct boolean choice; flow-answer queues remain reserved for setup modes.
+    if (
+      params.initialValue === false &&
+      params.options.some((option) => option.value === false) &&
+      params.options.some((option) => option.value === true)
+    ) {
+      return false;
+    }
+    return selectValues.shift() ?? options?.defaultSelect ?? "quickstart";
+  }) as unknown as WizardPrompter["select"];
   return {
     intro: vi.fn(async () => {}),
     outro: vi.fn(async () => {}),

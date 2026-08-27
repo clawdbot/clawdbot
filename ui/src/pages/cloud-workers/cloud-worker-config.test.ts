@@ -18,6 +18,7 @@ const configuredProfile = {
     ttl: "24h",
     idleTimeout: "60m",
     setup: "install-node",
+    setupEnv: ["OPENCLAW_WORKER_ARTIFACT_TOKEN"],
     desktop: true,
     binary: "/opt/crabbox",
     region: "eu-west-1",
@@ -91,6 +92,7 @@ describe("cloud worker settings state", () => {
                 ttl: "8h",
                 idleTimeout: "45m",
                 setup: null,
+                setupEnv: null,
                 desktop: null,
                 binary: null,
                 region: "eu-west-1",
@@ -99,6 +101,79 @@ describe("cloud worker settings state", () => {
           },
         },
       },
+    });
+  });
+
+  it("preserves forwarded setup environment while its setup command remains configured", () => {
+    const config = { cloudWorkers: { profiles: { production: configuredProfile } } };
+    const draft = createCloudWorkerDraft(readCloudWorkerProfiles(config)[0]);
+
+    expect(buildCloudWorkerUpsertPatch(config, draft, "production")).toMatchObject({
+      patch: {
+        cloudWorkers: {
+          profiles: {
+            production: {
+              settings: {
+                setup: "install-node",
+                setupEnv: ["OPENCLAW_WORKER_ARTIFACT_TOKEN"],
+              },
+            },
+          },
+        },
+      },
+    });
+  });
+
+  it.each([undefined, []])("keeps empty setup environment unchanged (%j)", (setupEnv) => {
+    const existingSettings = Object.fromEntries(
+      Object.entries(configuredProfile.settings).filter(
+        ([key]) => key !== "setupEnv" || setupEnv !== undefined,
+      ),
+    );
+    if (setupEnv) {
+      existingSettings.setupEnv = setupEnv;
+    }
+    const profile = { ...configuredProfile, settings: existingSettings };
+    const config = { cloudWorkers: { profiles: { production: profile } } };
+    const draft = { ...createCloudWorkerDraft(readCloudWorkerProfiles(config)[0]), setup: "" };
+
+    expect(buildCloudWorkerUpsertPatch(config, draft, "production")).toEqual({
+      patch: {
+        cloudWorkers: {
+          profiles: {
+            production: { ...profile, settings: { ...existingSettings, setup: null } },
+          },
+        },
+      },
+    });
+  });
+
+  it("rejects an edit after its authoritative profile changes provider", () => {
+    const config = {
+      cloudWorkers: {
+        profiles: {
+          production: {
+            provider: "static-ssh",
+            settings: { host: "worker.example.test", user: "openclaw" },
+          },
+        },
+      },
+    };
+    const draft = createCloudWorkerDraft({
+      id: "production",
+      providerId: "crabbox",
+      install: "bundle",
+      backend: "aws",
+      machineClass: "standard",
+      ttl: "8h",
+      idleTimeout: "45m",
+      setup: "",
+      desktop: false,
+      binary: "",
+    });
+
+    expect(buildCloudWorkerUpsertPatch(config, draft, "production")).toEqual({
+      error: "profileMissing",
     });
   });
 
@@ -134,6 +209,31 @@ describe("cloud worker settings state", () => {
       patch: {
         cloudWorkers: {
           profiles: { production: null },
+        },
+      },
+    });
+  });
+
+  it("removes only project defaults that reference a deleted profile", () => {
+    const config = {
+      cloudWorkers: {
+        profiles: { production: configuredProfile, retained: configuredProfile },
+        projectProfiles: {
+          "github.com/acme/app": "production",
+          "github.com/acme/docs": "production",
+          "github.com/acme/retained": "retained",
+        },
+      },
+    };
+
+    expect(buildCloudWorkerDeletePatch(config, "production")).toEqual({
+      patch: {
+        cloudWorkers: {
+          profiles: { production: null, retained: configuredProfile },
+          projectProfiles: {
+            "github.com/acme/app": null,
+            "github.com/acme/docs": null,
+          },
         },
       },
     });

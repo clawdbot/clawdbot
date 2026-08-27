@@ -134,6 +134,8 @@ export type SubscribeEmbeddedAgentSessionParams = {
   coreBuiltinToolNames?: ReadonlySet<string>;
   /** Exact registered tool names whose concrete instances are safe to replay. */
   replaySafeToolNames?: ReadonlySet<string>;
+  /** Exact names of the marked Code Mode `exec` control tool(s) registered for this run. */
+  codeModeExecToolNames?: ReadonlySet<string>;
   /** Canonical owner keys for unique plugin tools that can change durable state. */
   sideEffectToolOwners?: ReadonlyMap<string, string>;
   /**

@@ -26,7 +26,7 @@ openclaw daemon uninstall
 | Subcommand  | Options                                                                                          |
 | ----------- | ------------------------------------------------------------------------------------------------ |
 | `status`    | `--url`, `--token`, `--password`, `--timeout`, `--no-probe`, `--require-rpc`, `--deep`, `--json` |
-| `install`   | `--port`, `--runtime <node>`, `--token`, `--wrapper <path>`, `--force`, `--json`                 |
+| `install`   | `--port`, `--runtime <node\|bun>`, `--token`, `--wrapper <path>`, `--force`, `--json`            |
 | `uninstall` | `--json`                                                                                         |
 | `start`     | `--json`                                                                                         |
 | `stop`      | `--force`, `--json`, `--disable` (launchd only: suppress KeepAlive/RunAtLoad until next start)   |
@@ -36,6 +36,7 @@ openclaw daemon uninstall
 
 - `status`: shows service install state (launchd/systemd/schtasks) and probes Gateway health.
 - `install`: installs the service; `--force` reinstalls/overwrites an existing install.
+- Node is the primary, default, and recommended service runtime. Bun 1.4+ with WAL-reset-safe `node:sqlite` is available as an explicit opt-in with `install --runtime bun`.
 - `restart --safe`: asks the running Gateway to preflight active work and schedule one coalesced restart after work drains, bounded to 5 minutes. When that budget expires, the restart is forced anyway. Plain `restart` uses the service manager directly; `--force` is the immediate override.
 - `restart --safe --skip-deferral`: bypasses only the active-work deferral gate. Shutdown may still wait for pending replies to drain before the Gateway process exits. Requires `--safe`.
 

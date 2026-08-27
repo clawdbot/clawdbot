@@ -1,7 +1,9 @@
 /**
  * Gateway session preview resolve tests.
  */
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
+import * as sessionAccessor from "../config/sessions/session-accessor.js";
+import * as sessionHistoryEvents from "../config/sessions/session-accessor.sqlite-history-events.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
 import { rpcReq, writeSessionStore } from "./test-helpers.js";
@@ -13,6 +15,23 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
+
+async function seedPreviewTail(
+  sessionId: string,
+  messages: Array<{ role: string; content: string }>,
+): Promise<void> {
+  const { storePath } = await createSessionStoreDir();
+  await writeSessionStore({
+    entries: { "agent:main:main": sessionStoreEntry(sessionId) },
+  });
+  await sessionAccessor.persistSessionTranscriptTurn(
+    { agentId: "main", sessionId, sessionKey: "agent:main:main", storePath },
+    {
+      messages: messages.map((message) => ({ message })),
+      touchSessionEntry: false,
+    },
+  );
+}
 
 function identifiedClient(profileId: string, scopes: string[] = ["operator.read"]): GatewayClient {
   return {
@@ -111,6 +130,74 @@ test("sessions.preview honors maxChars up to the shared cap", async () => {
   expect(capped.payload?.previews[0]?.items).toEqual([
     { role: "assistant", text: `${"a".repeat(maxChars - 3)}...` },
   ]);
+});
+
+test("sessions.preview reads only a bounded tail from a large transcript", async () => {
+  await seedPreviewTail(
+    "sess-preview-bounded-tail",
+    Array.from({ length: 1024 }, (_, index) => ({
+      role: "assistant",
+      content: `message ${String(index)}`,
+    })),
+  );
+  const fullRead = vi.spyOn(sessionAccessor, "readSessionTranscriptMessageEvents");
+  const tailRead = vi.spyOn(sessionHistoryEvents, "readRecentSessionTranscriptHistoryEvents");
+
+  try {
+    const preview = await directSessionReq<{
+      previews: Array<{ items: Array<{ role: string; text: string }> }>;
+    }>("sessions.preview", { keys: ["main"], limit: 12, maxChars: 120 });
+
+    expect(preview.ok).toBe(true);
+    expect(preview.payload?.previews[0]?.items).toEqual(
+      Array.from({ length: 12 }, (_, index) => ({
+        role: "assistant",
+        text: `message ${String(1012 + index)}`,
+      })),
+    );
+    expect(fullRead).not.toHaveBeenCalled();
+    expect(tailRead).toHaveBeenCalledOnce();
+    expect(tailRead.mock.results[0]).toMatchObject({
+      type: "return",
+      value: { events: { length: 64 }, totalMessages: 1024 },
+    });
+  } finally {
+    fullRead.mockRestore();
+    tailRead.mockRestore();
+  }
+});
+
+test("sessions.preview widens its bounded tail past filtered tool-result rows", async () => {
+  await seedPreviewTail("sess-preview-sparse-tail", [
+    ...Array.from({ length: 12 }, (_, index) => ({
+      role: "assistant",
+      content: `visible ${String(index)}`,
+    })),
+    ...Array.from({ length: 320 }, (_, index) => ({
+      role: "toolResult",
+      content: `tool ${String(index)}`,
+    })),
+  ]);
+  const tailRead = vi.spyOn(sessionHistoryEvents, "readRecentSessionTranscriptHistoryEvents");
+
+  try {
+    const preview = await directSessionReq<{
+      previews: Array<{ items: Array<{ role: string; text: string }> }>;
+    }>("sessions.preview", { keys: ["main"], limit: 12, maxChars: 120 });
+
+    expect(preview.payload?.previews[0]?.items).toEqual(
+      Array.from({ length: 12 }, (_, index) => ({
+        role: "assistant",
+        text: `visible ${String(index)}`,
+      })),
+    );
+    expect(tailRead.mock.calls.map(([, options]) => options)).toEqual([
+      { maxBytes: 1024 * 1024, maxLines: 64, maxMessages: 64 },
+      { maxBytes: 8 * 1024 * 1024, maxLines: 1024, maxMessages: 1024 },
+    ]);
+  } finally {
+    tailRead.mockRestore();
+  }
 });
 
 test("sessions.resolve by sessionId ignores fuzzy-search list limits and returns the exact match", async () => {

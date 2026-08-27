@@ -1,4 +1,6 @@
 // Control UI tests cover WhatsApp logout feedback against a mocked Gateway.
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
 import { expect, it } from "vitest";
 import { installMockGateway, waitForConfirmModal } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -11,8 +13,189 @@ const suite = createControlUiE2eSuite({
 
 const QR_DATA_URL =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlY9Z8AAAAASUVORK5CYII=";
+const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const uiProofArtifactDir = path.join(
+  process.cwd(),
+  ".artifacts",
+  "control-ui-e2e",
+  "channels-save-failure",
+);
 
 suite.define(() => {
+  it("shows rejected channel configuration saves in the open editor without losing the draft", async () => {
+    if (captureUiProofEnabled) {
+      await mkdir(uiProofArtifactDir, { recursive: true });
+    }
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1280 },
+        ...(captureUiProofEnabled
+          ? { recordVideo: { dir: uiProofArtifactDir, size: { height: 900, width: 1280 } } }
+          : {}),
+      },
+      async ({ page }) => {
+        const config = { channels: { whatsapp: { enabled: true } } };
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            "channels.status": {
+              ts: Date.now(),
+              channelOrder: ["whatsapp"],
+              channelLabels: { whatsapp: "WhatsApp" },
+              channels: {
+                whatsapp: {
+                  configured: true,
+                  linked: true,
+                  running: true,
+                  connected: true,
+                  reconnectAttempts: 0,
+                },
+              },
+              channelAccounts: {},
+              channelDefaultAccountId: {},
+            },
+            "channels.pairing.list": {
+              accounts: [],
+              requests: [],
+              commandOwnerConfigured: true,
+              limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
+            },
+            "config.get": {
+              config,
+              hash: "channel-config-1",
+              raw: JSON.stringify(config),
+              valid: true,
+              issues: [],
+            },
+            "config.schema": {
+              generatedAt: "2026-08-25T00:00:00.000Z",
+              version: "e2e",
+              uiHints: { "channels.whatsapp.enabled": { advanced: false } },
+              schema: {
+                type: "object",
+                properties: {
+                  channels: {
+                    type: "object",
+                    properties: {
+                      whatsapp: {
+                        type: "object",
+                        properties: { enabled: { type: "boolean", title: "Enabled" } },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        });
+
+        expect((await page.goto(`${suite.server.baseUrl}settings/channels`))?.status()).toBe(200);
+        await page.locator(".channels-item", { hasText: "WhatsApp" }).first().click();
+        const detail = page.locator(".channels-detail");
+        await detail.getByRole("switch", { name: "Enabled" }).waitFor();
+        if (captureUiProofEnabled) {
+          await detail.screenshot({ path: path.join(uiProofArtifactDir, "00-editor-before.png") });
+        }
+
+        await gateway.deferNext("config.set");
+        await detail.locator("wa-switch").first().click();
+        await gateway.waitForRequest("config.set");
+        await gateway.rejectDeferred("config.set", {
+          code: "INVALID_REQUEST",
+          message: "automatic channel save rejected",
+        });
+        const alert = detail.getByRole("alert");
+        await expect.poll(() => alert.textContent()).toContain("automatic channel save rejected");
+
+        const save = detail.getByRole("button", { name: "Save", exact: true });
+        await expect.poll(() => save.isEnabled()).toBe(true);
+        const writesBefore = (await gateway.getRequests("config.set")).length;
+        const readsBefore = (await gateway.getRequests("config.get")).length;
+        await gateway.deferNext("config.set");
+        await save.click();
+        const request = await gateway.waitForRequest("config.set", { after: writesBefore });
+        expect(request.params).toMatchObject({ baseHash: "channel-config-1" });
+        await gateway.rejectDeferred("config.set", {
+          code: "INVALID_REQUEST",
+          message:
+            "channel rejected: OPENAI_API_KEY=sk-1234567890abcdef <img src=x onerror=alert(1)>",
+        });
+
+        await expect.poll(() => alert.textContent()).toContain("channel rejected");
+        const message = await alert.textContent();
+        expect(message).toContain("OPENAI_API_KEY=sk-123...cdef");
+        expect(message).not.toContain("sk-1234567890abcdef");
+        expect(await alert.locator("img").count()).toBe(0);
+        expect(await save.isEnabled()).toBe(true);
+        expect(await detail.getByRole("switch", { name: "Enabled" }).isChecked()).toBe(false);
+        expect(await gateway.getRequests("config.get")).toHaveLength(readsBefore);
+        if (captureUiProofEnabled) {
+          await detail.screenshot({ path: path.join(uiProofArtifactDir, "01-visible-error.png") });
+        }
+      },
+    );
+  });
+
+  it("shows rejected WhatsApp login immediately without waiting for channel status", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            "channels.status": {
+              ts: Date.now(),
+              channelOrder: ["whatsapp"],
+              channelLabels: { whatsapp: "WhatsApp" },
+              channels: {
+                whatsapp: { configured: true, linked: true, running: true, connected: true },
+              },
+              channelAccounts: {},
+              channelDefaultAccountId: {},
+            },
+            "channels.pairing.list": {
+              accounts: [],
+              requests: [],
+              commandOwnerConfigured: true,
+              limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
+            },
+          },
+        });
+
+        expect((await page.goto(`${suite.server.baseUrl}settings/channels`))?.status()).toBe(200);
+        await page.locator(".channels-item", { hasText: "WhatsApp" }).first().click();
+        const detail = page.locator(".channels-detail");
+        const relink = detail.getByRole("button", { name: "Relink" });
+        await relink.waitFor();
+        const statusReadsBefore = (await gateway.getRequests("channels.status")).length;
+        await gateway.deferNext("channels.status", { probe: true });
+        await gateway.deferNext("web.login.start");
+
+        await relink.click();
+        await gateway.waitForRequest("web.login.start");
+        await gateway.rejectDeferred("web.login.start", {
+          code: "INVALID_REQUEST",
+          message: "WhatsApp login rejected",
+        });
+
+        if (captureUiProofEnabled) {
+          await mkdir(uiProofArtifactDir, { recursive: true });
+          await page.screenshot({
+            animations: "disabled",
+            fullPage: true,
+            path: path.join(
+              uiProofArtifactDir,
+              `whatsapp-mutation-${process.env.OPENCLAW_UI_PROOF_LABEL ?? "rejected"}.png`,
+            ),
+          });
+        }
+        await expect.poll(() => detail.textContent()).toContain("WhatsApp login rejected");
+        await expect.poll(() => relink.isEnabled()).toBe(true);
+        expect(await gateway.getRequests("channels.status")).toHaveLength(statusReadsBefore);
+      },
+    );
+  });
+
   it("confirms the explicit default account and preserves a no-op logout", async () => {
     await suite.withPage(
       {
@@ -80,7 +263,20 @@ suite.define(() => {
         await expect(firstConfirm.textContent()).resolves.toContain(
           "Logging out of account default stops its listener and deletes its saved credentials.",
         );
-        await firstConfirm.getByRole("button", { name: "Cancel" }).click();
+        await firstConfirm.getByRole("button", { name: "Cancel" }).focus();
+        await page.keyboard.press("Escape");
+        if (captureUiProofEnabled) {
+          await mkdir(uiProofArtifactDir, { recursive: true });
+          await page.screenshot({
+            animations: "disabled",
+            fullPage: true,
+            path: path.join(
+              uiProofArtifactDir,
+              `modal-escape-${process.env.OPENCLAW_UI_PROOF_LABEL ?? "dismissed"}.png`,
+            ),
+          });
+        }
+        await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/channels");
         await expect.poll(() => page.locator("openclaw-modal-dialog").count()).toBe(1);
         await expect.poll(async () => gateway.getRequests("channels.logout")).toHaveLength(0);
         await expect(qr.getAttribute("src")).resolves.toBe(QR_DATA_URL);

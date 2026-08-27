@@ -335,6 +335,8 @@ private fun deleteInlineWidgetProfile(profileName: String) {
   }
 }
 
+// WebKit 1.17's lint detector reports Kotlin WebViewClient constructors even when this callback exists.
+@SuppressLint("MissingOnRenderProcessGone")
 private class InlineWidgetWebViewClient(
   private val resource: ChatWidgetResource,
   private val onFailure: () -> Unit,
@@ -349,7 +351,6 @@ private class InlineWidgetWebViewClient(
     view.setOnLongClickListener(null)
     view.stopLoading()
     closePinnedClient()
-    view.webViewClient = WebViewClient()
     view.removeAllViews()
     view.destroy()
   }

@@ -1123,7 +1123,7 @@ describe("applyMediaUnderstanding", () => {
     expect(markerCount - 1).toBe(1);
   });
 
-  it("uses CLI image understanding and preserves caption for commands", async () => {
+  it("describes ACP-delivered images and preserves their captions for commands", async () => {
     const imagePath = await createTempMediaFile({
       fileName: "photo.jpg",
       content: "image-bytes",
@@ -1159,6 +1159,7 @@ describe("applyMediaUnderstanding", () => {
     const result = await applyMediaUnderstanding({
       ctx,
       cfg,
+      deliveredImageIndexes: new Set([0]),
     });
 
     expect(result.appliedImage).toBe(true);
@@ -1262,15 +1263,34 @@ describe("applyMediaUnderstanding", () => {
     );
   });
 
-  it("normalizes HEIC images before tools.media.image provider execution", async () => {
-    const imagePath = await createTempMediaFile({
+  it.each([
+    {
+      name: "HEIC",
       fileName: "photo.heic",
-      content: "heic-source",
+      mime: "image/heic",
+      bytes: Buffer.from("heic-source"),
+    },
+    {
+      name: "HEIC sequence",
+      fileName: "photo.heic",
+      mime: "image/heic-sequence",
+      bytes: Buffer.from("000000186674797068657663000000000000000000000000", "hex"),
+    },
+    {
+      name: "HEIF sequence",
+      fileName: "photo.heif",
+      mime: "image/heif-sequence",
+      bytes: Buffer.from("00000018667479706d736631000000000000000000000000", "hex"),
+    },
+  ])("normalizes $name images before tools.media.image provider execution", async (testCase) => {
+    const imagePath = await createTempMediaFile({
+      fileName: testCase.fileName,
+      content: testCase.bytes,
     });
     const describeImage = vi.fn(async () => ({ text: "normalized image" }));
     const ctx: MsgContext = {
       Body: "",
-      media: [{ path: imagePath, contentType: "image/heic" }],
+      media: [{ path: imagePath, contentType: testCase.mime }],
     };
     const cfg: OpenClawConfig = {
       tools: {
@@ -1303,11 +1323,11 @@ describe("applyMediaUnderstanding", () => {
     });
 
     expect(result.appliedImage).toBe(true);
-    expect(mockedConvertHeicToJpeg).toHaveBeenCalledWith(Buffer.from("heic-source"));
+    expect(mockedConvertHeicToJpeg).toHaveBeenCalledWith(testCase.bytes);
     expect(describeImage).toHaveBeenCalledWith(
       expect.objectContaining({
         buffer: Buffer.from("jpeg-normalized"),
-        fileName: "photo.heic",
+        fileName: testCase.fileName,
         mime: "image/jpeg",
       }),
     );

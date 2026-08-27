@@ -91,6 +91,13 @@ type RuntimeUpsertSessionEntryParams = RuntimeSessionStoreReadParams & {
 const loadEmbeddedAgentRuntime = createLazyRuntimeModule(
   () => import("./runtime-embedded-agent.runtime.js"),
 );
+const loadAgentCommandRuntime = createLazyRuntimeModule(async () => {
+  const [command, identity] = await Promise.all([
+    import("../../agents/agent-command.js"),
+    import("../../agents/agent-command-execution-identity.js"),
+  ]);
+  return { command, identity };
+});
 
 function toSessionAccessScope(params: RuntimeSessionStoreReadParams): SessionAccessScope {
   // Keep plugin runtime parameters aligned with the public SDK wrapper while
@@ -364,6 +371,7 @@ async function createSessionEntry(
         } else {
           const result = await createGatewaySession({
             cfg: params.cfg,
+            operatorRoleActor: { kind: "system" },
             key: params.key,
             ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
             ...(params.label !== undefined ? { label: params.label } : {}),
@@ -628,9 +636,31 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
     resolveAgentTimeoutMs,
     resolveCliBackendDispatchEligibility: resolveEmbeddedCliBackendDispatchEligibility,
     ensureAgentWorkspace,
-  } satisfies Omit<PluginRuntime["agent"], "runEmbeddedAgent" | "session"> &
-    Partial<Pick<PluginRuntime["agent"], "runEmbeddedAgent" | "session">>;
+  } satisfies Omit<
+    PluginRuntime["agent"],
+    "runCommandFromIngress" | "runEmbeddedAgent" | "session"
+  > &
+    Partial<Pick<PluginRuntime["agent"], "runCommandFromIngress" | "runEmbeddedAgent" | "session">>;
 
+  defineCachedValue(agentRuntime, "runCommandFromIngress", () =>
+    createLazyRuntimeMethod(
+      loadAgentCommandRuntime,
+      ({ command, identity }) =>
+        async (
+          opts: Parameters<PluginRuntime["agent"]["runCommandFromIngress"]>[0],
+          runtime: Parameters<PluginRuntime["agent"]["runCommandFromIngress"]>[1],
+        ) =>
+          await command.agentCommandFromGatewayIngress(
+            {
+              ...identity.sanitizePublicAgentCommandIngressOpts(opts),
+              senderIsOwner: opts.senderIsOwner === true,
+            },
+            runtime,
+            undefined,
+            {},
+          ),
+    ),
+  );
   defineCachedValue(agentRuntime, "runEmbeddedAgent", () =>
     createLazyRuntimeMethod(loadEmbeddedAgentRuntime, (runtime) => runtime.runPluginEmbeddedAgent),
   );

@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   auditGatewayServiceConfig,
   checkTokenDrift,
@@ -10,6 +10,28 @@ import {
 } from "./service-audit.js";
 import { buildServiceEnvironment } from "./service-env.js";
 import type { GatewayServiceEnvironmentValueSource } from "./service-types.js";
+
+const execSystemctlUser = vi.hoisted(() =>
+  vi.fn<
+    (
+      env: NodeJS.ProcessEnv,
+      args: string[],
+      timeoutMs?: number,
+    ) => Promise<{ stdout: string; stderr: string; code: number }>
+  >(),
+);
+
+const resolveBunRuntimeInfo = vi.hoisted(() => vi.fn());
+
+vi.mock("./runtime-paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./runtime-paths.js")>()),
+  resolveBunRuntimeInfo,
+}));
+
+vi.mock("./systemd-exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./systemd-exec.js")>()),
+  execSystemctlUser,
+}));
 
 function buildMinimalServicePath(options: {
   platform: NodeJS.Platform;
@@ -65,9 +87,13 @@ function createGatewayAudit({
   });
 }
 
-async function writeSystemdUnitForAudit(home: string, lines: string[]) {
+async function writeSystemdUnitForAudit(
+  home: string,
+  lines: string[],
+  unitName = "openclaw-gateway.service",
+) {
   const unitDir = path.join(home, ".config", "systemd", "user");
-  const unitPath = path.join(unitDir, "openclaw-gateway.service");
+  const unitPath = path.join(unitDir, unitName);
   await fs.mkdir(unitDir, { recursive: true });
   await fs.writeFile(
     unitPath,
@@ -101,7 +127,25 @@ function expectTokenAudit(
 }
 
 describe("auditGatewayServiceConfig", () => {
-  it("flags bun runtime", async () => {
+  beforeEach(() => {
+    execSystemctlUser.mockReset();
+    execSystemctlUser.mockResolvedValue({ stdout: "", stderr: "systemd unavailable", code: 1 });
+    resolveBunRuntimeInfo.mockReset();
+    resolveBunRuntimeInfo.mockResolvedValue({
+      version: "1.4.0",
+      hasNodeSqlite: true,
+      sqliteVersion: "3.51.3",
+      supported: true,
+    });
+  });
+
+  it("flags Bun runtimes without WAL-safe SQLite", async () => {
+    resolveBunRuntimeInfo.mockResolvedValue({
+      version: "1.4.0",
+      hasNodeSqlite: true,
+      sqliteVersion: "3.51.2",
+      supported: false,
+    });
     const audit = await auditGatewayServiceConfig({
       env: { HOME: "/tmp" },
       platform: "darwin",
@@ -113,7 +157,20 @@ describe("auditGatewayServiceConfig", () => {
     expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayRuntimeBun)).toBe(true);
     expect(
       audit.issues.find((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeBun)?.message,
-    ).toContain("runtime state requires node:sqlite");
+    ).toContain("Bun 1.4+ with WAL-reset-safe node:sqlite is required");
+  });
+
+  it("accepts Bun 1.4 with WAL-safe node:sqlite", async () => {
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/tmp" },
+      platform: "darwin",
+      command: {
+        programArguments: ["/opt/homebrew/bin/bun", "gateway"],
+        environment: { PATH: "/usr/bin:/bin" },
+      },
+    });
+
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayRuntimeBun)).toBe(false);
   });
 
   it("flags version-managed node paths", async () => {
@@ -500,6 +557,103 @@ describe("auditGatewayServiceConfig", () => {
     expectTokenAudit(audit, { embedded: true, mismatch: true });
   });
 
+  it.each([
+    {
+      name: "uses manager KillMode instead of the base unit",
+      unit: [
+        "After=network-online.target",
+        "Wants=network-online.target",
+        "RestartSec=5",
+        "KillMode=control-group",
+      ],
+      manager: [
+        "KillMode=process",
+        "RestartUSec=5s",
+        "After=network-online.target",
+        "Wants=network-online.target",
+      ],
+      code: SERVICE_AUDIT_CODES.systemdKillModeProcessOrNone,
+      expected: true,
+    },
+    {
+      name: "uses manager RestartUSec instead of the base unit",
+      unit: [
+        "After=network-online.target",
+        "Wants=network-online.target",
+        "RestartSec=100ms",
+        "KillMode=control-group",
+      ],
+      manager: [
+        "Wants=network-online.target",
+        "KillMode=control-group",
+        "RestartUSec=5s",
+        "After=network-online.target",
+      ],
+      code: SERVICE_AUDIT_CODES.systemdRestartSec,
+      expected: false,
+    },
+    {
+      name: "uses manager After dependencies absent from the base unit",
+      unit: ["Wants=network-online.target", "RestartSec=5", "KillMode=control-group"],
+      manager: [
+        "RestartUSec=5s",
+        "After=basic.target network-online.target",
+        "KillMode=control-group",
+        "Wants=network-online.target",
+      ],
+      code: SERVICE_AUDIT_CODES.systemdAfterNetworkOnline,
+      expected: false,
+    },
+    {
+      name: "does not refill missing manager Wants from the base unit",
+      unit: [
+        "After=network-online.target",
+        "Wants=network-online.target",
+        "RestartSec=5",
+        "KillMode=control-group",
+      ],
+      manager: [
+        "After=network-online.target",
+        "RestartUSec=5s",
+        "Wants=basic.target",
+        "KillMode=control-group",
+      ],
+      code: SERVICE_AUDIT_CODES.systemdWantsNetworkOnline,
+      expected: true,
+    },
+  ])("respects systemd manager authority: $name", async ({ unit, manager, code, expected }) => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-manager-"));
+    try {
+      const unitName = "openclaw-audit.service";
+      const env = { HOME: home, OPENCLAW_SYSTEMD_UNIT: unitName };
+      await writeSystemdUnitForAudit(home, unit, unitName);
+      execSystemctlUser.mockResolvedValueOnce({
+        stdout: manager.join("\n"),
+        stderr: "",
+        code: 0,
+      });
+
+      const audit = await auditGatewayServiceConfig({
+        env,
+        platform: "linux",
+        timeoutMs: 321,
+        command: {
+          programArguments: ["/usr/bin/node", "gateway"],
+          environment: { PATH: "/usr/bin:/bin" },
+        },
+      });
+
+      expect(hasIssue(audit, code)).toBe(expected);
+      expect(execSystemctlUser).toHaveBeenCalledExactlyOnceWith(
+        env,
+        ["show", unitName, "--no-page", "--property", "After,Wants,RestartUSec,KillMode"],
+        321,
+      );
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
   it.each(["process", "none"])(
     `warns when KillMode is %s in explicit unit file`,
     async (killMode) => {
@@ -524,6 +678,7 @@ describe("auditGatewayServiceConfig", () => {
           (entry) => entry.code === SERVICE_AUDIT_CODES.systemdKillModeProcessOrNone,
         ),
       ).toBe(true);
+      expect(execSystemctlUser).toHaveBeenCalledWith({ HOME: home }, expect.any(Array), 10_000);
     },
   );
 
@@ -618,6 +773,7 @@ describe("auditGatewayServiceConfig", () => {
     );
     expect(issue?.detail).toContain("OPENROUTER_API_KEY");
     expect(issue?.detail).toContain("TAVILY_API_KEY");
+    expect(issue?.environmentKeys).toEqual(["OPENROUTER_API_KEY", "TAVILY_API_KEY"]);
   });
 
   it("flags inline managed values expected by the current install plan for old services", async () => {
@@ -674,6 +830,7 @@ describe("auditGatewayServiceConfig", () => {
     expect(issue?.detail).toContain("HTTP_PROXY");
     expect(issue?.detail).toContain("HTTPS_PROXY");
     expect(issue?.detail).toContain("NO_PROXY");
+    expect(issue?.environmentKeys).toEqual(["HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY"]);
   });
 
   it("flags lowercase inline proxy environment values using portable key names", async () => {
@@ -687,6 +844,7 @@ describe("auditGatewayServiceConfig", () => {
       (entry) => entry.code === SERVICE_AUDIT_CODES.gatewayProxyEnvEmbedded,
     );
     expect(issue?.detail).toContain("HTTPS_PROXY");
+    expect(issue?.environmentKeys).toEqual(["https_proxy"]);
   });
 
   it("does not flag proxy values loaded only from EnvironmentFile", async () => {

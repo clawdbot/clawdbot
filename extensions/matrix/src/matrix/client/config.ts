@@ -1,4 +1,9 @@
 // Matrix helper module supports config behavior.
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+  normalizeOptionalAccountId,
+} from "openclaw/plugin-sdk/account-id";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveOptionalIntegerOption } from "openclaw/plugin-sdk/number-runtime";
@@ -10,6 +15,10 @@ import {
   normalizeResolvedSecretInputString,
 } from "openclaw/plugin-sdk/secret-input-runtime";
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
+import {
+  isPrivateNetworkOptInEnabled,
+  ssrfPolicyFromDangerouslyAllowPrivateNetwork,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   requiresExplicitMatrixDefaultAccount,
   resolveMatrixDefaultOrOnlyAccountId,
@@ -27,13 +36,6 @@ import {
 } from "../account-config.js";
 import { resolveMatrixConfigFieldPath } from "../config-paths.js";
 import type { MatrixStoredCredentials } from "../credentials-state.js";
-import {
-  DEFAULT_ACCOUNT_ID,
-  isPrivateNetworkOptInEnabled,
-  normalizeAccountId,
-  normalizeOptionalAccountId,
-  ssrfPolicyFromDangerouslyAllowPrivateNetwork,
-} from "./config-runtime-api.js";
 import { resolveGlobalMatrixEnvConfig, resolveScopedMatrixEnvConfig } from "./env-auth.js";
 import { repairCurrentTokenStorageMetaDeviceId } from "./storage.js";
 import type { MatrixAuth, MatrixResolvedConfig } from "./types.js";

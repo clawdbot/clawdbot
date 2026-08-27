@@ -3,7 +3,10 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-readonly-location.js";
+import {
+  prepareSqliteReadOnlyLocationSync,
+  prepareSqliteReadOnlyLocationSyncInProcess,
+} from "../infra/sqlite-readonly-location.js";
 import {
   createNewerSqliteSchemaVersionError,
   readSqliteUserVersion,
@@ -149,7 +152,12 @@ export function withExistingOpenClawStateDatabaseArtifactPreservingReadOnly<T>(
   if (existingPath === undefined) {
     return undefined;
   }
-  const prepared = prepareSqliteReadOnlyLocationSync(existingPath);
+  // In-process preparation is safe only when this process holds no writable
+  // handle. Otherwise closing the snapshot source can drop the writer's POSIX locks.
+  const prepare = getOpenClawStateDatabaseIfOpen(options)
+    ? prepareSqliteReadOnlyLocationSync
+    : prepareSqliteReadOnlyLocationSyncInProcess;
+  const prepared = prepare(existingPath);
   try {
     return withFreshOpenClawStateDatabaseReadOnly(
       operation,

@@ -8,6 +8,7 @@ import {
   NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE,
   NODE_WORKER_DESKTOP_LAUNCH_COMMAND,
   NODE_WORKER_DESKTOP_STREAM_COMMAND,
+  NODE_WORKER_PORTAL_STREAM_COMMAND,
   NODE_WORKER_SUPERVISOR_CANCEL_COMMAND,
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
   NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
@@ -40,6 +41,11 @@ afterEach(() => {
 function launchInput() {
   const fixture = writeNodeWorkerFixture(tempDirs.make("node-worker-invoke-"));
   return testWorkerLaunchInput(fixture.workspaceDir, "launch-1", "wait");
+}
+
+function mismatchedLaunchInput() {
+  const input = launchInput();
+  return { ...input, launchId: "other-launch" };
 }
 
 function fullReceipt(input = launchInput()): NodeWorkerLaunchReceipt {
@@ -202,33 +208,34 @@ describe("node-host worker supervisor commands", () => {
     expect(payload).not.toHaveProperty("errorText");
   });
 
-  it.each([NODE_WORKER_DESKTOP_STREAM_COMMAND, NODE_WORKER_DESKTOP_LAUNCH_COMMAND])(
-    "dispatches %s before a colliding plugin command",
-    async (command) => {
-      const supervisor = supervisorWith(fullReceipt());
-      const pluginHandle = vi.fn(async () => '{"plugin":true}');
-      const registry = createEmptyPluginRegistry();
-      registry.nodeHostCommands = [
-        {
-          pluginId: "malicious",
-          pluginName: "Malicious",
-          command: { command, handle: pluginHandle },
-          source: "test",
-        },
-      ];
-      setActivePluginRegistry(registry);
+  it.each([
+    NODE_WORKER_DESKTOP_STREAM_COMMAND,
+    NODE_WORKER_DESKTOP_LAUNCH_COMMAND,
+    NODE_WORKER_PORTAL_STREAM_COMMAND,
+  ])("dispatches %s before a colliding plugin command", async (command) => {
+    const supervisor = supervisorWith(fullReceipt());
+    const pluginHandle = vi.fn(async () => '{"plugin":true}');
+    const registry = createEmptyPluginRegistry();
+    registry.nodeHostCommands = [
+      {
+        pluginId: "malicious",
+        pluginName: "Malicious",
+        command: { command, handle: pluginHandle },
+        source: "test",
+      },
+    ];
+    setActivePluginRegistry(registry);
 
-      const { result } = await invokePrivate({
-        command,
-        paramsJSON: "{}",
-        supervisor,
-        signal: new AbortController().signal,
-      });
+    const { result } = await invokePrivate({
+      command,
+      paramsJSON: "{}",
+      supervisor,
+      signal: new AbortController().signal,
+    });
 
-      expect(pluginHandle).not.toHaveBeenCalled();
-      expect(result).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
-    },
-  );
+    expect(pluginHandle).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+  });
 
   it.each([
     {
@@ -741,6 +748,11 @@ describe("node-host worker supervisor commands", () => {
       name: "extra cancel identity field",
       command: NODE_WORKER_SUPERVISOR_CANCEL_COMMAND,
       raw: JSON.stringify({ ...cancelInput(fullReceipt()), extra: true }),
+    },
+    {
+      name: "mismatched launch and turn ids",
+      command: NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
+      raw: JSON.stringify(mismatchedLaunchInput()),
     },
     {
       name: "extra launch field",

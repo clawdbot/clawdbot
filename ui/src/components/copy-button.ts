@@ -31,7 +31,7 @@ function setButtonLabel(button: HTMLButtonElement, label: string) {
 export async function handleCopyButton(event: Event, text: string, idleLabel: string) {
   const button = event.currentTarget as HTMLButtonElement | null;
   if (!button || button.dataset.copying === "1") {
-    return;
+    return false;
   }
 
   // Older reset timers must not replace feedback from a newer copy attempt.
@@ -41,12 +41,14 @@ export async function handleCopyButton(event: Event, text: string, idleLabel: st
   button.setAttribute("aria-busy", "true");
   button.disabled = true;
 
-  const copied = await copyToClipboard(text);
+  // Retired buttons must not overwrite a newer copy through the legacy fallback.
+  const isCurrent = () => button.isConnected && button.dataset.copyAttempt === attempt;
+  const copied = await copyToClipboard(text, isCurrent);
   delete button.dataset.copying;
   button.removeAttribute("aria-busy");
   button.disabled = false;
-  if (!button.isConnected || button.dataset.copyAttempt !== attempt) {
-    return;
+  if (!isCurrent()) {
+    return false;
   }
 
   const feedback = copied ? "copied" : "error";
@@ -57,7 +59,7 @@ export async function handleCopyButton(event: Event, text: string, idleLabel: st
 
   const duration = copied ? COPIED_FOR_MS : ERROR_FOR_MS;
   window.setTimeout(() => {
-    if (!button.isConnected || button.dataset.copyAttempt !== attempt) {
+    if (!isCurrent()) {
       return;
     }
     delete button.dataset[feedback];
@@ -69,6 +71,7 @@ export async function handleCopyButton(event: Event, text: string, idleLabel: st
       renderedLabel && renderedLabel !== feedbackLabel ? renderedLabel : idleLabel,
     );
   }, duration);
+  return copied;
 }
 
 function createCopyButton(options: CopyButtonOptions): TemplateResult {

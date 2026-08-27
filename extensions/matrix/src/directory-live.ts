@@ -1,3 +1,4 @@
+import type { ChannelDirectoryEntry } from "openclaw/plugin-sdk/channel-contract";
 // Matrix plugin module implements directory live behavior.
 import {
   normalizeLowercaseStringOrEmpty,
@@ -6,7 +7,6 @@ import {
 import { resolveMatrixAuth } from "./matrix/client.js";
 import { MatrixAuthedHttpClient } from "./matrix/sdk/http-client.js";
 import { isMatrixQualifiedUserId, normalizeMatrixMessagingTarget } from "./matrix/target-ids.js";
-import type { ChannelDirectoryEntry } from "./runtime-api.js";
 
 type MatrixUserResult = {
   user_id?: string;

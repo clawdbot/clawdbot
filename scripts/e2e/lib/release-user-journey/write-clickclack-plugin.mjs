@@ -362,11 +362,15 @@ const clickclackPlugin = {
       label: snapshot.configured ? "configured" : "missing config",
       detail: snapshot.baseUrl ?? "",
     }),
-    buildAccountSnapshot: ({ account }) => ({
+    buildAccountSnapshot: ({ account, runtime }) => ({
       accountId: account.accountId,
       enabled: account.enabled,
       configured: account.configured,
       baseUrl: account.baseUrl,
+      running: runtime?.running ?? false,
+      lastStartAt: runtime?.lastStartAt ?? null,
+      lastStopAt: runtime?.lastStopAt ?? null,
+      lastError: runtime?.lastError ?? null,
     }),
   },
   outbound: {

@@ -1,5 +1,5 @@
 // Custom editor tests cover TUI editor key handling and cursor behavior.
-import { CombinedAutocompleteProvider, TUI } from "@earendil-works/pi-tui";
+import { CombinedAutocompleteProvider, type TUI } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getSlashCommands, shouldSubmitExactArgumentCompletion } from "../commands.js";
 import { editorTheme } from "../theme/theme.js";

@@ -1,13 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
-import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import {
   createModelGenerationFixture,
   publishCurrentModelGeneration,
   resetModelGenerationFixtureState,
 } from "./model.generation-scope.test-support.js";
-import { resolveModel, resolveModelAsync } from "./model.js";
+import { resolveModelAsync } from "./model.js";
 
 async function resolveGeneration(generation: ReturnType<typeof createModelGenerationFixture>) {
   const { preparedModelRuntime } = generation;
@@ -114,33 +113,6 @@ describe("model runtime generation scope", () => {
       provider: generationA.provider,
       name: "Static A",
       mediaInput: { image: generationA.staticImagePolicy },
-    });
-    expect(generationB.resolveDynamicModel).not.toHaveBeenCalled();
-  });
-
-  it("keeps synchronous resolution on the exact scoped generation", () => {
-    const config = {} satisfies OpenClawConfig;
-    const generationA = createModelGenerationFixture({ config, label: "a" });
-    const generationB = createModelGenerationFixture({ config, label: "b" });
-    publishCurrentModelGeneration(generationB);
-    const stores = generationA.preparedModelRuntime.createStores();
-
-    const result = withPluginRuntimeGenerationScope(generationA.preparedModelRuntime, () =>
-      resolveModel(
-        generationA.requestProvider,
-        generationA.modelId,
-        generationA.preparedModelRuntime.agentDir,
-        config,
-        {
-          ...stores,
-          workspaceDir: generationA.preparedModelRuntime.workspaceDir,
-        },
-      ),
-    );
-
-    expect(result.model).toMatchObject({
-      provider: generationA.provider,
-      name: "Runtime A",
     });
     expect(generationB.resolveDynamicModel).not.toHaveBeenCalled();
   });

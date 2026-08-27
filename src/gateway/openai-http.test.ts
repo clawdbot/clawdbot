@@ -33,6 +33,7 @@ import {
   getActiveGatewayRootWorkCount,
   isGatewaySubordinateWorkAdmissionClosed,
 } from "../process/gateway-work-admission.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
 import {
@@ -2627,8 +2628,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       name: "internal agent error without a provider terminal",
       fail: true,
       providerTerminal: false,
-      expected: "Error: internal error",
-      protocolError: false,
+      expected: "internal error",
+      protocolError: true,
     },
     {
       name: "internal agent error with a provider terminal",
@@ -2753,6 +2754,66 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
     },
   );
+
+  it.each([
+    { name: "a string", stream: "false" },
+    { name: "a number", stream: 1 },
+    { name: "an array", stream: [] },
+    { name: "an object", stream: {} },
+  ])("rejects $name stream mode before dispatching an agent", async ({ stream }) => {
+    agentCommandMock.mockClear();
+    const response = await postChatCompletions(enabledPort, {
+      model: "openclaw",
+      stream,
+      messages: [{ role: "user", content: "hi" }],
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.headers.get("content-type")).toContain("application/json");
+    await expect(response.json()).resolves.toMatchObject({
+      error: { type: "invalid_request_error", message: expect.stringContaining("stream") },
+    });
+    expect(agentCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps one created timestamp across every streamed completion chunk", async () => {
+    let now = 1_700_000_000_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => (now += 1_000));
+    try {
+      agentCommandMock.mockClear();
+      agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
+        const runId = (opts as { runId?: string }).runId ?? "";
+        emitAgentEvent({ runId, stream: "assistant", data: { delta: "commentary" } });
+        return {
+          payloads: [{ text: "commentary" }],
+          meta: {
+            stopReason: "tool_calls",
+            pendingToolCalls: [
+              { id: "call_1", name: "lookup", arguments: JSON.stringify({ q: "x".repeat(300) }) },
+            ],
+            agentMeta: { usage: { input: 4, output: 1, total: 5 } },
+          },
+        };
+      }) as never);
+
+      const response = await postChatCompletions(enabledPort, {
+        model: "openclaw",
+        stream: true,
+        stream_options: { include_usage: true },
+        messages: [{ role: "user", content: "hi" }],
+      });
+      expect(response.status).toBe(200);
+      const chunks = parseSseDataLines(await response.text())
+        .filter((data) => data !== "[DONE]")
+        .map((data) => JSON.parse(data) as { created?: number });
+
+      expect(chunks.length).toBeGreaterThanOrEqual(6);
+      expect(chunks.every((chunk) => typeof chunk.created === "number")).toBe(true);
+      expect(new Set(chunks.map((chunk) => chunk.created))).toEqual(new Set([chunks[0]?.created]));
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
 
   it("streams SSE chunks when stream=true", async () => {
     const port = enabledPort;
@@ -3142,16 +3203,16 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         const choices = errorChunks.flatMap(
           (chunk) => (chunk.choices as Array<Record<string, unknown>> | undefined) ?? [],
         );
-        const errorContentChoice = choices.find(
-          (choice) =>
-            (choice.delta as Record<string, unknown> | undefined)?.content ===
-            "Error: internal error",
-        );
-        expect(errorContentChoice?.finish_reason).toBeNull();
-        const stopChoices = choices.filter((choice) => choice.finish_reason === "stop");
-        expect(stopChoices).toHaveLength(1);
-        expect(stopChoices[0]?.delta).toEqual({});
-        expect(choices.at(-1)).toEqual(stopChoices[0]);
+        expect(errorChunks.filter((chunk) => "error" in chunk)).toEqual([
+          { error: { message: "internal error", type: "api_error" } },
+        ]);
+        expect(
+          choices.some((choice) =>
+            Boolean((choice.delta as Record<string, unknown> | undefined)?.content),
+          ),
+        ).toBe(false);
+        expect(choices.some((choice) => choice.finish_reason === "stop")).toBe(false);
+        expect(errorText).not.toContain("boom");
       }
     } finally {
       // shared server
@@ -3667,6 +3728,87 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         expect(firstAgentCommandOptions()?.senderIsOwner).toBe(senderIsOwner);
       }
     }
+  });
+
+  it("blocks a view-capped operator from mutating another operator's session", async () => {
+    await withEnvAsync(
+      { OPENCLAW_GATEWAY_TOKEN: undefined, OPENCLAW_GATEWAY_PASSWORD: undefined },
+      async () => {
+        const port = await getGatewayTestPort();
+        let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+        const previousGatewayAuth = testState.gatewayAuth;
+        const trustedProxyAuth = {
+          mode: "trusted-proxy" as const,
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+            requiredHeaders: ["x-forwarded-proto"],
+            allowLoopback: true,
+          },
+        };
+        testState.gatewayAuth = trustedProxyAuth;
+        try {
+          await writeGatewayConfig({
+            gateway: {
+              auth: trustedProxyAuth,
+              trustedProxies: ["127.0.0.1"],
+              roles: {
+                default: "guest",
+                definitions: {
+                  guest: {
+                    agents: "*",
+                    scopes: ["operator.write"],
+                    sessions: { others: "view" },
+                  },
+                },
+              },
+            },
+          });
+          resetConfigRuntimeState();
+          server = await startGatewayServer(port, {
+            host: "127.0.0.1",
+            auth: trustedProxyAuth,
+            controlUiEnabled: false,
+            openAiChatCompletionsEnabled: true,
+          });
+
+          const owner = ensureProfileForEmail("session-owner@example.test");
+          const sessionKey = "agent:main:foreign-openai-http";
+          await upsertSessionEntryCore(
+            { agentId: "main", sessionKey },
+            {
+              sessionId: "foreign-openai-http",
+              updatedAt: 1,
+              visibility: "shared",
+              createdActor: { type: "human", id: owner.id },
+            },
+          );
+
+          agentCommandMock.mockClear();
+          agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
+          const response = await postChatCompletions(
+            port,
+            { model: "openclaw", messages: [{ role: "user", content: "mutate foreign session" }] },
+            {
+              "x-forwarded-for": "198.51.100.42",
+              "x-forwarded-proto": "https",
+              "x-forwarded-user": "guest@example.test",
+              "x-openclaw-session-key": sessionKey,
+            },
+          );
+
+          expect(response.status).toBe(403);
+          expect(await response.json()).toMatchObject({
+            error: { type: "forbidden", message: expect.stringContaining("session is shared") },
+          });
+          expect(agentCommandMock).not.toHaveBeenCalled();
+        } finally {
+          await server?.close({ reason: "openai operator role session sharing test done" });
+          testState.gatewayAuth = previousGatewayAuth;
+          await writeGatewayConfig({});
+          resetConfigRuntimeState();
+        }
+      },
+    );
   });
 
   it("preserves verified trusted-proxy owner identity for both response modes", async () => {

@@ -45,11 +45,12 @@ vi.mock("../../secrets/target-registry.js", () => ({
   isKnownSecretTargetId: () => false,
 }));
 
+import { isSecretValueRegisteredForRedaction } from "../../logging/secret-redaction-registry.js";
 import {
   TALK_TEST_PROVIDER_API_KEY_PATH,
   TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS,
 } from "../../test-utils/talk-test-provider.js";
-import { createSecretsHandlers } from "./secrets.js";
+import { createSecretsHandlers, createSecretStoreWriteService } from "./secrets.js";
 
 async function invokeSecretsReload(params: {
   handlers: ReturnType<typeof createSecretsHandlers>;
@@ -211,6 +212,7 @@ describe("secrets handlers", () => {
       }));
     return createSecretsHandlers({
       reloadSecrets,
+      storeWriteService: createSecretStoreWriteService({ reloadSecrets, log: overrides?.log }),
       resolveSecrets,
       log: overrides?.log,
     });
@@ -453,6 +455,25 @@ describe("secrets handlers", () => {
       forceColdRefKeys: new Set(["store:default:SERVICE_API_KEY"]),
       joinInFlight: false,
     });
+  });
+
+  it("registers submitted store values for redaction before a failing write", async () => {
+    const value = "test-secret-value-redaction-before-write-123";
+    storeMocks.writeEntry.mockImplementationOnce(() => {
+      expect(isSecretValueRegisteredForRedaction(value)).toBe(true);
+      throw new Error("database unavailable");
+    });
+    const respond = vi.fn();
+
+    await invokeStoreMethod({
+      handlers: createHandlers(),
+      method: "secrets.store.set",
+      requestParams: { name: "SERVICE_API_KEY", value, kind: "secret" },
+      respond,
+    });
+
+    expectRespondError(respond, { code: "UNAVAILABLE", message: "secrets.store.set failed" });
+    expect(isSecretValueRegisteredForRedaction(value)).toBe(true);
   });
 
   it("rejects invalid store params before writing", async () => {

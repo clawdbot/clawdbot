@@ -1,6 +1,15 @@
 import crypto from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
+import type { AdmittedRunContext } from "../../agents/admitted-run-context.js";
+import {
+  executionOwnerBindingFromAdmission,
+  type ExecutionOwnerBindingResult,
+} from "../../audit/execution-owner-binding.js";
+import {
+  bindExecutionOwnerLifecycleMetadata,
+  deleteExecutionOwnerLifecycleMetadata,
+} from "../../audit/execution-owner-lifecycle-binding-store.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -176,6 +185,38 @@ function withReceiptWrite<T>(
   return result;
 }
 
+/** Binds the exact admitted execution to its authoritative receipt without changing lifecycle. */
+export function bindCronRunReceiptExecution(params: {
+  admitted: AdmittedRunContext;
+  handle: CronRunReceiptHandle;
+  options?: OpenClawStateDatabaseOptions;
+}): ExecutionOwnerBindingResult {
+  const binding = executionOwnerBindingFromAdmission(params.admitted);
+  if (!binding) {
+    return "disabled";
+  }
+  return withReceiptWrite(
+    "cron.run-receipt.execution-binding",
+    params.options ?? {},
+    (database) => {
+      try {
+        assertCronRunReceiptOwnedInDatabase({ database, handle: params.handle });
+      } catch (error) {
+        if (!(error instanceof CronRunReceiptRevisionError)) {
+          throw error;
+        }
+        return "missing";
+      }
+      return bindExecutionOwnerLifecycleMetadata({
+        db: database,
+        ownerKind: "cron",
+        ownerId: params.handle.receiptId,
+        binding,
+      });
+    },
+  );
+}
+
 function isReceiptStatus(value: string): value is CronRunReceiptStatus {
   return (
     value === "running" ||
@@ -329,6 +370,11 @@ function pruneTerminalReceipts(database: DatabaseSync, storeKey: string, jobId: 
     const receiptIds = terminalIds
       .slice(index, index + CRON_RUN_RECEIPT_DELETE_BATCH_SIZE)
       .map((row) => row.receipt_id);
+    deleteExecutionOwnerLifecycleMetadata({
+      db: database,
+      ownerKind: "cron",
+      ownerIds: receiptIds,
+    });
     executeSqliteQuerySync(
       database,
       query(database)

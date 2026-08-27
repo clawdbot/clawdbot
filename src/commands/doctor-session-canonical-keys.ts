@@ -292,6 +292,7 @@ function applyCanonicalDestinationArtifacts(params: {
     params.database,
     [params.winner.sessionKey],
     params.winner.canonicalKey,
+    { includeParticipants: false },
   );
 }
 

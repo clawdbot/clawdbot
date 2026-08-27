@@ -9,6 +9,23 @@ import Testing
 struct TalkModeManagerTests {
     private struct CloseError: Error {}
 
+    @Test func `recording sessions preserve system keyboard feedback`() throws {
+        let session = AVAudioSession.sharedInstance()
+        let previousSetting = session.allowHapticsAndSystemSoundsDuringRecording
+        defer {
+            try? session.setAllowHapticsAndSystemSoundsDuringRecording(previousSetting)
+            try? session.setActive(false, options: [.notifyOthersOnDeactivation])
+        }
+
+        try session.setAllowHapticsAndSystemSoundsDuringRecording(false)
+        try TalkModeManager.configureAudioSession()
+        #expect(session.allowHapticsAndSystemSoundsDuringRecording)
+
+        try session.setAllowHapticsAndSystemSoundsDuringRecording(false)
+        try TalkModeManager.configureRealtimeAudioSession()
+        #expect(session.allowHapticsAndSystemSoundsDuringRecording)
+    }
+
     private static func parse(_ config: [String: Any]) -> TalkModeGatewayConfigState {
         TalkModeGatewayConfigParser.parse(
             config: config,

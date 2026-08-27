@@ -44,6 +44,8 @@ const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM 
 const describeConformance = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 const authValue = "test";
 const sessionKey = "agent:main:mcp-app-conformance";
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const proofDir = path.resolve(".artifacts/control-ui-e2e/mcp-app-resource-revocation");
 
 let browser: Browser;
 let controlUiServer: ControlUiE2eServer;
@@ -526,7 +528,15 @@ describeConformance("MCP App Control UI and standalone host conformance", () => 
   }, 120_000);
 
   it("drives the authenticated Control UI and ticketed standalone bridges", async () => {
-    const controlContext = await browser.newContext({ permissions: ["local-network-access"] });
+    if (captureUiProof) {
+      await fs.mkdir(proofDir, { recursive: true });
+    }
+    const controlContext = await browser.newContext({
+      permissions: ["local-network-access"],
+      ...(captureUiProof
+        ? { recordVideo: { dir: proofDir, size: { width: 1280, height: 800 } } }
+        : {}),
+    });
     openContexts.add(controlContext);
     const controlPage = await controlContext.newPage();
     const browserDiagnostics: string[] = [];
@@ -597,6 +607,11 @@ describeConformance("MCP App Control UI and standalone host conformance", () => 
     await waitForTextContaining(app.locator("#model-tool"), "denied:");
     await app.locator("#read-resource").click();
     await waitForTextContaining(app.locator("#resource"), "resource-ok");
+    if (captureUiProof) {
+      await controlPage.screenshot({
+        path: path.join(proofDir, "control-ui-resource-allowed.png"),
+      });
+    }
     const confirmedPrompts: string[] = [];
     controlPage.on("dialog", async (dialog) => {
       confirmedPrompts.push(dialog.message());
@@ -629,7 +644,12 @@ describeConformance("MCP App Control UI and standalone host conformance", () => 
     expect(detachedDiagnostic).toBeGreaterThan(teardownDiagnostic);
     await expect.poll(() => controlPage.frames().length).toBe(1);
 
-    const standaloneContext = await browser.newContext({ permissions: ["local-network-access"] });
+    const standaloneContext = await browser.newContext({
+      permissions: ["local-network-access"],
+      ...(captureUiProof
+        ? { recordVideo: { dir: proofDir, size: { width: 1280, height: 800 } } }
+        : {}),
+    });
     openContexts.add(standaloneContext);
     const authorizationHeaders: string[] = [];
     const requestUrls: string[] = [];
@@ -680,6 +700,46 @@ describeConformance("MCP App Control UI and standalone host conformance", () => 
     await waitForTextContaining(app.locator("#result"), "initial-result");
     await app.locator("#call-app").click();
     await waitForTextContaining(app.locator("#app-tool"), "companion-called");
+
+    const activeView = getMcpAppViewLease(viewId, runtime);
+    if (!activeView) {
+      throw new Error("MCP App conformance view expired before revocation proof");
+    }
+    activeView.authorizeAppInteraction = async () => false;
+
+    // The already-initialized App retains its capability snapshot, so the
+    // authoritative request-time check must still withhold the resource.
+    await app.locator("#read-resource").click();
+    await waitForTextContaining(app.locator("#resource"), "denied:");
+    await waitForTextContaining(app.locator("#resource"), "resource-ok", false);
+    if (captureUiProof) {
+      await standalonePage.screenshot({
+        path: path.join(proofDir, "standalone-resource-revoked.png"),
+      });
+    }
+
+    await standalonePage.reload();
+    app = await findAppFrame(standalonePage);
+    await waitForTextContaining(app.locator("#capabilities"), "serverResources", false);
+    await app.locator("#read-resource").click();
+    await waitForTextContaining(app.locator("#resource"), "denied:");
+
+    const revokedControlPage = await controlContext.newPage();
+    await mountControlUiHost(revokedControlPage);
+    const revokedControlApp = await findAppFrame(revokedControlPage);
+    await waitForTextContaining(
+      revokedControlApp.locator("#capabilities"),
+      "serverResources",
+      false,
+    );
+    await revokedControlApp.locator("#read-resource").click();
+    await waitForTextContaining(revokedControlApp.locator("#resource"), "denied:");
+    if (captureUiProof) {
+      await revokedControlPage.screenshot({
+        path: path.join(proofDir, "control-ui-resource-revoked.png"),
+      });
+    }
+    await revokedControlPage.close();
 
     const tampered = `${absoluteStandaloneUrl.slice(0, -1)}${absoluteStandaloneUrl.endsWith("a") ? "b" : "a"}`;
     const tamperedPage = await standaloneContext.newPage();

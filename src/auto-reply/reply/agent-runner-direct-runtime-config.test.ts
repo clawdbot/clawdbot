@@ -11,6 +11,7 @@ import type { TemplateContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { createTestFollowupRun } from "./agent-runner.test-fixtures.js";
 import type { QueueSettings } from "./queue.js";
+import { resolveReplyOperationAgentTurn } from "./reply-operation-agent-turn-state.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
@@ -638,23 +639,56 @@ describe("runReplyAgent runtime config", () => {
     expect(executeAgentTurnMock).not.toHaveBeenCalled();
   });
 
-  it("does not start the main turn after cancellation during memory flush", async () => {
-    const { replyParams } = createDirectRuntimeReplyParams({
-      shouldFollowup: false,
-      isActive: false,
-    });
-    runPreflightCompactionIfNeededMock.mockResolvedValue(undefined);
-    runMemoryFlushIfNeededMock.mockImplementation(
-      async (params: { replyOperation: { abortByUser: () => boolean } }) => {
-        expect(params.replyOperation.abortByUser()).toBe(true);
-        return { sessionEntry: undefined, outcome: "failed" };
-      },
-    );
+  it.each(["abortByUser", "abortForRestart"] as const)(
+    "records %s during memory flush as cancellation without starting the main turn",
+    async (abortMethod) => {
+      const { replyParams } = createDirectRuntimeReplyParams({
+        shouldFollowup: false,
+        isActive: false,
+      });
+      const runState: ReplyOperationRunState = {};
+      replyParams.opts = { [REPLY_OPERATION_RUN_STATE]: runState };
+      runPreflightCompactionIfNeededMock.mockResolvedValue(undefined);
+      runMemoryFlushIfNeededMock.mockImplementation(
+        async (params: { replyOperation: ReplyOperation }) => {
+          expect(params.replyOperation[abortMethod]()).toBe(true);
+          return { sessionEntry: undefined, outcome: "failed" };
+        },
+      );
 
-    const result = await runReplyAgent(replyParams);
+      const result = await runReplyAgent(replyParams);
 
-    expect(result).toMatchObject({ text: SILENT_REPLY_TOKEN });
-  });
+      expect(result).toMatchObject({
+        text:
+          abortMethod === "abortByUser"
+            ? SILENT_REPLY_TOKEN
+            : "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
+      });
+      expect(resolveReplyOperationAgentTurn(runState)).toBe("cancelled");
+      expect(executeAgentTurnMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["user", "restart"] as const)(
+    "records an aborted %s agent turn as cancellation",
+    async (reason) => {
+      const { replyParams } = createDirectRuntimeReplyParams({
+        shouldFollowup: false,
+        isActive: false,
+      });
+      const runState: ReplyOperationRunState = {};
+      replyParams.opts = { [REPLY_OPERATION_RUN_STATE]: runState };
+      runPreflightCompactionIfNeededMock.mockResolvedValue(undefined);
+      executeAgentTurnMock.mockResolvedValue({
+        runId: "cancelled-runtime-config-test",
+        outcome: { kind: "aborted", reason },
+      });
+
+      await runReplyAgent(replyParams);
+
+      expect(resolveReplyOperationAgentTurn(runState)).toBe("cancelled");
+    },
+  );
 
   it("surfaces known pre-run Codex usage-limit failures instead of dropping the reply", async () => {
     const { replyParams } = createDirectRuntimeReplyParams({

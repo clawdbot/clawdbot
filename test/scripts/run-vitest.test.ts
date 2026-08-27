@@ -688,6 +688,17 @@ describe("scripts/run-vitest", () => {
         "--coverage=false",
       ]),
     ).toMatchObject({ NODE_DISABLE_COMPILE_CACHE: "1" });
+    expect(
+      resolveVitestSpawnParams(
+        {
+          CI: "true",
+          NODE_COMPILE_CACHE: "/tmp/node-compile",
+          NODE_COMPILE_CACHE_PORTABLE: "1",
+          PATH: "/usr/bin",
+        },
+        "linux",
+      ).env,
+    ).toEqual({ CI: "true", NODE_DISABLE_COMPILE_CACHE: "1", PATH: "/usr/bin" });
   });
 
   it("uses a longer default stall watchdog for broad e2e and project shard configs", () => {

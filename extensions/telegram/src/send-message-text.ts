@@ -1,6 +1,5 @@
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
-import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { ResolvedTelegramAccount } from "./accounts.js";
@@ -11,7 +10,6 @@ import type { TelegramOutboundPromptContextMessage as TelegramMessageLike } from
 import {
   getTelegramRichRawApi,
   removeTelegramRichNativeQuoteParam,
-  TELEGRAM_RICH_TEXT_LIMIT,
   toTelegramRichMessageContextParams,
   type TelegramRichMessageContextParams,
 } from "./rich-message.js";
@@ -37,6 +35,7 @@ import {
   deliverTelegramTextPage,
   planTelegramTextDeliveryPages,
 } from "./telegram-text-delivery.js";
+import { resolveTelegramTextChunkLimit } from "./text-chunk-limit.js";
 
 type SendTextOptions = {
   replyToAlreadyUsed?: boolean;
@@ -366,12 +365,7 @@ export function createTelegramTextSender(config: {
     });
     const alreadyUsed = options.replyToAlreadyUsed === true;
     const maxChars = useRichMessages
-      ? Math.min(
-          resolveTextChunkLimit(cfg, "telegram", account.accountId, {
-            fallbackLimit: TELEGRAM_RICH_TEXT_LIMIT,
-          }),
-          TELEGRAM_RICH_TEXT_LIMIT,
-        )
+      ? resolveTelegramTextChunkLimit({ cfg, accountId: account.accountId })
       : 4000;
     const pages = planTelegramTextDeliveryPages({
       text: textMode === "html" ? renderHtmlText(rawText) : rawText,

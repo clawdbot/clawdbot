@@ -17,6 +17,7 @@ export class PortaledHovercardController {
   private placement: PortaledHovercardPlacement = "vertical";
   private stopPositioning: (() => void) | null = null;
   private trigger: HTMLElement | null = null;
+  private unmountContents: (() => void) | null = null;
 
   constructor(
     private readonly close: () => void,
@@ -69,11 +70,13 @@ export class PortaledHovercardController {
     card: HTMLDivElement,
     placement: PortaledHovercardPlacement,
     observeVisualViewport = true,
+    unmountContents?: () => void,
   ): void {
     this.clearCard();
     this.anchor = anchor;
     this.card = card;
     this.placement = placement;
+    this.unmountContents = unmountContents ?? null;
     this.stopPositioning = mountPortaledHovercard({
       anchor,
       trigger: this.trigger ?? anchor,
@@ -89,11 +92,14 @@ export class PortaledHovercardController {
     this.exitCleanup?.();
     this.exitCleanup = null;
     const card = this.card;
+    const unmountContents = this.unmountContents;
     this.card = null;
+    this.unmountContents = null;
     if (!card) {
       return;
     }
     if (exitDurationMs <= 0 || !card.isConnected) {
+      unmountContents?.();
       card.remove();
       return;
     }
@@ -106,6 +112,7 @@ export class PortaledHovercardController {
         exitTimer = null;
       }
       card.removeEventListener("transitionend", handleTransitionEnd);
+      unmountContents?.();
       card.remove();
       if (this.exitCleanup === finish) {
         this.exitCleanup = null;

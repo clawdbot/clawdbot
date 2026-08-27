@@ -86,6 +86,8 @@ export function createFinalDispatchPayloadDedupeKey(payload: ReplyPayload): stri
       replyToTag: payload.replyToTag,
       replyToCurrent: payload.replyToCurrent,
       audioAsVoice: payload.audioAsVoice,
+      videoAsNote: payload.videoAsNote === true,
+      location: payload.location,
       spokenText: payload.spokenText,
       ttsSupplement: payload.ttsSupplement,
       isError: payload.isError,
