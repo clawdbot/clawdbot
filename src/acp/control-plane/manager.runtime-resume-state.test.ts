@@ -80,7 +80,7 @@ describe("tryPrepareFreshManagerRuntimeSession", () => {
     expect(logVerboseMock).not.toHaveBeenCalled();
   });
 
-  it("records preparation failures without throwing", async () => {
+  it("propagates preparation failures after recording them", async () => {
     logVerboseMock.mockClear();
     const backend = {
       id: "acpx",
@@ -94,9 +94,9 @@ describe("tryPrepareFreshManagerRuntimeSession", () => {
         close: vi.fn(async () => {}),
       },
     } as AcpRuntimeBackend;
-    await expect(
-      tryPrepareFreshManagerRuntimeSession(callParams(backend)),
-    ).resolves.toBeUndefined();
+    await expect(tryPrepareFreshManagerRuntimeSession(callParams(backend))).rejects.toThrow(
+      "backend exploded",
+    );
     expect(logVerboseMock).toHaveBeenCalledWith(
       expect.stringContaining(
         "unable to prepare fresh session for agent:main:acp:test: backend exploded",

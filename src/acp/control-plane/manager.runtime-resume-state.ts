@@ -193,10 +193,9 @@ export async function discardPersistedManagerRuntimeState(params: {
 }
 
 /**
- * Best-effort fresh-session preparation against a maybe-missing backend.
- * Every non-applied path records why it was skipped: a reset that silently
- * skips this step looks successful while the backend keeps resuming the old
- * conversation, which is the worst failure mode for session resets.
+ * Backend discovery stays best-effort so missing plugins do not block cleanup.
+ * Once preparation starts, failures propagate: acknowledging a close without
+ * its durable reset lets the backend resume the old conversation after restart.
  */
 export async function tryPrepareFreshManagerRuntimeSession(params: {
   deps: Pick<AcpSessionManagerDeps, "getRuntimeBackend">;
@@ -207,23 +206,35 @@ export async function tryPrepareFreshManagerRuntimeSession(params: {
   missingBackendError?: unknown;
 }): Promise<void> {
   const configuredBackend = (params.meta.backend || params.cfg.acp?.backend || "").trim();
+  let backend: ReturnType<AcpSessionManagerDeps["getRuntimeBackend"]>;
   try {
-    const backend = params.deps.getRuntimeBackend(configuredBackend || undefined);
-    if (!backend) {
-      if (params.missingBackendError) {
-        throw toErrorObject(params.missingBackendError, "Non-Error thrown");
-      }
+    backend = params.deps.getRuntimeBackend(configuredBackend || undefined);
+  } catch (error) {
+    logVerbose(
+      `${params.logPrefix}: unable to prepare fresh session for ${params.sessionKey}: ${formatErrorMessage(error)}`,
+    );
+    return;
+  }
+  if (!backend) {
+    if (params.missingBackendError) {
+      const error = toErrorObject(params.missingBackendError, "Non-Error thrown");
       logVerbose(
-        `${params.logPrefix}: fresh-session preparation skipped for ${params.sessionKey}: ACP backend "${configuredBackend || "(default)"}" is not registered`,
+        `${params.logPrefix}: unable to prepare fresh session for ${params.sessionKey}: ${formatErrorMessage(error)}`,
       );
       return;
     }
-    if (!backend.runtime.prepareFreshSession) {
-      logVerbose(
-        `${params.logPrefix}: fresh-session preparation skipped for ${params.sessionKey}: ACP backend "${backend.id}" does not support prepareFreshSession`,
-      );
-      return;
-    }
+    logVerbose(
+      `${params.logPrefix}: fresh-session preparation skipped for ${params.sessionKey}: ACP backend "${configuredBackend || "(default)"}" is not registered`,
+    );
+    return;
+  }
+  if (!backend.runtime.prepareFreshSession) {
+    logVerbose(
+      `${params.logPrefix}: fresh-session preparation skipped for ${params.sessionKey}: ACP backend "${backend.id}" does not support prepareFreshSession`,
+    );
+    return;
+  }
+  try {
     await backend.runtime.prepareFreshSession({
       sessionKey: params.sessionKey,
     });
@@ -231,5 +242,6 @@ export async function tryPrepareFreshManagerRuntimeSession(params: {
     logVerbose(
       `${params.logPrefix}: unable to prepare fresh session for ${params.sessionKey}: ${formatErrorMessage(error)}`,
     );
+    throw error;
   }
 }

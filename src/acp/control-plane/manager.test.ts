@@ -1112,6 +1112,44 @@ describe("AcpSessionManager", () => {
     });
   });
 
+  it("does not clear metadata when fresh-session preparation fails", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.close.mockRejectedValueOnce(
+      new AcpRuntimeError(
+        "ACP_BACKEND_UNSUPPORTED_CONTROL",
+        'ACP backend "acpx" does not support session/close.',
+      ),
+    );
+    runtimeState.prepareFreshSession.mockRejectedValueOnce(new Error("session store is read-only"));
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:openclaw:acp:session-1",
+      storeSessionKey: "agent:openclaw:acp:session-1",
+      acp: readySessionMeta({
+        agent: "openclaw",
+      }),
+    });
+
+    const manager = new AcpSessionManager();
+    await expect(
+      manager.closeSession({
+        cfg: baseCfg,
+        sessionKey: "agent:openclaw:acp:session-1",
+        reason: "manual-close",
+        allowBackendUnavailable: true,
+        discardPersistentState: true,
+        clearMeta: true,
+      }),
+    ).rejects.toThrow("session store is read-only");
+
+    expect(hoisted.upsertAcpSessionMetaMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ failOnError: true }),
+    );
+  });
+
   it("clears persisted resume identity when close discards persistent state", async () => {
     const runtimeState = createRuntime();
     const sessionKey = "agent:claude:acp:binding:discord:default:9373ab192b2317f4";
