@@ -12,6 +12,7 @@ describe("publishSidebarSessionList", () => {
     sessionsLoading: false,
     sessionMutationError: null,
     expandedAgentId: () => "main",
+    sessionListQuery: (agentId: string) => ({ agentId }),
     requestSessionDataUpdate: () => undefined,
   });
 
