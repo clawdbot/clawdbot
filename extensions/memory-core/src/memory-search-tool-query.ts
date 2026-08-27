@@ -130,9 +130,10 @@ export async function executeMemorySearchToolQuery(params: {
         : "memory index identity is missing or mismatched"
       : undefined;
   if (pausedIndexIdentityReason) {
+    const rawResults: MemorySearchResult[] = [];
     return {
       status,
-      rawResults: [] as MemorySearchResult[],
+      rawResults,
       pausedIndexIdentityReason,
       searchMode: undefined,
       debug: undefined,

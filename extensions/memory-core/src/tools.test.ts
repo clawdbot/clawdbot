@@ -160,6 +160,7 @@ describe("memory_search unavailable payloads", () => {
       ];
     });
     setMemoryReadFileImpl(async (params) => ({
+      status: "ok",
       text: `---\nschema_version: openclaw.semantic_memory.v2\nstatus: ${
         params.relPath.endsWith("old.md") ? "superseded" : "active"
       }\n---`,
