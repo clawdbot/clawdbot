@@ -24,8 +24,12 @@ describe("Claude subscription usage credits (#122010)", () => {
     "You're out of usage credits. Run /usage-credits to keep using Fable 5 or /model to switch models.";
 
   it("classifies claude-cli usage-credit exhaustion as billing", () => {
-    // Left unmatched `classifyFailoverReason` returns `null`, which does not advance the
-    // model fallback chain, so a configured cross-provider fallback is never reached.
+    // Left unmatched, `classifyFailoverReason` returns `null`. On the embedded-result path
+    // that keeps `classifyProviderErrorPayloadReason` at `null`, so the failed run is
+    // accepted as terminal and the model fallback chain never advances. A thrown CLI error
+    // still retries remaining candidates, but as `unknown` it skips the billing recovery
+    // contract — no profile disable with backoff — so every candidate keeps reusing the
+    // exhausted login.
     expect(isBillingErrorMessage(reported)).toBe(true);
     expect(classifyFailoverReason(reported, { provider: "anthropic" })).toBe("billing");
   });

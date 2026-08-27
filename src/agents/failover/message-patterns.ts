@@ -234,8 +234,10 @@ const ERROR_PATTERNS = {
     /extra usage is required(?: for long context requests)?/i,
     // Claude subscription exhaustion surfaced by the claude-cli runtime: "You're out of
     // usage credits. Run /usage-credits ...". Without this the classifier returns `null`
-    // (unmatched), which does not advance the model fallback chain, so a configured
-    // cross-provider fallback is never reached (#122010).
+    // (unmatched). On the embedded-result path that leaves the run accepted as terminal, so
+    // the model fallback chain never advances; a thrown CLI error still retries remaining
+    // candidates, but as `unknown` it skips the billing recovery contract (profile disable
+    // with backoff) and keeps reusing the exhausted login (#122010).
     /\bout of usage credits\b/i,
     // Chinese provider billing messages
     "余额不足",
