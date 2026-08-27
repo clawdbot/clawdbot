@@ -24,7 +24,7 @@ export function syncControlUiSystemChrome(): void {
   const root = document.documentElement;
   const computedStyle = getComputedStyle(root);
   const pageBackground = computedStyle.getPropertyValue("--bg").trim();
-  const narrow = globalThis.matchMedia?.("(max-width: 768px)").matches === true;
+  const narrow = globalThis.matchMedia?.("(max-width: 768px)").matches;
   const background = narrow
     ? computedStyle.getPropertyValue("--bg-content").trim() || pageBackground
     : pageBackground;
