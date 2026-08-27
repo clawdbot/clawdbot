@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
+import { defaultRuntime } from "../../runtime.js";
 
 const mocks = vi.hoisted(() => ({
   createUpdateConfigSnapshot: vi.fn(async () => undefined),
@@ -109,4 +110,28 @@ describe("maybeRestartService", () => {
       );
     },
   );
+
+  it("reports service ownership skips to JSON callers", async () => {
+    const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
+
+    await expect(
+      maybeRestartService({
+        shouldRestart: false,
+        result: {
+          status: "ok",
+          mode: "npm",
+          steps: [],
+          durationMs: 0,
+        },
+        channel: "stable",
+        opts: { json: true },
+        refreshServiceEnv: false,
+        gatewayPort: 18789,
+        serviceMutationSkipMessage: "service management skipped: ownership conflict",
+        timeoutMs: 1_000,
+      }),
+    ).resolves.toBe(true);
+
+    expect(errorSpy).toHaveBeenCalledWith("service management skipped: ownership conflict");
+  });
 });
