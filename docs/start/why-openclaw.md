@@ -15,6 +15,17 @@ Most harnesses are a single trust envelope. One process holds the agent loop, th
 
 OpenClaw separates a trusted [Gateway](/gateway) from untrusted, movable execution. Policy is enforced by code that fails closed, and state is versioned and migrated, so a deployment is replaceable. Every claim below carries a source; the comparison with [Hermes Agent](https://github.com/NousResearch/hermes-agent) is based on its source tree. This separation of credentials from execution is spreading: OpenAI's Agents SDK adopted it in 2026 for sandbox orchestration. An SDK supplies components for building an agent; OpenClaw ships this separation as an operated product with channels, identity, and state.
 
+Hermes's own `SECURITY.md` states the single-envelope boundary plainly: "The only security boundary against an adversarial LLM is the operating system." OpenClaw's boundary sits above the operating system, at the Gateway. The claims that matter most:
+
+- **A compromised sandbox steals nothing.** Execution moves to sandboxes, paired nodes, or throwaway cloud machines; credentials stay at the Gateway. ([Trust boundary](#the-trust-boundary))
+- **The model cannot talk its way past policy.** Denied tools are never registered, and an approval that cannot be bound to an exact command is refused. ([Policy as code](#policy-as-code))
+- **The agent never sees a credential.** Its context holds an encrypted placeholder; the real value is substituted at the network boundary, for allow-listed hosts only. ([Secrets](#secrets))
+- **An upgrade refuses state it does not understand.** Schemas are versioned, updaters check compatibility in both directions, and releases are immutable and signed. ([Versioned state](#versioned-state-guarded-upgrades))
+- **Deleted means deleted.** Every memory traces to its source sessions, and a purge writes tombstones that consolidation and reindexing respect. ([Provenance](#provenance))
+- **No vendor owns it.** MIT under an independent 501(c)(3) foundation, with signed releases and hundreds of self-published security advisories. ([Governance](#governance))
+
+The [comparison table](#openclaw-and-hermes-agent) condenses the source-verified contrast with Hermes. [What we do not claim](#what-we-do-not-claim) states the limits, starting with sandboxing being off by default.
+
 ## What an enterprise harness has to prove
 
 Six testable properties:
