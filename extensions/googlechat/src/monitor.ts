@@ -4,6 +4,7 @@ import {
   type ChannelBotLoopProtectionFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
+import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawConfig } from "../runtime-api.js";
 import {
@@ -252,6 +253,7 @@ async function processMessageWithPipeline(params: {
     return;
   }
 
+  const replyThreadName = isGroup ? message.thread?.name : undefined;
   const { route, buildEnvelope } = resolveInboundRouteEnvelopeBuilderWithRuntime({
     cfg: config,
     channel: "googlechat",
@@ -260,7 +262,21 @@ async function processMessageWithPipeline(params: {
       kind: isGroup ? ("group" as const) : ("direct" as const),
       id: spaceId,
     },
-    runtime: core.channel,
+    runtime: {
+      ...core.channel,
+      routing: {
+        resolveAgentRoute: (routeParams) => {
+          const baseRoute = core.channel.routing.resolveAgentRoute(routeParams);
+          const threadKeys = resolveThreadSessionKeys({
+            baseSessionKey: baseRoute.sessionKey,
+            threadId: replyThreadName,
+          });
+          return threadKeys.sessionKey === baseRoute.sessionKey
+            ? baseRoute
+            : { ...baseRoute, sessionKey: threadKeys.sessionKey, lastRoutePolicy: "session" };
+        },
+      },
+    },
     sessionStore: config.session?.store,
   });
 
@@ -286,7 +302,6 @@ async function processMessageWithPipeline(params: {
     body: rawBody,
   });
 
-  const replyThreadName = isGroup ? message.thread?.name : undefined;
   const ctxPayload = core.channel.inbound.buildContext({
     channel: "googlechat",
     accountId: route.accountId,

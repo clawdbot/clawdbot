@@ -187,6 +187,60 @@ describe("googlechat monitor bot loop protection", () => {
   });
 });
 
+describe("googlechat monitor thread sessions", () => {
+  it("isolates threaded group messages while keeping an unthreaded root in the space session", async () => {
+    const { core, runTurn } = createInboundClassificationHarness();
+    const account = {
+      accountId: "work",
+      config: { typingIndicator: "none" },
+      credentialSource: "inline",
+    } as ResolvedGoogleChatAccount;
+    accessMocks.applyGoogleChatInboundAccessPolicy.mockResolvedValue({
+      ok: true,
+      commandAuthorized: undefined,
+      effectiveWasMentioned: undefined,
+      groupBotLoopProtection: undefined,
+      groupSystemPrompt: undefined,
+    });
+
+    for (const [messageId, threadId] of [
+      ["first", "spaces/CLASSIFY/threads/first"],
+      ["second", "spaces/CLASSIFY/threads/second"],
+      ["root", undefined],
+    ]) {
+      await testing.processMessageWithPipeline({
+        event: {
+          type: "MESSAGE",
+          space: { name: "spaces/CLASSIFY", spaceType: "SPACE" },
+          message: {
+            name: `spaces/CLASSIFY/messages/${messageId}`,
+            text: "hello",
+            ...(threadId ? { thread: { name: threadId } } : {}),
+            sender: { name: "users/alice", displayName: "Alice", type: "HUMAN" },
+          },
+        } satisfies GoogleChatEvent,
+        account,
+        config: {},
+        runtime: { error: vi.fn(), log: vi.fn() },
+        core,
+        mediaMaxMb: 10,
+      });
+    }
+
+    const sessionKeys = runTurn.mock.calls.map(
+      ([params]) =>
+        (
+          params as { adapter: { resolveTurn: () => { routeSessionKey: string } } }
+        ).adapter.resolveTurn().routeSessionKey,
+    );
+    expect(sessionKeys).toEqual([
+      "session-1:thread:spaces/classify/threads/first",
+      "session-1:thread:spaces/classify/threads/second",
+      "session-1",
+    ]);
+  });
+});
+
 describe("googlechat monitor inbound space classification", () => {
   const cases = [
     { name: "legacy DM", space: { type: "DM" }, peerKind: "direct" },
