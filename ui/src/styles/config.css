@@ -506,13 +506,14 @@
 }
 
 .settings-accent-swatch--custom:has(.settings-accent-swatch__input:focus-visible) {
-  box-shadow: var(--focus-ring);
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
 }
 
 .settings-accent-swatch__picker {
   display: inline-flex;
-  width: 24px;
-  height: 24px;
+  width: 18px;
+  height: 18px;
   align-items: center;
   justify-content: center;
   border-radius: 50%;
@@ -525,8 +526,8 @@
 }
 
 .settings-accent-swatch__picker svg {
-  width: 15px;
-  height: 15px;
+  width: 12px;
+  height: 12px;
 }
 
 @media (forced-colors: active) {
