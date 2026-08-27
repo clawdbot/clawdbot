@@ -276,17 +276,64 @@ function expectInboxPairingReplyText(
   return resolvedCode;
 }
 
-export function getMonitorWebInbox(): MonitorWebInbox {
-  if (!monitorWebInbox) {
-    throw new Error("monitorWebInbox not initialized");
-  }
-  return monitorWebInbox;
-}
-
+// Yields two macrotask ticks so already-scheduled inbound continuations run.
+// This deliberately does NOT wait for pending inbound work to finish — tests
+// observing intermediate states (held handlers, parked debounce batches) rely
+// on that. For final-state assertions use waitForInboundWorkDrained().
 export async function settleInboundWork() {
   await new Promise((resolve) => {
     setImmediate(resolve);
   });
+  await new Promise((resolve) => {
+    setImmediate(resolve);
+  });
+}
+
+type InboundWorkTracker = { pending: number };
+const inboundWorkTrackers = new Set<InboundWorkTracker>();
+let inboundDrainWaiters: Array<() => void> = [];
+
+function releaseInboundDrainWaitersIfIdle() {
+  if (inboundDrainWaiters.length === 0) {
+    return;
+  }
+  for (const tracker of inboundWorkTrackers) {
+    if (tracker.pending > 0) {
+      return;
+    }
+  }
+  const waiters = inboundDrainWaiters;
+  inboundDrainWaiters = [];
+  for (const release of waiters) {
+    release();
+  }
+}
+
+function hasPendingInboundWork(): boolean {
+  for (const tracker of inboundWorkTrackers) {
+    if (tracker.pending > 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Event-driven drain: resolves when every harness-started listener reports zero
+// pending inbound work. Unlike a vi.waitFor deadline, this cannot fail spuriously
+// when a saturated no-isolate worker stalls mid-flow (sync module fetches against
+// the shared transform queue starve waitFor's interval timers). Do not call it
+// while a handler or debounced batch is intentionally held open — it would wait
+// for that work too; use settleInboundWork/waitForMessageCalls there.
+export async function waitForInboundWorkDrained() {
+  if (inboundWorkTrackers.size === 0) {
+    throw new Error("waitForInboundWorkDrained requires a listener started via startInboxMonitor");
+  }
+  if (hasPendingInboundWork()) {
+    await new Promise<void>((resolve) => {
+      inboundDrainWaiters.push(resolve);
+    });
+  }
+  // One extra tick lets drained-callback continuations (delivery bookkeeping) run.
   await new Promise((resolve) => {
     setImmediate(resolve);
   });
@@ -316,13 +363,24 @@ export async function startInboxMonitor(
   if (!monitorWebInbox) {
     ({ monitorWebInbox } = await import("./inbound.js"));
   }
-  const listener = await monitorWebInbox({
+  const merged = {
     cfg: mockLoadConfig() as never,
     verbose: false,
     onMessage,
     accountId: DEFAULT_ACCOUNT_ID,
     authDir: getAuthDir(),
     ...extraOptions,
+  };
+  const tracker: InboundWorkTracker = { pending: 0 };
+  inboundWorkTrackers.add(tracker);
+  const callerOnPendingWorkChanged = merged.onPendingWorkChanged;
+  const listener = await monitorWebInbox({
+    ...merged,
+    onPendingWorkChanged: (pendingWorkCount: number, at?: number) => {
+      tracker.pending = pendingWorkCount;
+      releaseInboundDrainWaitersIfIdle();
+      callerOnPendingWorkChanged?.(pendingWorkCount, at);
+    },
   });
   return { listener, sock: getSock() };
 }
@@ -353,7 +411,7 @@ export function buildNotifyMessageUpsert(params: {
   };
 }
 
-export function expectPairingPromptSent(sock: MockSock, jid: string, senderE164: string) {
+function expectPairingPromptSent(sock: MockSock, jid: string, senderE164: string) {
   expect(sock.sendMessage).toHaveBeenCalledTimes(1);
   const sendCall = sock.sendMessage.mock.calls.at(0);
   expect(sendCall?.[0]).toBe(jid);
@@ -362,6 +420,14 @@ export function expectPairingPromptSent(sock: MockSock, jid: string, senderE164:
     idLine: `Your WhatsApp phone number: ${senderE164}`,
     code: "PAIRCODE",
   });
+}
+
+// The pairing reply is sent before the inbound handler completes, so a full
+// drain guarantees the prompt is observable — and makes the callers' negative
+// assertions (onMessage/readMessages never called) non-vacuous.
+export async function waitForPairingPromptSent(sock: MockSock, jid: string, senderE164: string) {
+  await waitForInboundWorkDrained();
+  expectPairingPromptSent(sock, jid, senderE164);
 }
 
 let authDir: string | undefined;
@@ -379,6 +445,8 @@ export function installWebMonitorInboxUnitTestHooks(opts?: { authDir?: boolean }
   beforeEach(async () => {
     vi.useRealTimers();
     vi.clearAllMocks();
+    inboundWorkTrackers.clear();
+    inboundDrainWaiters = [];
     channelActivityMocks.recordChannelActivity.mockClear();
     pluginRuntimeMocks.reset();
     setWhatsAppRuntime({

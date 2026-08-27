@@ -289,8 +289,9 @@ configured default model is never replaced.
   <Accordion title="Transport selection">
     Claude model IDs use the Anthropic Messages transport automatically.
     Gemini models use the OpenAI Chat Completions transport; GPT and o-series
-    models keep the OpenAI Responses transport. OpenClaw selects the correct
-    transport based on the model ref.
+    models keep the OpenAI Responses transport. The bundled static catalog
+    includes these transports and request compatibility settings, so Gemini
+    keeps using Chat Completions when live discovery is disabled or unavailable.
   </Accordion>
 
   <Accordion title="Thinking levels">
@@ -333,6 +334,11 @@ configured default model is never replaced.
     resolves the account-specific API endpoint, and uses the stored GitHub token
     for Copilot requests. You do not need to manage runtime authentication
     manually.
+
+    Usage checks also use the selected profile's GitHub token. For OAuth profiles
+    that carry a tenant domain, usage follows that domain before the provider's
+    configured domain. `COPILOT_GITHUB_DOMAIN` still takes precedence.
+
   </Accordion>
 </AccordionGroup>
 

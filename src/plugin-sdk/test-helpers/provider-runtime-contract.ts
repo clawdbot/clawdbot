@@ -1,5 +1,7 @@
 // Provider runtime contract helpers define reusable runtime tests for provider plugins.
+import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createPluginMetadataSnapshot } from "../../config/plugin-auto-enable.test-helpers.js";
 import type { ProviderRuntimeModel } from "../plugin-entry.js";
 import { registerProviderPlugin, requireRegisteredProvider } from "../plugin-test-runtime.js";
 import { buildManifestModelProviderConfig } from "../provider-catalog-shared.js";
@@ -282,6 +284,95 @@ export function describeGithubCopilotProviderRuntimeContract(
         },
       ]);
       const createManifestModel = createManifestModelFactory("github-copilot", manifestCatalog);
+
+      it.each([
+        ["gemini-3.6-flash", "openai-completions", false],
+        ["gemini-3.1-pro-preview", "openai-completions", false],
+        ["gemini-3.5-flash", "openai-completions", false],
+        ["gemini-2.5-pro", "openai-completions", false],
+        ["gpt-5.6-sol", "openai-responses", false],
+        ["claude-sonnet-5", "anthropic-messages", false],
+        ["gemini-3.6-flash", "openai-completions", true],
+      ] as const)(
+        "routes static %s through %s with discovery enabled=%s",
+        async (modelId, api, discoveryEnabled) => {
+          const { createBundledStaticCatalogModelResolver } =
+            await import("../../agents/embedded-agent-runner/model.static-catalog.js");
+          const config = {
+            models: { catalogRefresh: { enabled: false } },
+            plugins: {
+              entries: {
+                "github-copilot": { config: { discovery: { enabled: discoveryEnabled } } },
+              },
+            },
+          };
+          const metadataSnapshot = createPluginMetadataSnapshot({
+            config,
+            manifestRegistry: {
+              diagnostics: [],
+              plugins: [
+                {
+                  id: "github-copilot",
+                  origin: "bundled",
+                  providers: ["github-copilot"],
+                  channels: [],
+                  cliBackends: [],
+                  skills: [],
+                  hooks: [],
+                  rootDir: "/fixtures/github-copilot",
+                  source: "/fixtures/github-copilot/index.js",
+                  manifestPath: "/fixtures/github-copilot/openclaw.plugin.json",
+                  modelCatalog: normalizeModelCatalog(
+                    {
+                      providers: { "github-copilot": manifestCatalog },
+                      discovery: { "github-copilot": "runtime" },
+                    },
+                    { ownedProviders: new Set(["github-copilot"]) },
+                  ),
+                },
+              ],
+            },
+          });
+          const resolveModel = createBundledStaticCatalogModelResolver({
+            cfg: config,
+            env: {},
+            metadataSnapshot,
+            includeRuntimeDiscovery: true,
+          });
+          const model = resolveModel({ provider: "github-copilot", modelId });
+          expect(model?.api).toBe(api);
+          if (api === "openai-completions") {
+            expect(model?.compat).toMatchObject({
+              supportsStore: false,
+              supportsDeveloperRole: false,
+              supportsUsageInStreaming: false,
+              maxTokensField: "max_tokens",
+            });
+          }
+          const provider = requireProviderContractProvider("github-copilot");
+          expect(
+            provider.preferRuntimeResolvedModel?.({
+              config,
+              provider: "github-copilot",
+              modelId,
+            }),
+          ).toBe(discoveryEnabled);
+          // A missing prepared live row also occurs when enabled discovery is unavailable.
+          expect(
+            provider.resolveDynamicModel?.({
+              config,
+              provider: "github-copilot",
+              modelId,
+              modelRegistry: {
+                find: () => model,
+                getAll: () => (model ? [model] : []),
+                getAvailable: () => (model ? [model] : []),
+                hasConfiguredAuth: () => false,
+              },
+            }),
+          ).toBeUndefined();
+        },
+      );
 
       it("owns Copilot-specific forward-compat fallbacks", () => {
         const provider = requireProviderContractProvider("github-copilot");

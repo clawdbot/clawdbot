@@ -6070,18 +6070,14 @@ button.chat-pr__diff {
 }
 
 .chat-controls__model-trigger-skeleton {
+  --skeleton-base: color-mix(in srgb, var(--muted) 15%, transparent);
+  --skeleton-highlight: color-mix(in srgb, var(--text) 30%, transparent);
+  --skeleton-duration: 1.45s;
+
   display: block;
   width: 100%;
   height: 0.78em;
   border-radius: var(--radius-full);
-  background: linear-gradient(
-    90deg,
-    color-mix(in srgb, var(--muted) 15%, transparent) 25%,
-    color-mix(in srgb, var(--text) 30%, transparent) 50%,
-    color-mix(in srgb, var(--muted) 15%, transparent) 75%
-  );
-  background-size: 200% 100%;
-  animation: chat-model-trigger-shimmer 1.45s ease-in-out infinite;
 }
 
 /* The loading label occupies the same explicit text metric as the skeleton.
@@ -6093,32 +6089,6 @@ button.chat-pr__diff {
   height: 1.35em;
   flex: 0 0 8.5em;
   align-items: center;
-}
-
-@keyframes chat-model-trigger-shimmer {
-  from {
-    background-position: -200% 0;
-  }
-  to {
-    background-position: 200% 0;
-  }
-}
-
-@keyframes chat-model-trigger-pulse {
-  0%,
-  100% {
-    opacity: 0.62;
-  }
-  50% {
-    opacity: 1;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .chat-controls__model-trigger-skeleton {
-    background: color-mix(in srgb, var(--muted) 18%, transparent);
-    animation: chat-model-trigger-pulse 2.4s ease-in-out infinite;
-  }
 }
 
 .chat-controls__inline-select-check svg {

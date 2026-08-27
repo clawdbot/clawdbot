@@ -727,6 +727,51 @@ describe("runDoctorSessionSqlite", () => {
     });
   });
 
+  it.each([true, false])(
+    "preserves required=%s creation provenance when importing an older legacy row",
+    async (required) => {
+      const legacyStamp = {
+        createdActor: { id: "profile-legacy", type: "human" as const },
+        createdAt: 1000,
+        createdVia: "channel" as const,
+      };
+      const authoritativeStamp = {
+        createdActor: { id: "profile-protected", type: "human" as const },
+        createdAt: 1500,
+        createdVia: "operator" as const,
+        ...(required ? { sandbox: "required" as const } : {}),
+      };
+      const store = createLegacyStore({ entryOverrides: legacyStamp });
+      const scope = {
+        agentId: "main",
+        env: store.env,
+        sessionKey: "agent:main:main",
+        storePath: store.storePath,
+      };
+      await upsertSessionEntryCore(scope, {
+        ...authoritativeStamp,
+        sessionId: "session-1",
+        updatedAt: 3000,
+      });
+
+      const report = await runDoctorSessionSqlite({
+        env: store.env,
+        mode: "import",
+        store: store.storePath,
+      });
+
+      expect(report.totals).toMatchObject({ importedEntries: 1, issues: 0 });
+      const imported = loadExactSessionEntry(scope)?.entry;
+      expect(imported).toMatchObject({
+        ...(required ? authoritativeStamp : legacyStamp),
+        sessionId: "session-1",
+      });
+      if (!required) {
+        expect(imported).not.toHaveProperty("sandbox");
+      }
+    },
+  );
+
   it("imports and validates legacy sessions idempotently", async () => {
     const store = createLegacyStore();
 

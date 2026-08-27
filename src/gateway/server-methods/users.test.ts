@@ -86,6 +86,65 @@ describe("users gateway methods", () => {
     });
   });
 
+  it.each([
+    { method: "users.list", params: {} },
+    { method: "users.self", params: {} },
+    { method: "users.prefs.get", params: { keys: ["ui.theme"] } },
+    { method: "users.prefs.set", params: { entries: { "ui.theme": "claw" } } },
+    {
+      method: "users.linkEmail",
+      params: { email: "ada@example.test", targetProfileId: "profile-1" },
+    },
+    {
+      method: "users.setDisplayName",
+      params: { profileId: "profile-1", displayName: "Ada" },
+    },
+    { method: "users.setRole", params: { profileId: "profile-1", role: null } },
+    {
+      method: "users.setAvatar",
+      params: { profileId: "profile-1", mime: "image/png", avatarBase64: "AQ==" },
+    },
+  ])("rejects malformed $method before reaching user state", async ({ method, params }) => {
+    const invalid = { ...params, unexpected: true };
+    const original = structuredClone(invalid);
+    const unreadableState = new Proxy(
+      {},
+      {
+        get() {
+          throw new Error("invalid users request reached owner state");
+        },
+      },
+    );
+
+    const respond = await runUsersHandler(method, invalid, unreadableState, unreadableState);
+
+    expect(respond.mock.calls).toEqual([
+      [
+        false,
+        undefined,
+        {
+          code: "INVALID_REQUEST",
+          message: `invalid ${method} params: at root: unexpected property 'unexpected'`,
+        },
+      ],
+    ]);
+    expect(invalid).toEqual(original);
+    for (const effect of [
+      ensureProfileForEmail,
+      getUserProfileDisplay,
+      getUserProfileListItem,
+      resolveUserProfileId,
+      linkEmail,
+      listProfiles,
+      setAvatar,
+      setDisplayName,
+      setUserProfileRole,
+      invalidateOperatorRolePolicy,
+    ]) {
+      expect(effect).not.toHaveBeenCalled();
+    }
+  });
+
   it("lists profiles through the read method", async () => {
     listProfiles.mockReturnValue([{ id: "profile-1" }]);
 

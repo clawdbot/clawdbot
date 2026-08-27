@@ -4,8 +4,7 @@ import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { computeDeclaredSurfaceHash } from "./capability-consent.js";
-import { buildPluginCapabilitySummary } from "./capability-summary.js";
+import { buildPluginCapabilitySummary, computeDeclaredSurfaceHash } from "./capability-summary.js";
 import {
   readPersistedInstalledPluginIndex,
   writePersistedInstalledPluginIndexSync,

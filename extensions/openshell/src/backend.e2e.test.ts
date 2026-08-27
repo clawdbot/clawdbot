@@ -539,6 +539,20 @@ describe("openshell sandbox backend e2e", () => {
           await fs.mkdir(protectedPath, { recursive: true });
           await fs.writeFile(path.join(protectedPath, "host-only.txt"), "private\n", "utf8");
         }
+        const hostLinkTarget = path.join(rootDir, "host-link-target.txt");
+        await fs.writeFile(hostLinkTarget, "host-only-link-target\n");
+        const hostLinks = [
+          "host-link",
+          "links/nested/link",
+          "links/removed/link",
+          "links/conflict/link",
+        ];
+        for (const relativePath of hostLinks) {
+          const linkPath = path.join(mirrorWorkspaceDir, relativePath);
+          await fs.mkdir(path.dirname(linkPath), { recursive: true });
+          await fs.symlink(hostLinkTarget, linkPath);
+        }
+        await fs.link(hostLinkTarget, path.join(mirrorWorkspaceDir, "links", "hardlinked.txt"));
         await fs.writeFile(dockerfilePath, CUSTOM_IMAGE_DOCKERFILE, "utf8");
         await fs.writeFile(
           denyPolicyPath,
@@ -652,6 +666,31 @@ describe("openshell sandbox backend e2e", () => {
         });
         expect(mirrorExecResult.stdout).toContain("/sandbox/project");
         expect(mirrorExecResult.stdout).toContain("mirror-from-local");
+        for (const relativePath of hostLinks) {
+          await expect(fs.readlink(path.join(mirrorWorkspaceDir, relativePath))).resolves.toBe(
+            hostLinkTarget,
+          );
+        }
+        await runBackendExec({
+          backend: mirrorBackend,
+          command:
+            "test ! -e host-link && test ! -L host-link && test ! -e links/nested/link && test ! -L links/nested/link && rm -rf links/removed links/conflict && printf remote-file > links/conflict && printf remote-write > links/hardlinked.txt && ln -s /etc/passwd links/remote-link",
+          timeoutMs: 60_000,
+        });
+        for (const relativePath of hostLinks) {
+          await expect(fs.readlink(path.join(mirrorWorkspaceDir, relativePath))).resolves.toBe(
+            hostLinkTarget,
+          );
+        }
+        await expect(fs.readFile(hostLinkTarget, "utf8")).resolves.toBe("host-only-link-target\n");
+        await expect(
+          fs.readFile(path.join(mirrorWorkspaceDir, "links", "hardlinked.txt"), "utf8"),
+        ).resolves.toBe("remote-write");
+        await expect(
+          fs.lstat(path.join(mirrorWorkspaceDir, "links", "remote-link")),
+        ).rejects.toMatchObject({
+          code: "ENOENT",
+        });
         for (const protectedDirectory of [".git", "hooks", "git-hooks"]) {
           await expect(
             fs.readFile(path.join(mirrorWorkspaceDir, protectedDirectory, "host-only.txt"), "utf8"),

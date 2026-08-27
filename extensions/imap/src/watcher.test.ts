@@ -190,6 +190,116 @@ async function startWatcher(
 }
 
 describe("IMAP watcher protocol boundary", () => {
+  it.each(["rejected admission", "throwing admission", "transient authentication"] as const)(
+    "retries %s without waiting for another email",
+    async (failure) => {
+      const { server, state, authenticator, dispatchHookAgentTurn } = await startWatcher({
+        account: { watch: { mode: "auto", pollSeconds: 0.02 } },
+      });
+      await vi.waitFor(async () =>
+        expect(await state.cursors.lookup("inbox")).toMatchObject({ lastSeenUid: 1 }),
+      );
+      if (failure === "rejected admission") {
+        dispatchHookAgentTurn.mockResolvedValueOnce({ ok: false, reason: "Gateway unavailable" });
+      } else if (failure === "throwing admission") {
+        dispatchHookAgentTurn.mockRejectedValueOnce(new Error("Gateway unavailable"));
+      } else {
+        authenticator.mockResolvedValueOnce(createImapAuthResult("temperror"));
+      }
+      server.append("From: trusted@example.com\r\nSubject: Retry\r\n\r\nRecover this email");
+      await vi.waitFor(async () =>
+        expect(await state.cursors.lookup("inbox")).toMatchObject({ lastSeenUid: 2 }),
+      );
+      expect(dispatchHookAgentTurn).toHaveBeenCalledTimes(
+        failure === "transient authentication" ? 1 : 2,
+      );
+      expect(
+        dispatchHookAgentTurn.mock.calls.every(
+          ([params]) =>
+            params.sessionKey === "hook:imap:inbox:17:2" &&
+            params.idempotencyKey === params.sessionKey,
+        ),
+      ).toBe(true);
+      expect(await state.skips.lookup("inbox:duplicate-uid")).toBeUndefined();
+    },
+  );
+
+  it("records exhausted admission retries and continues with the next email", async () => {
+    const { server, state, dispatchHookAgentTurn } = await startWatcher({
+      account: { watch: { mode: "auto", pollSeconds: 0.02 } },
+    });
+    await vi.waitFor(async () =>
+      expect(await state.cursors.lookup("inbox")).toMatchObject({ lastSeenUid: 1 }),
+    );
+    dispatchHookAgentTurn.mockRejectedValue(new Error("Gateway unavailable"));
+    server.append("From: trusted@example.com\r\nSubject: Exhausted\r\n\r\nNo admission");
+    await vi.waitFor(async () =>
+      expect(await state.skips.lookup("inbox:dispatch-rejected")).toEqual({ count: 1 }),
+    );
+    expect(dispatchHookAgentTurn).toHaveBeenCalledTimes(3);
+    expect(await state.claims.lookup("attempt:inbox:17:2")).toEqual({
+      count: 3,
+      reason: "dispatch-rejected",
+    });
+    dispatchHookAgentTurn.mockResolvedValue({ ok: true, runId: "recovered-run" });
+    server.append("From: trusted@example.com\r\nSubject: Next\r\n\r\nAdmitted");
+    await vi.waitFor(async () =>
+      expect(await state.cursors.lookup("inbox")).toMatchObject({ lastSeenUid: 3 }),
+    );
+    expect(dispatchHookAgentTurn).toHaveBeenCalledTimes(4);
+  });
+
+  it("serializes reconnect admission with later mailbox wakeups", async () => {
+    const { server, state, dispatchHookAgentTurn } = await startWatcher({
+      account: { watch: { mode: "auto", pollSeconds: 0.02 } },
+    });
+    await vi.waitFor(async () =>
+      expect(await state.cursors.lookup("inbox")).toMatchObject({ lastSeenUid: 1 }),
+    );
+    dispatchHookAgentTurn.mockImplementationOnce(async () => {
+      // Keep admission unresolved across subsequent mailbox notifications and polls.
+      server.append("From: trusted@example.com\r\nSubject: Later\r\n\r\nWait for earlier mail");
+      await new Promise((resolve) => {
+        setTimeout(resolve, 100);
+      });
+      return { ok: false, reason: "Gateway temporarily unavailable" };
+    });
+    server.disconnect();
+    server.messages.push({
+      uid: 2,
+      raw: "From: trusted@example.com\r\nSubject: Reconnect\r\n\r\nRetry after reconnect",
+    });
+    await vi.waitFor(
+      async () => expect(await state.cursors.lookup("inbox")).toMatchObject({ lastSeenUid: 3 }),
+      { timeout: 5_000 },
+    );
+    expect(dispatchHookAgentTurn.mock.calls.map(([params]) => params.sessionKey)).toEqual([
+      "hook:imap:inbox:17:2",
+      "hook:imap:inbox:17:2",
+      "hook:imap:inbox:17:3",
+    ]);
+    expect(await state.skips.lookup("inbox:duplicate-uid")).toBeUndefined();
+  });
+
+  it("stops pending admission retries when the watcher is stopped", async () => {
+    const { server, watcher, state, context, dispatchHookAgentTurn } = await startWatcher({
+      account: { watch: { mode: "auto", pollSeconds: 0.1 } },
+    });
+    await vi.waitFor(async () =>
+      expect(await state.cursors.lookup("inbox")).toMatchObject({ lastSeenUid: 1 }),
+    );
+    dispatchHookAgentTurn.mockRejectedValue(new Error("Gateway unavailable"));
+    server.append("From: trusted@example.com\r\nSubject: Stop\r\n\r\nDo not retry after stop");
+    await vi.waitFor(() => expect(context.logger.warn).toHaveBeenCalled());
+    await watcher.stop();
+    const attempts = dispatchHookAgentTurn.mock.calls.length;
+    await new Promise((resolve) => {
+      setTimeout(resolve, 150);
+    });
+    expect(dispatchHookAgentTurn).toHaveBeenCalledTimes(attempts);
+    expect(server.sockets.size).toBe(0);
+  });
+
   it("sweeps a pushed message through the real IMAP connection into one isolated hook dispatch", async () => {
     const { server, state, dispatchHookAgentTurn } = await startWatcher();
     await vi.waitFor(async () => {

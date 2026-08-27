@@ -248,6 +248,7 @@ async function repairMissingPluginInstallsWithLease(
         },
       },
       pluginIds: missingRecordedPluginIds,
+      skipDisabledPlugins: true,
       updateChannel,
       coreVersion: resolveCompatibilityHostVersion(env),
       logger: {

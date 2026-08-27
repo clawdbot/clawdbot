@@ -162,6 +162,19 @@ field it wants counted. A field missing from a supplied map is treated as
 `unverified`, even if its identity descriptor declares a stronger static claim.
 Channels with static strength omit the map entirely.
 
+Expose `classifyEntryAuthentication: identityEntryAuthenticationClassifier(identity)`
+from the security adapter's `resolveDmPolicy` result, importing the helper from
+`openclaw/plugin-sdk/channel-ingress-runtime`. It uses the identity descriptor's
+entry normalizers and returns the strongest static claim among accepting fields,
+or `undefined` when none accepts the entry; wildcard entries are excluded.
+The [security audit](/gateway/security/audit-checks) counts configured `allowFrom`
+entries that depend only on mutable identifiers: it warns when name matching is
+disabled and, when enabled, previews how many entries would stop authorizing
+after disabling it. Findings contain counts and config paths, not raw entries;
+pairing-store approvals are outside this check.
+Symbolic `accessGroup:` references resolve membership separately and are not
+counted as mutable identifiers.
+
 Existing plugins remain source-compatible during the deprecation window:
 
 | Deprecated field                                   | Exact mapping                        |

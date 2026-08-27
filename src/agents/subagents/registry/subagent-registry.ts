@@ -562,7 +562,9 @@ const subagentRunManager = createSubagentRunManager({
 export const markSubagentRunForSteerRestart = subagentRunManager.markSubagentRunForSteerRestart;
 export const clearSubagentRunSteerRestart = subagentRunManager.clearSubagentRunSteerRestart;
 export function recordAcceptedSubagentSteerDispatch(
-  params: Parameters<typeof subagentRunManager.recordAcceptedSubagentSteerDispatch>[0] & {
+  params: SubagentAcceptedSteerDispatch & {
+    runId: string;
+    expected: SubagentRunRecord;
     expectedDispatch?: SubagentAcceptedSteerDispatch;
   },
 ) {

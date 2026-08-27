@@ -995,6 +995,13 @@ class SessionsPage extends OpenClawLightDomElement {
   }
 
   private async requestNewCategory(sessionKey?: string) {
+    // Capture before loading the dialog: its key may belong to a replacement
+    // by the time the operator submits or the catalog write completes.
+    const session = this.result?.sessions.find((row) => row.key === sessionKey);
+    if (sessionKey && !session?.sessionId) {
+      this.error = t("common.refresh");
+      return;
+    }
     await this.withDialogLifecycle(async (signal) => {
       const showInputDialog = await this.loadInputDialog();
       await showInputDialog?.({
@@ -1003,7 +1010,7 @@ class SessionsPage extends OpenClawLightDomElement {
         label: t("sessionsView.newGroupPrompt"),
         submitLabel: t("sessionsView.newGroupCreate"),
         requireValue: true,
-        submit: (name) => this.writeNewCategory(name, sessionKey),
+        submit: (name) => this.writeNewCategory(name, session),
       });
     });
   }
@@ -1013,7 +1020,10 @@ class SessionsPage extends OpenClawLightDomElement {
    * row moves, and a catalog write that outlived its connection must not be
    * followed by an assignment issued on the replacement one.
    */
-  private async writeNewCategory(name: string, sessionKey?: string): Promise<string | null> {
+  private async writeNewCategory(
+    name: string,
+    session?: GatewaySessionRow,
+  ): Promise<string | null> {
     this.error = null;
     const scope = this.captureRequestScope();
     if (!scope) {
@@ -1025,21 +1035,15 @@ class SessionsPage extends OpenClawLightDomElement {
         ? (this.error ?? t("sessionsView.newGroupFailed"))
         : t("sessionsView.newGroupStale");
     }
-    if (!sessionKey) {
+    if (!session) {
       return null;
     }
-    // The catalog write is awaited first, so the row can leave this list in
-    // between. sessions.patch would recreate a store entry for a key the list no
-    // longer has, so the move is skipped — but this list is a bounded, filtered
-    // projection, and a plain refresh can page a live row out of it. Skipping
-    // silently would leave the operator with a new group, an unmoved session and
-    // nothing explaining why, so the partial outcome is stated and terminal:
-    // retrying here would only try to create the group that already exists.
-    if (!this.result?.sessions.some((row) => row.key === sessionKey)) {
-      this.error = t("sessionsView.newGroupMoveSkipped");
-      return null;
-    }
-    const assigned = await this.patchSession(sessionKey, { category: name }, scope);
+    const assigned = await this.patchSession(
+      session.key,
+      { category: name },
+      scope,
+      session.sessionId,
+    );
     if (assigned === "failed") {
       return this.error ?? t("sessionsView.newGroupFailed");
     }
@@ -1060,7 +1064,8 @@ class SessionsPage extends OpenClawLightDomElement {
     if (value === null) {
       return;
     }
-    void this.patchSession(row.key, { label: normalizeOptionalString(value) ?? null });
+    const patch = { label: normalizeOptionalString(value) ?? null };
+    void this.patchSession(row.key, patch, undefined, row.sessionId);
   }
 
   private async patchSession(
@@ -1095,7 +1100,7 @@ class SessionsPage extends OpenClawLightDomElement {
     try {
       const patched = await scope.sessions.patch(key, patch, {
         agentId,
-        ...(typeof patch.archived === "boolean" ? { expectedSessionId } : {}),
+        ...(expectedSessionId ? { expectedSessionId } : {}),
       });
       if (!this.isRequestScopeCurrent(scope)) {
         return "stale";

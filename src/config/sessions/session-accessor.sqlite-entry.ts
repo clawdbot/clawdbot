@@ -582,13 +582,17 @@ async function patchSqliteSessionEntrySnapshot<TSnapshot>(
     const patch = await params.update(cloneSessionEntry(writeBase), {
       existingEntry: existing ? cloneSessionEntry(existing) : undefined,
     });
-    const merged = !patch
+    // A fallback supplies identity, not an existing node's immutable creation policy.
+    const creatingRequiredSession = !existing && patch?.sandbox === "required";
+    const mergeBase = creatingRequiredSession ? undefined : writeBase;
+    const creationPatch = creatingRequiredSession ? { ...writeBase, ...patch } : patch;
+    const merged = !creationPatch
       ? undefined
       : options.replaceEntry
         ? cloneSessionEntry(patch as SessionEntry)
         : options.preserveActivity
-          ? mergeSessionEntryPreserveActivity(writeBase, patch)
-          : mergeSessionEntry(writeBase, patch);
+          ? mergeSessionEntryPreserveActivity(mergeBase, creationPatch)
+          : mergeSessionEntry(mergeBase, creationPatch);
     const next = !merged
       ? undefined
       : options.replaceEntry
@@ -625,7 +629,7 @@ async function patchSqliteSessionEntrySnapshot<TSnapshot>(
           ];
           previousIdentity = createSessionIdentitySnapshot(snapshotRows);
           const selectedPreviousEntry = params.existingEntry(fresh) ?? writeBase;
-          writeSessionEntry(writeDatabase, sessionKey, next, {
+          const persisted = writeSessionEntry(writeDatabase, sessionKey, next, {
             previousEntry: selectedPreviousEntry,
           });
           if (params.rehomeWindows) {
@@ -644,7 +648,7 @@ async function patchSqliteSessionEntrySnapshot<TSnapshot>(
             }),
           );
           currentIdentity = readSessionIdentitySnapshot(writeDatabase, identityKeys);
-          result = cloneSessionEntry(next);
+          result = cloneSessionEntry(persisted.sandbox === "required" ? persisted : next);
         }, toDatabaseOptions(resolved));
         emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity);
         return { maintenancePlans, result };
