@@ -72,7 +72,6 @@ export async function compactWithSafetyTimeout<T>(
   const timeoutAbortCtrl = new AbortController();
   const timeoutError = new Error("Compaction timed out");
   let timer: ReturnType<typeof setTimeout> | undefined;
-  let absoluteTimer: ReturnType<typeof setTimeout> | undefined;
   const clearTimer = () => {
     if (timer !== undefined) {
       clearTimeout(timer);
@@ -96,7 +95,7 @@ export async function compactWithSafetyTimeout<T>(
   // engine that reports progress forever must not defer the bound indefinitely
   // (the stall budget's documented inverse risk). 10x the stall budget keeps
   // the ceiling generous without a new configuration surface.
-  absoluteTimer = setTimeout(
+  const absoluteTimer = setTimeout(
     () => timeoutAbortCtrl.abort(timeoutError),
     resolvedTimeoutMs * ABSOLUTE_COMPACTION_BUDGET_MULTIPLIER,
   );
