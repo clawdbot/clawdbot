@@ -170,7 +170,7 @@ describe("daytona exec launcher", () => {
     };
     const sandbox = {
       process: {
-        createPty: vi.fn(async () => ptyHandle),
+        createPty: vi.fn(async (_options: { id: string }) => ptyHandle),
         killPtySession: vi.fn(async () => {}),
       },
     };
