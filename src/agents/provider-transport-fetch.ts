@@ -4,6 +4,7 @@
  * Applies request timeouts, proxy/TLS overrides, SSRF policy, local-service leases, retry hints, and SSE normalization.
  */
 import { parseRetryAfterHttpDateMs } from "@openclaw/ai/internal/retry-after";
+import { inspectTlsCertificateError } from "@openclaw/ai/internal/shared";
 import { emitModelTransportDebug, formatModelTransportDebugUrl } from "@openclaw/ai/transports";
 import {
   isCloudMetadataIpAddress,
@@ -17,12 +18,14 @@ import {
   parseStrictFiniteNumber,
   parseStrictNonNegativeInteger,
 } from "@openclaw/normalization-core/number-coercion";
+import { isAbortError } from "../infra/abort-signal.js";
 import {
   fetchWithSsrFGuard,
   withTrustedEnvProxyGuardedFetchMode,
 } from "../infra/net/fetch-guard.js";
 import { wrapGuardedBodyStream } from "../infra/net/guarded-body-stream.js";
 import { shouldUseEnvHttpProxyForUrl } from "../infra/net/proxy-env.js";
+import type { GuardedFetchSendTracker } from "../infra/net/runtime-fetch.js";
 import {
   mergeSsrFPolicies,
   ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist,
@@ -30,6 +33,7 @@ import {
   SsrFBlockedError,
   type SsrFPolicy,
 } from "../infra/net/ssrf.js";
+import { isTransientNetworkError } from "../infra/retryable-network-errors.js";
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveDebugProxySettings } from "../proxy-capture/env.js";
@@ -634,6 +638,19 @@ function buildModelRequestSignal(
   return AbortSignal.any([baseSignal, timeoutSignal]);
 }
 
+function isReplayableAnthropicMessagesRequest(params: {
+  model: Model;
+  request: Request | undefined;
+  init: RequestInit | undefined;
+}): boolean {
+  const body = params.init?.body;
+  return (
+    params.model.api === "anthropic-messages" &&
+    !params.request &&
+    (body == null || typeof body === "string")
+  );
+}
+
 function resolveHttpOrigin(value: unknown): string | undefined {
   if (typeof value !== "string" || !value.trim()) {
     return undefined;
@@ -879,7 +896,7 @@ export function buildGuardedModelFetch(
       requestInit ??
       (swappedEgress.headers && init ? { ...init, headers: swappedEgress.headers } : init);
     const baseSignal = baseInit?.signal ?? undefined;
-    const localServiceSignal = buildModelRequestSignal(baseSignal, requestTimeoutMs);
+    const requestSignal = buildModelRequestSignal(baseSignal, requestTimeoutMs);
     const guardedFetchOptions = {
       url,
       init: baseInit,
@@ -893,7 +910,7 @@ export function buildGuardedModelFetch(
       dispatcherPolicy,
       dispatcherPool: getProviderTransportDispatcherPool(),
       timeoutMs: requestTimeoutMs,
-      ...(baseSignal ? { signal: baseSignal } : {}),
+      ...(requestSignal ? { signal: requestSignal } : {}),
       // Provider transport intentionally keeps the secure default and never
       // replays unsafe request bodies across cross-origin redirects.
       allowCrossOriginUnsafeRedirectReplay: false,
@@ -911,16 +928,43 @@ export function buildGuardedModelFetch(
         `policy=${policy ? "custom" : "default"}`,
     );
     try {
-      localServiceLease = await ensureModelProviderLocalService(
+      localServiceLease = await ensureModelProviderLocalService(model, rawHeaders, requestSignal);
+      const guardedFetchParams = useEnvProxy
+        ? withTrustedEnvProxyGuardedFetchMode(guardedFetchOptions)
+        : guardedFetchOptions;
+      const shouldTrackRequestSend = isReplayableAnthropicMessagesRequest({
         model,
-        rawHeaders,
-        localServiceSignal,
-      );
-      result = await fetchWithSsrFGuard(
-        useEnvProxy
-          ? withTrustedEnvProxyGuardedFetchMode(guardedFetchOptions)
-          : guardedFetchOptions,
-      );
+        request,
+        init: baseInit,
+      });
+      const sendTracker: GuardedFetchSendTracker = { state: "unknown" };
+      const maxAttempts = shouldTrackRequestSend ? 2 : 1;
+      for (let attempt = 1; ; attempt += 1) {
+        try {
+          result = await fetchWithSsrFGuard({
+            ...guardedFetchParams,
+            ...(shouldTrackRequestSend ? { sendTracker } : {}),
+          });
+          break;
+        } catch (error) {
+          if (
+            attempt === maxAttempts ||
+            requestSignal?.aborted ||
+            sendTracker.state !== "not-sent" ||
+            isAbortError(error) ||
+            inspectTlsCertificateError(error) ||
+            !isTransientNetworkError(error)
+          ) {
+            throw error;
+          }
+          // The Messages transport serializes one JSON string. Retry only before
+          // Undici reports that the complete body reached its local socket.
+          log.warn(
+            `[model-fetch] retry provider=${model.provider} api=${model.api} model=${model.id} ` +
+              `attempt=${attempt + 1}/${maxAttempts} elapsedMs=${Date.now() - fetchStartedAt} ${summarizeError(error)}`,
+          );
+        }
+      }
     } catch (error) {
       const remediatedError = withModelProviderNetworkRemediation(error, {
         baseUrl: model.baseUrl,
