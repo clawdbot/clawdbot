@@ -9,6 +9,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
+import { listAppServerRuntimeModelBackendBindings } from "../../agents/app-server-runtime-bindings.js";
 import { listCliRuntimeModelBackendBindings } from "../../agents/cli-backends.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
@@ -364,22 +365,17 @@ export async function buildModelsProviderData(
 
   const runtimeChoicesByProvider = new Map<string, ModelsRuntimeChoice[]>();
   const runtimeBindings = [
-    { provider: "openai", runtime: "codex", cli: false },
-    // Anthropic gets the same runtime-chooser shape as openai: the
-    // claude-bridge harness (extensions/claude) is the parallel of the
-    // codex app-server harness — picking it routes anthropic turns
-    // through @zeroaltitude/openclaw-claude-bridge instead of the
-    // direct provider runtime.
-    { provider: "anthropic", runtime: "claude-bridge", cli: false },
-    // Z.ai gets the same treatment for the same reason: extensions/glm-bridge
-    // is a deliberate mirror of extensions/claude — it runs the SAME
-    // @zeroaltitude/openclaw-claude-bridge process pointed at Z.ai's
-    // Anthropic-compatible endpoint, declares its own `glm-bridge` harness id,
-    // and defaults modelProvider to "zai" so turns are attributed correctly.
-    // Without a row here, runtimeChoicesByProvider never gets a "zai" key and
-    // the picker silently renders no runtime chooser for GLM models, even
-    // though the harness is installed and enabled.
-    { provider: "zai", runtime: "glm-bridge", cli: false },
+    // Derived from the plugin registry rather than hardcoded (openclaw-ahp8).
+    // This replaces three hand-maintained rows (openai/codex,
+    // anthropic/claude-bridge, zai/glm-bridge). Hardcoding was the actual bug:
+    // a provider absent from the list silently renders NO runtime chooser, which
+    // is how both zai/glm-bridge and github-copilot ended up unreachable while
+    // their harnesses were installed and enabled.
+    ...listAppServerRuntimeModelBackendBindings().map((binding) => ({
+      provider: binding.provider,
+      runtime: binding.runtime,
+      cli: false,
+    })),
     ...listCliRuntimeModelBackendBindings().map((binding) => ({
       provider: binding.provider,
       runtime: binding.runtime,
