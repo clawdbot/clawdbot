@@ -10,6 +10,7 @@ import {
   isCompactionFailureError,
   isLikelyContextOverflowError,
 } from "../../embedded-agent-helpers.js";
+import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { log } from "../logger.js";
 import {
@@ -54,6 +55,7 @@ export async function recoverEmbeddedRunOverflow(
     toolResultPromptProjectionState: ToolResultPromptProjectionState;
     attemptCompactionCount: number;
     prepareCurrentTranscriptRetry: () => void;
+    providerOwner?: PreparedProviderFailoverOwner;
   },
 ): Promise<EmbeddedRunOverflowRecoveryOutcome> {
   const contextOverflowError =
@@ -61,7 +63,7 @@ export async function recoverEmbeddedRunOverflow(
       ? (() => {
           if (input.promptError) {
             const errorText = formatErrorMessage(input.promptError);
-            if (isLikelyContextOverflowError(errorText)) {
+            if (isLikelyContextOverflowError(errorText, input.providerOwner)) {
               return { text: errorText, source: "promptError" as const };
             }
             // A non-overflow prompt failure must not inherit a stale assistant
@@ -79,7 +81,10 @@ export async function recoverEmbeddedRunOverflow(
               source: "assistantError" as const,
             };
           }
-          if (input.assistantErrorText && isLikelyContextOverflowError(input.assistantErrorText)) {
+          if (
+            input.assistantErrorText &&
+            isLikelyContextOverflowError(input.assistantErrorText, input.providerOwner)
+          ) {
             return { text: input.assistantErrorText, source: "assistantError" as const };
           }
           return null;

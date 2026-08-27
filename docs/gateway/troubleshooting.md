@@ -160,22 +160,37 @@ openclaw config get agents.defaults.models
 
 Look for:
 
-- Selected Anthropic model is a GA-capable 1M Claude 4.x model (Opus 4.6/4.7/4.8, Sonnet 4.6), or the model config still carries legacy `params.context1m: true`.
-- Current Anthropic credential is not eligible for long-context usage.
-- Requests fail only on long sessions/model runs that need the 1M context path.
+- Selected Claude CLI model uses its 1M route (Claude 5 uses 1M by default), a
+  Claude 4.x CLI model has the explicit 1M context selection, or an older direct
+  API model config still carries `params.context1m: true`.
+- The response contains the exact long-context sentence above. Nonmatching 429
+  responses retain their normal classification, including billing or ordinary
+  rate limiting.
+- Whether the failure persists after OpenClaw compacts the active session.
+
+When Anthropic returns this exact body, OpenClaw treats it as the provider's
+long-context rejection rather than a transient rate limit. The runtime attempts
+**compact + retry** to refit the prompt before surfacing the error. If repeated
+retries receive the same response, the run ends **blocked** with a visible reset
+hint instead of silently moving the turn to a fallback model. The internal
+compaction call can still use configured fallback models if it encounters a
+separate eligible provider failure.
 
 Fix options:
 
 <Steps>
   <Step title="Use a standard context window">
-    Switch to a standard-window model, or remove legacy `context1m` from older
-    model config that is not GA-capable for 1M context.
+    Select the 200K context option for a Claude CLI model that offers it, switch
+    to a standard-window model, or remove an old explicit `context1m` override.
   </Step>
-  <Step title="Use an eligible credential">
-    Use an Anthropic credential that is eligible for long-context requests, or switch to an Anthropic API key.
+  <Step title="Check the Anthropic route">
+    Update Claude CLI and retry. If Anthropic still returns the message for an
+    account and model that should have long-context access, check Anthropic
+    status/support. Enable Claude extra usage only when you intend to use it.
   </Step>
   <Step title="Configure fallback models">
-    Configure fallback models so runs continue when Anthropic long-context requests are rejected.
+    Configure fallback models for ordinary Anthropic rate-limit errors. They do
+    not continue a run blocked by this specific long-context response.
   </Step>
 </Steps>
 

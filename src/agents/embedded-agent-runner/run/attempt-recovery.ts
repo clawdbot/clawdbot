@@ -244,6 +244,9 @@ export async function recoverEmbeddedRunAttempt(input: {
     agentDir: runInput.agentDir,
     workspaceDir: runInput.workspaceDir,
     provider: compactionSelection.provider,
+    // Classification reuses the owner prepared for the failing attempt even
+    // when a pending live-model switch selects a different compaction model.
+    providerOwner: runtime.providerRuntimeHandle.plugin,
     modelId: compactionSelection.model,
     harnessRuntime: runtime.agentHarness.id,
     thinkLevel: runtime.thinkLevel,

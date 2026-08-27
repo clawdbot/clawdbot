@@ -646,9 +646,9 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
     entries with that value are dropped during request header resolution, and
     unsupported older Claude models stay on their normal context window.
 
-    `params.context1m: true` behaves the same way for the Claude CLI backend
-    (`claude-cli/*`): eligible GA-capable Opus and Sonnet models already get the
-    1M window automatically, so the param is optional there too.
+    Claude 5 models use 1M by default in the Claude CLI backend (`claude-cli/*`)
+    and expose a 200K/1M context selector. Claude 4.x CLI models stay on their
+    plan-safe 200K default unless the model id explicitly selects `[1m]`.
 
     <Warning>
     Requires long-context access on your Anthropic credential. OAuth/subscription token auth keeps its required Anthropic beta headers, but OpenClaw strips the retired 1M beta header if it remains in older config.

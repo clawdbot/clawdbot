@@ -4,6 +4,7 @@ import { isBillingErrorMessage, isRateLimitErrorMessage } from "./message-patter
 import {
   classifyProviderPluginError,
   looksLikeProviderContextOverflowCandidate,
+  type PreparedProviderFailoverOwner,
 } from "./provider-patterns.js";
 
 export function isReasoningConstraintErrorMessage(raw: string): boolean {
@@ -55,7 +56,10 @@ export function isContextOverflowError(errorMessage?: string): boolean {
   );
 }
 
-export function isLikelyContextOverflowError(errorMessage?: string): boolean {
+export function isLikelyContextOverflowError(
+  errorMessage?: string,
+  providerOwner?: PreparedProviderFailoverOwner,
+): boolean {
   if (!errorMessage) {
     return false;
   }
@@ -67,6 +71,14 @@ export function isLikelyContextOverflowError(errorMessage?: string): boolean {
 
   if (isReasoningConstraintErrorMessage(errorMessage)) {
     return false;
+  }
+
+  if (
+    providerOwner &&
+    classifyProviderPluginError({ errorMessage, providerPlugin: providerOwner }) ===
+      "context_overflow"
+  ) {
+    return true;
   }
 
   // Billing/quota errors can contain patterns like "request size exceeds" or

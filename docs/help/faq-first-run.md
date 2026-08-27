@@ -537,11 +537,16 @@ and troubleshooting see the main [FAQ](/help/faq).
     check usage/billing in the Anthropic Console and raise limits as needed.
 
     If the message is specifically `Extra usage is required for long context requests`,
-    the request is trying to use Anthropic's 1M context window (a GA-capable 1M Claude 4.x
-    model, or legacy `params.context1m: true` config), and your current credential is not
-    eligible for long-context billing.
+    Anthropic rejected the selected long-context route. OpenClaw treats this exact
+    body as a context overflow and automatically attempts **compact + retry**. If
+    repeated retries receive the same response, the run ends blocked with a visible
+    hint rather than silently falling back (though the internal compaction call can
+    itself fall back on an eligible, separate provider error). Start a fresh session
+    with `/reset` (or `/new`), select a 200K Claude CLI context option when available,
+    or check the long-context route with Anthropic.
 
-    Set a **fallback model** so OpenClaw keeps replying while a provider is rate-limited.
+    For ordinary rate-limit errors (not the long-context body above), set a **fallback model**
+    so OpenClaw keeps replying while a provider is rate-limited.
     See [Models](/cli/models), [OAuth](/concepts/oauth), and
     [Anthropic 429 extra usage required for long context](/gateway/troubleshooting#anthropic-429-extra-usage-required-for-long-context).
 

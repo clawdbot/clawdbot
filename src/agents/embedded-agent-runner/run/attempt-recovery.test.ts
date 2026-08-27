@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildEmbeddedRunnerAssistant,
   createMockUsage,
@@ -10,7 +10,19 @@ import { recoverEmbeddedRunAttempt } from "./attempt-recovery.js";
 import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
 
+const mocks = vi.hoisted(() => ({
+  recoverOverflow: vi.fn(),
+}));
+
+vi.mock("./overflow-context-recovery.js", () => ({
+  recoverEmbeddedRunOverflow: mocks.recoverOverflow,
+}));
+
 describe("recoverEmbeddedRunAttempt", () => {
+  beforeEach(() => {
+    mocks.recoverOverflow.mockReset().mockResolvedValue({ action: "none" });
+  });
+
   it("surfaces before_agent_run blocks with current carried usage", async () => {
     const historicalAssistant = buildEmbeddedRunnerAssistant({
       usage: createMockUsage(128_814, 3_000),
@@ -98,7 +110,7 @@ describe("recoverEmbeddedRunAttempt", () => {
     });
   });
 
-  it("bypasses prompt failover for an operation-scoped compaction failure", async () => {
+  it("carries provider ownership while bypassing failover for a compaction failure", async () => {
     const promptFailover = vi.fn(async () => {
       throw new Error("prompt failover must not run");
     });
@@ -117,6 +129,7 @@ describe("recoverEmbeddedRunAttempt", () => {
       maybeMarkAuthProfileFailure: vi.fn(),
       maybeBackoffBeforeOverloadFailover: vi.fn(),
     };
+    const providerOwner = { id: "openai" };
     const attempt = makeEmbeddedRunnerAttempt({
       terminal: {
         kind: "failed",
@@ -159,6 +172,7 @@ describe("recoverEmbeddedRunAttempt", () => {
           outerContextTokenMeta: {},
           lastProfileId: "profile-1",
           pluginHarnessOwnsTransport: false,
+          providerRuntimeHandle: { plugin: providerOwner },
         }),
       },
       normalizedAttempt: {
@@ -191,6 +205,7 @@ describe("recoverEmbeddedRunAttempt", () => {
 
     expect(recovery).toEqual({ action: "proceed", shouldSurfaceCodexCompletionTimeout: false });
     expect(promptFailover).not.toHaveBeenCalled();
+    expect(mocks.recoverOverflow).toHaveBeenCalledWith(expect.objectContaining({ providerOwner }));
     expect(failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
     expect(failoverRetryController.advanceRateLimitAuthProfile).not.toHaveBeenCalled();
     expect(failoverRetryController.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();

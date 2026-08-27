@@ -230,6 +230,16 @@ describe("anthropic provider replay hooks", () => {
         code: "INSUFFICIENT_QUOTA",
       }),
     ).toBeUndefined();
+
+    for (const providerId of ["anthropic", "claude-cli"]) {
+      expect(
+        provider.classifyFailoverReason?.({
+          provider: providerId,
+          errorMessage:
+            '429 {"type":"error","error":{"type":"rate_limit_error","message":"Extra usage is required for long context requests."}}',
+        }),
+      ).toBe("context_overflow");
+    }
   });
 
   it("owns replay policy for Claude transports", async () => {

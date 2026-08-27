@@ -180,6 +180,22 @@ describe("provider failover hook structured signals", () => {
     });
   });
 
+  it("preserves an owned context classification through an inferred 429 status", () => {
+    const message =
+      '429 {"type":"error","error":{"type":"rate_limit_error","message":"Extra usage is required for long context requests."}}';
+    providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockImplementation(
+      ({ provider }) => (provider === "anthropic" ? "context_overflow" : undefined),
+    );
+
+    expect(classifyFailoverSignal({ provider: "anthropic", message })).toEqual({
+      kind: "context_overflow",
+    });
+    expect(classifyFailoverSignal({ provider: "openai", message })).toEqual({
+      kind: "reason",
+      reason: "billing",
+    });
+  });
+
   it("passes nested provider error types through failover error normalization", () => {
     // SDK wrappers often put the provider code under error.type; normalization
     // should preserve that code for provider hooks.

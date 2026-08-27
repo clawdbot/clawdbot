@@ -217,6 +217,9 @@ export function classifyFailoverClassificationFromHttpStatus(
     return toReasonClassification(classify402Message(message));
   }
   if (status === 429) {
+    if (opts?.preserveProviderSignalClassification && messageClassification) {
+      return messageClassification;
+    }
     if (messageReason === "billing" && !isAmbiguousGeneric429BalanceMessage(message ?? "")) {
       return toReasonClassification("billing");
     }
