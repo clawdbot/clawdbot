@@ -223,6 +223,8 @@ export type DeliverOutboundPayloadsCoreParams = {
   /** Session/agent context used for hooks and media local-root scoping. */
   session?: OutboundSessionContext;
   mirror?: DeliveryMirror;
+  /** Keep the durable mirror for recovery, but let the live caller commit it under its own fence. */
+  deferLiveTranscriptMirror?: boolean;
   silent?: boolean;
   gatewayClientScopes?: readonly string[];
   conversationReadOrigin?: "delegated" | "direct-operator";

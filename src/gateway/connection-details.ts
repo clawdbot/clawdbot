@@ -14,6 +14,24 @@ export type GatewayConnectionDetails = {
   message: string;
 };
 
+export type GatewayConnectionTarget = "local" | "remote";
+
+/** Resolve the configured Gateway owner before a caller crosses the RPC boundary. */
+export function resolveDefaultGatewayConnectionTarget(params: {
+  config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}): GatewayConnectionTarget {
+  if (normalizeOptionalString((params.env ?? process.env).OPENCLAW_GATEWAY_URL)) {
+    // An ambient override may be a tunnel or another machine even when its URL
+    // looks loopback-local, so only the remote Gateway may own its durable state.
+    return "remote";
+  }
+  return params.config.gateway?.mode === "remote" &&
+    normalizeOptionalString(params.config.gateway.remote?.url)
+    ? "remote"
+    : "local";
+}
+
 /** Project raw transport details into the credential-safe CLI/report shape. */
 export function projectGatewayConnectionDetailsForDiagnostics(
   details: GatewayConnectionDetails,

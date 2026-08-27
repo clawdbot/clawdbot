@@ -4,7 +4,7 @@ import type { SlackEventScope } from "./event-scope.js";
 export function resolveSlackEnterpriseMainDmSessionKey(params: {
   baseSessionKey: string;
   accountId: string;
-  eventScope: SlackEventScope;
+  eventScope: Pick<SlackEventScope, "teamId">;
 }): string {
   const accountId = encodeURIComponent(params.accountId).toLowerCase();
   const teamId = encodeURIComponent(params.eventScope.teamId).toLowerCase();

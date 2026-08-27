@@ -41,7 +41,8 @@ describe("runMessageAction plugin dispatch", () => {
       },
       capabilities: { chatTypes: ["direct"] },
       config: {
-        listAccountIds: () => ["default", "ops", "disabled"],
+        listAccountIds: () => ["default", "ops", "configured", "disabled"],
+        defaultAccountId: () => "configured",
         resolveAccount: (_cfg, accountId) => ({ enabled: accountId !== "disabled" }),
       },
       directory: { listGroupsLive },
@@ -69,6 +70,13 @@ describe("runMessageAction plugin dispatch", () => {
           defaultAccountId: "ops",
         },
         expectedAccountId: "ops",
+      },
+      {
+        name: "materializes the configured channel default",
+        args: {
+          cfg: {} as OpenClawConfig,
+        },
+        expectedAccountId: "configured",
       },
       {
         name: "falls back to agent binding account",

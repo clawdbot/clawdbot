@@ -39,7 +39,13 @@ import {
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
 import { telegramMessagingForTest } from "./outbound/targets.test-helpers.js";
-import { enqueueSystemEvent, resetSystemEventsForTest } from "./system-events.js";
+import {
+  enqueueSystemEvent,
+  enqueueSystemEventDeferredDuringHeartbeat,
+  isSystemEventDeferredDuringHeartbeat,
+  peekSystemEventEntries,
+  resetSystemEventsForTest,
+} from "./system-events.js";
 
 let previousRegistry: ReturnType<typeof getActivePluginRegistry> | null = null;
 let testRegistry: ReturnType<typeof getActivePluginRegistry> | null = null;
@@ -969,6 +975,36 @@ describe("runHeartbeatOnce", () => {
 
     expect(result).toEqual({ status: "skipped", reason: "no-route" });
     expect(replySpy).not.toHaveBeenCalled();
+  });
+
+  it("does not run a routeless interval for target awareness deferred to a user turn", async () => {
+    const tmpDir = await createCaseDir("hb-no-route-deferred-awareness");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { workspace: tmpDir, heartbeat: { every: "5m" } } },
+      session: { store: storePath },
+    };
+    const sessionKey = resolveMainSessionKey(cfg);
+    await seedSessionStore(storePath, sessionKey, {
+      sessionId: "sid-no-route-deferred-awareness",
+      updatedAt: Date.now(),
+    });
+    enqueueSystemEventDeferredDuringHeartbeat("A prior heartbeat delivered an alert.", {
+      sessionKey,
+      contextKey: "heartbeat-delivery:test",
+    });
+    const replySpy = vi.fn().mockResolvedValue({ text: "should not run" });
+
+    const result = await runHeartbeatOnce({
+      cfg,
+      deps: createHeartbeatDeps(vi.fn(), { getReplyFromConfig: replySpy }),
+    });
+
+    expect(result).toEqual({ status: "skipped", reason: "no-route" });
+    expect(replySpy).not.toHaveBeenCalled();
+    const pending = peekSystemEventEntries(sessionKey);
+    expect(pending).toHaveLength(1);
+    expect(isSystemEventDeferredDuringHeartbeat(pending[0]!)).toBe(true);
   });
 
   it("runs a routeless interval wake that carries scheduled tasks", async () => {

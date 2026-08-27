@@ -120,6 +120,7 @@ describe("runMessageAction plugin dispatch", () => {
         gateway: {
           resolveAgentRuntimeIdentityToken,
           terminalSourceReplyReceiptOwner: "caller",
+          connectionTarget: "remote",
           clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
           mode: GATEWAY_CLIENT_MODES.BACKEND,
         },
@@ -181,6 +182,7 @@ describe("runMessageAction plugin dispatch", () => {
         sourceReplyToolCallId: "message-call-1",
         gateway: {
           terminalSourceReplyReceiptOwner: "caller",
+          connectionTarget: "remote",
           clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
           mode: GATEWAY_CLIENT_MODES.BACKEND,
         },
@@ -220,6 +222,7 @@ describe("runMessageAction plugin dispatch", () => {
         sourceReplyToolCallId: "message-call-1",
         gateway: {
           terminalSourceReplyReceiptOwner: "caller",
+          connectionTarget: "remote",
           clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
           mode: GATEWAY_CLIENT_MODES.BACKEND,
         },
@@ -269,6 +272,7 @@ describe("runMessageAction plugin dispatch", () => {
           sourceReplyToolCallId: receipt.toolCallId,
           gateway: {
             terminalSourceReplyReceiptOwner: "caller",
+            connectionTarget: "remote",
             clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
             mode: GATEWAY_CLIENT_MODES.BACKEND,
           },
@@ -314,6 +318,7 @@ describe("runMessageAction plugin dispatch", () => {
           sourceReplyToolCallId: receipt.toolCallId,
           gateway: {
             terminalSourceReplyReceiptOwner: "caller",
+            connectionTarget: "remote",
             clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
             mode: GATEWAY_CLIENT_MODES.BACKEND,
           },
@@ -356,6 +361,7 @@ describe("runMessageAction plugin dispatch", () => {
           sourceReplyToolCallId: "message-call-1",
           gateway: {
             terminalSourceReplyReceiptOwner: "caller",
+            connectionTarget: "remote",
             clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
             mode: GATEWAY_CLIENT_MODES.BACKEND,
           },
@@ -406,6 +412,7 @@ describe("runMessageAction plugin dispatch", () => {
           sourceReplyToolCallId: receipt.toolCallId,
           gateway: {
             terminalSourceReplyReceiptOwner: "caller",
+            connectionTarget: "remote",
             clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
             mode: GATEWAY_CLIENT_MODES.BACKEND,
           },
@@ -453,6 +460,7 @@ describe("runMessageAction plugin dispatch", () => {
         sourceReplyToolCallId: receipt.toolCallId,
         gateway: {
           terminalSourceReplyReceiptOwner: "caller",
+          connectionTarget: "remote",
           clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
           mode: GATEWAY_CLIENT_MODES.BACKEND,
         },
@@ -494,6 +502,7 @@ describe("runMessageAction plugin dispatch", () => {
           gateway: {
             resolveAgentRuntimeIdentityToken,
             terminalSourceReplyReceiptOwner: "caller",
+            connectionTarget: "remote",
             clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
             mode: GATEWAY_CLIENT_MODES.BACKEND,
           },
@@ -534,6 +543,7 @@ describe("runMessageAction plugin dispatch", () => {
           sourceReplyToolCallId: receipt.toolCallId,
           gateway: {
             terminalSourceReplyReceiptOwner: "caller",
+            connectionTarget: "remote",
             clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
             mode: GATEWAY_CLIENT_MODES.BACKEND,
           },
@@ -583,6 +593,7 @@ describe("runMessageAction plugin dispatch", () => {
           message: "hello from agent",
         },
         gateway: {
+          connectionTarget: "local",
           clientName: "cli",
           mode: "cli",
           timeoutMs: 120_000,
@@ -698,6 +709,7 @@ describe("runMessageAction plugin dispatch", () => {
             message: "hello from agent",
           },
           gateway: {
+            connectionTarget: "local",
             clientName: "cli",
             mode: "cli",
           },

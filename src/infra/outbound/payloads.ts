@@ -75,7 +75,7 @@ type OutboundPayloadPlanContext = {
 };
 
 /** Text/media projection used to mirror outbound replies into session state. */
-type OutboundPayloadMirror = {
+export type OutboundPayloadMirror = {
   text: string;
   mediaUrls: string[];
 };
@@ -140,7 +140,7 @@ function collectPresentationMirrorText(presentation: MessagePresentation | undef
 }
 
 /** Renders user-visible payload content safely for every outbound transcript mirror. */
-export function resolveOutboundPayloadMirrorText(payload: ReplyPayload): string {
+function resolveOutboundPayloadMirrorText(payload: ReplyPayload): string {
   const text = payload.text?.trim()
     ? payload.text
     : payload.location && formatLocationText(payload.location);
@@ -359,6 +359,19 @@ export function projectOutboundPayloadPlanForMirror(
       .filter((text): text is string => Boolean(text))
       .join("\n"),
     mediaUrls: plan.flatMap((entry) => entry.parts.mediaUrls),
+  };
+}
+
+/** Projects payloads confirmed by the transport into transcript mirror content. */
+export function projectDeliveredOutboundPayloadsForMirror(
+  payloads: readonly NormalizedOutboundPayload[],
+): OutboundPayloadMirror {
+  return {
+    text: payloads
+      .map((payload) => payload.hookContent ?? resolveOutboundPayloadMirrorText(payload))
+      .filter((text) => text.trim())
+      .join("\n"),
+    mediaUrls: payloads.flatMap((payload) => payload.mediaUrls),
   };
 }
 

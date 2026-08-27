@@ -27,6 +27,7 @@ import {
 } from "../../infra/outbound/session-binding-service.js";
 import {
   enqueueSystemEvent,
+  enqueueSystemEventDeferredDuringHeartbeat,
   peekSystemEvents,
   resetSystemEventsForTest,
 } from "../../infra/system-events.js";
@@ -4648,6 +4649,41 @@ describe("drainFormattedSystemEvents", () => {
       });
 
       expect(result).toContain("Reminder: rotate API keys");
+      expect(peekSystemEvents("agent:main:main")).toEqual([]);
+    } finally {
+      resetSystemEventsForTest();
+    }
+  });
+
+  it("defers delivery awareness during heartbeat drains and exposes it to the next ordinary turn", async () => {
+    try {
+      enqueueSystemEventDeferredDuringHeartbeat("A heartbeat delivered an important reminder.", {
+        sessionKey: "agent:main:main",
+        contextKey: "heartbeat-delivery:v1:main:100",
+      });
+
+      const heartbeatResult = await drainFormattedSystemEvents({
+        cfg: {} as OpenClawConfig,
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        isMainSession: true,
+        isNewSession: false,
+        suppressHeartbeatOwnedEvents: true,
+      });
+
+      expect(heartbeatResult).toBeUndefined();
+      expect(peekSystemEvents("agent:main:main")).toEqual([
+        "A heartbeat delivered an important reminder.",
+      ]);
+
+      const ordinaryResult = await drainFormattedSystemEvents({
+        cfg: {} as OpenClawConfig,
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        isMainSession: true,
+        isNewSession: false,
+      });
+      expect(ordinaryResult).toContain("A heartbeat delivered an important reminder.");
       expect(peekSystemEvents("agent:main:main")).toEqual([]);
     } finally {
       resetSystemEventsForTest();

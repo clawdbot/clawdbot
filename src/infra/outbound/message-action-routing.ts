@@ -5,6 +5,7 @@ import {
 import { readToolStringParam } from "../../agents/tools/common.js";
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import { normalizeConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
+import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import {
   prepareExternalMessageActionTargetForResolution,
   shouldDeferExternalMessageActionTargetResolution,
@@ -396,6 +397,7 @@ export async function prepareMessageRoute(params: {
       agentId,
     });
   }
+  accountId ??= resolveChannelDefaultAccountId({ plugin: channelPlugin, cfg });
   if (accountId) {
     actionParams.accountId = accountId;
   }

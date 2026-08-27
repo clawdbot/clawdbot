@@ -194,6 +194,7 @@ async function ensureConversationContextBinding(params: {
   }
   await params.deps.bindOutboundSessionEntry({
     cfg: params.config,
+    agentId: params.agentId,
     channel,
     accountId: params.conversation.accountId,
     route,

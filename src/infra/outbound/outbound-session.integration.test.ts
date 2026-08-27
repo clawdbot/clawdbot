@@ -63,6 +63,7 @@ describe("outbound session persistence", () => {
 
     await bindOutboundSessionEntry({
       cfg: { session: { store: storePath } } as OpenClawConfig,
+      agentId: "main",
       channel: "reef",
       accountId: "default",
       route: {
@@ -132,6 +133,7 @@ describe("outbound session persistence", () => {
 
     await bindOutboundSessionEntry({
       cfg: { session: { store: storePath } } as OpenClawConfig,
+      agentId: "main",
       channel: "reef",
       accountId: "default",
       route: {
@@ -175,6 +177,7 @@ describe("outbound session persistence", () => {
 
     await bindOutboundSessionEntry({
       cfg: { session: { store: storePath } } as OpenClawConfig,
+      agentId: "main",
       channel: "reef",
       accountId: "default",
       route: {
@@ -215,6 +218,7 @@ describe("outbound session persistence", () => {
 
     await bindOutboundSessionEntry({
       cfg: { session: { store: storePath } } as OpenClawConfig,
+      agentId: "main",
       channel: "reef",
       accountId: "default",
       route: {

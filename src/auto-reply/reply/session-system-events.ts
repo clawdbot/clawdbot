@@ -15,6 +15,7 @@ import { isExecCompletionEvent } from "../../infra/heartbeat-events-filter.js";
 import { selectAgentSystemEvents } from "../../infra/system-event-ownership.js";
 import {
   consumeSelectedSystemEventEntries,
+  isSystemEventDeferredDuringHeartbeat,
   peekSystemEventEntries,
   type SystemEvent,
 } from "../../infra/system-events.js";
@@ -29,14 +30,16 @@ function selectGenericSystemEvents(
   events: readonly SystemEvent[],
   options?: { suppressHeartbeatOwnedEvents?: boolean },
 ): SystemEvent[] {
-  // Exec completions and tagged cron events own dedicated heartbeat prompts
-  // (buildExecEventPrompt / buildCronEventPrompt). During heartbeat runs, leave
-  // cron entries queued for that owner; ordinary turns still drain them as the
-  // fallback when a heartbeat was skipped before it could consume the event.
+  // Exec completions and tagged cron events own dedicated heartbeat prompts.
+  // During heartbeat runs, leave cron events and explicitly deferred delivery
+  // awareness queued; an ordinary turn remains their fallback consumer.
   return events.filter(
     (event) =>
       !isExecCompletionEvent(event.text) &&
-      !(options?.suppressHeartbeatOwnedEvents === true && isCronContextSystemEvent(event)),
+      !(
+        options?.suppressHeartbeatOwnedEvents === true &&
+        (isCronContextSystemEvent(event) || isSystemEventDeferredDuringHeartbeat(event))
+      ),
   );
 }
 

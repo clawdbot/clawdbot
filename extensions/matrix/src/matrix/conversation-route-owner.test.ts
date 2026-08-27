@@ -66,14 +66,22 @@ describe("resolveMatrixConversationRouteOwner", () => {
           nativeChannelId: "!dm:example.org",
         },
       }),
-    ).toEqual({ kind: "agent", agentId: "finance" });
+    ).toEqual({
+      kind: "agent",
+      agentId: "finance",
+      sessionKey: "agent:finance:bound",
+    });
     expect(
       resolveMatrixConversationRouteOwner({
         cfg: {},
         accountId: "default",
         conversation: { kind: "channel", peerId: "!room:example.org" },
       }),
-    ).toEqual({ kind: "agent", agentId: "finance" });
+    ).toEqual({
+      kind: "agent",
+      agentId: "finance",
+      sessionKey: "agent:finance:bound",
+    });
   });
 
   it("reports temporary binding-store unavailability", () => {

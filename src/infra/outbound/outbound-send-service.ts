@@ -16,7 +16,6 @@ import type {
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.public.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
-import { getOwnedSessionTranscriptWriterFence } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   normalizeMessagePresentation,
@@ -35,7 +34,7 @@ import type { MessageActionGateway } from "./message-action-contracts.js";
 import { collectActionMediaSourceHints } from "./message-action-params.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
 import { sendMessage, sendPoll } from "./message.js";
-import type { OutboundMirror } from "./mirror.js";
+import { resolveOutboundMirrorWriterFence, type OutboundMirror } from "./mirror.js";
 
 const log = createSubsystemLogger("outbound/send-service");
 
@@ -96,6 +95,8 @@ type OutboundSendContext = {
   onPlatformSendDispatch?: () => Promise<void>;
   /** Keep ephemeral-authority sends out of replayable recovery. */
   skipQueue?: boolean;
+  /** Reports effective payloads only after identified platform delivery. */
+  onDeliveredPayload?: (payload: NormalizedOutboundPayload) => void;
   /** Runs once a plugin action accepted the send, before transcript mirroring. */
   onPluginSendAccepted?: () => Promise<void>;
 };
@@ -197,7 +198,10 @@ async function sendCoreMessage(params: {
     onDeliveryResult: params.ctx.onDeliveryResult,
     onPlatformSendDispatch: params.ctx.onPlatformSendDispatch,
     skipQueue: params.ctx.skipQueue,
-    onDeliveredPayload: (payload) => deliveredPayloads.push(payload),
+    onDeliveredPayload: (payload) => {
+      deliveredPayloads.push(payload);
+      params.ctx.onDeliveredPayload?.(payload);
+    },
   });
   const deliveredText =
     result.deliveryStatus === "sent" &&
@@ -446,15 +450,11 @@ export async function executeSendAction(params: {
             params.mediaUrls ??
             (params.mediaUrl ? [params.mediaUrl] : undefined);
           try {
-            const writerFence = getOwnedSessionTranscriptWriterFence();
             const mirrorResult = await appendAssistantMessageToSessionTranscript({
               agentId: params.ctx.mirror.agentId,
               sessionKey: params.ctx.mirror.sessionKey,
               expectedSessionId: params.ctx.mirror.expectedSessionId,
-              ...(writerFence?.expectedLifecycleRevision !== undefined
-                ? { expectedLifecycleRevision: writerFence.expectedLifecycleRevision }
-                : {}),
-              ...(writerFence ? { expectedWriterRunId: writerFence.expectedWriterRunId } : {}),
+              ...resolveOutboundMirrorWriterFence(params.ctx.cfg, params.ctx.mirror),
               text: mirrorText,
               mediaUrls: mirrorMediaUrls,
               idempotencyKey: params.ctx.mirror.idempotencyKey,

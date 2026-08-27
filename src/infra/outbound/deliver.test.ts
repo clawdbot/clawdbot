@@ -34,7 +34,7 @@ import {
 import { retryAsync } from "../retry.js";
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
 import { prepareOutboundPayloadBatch } from "./deliver-prepare.js";
-import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
+import { OutboundDeliveryError, PlatformMessageNotDispatchedError } from "./deliver-types.js";
 import { createUnmodifiedPreparedOutboundBatch } from "./prepared-batch.js";
 
 type AppendAssistantTranscript =
@@ -2441,17 +2441,24 @@ describe("deliverOutboundPayloads", () => {
     expect(queueMocks.failDelivery).not.toHaveBeenCalled();
   });
 
-  it("fails required delivery when queue ack fails after platform send", async () => {
-    queueMocks.ackDelivery.mockRejectedValueOnce(new Error("ack offline"));
+  it("returns identified results in a typed queue error when required ack fails", async () => {
+    const ackError = new Error("ack offline");
+    queueMocks.ackDelivery.mockRejectedValueOnce(ackError);
     const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1" });
 
-    await expect(
-      deliverMatrix({
-        payloads: [{ text: "hi" }],
-        deps: { matrix: sendMatrix },
-        queuePolicy: "required",
-      }),
-    ).rejects.toThrow("ack offline");
+    const failure = await deliverMatrix({
+      payloads: [{ text: "hi" }],
+      deps: { matrix: sendMatrix },
+      queuePolicy: "required",
+    }).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(OutboundDeliveryError);
+    expect(failure).toMatchObject({
+      cause: ackError,
+      message: "ack offline",
+      results: [{ channel: "matrix", messageId: "m1" }],
+      stage: "queue",
+    });
 
     expect(sendMatrix).toHaveBeenCalled();
     expect(queueMocks.markDeliveryPlatformOutcomeUnknown).toHaveBeenCalledWith("mock-queue-id");
@@ -5091,6 +5098,9 @@ describe("deliverOutboundPayloads", () => {
       payloads: [{ text: "caption", mediaUrl: "https://example.com/files/report.pdf?sig=1" }],
       mirror: {
         sessionKey: "agent:main:main",
+        agentId: "main",
+        expectedSessionId: "session-1",
+        expectedLifecycleRevision: "revision-1",
         text: "caption",
         mediaUrls: ["https://example.com/files/report.pdf?sig=1"],
         idempotencyKey: "idem-deliver-1",
@@ -5103,7 +5113,45 @@ describe("deliverOutboundPayloads", () => {
     );
     expect(appendOptions?.text).toBe("caption\nreport.pdf");
     expect(appendOptions?.idempotencyKey).toBe("idem-deliver-1");
+    expect(appendOptions?.expectedSessionId).toBe("session-1");
+    expect(appendOptions?.expectedLifecycleRevision).toBe("revision-1");
     expect(appendOptions?.config).toBe(cfg);
+  });
+
+  it("defers the live mirror while preserving it for durable recovery", async () => {
+    setTestOutbound(
+      {
+        sendText: async ({ text }) => ({ channel: "line", messageId: text }),
+      },
+      "line",
+    );
+    mocks.appendAssistantMessageToSessionTranscript.mockClear();
+
+    await deliverOutboundPayloads({
+      cfg: { channels: { line: {} } } as OpenClawConfig,
+      channel: "line",
+      to: "U123",
+      payloads: [{ text: "deferred mirror" }],
+      mirror: {
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        expectedSessionId: "session-1",
+        text: "deferred mirror",
+        idempotencyKey: "idem-deferred-mirror",
+      },
+      deferLiveTranscriptMirror: true,
+    });
+
+    expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+    expect(requireMockCallArg(queueMocks.enqueueDelivery, "enqueueDelivery")).toMatchObject({
+      mirror: {
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        expectedSessionId: "session-1",
+        text: "deferred mirror",
+        idempotencyKey: "idem-deferred-mirror",
+      },
+    });
   });
 
   it("mirrors successfully delivered location-only payloads into the session transcript", async () => {

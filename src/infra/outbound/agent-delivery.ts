@@ -12,7 +12,6 @@ import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import { normalizeRouteBindingChannelId } from "../../routing/binding-scope.js";
-import { buildAgentMainSessionKey, normalizeAgentId } from "../../routing/session-key.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
@@ -20,7 +19,10 @@ import {
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
-import { resolveOutboundSessionRoute } from "./outbound-session.js";
+import {
+  resolveOutboundSessionRoute,
+  selectOutboundSessionRouteForDelivery,
+} from "./outbound-session.js";
 import { resolveChannelTarget, type ResolvedMessagingTarget } from "./target-resolver.js";
 import {
   type OutboundTargetResolution,
@@ -257,45 +259,25 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
       return null;
     }
   })();
-  const globalDmScope = params.cfg.session?.dmScope ?? "main";
-  const knownNonExactRoute =
-    params.sessionRouteMode === "allow-fallback" &&
-    (route?.recipientSessionExact === false || route?.recipientSessionExact === "direct-alias");
-  // A best-effort alias is safe only when every direct recipient on this channel
-  // shares the selected agent's main session; binding overrides can isolate peers.
-  const canonicalMainSessionKey = buildAgentMainSessionKey({
+  const selectedRouteCandidate = selectOutboundSessionRouteForDelivery({
+    cfg: params.cfg,
     agentId: params.agentId,
-    mainKey: params.cfg.session?.mainKey,
+    channel: resolvedChannel,
+    route,
+    mode: params.sessionRouteMode ?? "plugin-only",
   });
-  const usesCanonicalMainSession =
-    route?.recipientSessionExact === "direct-alias" &&
-    route.chatType === "direct" &&
-    route.sessionKey === route.baseSessionKey &&
-    route.sessionKey === canonicalMainSessionKey &&
-    globalDmScope === "main" &&
-    !listRouteBindings(params.cfg).some(
+  // Explicit-recipient fallback remains conservative: any channel binding can
+  // isolate a peer that a best-effort main-session alias cannot prove it owns.
+  const selectedRoute =
+    selectedRouteCandidate?.recipientSessionExact === "direct-alias" &&
+    listRouteBindings(params.cfg).some(
       (binding) =>
         binding.session?.dmScope !== undefined &&
         binding.session.dmScope !== "main" &&
         normalizeRouteBindingChannelId(binding.match.channel) === resolvedChannel,
-    );
-  // Stable outbound-only identities may resume each other, but never the shared
-  // agent main session. Omitted markers retain the external plugin contract.
-  const usesIsolatedDeliveryIdentity =
-    route?.recipientSessionExact === "delivery-identity" &&
-    route.baseSessionKey !== canonicalMainSessionKey &&
-    route.baseSessionKey.startsWith(
-      `agent:${normalizeAgentId(params.agentId)}:${resolvedChannel}:`,
-    ) &&
-    (route.sessionKey === route.baseSessionKey ||
-      route.sessionKey.startsWith(`${route.baseSessionKey}:`));
-  const selectedRoute =
-    route &&
-    (route.recipientSessionExact === "delivery-identity"
-      ? usesIsolatedDeliveryIdentity
-      : !knownNonExactRoute || usesCanonicalMainSession)
-      ? route
-      : null;
+    )
+      ? null
+      : selectedRouteCandidate;
   if (!selectedRoute) {
     if (resolvedSessionRouteTarget) {
       return {

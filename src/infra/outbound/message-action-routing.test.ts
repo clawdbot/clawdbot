@@ -565,6 +565,7 @@ describe("runMessageAction plugin dispatch", () => {
           currentChatType: "group",
         },
         gateway: {
+          connectionTarget: "local",
           clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
           mode: GATEWAY_CLIENT_MODES.BACKEND,
         },

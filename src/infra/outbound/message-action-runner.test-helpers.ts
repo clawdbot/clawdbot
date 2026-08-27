@@ -32,6 +32,9 @@ const hoistedMessageActionRunnerMocks = vi.hoisted(() => ({
   randomIdempotencyKey: vi.fn(() => "idem-gateway-action"),
   maybeApplyTtsToPayload: vi.fn(async (params: { payload: unknown }) => params.payload),
   prepareOutboundMirrorRoute: vi.fn(),
+  ensureOutboundSessionEntry: vi.fn(async () => undefined),
+  bindOutboundSessionEntry: vi.fn(async () => undefined),
+  selectAuthoritativeOutboundTargetSessionRoute: vi.fn(),
   beginTerminalSourceReplyDelivery: vi.fn(),
   cancelTerminalSourceReplyDelivery: vi.fn(),
   isCurrentSourceReplyActionName: vi.fn(() => false),
@@ -80,8 +83,11 @@ vi.mock("../../tts/tts.runtime.js", () => ({
 }));
 
 vi.mock("./outbound-session.js", () => ({
-  ensureOutboundSessionEntry: vi.fn(async () => undefined),
+  ensureOutboundSessionEntry: messageActionRunnerMocks.ensureOutboundSessionEntry,
+  bindOutboundSessionEntry: messageActionRunnerMocks.bindOutboundSessionEntry,
   resolveOutboundSessionRoute: vi.fn(async () => null),
+  selectAuthoritativeOutboundTargetSessionRoute:
+    messageActionRunnerMocks.selectAuthoritativeOutboundTargetSessionRoute,
 }));
 
 vi.mock("../../channels/plugins/bootstrap-registry.js", () => ({
@@ -357,6 +363,9 @@ export function resetMessageActionRunnerMocks() {
     async (params: { payload: unknown }) => params.payload,
   );
   mocks.prepareOutboundMirrorRoute.mockClear();
+  mocks.ensureOutboundSessionEntry.mockClear();
+  mocks.bindOutboundSessionEntry.mockClear();
+  mocks.selectAuthoritativeOutboundTargetSessionRoute.mockReset();
   mocks.beginTerminalSourceReplyDelivery.mockReset();
   mocks.cancelTerminalSourceReplyDelivery.mockReset();
   mocks.reconcileTerminalSourceReplyDelivery.mockReset();

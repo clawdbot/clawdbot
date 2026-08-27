@@ -100,6 +100,38 @@ describe("resolveOutboundSessionRoute", () => {
     expect(route?.chatType).toBe("direct");
   });
 
+  it("collapses provider routes into the selected agent's global session bucket", async () => {
+    const plugin = {
+      ...createChannelTestPluginBase({ id: "external-channel" }),
+      messaging: {
+        resolveOutboundSessionRoute: () => ({
+          sessionKey: "agent:other:external-channel:direct:u123",
+          baseSessionKey: "agent:other:external-channel:direct:u123",
+          recipientSessionExact: false as const,
+          peer: { kind: "direct" as const, id: "u123" },
+          chatType: "direct" as const,
+          from: "external-channel:u123",
+          to: "user:u123",
+        }),
+      },
+    } satisfies ChannelPlugin;
+
+    const route = await resolveOutboundSessionRoute({
+      cfg: { session: { scope: "global" } } as OpenClawConfig,
+      channel: "external-channel",
+      plugin,
+      agentId: "ops",
+      target: "u123",
+    });
+
+    expect(route).toMatchObject({
+      sessionKey: "global",
+      baseSessionKey: "global",
+      recipientSessionExact: false,
+      to: "user:u123",
+    });
+  });
+
   it.each([
     {
       name: "group binding collapses an exact room into main",
@@ -615,6 +647,7 @@ describe("ensureOutboundSessionEntry", () => {
           store: "/stores/{agentId}.json",
         },
       } as OpenClawConfig,
+      agentId: "main",
       channel: "workspace",
       route: {
         sessionKey: "agent:main:workspace:channel:c1",
@@ -639,9 +672,83 @@ describe("ensureOutboundSessionEntry", () => {
     });
   });
 
+  it("persists a cross-agent exact route in the route owner's session store", async () => {
+    await ensureOutboundSessionEntry({
+      cfg: {
+        session: {
+          store: "/stores/{agentId}.json",
+        },
+      } as OpenClawConfig,
+      agentId: "main",
+      channel: "workspace",
+      route: {
+        sessionKey: "agent:ops:workspace:channel:c1",
+        baseSessionKey: "agent:ops:workspace:channel:c1",
+        recipientSessionExact: true,
+        peer: { kind: "channel", id: "c1" },
+        chatType: "channel",
+        from: "workspace:channel:C1",
+        to: "channel:C1",
+      },
+    });
+
+    expect(mocks.resolveStorePath).toHaveBeenCalledWith("/stores/{agentId}.json", {
+      agentId: "ops",
+    });
+    expect(firstMockArg(mocks.updateSessionLastRoute, "updateSessionLastRoute")).toMatchObject({
+      storePath: "/stores/ops.json",
+      sessionKey: "agent:ops:workspace:channel:c1",
+    });
+  });
+
+  it("persists an unscoped global route in the explicitly selected agent store", async () => {
+    await bindOutboundSessionEntry({
+      cfg: { session: { scope: "global", store: "/stores/{agentId}.json" } } as OpenClawConfig,
+      agentId: "ops",
+      channel: "workspace",
+      route: {
+        sessionKey: "global",
+        baseSessionKey: "global",
+        recipientSessionExact: true,
+        peer: { kind: "direct", id: "u123" },
+        chatType: "direct",
+        from: "workspace:u123",
+        to: "user:u123",
+      },
+    });
+
+    expect(mocks.resolveStorePath).toHaveBeenCalledWith("/stores/{agentId}.json", {
+      agentId: "ops",
+    });
+    expect(firstMockArg(mocks.updateSessionLastRoute, "updateSessionLastRoute")).toMatchObject({
+      storePath: "/stores/ops.json",
+      sessionKey: "global",
+    });
+  });
+
+  it("does not use selected-agent authority for a non-global bare route", async () => {
+    await expect(
+      bindOutboundSessionEntry({
+        cfg: {} as OpenClawConfig,
+        agentId: "ops",
+        channel: "workspace",
+        route: {
+          sessionKey: "opaque-peer",
+          baseSessionKey: "opaque-peer",
+          peer: { kind: "direct", id: "u123" },
+          chatType: "direct",
+          from: "workspace:u123",
+          to: "user:u123",
+        },
+      }),
+    ).rejects.toThrow("Session key does not contain an agent id");
+    expect(mocks.updateSessionLastRoute).not.toHaveBeenCalled();
+  });
+
   it("persists the canonical direct peer separately from its adapter target", async () => {
     await ensureOutboundSessionEntry({
       cfg: {} as OpenClawConfig,
+      agentId: "main",
       channel: "reef",
       route: {
         sessionKey: "agent:main:main",
@@ -667,6 +774,7 @@ describe("ensureOutboundSessionEntry", () => {
     await expect(
       ensureOutboundSessionEntry({
         cfg: {} as OpenClawConfig,
+        agentId: "main",
         channel: "reef",
         route: {
           sessionKey: "agent:main:main",
@@ -686,6 +794,7 @@ describe("ensureOutboundSessionEntry", () => {
     await expect(
       bindOutboundSessionEntry({
         cfg: {} as OpenClawConfig,
+        agentId: "main",
         channel: "reef",
         route: {
           sessionKey: "agent:main:main",

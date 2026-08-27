@@ -21,6 +21,7 @@ import {
 } from "../../gateway/agent-runtime-execution-lineage.js";
 import { mintAgentRuntimeIdentityToken } from "../../gateway/agent-runtime-identity-token.js";
 import { callGateway } from "../../gateway/call.js";
+import { resolveDefaultGatewayConnectionTarget } from "../../gateway/connection-details.js";
 import { resolveGatewayCredentialsFromConfig, trimToUndefined } from "../../gateway/credentials.js";
 import { resolveMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
 import {
@@ -118,24 +119,6 @@ function resolveConfiguredRemoteGatewayKey(cfg: OpenClawConfig): string | undefi
   return remoteKey;
 }
 
-function resolveDefaultGatewayTarget(params: {
-  cfg: OpenClawConfig;
-  envGatewayUrl?: string;
-}): GatewayOverrideTarget {
-  if (params.envGatewayUrl) {
-    // Match operator-approvals-client: env-selected URLs may be tunnels or other gateways,
-    // so loopback alone must not grant local approval-runtime authority.
-    return "remote";
-  }
-  if (
-    params.cfg.gateway?.mode === "remote" &&
-    normalizeOptionalString(params.cfg.gateway.remote?.url)
-  ) {
-    return "remote";
-  }
-  return "local";
-}
-
 function validateGatewayUrlOverrideForAgentTools(params: {
   cfg: OpenClawConfig;
   urlOverride: string;
@@ -202,12 +185,10 @@ export function resolveGatewayOptions(opts?: GatewayCallOptions) {
     typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
       ? Math.max(1, Math.floor(opts.timeoutMs))
       : 30_000;
-  const envGatewayUrl = trimToUndefined(process.env.OPENCLAW_GATEWAY_URL);
   const target =
     validatedOverride?.target ??
-    resolveDefaultGatewayTarget({
-      cfg,
-      envGatewayUrl,
+    resolveDefaultGatewayConnectionTarget({
+      config: cfg,
     });
   return { url: validatedOverride?.url, token, timeoutMs, target };
 }

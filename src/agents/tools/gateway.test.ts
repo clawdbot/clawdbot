@@ -125,6 +125,12 @@ describe("gateway tool defaults", () => {
     expect(opts.target).toBe("local");
   });
 
+  it("keeps remote mode without a remote URL on the local fallback target", () => {
+    mocks.configState.value = { gateway: { mode: "remote" } };
+
+    expect(resolveGatewayOptions().target).toBe("local");
+  });
+
   it("accepts allowlisted gatewayUrl overrides (SSRF hardening)", async () => {
     mocks.callGateway.mockResolvedValueOnce({ ok: true });
     await callGatewayTool(
@@ -164,6 +170,7 @@ describe("gateway tool defaults", () => {
     const opts = resolveGatewayOptions({ gatewayUrl: "ws://127.0.0.1:18789" });
     expect(opts.url).toBe("ws://127.0.0.1:18789");
     expect(opts.token).toBe("env-token");
+    expect(opts.target).toBe("local");
   });
 
   it("falls back to config gateway.auth.token when env is unset for local overrides", () => {
@@ -188,6 +195,14 @@ describe("gateway tool defaults", () => {
     const opts = resolveGatewayOptions({ gatewayUrl: "wss://gateway.example" });
     expect(opts.url).toBe("wss://gateway.example");
     expect(opts.token).toBe("remote-token");
+    expect(opts.target).toBe("remote");
+  });
+
+  it("keeps an explicit token separate from Gateway endpoint ownership", () => {
+    const opts = resolveGatewayOptions({ gatewayToken: "explicit-token" });
+
+    expect(opts.token).toBe("explicit-token");
+    expect(opts.target).toBe("local");
   });
 
   it("does not leak local env/config tokens to remote overrides", () => {

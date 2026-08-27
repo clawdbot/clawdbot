@@ -19,6 +19,7 @@ import { resolveMessageSecretScope } from "../cli/message-secret-scope.js";
 import { createOutboundSendDeps, type CliDeps } from "../cli/outbound-send-deps.js";
 import { withProgress } from "../cli/progress.js";
 import { getRuntimeConfig } from "../config/config.js";
+import { resolveDefaultGatewayConnectionTarget } from "../gateway/connection-details.js";
 import type { OutboundSendDeps } from "../infra/outbound/deliver.js";
 import {
   resolveMessageBroadcastAccountPlan,
@@ -149,6 +150,7 @@ export async function messageCommand(
       gateway: {
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
+        connectionTarget: resolveDefaultGatewayConnectionTarget({ config: loadedRaw }),
       },
     });
 

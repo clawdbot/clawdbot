@@ -24,6 +24,7 @@ import type { MessageActionDeniedError } from "./message-action-denial.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
 import type { OutboundMirror } from "./mirror.js";
 import type { ResolvedMessagingTarget } from "./target-resolver.js";
+import type { TargetSessionProjectionCoordinator } from "./target-session-projection.types.js";
 
 export type MessageActionGateway = {
   url?: string;
@@ -34,6 +35,8 @@ export type MessageActionGateway = {
     sourceReplyToolCallId?: string;
   }) => Promise<string | undefined>;
   terminalSourceReplyReceiptOwner?: "caller";
+  /** Prepared endpoint owner; remote Gateway state must never be projected locally. */
+  connectionTarget: "local" | "remote";
   clientName: GatewayClientName;
   clientDisplayName?: string;
   mode: GatewayClientMode;
@@ -79,6 +82,12 @@ export type MessageActionInput = {
   /** @internal Durable session key for source-reply transcript and receipt state. */
   sourceReplySessionKey?: string;
   agentId?: string;
+  /** @internal Capture target-session ownership before a heartbeat message reaches the platform. */
+  targetSessionProjection?: {
+    cfg: OpenClawConfig;
+    readCurrentConfig: () => OpenClawConfig;
+    coordinator?: TargetSessionProjectionCoordinator;
+  };
   /** Caller owns durable outbound context and must avoid the generic delivery mirror. */
   suppressTranscriptMirror?: boolean;
   /** @internal Explicit durable transcript destination owned by the caller. */
@@ -133,10 +142,12 @@ export type MessageActionResult =
       channel: ChannelId;
       action: "send";
       to: string;
+      /** Effective transport account after defaults and target bindings resolve. */
+      accountId?: string;
       handledBy: "plugin" | "core" | "internal-source";
       payload: unknown;
       normalization?: MessageActionNormalization;
-      /** Exact text handed to the direct transport after core normalization and hooks. */
+      /** Exact text confirmed by the core durable transport after normalization and hooks. */
       deliveredText?: string;
       toolResult?: AgentToolResult<unknown>;
       sendResult?: MessageSendResult;

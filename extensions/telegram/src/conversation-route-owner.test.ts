@@ -79,7 +79,11 @@ describe("inspectTelegramConversationRouteOwner", () => {
         accountId: "default",
         conversation: { kind: "group", peerId: "-100123:topic:42", threadId: "42" },
       }),
-    ).toEqual({ kind: "agent", agentId: "runtime" });
+    ).toEqual({
+      kind: "agent",
+      agentId: "runtime",
+      sessionKey: "agent:runtime:bound",
+    });
     expect(touch).not.toHaveBeenCalled();
   });
 
@@ -100,7 +104,11 @@ describe("inspectTelegramConversationRouteOwner", () => {
         accountId: "default",
         conversation,
       }),
-    ).toEqual({ kind: "agent", agentId: "main" });
+    ).toEqual({
+      kind: "agent",
+      agentId: "main",
+      sessionKey: "agent:main:telegram:group:-100123:topic:42",
+    });
   });
 
   it("keeps the direct sender route separate from its delivery chat", () => {
@@ -125,9 +133,59 @@ describe("inspectTelegramConversationRouteOwner", () => {
         accountId: "default",
         conversation: { kind: "direct", peerId: "1001", target: "2002" },
       }),
-    ).toEqual({ kind: "agent", agentId: "runtime" });
+    ).toEqual({
+      kind: "agent",
+      agentId: "runtime",
+      sessionKey: "agent:runtime:bound",
+    });
     expect(resolveByConversation).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: "2002" }),
     );
+  });
+
+  it("returns the named-account DM session used by inbound routing", () => {
+    registerSessionBindingAdapter({
+      channel: "telegram",
+      accountId: "personal",
+      listBySession: () => [],
+      resolveByConversation: () => null,
+    });
+    expect(
+      inspectTelegramConversationRouteOwner({
+        cfg: {
+          channels: {
+            telegram: {
+              defaultAccount: "work",
+              accounts: { work: {}, personal: {} },
+            },
+          },
+        },
+        accountId: "personal",
+        conversation: { kind: "direct", peerId: "1001" },
+      }),
+    ).toEqual({
+      kind: "agent",
+      agentId: "main",
+      sessionKey: "agent:main:telegram:personal:direct:1001",
+    });
+  });
+
+  it("returns the final numeric direct-topic session", () => {
+    expect(
+      inspectTelegramConversationRouteOwner({
+        cfg: {},
+        accountId: "default",
+        conversation: {
+          kind: "direct",
+          peerId: "12345",
+          target: "12345:topic:99",
+          threadId: "99",
+        },
+      }),
+    ).toEqual({
+      kind: "agent",
+      agentId: "main",
+      sessionKey: "agent:main:main:thread:12345:99",
+    });
   });
 });

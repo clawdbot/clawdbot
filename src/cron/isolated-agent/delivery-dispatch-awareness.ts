@@ -25,7 +25,6 @@ import type { CronJob } from "../types.js";
 import {
   buildDirectCronDeliveryIdempotencyKey,
   logCronDeliveryWarn,
-  normalizeDeliveryTarget,
 } from "./delivery-dispatch-policy.js";
 import { selectCronRouteCurrentSessionKey } from "./delivery-route-session-key.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
@@ -182,7 +181,10 @@ export async function queueCronAwarenessSystemEvent(params: {
       enqueueSystemEvent(
         params.text,
         withSystemEventOwner(
-          { sessionKey: mainSessionKey, contextKey: params.deliveryIdempotencyKey },
+          {
+            sessionKey: mainSessionKey,
+            contextKey: params.deliveryIdempotencyKey,
+          },
           params.agentId,
         ),
       );
@@ -194,7 +196,10 @@ export async function queueCronAwarenessSystemEvent(params: {
     if (shouldQueueTargetSession) {
       const text = params.targetText ?? formatTargetCronDeliveryAwarenessText(params.text);
       const options = withSystemEventOwner(
-        { sessionKey: targetSessionKey, contextKey: params.deliveryIdempotencyKey },
+        {
+          sessionKey: targetSessionKey,
+          contextKey: params.deliveryIdempotencyKey,
+        },
         params.agentId,
       );
       enqueueSystemEvent(text, options);
@@ -385,6 +390,7 @@ async function resolveCronDeliveryRouteSessionKey(params: {
 // and gateway server-methods/send.ts.
 export async function commitDirectCronOutboundRoute(params: {
   cfg: OpenClawConfig;
+  agentId: string;
   delivery: SuccessfulDeliveryTarget;
   route: OutboundSessionRoute | null;
 }): Promise<void> {
@@ -395,6 +401,7 @@ export async function commitDirectCronOutboundRoute(params: {
     const { ensureOutboundSessionEntry } = await outboundSessionRuntimeLoader.load();
     await ensureOutboundSessionEntry({
       cfg: params.cfg,
+      agentId: params.agentId,
       channel: params.delivery.channel,
       accountId: params.delivery.accountId,
       route: params.route,
@@ -492,9 +499,11 @@ export async function queueCronMessageToolDeliveryAwareness(params: {
   resolvedDelivery: DeliveryTargetResolution;
   sourceDeliveryOutcome: SourceDeliveryOutcome;
 }): Promise<(() => Promise<void>) | undefined> {
-  const seen = new Set<string>();
   const deferredAwareness: Array<() => Promise<void>> = [];
-  for (const delivery of params.sourceDeliveryOutcome.visibleDeliveries) {
+  for (const [
+    deliveryIndex,
+    delivery,
+  ] of params.sourceDeliveryOutcome.visibleDeliveries.entries()) {
     const target = resolveCronMessageToolAwarenessTarget({
       delivery,
       resolvedDelivery: params.resolvedDelivery,
@@ -502,17 +511,8 @@ export async function queueCronMessageToolDeliveryAwareness(params: {
     if (!target) {
       continue;
     }
-    const dedupeKey = [
-      target.channel,
-      normalizeDeliveryTarget(target.channel, target.to),
-      target.accountId ?? "",
-      target.threadId ?? "",
-      target.text,
-    ].join("\0");
-    if (seen.has(dedupeKey)) {
-      continue;
-    }
-    seen.add(dedupeKey);
+    // Each confirmed tool completion is one visible effect. Equal content is
+    // not a delivery identity and must remain visible as a separate send.
     const { sessionKey: targetSessionKey, route: targetRoute } =
       await resolveCronDeliveryRouteSessionKey({
         cfg: params.cfg,
@@ -526,14 +526,15 @@ export async function queueCronMessageToolDeliveryAwareness(params: {
     // so persisting the route here is post-success.
     await commitDirectCronOutboundRoute({
       cfg: params.cfg,
+      agentId: params.agentId,
       delivery: target,
       route: targetRoute,
     });
-    const deliveryIdempotencyKey = buildDirectCronDeliveryIdempotencyKey({
+    const deliveryIdempotencyKey = `${buildDirectCronDeliveryIdempotencyKey({
       jobId: params.job.id,
       runStartedAt: params.runStartedAt,
       delivery: target,
-    });
+    })}:message-tool:${deliveryIndex}`;
     const awarenessParams = {
       cfg: params.cfg,
       jobId: params.job.id,

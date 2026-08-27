@@ -349,6 +349,7 @@ export function buildChannelOutboundSessionRoute(params: {
   channel: string;
   accountId?: string | null;
   recipientSessionExact?: boolean | "direct-alias" | "delivery-identity";
+  nativeChannelId?: string;
   peer: { kind: "direct" | "group" | "channel"; id: string };
   chatType: "direct" | "group" | "channel";
   from: string;
@@ -368,6 +369,7 @@ export function buildChannelOutboundSessionRoute(params: {
     ...(params.recipientSessionExact !== undefined
       ? { recipientSessionExact: params.recipientSessionExact }
       : {}),
+    ...(params.nativeChannelId !== undefined ? { nativeChannelId: params.nativeChannelId } : {}),
     peer: params.peer,
     chatType: params.chatType,
     from: params.from,

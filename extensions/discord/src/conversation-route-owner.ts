@@ -68,5 +68,7 @@ export function inspectDiscordConversationRouteOwner(params: {
   return {
     kind: "agent" as const,
     agentId: runtimeRoute.boundAgentId ?? configuredRoute?.boundAgentId ?? route.agentId,
+    sessionKey:
+      runtimeRoute.boundSessionKey ?? configuredRoute?.boundSessionKey ?? route.sessionKey,
   };
 }

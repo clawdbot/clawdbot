@@ -350,6 +350,12 @@ normalizes numeric thread ids the same way core does, so prefer it over ad hoc
 should expose `messaging.resolveOutboundSessionRoute(...)` so core gets
 provider-native session and thread identity without parser shims.
 
+When the routing peer is not the platform's conversation identifier (for
+example, a user-addressed DM backed by a native room), include the observed
+`nativeChannelId` in the outbound session route. Only use an identity recovered
+from persisted channel metadata or another authoritative platform fact; core
+fails closed for detached projection when the native identity is unavailable.
+
 ### Conversation route ownership
 
 Implement `messaging.resolveConversationRouteOwner(...)` when generic route
@@ -362,7 +368,13 @@ routing.
 Ownership inspection is synchronous and read-only. Do not refresh binding
 liveness, perform network requests, or infer missing provider facts. Return:
 
-- `{ kind: "agent", agentId }` for an agent-owned route.
+- `{ kind: "agent", agentId, sessionKey? }` for an agent-owned route. A custom
+  resolver should return the complete effective `sessionKey` after applying
+  provider, binding, scope, and thread rules. Omitting it remains valid for
+  ownership checks, but detached delivery projection fails closed rather than
+  guessing a same-agent session. Core captures this owner and exact session
+  generation before recipient-visible I/O, then revalidates both against the
+  current config before writing route, transcript, or next-turn awareness state.
 - `{ kind: "plugin", pluginId, fallbackAgentId }` for a plugin-owned runtime
   binding. `fallbackAgentId` is the route used when that plugin has no active
   inbound claim handler.
@@ -376,6 +388,17 @@ proof that a previously bound conversation is unowned.
 Use `inspectConversationBinding(...)` from
 `openclaw/plugin-sdk/conversation-binding-inspection-runtime` when the resolver needs this
 available/unavailable distinction.
+
+For heartbeat-owned, in-process `message(action="send")`, return structured delivery
+evidence from the canonical action result. Core mirrors only effective payloads
+reported through the post-hook delivery callback. An opaque accepted result
+keeps legacy route binding only; it cannot create transcript or awareness
+content. Mark intentional non-delivery as `status: "suppressed"` so core skips
+all target-session projection. Provider-native tools that send outside the
+canonical message action have no host-owned target capture and are not
+projected.
+Explicit remote Gateway actions are outside the local heartbeat's session
+authority and are likewise not projected locally.
 
 ### Account-scoped conversation binding support
 

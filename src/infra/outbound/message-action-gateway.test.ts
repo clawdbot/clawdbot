@@ -117,6 +117,7 @@ describe("runMessageAction plugin dispatch", () => {
         },
         gateway: {
           resolveAgentRuntimeIdentityToken,
+          connectionTarget: "local",
           clientName: "cli",
           mode: "cli",
         },
@@ -170,6 +171,67 @@ describe("runMessageAction plugin dispatch", () => {
       );
     });
 
+    it("carries the configured named default account through a gateway send", async () => {
+      const basePlugin = createGatewayActionPlugin({
+        pluginId: "gatewaychat",
+        label: "Gateway Chat",
+        blurb: "Gateway Chat named default account test plugin.",
+        actions: ["send"],
+        messaging: { targetResolver: { looksLikeId: () => true } },
+        handleAction: vi.fn(async () => jsonResult({ ok: true, local: true })),
+      });
+      const gatewayPlugin = {
+        ...basePlugin,
+        config: {
+          ...basePlugin.config,
+          listAccountIds: () => ["work", "personal"],
+          defaultAccountId: () => "work",
+          resolveAccount: (_cfg: OpenClawConfig, accountId: string) => ({
+            accountId,
+            enabled: true,
+          }),
+        },
+      };
+      setTestPlugin(gatewayPlugin, "gatewaychat");
+      mocks.callGatewayLeastPrivilege.mockResolvedValue({ ok: true, messageId: "gw-send-1" });
+      mocks.prepareOutboundMirrorRoute.mockResolvedValueOnce({
+        outboundRoute: {
+          sessionKey: "agent:alpha:gatewaychat:direct:user-123",
+          baseSessionKey: "agent:alpha:gatewaychat:direct:user-123",
+          recipientSessionExact: true,
+          peer: { kind: "direct", id: "user-123" },
+          chatType: "direct",
+          from: "gatewaychat:user-123",
+          to: "user-123",
+        },
+      });
+
+      const result = await runMessageAction({
+        cfg: { channels: { gatewaychat: { enabled: true } } } as OpenClawConfig,
+        action: "send",
+        agentId: "alpha",
+        params: {
+          channel: "gatewaychat",
+          target: "user-123",
+          message: "heartbeat reminder",
+        },
+        gateway: { clientName: "cli", mode: "cli", connectionTarget: "local" },
+      });
+
+      const gatewayCall = readMockCallArg(
+        mocks.callGatewayLeastPrivilege,
+        "gateway least privilege call",
+      );
+      const gatewayParams = readRecordField(gatewayCall, "params", "gateway call params");
+      expect(gatewayParams.accountId).toBe("work");
+      expect(result).toMatchObject({
+        kind: "send",
+        handledBy: "plugin",
+        accountId: "work",
+      });
+      expect(mocks.ensureOutboundSessionEntry).toHaveBeenCalledOnce();
+    });
+
     it("keeps blank backend requester provenance least-privileged", async () => {
       const handleActionEntry = vi.fn(async () => jsonResult({ ok: true, local: true }));
       const gatewayPlugin = createGatewayActionPlugin({
@@ -204,6 +266,7 @@ describe("runMessageAction plugin dispatch", () => {
         },
         requesterSenderId: "   ",
         gateway: {
+          connectionTarget: "local",
           clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
           mode: GATEWAY_CLIENT_MODES.BACKEND,
         },
@@ -261,6 +324,7 @@ describe("runMessageAction plugin dispatch", () => {
         },
         senderIsOwner: true,
         gateway: {
+          connectionTarget: "local",
           clientName: GATEWAY_CLIENT_NAMES.CLI,
           mode: GATEWAY_CLIENT_MODES.CLI,
         },
@@ -339,6 +403,7 @@ describe("runMessageAction plugin dispatch", () => {
           url: "ws://127.0.0.1:18789",
           token: "configured-token",
           timeoutMs: 5000,
+          connectionTarget: "local",
           clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
           mode: GATEWAY_CLIENT_MODES.BACKEND,
         },
@@ -358,7 +423,7 @@ describe("runMessageAction plugin dispatch", () => {
       );
     });
 
-    it("routes gateway-executed plugin sends through gateway RPC instead of local dispatch", async () => {
+    it("keeps remote Gateway plugin sends out of local route state", async () => {
       const handleActionResult = vi.fn(async () => jsonResult({ ok: true, local: true }));
       const gatewayPlugin = createGatewayActionPlugin({
         pluginId: "gatewaychat",
@@ -377,6 +442,17 @@ describe("runMessageAction plugin dispatch", () => {
         ok: true,
         messageId: "gw-send-1",
       });
+      mocks.prepareOutboundMirrorRoute.mockResolvedValueOnce({
+        outboundRoute: {
+          sessionKey: "agent:alpha:gatewaychat:direct:user-123",
+          baseSessionKey: "agent:alpha:gatewaychat:direct:user-123",
+          recipientSessionExact: true,
+          peer: { kind: "direct", id: "user-123" },
+          chatType: "direct",
+          from: "gatewaychat:user-123",
+          to: "user-123",
+        },
+      });
       const resolveAgentRuntimeIdentityToken = vi.fn(async () => "test-token-placeholder");
 
       const result = await runMessageAction({
@@ -388,13 +464,12 @@ describe("runMessageAction plugin dispatch", () => {
           },
         } as OpenClawConfig,
         action: "send",
-        conversationReadOrigin: "direct-operator",
-        sourceReplyDeliveryMode: "message_tool_only",
-        sourceReplyFinal: true,
+        agentId: "alpha",
+        sessionKey: "agent:alpha:main",
         params: {
           channel: "gatewaychat",
           target: "user-123",
-          message: "hello from cli",
+          message: "hello from remote operator",
         },
         toolContext: {
           currentChannelProvider: "gatewaychat",
@@ -404,8 +479,9 @@ describe("runMessageAction plugin dispatch", () => {
         },
         gateway: {
           resolveAgentRuntimeIdentityToken,
-          clientName: "cli",
-          mode: "cli",
+          connectionTarget: "remote",
+          clientName: GATEWAY_CLIENT_NAMES.CLI,
+          mode: GATEWAY_CLIENT_MODES.CLI,
         },
         dryRun: false,
       });
@@ -421,7 +497,6 @@ describe("runMessageAction plugin dispatch", () => {
         {
           channel: "gatewaychat",
           action: "send",
-          conversationReadOrigin: "direct-operator",
           idempotencyKey: "idem-gateway-action",
           reply: {
             replyToId: "source-message-1",
@@ -431,19 +506,19 @@ describe("runMessageAction plugin dispatch", () => {
         },
         "gateway call params",
       );
+      expect(gatewayParams).not.toHaveProperty("conversationReadOrigin");
       expect(gatewayParams).not.toHaveProperty("sourceReplyFinal");
-      expect(resolveAgentRuntimeIdentityToken).toHaveBeenCalledWith({
-        sourceReplyFinal: true,
-      });
+      expect(resolveAgentRuntimeIdentityToken).toHaveBeenCalledOnce();
       expectRecordFields(
         readRecordField(gatewayParams, "params", "gateway message params"),
         {
           to: "user-123",
-          message: "hello from cli",
+          message: "hello from remote operator",
         },
         "gateway message params",
       );
       expect(mocks.executeSendAction).not.toHaveBeenCalled();
+      expect(mocks.ensureOutboundSessionEntry).not.toHaveBeenCalled();
       expect(handleActionResult).not.toHaveBeenCalled();
       expectRecordFields(
         result,
@@ -505,6 +580,7 @@ describe("runMessageAction plugin dispatch", () => {
           message: "durable hello",
         },
         gateway: {
+          connectionTarget: "local",
           clientName: "cli",
           mode: "cli",
         },
@@ -592,6 +668,7 @@ describe("runMessageAction plugin dispatch", () => {
           pollOption: ["Pizza", "Sushi"],
         },
         gateway: {
+          connectionTarget: "local",
           clientName: "cli",
           mode: "cli",
         },

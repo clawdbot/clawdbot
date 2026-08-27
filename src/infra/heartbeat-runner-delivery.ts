@@ -3,11 +3,20 @@ import {
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import { replaceGenericExternalRunFailureText } from "../agents/failover/user-copy.js";
-import { copyReplyPayloadMetadata, getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
+import {
+  copyReplyPayloadMetadata,
+  getReplyPayloadMetadata,
+  type ReplyPayload,
+} from "../auto-reply/reply-payload.js";
 import { buildRecoverablePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
 import { isSilentReplyPayloadText } from "../auto-reply/tokens.js";
-import { sendDurableMessageBatchCore } from "../channels/message/runtime.js";
+import {
+  durableMessageBatchMayHaveReachedRecipient,
+  sendDurableMessageBatchCore,
+} from "../channels/message/runtime.js";
+import type { ChannelId } from "../channels/plugins/types.public.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { resolveMirroredTranscriptText } from "../config/sessions/transcript-mirror.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { formatErrorMessage } from "./errors.js";
 import {
@@ -27,8 +36,20 @@ import type {
 import { truncateHeartbeatPreview } from "./heartbeat-runner-prompt.js";
 import { restoreHeartbeatUpdatedAt } from "./heartbeat-runner-session.js";
 import type { HeartbeatRunResult } from "./heartbeat-wake.js";
+import { isOutboundDeliveryError } from "./outbound/deliver-types.js";
 import type { resolveAgentOutboundIdentity } from "./outbound/identity.js";
+import {
+  projectDeliveredOutboundPayloadsForMirror,
+  type NormalizedOutboundPayload,
+} from "./outbound/payloads.js";
 import type { buildOutboundSessionContext } from "./outbound/session-context.js";
+import {
+  commitTargetSessionProjection,
+  formatHeartbeatTargetSessionAwareness,
+  refreshTargetSessionProjection,
+  type PreparedTargetSessionProjection,
+  type TargetSessionProjectionCoordinator,
+} from "./outbound/target-session-projection.js";
 import { consumeSelectedSystemEventEntries } from "./system-events.js";
 
 const log = heartbeatLog;
@@ -43,6 +64,189 @@ const CLEARED_PENDING_FINAL_DELIVERY_FIELDS = {
 
 const FIRST_HEARTBEAT_ALERT_PREAMBLE =
   'First heartbeat alert: your bot runs periodic background checks and messages you only when something needs attention. Set agents.defaults.heartbeat.target: "none" to keep these internal.';
+
+function buildHeartbeatDeliveryIdempotencyKey(agentId: string, startedAt: number): string {
+  return `heartbeat-delivery:v1:${encodeURIComponent(agentId.trim().toLowerCase())}:${startedAt}`;
+}
+
+type HeartbeatDeliverySendResult = Awaited<ReturnType<typeof sendDurableMessageBatchCore>>;
+type HeartbeatDeliveryAttempt = {
+  send: HeartbeatDeliverySendResult;
+  projection: Promise<void>;
+};
+
+async function projectHeartbeatDeliveryOutcome(params: {
+  wake: ReadyHeartbeatWake;
+  prepared: PreparedHeartbeatRun;
+  channel: ChannelId;
+  target: PreparedTargetSessionProjection | undefined;
+  send: HeartbeatDeliverySendResult;
+  attemptedPayloads: NormalizedOutboundPayload[];
+  deliveredPayloads: NormalizedOutboundPayload[];
+  targetProjectionCoordinator?: TargetSessionProjectionCoordinator;
+}): Promise<void> {
+  const target = params.target;
+  if (!target) {
+    return;
+  }
+  const { cfg, agentId, startedAt } = params.wake;
+  const { delivery, runSessionKey } = params.prepared;
+  const mayHaveReachedRecipient = durableMessageBatchMayHaveReachedRecipient(params.send);
+  const recoveryOwnsRetry =
+    params.send.status === "failed" &&
+    isOutboundDeliveryError(params.send.error) &&
+    params.send.error.recoveryOwnedRetry === true;
+  const targetsDifferent =
+    target.agentId !== agentId || target.route.sessionKey.trim() !== runSessionKey.trim();
+  const routeBinding =
+    mayHaveReachedRecipient && targetsDifferent
+      ? {
+          channel: params.channel,
+          ...(delivery.accountId ? { accountId: delivery.accountId } : {}),
+        }
+      : undefined;
+  const deliveredMirror =
+    params.send.status === "sent" || params.send.status === "partial_failed"
+      ? projectDeliveredOutboundPayloadsForMirror(params.deliveredPayloads)
+      : undefined;
+  const attemptedMirror = projectDeliveredOutboundPayloadsForMirror(params.attemptedPayloads);
+  const mirror =
+    deliveredMirror &&
+    targetsDifferent &&
+    (deliveredMirror.text || deliveredMirror.mediaUrls.length > 0)
+      ? deliveredMirror
+      : undefined;
+  const awarenessText = recoveryOwnsRetry
+    ? undefined
+    : params.send.status === "failed" || params.send.status === "partial_failed"
+      ? formatHeartbeatTargetSessionAwareness({
+          status: "failed",
+          mayHaveReachedRecipient,
+        })
+      : params.send.status === "suppressed" && params.send.reason === "adapter_returned_no_identity"
+        ? formatHeartbeatTargetSessionAwareness({
+            status: "uncertain",
+            text: resolveMirroredTranscriptText(attemptedMirror) ?? undefined,
+          })
+        : params.send.status === "sent" && targetsDifferent
+          ? formatHeartbeatTargetSessionAwareness({
+              status: "delivered",
+              text: resolveMirroredTranscriptText(deliveredMirror ?? {}) ?? undefined,
+            })
+          : undefined;
+  if (!routeBinding && !mirror && !awarenessText) {
+    return;
+  }
+  const projection = await commitTargetSessionProjection({
+    cfg,
+    prepared: target,
+    idempotencyKey: buildHeartbeatDeliveryIdempotencyKey(agentId, startedAt),
+    ...(routeBinding ? { routeBinding } : {}),
+    ...(mirror ? { mirror } : {}),
+    ...(awarenessText ? { awarenessText } : {}),
+    ...(params.targetProjectionCoordinator
+      ? { coordinator: params.targetProjectionCoordinator }
+      : {}),
+  });
+  if (projection.status === "skipped") {
+    log.warn("heartbeat: skipped target session projection", {
+      reason: projection.reason,
+      sessionKey: target.route.sessionKey,
+      deliveryStatus: params.send.status,
+    });
+  } else if (projection.warnings.length > 0) {
+    log.warn("heartbeat: target session projection completed with warnings", {
+      warnings: projection.warnings,
+      sessionKey: target.route.sessionKey,
+      deliveryStatus: params.send.status,
+    });
+  }
+}
+
+async function sendHeartbeatPayloads(params: {
+  wake: ReadyHeartbeatWake;
+  prepared: PreparedHeartbeatRun;
+  outboundSession: ReturnType<typeof buildOutboundSessionContext>;
+  outboundIdentity: ReturnType<typeof resolveAgentOutboundIdentity>;
+  payloads: ReplyPayload[];
+  deps: HeartbeatRunOptions["deps"];
+  silent?: boolean;
+  targetProjectionCoordinator?: TargetSessionProjectionCoordinator;
+}): Promise<HeartbeatDeliveryAttempt> {
+  const { cfg } = params.wake;
+  const { delivery } = params.prepared;
+  if (delivery.channel === "none" || !delivery.to) {
+    throw new Error("Heartbeat delivery target is unavailable.");
+  }
+  const attemptedPayloads: NormalizedOutboundPayload[] = [];
+  const deliveredPayloads: NormalizedOutboundPayload[] = [];
+  // The model run and its message tools may legitimately create or reset the
+  // target session. Freeze the generation immediately before platform I/O so
+  // only resets in the send/commit window invalidate this direct delivery.
+  const target = params.prepared.targetSessionProjection
+    ? refreshTargetSessionProjection(params.prepared.targetSessionProjection)
+    : undefined;
+  const deliveryIdempotencyKey = buildHeartbeatDeliveryIdempotencyKey(
+    params.wake.agentId,
+    params.wake.startedAt,
+  );
+  const durableTargetMirror =
+    target?.observedSession &&
+    (target.agentId !== params.wake.agentId ||
+      target.route.sessionKey.trim() !== params.prepared.runSessionKey.trim())
+      ? {
+          sessionKey: target.route.sessionKey,
+          agentId: target.agentId,
+          expectedSessionId: target.observedSession.sessionId,
+          ...(target.observedSession.lifecycleRevision
+            ? { expectedLifecycleRevision: target.observedSession.lifecycleRevision }
+            : {}),
+          idempotencyKey: deliveryIdempotencyKey,
+        }
+      : undefined;
+  const send = await sendDurableMessageBatchCore({
+    cfg,
+    channel: delivery.channel,
+    to: delivery.to,
+    accountId: delivery.accountId,
+    session: params.outboundSession,
+    identity: params.outboundIdentity,
+    threadId: delivery.threadId,
+    payloads: params.payloads,
+    mirror: durableTargetMirror,
+    deferLiveTranscriptMirror: Boolean(durableTargetMirror),
+    onPayload: (payload) => {
+      attemptedPayloads.push(payload);
+    },
+    onDeliveredPayload: (payload) => {
+      deliveredPayloads.push(payload);
+    },
+    deps: params.deps,
+    silent: params.silent,
+  });
+  // The irreversible send settles before target-session bookkeeping. Returning
+  // that fact first lets the heartbeat owner record dedupe state even when the
+  // target is busy and the projection must wait between its turns.
+  const projection = projectHeartbeatDeliveryOutcome({
+    wake: params.wake,
+    prepared: params.prepared,
+    channel: delivery.channel,
+    target,
+    send,
+    attemptedPayloads,
+    deliveredPayloads,
+    ...(params.targetProjectionCoordinator
+      ? { targetProjectionCoordinator: params.targetProjectionCoordinator }
+      : {}),
+  }).catch((error: unknown) => {
+    log.warn("heartbeat: target session projection failed", {
+      error: formatErrorMessage(error),
+      sessionKey: target?.route.sessionKey,
+      deliveryStatus: send.status,
+    });
+  });
+  return { send, projection };
+}
 
 // Clear pending-final only when this run produced it: the agent run stamps
 // createdAt during the run, so createdAt >= run start means we own it. An older
@@ -178,6 +382,7 @@ export async function finalizeHeartbeatOutcome(params: {
   maybeSendHeartbeatOk: () => Promise<boolean>;
   outboundSession: ReturnType<typeof buildOutboundSessionContext>;
   outboundIdentity: ReturnType<typeof resolveAgentOutboundIdentity>;
+  targetProjectionCoordinator?: TargetSessionProjectionCoordinator;
 }): Promise<HeartbeatRunResult> {
   const { cfg, agentId, scheduledTasks, startedAt, wakeSource } = params.wake;
   const { delivery, entry, previousUpdatedAt } = params.prepared;
@@ -216,14 +421,11 @@ export async function finalizeHeartbeatOutcome(params: {
       ...(failureChannel !== "none" && failureTarget
         ? {
             deliver: async () => {
-              const send = await sendDurableMessageBatchCore({
-                cfg,
-                channel: failureChannel,
-                to: failureTarget,
-                accountId: delivery.accountId,
-                session: params.outboundSession,
-                identity: params.outboundIdentity,
-                threadId: delivery.threadId,
+              const deliveryAttempt = await sendHeartbeatPayloads({
+                wake: params.wake,
+                prepared: params.prepared,
+                outboundSession: params.outboundSession,
+                outboundIdentity: params.outboundIdentity,
                 payloads: [
                   copyReplyPayloadMetadata(failureReplyPayload ?? {}, {
                     ...failureReplyPayload,
@@ -232,10 +434,16 @@ export async function finalizeHeartbeatOutcome(params: {
                 ],
                 deps: params.opts.deps,
                 silent: outcome.normalized.silent,
+                ...(params.targetProjectionCoordinator
+                  ? { targetProjectionCoordinator: params.targetProjectionCoordinator }
+                  : {}),
               });
+              const { send } = deliveryAttempt;
               if (send.status === "failed" || send.status === "partial_failed") {
+                await deliveryAttempt.projection;
                 throw send.error;
               }
+              await deliveryAttempt.projection;
               return send.status === "sent" ? "sent" : "suppressed";
             },
           }
@@ -395,51 +603,58 @@ export async function finalizeHeartbeatOutcome(params: {
     }
   }
 
-  const send = await sendDurableMessageBatchCore({
-    cfg,
-    channel: delivery.channel,
-    to: delivery.to,
-    accountId: deliveryAccountId,
-    session: params.outboundSession,
-    identity: params.outboundIdentity,
-    threadId: delivery.threadId,
-    payloads: [
-      copyReplyPayloadMetadata(replyPayload ?? {}, {
-        ...replyPayload,
-        text: deliveryText,
-        mediaUrls,
-      }),
-    ],
+  const deliveryPayload = copyReplyPayloadMetadata(replyPayload ?? {}, {
+    ...replyPayload,
+    text: deliveryText,
+    mediaUrls,
+  });
+  const deliveryAttempt = await sendHeartbeatPayloads({
+    wake: params.wake,
+    prepared: params.prepared,
+    outboundSession: params.outboundSession,
+    outboundIdentity: params.outboundIdentity,
+    payloads: [deliveryPayload],
     deps: params.opts.deps,
     silent: normalized.silent,
+    ...(params.targetProjectionCoordinator
+      ? { targetProjectionCoordinator: params.targetProjectionCoordinator }
+      : {}),
   });
+  const { send } = deliveryAttempt;
   if (send.status === "failed" || send.status === "partial_failed") {
+    await deliveryAttempt.projection;
     throw send.error;
   }
   const visibleSendSucceeded = send.status === "sent";
-  if (visibleSendSucceeded) {
-    const hasHeartbeatText = Boolean(deliveryText.trim());
-    await patchSessionEntryCore(
-      { storePath, sessionKey },
-      (current, context) => {
-        if (!context.existingEntry) {
-          return null;
-        }
-        // Visible structured-only sends satisfy their own pending final too;
-        // preserve old text dedupe markers and another run's recovery state.
-        const ownsPendingFinalDelivery = heartbeatRunOwnsPendingFinalDelivery(current, startedAt);
-        if (!hasHeartbeatText && !ownsPendingFinalDelivery) {
-          return null;
-        }
-        return {
-          ...(hasHeartbeatText
-            ? { lastHeartbeatText: normalized.text, lastHeartbeatSentAt: startedAt }
-            : {}),
-          ...(ownsPendingFinalDelivery ? CLEARED_PENDING_FINAL_DELIVERY_FIELDS : {}),
-        };
-      },
-      { preserveActivity: true },
-    );
+  try {
+    if (visibleSendSucceeded) {
+      const hasHeartbeatText = Boolean(deliveryText.trim());
+      await patchSessionEntryCore(
+        { storePath, sessionKey },
+        (current, context) => {
+          if (!context.existingEntry) {
+            return null;
+          }
+          // Visible structured-only sends satisfy their own pending final too;
+          // preserve old text dedupe markers and another run's recovery state.
+          const ownsPendingFinalDelivery = heartbeatRunOwnsPendingFinalDelivery(current, startedAt);
+          if (!hasHeartbeatText && !ownsPendingFinalDelivery) {
+            return null;
+          }
+          return {
+            ...(hasHeartbeatText
+              ? { lastHeartbeatText: normalized.text, lastHeartbeatSentAt: startedAt }
+              : {}),
+            ...(ownsPendingFinalDelivery ? CLEARED_PENDING_FINAL_DELIVERY_FIELDS : {}),
+          };
+        },
+        { preserveActivity: true },
+      );
+    }
+  } finally {
+    // The platform send is irreversible. Preserve its target-session fact even
+    // when source-session accounting fails after the send has settled.
+    await deliveryAttempt.projection;
   }
 
   const eventStatus = visibleSendSucceeded ? "sent" : "skipped";

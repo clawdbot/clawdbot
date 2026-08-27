@@ -232,7 +232,7 @@ describe("createChatChannelPlugin", () => {
       resolveConversationRouteOwner: ({ conversation }) =>
         conversation.peerId === "retry"
           ? ({ kind: "unavailable" } as const)
-          : ({ kind: "agent", agentId: "main" } as const),
+          : ({ kind: "agent", agentId: "main", sessionKey: "agent:main:main" } as const),
     } satisfies NonNullable<ChannelPlugin["messaging"]>;
 
     expect(

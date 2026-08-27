@@ -47,7 +47,11 @@ describe("inspectSlackConversationRouteOwner", () => {
         accountId: "default",
         conversation: { kind: "channel", peerId: "channel-1", threadId: "thread-1" },
       }),
-    ).toEqual({ kind: "agent", agentId: "finance" });
+    ).toEqual({
+      kind: "agent",
+      agentId: "finance",
+      sessionKey: "agent:finance:bound",
+    });
     expect(resolveByConversation).toHaveBeenCalledWith({
       channel: "slack",
       accountId: "default",
@@ -102,9 +106,46 @@ describe("inspectSlackConversationRouteOwner", () => {
     expect(inspectSlackConversationRouteOwner(input)).toEqual({
       kind: "agent",
       agentId: "finance",
+      sessionKey: "agent:finance:bound",
     });
     releaseInstallation?.();
     releaseInstallation = undefined;
     expect(inspectSlackConversationRouteOwner(input)).toEqual({ kind: "unavailable" });
+  });
+
+  it("preserves the Enterprise workspace partition for a main DM", () => {
+    releaseInstallation?.();
+    const installation = registerSlackInstallationState("default", "enterprise");
+    releaseInstallation = installation.release;
+
+    expect(
+      inspectSlackConversationRouteOwner({
+        cfg: {},
+        accountId: "default",
+        conversation: {
+          kind: "direct",
+          peerId: "team:T123:user:U12345678",
+          context: { teamId: "T123" },
+        },
+      }),
+    ).toEqual({
+      kind: "agent",
+      agentId: "main",
+      sessionKey: "agent:main:main:account:default:team:t123",
+    });
+  });
+
+  it("does not guess whether an unbound DM thread is a session boundary", () => {
+    expect(
+      inspectSlackConversationRouteOwner({
+        cfg: {},
+        accountId: "default",
+        conversation: {
+          kind: "direct",
+          peerId: "U12345678",
+          threadId: "1710000000.000100",
+        },
+      }),
+    ).toEqual({ kind: "agent", agentId: "main" });
   });
 });

@@ -66,6 +66,7 @@ import {
 import {
   resolveHeartbeatPreflight,
   resolveHeartbeatRunPrompt,
+  selectHeartbeatConsumableSystemEvents,
   selectSystemEventsConsumedByHeartbeat,
   shouldPreflightExecEventWake,
 } from "./heartbeat-runner-prompt.js";
@@ -91,6 +92,10 @@ import {
   type HeartbeatWakeSource,
 } from "./heartbeat-wake.js";
 import type { OutboundSendDeps } from "./outbound/deliver.js";
+import {
+  createTargetSessionProjectionCoordinator,
+  prepareTargetSessionProjection,
+} from "./outbound/target-session-projection.js";
 import {
   resolveHeartbeatDeliveryTargetWithSessionRoute,
   resolveHeartbeatSenderContext,
@@ -131,6 +136,8 @@ function hasActiveRunForSession(
 
 export type HeartbeatRunOptions = {
   cfg?: OpenClawConfig;
+  /** Runtime-owned config reader used to fence target ownership across awaited delivery. */
+  readCurrentConfig?: () => OpenClawConfig;
   agentId?: string;
   sessionKey?: string;
   heartbeat?: HeartbeatConfig;
@@ -392,6 +399,7 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
   return {
     kind: "ready",
     cfg,
+    readCurrentConfig: opts.readCurrentConfig ?? (() => cfg),
     agentId,
     wakeSource,
     heartbeat,
@@ -407,7 +415,7 @@ type StageResult<T, K extends string> = Extract<Awaited<T>, { kind: K }>;
 export type ReadyHeartbeatWake = StageResult<ReturnType<typeof resolveHeartbeatWakeStage>, "ready">;
 
 export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
-  const { cfg, agentId, heartbeat, preflight } = wake;
+  const { cfg, readCurrentConfig, agentId, heartbeat, preflight } = wake;
   const { scheduledTasks, startedAt } = wake;
   const { listActiveEmbeddedRuns, isReplyRunActive } = wake;
   const { entry, sessionKey } = preflight.session;
@@ -421,6 +429,7 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
   const useIsolatedSession = heartbeat?.isolatedSession === true;
   const delivery = await resolveHeartbeatDeliveryTargetWithSessionRoute({
     cfg,
+    readCurrentConfig,
     agentId,
     entry,
     heartbeat,
@@ -439,7 +448,7 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
     delivery.channel === "none" &&
     delivery.reason === "no-route" &&
     (wake.wakeSource === undefined || wake.wakeSource === "interval") &&
-    preflight.pendingEventEntries.length === 0 &&
+    selectHeartbeatConsumableSystemEvents(preflight.pendingEventEntries).length === 0 &&
     scheduledTasks.length === 0
   ) {
     emitHeartbeatEvent({
@@ -607,6 +616,22 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
     }
   }
   const { hasExecCompletion, hasCronEvents } = heartbeatRunPrompt;
+  const targetSessionProjection = (() => {
+    if (!delivery.targetSession) {
+      return undefined;
+    }
+    try {
+      return prepareTargetSessionProjection({ cfg, target: delivery.targetSession });
+    } catch (error) {
+      // Projection is post-delivery bookkeeping; an unreadable target session
+      // must not suppress the heartbeat's outward alert.
+      log.warn("heartbeat: failed to prepare target session projection", {
+        error: formatErrorMessage(error),
+        sessionKey: delivery.targetSession.route.sessionKey,
+      });
+      return undefined;
+    }
+  })();
   return {
     kind: "ready",
     ...preflight.session,
@@ -617,6 +642,7 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
     replyPrefix,
     runSessionKey,
     outboundPolicySessionKey,
+    targetSessionProjection,
     ...heartbeatRunPrompt,
     inspectedSystemEventsToConsume: selectSystemEventsConsumedByHeartbeat({
       preflight,
@@ -645,8 +671,12 @@ export async function invokeHeartbeatAgentRun(
   const getReplyFromConfig =
     opts.deps?.getReplyFromConfig ?? (await loadHeartbeatRunnerRuntime()).getReplyFromConfig;
   const heartbeatWakeAbortSignal = getHeartbeatWakeAbortSignal();
+  const targetSessionProjectionCoordinator = createTargetSessionProjectionCoordinator(
+    wake.readCurrentConfig,
+  );
   const replyOpts = {
     isHeartbeat: true,
+    targetSessionProjectionCoordinator,
     [REPLY_OPERATION_RUN_STATE]: replyOperationRunState,
     ...(heartbeatModelOverride ? { heartbeatModelOverride } : {}),
     suppressToolErrorWarnings: false,
@@ -658,7 +688,7 @@ export async function invokeHeartbeatAgentRun(
     bootstrapContextMode: heartbeat?.lightContext === true ? ("lightweight" as const) : undefined,
     onModelSelected: replyPrefix.onModelSelected,
   };
-  const replyResult = await getReplyFromConfig(
+  const replyOutcome = await getReplyFromConfig(
     {
       Body: appendCronStyleCurrentTimeLine(prompt, cfg, startedAt),
       From: sender,
@@ -674,10 +704,21 @@ export async function invokeHeartbeatAgentRun(
     },
     replyOpts,
     cfg,
+  ).then(
+    (result) => ({ ok: true as const, result }),
+    (error: unknown) => ({ ok: false as const, error }),
   );
+  const projectionContext = { targetSessionProjectionCoordinator };
+  if (!replyOutcome.ok) {
+    return { kind: "errored", error: replyOutcome.error, ...projectionContext } as const;
+  }
+  const replyResult = replyOutcome.result;
   const agentTurnStatus = resolveReplyOperationAgentTurn(replyOperationRunState);
   if (agentTurnStatus === "superseded" || agentTurnStatus === "cancelled") {
-    return { kind: agentTurnStatus === "superseded" ? "preempted" : "cancelled" } as const;
+    return {
+      kind: agentTurnStatus === "superseded" ? "preempted" : "cancelled",
+      ...projectionContext,
+    } as const;
   }
   const heartbeatToolResponse = resolveHeartbeatToolResponseFromReplyResult(replyResult);
   const heartbeatScratchProposal = resolveHeartbeatScratchProposalFromReplyResult(replyResult);
@@ -714,10 +755,11 @@ export async function invokeHeartbeatAgentRun(
     replyOperationRunState.admission?.status === "skipped" &&
     replyOperationRunState.admission.reason === "active-run"
   ) {
-    return { kind: "busy" } as const;
+    return { kind: "busy", ...projectionContext } as const;
   }
   return {
     kind: "completed",
+    ...projectionContext,
     heartbeatToolResponse,
     heartbeatTerminalToolFailure,
     agentRunFailed,

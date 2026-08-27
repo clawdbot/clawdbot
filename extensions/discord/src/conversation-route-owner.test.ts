@@ -72,7 +72,11 @@ describe("inspectDiscordConversationRouteOwner", () => {
         accountId: "default",
         conversation: { kind: "direct", peerId: "user-1", nativeChannelId: "dm-1" },
       }),
-    ).toEqual({ kind: "agent", agentId: "finance" });
+    ).toEqual({
+      kind: "agent",
+      agentId: "finance",
+      sessionKey: "agent:finance:bound",
+    });
     expect(resolveByConversation).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: "user:user-1" }),
     );
@@ -115,7 +119,11 @@ describe("inspectDiscordConversationRouteOwner", () => {
         accountId: "default",
         conversation,
       }),
-    ).toEqual({ kind: "agent", agentId: "main" });
+    ).toEqual({
+      kind: "agent",
+      agentId: "main",
+      sessionKey: "agent:main:discord:channel:channel-1",
+    });
   });
 
   it("preserves explicit plugin ownership independently of the target session key", () => {

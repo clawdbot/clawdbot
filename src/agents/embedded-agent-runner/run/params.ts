@@ -18,6 +18,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { GroupToolPolicyConfig } from "../../../config/types.tools.js";
 import type { CronRuntimeAuthority } from "../../../cron/runtime-authority.js";
 import type { CronScheduledToolCallerOrigin } from "../../../cron/scheduled-tool-policy.js";
+import type { TargetSessionProjectionCoordinator } from "../../../infra/outbound/target-session-projection.types.js";
 import type { ImageContent } from "../../../llm/types.js";
 import type { MediaFact } from "../../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
@@ -116,6 +117,7 @@ export type RunEmbeddedAgentParams = {
   agentAccountId?: string;
   /** What initiated this agent run: "user", "heartbeat", "cron", "memory", "overflow", or "manual". */
   trigger?: EmbeddedRunTrigger;
+  targetSessionProjectionCoordinator?: TargetSessionProjectionCoordinator;
   /** Stable cron job identifier populated for cron-triggered runs. */
   jobId?: string;
   /** Store-private runtime authority forwarded only by the cron execution owner. */

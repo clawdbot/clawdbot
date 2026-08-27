@@ -1433,6 +1433,7 @@ export const sendHandlers: GatewayRequestHandlers = {
             outboundRoutePersisted = true;
             await ensureOutboundSessionEntry({
               cfg,
+              agentId: effectiveAgentId,
               channel,
               accountId,
               route: outboundRoute,

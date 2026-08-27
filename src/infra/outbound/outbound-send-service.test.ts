@@ -187,6 +187,8 @@ describe("executeSendAction", () => {
       sessionKey: string;
       agentId?: string;
       idempotencyKey?: string;
+      expectedSessionId?: string;
+      expectedLifecycleRevision?: string;
     }>;
     mediaUrls?: string[];
   }) {
@@ -209,6 +211,26 @@ describe("executeSendAction", () => {
       mediaUrls: params.mediaUrls,
     });
   }
+
+  it("uses an explicit target generation fence for plugin-handled mirrors", async () => {
+    await executePluginMirroredSend({
+      mirror: {
+        agentId: "main",
+        expectedSessionId: "session-1",
+        expectedLifecycleRevision: "revision-1",
+      },
+    });
+
+    expectMirrorWrite({
+      agentId: "main",
+      sessionKey: "agent:main:demo-outbound:channel:123",
+      text: "hello",
+    });
+    expectSingleCallFields(mocks.appendAssistantMessageToSessionTranscript, {
+      expectedSessionId: "session-1",
+      expectedLifecycleRevision: "revision-1",
+    });
+  });
 
   function createPluginMediaSendContext(
     overrides: Partial<ExecuteSendContext>,
@@ -1088,6 +1110,7 @@ describe("executeSendAction", () => {
           url: "http://127.0.0.1:18789",
           token: "tok",
           timeoutMs: 5000,
+          connectionTarget: "local",
           clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
           mode: GATEWAY_CLIENT_MODES.BACKEND,
         },
@@ -1295,6 +1318,7 @@ describe("executeSendAction", () => {
           url: "http://127.0.0.1:18789",
           token: "tok",
           timeoutMs: 5000,
+          connectionTarget: "local",
           clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
           mode: GATEWAY_CLIENT_MODES.BACKEND,
         },

@@ -285,6 +285,7 @@ export function startHeartbeatRunner(opts: {
       try {
         res = await runOnce({
           cfg: wakeConfig,
+          readCurrentConfig,
           agentId,
           heartbeat: useEnrolledHeartbeat
             ? agent?.heartbeat

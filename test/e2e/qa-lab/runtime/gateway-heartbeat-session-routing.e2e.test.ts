@@ -213,7 +213,7 @@ describe("Gateway heartbeat session routing", () => {
   afterEach(resetGatewayState);
 
   it(
-    "routes monitor wakes through heartbeat.session while preserving explicit wake sessions",
+    "routes heartbeat runs independently while projecting deliveries into the target session",
     { timeout: 90_000 },
     async () => {
       const envSnapshot = captureEnv([...ISOLATED_GATEWAY_ENV_KEYS]);
@@ -265,6 +265,12 @@ describe("Gateway heartbeat session routing", () => {
       const explicitQueuedEvent = nextId("explicit-queued-event");
       const explicitWakeText = nextId("explicit-wake-event");
       const explicitReply = nextId("explicit-heartbeat-reply");
+      const firstTargetTurn = nextId("first-target-turn");
+      const firstTargetReply = nextId("first-target-reply");
+      const secondTargetTurn = nextId("second-target-turn");
+      const secondTargetReply = nextId("second-target-reply");
+      const thirdTargetTurn = nextId("third-target-turn");
+      const thirdTargetReply = nextId("third-target-reply");
       const mainSessionKey = "agent:main:main";
       const mainSessionId = nextId("main-session");
       const providerRequests: Array<Record<string, unknown>> = [];
@@ -286,11 +292,18 @@ describe("Gateway heartbeat session routing", () => {
           const serialized = JSON.stringify(body);
           writeAssistantResponse(
             response,
-            serialized.includes(configuredEvent)
-              ? configuredReply
-              : serialized.includes(explicitQueuedEvent) || serialized.includes(explicitWakeText)
-                ? explicitReply
-                : nextId("unexpected-heartbeat-reply"),
+            serialized.includes(thirdTargetTurn)
+              ? thirdTargetReply
+              : serialized.includes(secondTargetTurn)
+                ? secondTargetReply
+                : serialized.includes(firstTargetTurn)
+                  ? firstTargetReply
+                  : serialized.includes(configuredEvent)
+                    ? configuredReply
+                    : serialized.includes(explicitQueuedEvent) ||
+                        serialized.includes(explicitWakeText)
+                      ? explicitReply
+                      : nextId("unexpected-heartbeat-reply"),
           );
         })().catch((error: unknown) => {
           response.writeHead(500).end(error instanceof Error ? error.message : String(error));
@@ -359,6 +372,29 @@ describe("Gateway heartbeat session routing", () => {
         }
         markCompleteReplyConfig(runtimeConfig, { runtimeMode: "full" });
         const client = gateway.client;
+        const sendTargetTurn = async (message: string) => {
+          const requestBaseline = providerRequests.length;
+          const started = await client.request<{ runId?: string; status?: string }>("chat.send", {
+            sessionKey: mainSessionKey,
+            message,
+            idempotencyKey: nextId("target-chat-send"),
+          });
+          expect(started).toMatchObject({ status: "started", runId: expect.any(String) });
+          if (!started.runId) {
+            throw new Error("chat.send did not return a run id");
+          }
+          await expect(
+            client.request<{ status?: string }>(
+              "agent.wait",
+              { runId: started.runId, timeoutMs: 15_000 },
+              { timeoutMs: 20_000 },
+            ),
+          ).resolves.toMatchObject({ status: "ok" });
+          await expect
+            .poll(() => providerRequests.length, { timeout: 15_000, interval: 50 })
+            .toBeGreaterThan(requestBaseline);
+          return JSON.stringify(providerRequests[requestBaseline]);
+        };
 
         const seedSession = async (params: {
           sessionId: string;
@@ -495,9 +531,24 @@ describe("Gateway heartbeat session routing", () => {
           await readSessionTranscript(configuredSessionKey),
         );
         expect(configuredTranscript).toContain(configuredReply);
-        expect(JSON.stringify(await readSessionTranscript(mainSessionKey))).not.toContain(
-          configuredReply,
+        const mainAfterConfigured = JSON.stringify(await readSessionTranscript(mainSessionKey));
+        expect(mainAfterConfigured).toContain(configuredReply);
+        expect(mainAfterConfigured).toContain('"model":"delivery-mirror"');
+        const configuredAwareness = `A heartbeat delivered this message to this channel:\n${configuredReply}`;
+        expect(peekSystemEvents(mainSessionKey)).toContain(configuredAwareness);
+
+        const firstTargetRequest = await sendTargetTurn(firstTargetTurn);
+        expect(peekSystemEvents(mainSessionKey)).not.toContain(configuredAwareness);
+        expect(firstTargetRequest).toContain(
+          `A heartbeat delivered this message to this channel:\\nSystem: ${configuredReply}`,
         );
+        expect(firstTargetRequest).toContain(firstTargetTurn);
+        await expect
+          .poll(() => readSessionTranscript(mainSessionKey).then(JSON.stringify), {
+            timeout: 15_000,
+            interval: 50,
+          })
+          .toContain(firstTargetReply);
 
         await expect(
           client.request<{ ok: boolean }>("system-event", {
@@ -568,8 +619,22 @@ describe("Gateway heartbeat session routing", () => {
           explicitReply,
         );
         const mainTranscript = JSON.stringify(await readSessionTranscript(mainSessionKey));
-        expect(mainTranscript).not.toContain(configuredReply);
-        expect(mainTranscript).not.toContain(explicitReply);
+        expect(mainTranscript).toContain(configuredReply);
+        expect(mainTranscript).toContain(explicitReply);
+        const explicitAwareness = `A heartbeat delivered this message to this channel:\n${explicitReply}`;
+        expect(peekSystemEvents(mainSessionKey)).toContain(explicitAwareness);
+
+        const secondTargetRequest = await sendTargetTurn(secondTargetTurn);
+        expect(secondTargetRequest).toContain(
+          `A heartbeat delivered this message to this channel:\\nSystem: ${explicitReply}`,
+        );
+        expect(secondTargetRequest).not.toContain(configuredReply);
+        expect(peekSystemEvents(mainSessionKey)).not.toContain(explicitAwareness);
+
+        const thirdTargetRequest = await sendTargetTurn(thirdTargetTurn);
+        expect(thirdTargetRequest).toContain(thirdTargetTurn);
+        expect(thirdTargetRequest).not.toContain("A heartbeat delivered this message");
+        expect(thirdTargetRequest).not.toContain(explicitReply);
         expect((await readDeliveryTrace(deliveryTracePath)).map((entry) => entry.to)).not.toContain(
           "main-destination",
         );

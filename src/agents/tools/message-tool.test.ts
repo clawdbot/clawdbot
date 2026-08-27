@@ -10,6 +10,7 @@ import { markInboundContextLabel } from "../../auto-reply/reply/inbound-context-
 import type { ChannelMessageAdapterShape } from "../../channels/message/types.js";
 import type { ChannelMessageCapability } from "../../channels/plugins/message-capabilities.js";
 import type { ChannelMessageActionName, ChannelPlugin } from "../../channels/plugins/types.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import {
   mintMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
@@ -19,6 +20,7 @@ import {
   workspaceConfig,
   workspaceTestPlugin,
 } from "../../infra/outbound/message-action-runner.test-support.js";
+import { createTargetSessionProjectionCoordinator } from "../../infra/outbound/target-session-projection.js";
 import { resetDiagnosticSessionStateForTest } from "../../logging/diagnostic-session-state.js";
 import {
   MESSAGE_TOOL_DELIVERY_HINTS,
@@ -188,6 +190,7 @@ type RunMessageActionInput = {
   gateway?: {
     timeoutMs?: unknown;
     terminalSourceReplyReceiptOwner?: "caller";
+    connectionTarget?: "local" | "remote";
     resolveAgentRuntimeIdentityToken?: (context?: {
       sourceReplyFinal?: boolean;
       sourceReplyToolCallId?: string;
@@ -682,6 +685,7 @@ describe("message tool gateway timeout", () => {
     });
 
     expect(call?.gateway?.timeoutMs).toBe(5000);
+    expect(call?.gateway?.connectionTarget).toBe("local");
   });
 });
 
@@ -1408,6 +1412,9 @@ describe("message tool secret scoping", () => {
     const tool = createMessageTool({
       getRuntimeConfig: mocks.getRuntimeConfig,
       runMessageAction: mocks.runMessageAction as never,
+      targetSessionProjectionCoordinator: createTargetSessionProjectionCoordinator(
+        () => mocks.getRuntimeConfig() as OpenClawConfig,
+      ),
       agentId: "main",
       agentSessionKey: sessionKey,
       runId: "run-remote-source-reply",
@@ -1425,7 +1432,9 @@ describe("message tool secret scoping", () => {
     const terminal = firstRunMessageActionInput();
     expect(terminal?.sourceReplyFinal).toBe(true);
     expect(terminal?.gateway?.terminalSourceReplyReceiptOwner).toBe("caller");
+    expect(terminal?.gateway?.connectionTarget).toBe("remote");
     expect(terminal?.gateway?.resolveAgentRuntimeIdentityToken).toEqual(expect.any(Function));
+    expect(terminal).not.toHaveProperty("targetSessionProjection");
   });
 
   it("keeps source-less message-tool-only sends outside terminal reconciliation", async () => {

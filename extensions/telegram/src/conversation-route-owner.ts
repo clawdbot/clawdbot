@@ -2,7 +2,10 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveThreadBindingSpawnPolicy } from "openclaw/plugin-sdk/conversation-runtime";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { resolveTelegramAccount } from "./accounts.js";
-import { inspectTelegramConversationRoute } from "./conversation-route.js";
+import {
+  inspectTelegramConversationRoute,
+  resolveTelegramTargetSession,
+} from "./conversation-route.js";
 import { resolveTelegramScopedGroupConfig } from "./group-config-helpers.js";
 import { parseTelegramTarget } from "./targets.js";
 import type { TelegramThreadSpec } from "./thread-spec.js";
@@ -25,7 +28,13 @@ function resolveInspectionThread(params: {
     };
   }
   if (target.messageThreadId != null) {
-    return { chatId, threadSpec: { id: target.messageThreadId, scope: "forum" } };
+    return {
+      chatId,
+      threadSpec: {
+        id: target.messageThreadId,
+        scope: params.kind === "direct" ? "dm" : "forum",
+      },
+    };
   }
   const threadId = parseStrictNonNegativeInteger(params.threadId);
   return {
@@ -78,7 +87,26 @@ export function inspectTelegramConversationRouteOwner(params: {
     return { kind: "unavailable" as const };
   }
   if (result.bindingMode.kind !== "plugin-owned-runtime") {
-    return { kind: "agent" as const, agentId: result.route.agentId };
+    const sessionKey = resolveTelegramTargetSession({
+      cfg: params.cfg,
+      route: result.route,
+      chatId: parsed.chatId,
+      isGroup: params.conversation.kind !== "direct",
+      senderId: params.conversation.kind === "direct" ? params.conversation.peerId : undefined,
+      ...(parsed.threadSpec.scope === "dm" && parsed.threadSpec.id != null
+        ? {
+            dmThreadId: parsed.threadSpec.id,
+            // An explicit direct-topic target supplies the fact inbound normally
+            // learns from the Bot profile before applying the same session helper.
+            botHasTopicsEnabled: true,
+          }
+        : {}),
+    });
+    return {
+      kind: "agent" as const,
+      agentId: result.route.agentId,
+      sessionKey,
+    };
   }
   return result.bindingMode.pluginId
     ? {

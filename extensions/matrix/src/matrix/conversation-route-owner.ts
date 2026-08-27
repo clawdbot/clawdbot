@@ -39,5 +39,9 @@ export function resolveMatrixConversationRouteOwner(params: {
     // cannot authorize detached delivery through an inferred fallback owner.
     return null;
   }
-  return { kind: "agent" as const, agentId: result.route.agentId };
+  return {
+    kind: "agent" as const,
+    agentId: result.route.agentId,
+    sessionKey: result.route.sessionKey,
+  };
 }

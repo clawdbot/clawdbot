@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
@@ -35,6 +36,7 @@ import type {
   MessageActionResult,
   ResolvedActionContext,
 } from "./message-action-contracts.js";
+import { resolveMessageActionOutcome } from "./message-action-contracts.js";
 import {
   annotateSourceDelivery,
   applyMessageCrossContextMarker,
@@ -45,6 +47,7 @@ import {
   collectAttachmentSources,
   normalizeSandboxMediaList,
 } from "./message-action-params.js";
+import { createMessageActionTargetSessionBookkeeping } from "./message-action-target-session.js";
 import {
   prepareOutboundMirrorRoute,
   resolveAndApplyOutboundReplyToId,
@@ -462,7 +465,13 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
       return;
     }
     outboundRoutePersisted = true;
-    await ensureOutboundSessionEntry({ cfg, channel, accountId, route: outboundRoute });
+    await ensureOutboundSessionEntry({
+      cfg,
+      agentId: expectDefined(agentId, "outbound route agent id"),
+      channel,
+      accountId,
+      route: outboundRoute,
+    });
   };
   throwIfAborted(abortSignal);
 
@@ -501,39 +510,75 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
       requesterSenderE164: input.requesterSenderE164,
     });
 
+  const sourceSessionKey = input.sourceReplySessionKey ?? input.sessionKey;
+  // A prepared heartbeat projection owns route binding and transcript mirroring
+  // after delivery. Committing those writes here would make first contact look
+  // like a reset before the projection can establish its captured generation.
+  const targetSessionBookkeeping = createMessageActionTargetSessionBookkeeping({
+    requested: Boolean(input.targetSessionProjection && !dryRun),
+    ...(input.targetSessionProjection && agentId && sourceSessionKey && !dryRun
+      ? {
+          capture: {
+            cfg: input.targetSessionProjection.cfg,
+            readCurrentConfig: input.targetSessionProjection.readCurrentConfig,
+            sourceAgentId: agentId,
+            sourceSessionKey,
+            channel,
+            accountId,
+            route: outboundRoute,
+            coordinator: input.targetSessionProjection.coordinator,
+            idempotencyKey: ctx.idempotencyKey,
+          },
+        }
+      : {}),
+    commitOrdinaryRoute: commitOutboundSessionRoute,
+  });
+  const deferTargetSessionBookkeeping = targetSessionBookkeeping.deferred;
+
   // Required queue persistence is itself an ownership decision: neither the
   // remote gateway action nor a provider-native action may bypass core queueing.
   const requiresCoreDelivery =
     input.forceCoreDelivery === true || input.requireQueuePersistence === true;
-
   // Gateway action ownership wins even when this process has a render-capable
   // outbound adapter; credentials and account selection may exist only remotely.
-  const gatewayPluginAction = requiresCoreDelivery
-    ? null
-    : await executeGatewayAction({
-        cfg,
-        params,
-        channel,
-        channelPlugin,
-        action,
-        reply,
-        accountId,
-        dryRun,
-        gateway,
-        input,
-        agentId,
-        result: (payload) => ({
-          kind: "send",
+  let gatewayPluginAction: Awaited<ReturnType<typeof executeGatewayAction>>;
+  try {
+    gatewayPluginAction = requiresCoreDelivery
+      ? null
+      : await executeGatewayAction({
+          cfg,
+          params,
           channel,
+          channelPlugin,
           action,
-          to,
-          handledBy: "plugin",
-          payload,
+          reply,
+          accountId,
           dryRun,
-        }),
-      });
+          gateway,
+          input,
+          agentId,
+          result: (payload) => ({
+            kind: "send",
+            channel,
+            action,
+            to,
+            ...(accountId ? { accountId } : {}),
+            handledBy: "plugin",
+            payload,
+            dryRun,
+          }),
+        });
+  } catch (error) {
+    // Only the local Gateway transport owner has authoritative target-session lifecycle state.
+    targetSessionBookkeeping.beginGatewayError(error, gateway?.connectionTarget);
+    throw error;
+  }
   if (gatewayPluginAction) {
-    await commitOutboundSessionRoute();
+    // A remote Gateway owns the transport boundary. This caller has no
+    // authoritative route state for that process, so it must not write locally.
+    if (gateway?.connectionTarget === "local") {
+      await targetSessionBookkeeping.commitPlugin(gatewayPluginAction.payload);
+    }
     return annotateSourceDelivery(
       withSendNormalization(gatewayPluginAction, sendPayload.normalization),
       {
@@ -564,96 +609,116 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     applySendPayloadPartsToActionParams(params, sendPayload);
   }
 
-  const send = await executeSendAction({
-    ctx: {
-      cfg,
-      channel,
-      plugin: channelPlugin,
-      params,
-      idempotencyKey: ctx.idempotencyKey,
-      agentId,
-      sessionKey: input.sessionKey,
-      requesterAccountId: input.requesterAccountId ?? undefined,
-      requesterSenderId: input.requesterSenderId ?? undefined,
-      requesterSenderName: input.requesterSenderName ?? undefined,
-      requesterSenderUsername: input.requesterSenderUsername ?? undefined,
-      requesterSenderE164: input.requesterSenderE164 ?? undefined,
-      senderIsOwner: input.senderIsOwner,
-      conversationReadOrigin: normalizeConversationReadInvocationOrigin(
-        input.conversationReadOrigin,
-      ),
-      mediaAccess,
-      accountId: accountId ?? undefined,
-      conversationType: outboundRoute?.chatType,
-      sessionId: input.sessionId,
-      runId: input.runId,
-      executionIdentityToken: input.executionIdentityToken,
-      inboundEventKind: input.inboundEventKind,
-      gateway,
-      toolContext: input.toolContext,
-      deps: input.deps,
-      dryRun,
-      preparedMessageId: input.preparedMessageId,
-      gatewayOwnedDelivery: input.gatewayOwnedDelivery,
-      forceCoreDelivery: requiresCoreDelivery,
-      requireQueuePersistence: input.requireQueuePersistence,
-      deliveryIntentId: input.deliveryIntentId,
-      deliveryCompletion: input.deliveryCompletion,
-      // Model-authored sends get the failure back and resend it themselves; every
-      // other caller only reports the error, so recovery keeps its replay right.
-      deliveryRetryOwner: input.actionOrigin === "message-tool" ? "caller" : undefined,
-      onDeliveryIntent: input.onDeliveryIntent,
-      onPlatformSendDispatch: input.onPlatformSendDispatch,
-      skipQueue: input.skipQueue,
-      onDeliveryAttempt: input.onDeliveryAttempt,
-      // Identified platform evidence is the first success proof on the core
-      // path; commit the route here so the transcript mirror (which runs later
-      // in the same delivery) can resolve a just-created session entry.
-      onDeliveryResult: async (result) => {
-        await commitOutboundSessionRoute();
-        await input.onDeliveryResult?.(result);
-      },
-      onPluginSendAccepted: commitOutboundSessionRoute,
-      mirror:
-        !dryRun && input.transcriptMirror
-          ? {
-              ...input.transcriptMirror,
-              text: sendPayload.message,
-              mediaUrls: sendPayload.mediaUrls,
-            }
-          : outboundRoute && !dryRun && input.suppressTranscriptMirror !== true
+  let send: Awaited<ReturnType<typeof executeSendAction>>;
+  try {
+    send = await executeSendAction({
+      ctx: {
+        cfg,
+        channel,
+        plugin: channelPlugin,
+        params,
+        idempotencyKey: ctx.idempotencyKey,
+        agentId,
+        sessionKey: input.sessionKey,
+        requesterAccountId: input.requesterAccountId ?? undefined,
+        requesterSenderId: input.requesterSenderId ?? undefined,
+        requesterSenderName: input.requesterSenderName ?? undefined,
+        requesterSenderUsername: input.requesterSenderUsername ?? undefined,
+        requesterSenderE164: input.requesterSenderE164 ?? undefined,
+        senderIsOwner: input.senderIsOwner,
+        conversationReadOrigin: normalizeConversationReadInvocationOrigin(
+          input.conversationReadOrigin,
+        ),
+        mediaAccess,
+        accountId: accountId ?? undefined,
+        conversationType: outboundRoute?.chatType,
+        sessionId: input.sessionId,
+        runId: input.runId,
+        executionIdentityToken: input.executionIdentityToken,
+        inboundEventKind: input.inboundEventKind,
+        gateway,
+        toolContext: input.toolContext,
+        deps: input.deps,
+        dryRun,
+        preparedMessageId: input.preparedMessageId,
+        gatewayOwnedDelivery: input.gatewayOwnedDelivery,
+        forceCoreDelivery: requiresCoreDelivery,
+        requireQueuePersistence: input.requireQueuePersistence,
+        deliveryIntentId: input.deliveryIntentId,
+        deliveryCompletion: input.deliveryCompletion,
+        // Model-authored sends get the failure back and resend it themselves; every
+        // other caller only reports the error, so recovery keeps its replay right.
+        deliveryRetryOwner: input.actionOrigin === "message-tool" ? "caller" : undefined,
+        onDeliveryIntent: input.onDeliveryIntent,
+        onPlatformSendDispatch: input.onPlatformSendDispatch,
+        skipQueue: input.skipQueue,
+        onDeliveryAttempt: input.onDeliveryAttempt,
+        // Identified platform evidence is the first success proof on the core
+        // path. Ordinary sends bind here before transcript mirroring; heartbeat
+        // target projection owns both writes after the send settles.
+        onDeliveryResult: async (result) => {
+          if (!deferTargetSessionBookkeeping) {
+            await commitOutboundSessionRoute();
+          }
+          await input.onDeliveryResult?.(result);
+        },
+        onPluginSendAccepted: deferTargetSessionBookkeeping
+          ? undefined
+          : commitOutboundSessionRoute,
+        onDeliveredPayload: deferTargetSessionBookkeeping
+          ? targetSessionBookkeeping.recordDeliveredPayload
+          : undefined,
+        mirror:
+          !dryRun && input.transcriptMirror
             ? {
-                sessionKey: outboundRoute.sessionKey,
-                agentId,
+                ...input.transcriptMirror,
                 text: sendPayload.message,
                 mediaUrls: sendPayload.mediaUrls,
-                idempotencyKey: normalizeOptionalString(params.idempotencyKey) ?? undefined,
               }
-            : undefined,
-      abortSignal,
-      silent: sendPayload.silent ?? undefined,
-    },
-    to,
-    message: sendPayload.message,
-    payload: sendPayload.payload,
-    mediaUrl: sendPayload.mediaUrl,
-    mediaUrls: sendPayload.mediaUrls,
-    buffer: readToolStringParam(params, "buffer", { trim: false }) ?? undefined,
-    filename: readToolStringParam(params, "filename") ?? undefined,
-    contentType: readToolStringParam(params, "contentType") ?? undefined,
-    asVoice: sendPayload.asVoice,
-    gifPlayback: sendPayload.gifPlayback,
-    forceDocument: sendPayload.forceDocument,
-    bestEffort: sendPayload.bestEffort,
-    reply,
-    threadId: resolvedThreadId ?? undefined,
-  });
+            : outboundRoute &&
+                !dryRun &&
+                input.suppressTranscriptMirror !== true &&
+                !deferTargetSessionBookkeeping
+              ? {
+                  sessionKey: outboundRoute.sessionKey,
+                  agentId,
+                  text: sendPayload.message,
+                  mediaUrls: sendPayload.mediaUrls,
+                  idempotencyKey: normalizeOptionalString(params.idempotencyKey) ?? undefined,
+                }
+              : undefined,
+        abortSignal,
+        silent: sendPayload.silent ?? undefined,
+      },
+      to,
+      message: sendPayload.message,
+      payload: sendPayload.payload,
+      mediaUrl: sendPayload.mediaUrl,
+      mediaUrls: sendPayload.mediaUrls,
+      buffer: readToolStringParam(params, "buffer", { trim: false }) ?? undefined,
+      filename: readToolStringParam(params, "filename") ?? undefined,
+      contentType: readToolStringParam(params, "contentType") ?? undefined,
+      asVoice: sendPayload.asVoice,
+      gifPlayback: sendPayload.gifPlayback,
+      forceDocument: sendPayload.forceDocument,
+      bestEffort: sendPayload.bestEffort,
+      reply,
+      threadId: resolvedThreadId ?? undefined,
+    });
+  } catch (error) {
+    targetSessionBookkeeping.beginPartialForError(error);
+    throw error;
+  }
 
   // Gateway-relayed core sends return no identified platform result locally;
   // a non-failed, non-suppressed return is their success proof. Failed and
   // suppressed sends leave the durable route untouched.
   const coreDeliveryStatus = send.sendResult?.deliveryStatus;
-  if (coreDeliveryStatus !== "failed" && coreDeliveryStatus !== "suppressed") {
+  if (
+    !deferTargetSessionBookkeeping &&
+    coreDeliveryStatus !== "failed" &&
+    coreDeliveryStatus !== "suppressed"
+  ) {
     await commitOutboundSessionRoute();
   }
 
@@ -662,6 +727,7 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     channel,
     action,
     to,
+    ...(accountId ? { accountId } : {}),
     handledBy: send.handledBy,
     payload: send.payload,
     ...(send.deliveredText ? { deliveredText: send.deliveredText } : {}),
@@ -669,6 +735,16 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     sendResult: send.sendResult,
     dryRun,
   };
+  if (send.handledBy === "core" && send.sendResult) {
+    const outcome = resolveMessageActionOutcome(result);
+    if (outcome.ok) {
+      targetSessionBookkeeping.begin(false);
+    } else if (send.sendResult.deliveryStatus === "partial_failed") {
+      targetSessionBookkeeping.begin(true);
+    }
+  } else if (send.handledBy === "plugin") {
+    await targetSessionBookkeeping.commitPlugin(send.payload);
+  }
   return annotateSourceDelivery(withSendNormalization(result, sendPayload.normalization), {
     cfg,
     actionParams: params,

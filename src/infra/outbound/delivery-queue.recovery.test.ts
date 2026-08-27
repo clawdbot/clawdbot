@@ -1563,7 +1563,9 @@ describe("delivery-queue recovery", () => {
       gatewayClientScopes: ["operator.write"],
       mirror: {
         sessionKey: "agent:main:main",
+        agentId: "main",
         expectedSessionId: "session-main",
+        expectedLifecycleRevision: "revision-main",
         text: "a",
         mediaUrls: ["https://example.com/a.png"],
         idempotencyKey: "channel-final:message-1",

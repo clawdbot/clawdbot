@@ -101,6 +101,7 @@ describe("runMessageAction plugin dispatch", () => {
         },
         gateway: {
           resolveAgentRuntimeIdentityToken,
+          connectionTarget: "local",
           clientName: "gateway-client",
           mode: "backend",
         },
@@ -334,7 +335,10 @@ describe("runMessageAction plugin dispatch", () => {
             currentChannelId: "forum:123",
             currentThreadTs: "42",
           },
-          gateway: executionMode === "gateway" ? { clientName: "cli", mode: "cli" } : undefined,
+          gateway:
+            executionMode === "gateway"
+              ? { clientName: "cli", mode: "cli", connectionTarget: "local" }
+              : undefined,
           dryRun: false,
         });
 
@@ -379,7 +383,10 @@ describe("runMessageAction plugin dispatch", () => {
             currentChannelId: "forum:123",
             currentThreadTs: "42",
           },
-          gateway: executionMode === "gateway" ? { clientName: "cli", mode: "cli" } : undefined,
+          gateway:
+            executionMode === "gateway"
+              ? { clientName: "cli", mode: "cli", connectionTarget: "local" }
+              : undefined,
           dryRun: false,
         });
 

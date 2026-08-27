@@ -1,13 +1,17 @@
 // Covers plugin-dispatched message actions, target resolution, dry-run behavior,
 // and plugin tool-result extraction.
+import os from "node:os";
+import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { GatewayClientRequestError } from "../../gateway/client.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { peekSystemEventEntries, resetSystemEventsForTest } from "../system-events.js";
 import {
   createAlwaysConfiguredPluginConfig,
   createActionHubPluginFixture,
@@ -17,6 +21,28 @@ import {
   runMessageAction,
   setMessageActionTestPlugin as setTestPlugin,
 } from "./message-action-runner.test-helpers.js";
+import {
+  createTargetSessionProjectionCoordinator,
+  projectHeartbeatMessageToolDeliveries,
+} from "./target-session-projection.js";
+
+const sessionAccessorMockState = vi.hoisted(() => ({
+  targetEntry: undefined as { sessionId: string; updatedAt: number } | undefined,
+}));
+const appendAssistantMessageToSessionTranscript = vi.hoisted(() => vi.fn());
+
+vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config/sessions/session-accessor.js")>();
+  return {
+    ...actual,
+    loadSessionEntry: (...args: Parameters<typeof actual.loadSessionEntry>) =>
+      sessionAccessorMockState.targetEntry ?? actual.loadSessionEntry(...args),
+  };
+});
+
+vi.mock("../../config/sessions/transcript.runtime.js", () => ({
+  appendAssistantMessageToSessionTranscript,
+}));
 
 const requireRecord = createRequireRecord("record", "expected-non-array-record");
 const requireLabeledRecord = createRequireRecord("record", "expected-label");
@@ -56,6 +82,14 @@ function expectRecordFields(
 describe("runMessageAction plugin dispatch", () => {
   beforeEach(() => {
     resetMessageActionRunnerMocks();
+    appendAssistantMessageToSessionTranscript.mockReset();
+    sessionAccessorMockState.targetEntry = undefined;
+    resetSystemEventsForTest();
+  });
+
+  afterEach(() => {
+    sessionAccessorMockState.targetEntry = undefined;
+    resetSystemEventsForTest();
   });
   describe("alias-based plugin action dispatch", () => {
     const { handleAction, plugin: actionHubPlugin } = createActionHubPluginFixture();
@@ -70,6 +104,168 @@ describe("runMessageAction plugin dispatch", () => {
       vi.clearAllMocks();
       vi.unstubAllEnvs();
     });
+    it("preserves the ordinary same-session route and mirror without detached owner detail", async () => {
+      const cfg = { channels: { actionhub: { enabled: true } } } as OpenClawConfig;
+      const sourceSessionKey = "agent:main:main";
+      mocks.prepareOutboundMirrorRoute.mockResolvedValueOnce({
+        resolvedThreadId: undefined,
+        outboundRoute: {
+          sessionKey: sourceSessionKey,
+          baseSessionKey: sourceSessionKey,
+          recipientSessionExact: true,
+          peer: { kind: "direct", id: "operator" },
+          chatType: "direct",
+          from: "actionhub:operator",
+          to: "user:operator",
+        },
+      });
+      mocks.executeSendAction.mockResolvedValueOnce({
+        handledBy: "core",
+        payload: { ok: true },
+        sendResult: { channel: "actionhub", messageId: "same-source-send" },
+      });
+      const coordinator = createTargetSessionProjectionCoordinator(() => cfg);
+
+      await runMessageAction({
+        cfg,
+        action: "send",
+        params: { channel: "actionhub", target: "operator", message: "Heartbeat reminder." },
+        actionOrigin: "message-tool",
+        agentId: "main",
+        sessionKey: sourceSessionKey,
+        sourceReplySessionKey: sourceSessionKey,
+        targetSessionProjection: { cfg, readCurrentConfig: () => cfg, coordinator },
+        dryRun: false,
+      });
+
+      expect(mocks.ensureOutboundSessionEntry).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: "main",
+          route: expect.objectContaining({ sessionKey: sourceSessionKey }),
+        }),
+      );
+      const executeContext = readRecordField(
+        readMockCallArg(mocks.executeSendAction, "execute send call"),
+        "ctx",
+        "execute send context",
+      );
+      expect(executeContext.mirror).toMatchObject({
+        agentId: "main",
+        sessionKey: sourceSessionKey,
+        text: "Heartbeat reminder.",
+      });
+      expect(coordinator.completions.size).toBe(0);
+    });
+
+    it.each([
+      {
+        name: "projects a local Gateway partial-delivery receipt without inventing transcript content",
+        connectionTarget: "local" as const,
+        projected: 1,
+        awareness: [
+          [
+            "A heartbeat attempted to deliver a message to this channel, but delivery failed.",
+            "One or more heartbeat message parts may already have been delivered.",
+          ].join("\n"),
+        ],
+      },
+      {
+        name: "keeps a remote Gateway partial-delivery receipt out of local session state",
+        connectionTarget: "remote" as const,
+        projected: 0,
+        awareness: [],
+      },
+    ])("$name", async ({ connectionTarget, projected, awareness }) => {
+      const targetSessionKey = "agent:ops:gatewaychat:direct:user-123";
+      const route = {
+        sessionKey: targetSessionKey,
+        baseSessionKey: targetSessionKey,
+        recipientSessionExact: true as const,
+        peer: { kind: "direct" as const, id: "user-123" },
+        chatType: "direct" as const,
+        from: "gatewaychat:user-123",
+        to: "user-123",
+      };
+      const cfg = {
+        session: {
+          store: path.join(os.tmpdir(), "openclaw-message-action-{agentId}.json"),
+        },
+        channels: { gatewaychat: { enabled: true } },
+      } as OpenClawConfig;
+      const gatewayPlugin = createGatewayActionPlugin({
+        pluginId: "gatewaychat",
+        label: "Gateway Chat",
+        blurb: "Gateway Chat partial delivery test plugin.",
+        actions: ["send"],
+        messaging: { targetResolver: { looksLikeId: () => true } },
+        handleAction: vi.fn(async () => jsonResult({ ok: true, local: true })),
+      });
+      setTestPlugin(gatewayPlugin, "gatewaychat");
+      mocks.prepareOutboundMirrorRoute.mockResolvedValueOnce({ outboundRoute: route });
+      mocks.selectAuthoritativeOutboundTargetSessionRoute.mockReturnValueOnce({
+        agentId: "ops",
+        route,
+        isCurrent: () => true,
+      });
+      sessionAccessorMockState.targetEntry = {
+        sessionId: "target-session",
+        updatedAt: 1,
+      };
+      const partialDeliveryError = new GatewayClientRequestError({
+        code: "UNAVAILABLE",
+        message: "media upload failed",
+        details: {
+          partialDelivery: {
+            messageIds: ["caption-message"],
+            visibleReplySent: true,
+          },
+        },
+        retryable: false,
+      });
+      mocks.callGatewayLeastPrivilege.mockRejectedValueOnce(partialDeliveryError);
+      const coordinator = createTargetSessionProjectionCoordinator(() => cfg);
+
+      await expect(
+        runMessageAction({
+          cfg,
+          action: "send",
+          params: {
+            channel: "gatewaychat",
+            target: "user-123",
+            message: "Caption followed by media.",
+          },
+          actionOrigin: "message-tool",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          sourceReplySessionKey: "agent:main:heartbeat:test",
+          targetSessionProjection: { cfg, readCurrentConfig: () => cfg, coordinator },
+          gateway: {
+            connectionTarget,
+            clientName: "cli",
+            mode: "cli",
+          },
+          dryRun: false,
+        }),
+      ).rejects.toBe(partialDeliveryError);
+
+      expect(await projectHeartbeatMessageToolDeliveries({ coordinator })).toEqual({
+        projected,
+        skipped: 0,
+        warnings: 0,
+      });
+      if (connectionTarget === "local") {
+        expect(mocks.bindOutboundSessionEntry).toHaveBeenCalledWith(
+          expect.objectContaining({ agentId: "ops", route }),
+        );
+      } else {
+        expect(mocks.bindOutboundSessionEntry).not.toHaveBeenCalled();
+      }
+      expect(peekSystemEventEntries(targetSessionKey).map((event) => event.text)).toEqual(
+        awareness,
+      );
+      expect(appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+    });
+
     it.each([
       { name: "raw base64", buffer: "SGVsbG8=" },
       { name: "data URL", buffer: "data:application/octet-stream;base64,SGVsbG8=" },
@@ -109,6 +305,7 @@ describe("runMessageAction plugin dispatch", () => {
           mimeType: "text/plain",
         },
         gateway: {
+          connectionTarget: "local",
           clientName: "cli",
           mode: "cli",
         },
@@ -186,6 +383,7 @@ describe("runMessageAction plugin dispatch", () => {
           mimeType: "text/plain",
         },
         gateway: {
+          connectionTarget: "local",
           clientName: "cli",
           mode: "cli",
         },
@@ -247,6 +445,7 @@ describe("runMessageAction plugin dispatch", () => {
           message: "[[tts:text]]hello there[[/tts:text]]",
         },
         gateway: {
+          connectionTarget: "local",
           clientName: "cli",
           mode: "cli",
         },
@@ -409,6 +608,7 @@ describe("runMessageAction plugin dispatch", () => {
           presentation,
         },
         gateway: {
+          connectionTarget: "local",
           clientName: "cli",
           mode: "cli",
         },
@@ -456,6 +656,7 @@ describe("runMessageAction plugin dispatch", () => {
           location: "",
         },
         gateway: {
+          connectionTarget: "local",
           clientName: "cli",
           mode: "cli",
         },
@@ -517,6 +718,7 @@ describe("runMessageAction plugin dispatch", () => {
           presentation,
         },
         gateway: {
+          connectionTarget: "local",
           clientName: "cli",
           mode: "cli",
         },
@@ -600,6 +802,7 @@ describe("runMessageAction plugin dispatch", () => {
           presentation,
         },
         gateway: {
+          connectionTarget: "local",
           clientName: "cli",
           mode: "cli",
         },
@@ -662,7 +865,7 @@ describe("runMessageAction plugin dispatch", () => {
           message: "Deployment trend",
           presentation,
         },
-        gateway: { clientName: "cli", mode: "cli" },
+        gateway: { clientName: "cli", mode: "cli", connectionTarget: "local" },
         agentId: "main",
         suppressTranscriptMirror: true,
         dryRun: false,

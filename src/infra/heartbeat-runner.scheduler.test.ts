@@ -395,6 +395,10 @@ describe("startHeartbeatRunner", () => {
     const options = getRunCall(runSpy, 0);
     expect((options.cfg as OpenClawConfig).messages?.visibleReplies).toBe("message_tool");
     expect((options.heartbeat as { every?: string }).every).toBe("30m");
+    const readCurrentConfig = options.readCurrentConfig as (() => OpenClawConfig) | undefined;
+    expect(readCurrentConfig?.().messages?.visibleReplies).toBe("message_tool");
+    setRuntimeConfigSnapshot(initialConfig, initialConfig);
+    expect(readCurrentConfig?.().messages?.visibleReplies).toBe("automatic");
     runner.stop();
   });
 

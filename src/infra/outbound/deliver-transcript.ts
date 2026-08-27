@@ -1,11 +1,14 @@
 // Mirrors successful outbound payloads into the configured session transcript.
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
-import { getOwnedSessionTranscriptWriterFence } from "../../config/sessions/transcript-write-context.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { formatErrorMessage } from "../errors.js";
 import type { DeliverOutboundPayloadsCoreParams } from "./deliver-contracts.js";
-import { resolveOutboundPayloadMirrorText, type NormalizedOutboundPayload } from "./payloads.js";
+import { resolveOutboundMirrorWriterFence } from "./mirror.js";
+import {
+  projectDeliveredOutboundPayloadsForMirror,
+  type NormalizedOutboundPayload,
+} from "./payloads.js";
 
 const log = createSubsystemLogger("outbound/deliver");
 const loadTranscriptRuntime = createLazyRuntimeModule(
@@ -22,13 +25,7 @@ export async function mirrorDeliveredPayloads(params: {
   if (!mirror || params.payloads.length === 0) {
     return;
   }
-  const deliveredMirror = {
-    text: params.payloads
-      .map((payload) => payload.hookContent ?? resolveOutboundPayloadMirrorText(payload))
-      .filter((text) => text.trim())
-      .join("\n"),
-    mediaUrls: params.payloads.flatMap((payload) => payload.mediaUrls),
-  };
+  const deliveredMirror = projectDeliveredOutboundPayloadsForMirror(params.payloads);
   const mirrorText = resolveMirroredTranscriptText({
     text: deliveredMirror.text,
     mediaUrls: deliveredMirror.mediaUrls,
@@ -40,15 +37,11 @@ export async function mirrorDeliveredPayloads(params: {
   // Keep mirror failures non-fatal so callers do not retry an already-sent payload.
   try {
     const { appendAssistantMessageToSessionTranscript } = await loadTranscriptRuntime();
-    const writerFence = getOwnedSessionTranscriptWriterFence();
     const mirrorResult = await appendAssistantMessageToSessionTranscript({
       agentId: mirror.agentId,
       sessionKey: mirror.sessionKey,
       expectedSessionId: mirror.expectedSessionId,
-      ...(writerFence?.expectedLifecycleRevision !== undefined
-        ? { expectedLifecycleRevision: writerFence.expectedLifecycleRevision }
-        : {}),
-      ...(writerFence ? { expectedWriterRunId: writerFence.expectedWriterRunId } : {}),
+      ...resolveOutboundMirrorWriterFence(params.delivery.cfg, mirror),
       text: mirrorText,
       idempotencyKey: mirror.idempotencyKey,
       deliveryMirror: mirror.deliveryMirror,

@@ -531,12 +531,14 @@ export async function deliverOutboundPayloadsCore(
       params.onError?.(err, payloadSummary);
     }
   }
-  await mirrorDeliveredPayloads({
-    delivery: params,
-    payloads: deliveredMirrorPayloads,
-    channel,
-    to,
-  });
+  if (!params.deferLiveTranscriptMirror) {
+    await mirrorDeliveredPayloads({
+      delivery: params,
+      payloads: deliveredMirrorPayloads,
+      channel,
+      to,
+    });
+  }
 
   return results;
 }

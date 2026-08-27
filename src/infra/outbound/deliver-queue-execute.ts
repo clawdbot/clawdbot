@@ -502,6 +502,16 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     if (err instanceof OutboundDeliveryError && err.results.length > 0) {
       deliveredResults = err.results;
     }
+    // Platform results remain authoritative when later local finalization fails.
+    // Preserve them so callers cannot mistake an identified send for a safe retry.
+    const deliveryError =
+      deliveredResults.length > 0 && !(err instanceof OutboundDeliveryError)
+        ? new OutboundDeliveryError(formatErrorMessage(err), {
+            cause: err,
+            results: deliveredResults,
+            stage: "queue",
+          })
+        : err;
     const hasPlatformSendEvidence =
       deliveredResults.length > 0 ||
       queuedPreSendState === "marked" ||
@@ -519,7 +529,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
         }),
       );
     const platformSendFailureStage: AuditMessageFailureStage =
-      err instanceof OutboundDeliveryError ? err.stage : "platform_send";
+      deliveryError instanceof OutboundDeliveryError ? deliveryError.stage : "platform_send";
     if (queueId) {
       if (queuedPreSendState === "acked") {
         // Best-effort fallback removed durable custody before provider I/O.
@@ -679,7 +689,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       flushMessageSentEvents();
       emitFailedTerminals(platformSendFailureStage);
     }
-    throw err;
+    throw deliveryError;
   }
 }
 

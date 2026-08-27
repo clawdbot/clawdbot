@@ -1,11 +1,12 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import { resolveAgentRoute, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import {
   normalizeSlackRouteBindingConfig,
   resolveSlackConversationBindingRoute,
 } from "./conversation-binding-route.js";
 import { getSlackInstallationKind } from "./installation-identity-state.js";
 import {
+  resolveSlackEnterpriseMainDmSessionKey,
   qualifySlackConversationId,
   qualifySlackRoutePeerId,
 } from "./monitor/workspace-routing.js";
@@ -60,7 +61,7 @@ export function inspectSlackConversationRouteOwner(params: {
     return null;
   }
   const enterpriseScope = enterpriseRoute && teamId ? { teamId } : undefined;
-  const route = resolveAgentRoute({
+  let route = resolveAgentRoute({
     cfg: normalizeSlackRouteBindingConfig(params.cfg),
     channel: "slack",
     accountId: params.accountId,
@@ -74,6 +75,14 @@ export function inspectSlackConversationRouteOwner(params: {
       }),
     },
   });
+  if (enterpriseScope && direct && route.dmScope === "main") {
+    const sessionKey = resolveSlackEnterpriseMainDmSessionKey({
+      baseSessionKey: route.sessionKey,
+      accountId: params.accountId,
+      eventScope: enterpriseScope,
+    });
+    route = { ...route, sessionKey, mainSessionKey: sessionKey };
+  }
   const baseConversationId = qualifySlackConversationId(
     direct ? `user:${target.id}` : target.id,
     enterpriseScope,
@@ -97,11 +106,23 @@ export function inspectSlackConversationRouteOwner(params: {
       fallbackAgentId: route.agentId,
     };
   }
+  const agentId =
+    bindingRoute.runtimeRoute.boundAgentId ??
+    bindingRoute.configuredRoute?.boundAgentId ??
+    route.agentId;
+  const boundSessionKey =
+    bindingRoute.runtimeRoute.boundSessionKey ?? bindingRoute.configuredRoute?.boundSessionKey;
+  if (direct && params.conversation.threadId && !boundSessionKey) {
+    return { kind: "agent" as const, agentId };
+  }
   return {
     kind: "agent" as const,
-    agentId:
-      bindingRoute.runtimeRoute.boundAgentId ??
-      bindingRoute.configuredRoute?.boundAgentId ??
-      route.agentId,
+    agentId,
+    sessionKey: boundSessionKey
+      ? bindingRoute.route.sessionKey
+      : resolveThreadSessionKeys({
+          baseSessionKey: bindingRoute.route.sessionKey,
+          threadId: params.conversation.threadId,
+        }).sessionKey,
   };
 }

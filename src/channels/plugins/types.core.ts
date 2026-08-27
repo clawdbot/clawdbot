@@ -372,6 +372,8 @@ export type ChannelOutboundSessionRoute = {
   baseSessionKey: string;
   /** Route authority for explicit recipient session selection. */
   recipientSessionExact?: boolean | "direct-alias" | "delivery-identity";
+  /** Platform-native conversation id when it differs from the routing peer. */
+  nativeChannelId?: string;
   peer: {
     kind: ChatType;
     id: string;
@@ -515,7 +517,7 @@ export type ChannelMessagingAdapter = {
   }) =>
     // `undefined` delegates to core, `null` denies ownership, and `unavailable`
     // preserves temporary owner-store outages as retryable delivery failures.
-    | { kind: "agent"; agentId: string }
+    | { kind: "agent"; agentId: string; sessionKey?: string }
     | { kind: "plugin"; pluginId: string; fallbackAgentId: string }
     | { kind: "unavailable" }
     | null

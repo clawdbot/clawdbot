@@ -1185,11 +1185,108 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(resolved.channel).toBe("forum");
     expect(resolved.to).toBe("room:ops");
     expect(resolved.threadId).toBe(1008013);
+    expect(resolved.targetSession).toBeUndefined();
     expect(mocks.resolveOutboundChannelPlugin).toHaveBeenCalledWith({
       channel: "forum",
       cfg,
       agentId: "main",
       allowBootstrap: true,
+    });
+  });
+
+  it("keeps ambiguous generic heartbeat targets unchanged without inventing a session route", async () => {
+    const resolved = await resolveHeartbeatDeliveryTargetWithSessionRoute({
+      cfg: {},
+      agentId: "main",
+      heartbeat: {
+        target: "alpha",
+        to: "Alpha:User One",
+      },
+    });
+
+    expect(resolved).toMatchObject({ channel: "alpha", to: "user-one" });
+    expect(resolved.targetSession).toBeUndefined();
+  });
+
+  it("carries a safe main-session alias when the generic channel proves direct chat", async () => {
+    const direct = createGenericTargetTestPlugin("alpha", "Alpha");
+    direct.capabilities = { chatTypes: ["direct"] };
+    setActivePluginRegistry(createTargetsTestRegistry([direct]));
+
+    const resolved = await resolveHeartbeatDeliveryTargetWithSessionRoute({
+      cfg: {},
+      agentId: "main",
+      heartbeat: { target: "alpha", to: "Alpha:User One" },
+    });
+
+    expect(resolved).toMatchObject({
+      channel: "alpha",
+      to: "user-one",
+      targetSession: {
+        route: {
+          sessionKey: "agent:main:main",
+          recipientSessionExact: "direct-alias",
+          peer: { kind: "direct", id: "user-one" },
+        },
+      },
+    });
+  });
+
+  it("uses the named default account when selecting heartbeat route ownership", async () => {
+    const direct = createGenericTargetTestPlugin("alpha", "Alpha");
+    direct.capabilities = { chatTypes: ["direct"] };
+    direct.config = {
+      ...direct.config,
+      listAccountIds: () => ["work", "personal"],
+      defaultAccountId: () => "work",
+    };
+    setActivePluginRegistry(createTargetsTestRegistry([direct]));
+
+    const resolved = await resolveHeartbeatDeliveryTargetWithSessionRoute({
+      cfg: {
+        bindings: [{ agentId: "ops", match: { channel: "alpha", accountId: "work" } }],
+      },
+      agentId: "main",
+      heartbeat: { target: "alpha", to: "Alpha:User One" },
+    });
+
+    expect(resolved).toMatchObject({
+      accountId: "work",
+      targetSession: { agentId: "ops" },
+    });
+  });
+
+  it("keeps an owner route from a direct-only plugin without a chat-type inference hook", async () => {
+    const direct = createOwnerAllowlistTargetTestPlugin({
+      id: "alpha",
+      label: "Alpha",
+      ownerId: "person-123",
+    });
+    direct.capabilities = { chatTypes: ["direct"] };
+    setActivePluginRegistry(createTargetsTestRegistry([direct]));
+
+    const resolved = await resolveHeartbeatDeliveryTargetWithSessionRoute({
+      cfg: { channels: { alpha: { allowFrom: ["person-123"] } } } as OpenClawConfig,
+      agentId: "main",
+      entry: {
+        sessionId: "sess-direct-only-owner",
+        updatedAt: 1,
+        lastChannel: "alpha",
+        lastTo: "person-123",
+        chatType: "direct",
+      },
+      heartbeat: { target: "owner" },
+    });
+
+    expect(resolved).toMatchObject({
+      channel: "alpha",
+      to: "person-123",
+      targetSession: {
+        route: {
+          sessionKey: "agent:main:main",
+          recipientSessionExact: "direct-alias",
+        },
+      },
     });
   });
 
@@ -1272,6 +1369,28 @@ describe("resolveSessionDeliveryTarget", () => {
         target: "last",
         directPolicy: "block",
       },
+    });
+
+    expect(resolved.channel).toBe("none");
+    expect(resolved.reason).toBe("dm-blocked");
+  });
+
+  it("preserves a known direct last-route kind for ambiguous generic targets", async () => {
+    setActivePluginRegistry(
+      createTargetsTestRegistry([createGenericTargetTestPlugin("alpha", "Alpha")]),
+    );
+
+    const resolved = await resolveHeartbeatDeliveryTargetWithSessionRoute({
+      cfg: {},
+      agentId: "main",
+      entry: {
+        sessionId: "sess-heartbeat-generic-direct",
+        updatedAt: 1,
+        lastChannel: "alpha",
+        lastTo: "D123",
+        chatType: "direct",
+      },
+      heartbeat: { target: "last", directPolicy: "block" },
     });
 
     expect(resolved.channel).toBe("none");

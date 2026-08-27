@@ -358,6 +358,7 @@ describe("runMessageAction plugin dispatch", () => {
             currentChatType: "group",
           },
           gateway: {
+            connectionTarget: "local",
             clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
             mode: GATEWAY_CLIENT_MODES.BACKEND,
           },
@@ -402,6 +403,7 @@ describe("runMessageAction plugin dispatch", () => {
           message: "hello from broadcast",
         },
         gateway: {
+          connectionTarget: "local",
           clientName: "cli",
           mode: "cli",
         },
@@ -580,6 +582,7 @@ describe("runMessageAction plugin dispatch", () => {
           message: "hello from broadcast",
         },
         gateway: {
+          connectionTarget: "local",
           clientName: "cli",
           mode: "cli",
         },

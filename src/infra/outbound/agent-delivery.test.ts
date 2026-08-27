@@ -82,7 +82,8 @@ vi.mock("./channel-resolution.js", () => ({
   resolveOutboundChannelPlugin: mocks.resolveOutboundChannelPlugin,
 }));
 
-vi.mock("./outbound-session.js", () => ({
+vi.mock("./outbound-session.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./outbound-session.js")>()),
   resolveOutboundSessionRoute: mocks.resolveOutboundSessionRoute,
 }));
 
@@ -529,6 +530,32 @@ describe("agent delivery helpers", () => {
     });
 
     expect(result.sessionKey).toBe("agent:main:provider:direct:user-1");
+  });
+
+  it("preserves the shipped cross-agent explicit delivery route", async () => {
+    mocks.resolveOutboundChannelPlugin.mockReturnValue({
+      config: { listAccountIds: () => [] },
+      messaging: { resolveOutboundSessionRoute: vi.fn() },
+    });
+    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
+      sessionKey: "agent:other:provider:direct:user-1",
+      baseSessionKey: "agent:other:provider:direct:user-1",
+      recipientSessionExact: true,
+      peer: { kind: "direct", id: "user-1" },
+      chatType: "direct",
+      from: "provider:user-1",
+      to: "user-1",
+    });
+
+    const result = await resolveAgentExplicitRecipientSession({
+      cfg: {} as OpenClawConfig,
+      agentId: "main",
+      channel: "provider",
+      to: "user-1",
+    });
+
+    expect(result.sessionKey).toBe("agent:other:provider:direct:user-1");
+    expect(result.error).toBeUndefined();
   });
 
   it("accepts stable outbound-only identities that stay isolated from main", async () => {

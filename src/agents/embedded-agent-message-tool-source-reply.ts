@@ -4,8 +4,8 @@ import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.ty
 import {
   pluginBroadcastHasDelivery,
   pluginEnvelopeHas,
-  readEmbeddedMessageDeliveryFact,
-} from "./embedded-agent-message-delivery.js";
+} from "../infra/outbound/plugin-message-delivery.js";
+import { readEmbeddedMessageDeliveryFact } from "./embedded-agent-message-delivery.js";
 import {
   isMessageToolConversationCreateActionName,
   isMessageToolSendActionName,

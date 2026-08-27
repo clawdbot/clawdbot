@@ -16,6 +16,9 @@ export function buildOutboundBaseSessionKey(params: {
   accountId?: string | null;
   peer: RoutePeer;
 }): string {
+  if (params.cfg.session?.scope === "global") {
+    return "global";
+  }
   return buildAgentSessionKey({
     agentId: params.agentId,
     mainKey: params.cfg.session?.mainKey,

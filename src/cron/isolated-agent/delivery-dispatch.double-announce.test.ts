@@ -29,6 +29,7 @@ const {
   commitBackgroundResultToSessionMock,
   countActiveDescendantRunsMock,
   deliverOutboundPayloadsMock,
+  enqueueSystemEventMock,
   ensureOutboundSessionEntryMock,
   loadCronSessionEntryLatestMock,
   maybeApplyTtsToPayloadMock,
@@ -46,6 +47,7 @@ const {
   }),
   countActiveDescendantRunsMock: vi.fn().mockReturnValue(0),
   deliverOutboundPayloadsMock: vi.fn().mockResolvedValue([{ ok: true }]),
+  enqueueSystemEventMock: vi.fn(),
   ensureOutboundSessionEntryMock: vi.fn().mockResolvedValue(undefined),
   loadCronSessionEntryLatestMock: vi.fn(),
   maybeApplyTtsToPayloadMock: vi.fn(async (params: { payload: unknown }) => params.payload),
@@ -158,7 +160,8 @@ vi.mock("../../logger.js", () => ({
 }));
 
 vi.mock("../../infra/system-events.js", () => ({
-  enqueueSystemEvent: vi.fn(),
+  enqueueSystemEvent: enqueueSystemEventMock,
+  enqueueSystemEventDeferredDuringHeartbeat: enqueueSystemEventMock,
 }));
 
 vi.mock("../../tts/tts.runtime.js", () => ({
@@ -904,9 +907,56 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       "A scheduled automation delivered this message to this channel:\nThreaded cron update.",
       {
         sessionKey: "agent:main:telegram:direct:123456:thread:42",
-        contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:42",
+        contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:42:message-tool:0",
       },
     );
+  });
+
+  it("preserves repeated complete message-tool deliveries with identical content", async () => {
+    const systemEvents = await vi.importActual<typeof import("../../infra/system-events.js")>(
+      "../../infra/system-events.js",
+    );
+    systemEvents.resetSystemEventsForTest();
+    vi.mocked(enqueueSystemEvent).mockImplementation(systemEvents.enqueueSystemEvent);
+    mockResolvedOutboundRoute();
+    const target = {
+      tool: "message",
+      provider: "telegram",
+      to: "123456",
+      text: "Retried cron update.",
+    };
+    try {
+      await queueCronMessageToolDeliveryAwareness({
+        ...makeBaseParams({ runStartedAt: 1_000 }),
+        resolvedDelivery: makeResolvedDelivery(),
+        sourceDeliveryOutcome: {
+          visibleDeliveries: [
+            { via: "message_tool", target, verifiedTarget: true },
+            { via: "message_tool", target, verifiedTarget: true },
+          ],
+          verifiedMessageToolDelivery: true,
+          satisfiesSourceDelivery: true,
+          unverifiedMessageToolDelivery: false,
+        },
+      });
+
+      expect(
+        systemEvents
+          .peekSystemEventEntries("agent:main:telegram:direct:123456")
+          .map(({ text, contextKey }) => ({ text, contextKey })),
+      ).toEqual([
+        {
+          text: "A scheduled automation delivered this message to this channel:\nRetried cron update.",
+          contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456::message-tool:0",
+        },
+        {
+          text: "A scheduled automation delivered this message to this channel:\nRetried cron update.",
+          contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456::message-tool:1",
+        },
+      ]);
+    } finally {
+      systemEvents.resetSystemEventsForTest();
+    }
   });
 
   it("defers same-source message-tool awareness until requested", async () => {
@@ -948,7 +998,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       "A scheduled automation delivered this message to this channel:\nCurrent-session completion.",
       {
         sessionKey: "agent:main:webchat:direct:owner",
-        contextKey: "cron-direct-delivery:v1:cron:test-job:1000:webchat::owner:",
+        contextKey: "cron-direct-delivery:v1:cron:test-job:1000:webchat::owner::message-tool:0",
       },
     );
   });
@@ -982,7 +1032,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       "A scheduled automation delivered this message to this channel:\nMain-scoped cron update.",
       {
         sessionKey: "agent:main",
-        contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
+        contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456::message-tool:0",
       },
     );
   });
@@ -1043,14 +1093,15 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       "A scheduled automation delivered this message to this channel:\nShared cron update.",
       {
         sessionKey: "agent:main:telegram:direct:123456",
-        contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
+        contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456::message-tool:0",
       },
     );
     expect(enqueueSystemEvent).toHaveBeenCalledWith(
       "A scheduled automation delivered this message to this channel:\nShared cron update.",
       {
         sessionKey: "agent:main:openclaw-weixin:direct:123456",
-        contextKey: "cron-direct-delivery:v1:cron:test-job:1000:openclaw-weixin::123456:",
+        contextKey:
+          "cron-direct-delivery:v1:cron:test-job:1000:openclaw-weixin::123456::message-tool:1",
       },
     );
   });
@@ -1096,7 +1147,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       "A scheduled automation delivered this message to this channel:\nSession-targeted off-plan update.",
       {
         sessionKey: "agent:main:telegram:direct:123456",
-        contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
+        contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456::message-tool:0",
       },
     );
   });
@@ -1130,7 +1181,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       "A scheduled automation delivered this message to this channel:\nweather-map.png",
       {
         sessionKey: "agent:main:telegram:direct:123456",
-        contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
+        contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456::message-tool:0",
       },
     );
   });
@@ -1181,7 +1232,8 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       "A scheduled automation delivered this message to this channel:\n386502",
       {
         sessionKey: "agent:main:openclaw-weixin:direct:user-123",
-        contextKey: "cron-direct-delivery:v1:cron:test-job:1000:openclaw-weixin::user-123:",
+        contextKey:
+          "cron-direct-delivery:v1:cron:test-job:1000:openclaw-weixin::user-123::message-tool:0",
       },
     );
   });
@@ -1806,6 +1858,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
     expect(ensureOutboundSessionEntry).toHaveBeenCalledWith({
       cfg: params.cfgWithAgentDefaults,
+      agentId: "main",
       channel: "telegram",
       accountId: undefined,
       route: expect.objectContaining({
@@ -1846,6 +1899,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
     expect(ensureOutboundSessionEntry).toHaveBeenCalledWith({
       cfg: params.cfgWithAgentDefaults,
+      agentId: "main",
       channel: "telegram",
       accountId: undefined,
       route: expect.objectContaining({
@@ -2608,7 +2662,9 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(ensureOutboundSessionEntry).toHaveBeenCalledTimes(1);
     expect(ensureOutboundSessionEntry).toHaveBeenCalledWith({
       cfg: expect.anything(),
+      agentId: "main",
       channel: "telegram",
+      accountId: undefined,
       route: expect.objectContaining({ to: "telegram:123456", from: "telegram:123456" }),
     });
   });
@@ -3027,7 +3083,9 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(ensureOutboundSessionEntry).toHaveBeenCalledTimes(1);
     expect(ensureOutboundSessionEntry).toHaveBeenCalledWith({
       cfg: expect.anything(),
+      agentId: "main",
       channel: "telegram",
+      accountId: undefined,
       route: expect.objectContaining({ to: "telegram:123456", from: "telegram:123456" }),
     });
   });
@@ -3068,7 +3126,9 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(ensureOutboundSessionEntry).toHaveBeenCalledTimes(1);
     expect(ensureOutboundSessionEntry).toHaveBeenCalledWith({
       cfg: expect.anything(),
+      agentId: "main",
       channel: "telegram",
+      accountId: undefined,
       route: expect.objectContaining({ to: "telegram:123456", from: "telegram:123456" }),
     });
   });
@@ -3129,7 +3189,9 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(ensureOutboundSessionEntry).toHaveBeenCalledTimes(1);
     expect(ensureOutboundSessionEntry).toHaveBeenCalledWith({
       cfg: expect.anything(),
+      agentId: "main",
       channel: "telegram",
+      accountId: undefined,
       route: expect.objectContaining({ to: "telegram:123456", from: "telegram:123456" }),
     });
   });
@@ -3530,6 +3592,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
     expect(ensureOutboundSessionEntry).toHaveBeenCalledWith({
       cfg: params.cfgWithAgentDefaults,
+      agentId: "main",
       channel: "whatsapp",
       accountId: undefined,
       route: expect.objectContaining({

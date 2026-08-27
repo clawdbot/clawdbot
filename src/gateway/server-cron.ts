@@ -863,6 +863,7 @@ export function buildGatewayCronService(params: {
       const { runtimeConfig, wake } = resolveCronHeartbeatWake(opts, true);
       return await runHeartbeatOnce({
         cfg: runtimeConfig,
+        readCurrentConfig: getRuntimeConfig,
         ...wake,
         // Preserve ownership across this adapter so the wake does not self-block on
         // the cron run that is awaiting it.

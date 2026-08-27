@@ -36,6 +36,7 @@ import {
 } from "./heartbeat-wake.js";
 import { selectAgentSystemEvents } from "./system-event-ownership.js";
 import {
+  isSystemEventDeferredDuringHeartbeat,
   peekSystemEventEntries,
   resolveSystemEventDeliveryContext,
   type SystemEvent,
@@ -235,7 +236,9 @@ export function resolveHeartbeatRunPrompt(params: {
   heartbeatScratchContent?: string;
   useHeartbeatResponseTool: boolean;
 }): HeartbeatPromptResolution {
-  const pendingEventEntries = params.preflight.pendingEventEntries;
+  const pendingEventEntries = selectHeartbeatConsumableSystemEvents(
+    params.preflight.pendingEventEntries,
+  );
   const cronEvents = pendingEventEntries
     .filter(
       (event) =>
@@ -307,14 +310,17 @@ export function selectSystemEventsConsumedByHeartbeat(params: {
   hasCronEvents: boolean;
 }): SystemEvent[] {
   const { preflight } = params;
-  if (!preflight.shouldInspectPendingEvents || preflight.pendingEventEntries.length === 0) {
+  // A target-session delivery notice exists specifically to bridge background
+  // output into a later non-heartbeat turn; another heartbeat cannot consume it.
+  const consumableEvents = selectHeartbeatConsumableSystemEvents(preflight.pendingEventEntries);
+  if (!preflight.shouldInspectPendingEvents || consumableEvents.length === 0) {
     return [];
   }
   if (params.hasExecCompletion) {
-    return preflight.pendingEventEntries.filter((event) => isExecCompletionEvent(event.text));
+    return consumableEvents.filter((event) => isExecCompletionEvent(event.text));
   }
   if (params.hasCronEvents) {
-    return preflight.pendingEventEntries.filter(
+    return consumableEvents.filter(
       (event) =>
         (preflight.isCronWake || event.contextKey?.startsWith("cron:")) &&
         isCronSystemEvent(event.text),
@@ -323,5 +329,11 @@ export function selectSystemEventsConsumedByHeartbeat(params: {
   if (preflight.isExecEventWake && !params.hasExecCompletion) {
     return [];
   }
-  return preflight.pendingEventEntries;
+  return consumableEvents;
+}
+
+export function selectHeartbeatConsumableSystemEvents(
+  events: readonly SystemEvent[],
+): SystemEvent[] {
+  return events.filter((event) => !isSystemEventDeferredDuringHeartbeat(event));
 }

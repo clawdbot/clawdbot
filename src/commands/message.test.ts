@@ -31,6 +31,7 @@ type RunMessageActionParams = {
   gateway?: {
     clientName?: string;
     mode?: string;
+    connectionTarget?: "local" | "remote";
   };
 };
 
@@ -137,9 +138,10 @@ const runtime: RuntimeEnv = {
 beforeEach(() => {
   resetPluginRuntimeStateForTest();
   setActivePluginRegistry(createTestRegistry([]));
-  envSnapshot = captureEnv(["TELEGRAM_BOT_TOKEN", "DISCORD_BOT_TOKEN"]);
+  envSnapshot = captureEnv(["TELEGRAM_BOT_TOKEN", "DISCORD_BOT_TOKEN", "OPENCLAW_GATEWAY_URL"]);
   process.env.TELEGRAM_BOT_TOKEN = "";
   process.env.DISCORD_BOT_TOKEN = "";
+  delete process.env.OPENCLAW_GATEWAY_URL;
   testConfig = {};
   runMessageActionMock.mockClear();
   resolveCommandConfigWithSecrets.mockClear();
@@ -430,6 +432,7 @@ describe("messageCommand", () => {
     expect(actionCall.conversationReadOrigin).toBe("direct-operator");
     expect(actionCall.gateway?.clientName).toBe("cli");
     expect(actionCall.gateway?.mode).toBe("cli");
+    expect(actionCall.gateway?.connectionTarget).toBe("local");
     expect(actionCall.cfg).not.toBe(rawConfig);
     const configResolutionCall = resolveCommandConfigWithSecrets.mock.calls[0]?.[0] as {
       commandName?: string;
@@ -449,6 +452,27 @@ describe("messageCommand", () => {
         (id) => !id.startsWith("channels.telegram."),
       ),
     ).toStrictEqual([]);
+  });
+
+  it("marks a configured remote Gateway as the route-state owner", async () => {
+    testConfig = {
+      gateway: {
+        mode: "remote",
+        remote: { url: "wss://gateway.example.test" },
+      },
+    };
+
+    await runMessageCommand();
+
+    expect(readOnlyMessageActionCall().gateway?.connectionTarget).toBe("remote");
+  });
+
+  it("treats an ambient Gateway URL override as remote state ownership", async () => {
+    process.env.OPENCLAW_GATEWAY_URL = "ws://127.0.0.1:18789";
+
+    await runMessageCommand();
+
+    expect(readOnlyMessageActionCall().gateway?.connectionTarget).toBe("remote");
   });
 
   it("keeps the retained legacy owner after config load strips the default marker", async () => {

@@ -34,16 +34,15 @@ function resolveMatrixDmSessionScope(params: {
   );
 }
 
-function resolveMatrixCurrentDmRoomId(params: {
+function resolveMatrixStoredDmRoomId(params: {
   cfg: ChannelOutboundSessionRouteParams["cfg"];
   agentId: string;
   accountId: string;
-  currentSessionKey?: string;
+  sessionKey?: string;
   targetUserId: string;
 }): string | undefined {
   const sessionKey =
-    parseThreadSessionSuffix(params.currentSessionKey).baseSessionKey ??
-    params.currentSessionKey?.trim();
+    parseThreadSessionSuffix(params.sessionKey).baseSessionKey ?? params.sessionKey?.trim();
   if (!sessionKey) {
     return undefined;
   }
@@ -57,6 +56,9 @@ function resolveMatrixCurrentDmRoomId(params: {
     });
     const currentSession = resolveMatrixStoredSessionMeta(existing);
     if (!currentSession) {
+      return undefined;
+    }
+    if (currentSession.channel && currentSession.channel !== "matrix") {
       return undefined;
     }
     if (currentSession.accountId && currentSession.accountId !== params.accountId) {
@@ -85,11 +87,11 @@ export function resolveMatrixOutboundSessionRoute(params: ChannelOutboundSession
   });
   const roomScopedDmId =
     target.kind === "user" && dmSessionScope === "per-room"
-      ? resolveMatrixCurrentDmRoomId({
+      ? resolveMatrixStoredDmRoomId({
           cfg: params.cfg,
           agentId: params.agentId,
           accountId: effectiveAccountId,
-          currentSessionKey: params.currentSessionKey,
+          sessionKey: params.currentSessionKey,
           targetUserId: target.id,
         })
       : undefined;
@@ -115,13 +117,24 @@ export function resolveMatrixOutboundSessionRoute(params: ChannelOutboundSession
         : dmSessionScope === "per-user"
           ? isMatrixQualifiedUserId(target.id)
           : roomScopedDmId !== undefined,
+    nativeChannelId: roomScopedDmId,
     peer,
     chatType,
     from,
     to,
   });
+  const nativeDmRoomId =
+    target.kind === "user" && dmSessionScope === "per-user"
+      ? resolveMatrixStoredDmRoomId({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          accountId: effectiveAccountId,
+          sessionKey: baseRoute.baseSessionKey,
+          targetUserId: target.id,
+        })
+      : roomScopedDmId;
   return buildThreadAwareOutboundSessionRoute({
-    route: baseRoute,
+    route: nativeDmRoomId ? { ...baseRoute, nativeChannelId: nativeDmRoomId } : baseRoute,
     replyToId: params.replyToId,
     threadId: params.threadId,
     currentSessionKey: params.currentSessionKey,

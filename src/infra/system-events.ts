@@ -8,7 +8,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
-import { resolveGlobalMap } from "../shared/global-singleton.js";
+import { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   mergeDeliveryContext,
   normalizeDeliveryContext,
@@ -35,6 +35,8 @@ export type SystemEvent = {
   deliveryContext?: DeliveryContext;
 };
 
+type SystemEventConsumption = "defer-during-heartbeat";
+
 const MAX_EVENTS = 20;
 
 type SessionQueue = {
@@ -43,8 +45,13 @@ type SessionQueue = {
 };
 
 const SYSTEM_EVENT_QUEUES_KEY = Symbol.for("openclaw.systemEvents.queues");
+const SYSTEM_EVENT_CONSUMPTION_KEY = Symbol.for("openclaw.systemEvents.consumption");
 
 const queues = resolveGlobalMap<string, SessionQueue>(SYSTEM_EVENT_QUEUES_KEY, "close-and-restart");
+const eventConsumption = resolveGlobalSingleton(
+  SYSTEM_EVENT_CONSUMPTION_KEY,
+  () => new WeakMap<SystemEvent, SystemEventConsumption>(),
+);
 
 type SystemEventOptions = {
   sessionKey: string;
@@ -92,7 +99,15 @@ function cloneSystemEvent(event: SystemEvent): SystemEvent {
     ...(event.deliveryContext ? { deliveryContext: { ...event.deliveryContext } } : {}),
   };
   cloneSystemEventOwner(event, clone);
+  const consumption = eventConsumption.get(event);
+  if (consumption) {
+    eventConsumption.set(clone, consumption);
+  }
   return clone;
+}
+
+export function isSystemEventDeferredDuringHeartbeat(event: SystemEvent): boolean {
+  return eventConsumption.get(event) === "defer-during-heartbeat";
 }
 
 export function isSystemEventContextChanged(
@@ -110,8 +125,9 @@ function findDuplicateInQueue(
   contextKey: string | null,
   deliveryContext: DeliveryContext | undefined,
   ownerAgentId: string | null,
+  consumption: SystemEventConsumption | undefined,
 ): boolean {
-  const incoming = { text, contextKey, deliveryContext, ownerAgentId };
+  const incoming = { text, contextKey, deliveryContext, ownerAgentId, consumption };
   if (contextKey === null) {
     const last = queue[queue.length - 1];
     return last ? isDuplicateSystemEvent(last, incoming) : false;
@@ -130,9 +146,10 @@ function enqueueOwnedSystemEventEntry(
   text: string,
   options: SystemEventOptions,
   receiptOptions?: ReceiptOptions,
+  consumption?: SystemEventConsumption,
 ): SystemEvent | null {
   if (options.replace) {
-    return replaceSystemEventEntry(text, options);
+    return replaceSystemEventEntry(text, options, consumption);
   }
   const key = requireSessionKey(options.sessionKey);
   const entry = getOrCreateSessionQueue(key);
@@ -151,6 +168,7 @@ function enqueueOwnedSystemEventEntry(
       normalizedContextKey,
       normalizedDeliveryContext,
       normalizedOwnerAgentId,
+      consumption,
     )
   ) {
     return null;
@@ -166,6 +184,9 @@ function enqueueOwnedSystemEventEntry(
     deliveryContext: normalizedDeliveryContext,
   };
   recordSystemEventOwner(event, normalizedOwnerAgentId);
+  if (consumption) {
+    eventConsumption.set(event, consumption);
+  }
   entry.queue.push(event);
   if (entry.queue.length > MAX_EVENTS) {
     entry.queue.shift();
@@ -175,6 +196,14 @@ function enqueueOwnedSystemEventEntry(
 
 export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
   return enqueueSystemEventEntry(text, options) !== null;
+}
+
+/** Internal delivery policy: heartbeat inspection must leave this occurrence queued. */
+export function enqueueSystemEventDeferredDuringHeartbeat(
+  text: string,
+  options: SystemEventOptions,
+): boolean {
+  return enqueueOwnedSystemEventEntry(text, options, undefined, "defer-during-heartbeat") !== null;
 }
 
 /** Enqueues one occurrence and returns one-use removal ownership for its UUID. */
@@ -214,7 +243,11 @@ function areDeliveryContextsEqual(left?: DeliveryContext, right?: DeliveryContex
   return channelRouteDedupeKey(left) === channelRouteDedupeKey(right);
 }
 
-function replaceSystemEventEntry(text: string, options: SystemEventOptions): SystemEvent | null {
+function replaceSystemEventEntry(
+  text: string,
+  options: SystemEventOptions,
+  consumption?: SystemEventConsumption,
+): SystemEvent | null {
   const key = requireSessionKey(options.sessionKey);
   const entry = getOrCreateSessionQueue(key);
   const cleaned = text.trim();
@@ -233,7 +266,11 @@ function replaceSystemEventEntry(text: string, options: SystemEventOptions): Sys
       resolveSystemEventOwnerAgentId(event) === normalizedOwnerAgentId &&
       areDeliveryContextsEqual(event.deliveryContext, normalizedDeliveryContext),
   );
-  if (matching.length === 1 && matching[0]?.text === cleaned) {
+  if (
+    matching.length === 1 &&
+    matching[0]?.text === cleaned &&
+    eventConsumption.get(expectDefined(matching[0], "matching system event")) === consumption
+  ) {
     return null;
   }
 
@@ -253,6 +290,9 @@ function replaceSystemEventEntry(text: string, options: SystemEventOptions): Sys
     deliveryContext: normalizedDeliveryContext,
   };
   recordSystemEventOwner(event, normalizedOwnerAgentId);
+  if (consumption) {
+    eventConsumption.set(event, consumption);
+  }
   entry.queue.push(event);
   if (entry.queue.length > MAX_EVENTS) {
     entry.queue.shift();
@@ -265,12 +305,14 @@ function isDuplicateSystemEvent(
   existing: SystemEvent,
   incoming: Pick<SystemEvent, "text" | "contextKey" | "deliveryContext"> & {
     ownerAgentId: string | null;
+    consumption?: SystemEventConsumption;
   },
 ): boolean {
   return (
     existing.text === incoming.text &&
     (existing.contextKey ?? null) === (incoming.contextKey ?? null) &&
     resolveSystemEventOwnerAgentId(existing) === incoming.ownerAgentId &&
+    eventConsumption.get(existing) === incoming.consumption &&
     areDeliveryContextsEqual(existing.deliveryContext, incoming.deliveryContext)
   );
 }
@@ -281,6 +323,7 @@ function areLegacySystemEventsEqual(left: SystemEvent, right: SystemEvent): bool
     left.ts === right.ts &&
     (left.contextKey ?? null) === (right.contextKey ?? null) &&
     resolveSystemEventOwnerAgentId(left) === resolveSystemEventOwnerAgentId(right) &&
+    eventConsumption.get(left) === eventConsumption.get(right) &&
     areDeliveryContextsEqual(left.deliveryContext, right.deliveryContext)
   );
 }

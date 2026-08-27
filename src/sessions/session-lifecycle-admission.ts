@@ -33,6 +33,8 @@ type SessionLifecycleAdmissionState = {
   activeAdmissions: Map<string, Set<SessionWorkAdmission>>;
   activeMutations: Map<string, number>;
   activeMutationRuns?: Set<object>;
+  queuedAdmissionFenceMutations?: Map<string, number>;
+  queuedAdmissionFenceMutationRuns?: Set<object>;
   activeMutationKinds: Map<string, Map<SessionLifecycleMutationKind, number>>;
   idleWaiters: Map<string, Set<() => void>>;
   currentAdmissions: AsyncLocalStorage<ReadonlySet<SessionWorkAdmission>>;
@@ -47,6 +49,8 @@ type SessionLifecycleMutationTarget = {
 
 type SessionLifecycleMutationParams<T> = {
   kind?: SessionLifecycleMutationKind;
+  /** Keep later work admissions fenced while this mutation waits behind a predecessor. */
+  reserveAdmissionFenceWhileQueued?: boolean;
   prepare?: () => Promise<void>;
   finalize?: () => Promise<void>;
   run: () => Promise<T>;
@@ -63,6 +67,8 @@ const SESSION_LIFECYCLE_ADMISSION_STATE = resolveGlobalSingleton(
     activeAdmissions: new Map(),
     activeMutations: new Map(),
     activeMutationRuns: new Set(),
+    queuedAdmissionFenceMutations: new Map(),
+    queuedAdmissionFenceMutationRuns: new Set(),
     activeMutationKinds: new Map(),
     idleWaiters: new Map(),
     currentAdmissions: new AsyncLocalStorage(),
@@ -80,6 +86,10 @@ const {
 // Older runtime chunks can create the shared state without this newer index.
 const ACTIVE_SESSION_LIFECYCLE_MUTATION_RUNS =
   (SESSION_LIFECYCLE_ADMISSION_STATE.activeMutationRuns ??= new Set());
+const QUEUED_SESSION_LIFECYCLE_ADMISSION_FENCES =
+  (SESSION_LIFECYCLE_ADMISSION_STATE.queuedAdmissionFenceMutations ??= new Map());
+const QUEUED_SESSION_LIFECYCLE_ADMISSION_FENCE_RUNS =
+  (SESSION_LIFECYCLE_ADMISSION_STATE.queuedAdmissionFenceMutationRuns ??= new Set());
 
 async function runWithSessionIdentityLocks<T>(
   identities: readonly string[],
@@ -102,7 +112,11 @@ async function runWithSessionIdentityLocks<T>(
 }
 
 function hasActiveSessionLifecycleMutation(identities: readonly string[]): boolean {
-  return identities.some((identity) => (ACTIVE_SESSION_LIFECYCLE_MUTATIONS.get(identity) ?? 0) > 0);
+  return identities.some(
+    (identity) =>
+      (ACTIVE_SESSION_LIFECYCLE_MUTATIONS.get(identity) ?? 0) > 0 ||
+      (QUEUED_SESSION_LIFECYCLE_ADMISSION_FENCES.get(identity) ?? 0) > 0,
+  );
 }
 
 function hasOnlyActiveSessionLifecycleMutationKind(
@@ -112,10 +126,14 @@ function hasOnlyActiveSessionLifecycleMutationKind(
   let foundActiveMutation = false;
   for (const identity of identities) {
     const activeCount = ACTIVE_SESSION_LIFECYCLE_MUTATIONS.get(identity) ?? 0;
-    if (activeCount === 0) {
+    const queuedFenceCount = QUEUED_SESSION_LIFECYCLE_ADMISSION_FENCES.get(identity) ?? 0;
+    if (activeCount === 0 && queuedFenceCount === 0) {
       continue;
     }
     foundActiveMutation = true;
+    if (queuedFenceCount > 0) {
+      return false;
+    }
     if ((ACTIVE_SESSION_LIFECYCLE_MUTATION_KINDS.get(identity)?.get(kind) ?? 0) !== activeCount) {
       return false;
     }
@@ -127,8 +145,8 @@ async function waitForNormalizedSessionLifecycleMutationIdle(
   identities: readonly string[],
   signal?: AbortSignal,
 ): Promise<void> {
-  const activeIdentities = identities.filter(
-    (identity) => (ACTIVE_SESSION_LIFECYCLE_MUTATIONS.get(identity) ?? 0) > 0,
+  const activeIdentities = identities.filter((identity) =>
+    hasActiveSessionLifecycleMutation([identity]),
   );
   if (activeIdentities.length === 0) {
     return;
@@ -212,6 +230,39 @@ export async function runExclusiveSessionLifecycleMutation<T>(
   signal?.throwIfAborted();
   const callerAdmissions = new Set(CURRENT_SESSION_WORK_ADMISSIONS.getStore());
   const mutationRun = {};
+  const reserveQueuedFence = params.reserveAdmissionFenceWhileQueued === true;
+  if (reserveQueuedFence) {
+    QUEUED_SESSION_LIFECYCLE_ADMISSION_FENCE_RUNS.add(mutationRun);
+    for (const identity of identities) {
+      QUEUED_SESSION_LIFECYCLE_ADMISSION_FENCES.set(
+        identity,
+        (QUEUED_SESSION_LIFECYCLE_ADMISSION_FENCES.get(identity) ?? 0) + 1,
+      );
+    }
+  }
+  let queuedFenceReleased = false;
+  const releaseQueuedFence = () => {
+    if (!reserveQueuedFence || queuedFenceReleased) {
+      return;
+    }
+    queuedFenceReleased = true;
+    QUEUED_SESSION_LIFECYCLE_ADMISSION_FENCE_RUNS.delete(mutationRun);
+    for (const identity of identities) {
+      const remaining = (QUEUED_SESSION_LIFECYCLE_ADMISSION_FENCES.get(identity) ?? 1) - 1;
+      if (remaining > 0) {
+        QUEUED_SESSION_LIFECYCLE_ADMISSION_FENCES.set(identity, remaining);
+        continue;
+      }
+      QUEUED_SESSION_LIFECYCLE_ADMISSION_FENCES.delete(identity);
+      if ((ACTIVE_SESSION_LIFECYCLE_MUTATIONS.get(identity) ?? 0) === 0) {
+        const waiters = SESSION_LIFECYCLE_IDLE_WAITERS.get(identity);
+        SESSION_LIFECYCLE_IDLE_WAITERS.delete(identity);
+        for (const resolve of waiters ?? []) {
+          resolve();
+        }
+      }
+    }
+  };
   let mutationActivated = false;
   let removeAbortListener = () => {};
   const mutation = runWithSessionIdentityLocks(
@@ -267,10 +318,12 @@ export async function runExclusiveSessionLifecycleMutation<T>(
                   continue;
                 }
                 ACTIVE_SESSION_LIFECYCLE_MUTATIONS.delete(identity);
-                const waiters = SESSION_LIFECYCLE_IDLE_WAITERS.get(identity);
-                SESSION_LIFECYCLE_IDLE_WAITERS.delete(identity);
-                for (const resolve of waiters ?? []) {
-                  resolve();
+                if ((QUEUED_SESSION_LIFECYCLE_ADMISSION_FENCES.get(identity) ?? 0) === 0) {
+                  const waiters = SESSION_LIFECYCLE_IDLE_WAITERS.get(identity);
+                  SESSION_LIFECYCLE_IDLE_WAITERS.delete(identity);
+                  for (const resolve of waiters ?? []) {
+                    resolve();
+                  }
                 }
               }
               ACTIVE_SESSION_LIFECYCLE_MUTATION_RUNS.delete(mutationRun);
@@ -280,17 +333,19 @@ export async function runExclusiveSessionLifecycleMutation<T>(
       }),
     "mutation",
   );
+  const fencedMutation = reserveQueuedFence ? mutation.finally(releaseQueuedFence) : mutation;
   if (!signal) {
-    return await mutation;
+    return await fencedMutation;
   }
   if (mutationActivated) {
-    return await mutation;
+    return await fencedMutation;
   }
   const aborted = new Promise<never>((_, reject) => {
     const onAbort = () => {
       if (mutationActivated) {
         return;
       }
+      releaseQueuedFence();
       try {
         signal.throwIfAborted();
       } catch (error) {
@@ -304,7 +359,7 @@ export async function runExclusiveSessionLifecycleMutation<T>(
     }
   });
   try {
-    return await Promise.race([mutation, aborted]);
+    return await Promise.race([fencedMutation, aborted]);
   } finally {
     removeAbortListener();
   }
@@ -428,8 +483,12 @@ export function getActiveSessionWorkAdmissionCount(): number {
 
 /** Unique active lifecycle mutations; one run can be indexed under several identities. */
 export function getActiveSessionLifecycleMutationCount(): number {
-  if (ACTIVE_SESSION_LIFECYCLE_MUTATION_RUNS.size > 0) {
-    return ACTIVE_SESSION_LIFECYCLE_MUTATION_RUNS.size;
+  const runs = new Set([
+    ...ACTIVE_SESSION_LIFECYCLE_MUTATION_RUNS,
+    ...QUEUED_SESSION_LIFECYCLE_ADMISSION_FENCE_RUNS,
+  ]);
+  if (runs.size > 0) {
+    return runs.size;
   }
   // A mutation from an older loaded chunk may only populate the identity index.
   return ACTIVE_SESSION_LIFECYCLE_MUTATIONS.size > 0 ? 1 : 0;

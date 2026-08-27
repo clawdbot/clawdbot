@@ -260,6 +260,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
         requireExplicitTarget: options?.requireExplicitMessageTarget,
         sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
         sourceReplyOnly: options?.sourceReplyOnly,
+        targetSessionProjectionCoordinator: options?.targetSessionProjectionCoordinator,
         inboundEventKind: options?.inboundEventKind,
         requesterSenderId: options?.requesterSenderId ?? undefined,
         senderIsOwner: options?.senderIsOwner,

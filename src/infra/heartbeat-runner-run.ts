@@ -29,6 +29,7 @@ import {
 } from "./heartbeat-wake.js";
 import { resolveAgentOutboundIdentity } from "./outbound/identity.js";
 import { buildOutboundSessionContext } from "./outbound/session-context.js";
+import { projectHeartbeatMessageToolDeliveries } from "./outbound/target-session-projection.js";
 
 const log = heartbeatLog;
 
@@ -140,9 +141,16 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
     }
   };
 
+  let messageToolProjection: ReturnType<typeof projectHeartbeatMessageToolDeliveries> | undefined;
   try {
     await heartbeatTyping?.onReplyStart();
     const agentRun = await invokeHeartbeatAgentRun(opts, wake, prepared);
+    messageToolProjection = projectHeartbeatMessageToolDeliveries({
+      coordinator: agentRun.targetSessionProjectionCoordinator,
+    });
+    if (agentRun.kind === "errored") {
+      throw agentRun.error;
+    }
     if (agentRun.kind !== "completed") {
       const reason =
         agentRun.kind === "busy"
@@ -172,6 +180,7 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
       maybeSendHeartbeatOk,
       outboundSession,
       outboundIdentity,
+      targetProjectionCoordinator: agentRun.targetSessionProjectionCoordinator,
     });
   } catch (err) {
     const reason = formatErrorMessage(err);
@@ -186,6 +195,15 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
     log.error(`heartbeat failed: ${reason}`, { error: reason });
     return { status: "failed", reason };
   } finally {
-    heartbeatTyping?.onCleanup?.();
+    try {
+      const projection = await messageToolProjection;
+      if (projection && projection.warnings > 0) {
+        log.warn("heartbeat: message-tool target projection completed with warnings", projection);
+      } else if (projection && projection.skipped > 0) {
+        log.debug("heartbeat: skipped one or more message-tool target projections", projection);
+      }
+    } finally {
+      heartbeatTyping?.onCleanup?.();
+    }
   }
 }

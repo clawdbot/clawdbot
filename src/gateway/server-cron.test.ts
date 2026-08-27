@@ -2609,6 +2609,14 @@ describe("buildGatewayCronService", () => {
       );
       expect(heartbeatRun.agentId).toBe("main");
       expect(heartbeatRun.sessionKey).toBe("global");
+      const reloadedConfig = {
+        ...cfg,
+        messages: { visibleReplies: "message_tool" },
+      } as OpenClawConfig;
+      loadConfigMock.mockReturnValue(reloadedConfig);
+      expect((heartbeatRun.readCurrentConfig as (() => OpenClawConfig) | undefined)?.()).toBe(
+        reloadedConfig,
+      );
       // The adapter rebuilds this object field-by-field; preserve the optional owner.
       expect(heartbeatRun.owningCronJobMarker).toMatchObject({ jobId: job.id });
       expect(heartbeatRun.heartbeat).toEqual({

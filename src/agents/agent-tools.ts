@@ -18,6 +18,7 @@ import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.j
 import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import { applyExecPolicyLayer } from "../infra/exec-policy.js";
 import { mergeGatewayAgentCliPath } from "../infra/openclaw-cli-shim.js";
+import type { TargetSessionProjectionCoordinator } from "../infra/outbound/target-session-projection.types.js";
 import { logWarn } from "../logger.js";
 import type {
   PluginHookChannelContext,
@@ -215,6 +216,7 @@ type OpenClawCodingToolsOptions = {
   trace?: DiagnosticTraceContext;
   /** What initiated this run (for trigger-specific tool restrictions). */
   trigger?: string;
+  targetSessionProjectionCoordinator?: TargetSessionProjectionCoordinator;
   /** Stable cron job identifier populated for cron-triggered runs. */
   jobId?: string;
   /** Relative workspace path that memory-triggered writes may append to. */
@@ -867,6 +869,10 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             swarmCollector: options?.swarmCollector,
             swarmOutputSchema: options?.swarmOutputSchema,
             enableHeartbeatTool,
+            targetSessionProjectionCoordinator:
+              options?.trigger === "heartbeat"
+                ? options.targetSessionProjectionCoordinator
+                : undefined,
             disablePluginTools: !includePluginTools,
             wrapBeforeToolCallHook: false,
             ...(cronSelfRemoveOnlyJobId ? { cronSelfRemoveOnlyJobId } : {}),

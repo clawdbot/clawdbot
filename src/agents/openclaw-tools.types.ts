@@ -7,6 +7,7 @@ import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { ConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ExecMode } from "../infra/exec-approvals.js";
+import type { TargetSessionProjectionCoordinator } from "../infra/outbound/target-session-projection.types.js";
 import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import type { ConversationRecallContext } from "./conversation-recall.types.js";
@@ -119,6 +120,8 @@ export type OpenClawToolsOptions = {
   swarmOutputSchema?: Record<string, unknown>;
   /** If true, include the heartbeat response tool for structured heartbeat outcomes. */
   enableHeartbeatTool?: boolean;
+  /** @internal Preserve heartbeat message-tool target ownership across run settlement. */
+  targetSessionProjectionCoordinator?: TargetSessionProjectionCoordinator;
   /** If true, skip plugin tool resolution and return only shipped core tools. */
   disablePluginTools?: boolean;
   /**

@@ -157,6 +157,7 @@ function expectCurrentDmRoomRoute(route: ReturnType<typeof resolveMatrixOutbound
   expect(currentRoute.chatType).toBe("direct");
   expect(currentRoute.from).toBe("matrix:@alice:example.org");
   expect(currentRoute.to).toBe("room:!dm:example.org");
+  expect(currentRoute.nativeChannelId).toBe("!dm:example.org");
   expect(currentRoute.recipientSessionExact).toBe(true);
 }
 
@@ -193,6 +194,26 @@ afterEach(() => {
 });
 
 describe("resolveMatrixOutboundSessionRoute", () => {
+  it("recovers a default per-user DM's native room from the target base session", async () => {
+    const route = resolveUserRoute({
+      cfg: await createMatrixRouteConfig(
+        {
+          "agent:main:main": createStoredDirectDmSession(),
+        },
+        {},
+      ),
+      accountId: "ops",
+    });
+
+    expect(expectRoute(route)).toMatchObject({
+      sessionKey: "agent:main:main",
+      baseSessionKey: "agent:main:main",
+      nativeChannelId: "!dm:example.org",
+      peer: { kind: "direct", id: "@alice:example.org" },
+      to: "room:@alice:example.org",
+    });
+  });
+
   it("reuses the current DM room session for same-user sends when Matrix DMs are per-room", async () => {
     const route = await resolveUserRouteForCurrentSession({
       storedSession: createStoredDirectDmSession(),

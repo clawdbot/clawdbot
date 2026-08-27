@@ -347,12 +347,14 @@ describe("runMessageAction core send routing", () => {
       },
       preparedMessageId: "reef-message-1",
       gatewayOwnedDelivery: true,
+      defaultAccountId: "work",
       dryRun: false,
     });
 
     expect(sendText).toHaveBeenCalledOnce();
     expect(result).toMatchObject({
       kind: "send",
+      accountId: "work",
       sendResult: { via: "direct", result: { messageId: "reef-message-1" } },
     });
   });

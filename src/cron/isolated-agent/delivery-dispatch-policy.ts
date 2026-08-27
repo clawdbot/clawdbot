@@ -37,7 +37,7 @@ export const DIRECT_CRON_DELIVERY_COMPLETION_RETENTION = {
   maxEntries: 2_000,
 } as const satisfies DeliveryQueueCompletionRetention;
 
-export function normalizeDeliveryTarget(channel: string, to: string): string {
+function normalizeDeliveryTarget(channel: string, to: string): string {
   const toTrimmed = to.trim();
   return normalizeTargetForProvider(channel, toTrimmed) ?? toTrimmed;
 }

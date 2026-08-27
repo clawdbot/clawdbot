@@ -297,6 +297,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
           workspaceDir: params.effectiveWorkspace,
           spawnWorkspaceDir,
           config: toolSearchRuntimeConfig,
+          targetSessionProjectionCoordinator: attempt.targetSessionProjectionCoordinator,
           sessionConfigSource: attempt.oneShotCliRun ? "pinned" : "runtime",
           webSearchEnabled: attempt.toolOverrides?.webSearch !== false,
           githubPublicationAvailable: attempt.githubPublicationAvailable,
