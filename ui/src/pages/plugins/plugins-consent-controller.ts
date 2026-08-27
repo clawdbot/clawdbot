@@ -1,5 +1,5 @@
 import type { CapabilityConsentErrorDetails } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
@@ -16,7 +16,6 @@ import {
   type PluginInstallRequest,
   type PluginListResult,
   type PluginMutationResult,
-  type PluginSearchResult,
   type PluginsInspectResult,
 } from "../../lib/plugins/index.ts";
 import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
@@ -36,7 +35,6 @@ type PluginsConsentControllerHost = {
   gateway: GatewayPageController;
   getContext: () => ApplicationContext;
   getResult: () => PluginListResult | null;
-  getSearchResults: () => PluginSearchResult[] | null;
   canMutate: () => boolean;
   isBusy: (rowKey: string) => boolean;
   setBusy: (rowKey: string, busy: boolean) => void;
@@ -129,76 +127,31 @@ export class PluginsConsentController {
     }
   }
 
-  requestInstallConsent(request: PluginInstallRequest, installIdentity: string): void {
-    if (
-      request.acknowledgeCapabilities ||
-      request.acknowledgeInstallPolicyWarning ||
-      (request.source === "clawhub" && request.acknowledgeClawHubRisk)
-    ) {
-      void this.install(request, installIdentity);
-      return;
-    }
-    const pluginId = installIdentity.startsWith("plugin:")
-      ? installIdentity.slice("plugin:".length)
-      : null;
-    const catalogPlugin = pluginId
-      ? this.host.getResult()?.plugins.find((plugin) => plugin.id === pluginId)
-      : undefined;
-    const searchPackage =
-      request.source === "clawhub"
-        ? this.host.getSearchResults()?.find((entry) => entry.package.name === request.packageName)
-            ?.package
-        : undefined;
-    const fallback = {
-      name:
-        catalogPlugin?.name ??
-        searchPackage?.displayName ??
-        (request.source === "official" ? request.pluginId : request.packageName),
-      ...(catalogPlugin?.version || searchPackage?.latestVersion
-        ? { version: catalogPlugin?.version ?? searchPackage?.latestVersion }
-        : {}),
-      ...(catalogPlugin || searchPackage
-        ? { official: catalogPlugin?.origin === "official" || searchPackage?.isOfficial === true }
-        : {}),
-      ...(searchPackage?.verificationTier
-        ? { verificationTier: searchPackage.verificationTier }
-        : {}),
-    };
-    this.open({ kind: "install", request, installIdentity }, pluginId, undefined, fallback);
-  }
-
   private open(
     intent: PluginConsentIntent,
-    pluginId: string | null,
+    pluginId: string,
     details?: CapabilityConsentErrorDetails,
-    fallback?: PluginConsentState["fallback"],
   ): void {
     if (!this.host.canMutate()) {
       return;
     }
-    let resolvedFallback = fallback;
-    if (!resolvedFallback && pluginId) {
-      const plugin = this.host.getResult()?.plugins.find((entry) => entry.id === pluginId);
-      resolvedFallback = {
-        name: plugin?.name ?? pluginId,
-        ...(plugin?.version ? { version: plugin.version } : {}),
-        ...(plugin?.origin === "official" ? { official: true } : {}),
-      };
-    }
+    const plugin = this.host.getResult()?.plugins.find((entry) => entry.id === pluginId);
     this.host.closeDetails();
     this.inspection = null;
     this.inspectionError = null;
-    this.inspectionLoading = Boolean(pluginId);
+    this.inspectionLoading = true;
     this.consent = {
       intent,
       pluginId,
-      fallback: resolvedFallback ?? null,
+      fallback: {
+        name: plugin?.name ?? pluginId,
+        ...(plugin?.version ? { version: plugin.version } : {}),
+        ...(plugin?.origin === "official" ? { official: true } : {}),
+      },
       ...(details ? { details } : {}),
     };
     this.host.requestUpdate();
-    if (pluginId) {
-      void this.inspect();
-    }
+    void this.inspect();
   }
 
   close(): void {
@@ -225,12 +178,7 @@ export class PluginsConsentController {
       }
     } catch (error) {
       if (this.host.gateway.isCurrent(scope) && this.consent === consent) {
-        const unavailableBeforeInstall =
-          consent.intent.kind === "install" &&
-          !consent.details &&
-          error instanceof GatewayRequestError &&
-          error.code === "INVALID_REQUEST";
-        this.inspectionError = unavailableBeforeInstall ? null : formatUiError(error);
+        this.inspectionError = formatUiError(error);
       }
     } finally {
       if (this.host.gateway.isCurrent(scope) && this.consent === consent) {
@@ -243,12 +191,7 @@ export class PluginsConsentController {
   confirm(): void {
     const intent = this.consent?.intent;
     const reviewToken = this.inspection?.reviewToken;
-    if (
-      !intent ||
-      this.inspectionLoading ||
-      this.inspectionError ||
-      (!reviewToken && (intent.kind === "enable" || Boolean(this.consent?.details)))
-    ) {
+    if (!intent || this.inspectionLoading || this.inspectionError || !reviewToken) {
       return;
     }
     this.close();
@@ -256,11 +199,11 @@ export class PluginsConsentController {
       void this.install(
         {
           ...intent.request,
-          ...(reviewToken ? { acknowledgeCapabilities: { reviewToken } } : {}),
+          acknowledgeCapabilities: { reviewToken },
         },
         intent.installIdentity,
       );
-    } else if (reviewToken) {
+    } else {
       void this.setEnabled(intent.pluginId, true, intent.rowKey, {
         acknowledgeCapabilities: { reviewToken },
       });
@@ -268,6 +211,8 @@ export class PluginsConsentController {
   }
 
   async install(request: PluginInstallRequest, installIdentity: string): Promise<void> {
+    // The server stages and inspects the requested artifact before asking for consent.
+    // Catalog/search metadata cannot authorize that artifact's capabilities.
     await this.runMutation(
       installIdentity,
       (client) => installPlugin(client, request),

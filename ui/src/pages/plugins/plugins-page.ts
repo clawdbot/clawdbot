@@ -118,7 +118,6 @@ class PluginsPage extends OpenClawLightDomElement {
     gateway: this.gateway,
     getContext: () => this.context,
     getResult: () => this.result,
-    getSearchResults: () => this.searchResults,
     canMutate: () => this.canMutate(),
     isBusy: (rowKey) => Boolean(this.busy[rowKey]),
     setBusy: (rowKey, busy) => this.setBusy(rowKey, busy),
@@ -724,7 +723,7 @@ class PluginsPage extends OpenClawLightDomElement {
           onSetEnabled: (pluginId, enabled, rowKey) =>
             void this.updateEnabled(pluginId, enabled, rowKey),
           onInstall: (request, installIdentity) =>
-            this.consentController.requestInstallConsent(request, installIdentity),
+            void this.consentController.install(request, installIdentity),
           onCancelConsent: () => this.consentController.close(),
           onConfirmConsent: () => this.consentController.confirm(),
           onRetryConsentInspection: () => void this.consentController.inspect(),

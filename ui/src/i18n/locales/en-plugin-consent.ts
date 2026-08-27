@@ -42,8 +42,7 @@ const enPluginConsent = {
     agentIdOverride: "Agent ID override: {value}",
     noOverrides: "No overrides configured",
     loading: "Loading capability details…",
-    fallback:
-      "Capability declarations are verified against the installed artifact before approval. The install pauses if additional review is required.",
+    fallback: "Capability details must be available before you can approve this plugin.",
     verifiedClean: "Verified clean",
     reviewRecommended: "Review recommended",
     reviewRequired: "Review required",

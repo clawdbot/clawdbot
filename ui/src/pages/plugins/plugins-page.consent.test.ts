@@ -55,58 +55,112 @@ describe("PluginsPage consent", () => {
 
   afterEach(resetPluginsPageTestState);
 
-  it("inspects an installable plugin and waits for operator consent before installing it", async () => {
-    const installed = createPlugin({
-      ...createAvailablePlugin(),
-      installed: true,
-      enabled: true,
-      state: "enabled",
-    });
-    const { page, request } = await mountDiscover(async (method) => {
-      if (method === "plugins.inspect") {
-        return createInspectResult({
-          plugin: {
-            id: "calendar-runtime",
-            name: "Calendar Plus",
-            origin: "official",
-            installed: false,
-            enabled: false,
-          },
-        });
+  it.each(["official", "search"])(
+    "reviews only the staged artifact before accepting an %s install",
+    async (source) => {
+      const installed = createPlugin({
+        ...createAvailablePlugin(),
+        installed: true,
+        enabled: true,
+        state: "enabled",
+      });
+      const inspection = createInspectResult({
+        plugin: {
+          id: "calendar-runtime",
+          name: "Calendar Plus",
+          origin: "global",
+          installed: false,
+          enabled: false,
+        },
+        declared: { ...createInspectResult().declared, tools: ["calendar_review"] },
+      });
+      const stagedInstall = deferred<never>();
+      const installRequest: PluginInstallRequest =
+        source === "official"
+          ? { source: "official", pluginId: "calendar-runtime" }
+          : { source: "clawhub", packageName: "community-calendar" };
+      const { page, request } = await mountDiscover(async (method, params) => {
+        if (method === "plugins.search") {
+          return {
+            results: [
+              {
+                score: 1,
+                package: {
+                  name: "community-calendar",
+                  displayName: "Calendar Plus",
+                  family: "code-plugin",
+                  channel: "community",
+                  isOfficial: false,
+                },
+              },
+            ],
+          };
+        }
+        if (method === "plugins.inspect") {
+          return inspection;
+        }
+        if (method === "plugins.install") {
+          if (!(params as PluginInstallRequest).acknowledgeCapabilities) {
+            return stagedInstall.promise;
+          }
+          return { ok: true, plugin: installed, restartRequired: true };
+        }
+        if (method === "plugins.list") {
+          return createResult(installed);
+        }
+        throw new Error(`Unexpected method ${method}`);
+      });
+      const row =
+        source === "official"
+          ? '[data-plugin-id="calendar-runtime"]'
+          : '[data-package-name="community-calendar"]';
+      if (source === "search") {
+        const search = page.querySelector<HTMLInputElement>("#plugins-global-search")!;
+        search.value = "calendar";
+        search.dispatchEvent(new Event("input", { bubbles: true }));
+        await waitForFast(() => expect(page.querySelector(row)).not.toBeNull());
       }
-      if (method === "plugins.install") {
-        return { ok: true, plugin: installed, restartRequired: true };
-      }
-      if (method === "plugins.list") {
-        return createResult(installed);
-      }
-      throw new Error(`Unexpected method ${method}`);
-    });
 
-    await clickRowAction(page, '[data-plugin-id="calendar-runtime"]', "Install");
+      await clickRowAction(page, row, "Install");
 
-    await waitForFast(() =>
-      expect(request).toHaveBeenCalledWith("plugins.inspect", { pluginId: "calendar-runtime" }),
-    );
-    expect(page.querySelector('[data-plugin-consent="install"]')?.textContent).toContain(
-      "Calendar Plus",
-    );
-    expect(request.mock.calls.some(([method]) => method === "plugins.install")).toBe(false);
+      await waitForFast(() =>
+        expect(request).toHaveBeenCalledWith("plugins.install", installRequest),
+      );
+      expect(page.querySelector("[data-plugin-consent]")).toBeNull();
+      expect(request.mock.calls.some(([method]) => method === "plugins.inspect")).toBe(false);
+      stagedInstall.reject(
+        new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: "Capability consent required",
+          details: buildCapabilityConsentErrorDetails({
+            pluginId: "calendar-runtime",
+            reviewToken: inspection.reviewToken,
+          }),
+        }),
+      );
+      await waitForFast(() =>
+        expect(page.querySelector('[data-plugin-consent="install"]')?.textContent).toContain(
+          "calendar_review",
+        ),
+      );
+      expect(request.mock.calls.filter(([method]) => method === "plugins.install")).toHaveLength(1);
 
-    page.querySelector<HTMLButtonElement>('[data-plugin-consent="install"] .btn.primary')?.click();
+      page
+        .querySelector<HTMLButtonElement>('[data-plugin-consent="install"] .btn.primary')
+        ?.click();
 
-    await waitForFast(() =>
-      expect(request).toHaveBeenCalledWith("plugins.install", {
-        source: "official",
-        pluginId: "calendar-runtime",
-        acknowledgeCapabilities: { reviewToken: "review-token-workboard" },
-      }),
-    );
-    await page.updateComplete;
-    expect(page.querySelector('[data-plugin-consent="install"]')).toBeNull();
-  });
+      await waitForFast(() =>
+        expect(request).toHaveBeenCalledWith("plugins.install", {
+          ...installRequest,
+          acknowledgeCapabilities: { reviewToken: inspection.reviewToken },
+        }),
+      );
+      await page.updateComplete;
+      expect(page.querySelector('[data-plugin-consent="install"]')).toBeNull();
+    },
+  );
 
-  it("does not reopen consent when an install-policy warning has already been acknowledged", async () => {
+  it("preserves an install-policy acknowledgement through the artifact review", async () => {
     const installed = createPlugin({
       ...createAvailablePlugin(),
       installed: true,
@@ -131,6 +185,16 @@ describe("PluginsPage consent", () => {
             },
           });
         }
+        if (!(params as PluginInstallRequest).acknowledgeCapabilities) {
+          throw new GatewayRequestError({
+            code: "INVALID_REQUEST",
+            message: "Capability consent required",
+            details: buildCapabilityConsentErrorDetails({
+              pluginId: "calendar-runtime",
+              reviewToken: "review-token-workboard",
+            }),
+          });
+        }
         return { ok: true, plugin: installed, restartRequired: true };
       }
       if (method === "plugins.list") {
@@ -141,19 +205,19 @@ describe("PluginsPage consent", () => {
 
     await clickRowAction(page, '[data-plugin-id="calendar-runtime"]', "Install");
     await waitForFast(() =>
-      expect(
-        page.querySelector<HTMLButtonElement>('[data-plugin-consent="install"] .btn.primary')
-          ?.disabled,
-      ).toBe(false),
-    );
-    page.querySelector<HTMLButtonElement>('[data-plugin-consent="install"] .btn.primary')?.click();
-    await waitForFast(() =>
       expect(page.querySelector(".plugins-policy-review")?.textContent).toContain(
         "Review this plugin.",
       ),
     );
 
     page.querySelector<HTMLButtonElement>(".plugins-policy-review__actions .btn.danger")?.click();
+    await waitForFast(() =>
+      expect(
+        page.querySelector<HTMLButtonElement>('[data-plugin-consent="install"] .btn.primary')
+          ?.disabled,
+      ).toBe(false),
+    );
+    page.querySelector<HTMLButtonElement>('[data-plugin-consent="install"] .btn.primary')?.click();
 
     await waitForFast(() =>
       expect(request).toHaveBeenCalledWith("plugins.install", {
@@ -233,91 +297,6 @@ describe("PluginsPage consent", () => {
       );
     },
   );
-
-  it("reviews staged capabilities before acknowledging a previously uninspectable install", async () => {
-    const installed = createPlugin({
-      ...createAvailablePlugin(),
-      installed: true,
-      enabled: true,
-      state: "enabled",
-    });
-    const inspection = createInspectResult({
-      plugin: {
-        id: "calendar-runtime",
-        name: "Calendar Plus",
-        origin: "official",
-        installed: false,
-        enabled: false,
-      },
-      declared: { ...createInspectResult().declared, tools: ["calendar_review"] },
-    });
-    let inspectionAttempts = 0;
-    const { page, request } = await mountDiscover(async (method, params) => {
-      if (method === "plugins.inspect") {
-        inspectionAttempts += 1;
-        if (inspectionAttempts === 1) {
-          throw new GatewayRequestError({
-            code: "INVALID_REQUEST",
-            message: "plugin not found: calendar-runtime",
-          });
-        }
-        return inspection;
-      }
-      if (method === "plugins.install") {
-        if (typeof params !== "object" || !params || !("acknowledgeCapabilities" in params)) {
-          throw new GatewayRequestError({
-            code: "INVALID_REQUEST",
-            message: "Capability consent required",
-            details: buildCapabilityConsentErrorDetails({
-              pluginId: "calendar-runtime",
-              reviewToken: inspection.reviewToken,
-            }),
-          });
-        }
-        return { ok: true, plugin: installed, restartRequired: true };
-      }
-      if (method === "plugins.list") {
-        return createResult(installed);
-      }
-      throw new Error(`Unexpected method ${method}`);
-    });
-
-    await clickRowAction(page, '[data-plugin-id="calendar-runtime"]', "Install");
-    await waitForFast(() =>
-      expect(page.querySelector('[data-plugin-consent="install"]')?.textContent).toContain(
-        "Capability declarations are verified against the installed artifact before approval.",
-      ),
-    );
-    const confirm = page.querySelector<HTMLButtonElement>(
-      '[data-plugin-consent="install"] .btn.primary',
-    );
-    expect(confirm?.disabled).toBe(false);
-
-    confirm?.click();
-
-    await waitForFast(() =>
-      expect(request).toHaveBeenCalledWith("plugins.install", {
-        source: "official",
-        pluginId: "calendar-runtime",
-      }),
-    );
-    await waitForFast(() =>
-      expect(page.querySelector('[data-plugin-consent="install"]')?.textContent).toContain(
-        "calendar_review",
-      ),
-    );
-
-    page.querySelector<HTMLButtonElement>('[data-plugin-consent="install"] .btn.primary')?.click();
-
-    await waitForFast(() =>
-      expect(request).toHaveBeenCalledWith("plugins.install", {
-        source: "official",
-        pluginId: "calendar-runtime",
-        acknowledgeCapabilities: { reviewToken: inspection.reviewToken },
-      }),
-    );
-    expect(inspectionAttempts).toBe(2);
-  });
 
   it("hydrates a compact consent error through inspection and acknowledges its reviewed token", async () => {
     const plugin = createPlugin({ origin: "bundled", enabled: false, state: "disabled" });

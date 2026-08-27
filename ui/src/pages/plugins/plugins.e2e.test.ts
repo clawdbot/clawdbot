@@ -4,6 +4,7 @@ import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { buildCapabilityConsentErrorDetails } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import type { PluginsSearchResult } from "../../../../packages/gateway-protocol/src/schema/plugins.ts";
 import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/version.js";
 import type {
@@ -261,6 +262,14 @@ const lobsterInspection = {
   source: { kind: "npm", packageName: "@openclaw/lobster" },
 } satisfies PluginsInspectResult;
 
+const calendarInspection = {
+  ...workboardInspection,
+  reviewToken: "c".repeat(64),
+  plugin: { ...calendarPlugin, installed: false, enabled: false },
+  source: { kind: "clawhub", packageName: "calendar-plus" },
+  declared: { ...workboardInspection.declared, tools: ["calendar_create"] },
+} satisfies PluginsInspectResult;
+
 let browser: Browser;
 let server: ControlUiE2eServer;
 
@@ -399,6 +408,7 @@ function pluginMethodResponses() {
       cases: [
         { match: { pluginId: "workboard" }, response: workboardInspection },
         { match: { pluginId: "lobster" }, response: lobsterInspection },
+        { match: { pluginId: "calendar-plus" }, response: calendarInspection },
       ],
     },
     "plugins.search": {
@@ -592,8 +602,8 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
 
       await gateway.deferNext("plugins.install");
       await searchRow.getByRole("button", { name: "Install Calendar Plus", exact: true }).click();
-      await confirmPluginConsent(page, "Install Calendar Plus");
       const firstInstallRequest = await gateway.waitForRequest("plugins.install");
+      expect(await page.locator("[data-plugin-consent]").count()).toBe(0);
       expect(requestParams(firstInstallRequest)).toEqual({
         source: "clawhub",
         packageName: "calendar-plus",
@@ -619,6 +629,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       const installCountBeforeRetry = (await gateway.getRequests("plugins.install")).length;
       await gateway.deferNext("plugins.list");
       await gateway.deferNext("config.get");
+      await gateway.deferNext("plugins.install");
       await acknowledgeButton.click();
 
       const retryInstallRequest = await waitForNextRequest(
@@ -631,6 +642,31 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
         packageName: "calendar-plus",
         version: "1.2.3",
         acknowledgeClawHubRisk: true,
+      });
+      await gateway.rejectDeferred("plugins.install", {
+        code: "INVALID_REQUEST",
+        message: "Capability consent required",
+        details: buildCapabilityConsentErrorDetails({
+          pluginId: "calendar-plus",
+          reviewToken: calendarInspection.reviewToken,
+        }),
+      });
+      const consent = page.locator('[data-plugin-consent="install"]');
+      await consent.getByText("calendar_create", { exact: true }).waitFor();
+      await captureScreenshot(page, "artifact-consent-desktop.png");
+      await gateway.setMethodResponse("plugins.install", installResult);
+      const installCountBeforeConsent = (await gateway.getRequests("plugins.install")).length;
+      await confirmPluginConsent(page, "Install Calendar Plus");
+      expect(
+        requestParams(
+          await waitForNextRequest(gateway, "plugins.install", installCountBeforeConsent),
+        ),
+      ).toEqual({
+        source: "clawhub",
+        packageName: "calendar-plus",
+        version: "1.2.3",
+        acknowledgeClawHubRisk: true,
+        acknowledgeCapabilities: { reviewToken: calendarInspection.reviewToken },
       });
       // The mutation boundary refreshes config before the page refreshes the
       // plugin catalog; release the deferred requests in that contract order.
@@ -752,7 +788,6 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await reinstallRow
         .getByRole("button", { name: "Install Calendar Plus", exact: true })
         .click();
-      await confirmPluginConsent(page, "Install Calendar Plus");
       const reinstallRequest = await waitForNextRequest(
         gateway,
         "plugins.install",
@@ -836,11 +871,9 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
 
       await gateway.deferNext("plugins.install");
       await row.getByRole("button", { name: "Install Lobster", exact: true }).click();
-      await confirmPluginConsent(page, "Install Lobster");
       expect(requestParams(await gateway.waitForRequest("plugins.install"))).toEqual({
         source: "clawhub",
         packageName: "@openclaw/lobster",
-        acknowledgeCapabilities: { reviewToken: lobsterInspection.reviewToken },
       });
       await gateway.rejectDeferred("plugins.install", {
         code: "INVALID_REQUEST",
@@ -895,7 +928,6 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       const installCountBeforeSecondAttempt = (await gateway.getRequests("plugins.install")).length;
       await gateway.deferNext("plugins.install");
       await row.getByRole("button", { name: "Install Lobster", exact: true }).click();
-      await confirmPluginConsent(page, "Install Lobster");
       await waitForNextRequest(gateway, "plugins.install", installCountBeforeSecondAttempt);
       await gateway.rejectDeferred("plugins.install", {
         code: "INVALID_REQUEST",
@@ -911,7 +943,6 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       expect(requestParams(retry)).toEqual({
         source: "clawhub",
         packageName: "@openclaw/lobster",
-        acknowledgeCapabilities: { reviewToken: lobsterInspection.reviewToken },
         acknowledgeInstallPolicyWarning: true,
       });
       const pendingRetry = review.getByRole("button", { name: "Installing…", exact: true });
@@ -943,7 +974,6 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       expect(requestParams(secondRetry)).toEqual({
         source: "clawhub",
         packageName: "@openclaw/lobster",
-        acknowledgeCapabilities: { reviewToken: lobsterInspection.reviewToken },
         acknowledgeInstallPolicyWarning: true,
       });
 

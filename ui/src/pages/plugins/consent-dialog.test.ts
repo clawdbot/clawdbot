@@ -198,7 +198,7 @@ describe("renderPluginConsentDialog", () => {
     expect(dialog?.querySelectorAll(".plugins-consent__row--warning")).toHaveLength(5);
   });
 
-  it("explains integrity and review protection when a package cannot be inspected yet", () => {
+  it("prevents approval until the package capabilities have been inspected", () => {
     const container = mount({
       consent: {
         intent: {
@@ -211,7 +211,6 @@ describe("renderPluginConsentDialog", () => {
           name: "Community Calendar",
           version: "1.2.0",
           official: false,
-          verificationTier: "source-linked",
         },
       },
       inspection: null,
@@ -219,11 +218,10 @@ describe("renderPluginConsentDialog", () => {
 
     const dialog = container.querySelector('[data-plugin-consent="install"]');
     expect(normalizedText(dialog)).toContain("Community Calendar");
-    expect(normalizedText(dialog)).toContain("Verified source");
     expect(normalizedText(dialog)).toContain(
-      "Capability declarations are verified against the installed artifact before approval. The install pauses if additional review is required.",
+      "Capability details must be available before you can approve this plugin.",
     );
-    expect(dialog?.querySelector<HTMLButtonElement>(".btn.primary")?.disabled).toBe(false);
+    expect(dialog?.querySelector<HTMLButtonElement>(".btn.primary")?.disabled).toBe(true);
   });
 
   it("prevents consent confirmation when the operator cannot mutate plugins", () => {

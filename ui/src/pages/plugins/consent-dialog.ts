@@ -29,7 +29,6 @@ type PluginConsentFallback = {
   name: string;
   version?: string;
   official?: boolean;
-  verificationTier?: string;
 };
 
 export type PluginConsentState = {
@@ -367,10 +366,7 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): Temp
   const name = plugin?.name ?? fallback?.name ?? slug;
   const version = plugin?.version ?? fallback?.version;
   const origin = pluginOriginLabel(plugin?.origin, fallback?.official);
-  const verification = fallback?.verificationTier
-    ? pluginVerificationLabel(fallback.verificationTier)
-    : undefined;
-  const meta = [origin, packageName, verification].filter(Boolean).join(" · ");
+  const meta = [origin, packageName].filter(Boolean).join(" · ");
   const action =
     consent.intent.kind === "install"
       ? props.busy
@@ -425,7 +421,7 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): Temp
             props.busy ||
             props.loading ||
             Boolean(props.error) ||
-            (!inspection && (consent.intent.kind === "enable" || Boolean(details)))}
+            !inspection}
             @click=${props.onConfirm}
           >
             ${action}
