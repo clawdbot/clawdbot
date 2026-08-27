@@ -24,6 +24,10 @@
     background: transparent;
   }
 
+  .chat-main__conversation-column > .agent-chat__search-bar {
+    margin-top: var(--chat-mobile-pane-header-height);
+  }
+
   .chat-main__conversation-column > .chat-pane__header::before,
   .chat-main__conversation-column > .chat-pane__header::after {
     position: absolute;
@@ -157,6 +161,13 @@
 
   .chat-main__conversation-column > .chat-pane__header .chat-pane__workspace-chip span {
     display: block;
+  }
+}
+
+@media (display-mode: standalone) and (max-width: 768px),
+  (display-mode: standalone) and (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .chat-main__conversation-column > .chat-pane__header {
+    padding-inline: var(--chat-mobile-edge-inset, 4px);
   }
 }
 

@@ -142,6 +142,68 @@ suite.define(() => {
     }
   }
 
+  for (const viewport of [
+    { height: 844, label: "portrait", width: 390 },
+    { height: 393, label: "short landscape", width: 852 },
+  ] as const) {
+    it(`keeps compact ${viewport.label} transcript search below the floating header`, async () => {
+      const context = await suite.newBrowserContext({
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: viewport.height, width: viewport.width },
+      });
+      const page = await context.newPage();
+      await installMockGateway(page, {
+        methodResponses: { "sessions.list": chatSessionListResponse() },
+      });
+
+      try {
+        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.locator(".agent-chat__composer-combobox > textarea").focus();
+        await page.keyboard.press("Control+f");
+        const search = page.locator(".agent-chat__search-bar input");
+        await search.waitFor();
+        const [headerBox, searchBox] = await Promise.all([
+          page.locator(".chat-pane__header").first().boundingBox(),
+          search.boundingBox(),
+        ]);
+        expect(headerBox).not.toBeNull();
+        expect(searchBox).not.toBeNull();
+        expect(searchBox!.y).toBeGreaterThanOrEqual(headerBox!.y + headerBox!.height);
+        await search.click();
+        await search.fill("reachable");
+        expect(await search.inputValue()).toBe("reachable");
+      } finally {
+        await suite.closeBrowserContext(context);
+      }
+    });
+
+    it(`preserves compact ${viewport.label} New Session composer edge margins`, async () => {
+      const context = await suite.newBrowserContext({
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: viewport.height, width: viewport.width },
+      });
+      const page = await context.newPage();
+      await installMockGateway(page, {
+        methodResponses: { "sessions.list": chatSessionListResponse() },
+      });
+
+      try {
+        await page.goto(`${suite.server.baseUrl}new`);
+        const composer = page.locator(".new-session-page__composer");
+        await composer.waitFor();
+        const margins = await composer.evaluate((element) => {
+          const style = getComputedStyle(element);
+          return { left: style.marginLeft, right: style.marginRight };
+        });
+        expect(margins).toEqual({ left: "4px", right: "4px" });
+      } finally {
+        await suite.closeBrowserContext(context);
+      }
+    });
+  }
+
   it("repaints a mounted project icon after the Gateway advertises a retry", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",

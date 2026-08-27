@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 342930,
-  "reason": "per-profile appearance preferences: profile-scoped resolution, users.prefs routing, and live cross-device sync on the boot path; measured 342875 B on the tide/beacon/phosphor base, pinned with jitter headroom",
-  "updatedAt": "2026-08-26"
+  "startupJsGzipBytes": 343529,
+  "reason": "compact chat topbar and route-aware native chrome on the boot path; measured 343529 B with compact layout regression coverage",
+  "updatedAt": "2026-08-27"
 }

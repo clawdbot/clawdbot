@@ -602,9 +602,7 @@ class OpenClawShell
     this.shellChrome.closeNavDrawer(options);
   }
 
-  resizeNavigation(splitRatio: number) {
-    this.shellChrome.resizeNavigation(splitRatio);
-  }
+  resizeNavigation = (splitRatio: number) => this.shellChrome.resizeNavigation(splitRatio);
 
   openNewSession(agentId: string, target?: NewSessionTarget) {
     this.shellNavigation.openNewSession(agentId, target);
