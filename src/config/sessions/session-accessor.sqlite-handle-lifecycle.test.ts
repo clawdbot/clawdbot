@@ -1,4 +1,5 @@
 import path from "node:path";
+import { Worker } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
@@ -144,6 +145,48 @@ describe("SQLite session handle lifecycle", () => {
         readSessionTranscriptMessageEventPage(scope, { maxMessages: 0, offset: 0 }).totalMessages,
       ).toBe(1);
     } finally {
+      await waitForSessionTranscriptIndexReconcile(databaseOptions);
+    }
+  });
+
+  it("cancels a projection wait while its worker is stalled", async () => {
+    await persistSessionTranscriptTurn(scope, {
+      messages: [{ eventId: "target", message: { role: "user", content: "target" } }],
+      touchSessionEntry: false,
+    });
+    const databaseOptions = { agentId: "main", path: databasePath };
+    const database = openOpenClawAgentDatabase(databaseOptions);
+    database.db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1").run();
+    let stalledWorker: Worker | undefined;
+    startSessionTranscriptIndexReconcile({
+      ...databaseOptions,
+      createWorker: () => {
+        stalledWorker = new Worker("setInterval(() => {}, 1_000)", { eval: true });
+        return stalledWorker;
+      },
+    });
+    const controller = new AbortController();
+    const abortReason = new Error("cancel stalled projection wait");
+
+    try {
+      const ready = waitForSessionTranscriptProjection(scope, controller.signal);
+      await vi.waitFor(() => expect(stalledWorker).toBeDefined());
+      controller.abort(abortReason);
+      const outcome = await Promise.race([
+        ready.then(
+          () => ({ kind: "resolved" as const }),
+          (error: unknown) => ({ kind: "rejected" as const, error }),
+        ),
+        new Promise<{ kind: "still-waiting" }>((resolve) => {
+          setTimeout(() => resolve({ kind: "still-waiting" }), 250);
+        }),
+      ]);
+      expect(outcome).toMatchObject({
+        kind: "rejected",
+        error: { name: "AbortError", cause: abortReason },
+      });
+    } finally {
+      await stalledWorker?.terminate();
       await waitForSessionTranscriptIndexReconcile(databaseOptions);
     }
   });

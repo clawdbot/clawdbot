@@ -52,6 +52,7 @@ pr_wrapper_components=(
   scripts/lib/direct-run.mjs
   scripts/lib/tsx-cli-shim.mjs
   scripts/lib/local-check-runtime.mts
+  scripts/tsx.mjs
   scripts/verify-pr-hosted-gates.mjs
   scripts/verify-pr-hosted-gates.mts
   scripts/watch-pr-ci.mjs

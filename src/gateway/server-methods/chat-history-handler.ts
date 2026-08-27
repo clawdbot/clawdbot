@@ -442,6 +442,8 @@ async function handleChatHistoryRequest({
     sessionId,
     ...(activeRunAgentId ? { agentId: activeRunAgentId } : {}),
     defaultAgentId: compatibilityOwnerAgentId,
+    // History stays active until the terminal row is queryable or its write fails.
+    includeTerminalPersistence: true,
   });
   sessionInfo.hasActiveRun = activeRunState.active;
   if (activeRunState.runIds !== undefined) {

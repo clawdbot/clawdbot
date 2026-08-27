@@ -142,9 +142,7 @@ export async function wakeSubagentRunAfterDescendants(
     owner: reservedDispatch.owner,
     dispatch: reservedDispatch.dispatch,
   };
-  const terminateUnownedWake = async (
-    gatewayRunId: string,
-  ): Promise<SubagentDescendantWakeOutcome> => {
+  const recordAcceptedWake = async (gatewayRunId: string): Promise<boolean> => {
     const acceptedDispatch = await registryRuntime.recordLazySubagentSteerDispatch({
       runId: wakeDispatchOwnership.ownerRunId,
       expected: wakeDispatchOwnership.owner,
@@ -160,12 +158,22 @@ export async function wakeSubagentRunAfterDescendants(
           ? childEntry.lifecycleRevision.trim() || undefined
           : undefined,
     });
-    if (acceptedDispatch.status !== "rejected") {
-      wakeDispatchOwnership = {
-        ownerRunId: acceptedDispatch.ownerRunId,
-        owner: acceptedDispatch.owner,
-        dispatch: acceptedDispatch.dispatch,
-      };
+    if (acceptedDispatch.status === "rejected") {
+      return false;
+    }
+    wakeDispatchOwnership = {
+      ownerRunId: acceptedDispatch.ownerRunId,
+      owner: acceptedDispatch.owner,
+      dispatch: acceptedDispatch.dispatch,
+    };
+    return true;
+  };
+  const terminateUnownedWake = async (
+    gatewayRunId: string,
+    acceptedDispatchRecorded = false,
+  ): Promise<SubagentDescendantWakeOutcome> => {
+    if (!acceptedDispatchRecorded) {
+      await recordAcceptedWake(gatewayRunId);
     }
     const terminated = await terminateAcceptedCollectorRun({
       childSessionKey: params.childSessionKey,
@@ -237,19 +245,23 @@ export async function wakeSubagentRunAfterDescendants(
     return await terminateUnownedWake(wakeDispatchId);
   }
 
-  if (wakeRunId !== wakeDispatchId) {
+  if (!wakeRunId) {
     return await terminateUnownedWake(wakeDispatchId);
+  }
+  const acceptedDispatchRecorded = await recordAcceptedWake(wakeRunId);
+  if (!acceptedDispatchRecorded) {
+    return await terminateUnownedWake(wakeRunId);
   }
 
   if (
     !params.isChildSessionEffectsAllowed() ||
     !isAgentEventLifecycleGenerationCurrent(wakeLifecycleGeneration)
   ) {
-    return await terminateUnownedWake(wakeDispatchId);
+    return await terminateUnownedWake(wakeRunId, true);
   }
   const replaced = await registryRuntime.replaceSubagentRunAfterSteer({
     previousRunId: wakeDispatchOwnership.ownerRunId,
-    nextRunId: wakeDispatchId,
+    nextRunId: wakeRunId,
     fallback: wakeDispatchOwnership.owner,
     expected: wakeDispatchOwnership.owner,
     allowEndedSource: true,
@@ -259,5 +271,5 @@ export async function wakeSubagentRunAfterDescendants(
     // post-restart redispatch reconstructs the correct prompt.
     task: wakeMessage,
   });
-  return replaced ? "woke" : await terminateUnownedWake(wakeDispatchId);
+  return replaced ? "woke" : await terminateUnownedWake(wakeRunId, true);
 }

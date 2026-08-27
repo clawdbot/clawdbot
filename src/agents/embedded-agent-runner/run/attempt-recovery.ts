@@ -282,6 +282,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     assistantOverflowCandidate,
     attemptCompactionCount,
     prepareCurrentTranscriptRetry: sessionPromptState.continueFromCurrentTranscript,
+    markOwnedTranscriptRetry: sessionPromptState.markOwnedTranscriptRetry,
   });
   if (overflowRecovery.action === "retry") {
     return retry();

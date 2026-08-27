@@ -2362,7 +2362,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   [/^scripts\/ci-changed-scope\.mjs$/u, [...changedScopeTests, "control-ui-i18n"]],
   [/^scripts\/check-changed\.(?:mjs|mts)$/u, ["changed-lanes"]],
   [/^scripts\/changed-lanes\.(?:mjs|mts)$/u, ["changed-lanes"]],
-  [/^scripts\/lib\/tsx-cli-shim\.mjs$/u, ["direct-run-entrypoints"]],
+  [/^scripts\/(?:lib\/tsx-cli-shim|tsx)\.mjs$/u, ["direct-run-entrypoints"]],
   [
     new RegExp(
       [

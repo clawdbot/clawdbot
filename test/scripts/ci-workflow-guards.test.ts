@@ -27,7 +27,6 @@ import {
 } from "../../scripts/ci-changed-scope.mjs";
 import { NATIVE_I18N_LOCALES } from "../../scripts/native-i18n-locales.ts";
 import { resolvePnpmRunner } from "../../scripts/pnpm-runner.mts";
-import { SUPPORTED_LOCALES } from "../../ui/src/i18n/lib/registry.ts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const CHECKOUT_V6 = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1";
@@ -2210,11 +2209,12 @@ NODE
       "${{ github.event_name == 'workflow_dispatch' && inputs.token_preflight_only && format('control-ui-locale-token-preflight-{0}', github.ref) || 'control-ui-locale-refresh' }}",
     );
     expect(controlUiWorkflow.jobs.plan).toBeUndefined();
+    expect(controlUiResolveBase.outputs.locales).toBe("${{ steps.base.outputs.locales }}");
     expect(controlUiWorkflow.jobs.refresh.if).toBe(
       "needs.resolve-base.result == 'success' && needs.publisher-preflight.result == 'success' && !(github.event_name == 'workflow_dispatch' && inputs.token_preflight_only)",
     );
-    expect(controlUiWorkflow.jobs.refresh.strategy.matrix.locale).toEqual(
-      SUPPORTED_LOCALES.filter((locale) => locale !== "en"),
+    expect(controlUiWorkflow.jobs.refresh.strategy.matrix.locale).toBe(
+      "${{ fromJSON(needs.resolve-base.outputs.locales) }}",
     );
     expect(workflow.concurrency["cancel-in-progress"]).toBe(false);
     expect(workflow.concurrency.group).toBe("native-app-locale-refresh");
@@ -2354,9 +2354,14 @@ NODE
       );
       expect(resolveBase.outputs.sha).toBe("${{ steps.base.outputs.sha }}");
       expect(resolveStep.env.GH_TOKEN).toBe("${{ github.token }}");
-      expect(resolveStep.run).toContain(
-        'gh api --method GET "repos/${REPOSITORY}/commits/${DEFAULT_BRANCH}" --jq .sha',
-      );
+      if (ownerWorkflow === controlUiWorkflow) {
+        expect(resolveStep.run.match(/gh api/gu)).toHaveLength(1);
+        expect(resolveStep.run).toContain("gh api graphql");
+      } else {
+        expect(resolveStep.run).toContain(
+          'gh api --method GET "repos/${REPOSITORY}/commits/${DEFAULT_BRANCH}" --jq .sha',
+        );
+      }
       expect(resolveStep.run).toContain('[[ ! "${sha}" =~ ^[0-9a-f]{40}$ ]]');
 
       const checkoutSteps = (
@@ -2381,7 +2386,13 @@ NODE
     expect(controlUiResolveStep.run).toContain(
       'if [[ "${TOKEN_PREFLIGHT_ONLY}" == "true" ]]; then',
     );
-    expect(controlUiResolveStep.run).toContain('sha="${WORKFLOW_SHA}"');
+    expect(controlUiResolveStep.run).toContain('source_ref="${WORKFLOW_SHA}"');
+    expect(controlUiResolveStep.run).toContain(
+      '-F configRef="${source_ref}:scripts/lib/control-ui-i18n-config.json"',
+    );
+    expect(controlUiResolveStep.run).toContain(
+      "jq -ce '.data.repository.config.text | fromjson | [.[].locale]",
+    );
 
     for (const preflight of [controlUiPreflight, nativePreflight]) {
       expect(preflight.needs).toBe("resolve-base");

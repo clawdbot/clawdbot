@@ -354,10 +354,11 @@ export type AgentEventHandlerOptions = {
     clientRunId: string;
     sessionKey: string;
   }) => void;
-  markTrackedRunTerminalPersisted?: (params: {
+  settleTrackedTerminal?: (params: {
     runId: string;
     clientRunId: string;
     sessionKey: string;
+    persisted?: boolean;
   }) => void;
   trackTrackedRunTerminalPersistence?: (params: {
     runId: string;
@@ -455,7 +456,7 @@ export function createAgentEventHandler({
   resolveRunToolErrorSummary = () => undefined,
   markChatSendTerminalBroadcasted,
   clearTrackedActiveRun,
-  markTrackedRunTerminalPersisted,
+  settleTrackedTerminal,
   trackTrackedRunTerminalPersistence,
   resolveActiveLifecycleGenerationForRun = () => undefined,
   resolveSessionActiveRunState,
@@ -874,18 +875,15 @@ export function createAgentEventHandler({
             { dropIfSlow: true },
           );
         };
-        const markPersisted = () => {
-          markTrackedRunTerminalPersisted?.({
-            runId: evt.runId,
-            clientRunId,
-            sessionKey,
-          });
-        };
         // Terminal writes serialize with restart markers. Reload only after the
         // write so subscribers see the canonical post-race session state.
         void persistence
           .then(() => {
-            markPersisted();
+            settleTrackedTerminal?.({
+              runId: evt.runId,
+              clientRunId,
+              sessionKey,
+            });
             broadcastSessionChange();
           })
           .catch((err: unknown) => {
@@ -894,8 +892,21 @@ export function createAgentEventHandler({
             );
             // Persistence recovery remains tracked by the controller entry, but
             // subscribers still need a terminal projection instead of hanging.
+            settleTrackedTerminal?.({
+              runId: evt.runId,
+              clientRunId,
+              sessionKey,
+              persisted: false,
+            });
             broadcastSessionChange(evt);
           });
+      } else {
+        settleTrackedTerminal?.({
+          runId: evt.runId,
+          clientRunId,
+          sessionKey,
+          persisted: false,
+        });
       }
     }
   };

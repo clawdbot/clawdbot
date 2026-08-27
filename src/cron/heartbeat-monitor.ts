@@ -151,6 +151,7 @@ export async function applyHeartbeatMonitorJobs(params: {
   cfg: OpenClawConfig;
   schedulerSeed?: string;
   logger?: { warn: (obj: unknown, msg?: string) => void };
+  commitGuard?: () => void;
 }): Promise<HeartbeatMonitorReconcileResult> {
   let jobs: CronJob[];
   try {
@@ -159,6 +160,7 @@ export async function applyHeartbeatMonitorJobs(params: {
     params.logger?.warn({ err: String(error) }, "cron-heartbeat: monitor inventory failed");
     return { ok: false, applied: [], failures: [{ error }] };
   }
+  params.commitGuard?.();
 
   const { changes } = resolveHeartbeatMonitorPlan(params.cfg, jobs, {
     schedulerSeed: params.schedulerSeed,
@@ -168,12 +170,19 @@ export async function applyHeartbeatMonitorJobs(params: {
   for (const change of changes) {
     try {
       if (change.kind === "remove") {
-        await params.cron.remove(change.job.id, { systemOwned: true });
+        await params.cron.remove(change.job.id, {
+          systemOwned: true,
+          ...(params.commitGuard ? { commitGuard: params.commitGuard } : {}),
+        });
       } else {
-        await params.cron.add(change.input, heartbeatMonitorAddOptions(change.agentId));
+        await params.cron.add(change.input, {
+          ...heartbeatMonitorAddOptions(change.agentId),
+          ...(params.commitGuard ? { commitGuard: params.commitGuard } : {}),
+        });
       }
       applied.push(change);
     } catch (error) {
+      params.commitGuard?.();
       failures.push({ change, error });
       params.logger?.warn(
         { agentId: change.agentId, err: String(error) },

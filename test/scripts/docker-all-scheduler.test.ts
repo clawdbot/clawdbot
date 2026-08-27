@@ -616,6 +616,7 @@ describe("scripts/test-docker-all scheduler", () => {
     copyFileSync("scripts/test-docker-all.mjs", path.join(scriptsDir, "test-docker-all.mjs"));
     copyFileSync("scripts/test-docker-all.mts", path.join(scriptsDir, "test-docker-all.mts"));
     copyFileSync("scripts/lib/tsx-cli-shim.mjs", path.join(libDir, "tsx-cli-shim.mjs"));
+    copyFileSync("scripts/tsx.mjs", path.join(scriptsDir, "tsx.mjs"));
     copyFileSync(
       "scripts/prepublish-plugin-registry-artifact.mjs",
       path.join(scriptsDir, "prepublish-plugin-registry-artifact.mjs"),

@@ -1,5 +1,6 @@
 // Configure wizard model/auth selection and gateway auth config helpers.
 import { resolveMutableAgentEntry } from "../agents/agent-scope-config.js";
+import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig, GatewayAuthConfig } from "../config/config.js";
@@ -234,7 +235,13 @@ export async function promptAuthConfig(
           });
 
     if (authChoice === "custom-api-key") {
-      const customResult = await promptCustomApiConfig({ prompter, runtime, config: next, target });
+      const customResult = await promptCustomApiConfig({
+        prompter,
+        runtime,
+        config: next,
+        target,
+        setAsPrimary: !resolveAgentEffectiveModelPrimary(next, target.agentId),
+      });
       next = customResult.config;
       break;
     }

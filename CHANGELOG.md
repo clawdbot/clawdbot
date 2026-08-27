@@ -70,7 +70,9 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - **Android settings:** keep form fields and actions reachable above the keyboard, and respect bottom system insets without duplicating navigation padding.
+- **Nextcloud Talk diagnostics:** redact reflected credentials before displaying send, reaction, and bot-preflight errors, and suppress incomplete error bodies. (#119976) Thanks @xialonglee.
 - Codex image attachments: decode mixed-case `file://` URLs as local image paths while preserving existing file URL validation and platform behavior. (#121611) Thanks @sunlit-deng.
+- **Android gateway discovery:** resolve nearby gateways one at a time on Android 12 and 13 so simultaneously advertised gateways are not silently omitted.
 
 - **Control UI agent files:** keep confirmed saves and file metadata intact when older reads or list refreshes finish later, preserve newer drafts, and rebuild invalidated file lists without losing the open editor.
 

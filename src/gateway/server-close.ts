@@ -323,6 +323,7 @@ async function settleTerminalSessionPersistenceForRestart(
     if (!tracked || tracked.entry.projectSessionTerminalPersistence !== tracked.persistence) {
       continue;
     }
+    tracked.entry.projectSessionTerminalPending = false;
     tracked.entry.projectSessionTerminalPersistence = undefined;
     if (result.status === "fulfilled") {
       tracked.entry.projectSessionTerminalPersisted = true;

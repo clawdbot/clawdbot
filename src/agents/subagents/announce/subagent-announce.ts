@@ -331,7 +331,8 @@ export async function runSubagentAnnounceFlow(params: {
           taskLabel: params.label || params.task || "task",
           findings: childCompletionFindings,
           announceId: wakeAnnounceId,
-          isChildSessionEffectsAllowed: childSessionEffectsAllowed,
+          isChildSessionEffectsAllowed: () =>
+            childSessionEffectsAllowed() && completionDeliveryAllowed(),
           resolveGatewayContext: params.resolveGatewayContext,
           signal: params.signal,
         },

@@ -232,12 +232,12 @@ describe("scripts/test-projects changed-target routing", () => {
     }
   });
 
-  it("routes shared TypeScript CLI shim changes through wrapper tests", () => {
-    expectChangedTargets(
-      ["scripts/lib/tsx-cli-shim.mjs"],
-      ["test/scripts/direct-run-entrypoints.test.ts"],
-    );
-  });
+  it.each(["scripts/lib/tsx-cli-shim.mjs", "scripts/tsx.mjs"])(
+    "routes shared TypeScript tooling changes through wrapper tests for %s",
+    (scriptPath) => {
+      expectChangedTargets([scriptPath], ["test/scripts/direct-run-entrypoints.test.ts"]);
+    },
+  );
 
   it("routes Docker pull retry helper changes through its regression test", () => {
     expectChangedTargets(

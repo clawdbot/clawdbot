@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Plugin } from "vite";
@@ -47,6 +48,11 @@ export function controlUiLocaleModulesPlugin(): Plugin {
         return null;
       }
       const memoryPath = path.join(i18nAssetsDir, `${locale}.tm.jsonl`);
+      // Source PRs omit generated memory until the post-merge refresh runs.
+      // Existing empty or malformed memory stays fatal below so drift cannot hide.
+      if (!existsSync(memoryPath)) {
+        return `export default ${JSON.stringify(sourceCatalog)};`;
+      }
       this.addWatchFile(memoryPath);
       const memory = loadControlUiTranslationMemory(memoryPath);
       if (memory.size === 0) {

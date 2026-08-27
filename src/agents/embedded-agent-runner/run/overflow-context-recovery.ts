@@ -56,6 +56,7 @@ export async function recoverEmbeddedRunOverflow(
     toolResultPromptProjectionState: ToolResultPromptProjectionState;
     attemptCompactionCount: number;
     prepareCurrentTranscriptRetry: () => void;
+    markOwnedTranscriptRetry: () => void;
   },
 ): Promise<EmbeddedRunOverflowRecoveryOutcome> {
   const contextOverflowError =
@@ -148,6 +149,7 @@ export async function recoverEmbeddedRunOverflow(
     input.attemptCompactionCount > 0 &&
     input.state.overflowCompactionAttempts < MAX_OVERFLOW_COMPACTION_ATTEMPTS
   ) {
+    input.markOwnedTranscriptRetry();
     input.state.overflowCompactionAttempts += 1;
     log.warn(
       `context overflow persisted after in-attempt compaction (attempt ${input.state.overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); retrying prompt without additional compaction for ${input.provider}/${input.modelId}`,
@@ -315,6 +317,7 @@ export async function recoverEmbeddedRunOverflow(
         log.info(
           `auto-compaction succeeded for ${input.provider}/${input.modelId}; retrying prompt`,
         );
+        input.markOwnedTranscriptRetry();
         if (preflightRecovery?.source === "mid-turn") {
           input.prepareCurrentTranscriptRetry();
         } else {
@@ -362,6 +365,7 @@ export async function recoverEmbeddedRunOverflow(
         projectionState: input.toolResultPromptProjectionState,
       });
       if (truncResult.truncated) {
+        input.markOwnedTranscriptRetry();
         log.info(
           `[context-overflow-recovery] Truncated ${truncResult.truncatedCount} tool result(s); retrying prompt`,
         );

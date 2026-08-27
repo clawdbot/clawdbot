@@ -132,6 +132,18 @@ export class GatewayConfigReloadSupersededError extends Error {
   }
 }
 
+export function assertReloadPublicationCurrent(
+  publicationCurrent: boolean,
+  restartStopped: boolean,
+): void {
+  if (!publicationCurrent) {
+    throw new GatewayConfigReloadSupersededError();
+  }
+  if (restartStopped) {
+    throw new GatewayHotReloadCancelledError();
+  }
+}
+
 export type GatewayPluginReloadResult = {
   restartChannels: ReadonlySet<ChannelKind>;
   activeChannels: ReadonlySet<ChannelKind>;
