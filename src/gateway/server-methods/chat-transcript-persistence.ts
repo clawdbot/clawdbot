@@ -1,6 +1,9 @@
 // Transcript persistence and source-reply rewrites shared by chat send and abort.
 import { asOptionalRecord as transcriptEventRecord } from "@openclaw/normalization-core/record-coerce";
-import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
+import {
+  appendReplyMediaFailureWarning,
+  getReplyPayloadMetadata,
+} from "../../auto-reply/reply-payload.js";
 import {
   findTranscriptEvent,
   loadTranscriptEventRowsAfterSeqSync,
@@ -147,6 +150,13 @@ function mergeManagedMediaIntoAssistantContent(params: {
   if (managedBlocks.length === 0) {
     return null;
   }
+  const mediaFailureWarning = appendReplyMediaFailureWarning(undefined);
+  const preserveMediaFailureWarning = params.replacement.some(
+    (block) =>
+      block?.type === "text" &&
+      typeof block.text === "string" &&
+      block.text.includes(mediaFailureWarning),
+  );
   let replaced = false;
   const merged: AssistantDisplayContentBlock[] = [];
   for (const block of original) {
@@ -160,7 +170,12 @@ function mergeManagedMediaIntoAssistantContent(params: {
     });
     if (visibleText) {
       const { textSignature: _textSignature, ...rest } = block;
-      merged.push({ ...rest, text: visibleText });
+      merged.push({
+        ...rest,
+        text: preserveMediaFailureWarning
+          ? appendReplyMediaFailureWarning(visibleText)
+          : visibleText,
+      });
     }
     if (split.mediaUrls?.length && !replaced) {
       merged.push(...managedBlocks);

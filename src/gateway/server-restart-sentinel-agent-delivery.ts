@@ -343,14 +343,25 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
           for (const mediaUrl of mediaUrls) {
             let blocks = preparedMediaBlocks[mediaUrl];
             if (!blocks) {
+              const attachment = entry.expectedMediaAttachments?.[mediaUrl];
               blocks = await createManagedOutgoingMediaBlocks({
                 sessionKey: params.canonicalKey,
                 agentId: params.agentId,
-                mediaUrls: [mediaUrl],
-                attachments: [entry.expectedMediaAttachments?.[mediaUrl] ?? {}],
+                items: [
+                  {
+                    url: mediaUrl,
+                    ...(attachment?.name ? { filename: attachment.name } : {}),
+                    ...(attachment?.mimeType ? { mimeType: attachment.mimeType } : {}),
+                    trustedLocal: true,
+                    ...(attachment?.durationMs !== undefined
+                      ? { durationMs: attachment.durationMs }
+                      : {}),
+                    ...(attachment?.width !== undefined ? { width: attachment.width } : {}),
+                    ...(attachment?.height !== undefined ? { height: attachment.height } : {}),
+                  },
+                ],
                 stateDir,
                 localRoots: [getMediaDir()],
-                allowLocalNonImage: true,
               });
               if (
                 !blocks.some(

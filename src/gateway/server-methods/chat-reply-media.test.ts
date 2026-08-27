@@ -12,7 +12,10 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createManagedOutgoingMediaBlocks as createManagedOutgoingImageBlocks } from "../managed-image-attachments.js";
-import { buildAssistantDisplayContentFromReplyPayloads } from "./chat-assistant-content.js";
+import {
+  buildAssistantDisplayContentFromReplyPayloads,
+  replaceAssistantContentTextBlocks,
+} from "./chat-assistant-content.js";
 import { normalizeWebchatReplyMediaPathsForDisplay } from "./chat-reply-media.js";
 
 const PNG_BYTES = Buffer.from(
@@ -133,7 +136,7 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
   }) {
     return createManagedOutgoingImageBlocks({
       sessionKey: TEST_SESSION_KEY,
-      mediaUrls: params.mediaUrls ?? [],
+      items: (params.mediaUrls ?? []).map((url) => ({ url, trustedLocal: false })),
       localRoots: getAgentScopedMediaLocalRoots(params.cfg, "main"),
     });
   }
@@ -177,6 +180,73 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     expect(requireString(payload?.text, "suppressed media text")).toBe(
       "⚠️ Media failed. Try sending a smaller supported file or a different format.",
     );
+  });
+
+  it("preserves a visible warning when mixed media normalization rejects one item", async () => {
+    const { workspaceDir, cfg } = createMediaTestContext({ allowRead: true });
+    const imagePath = path.join(workspaceDir, "image.png");
+    const unsupportedPath = path.join(workspaceDir, "script.js");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(imagePath, PNG_BYTES);
+    await fs.writeFile(unsupportedPath, "export default true;\n");
+
+    const payload = await normalizeReplyMedia({
+      cfg,
+      payloads: [
+        {
+          text: "Artifacts ready",
+          mediaUrls: [imagePath, unsupportedPath],
+        },
+      ],
+    });
+
+    expect(payload).toMatchObject({
+      text: "Artifacts ready\n⚠️ Media failed. Try sending a smaller supported file or a different format.",
+      mediaUrls: [expect.stringMatching(/\.png$/u)],
+      attachments: [
+        expect.objectContaining({
+          name: "image.png",
+          mimeType: "image/png",
+          trustedLocalMedia: true,
+        }),
+      ],
+    });
+  });
+
+  it("preserves rejection warnings and metadata beside trusted local audio", async () => {
+    const { workspaceDir, cfg } = createMediaTestContext({ allowRead: true });
+    const documentPath = path.join(workspaceDir, "report.json");
+    const unsupportedPath = path.join(workspaceDir, "script.js");
+    const audioPath = path.join(workspaceDir, "voice.mp3");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(documentPath, '{"ready":true}\n');
+    await fs.writeFile(unsupportedPath, "export default true;\n");
+    await createAudioFile(audioPath);
+
+    const payload = await normalizeReplyMedia({
+      cfg,
+      payloads: [
+        {
+          text: "Artifacts ready",
+          mediaUrls: [documentPath, unsupportedPath, audioPath],
+          attachments: [
+            { name: "report.json", mimeType: "application/json", trustedLocalMedia: true },
+            { name: "script.js", mimeType: "text/javascript", trustedLocalMedia: true },
+            { name: "voice.mp3", mimeType: "audio/mpeg", trustedLocalMedia: true },
+          ],
+          trustedLocalMedia: true,
+        },
+      ],
+    });
+
+    expect(payload).toMatchObject({
+      text: "Artifacts ready\n⚠️ Media failed. Try sending a smaller supported file or a different format.",
+      mediaUrls: [expect.stringMatching(/\.json$/u), audioPath],
+      attachments: [
+        expect.objectContaining({ name: "report.json", mimeType: "application/json" }),
+        expect.objectContaining({ name: "voice.mp3", mimeType: "audio/mpeg" }),
+      ],
+    });
   });
 
   it("does not stage sensitive media before display suppression", async () => {
@@ -224,6 +294,69 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     expect(errors).toEqual(["Invalid image data URL"]);
     expect(JSON.stringify(content)).not.toContain(source);
     expect(Buffer.byteLength(JSON.stringify(content))).toBeLessThan(256);
+  });
+
+  it("keeps an explicit warning when one media item cannot become an attachment", async () => {
+    const { workspaceDir } = createMediaTestContext({ allowRead: true });
+    const sourcePath = path.join(workspaceDir, "mystery.blob");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(sourcePath, Buffer.from([0, 1, 2, 3]));
+
+    const content = await buildAssistantDisplayContentFromReplyPayloads({
+      sessionKey: TEST_SESSION_KEY,
+      agentId: "main",
+      payloads: [
+        {
+          text: "Artifact result",
+          mediaUrls: [sourcePath],
+          attachments: [{ name: "mystery.blob", trustedLocalMedia: true }],
+        },
+      ],
+      managedMediaLocalRoots: [workspaceDir],
+    });
+
+    expect(content).toEqual([
+      { type: "text", text: "Artifact result" },
+      {
+        type: "text",
+        text: "⚠️ Media failed. Try sending a smaller supported file or a different format.",
+      },
+    ]);
+  });
+
+  it("preserves a media failure warning beside synthetic media-only text", () => {
+    const warning = "⚠️ Media failed. Try sending a smaller supported file or a different format.";
+
+    expect(
+      replaceAssistantContentTextBlocks(
+        [
+          { type: "image", url: "/managed/image" },
+          { type: "text", text: warning },
+        ],
+        { content: [{ type: "text", text: "Image reply" }] },
+      ),
+    ).toEqual([
+      { type: "text", text: "Image reply" },
+      { type: "image", url: "/managed/image" },
+      { type: "text", text: warning },
+    ]);
+  });
+
+  it("preserves a media failure warning appended to replaced transcript text", () => {
+    const warning = "⚠️ Media failed. Try sending a smaller supported file or a different format.";
+
+    expect(
+      replaceAssistantContentTextBlocks(
+        [
+          { type: "text", text: `Artifact result\n${warning}` },
+          { type: "attachment", attachment: { label: "report.pdf" } },
+        ],
+        { content: [{ type: "text", text: "Artifact result" }] },
+      ),
+    ).toEqual([
+      { type: "text", text: `Artifact result\n${warning}` },
+      { type: "attachment", attachment: { label: "report.pdf" } },
+    ]);
   });
 
   it("preserves local audio paths for WebChat audio embedding", async () => {

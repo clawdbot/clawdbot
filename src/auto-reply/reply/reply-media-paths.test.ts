@@ -96,6 +96,7 @@ describe("createReplyMediaPathNormalizer", () => {
     ensureSandboxWorkspaceForSession.mockReset().mockResolvedValue(null);
     resolveOutboundAttachmentFromUrl.mockReset().mockImplementation(async (mediaUrl: string) => ({
       path: path.join("/tmp/outbound-media", path.basename(mediaUrl.replace(/^file:\/\//i, ""))),
+      contentType: mediaUrl.endsWith(".mp3") ? "audio/mpeg" : "image/png",
     }));
     resolveAgentScopedOutboundMediaAccess
       .mockReset()
@@ -126,7 +127,9 @@ describe("createReplyMediaPathNormalizer", () => {
     const mediaAccess = requireRecord(options.mediaAccess, "media access");
     expect(mediaAccess.workspaceDir).toBe("/tmp/agent-workspace");
     expect(result.trustedLocalMedia).toBe(true);
-    expect(result.attachments).toEqual([{ name: "photo.png", trustedLocalMedia: true }]);
+    expect(result.attachments).toEqual([
+      { name: "photo.png", mimeType: "image/png", trustedLocalMedia: true },
+    ]);
   });
 
   it("does not grant local-media trust to remote-only replies", async () => {

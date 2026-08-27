@@ -1,6 +1,7 @@
 // Resolves media paths from reply payloads into runtime attachment metadata.
 import path from "node:path";
 import { isPassThroughRemoteMediaSource } from "@openclaw/media-core/media-source-url";
+import { mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolvePathFromInput, toRelativeWorkspacePath } from "../../agents/path-policy.js";
@@ -80,7 +81,7 @@ export function createReplyMediaPathNormalizer(params: {
         containerWorkdir: params.sandboxContainerWorkdir,
       })
     : undefined;
-  const persistedMediaBySource = new Map<string, Promise<string>>();
+  const persistedMediaBySource = new Map<string, Promise<{ path: string; contentType?: string }>>();
 
   const resolveSandboxWorkspace = async () => {
     if (!sandboxWorkspacePromise) {
@@ -115,13 +116,18 @@ export function createReplyMediaPathNormalizer(params: {
       groupSpace: params.groupSpace,
     });
 
-  const persistLocalReplyMedia = async (media: string): Promise<string> => {
+  const persistLocalReplyMedia = async (
+    media: string,
+  ): Promise<{ path: string; contentType?: string }> => {
     if (!isLikelyLocalMediaSource(media)) {
-      return media;
+      return { path: media };
     }
     const managedMediaPath = await resolveAllowedManagedMediaPath(media);
     if (managedMediaPath) {
-      return managedMediaPath;
+      return {
+        path: managedMediaPath,
+        contentType: mimeTypeFromFilePath(managedMediaPath),
+      };
     }
     const cached = persistedMediaBySource.get(media);
     if (cached) {
@@ -130,7 +136,10 @@ export function createReplyMediaPathNormalizer(params: {
     const persistPromise = resolveOutboundAttachmentFromUrl(media, maxBytes, {
       mediaAccess: resolveMediaAccessForSource(media),
     })
-      .then((saved) => saved.path)
+      .then((saved) => ({
+        ...saved,
+        contentType: saved.contentType ?? mimeTypeFromFilePath(media) ?? "application/octet-stream",
+      }))
       .catch((err: unknown) => {
         persistedMediaBySource.delete(media);
         throw err;
@@ -159,7 +168,12 @@ export function createReplyMediaPathNormalizer(params: {
 
   const normalizeMediaSource = async (
     raw: string,
-  ): Promise<{ mediaUrl: string; trustedLocalMedia: boolean; fileName?: string }> => {
+  ): Promise<{
+    mediaUrl: string;
+    trustedLocalMedia: boolean;
+    fileName?: string;
+    mimeType?: string;
+  }> => {
     const media = raw.trim();
     if (!media) {
       return { mediaUrl: media, trustedLocalMedia: false };
@@ -170,10 +184,12 @@ export function createReplyMediaPathNormalizer(params: {
     }
     const absoluteWorkspaceMedia = resolveAbsoluteWorkspaceMedia(media);
     if (absoluteWorkspaceMedia) {
+      const persisted = await persistLocalReplyMedia(absoluteWorkspaceMedia);
       return {
-        mediaUrl: await persistLocalReplyMedia(absoluteWorkspaceMedia),
+        mediaUrl: persisted.path,
         trustedLocalMedia: true,
         fileName: path.basename(absoluteWorkspaceMedia),
+        ...(persisted.contentType ? { mimeType: persisted.contentType } : {}),
       };
     }
     const isRelativeLocalMedia =
@@ -200,18 +216,22 @@ export function createReplyMediaPathNormalizer(params: {
         }
         throw err;
       }
+      const persisted = await persistLocalReplyMedia(sandboxResolvedMedia);
       return {
-        mediaUrl: await persistLocalReplyMedia(sandboxResolvedMedia),
+        mediaUrl: persisted.path,
         trustedLocalMedia: true,
         fileName: path.basename(sandboxResolvedMedia),
+        ...(persisted.contentType ? { mimeType: persisted.contentType } : {}),
       };
     }
     if (isRelativeLocalMedia) {
       const workspaceMedia = resolveWorkspaceRelativeMedia(media);
+      const persisted = await persistLocalReplyMedia(workspaceMedia);
       return {
-        mediaUrl: await persistLocalReplyMedia(workspaceMedia),
+        mediaUrl: persisted.path,
         trustedLocalMedia: true,
         fileName: path.basename(workspaceMedia),
+        ...(persisted.contentType ? { mimeType: persisted.contentType } : {}),
       };
     }
     if (!isLikelyLocalMediaSource(media)) {
@@ -222,10 +242,12 @@ export function createReplyMediaPathNormalizer(params: {
         "Host-local MEDIA file URLs are blocked in normal replies. Use a safe path or the message tool.",
       );
     }
+    const persisted = await persistLocalReplyMedia(media);
     return {
-      mediaUrl: await persistLocalReplyMedia(media),
+      mediaUrl: persisted.path,
       trustedLocalMedia: true,
       fileName: path.basename(media),
+      ...(persisted.contentType ? { mimeType: persisted.contentType } : {}),
     };
   };
 
@@ -259,6 +281,9 @@ export function createReplyMediaPathNormalizer(params: {
       normalizedAttachments.push({
         ...existingAttachment,
         ...(normalized.fileName && !existingAttachment.name ? { name: normalized.fileName } : {}),
+        ...(normalized.mimeType && !existingAttachment.mimeType
+          ? { mimeType: normalized.mimeType }
+          : {}),
         ...(normalized.trustedLocalMedia ? { trustedLocalMedia: true } : {}),
       });
     }

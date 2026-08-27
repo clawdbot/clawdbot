@@ -13,6 +13,7 @@ import { createKeyedFifoLeaseRegistry } from "../shared/keyed-fifo-lease.js";
 import { isOpenClawDeliveryMirrorAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
 import {
   createManagedOutgoingMediaBlocks,
+  prepareOutgoingMediaFromReplyPayload,
   removeManagedOutgoingMediaBlocks,
 } from "./managed-image-attachments.js";
 import { prepareGatewayInjectedAssistantContent } from "./server-methods/chat-transcript-inject.js";
@@ -20,12 +21,6 @@ import { prepareGatewayInjectedAssistantContent } from "./server-methods/chat-tr
 const internalSourceReplyPersistenceLeases = createKeyedFifoLeaseRegistry(
   Symbol.for("openclaw.internalSourceReplyPersistenceLeases"),
 );
-
-function collectSourceReplyMediaUrls(payload: ReplyPayload): string[] {
-  return Array.from(
-    new Set([...(payload.mediaUrl ? [payload.mediaUrl] : []), ...(payload.mediaUrls ?? [])]),
-  ).filter((value) => value.trim().length > 0);
-}
 
 async function hasPersistedInternalSourceReply(params: {
   cfg: OpenClawConfig;
@@ -95,17 +90,17 @@ export async function persistInternalSourceReply(params: {
     if (await hasPersistedInternalSourceReply(params)) {
       return;
     }
-    const mediaUrls = collectSourceReplyMediaUrls(params.payload);
     const messageId = randomUUID();
+    const media = prepareOutgoingMediaFromReplyPayload(params.payload);
     const mediaBlocks = await createManagedOutgoingMediaBlocks({
       sessionKey: params.sessionKey,
       agentId: params.agentId,
-      mediaUrls,
+      items: media,
       messageId,
       localRoots: getAgentScopedMediaLocalRootsForSources({
         cfg: params.cfg,
         agentId: params.agentId,
-        mediaSources: mediaUrls,
+        mediaSources: media.map((item) => item.url),
       }),
     });
     const content: Array<Record<string, unknown>> = [

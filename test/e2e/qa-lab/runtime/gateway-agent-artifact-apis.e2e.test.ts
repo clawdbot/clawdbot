@@ -362,7 +362,12 @@ describe("Gateway agent and artifact APIs", () => {
     const [managedBlock] = await createManagedOutgoingMediaBlocks({
       sessionKey,
       agentId: "main",
-      mediaUrls: [`data:image/png;base64,${TINY_PNG_BASE64}`],
+      items: [
+        {
+          url: `data:image/png;base64,${TINY_PNG_BASE64}`,
+          trustedLocal: false,
+        },
+      ],
       stateDir,
       messageId,
     });

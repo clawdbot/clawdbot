@@ -1,4 +1,5 @@
 /** Extracts message delivery evidence from embedded-agent tool calls and results. */
+import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
@@ -6,7 +7,6 @@ import {
   normalizeOptionalStringifiedId,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import type { ChannelMessageActionName } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -49,11 +49,48 @@ export function extractMessagingToolSourceReplyPayload(
     : Array.isArray(details.mediaUrls)
       ? details.mediaUrls
       : [];
-  const mediaUrls = uniqueStrings(
-    rawMediaUrls.filter((value): value is string => typeof value === "string"),
-  );
+  const mediaUrls = rawMediaUrls.filter((value): value is string => typeof value === "string");
   if (mediaUrls.length > 0) {
     payload.mediaUrls = mediaUrls;
+  }
+  if (Array.isArray(sourceReply.attachments)) {
+    const attachments = sourceReply.attachments.flatMap((value) => {
+      const attachment = readRecord(value);
+      if (!attachment) {
+        return [];
+      }
+      const durationMs = asNonNegativeFiniteNumber(attachment.durationMs);
+      const width = asNonNegativeFiniteNumber(attachment.width);
+      const height = asNonNegativeFiniteNumber(attachment.height);
+      const attachmentPath = readStringValue(attachment.path);
+      const attachmentUrl = readStringValue(attachment.url);
+      const attachmentMediaUrl = readStringValue(attachment.mediaUrl);
+      const filePath = readStringValue(attachment.filePath);
+      const mimeType = readStringValue(attachment.mimeType);
+      const name = readStringValue(attachment.name);
+      return [
+        {
+          ...(attachmentPath ? { path: attachmentPath } : {}),
+          ...(attachmentUrl ? { url: attachmentUrl } : {}),
+          ...(attachmentMediaUrl ? { mediaUrl: attachmentMediaUrl } : {}),
+          ...(filePath ? { filePath } : {}),
+          ...(mimeType ? { mimeType } : {}),
+          ...(name ? { name } : {}),
+          ...(typeof attachment.trustedLocalMedia === "boolean"
+            ? { trustedLocalMedia: attachment.trustedLocalMedia }
+            : {}),
+          ...(durationMs !== undefined ? { durationMs } : {}),
+          ...(width !== undefined ? { width } : {}),
+          ...(height !== undefined ? { height } : {}),
+        },
+      ];
+    });
+    if (attachments.length > 0) {
+      payload.attachments = attachments;
+    }
+  }
+  if (typeof sourceReply.trustedLocalMedia === "boolean") {
+    payload.trustedLocalMedia = sourceReply.trustedLocalMedia;
   }
   if (sourceReply.audioAsVoice === true || details.audioAsVoice === true) {
     payload.audioAsVoice = true;
