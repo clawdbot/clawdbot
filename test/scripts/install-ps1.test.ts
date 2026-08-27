@@ -1271,7 +1271,7 @@ describe("install.ps1 failure handling", () => {
     expect(ensurePnpmBody).toContain(
       'Invoke-NpmCommand -Arguments @("install", "-g", "--force", $pnpmSpec)',
     );
-    expect(transactionalCloneBody).toContain("git clone $RepoUrl $stagingDir");
+    expect(transactionalCloneBody).toContain("git clone --filter=blob:none $RepoUrl $stagingDir");
     expect(gitInstallBody.indexOf("New-TransactionalGitCheckout")).toBeLessThan(
       gitInstallBody.indexOf("Ensure-Pnpm -RepoDir $RepoDir"),
     );

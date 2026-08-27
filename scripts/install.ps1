@@ -1657,7 +1657,9 @@ function New-TransactionalGitCheckout {
     $retainStaging = $false
 
     try {
-        git clone $RepoUrl $stagingDir
+        # Keep ref metadata for later updates while avoiding file blobs. Git
+        # warns and falls back to a full clone when the server cannot filter.
+        git clone --filter=blob:none $RepoUrl $stagingDir
         if ($LASTEXITCODE -ne 0) {
             throw "git clone failed with exit code $LASTEXITCODE"
         }
