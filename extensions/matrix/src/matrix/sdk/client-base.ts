@@ -94,7 +94,7 @@ export const loadMatrixCryptoRuntime = createLazyRuntimeModule(() =>
 
 export abstract class MatrixClientBase {
   abstract getUserId(): Promise<string>;
-  abstract getJoinedRooms(): Promise<string[]>;
+  abstract getJoinedRooms(opts?: { abortSignal?: AbortSignal }): Promise<string[]>;
   abstract listOwnDevices(): Promise<MatrixOwnDeviceInfo[]>;
   abstract getOwnDeviceVerificationStatus(): Promise<MatrixOwnDeviceVerificationStatus>;
   abstract getRoomStateEvent(
@@ -141,6 +141,7 @@ export abstract class MatrixClientBase {
   protected verificationSummaryListenerBound = false;
   protected currentSyncState: MatrixSyncState | null = null;
   protected currentSyncError: unknown = undefined;
+  protected currentSyncFromCache: boolean | undefined;
   protected readonly transactionScopeHomeserver: string;
   protected readonly transactionScopeAccessTokenHash: string;
   protected transactionScopeDeviceId: string | null;
@@ -380,40 +381,34 @@ export abstract class MatrixClientBase {
     });
   }
 
-  protected async waitForInitialSyncReady(
-    params: {
-      timeoutMs?: number;
-      abortSignal?: AbortSignal;
-    } = {},
-  ): Promise<void> {
-    const timeoutMs = params.timeoutMs ?? 30_000;
-    if (isMatrixReadySyncState(this.currentSyncState)) {
-      return;
-    }
-    if (isMatrixAccessTokenInvalidatedError(this.currentSyncError)) {
-      throw this.currentSyncError instanceof Error
-        ? this.currentSyncError
-        : new Error("Matrix access token invalidated", { cause: this.currentSyncError });
-    }
-    if (isMatrixTerminalSyncState(this.currentSyncState)) {
-      throw new Error(`Matrix sync entered ${this.currentSyncState} during startup`);
-    }
-
+  protected async waitForSyncCondition(params: {
+    abortError: () => Error;
+    abortSignal?: AbortSignal;
+    check: (abortSignal: AbortSignal) => boolean | Promise<boolean>;
+    timeoutMessage: string;
+    timeoutMs: number;
+  }): Promise<void> {
     await new Promise<void>((resolve, reject) => {
+      let checkRequested = false;
+      let checking = false;
+      let pendingError: Error | undefined;
       let settled = false;
       let timeoutId: ReturnType<typeof setTimeout> | undefined;
       const abortSignal = params.abortSignal;
+      const checkAbortController = new AbortController();
+      const checkAbortSignal = abortSignal
+        ? AbortSignal.any([abortSignal, checkAbortController.signal])
+        : checkAbortController.signal;
 
       const cleanup = () => {
-        this.off("sync.state", onSyncState);
-        this.off("sync.unexpected_error", onUnexpectedError);
+        this.off("sync.state", scheduleCheck);
+        this.off("sync.unexpected_error", requestReject);
         abortSignal?.removeEventListener("abort", onAbort);
         if (timeoutId) {
           clearTimeout(timeoutId);
           timeoutId = undefined;
         }
       };
-
       const settleResolve = () => {
         if (settled) {
           return;
@@ -422,59 +417,109 @@ export abstract class MatrixClientBase {
         cleanup();
         resolve();
       };
-
-      const settleReject = (error: Error) => {
-        if (settled) {
+      const finishReject = () => {
+        const error = pendingError;
+        if (settled || !error) {
           return;
         }
         settled = true;
         cleanup();
         reject(error);
       };
-
-      const onSyncState = (state: MatrixSyncState, _prevState: string | null, error?: unknown) => {
-        if (isMatrixReadySyncState(state)) {
-          settleResolve();
+      const requestReject = (error: unknown) => {
+        if (settled || pendingError) {
           return;
         }
-        if (isMatrixAccessTokenInvalidatedError(error)) {
-          settleReject(
-            error instanceof Error ? error : new Error("Matrix access token invalidated"),
-          );
+        pendingError = error instanceof Error ? error : new Error(String(error));
+        cleanup();
+        checkAbortController.abort(pendingError);
+        if (!checking) {
+          finishReject();
+        }
+      };
+      const scheduleCheck = () => {
+        if (settled || pendingError) {
           return;
         }
-        if (isMatrixTerminalSyncState(state)) {
-          settleReject(
-            new Error(
-              error instanceof Error && error.message
-                ? error.message
-                : `Matrix sync entered ${state} during startup`,
-            ),
-          );
+        checkRequested = true;
+        if (checking) {
+          return;
         }
+        checking = true;
+        void (async () => {
+          try {
+            while (checkRequested) {
+              checkRequested = false;
+              const ready = await params.check(checkAbortSignal);
+              if (pendingError) {
+                return;
+              }
+              if (ready) {
+                settleResolve();
+                return;
+              }
+            }
+          } catch (error) {
+            requestReject(error);
+          } finally {
+            checking = false;
+            if (pendingError) {
+              finishReject();
+            } else if (checkRequested && !settled) {
+              scheduleCheck();
+            }
+          }
+        })();
       };
-
-      const onUnexpectedError = (error: Error) => {
-        settleReject(error);
-      };
-
       const onAbort = () => {
-        settleReject(createMatrixStartupAbortError());
+        requestReject(params.abortError());
       };
 
-      this.on("sync.state", onSyncState);
-      this.on("sync.unexpected_error", onUnexpectedError);
+      this.on("sync.state", scheduleCheck);
+      this.on("sync.unexpected_error", requestReject);
       if (abortSignal?.aborted) {
         onAbort();
         return;
       }
       abortSignal?.addEventListener("abort", onAbort, { once: true });
       timeoutId = setTimeout(() => {
-        settleReject(
-          new Error(`Matrix client did not reach a ready sync state within ${timeoutMs}ms`),
-        );
-      }, timeoutMs);
+        requestReject(new Error(params.timeoutMessage));
+      }, params.timeoutMs);
       timeoutId.unref?.();
+      scheduleCheck();
+    });
+  }
+
+  protected async waitForInitialSyncReady(
+    params: {
+      timeoutMs?: number;
+      abortSignal?: AbortSignal;
+    } = {},
+  ): Promise<void> {
+    const timeoutMs = params.timeoutMs ?? 30_000;
+    await this.waitForSyncCondition({
+      abortError: createMatrixStartupAbortError,
+      abortSignal: params.abortSignal,
+      check: () => {
+        if (isMatrixReadySyncState(this.currentSyncState)) {
+          return true;
+        }
+        if (isMatrixAccessTokenInvalidatedError(this.currentSyncError)) {
+          throw this.currentSyncError instanceof Error
+            ? this.currentSyncError
+            : new Error("Matrix access token invalidated", { cause: this.currentSyncError });
+        }
+        if (isMatrixTerminalSyncState(this.currentSyncState)) {
+          throw new Error(
+            this.currentSyncError instanceof Error && this.currentSyncError.message
+              ? this.currentSyncError.message
+              : `Matrix sync entered ${this.currentSyncState} during startup`,
+          );
+        }
+        return false;
+      },
+      timeoutMessage: `Matrix client did not reach a ready sync state within ${timeoutMs}ms`,
+      timeoutMs,
     });
   }
 
@@ -553,6 +598,7 @@ export abstract class MatrixClientBase {
     }
     this.currentSyncState = null;
     this.currentSyncError = undefined;
+    this.currentSyncFromCache = undefined;
     this.client.stopClient();
     this.sdkStopped = true;
     this.started = false;

@@ -11,7 +11,9 @@ import { EventStatus } from "matrix-js-sdk/lib/models/event-status.js";
 import type { Direction } from "matrix-js-sdk/lib/models/event-timeline.js";
 import { formatMatrixErrorReason } from "../errors.js";
 import { MATRIX_REACTION_EVENT_TYPE } from "../reaction-common.js";
+import { isMatrixTerminalSyncState } from "../sync-state.js";
 import { MatrixClientBase, type MatrixMessageWireDispatch } from "./client-base.js";
+import { isMatrixAccessTokenInvalidatedError } from "./client-support.js";
 import { matrixEventToRaw, parseMxc } from "./event-helpers.js";
 import { noop } from "./logger.js";
 import type { HttpMethod, QueryParams } from "./transport.js";
@@ -52,11 +54,76 @@ export abstract class MatrixClientCore extends MatrixClientBase {
     return resolved;
   }
 
-  async getJoinedRooms(): Promise<string[]> {
-    const joined = (await this.doRequest("GET", "/_matrix/client/v3/joined_rooms")) as {
+  async getJoinedRooms(opts: { abortSignal?: AbortSignal } = {}): Promise<string[]> {
+    const joined = (await this.doRequest(
+      "GET",
+      "/_matrix/client/v3/joined_rooms",
+      undefined,
+      undefined,
+      {
+        abortSignal: opts.abortSignal,
+      },
+    )) as {
       joined_rooms?: unknown;
     };
     return Array.isArray(joined.joined_rooms) ? joined.joined_rooms : [];
+  }
+
+  async waitForEncryptedRoomReady(
+    roomId: string,
+    opts: { abortSignal?: AbortSignal; timeoutMs?: number } = {},
+  ): Promise<void> {
+    const normalizedRoomId = roomId.trim();
+    if (!normalizedRoomId) {
+      throw new Error("Matrix encrypted room readiness requires a room id");
+    }
+    if (!this.encryptionEnabled) {
+      throw new Error("Matrix encrypted room readiness requires encryption to be enabled");
+    }
+    const timeoutMs = Math.max(1, Math.floor(opts.timeoutMs ?? this.localTimeoutMs));
+
+    await this.waitForSyncCondition({
+      abortError: () => {
+        const error = new Error(`Matrix encrypted room readiness aborted for ${normalizedRoomId}`);
+        error.name = "AbortError";
+        return error;
+      },
+      abortSignal: opts.abortSignal,
+      check: async (abortSignal) => {
+        if (isMatrixAccessTokenInvalidatedError(this.currentSyncError)) {
+          throw this.currentSyncError instanceof Error
+            ? this.currentSyncError
+            : new Error("Matrix access token invalidated");
+        }
+        if (isMatrixTerminalSyncState(this.currentSyncState)) {
+          throw new Error(
+            `Matrix sync entered ${this.currentSyncState} before encrypted room ${normalizedRoomId} was ready`,
+          );
+        }
+        if (
+          (this.currentSyncState !== "PREPARED" && this.currentSyncState !== "SYNCING") ||
+          this.currentSyncFromCache === true
+        ) {
+          // Cached PREPARED only reflects restored state. A live sync must finish
+          // before joined-room and crypto hydration are authoritative.
+          return false;
+        }
+        const room = this.client.getRoom(normalizedRoomId);
+        if (!room || room.getMyMembership() !== "join" || !room.hasEncryptionStateEvent()) {
+          return false;
+        }
+        const crypto = this.client.getCrypto();
+        if (!crypto) {
+          throw new Error("Matrix encrypted room readiness requires initialized crypto");
+        }
+        if (!(await crypto.isEncryptionEnabledInRoom(normalizedRoomId))) {
+          return false;
+        }
+        return (await this.getJoinedRooms({ abortSignal })).includes(normalizedRoomId);
+      },
+      timeoutMessage: `Matrix encrypted room ${normalizedRoomId} did not become ready within ${timeoutMs}ms`,
+      timeoutMs,
+    });
   }
 
   async getTransactionScopeId(): Promise<string> {
@@ -351,7 +418,7 @@ export abstract class MatrixClientCore extends MatrixClientBase {
     endpoint: string,
     qs?: QueryParams,
     body?: unknown,
-    opts?: { allowAbsoluteEndpoint?: boolean },
+    opts?: { allowAbsoluteEndpoint?: boolean; abortSignal?: AbortSignal },
   ): Promise<unknown> {
     return await this.httpClient.requestJson({
       method,
@@ -360,6 +427,7 @@ export abstract class MatrixClientCore extends MatrixClientBase {
       body,
       timeoutMs: this.localTimeoutMs,
       allowAbsoluteEndpoint: opts?.allowAbsoluteEndpoint,
+      abortSignal: opts?.abortSignal,
     });
   }
 

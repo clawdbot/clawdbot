@@ -38,6 +38,25 @@ import {
 } from "./scenario-runtime-shared.js";
 import type { MatrixQaScenarioExecution } from "./scenario-types.js";
 
+async function runMatrixQaCliGatewayLifecycle<T>(
+  run: () => Promise<T>,
+  cleanups: ReadonlyArray<() => Promise<unknown>>,
+): Promise<T> {
+  const errors: unknown[] = [];
+  const result = await run().catch((error: unknown) => errors.push(error));
+  for (const cleanup of cleanups) {
+    await cleanup().catch((error: unknown) => errors.push(error));
+  }
+  if (errors.length === 0) {
+    return result as T;
+  }
+  throw errors.length === 1
+    ? errors[0]
+    : new AggregateError(errors, "Matrix CLI setup gateway reply lifecycle failed", {
+        cause: errors[0],
+      });
+}
+
 export async function runMatrixQaE2eeCliEncryptionSetupMultiAccountScenario(
   context: MatrixQaScenarioContext,
 ): Promise<MatrixQaScenarioExecution> {
@@ -256,6 +275,7 @@ export async function runMatrixQaE2eeCliSetupThenGatewayReplyScenario(
     artifactLabel: "cli-setup-then-gateway-reply",
     context,
   });
+  let driverLifecycleStarted = false;
   try {
     const setupResult = await cli.run([
       "matrix",
@@ -310,49 +330,46 @@ export async function runMatrixQaE2eeCliSetupThenGatewayReplyScenario(
       observedEvents: context.observedEvents,
       outputDir: requireMatrixQaE2eeOutputDir(context),
       password: driverAccount.password,
+      readyRoomIds: [roomId],
       scenarioId,
       timeoutMs: context.timeoutMs,
       userId: driverAccount.userId,
     });
-    const replied = await (async () => {
-      try {
-        await ensureMatrixQaE2eeOwnDeviceVerified({
-          client: driverClient,
-          label: "Matrix CLI setup scenario driver",
-        });
-        await driverClient.waitForJoinedMember({
-          roomId,
-          timeoutMs: context.timeoutMs,
-          userId: account.userId,
-        });
-        await driverClient.prime();
-        const token = buildMatrixQaToken("MATRIX_QA_E2EE_CLI_GATEWAY");
-        const driverEventId = await driverClient.sendTextMessage({
-          body: buildMentionPrompt(account.userId, token),
-          mentionUserIds: [account.userId],
-          roomId,
-        });
-        const matched = await driverClient.waitForRoomEvent({
-          predicate: (event) =>
-            isMatrixQaExactMarkerReply(event, {
-              roomId,
-              sutUserId: account.userId,
-              token,
-            }) && event.relatesTo === undefined,
-          roomId,
-          timeoutMs: context.timeoutMs,
-        });
-        const reply = buildMatrixE2eeReplyArtifact(matched.event, token);
-        assertTopLevelReplyArtifact("gateway reply", reply);
-        return {
-          driverEventId,
-          reply,
-        };
-      } finally {
-        await driverClient.stop();
-      }
-    })();
-
+    driverLifecycleStarted = true;
+    const replied = await runMatrixQaCliGatewayLifecycle(async () => {
+      await ensureMatrixQaE2eeOwnDeviceVerified({
+        client: driverClient,
+        label: "Matrix CLI setup scenario driver",
+      });
+      await driverClient.waitForJoinedMember({
+        roomId,
+        timeoutMs: context.timeoutMs,
+        userId: account.userId,
+      });
+      await driverClient.prime();
+      const token = buildMatrixQaToken("MATRIX_QA_E2EE_CLI_GATEWAY");
+      const driverEventId = await driverClient.sendTextMessage({
+        body: buildMentionPrompt(account.userId, token),
+        mentionUserIds: [account.userId],
+        roomId,
+      });
+      const matched = await driverClient.waitForRoomEvent({
+        predicate: (event) =>
+          isMatrixQaExactMarkerReply(event, {
+            roomId,
+            sutUserId: account.userId,
+            token,
+          }) && event.relatesTo === undefined,
+        roomId,
+        timeoutMs: context.timeoutMs,
+      });
+      const reply = buildMatrixE2eeReplyArtifact(matched.event, token);
+      assertTopLevelReplyArtifact("gateway reply", reply);
+      return {
+        driverEventId,
+        reply,
+      };
+    }, [() => driverClient.stop(), () => cli.dispose()]);
     return {
       artifacts: {
         accountId,
@@ -379,6 +396,8 @@ export async function runMatrixQaE2eeCliSetupThenGatewayReplyScenario(
       ].join("\n"),
     };
   } finally {
-    await cli.dispose();
+    if (!driverLifecycleStarted) {
+      await cli.dispose();
+    }
   }
 }

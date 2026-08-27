@@ -28,6 +28,25 @@ export const MATRIX_QA_SYNC_STATE_AFTER_PARAM = "org.matrix.msc4222.use_state_af
 
 type MatrixQaE2eeBootstrapResult = Awaited<ReturnType<typeof runMatrixQaE2eeBootstrap>>;
 
+async function runMatrixQaDriverObserverLifecycle<T>(
+  run: () => Promise<T>,
+  cleanups: ReadonlyArray<() => Promise<unknown>>,
+): Promise<T> {
+  const errors: unknown[] = [];
+  const result = await run().catch((error: unknown) => errors.push(error));
+  for (const cleanup of cleanups) {
+    await cleanup().catch((error: unknown) => errors.push(error));
+  }
+  if (errors.length === 0) {
+    return result as T;
+  }
+  throw errors.length === 1
+    ? errors[0]
+    : new AggregateError(errors, "Matrix E2EE driver and observer lifecycle failed", {
+        cause: errors[0],
+      });
+}
+
 export function requireMatrixQaE2eeOutputDir(context: MatrixQaScenarioContext) {
   if (!context.outputDir) {
     throw new Error("Matrix E2EE QA scenarios require an output directory");
@@ -297,7 +316,10 @@ export function isMatrixQaE2eeNoticeTriggeredSutReply(params: {
 export async function createMatrixQaE2eeDriverClient(
   context: MatrixQaScenarioContext,
   scenarioId: MatrixQaE2eeScenarioId,
-  opts: { actorId?: "driver" | `driver-${string}` } = {},
+  opts: {
+    actorId?: "driver" | `driver-${string}`;
+    readyRoomIds?: string[];
+  } = {},
 ) {
   return await createMatrixQaE2eeScenarioClient({
     accessToken: context.driverAccessToken,
@@ -307,6 +329,7 @@ export async function createMatrixQaE2eeDriverClient(
     observedEvents: context.observedEvents,
     outputDir: requireMatrixQaE2eeOutputDir(context),
     password: context.driverPassword,
+    ...(opts.readyRoomIds ? { readyRoomIds: opts.readyRoomIds } : {}),
     scenarioId,
     timeoutMs: context.timeoutMs,
     userId: context.driverUserId,
@@ -316,6 +339,7 @@ export async function createMatrixQaE2eeDriverClient(
 async function createMatrixQaE2eeObserverClient(
   context: MatrixQaScenarioContext,
   scenarioId: MatrixQaE2eeScenarioId,
+  readyRoomIds?: string[],
 ) {
   return await createMatrixQaE2eeScenarioClient({
     accessToken: context.observerAccessToken,
@@ -325,6 +349,7 @@ async function createMatrixQaE2eeObserverClient(
     observedEvents: context.observedEvents,
     outputDir: requireMatrixQaE2eeOutputDir(context),
     password: context.observerPassword,
+    ...(readyRoomIds ? { readyRoomIds } : {}),
     scenarioId,
     timeoutMs: context.timeoutMs,
     userId: context.observerUserId,
@@ -338,14 +363,28 @@ export async function withMatrixQaE2eeDriverAndObserver<T>(
     driver: MatrixQaE2eeScenarioClient;
     observer: MatrixQaE2eeScenarioClient;
   }) => Promise<T>,
+  opts: { readyRoomIds?: string[] } = {},
 ) {
-  const driver = await createMatrixQaE2eeDriverClient(context, scenarioId);
-  const observer = await createMatrixQaE2eeObserverClient(context, scenarioId);
+  const driver = await createMatrixQaE2eeDriverClient(context, scenarioId, opts);
+  let observer: MatrixQaE2eeScenarioClient;
   try {
-    return await run({ driver, observer });
-  } finally {
-    await Promise.all([driver.stop(), observer.stop()]);
+    observer = await createMatrixQaE2eeObserverClient(context, scenarioId, opts.readyRoomIds);
+  } catch (error) {
+    try {
+      await driver.stop();
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "Matrix E2EE observer startup and driver cleanup both failed",
+        { cause: error },
+      );
+    }
+    throw error;
   }
+  return await runMatrixQaDriverObserverLifecycle(
+    () => run({ driver, observer }),
+    [() => observer.stop(), () => driver.stop()],
+  );
 }
 
 export async function completeMatrixQaSasVerification(params: {

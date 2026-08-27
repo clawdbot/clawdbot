@@ -1,5 +1,5 @@
 // Qa Lab Matrix tests cover harness behavior.
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
@@ -27,29 +27,35 @@ const testing = {
 type MatrixQaHarnessDeps = Parameters<typeof startMatrixQaHarness>[1];
 type MatrixQaHarnessResult = Awaited<ReturnType<typeof startMatrixQaHarness>>;
 
+function createRecordingProxy(stop: () => Promise<void> = async () => {}): MatrixQaRecordingProxy {
+  return {
+    baseUrl: "http://127.0.0.1:28008/",
+    buildManifest: vi.fn(),
+    installFaultRule: vi.fn(() => ({ hits: () => [], remove: vi.fn() })),
+    records: () => [],
+    setScenarioId: vi.fn(),
+    setTargetBaseUrl: vi.fn(),
+    stop: vi.fn(stop),
+  } as unknown as MatrixQaRecordingProxy;
+}
+
 async function withStartedMatrixHarness(
   deps: MatrixQaHarnessDeps,
   verify: (params: { outputDir: string; result: MatrixQaHarnessResult }) => Promise<void> | void,
   options?: { dynamicPort?: boolean },
 ) {
   const outputDir = await mkdtemp(path.join(os.tmpdir(), "matrix-qa-harness-"));
+  let result: MatrixQaHarnessResult | undefined;
 
   try {
     const startRecordingProxyImpl =
       deps?.startRecordingProxyImpl ??
-      (async ({ targetBaseUrl }: { targetBaseUrl: string }) =>
-        ({
-          baseUrl: targetBaseUrl,
-          buildManifest: vi.fn(),
-          installFaultRule: vi.fn(() => ({ hits: () => [], remove: vi.fn() })),
-          records: () => [],
-          setScenarioId: vi.fn(),
-          setTargetBaseUrl: vi.fn(),
-          stop: vi.fn(async () => {}),
-        }) as unknown as MatrixQaRecordingProxy);
-    const result = await startMatrixQaHarness(
+      (async ({ targetBaseUrl }: { targetBaseUrl: string }) => ({
+        ...createRecordingProxy(),
+        baseUrl: targetBaseUrl,
+      }));
+    result = await startMatrixQaHarness(
       {
-        outputDir,
         repoRoot: "/repo/openclaw",
         ...(options?.dynamicPort ? {} : { homeserverPort: 28008 }),
       },
@@ -57,6 +63,7 @@ async function withStartedMatrixHarness(
     );
     await verify({ outputDir, result });
   } finally {
+    await result?.stop();
     await rm(outputDir, { recursive: true, force: true });
   }
 }
@@ -112,11 +119,11 @@ function createStalledVersionsFetch() {
 
 describe("matrix harness runtime", () => {
   it("writes a pinned Tuwunel compose file", async () => {
-    const outputDir = await mkdtemp(path.join(os.tmpdir(), "matrix-qa-harness-"));
+    const runtimeDir = await mkdtemp(path.join(os.tmpdir(), "matrix-qa-harness-"));
 
     try {
       const result = await testing.writeMatrixQaHarnessFiles({
-        outputDir,
+        runtimeDir,
         homeserverPort: 28008,
         registrationToken: "secret-token",
         serverName: "matrix-qa.test",
@@ -133,8 +140,41 @@ describe("matrix harness runtime", () => {
       expect(compose).toContain('TUWUNEL_SERVER_NAME: "matrix-qa.test"');
       expect(result.registrationToken).toBe("secret-token");
     } finally {
-      await rm(outputDir, { recursive: true, force: true });
+      await rm(runtimeDir, { recursive: true, force: true });
     }
+  });
+
+  it("keeps registration credentials and Tuwunel data out of publishable artifacts", async () => {
+    let runtimeDir: string | undefined;
+
+    await withStartedMatrixHarness(
+      {
+        async runCommand(_command, args) {
+          if (args.join(" ").includes("ps --format json")) {
+            return { stdout: '[{"State":"running"}]\n', stderr: "" };
+          }
+          return { stdout: "", stderr: "" };
+        },
+        fetchImpl: vi.fn(async () => ({ ok: true })),
+        sleepImpl: vi.fn(async () => {}),
+      },
+      async ({ outputDir, result }) => {
+        runtimeDir = path.dirname(result.composeFile);
+        expect(path.relative(outputDir, result.composeFile)).toMatch(/^\.\./);
+        expect(path.relative(outputDir, path.join(runtimeDir, "data"))).toMatch(/^\.\./);
+        expect(await readdir(outputDir)).toEqual([]);
+        await expect(
+          access(path.join(outputDir, "docker-compose.matrix-qa.yml")),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(access(path.join(outputDir, "data"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        expect(await readFile(result.composeFile, "utf8")).toContain(result.registrationToken);
+      },
+    );
+
+    expect(runtimeDir).toBeDefined();
+    await expect(access(runtimeDir as string)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("starts the harness, waits for versions, and exposes a stop command", async () => {
@@ -156,11 +196,11 @@ describe("matrix harness runtime", () => {
         }),
         sleepImpl: vi.fn(async () => {}),
       },
-      async ({ outputDir, result }) => {
+      async ({ result }) => {
         expect(calls).toEqual([
-          `docker compose -f ${outputDir}/docker-compose.matrix-qa.yml down --remove-orphans @/repo/openclaw`,
-          `docker compose -f ${outputDir}/docker-compose.matrix-qa.yml up -d @/repo/openclaw`,
-          `docker compose -f ${outputDir}/docker-compose.matrix-qa.yml ps --format json matrix-qa-homeserver @/repo/openclaw`,
+          `docker compose -f ${result.composeFile} down --remove-orphans @/repo/openclaw`,
+          `docker compose -f ${result.composeFile} up -d @/repo/openclaw`,
+          `docker compose -f ${result.composeFile} ps --format json matrix-qa-homeserver @/repo/openclaw`,
         ]);
         expect(fetchCalls).toEqual([
           "http://127.0.0.1:28008/_matrix/client/versions",
@@ -168,11 +208,11 @@ describe("matrix harness runtime", () => {
         ]);
         expect(result.baseUrl).toBe("http://127.0.0.1:28008/");
         expect(result.stopCommand).toBe(
-          `docker compose -f ${outputDir}/docker-compose.matrix-qa.yml down --remove-orphans`,
+          `docker compose -f ${result.composeFile} down --remove-orphans`,
         );
         await result.restartService();
         expect(calls).toContain(
-          `docker compose -f ${outputDir}/docker-compose.matrix-qa.yml restart matrix-qa-homeserver @/repo/openclaw`,
+          `docker compose -f ${result.composeFile} restart matrix-qa-homeserver @/repo/openclaw`,
         );
       },
     );
@@ -242,11 +282,11 @@ describe("matrix harness runtime", () => {
           stop: vi.fn(async () => {}),
         })),
       },
-      async ({ outputDir, result }) => {
+      async ({ result }) => {
         expect(result.homeserverPort).toBe(49152);
         expect(result.baseUrl).toBe("http://127.0.0.1:49152/");
         expect(calls).toContain(
-          `docker compose -f ${outputDir}/docker-compose.matrix-qa.yml port matrix-qa-homeserver 8008 @/repo/openclaw`,
+          `docker compose -f ${result.composeFile} port matrix-qa-homeserver 8008 @/repo/openclaw`,
         );
         const compose = await readFile(result.composeFile, "utf8");
         expect(compose).toContain("      - target: 8008\n        host_ip: 127.0.0.1");
@@ -259,10 +299,11 @@ describe("matrix harness runtime", () => {
 
   it("stops Tuwunel when recorder startup fails", async () => {
     const calls: string[] = [];
-    await withTempDir("matrix-qa-harness-", async (outputDir) => {
+    let runtimeDir: string | undefined;
+    await withTempDir("matrix-qa-harness-", async (_outputDir) => {
       await expect(
         startMatrixQaHarness(
-          { outputDir, repoRoot: "/repo/openclaw", homeserverPort: 28008 },
+          { repoRoot: "/repo/openclaw", homeserverPort: 28008 },
           {
             async runCommand(command, args, cwd) {
               calls.push([command, ...args, `@${cwd}`].join(" "));
@@ -276,19 +317,179 @@ describe("matrix harness runtime", () => {
             startRecordingProxyImpl: vi.fn(async () => {
               throw new Error("recorder startup failed");
             }),
+            removeRuntimeDirImpl: async (candidateRuntimeDir) => {
+              runtimeDir = candidateRuntimeDir;
+              await rm(candidateRuntimeDir, { force: true, recursive: true });
+            },
           },
         ),
       ).rejects.toThrow("recorder startup failed");
       expect(calls.filter((call) => call.includes("down --remove-orphans"))).toHaveLength(2);
+      expect(runtimeDir).toBeDefined();
+      await expect(access(runtimeDir as string)).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
 
+  it("removes the runtime directory when startup and Docker cleanup both fail", async () => {
+    const startupError = new Error("recorder startup failed");
+    const dockerError = new Error("docker cleanup failed");
+    let downCount = 0;
+    let runtimeDir: string | undefined;
+
+    const failure = await startMatrixQaHarness(
+      { repoRoot: "/repo/openclaw", homeserverPort: 28008 },
+      {
+        async runCommand(_command, args) {
+          const rendered = args.join(" ");
+          if (rendered.includes("down --remove-orphans")) {
+            downCount += 1;
+            if (downCount === 2) {
+              throw dockerError;
+            }
+          }
+          if (rendered.includes("ps --format json")) {
+            return { stdout: '[{"State":"running"}]\n', stderr: "" };
+          }
+          return { stdout: "", stderr: "" };
+        },
+        fetchImpl: vi.fn(async () => ({ ok: true })),
+        sleepImpl: vi.fn(async () => {}),
+        startRecordingProxyImpl: vi.fn(async () => {
+          throw startupError;
+        }),
+        removeRuntimeDirImpl: async (candidateRuntimeDir) => {
+          runtimeDir = candidateRuntimeDir;
+          await rm(candidateRuntimeDir, { force: true, recursive: true });
+        },
+      },
+    ).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toEqual([startupError, dockerError]);
+    expect(runtimeDir).toBeDefined();
+    await expect(access(runtimeDir as string)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it.each(["recorder", "docker", "multiple"] as const)(
+    "preserves a single %s cleanup failure after removing the runtime directory",
+    async (failureOwner) => {
+      const cleanupError = new Error(`${failureOwner} cleanup failed`);
+      const removalError = new Error("runtime removal failed");
+      let downCount = 0;
+      const result = await startMatrixQaHarness(
+        { repoRoot: "/repo/openclaw", homeserverPort: 28008 },
+        {
+          async runCommand(_command, args) {
+            const rendered = args.join(" ");
+            if (rendered.includes("down --remove-orphans") && ++downCount === 2) {
+              if (failureOwner === "docker") {
+                throw cleanupError;
+              }
+            }
+            if (rendered.includes("ps --format json")) {
+              return { stdout: '[{"State":"running"}]\n', stderr: "" };
+            }
+            return { stdout: "", stderr: "" };
+          },
+          fetchImpl: vi.fn(async () => ({ ok: true })),
+          removeRuntimeDirImpl:
+            failureOwner === "multiple"
+              ? vi.fn(async () => {
+                  throw removalError;
+                })
+              : undefined,
+          sleepImpl: vi.fn(async () => {}),
+          startRecordingProxyImpl: vi.fn(async () =>
+            createRecordingProxy(async () => {
+              if (failureOwner !== "docker") {
+                throw cleanupError;
+              }
+            }),
+          ),
+        },
+      );
+      const runtimeDir = path.dirname(result.composeFile);
+
+      const failure = await result.stop().catch((error: unknown) => error);
+      if (failureOwner === "multiple") {
+        expect(failure).toMatchObject({
+          cause: cleanupError,
+          errors: [cleanupError, removalError],
+          message: "Matrix QA harness cleanup failed",
+        });
+        await rm(runtimeDir, { force: true, recursive: true });
+      } else {
+        expect(failure).toBe(cleanupError);
+        await expect(access(runtimeDir)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+    },
+  );
+
+  it.each(["normal stop", "startup rollback"] as const)(
+    "waits for Docker settlement before runtime removal during %s",
+    async (phase) => {
+      let downCount = 0;
+      const order: string[] = [];
+      let settleDocker: (() => void) | undefined;
+      const dockerSettled = new Promise<void>((resolve) => {
+        settleDocker = resolve;
+      });
+      const removeRuntimeDirImpl = vi.fn(async () => {
+        order.push("removal");
+      });
+      const startupError = new Error("recorder startup failed");
+      const starting = startMatrixQaHarness(
+        { repoRoot: "/repo/openclaw", homeserverPort: 28008 },
+        {
+          async runCommand(_command, args) {
+            const rendered = args.join(" ");
+            if (rendered.includes("down --remove-orphans") && ++downCount === 2) {
+              order.push("docker");
+              await dockerSettled;
+            }
+            if (rendered.includes("ps --format json")) {
+              return { stdout: '[{"State":"running"}]\n', stderr: "" };
+            }
+            return { stdout: "", stderr: "" };
+          },
+          fetchImpl: vi.fn(async () => ({ ok: true })),
+          removeRuntimeDirImpl,
+          sleepImpl: vi.fn(async () => {}),
+          startRecordingProxyImpl: vi.fn(async () => {
+            if (phase === "startup rollback") {
+              throw startupError;
+            }
+            return createRecordingProxy(async () => {
+              order.push("recorder");
+            });
+          }),
+        },
+      );
+
+      const operation =
+        phase === "normal stop"
+          ? (await starting).stop()
+          : starting.catch((error: unknown) => error);
+      await vi.waitFor(() => expect(downCount).toBe(2));
+      expect(removeRuntimeDirImpl).not.toHaveBeenCalled();
+      settleDocker?.();
+      const outcome = await operation;
+      if (phase === "startup rollback") {
+        expect(outcome).toBe(startupError);
+      }
+      expect(removeRuntimeDirImpl).toHaveBeenCalledOnce();
+      expect(order).toEqual(
+        phase === "normal stop" ? ["recorder", "docker", "removal"] : ["docker", "removal"],
+      );
+    },
+  );
+
   it("stops Tuwunel when post-start health setup fails", async () => {
     const calls: string[] = [];
-    await withTempDir("matrix-qa-harness-", async (outputDir) => {
+    await withTempDir("matrix-qa-harness-", async (_outputDir) => {
       await expect(
         startMatrixQaHarness(
-          { outputDir, repoRoot: "/repo/openclaw", homeserverPort: 28008 },
+          { repoRoot: "/repo/openclaw", homeserverPort: 28008 },
           {
             async runCommand(command, args, cwd) {
               calls.push([command, ...args, `@${cwd}`].join(" "));
@@ -483,10 +684,10 @@ describe("matrix harness runtime", () => {
         })),
         sleepImpl: vi.fn(async () => {}),
       },
-      ({ outputDir, result }) => {
+      ({ result }) => {
         expect(result.baseUrl).toBe("http://172.18.0.10:8008/");
         expect(calls).toContain(
-          `docker compose -f ${outputDir}/docker-compose.matrix-qa.yml ps -q matrix-qa-homeserver @/repo/openclaw`,
+          `docker compose -f ${result.composeFile} ps -q matrix-qa-homeserver @/repo/openclaw`,
         );
         expect(calls).toContain(
           "docker inspect --format {{range .NetworkSettings.Networks}}{{println .IPAddress}}{{end}} container-123 @/repo/openclaw",

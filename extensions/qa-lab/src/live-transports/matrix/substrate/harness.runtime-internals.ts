@@ -14,7 +14,6 @@ const MATRIX_QA_HEALTH_REQUEST_TIMEOUT_MS = 2_000;
 class MatrixQaHarnessTimeoutError extends Error {}
 
 export type MatrixQaHarnessFiles = {
-  outputDir: string;
   composeFile: string;
   image: string;
   serverName: string;
@@ -190,7 +189,7 @@ ${portMapping}
 }
 
 export async function writeMatrixQaHarnessFiles(params: {
-  outputDir: string;
+  runtimeDir: string;
   image?: string;
   homeserverPort: number;
   registrationToken?: string;
@@ -199,8 +198,8 @@ export async function writeMatrixQaHarnessFiles(params: {
   const image = resolveMatrixQaHarnessImage(params.image);
   const registrationToken = params.registrationToken?.trim() || `matrix-qa-${randomUUID()}`;
   const serverName = params.serverName?.trim() || MATRIX_QA_DEFAULT_SERVER_NAME;
-  const composeFile = path.join(params.outputDir, "docker-compose.matrix-qa.yml");
-  const dataDir = path.join(params.outputDir, "data");
+  const composeFile = path.join(params.runtimeDir, "docker-compose.matrix-qa.yml");
+  const dataDir = path.join(params.runtimeDir, "data");
 
   await fs.mkdir(dataDir, { recursive: true });
   await fs.writeFile(
@@ -214,7 +213,6 @@ export async function writeMatrixQaHarnessFiles(params: {
     { encoding: "utf8", mode: 0o600 },
   );
   return {
-    outputDir: params.outputDir,
     composeFile,
     image,
     serverName,

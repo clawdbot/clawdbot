@@ -159,6 +159,7 @@ export async function runMatrixQaE2eeThreadFollowUpScenario(
         token,
       };
     },
+    { readyRoomIds: [roomId] },
   );
   return {
     artifacts: {
@@ -283,6 +284,7 @@ export async function runMatrixQaE2eeVerificationNoticeNoTriggerScenario(
         ].join("\n"),
       };
     },
+    { readyRoomIds: [roomId] },
   );
 }
 

@@ -2,14 +2,46 @@
 import { access, mkdtemp, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   MATRIX_QA_E2EE_SYNC_FILTER,
   createMatrixQaE2eeClientLifecycle,
   createMatrixQaE2eeObservedEventRecorder,
   prepareMatrixQaE2eeStorage,
 } from "./e2ee-client-internals.js";
+import { createMatrixQaE2eeScenarioClient, runMatrixQaE2eeBootstrap } from "./e2ee-client.js";
 import { findMatrixQaObservedEventMatch, type MatrixQaObservedEvent } from "./events.js";
+
+const scenarioClientMocks = vi.hoisted(() => {
+  const client = {
+    bootstrapOwnDeviceVerification: vi.fn(async () => ({ success: true })),
+    drainPendingDecryptions: vi.fn(async () => undefined),
+    off: vi.fn((_eventName: string, _listener: (...args: unknown[]) => void) => undefined),
+    on: vi.fn((_eventName: string, _listener: (...args: unknown[]) => void) => undefined),
+    start: vi.fn(
+      async (_opts?: { abortSignal?: AbortSignal; readyTimeoutMs?: number }) => undefined,
+    ),
+    stopAndPersist: vi.fn(async () => undefined),
+    stopWithoutPersist: vi.fn(),
+    waitForEncryptedRoomReady: vi.fn(
+      async (_roomId: string, _opts?: { abortSignal?: AbortSignal; timeoutMs?: number }) =>
+        undefined,
+    ),
+  };
+  return {
+    client,
+    setMatrixRuntime: vi.fn(),
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/qa-runner-runtime", () => ({
+  loadQaRunnerBundledPluginTestApi: async () => ({
+    MatrixClient: function MatrixClient() {
+      return scenarioClientMocks.client;
+    },
+    setMatrixRuntime: scenarioClientMocks.setMatrixRuntime,
+  }),
+}));
 
 const testing = {
   MATRIX_QA_E2EE_SYNC_FILTER,
@@ -18,6 +50,20 @@ const testing = {
   findMatrixQaObservedEventMatch,
   prepareMatrixQaE2eeStorage,
 };
+
+beforeEach(() => {
+  scenarioClientMocks.client.bootstrapOwnDeviceVerification.mockReset().mockResolvedValue({
+    success: true,
+  });
+  scenarioClientMocks.setMatrixRuntime.mockReset();
+  scenarioClientMocks.client.drainPendingDecryptions.mockReset().mockResolvedValue(undefined);
+  scenarioClientMocks.client.off.mockReset();
+  scenarioClientMocks.client.on.mockReset();
+  scenarioClientMocks.client.start.mockReset().mockResolvedValue(undefined);
+  scenarioClientMocks.client.stopAndPersist.mockReset().mockResolvedValue(undefined);
+  scenarioClientMocks.client.stopWithoutPersist.mockReset();
+  scenarioClientMocks.client.waitForEncryptedRoomReady.mockReset().mockResolvedValue(undefined);
+});
 
 describe("matrix qa e2ee client storage", () => {
   function createLifecycleFixture(options?: {
@@ -88,6 +134,7 @@ describe("matrix qa e2ee client storage", () => {
           }),
         timeoutMs: 1_000,
       });
+      await Promise.resolve();
 
       const stop = lifecycle.stop();
       expect(calls).toEqual(["operation", "detach"]);
@@ -120,6 +167,7 @@ describe("matrix qa e2ee client storage", () => {
           }),
         timeoutMs: 1_000,
       });
+      await Promise.resolve();
       const stop = lifecycle.stop();
       const rejection = expect(stop).rejects.toThrow(
         "shutdown failed while waiting for active Matrix SDK operations",
@@ -210,6 +258,7 @@ describe("matrix qa e2ee client storage", () => {
           }),
         timeoutMs: 1_000,
       });
+      await Promise.resolve();
       const operationRejection = expect(operation).rejects.toThrow("late send failure");
       const stop = lifecycle.stop();
       const stopRejection = expect(stop).rejects.toThrow(
@@ -232,6 +281,251 @@ describe("matrix qa e2ee client storage", () => {
         ephemeral: { not_types: ["m.receipt"] },
       },
     });
+  });
+
+  it("keeps the scenario client unavailable until required-room readiness completes", async () => {
+    let releaseEncryption: (() => void) | undefined;
+    const encryptionReady = new Promise<void>((resolve) => {
+      releaseEncryption = resolve;
+    });
+    let readinessSignal: AbortSignal | undefined;
+    scenarioClientMocks.client.waitForEncryptedRoomReady.mockImplementationOnce(
+      async (_roomId, opts) => {
+        readinessSignal = opts?.abortSignal;
+        await encryptionReady;
+      },
+    );
+    let created = false;
+    const outputDir = await mkdtemp(path.join(os.tmpdir(), "matrix-qa-e2ee-readiness-"));
+
+    try {
+      const pendingClient = createMatrixQaE2eeScenarioClient({
+        accessToken: "driver-token",
+        actorId: "driver",
+        baseUrl: "https://matrix-qa.test",
+        observedEvents: [],
+        outputDir,
+        readyRoomIds: ["!target:matrix-qa.test"],
+        scenarioId: "matrix-e2ee-basic-reply",
+        timeoutMs: 1_000,
+        userId: "@driver:matrix-qa.test",
+      }).then((client) => {
+        created = true;
+        return client;
+      });
+      await vi.waitFor(() =>
+        expect(scenarioClientMocks.client.waitForEncryptedRoomReady).toHaveBeenCalledWith(
+          "!target:matrix-qa.test",
+          {
+            abortSignal: expect.any(AbortSignal),
+            timeoutMs: 1_000,
+          },
+        ),
+      );
+
+      expect(created).toBe(false);
+      expect(readinessSignal).toBe(
+        scenarioClientMocks.client.start.mock.calls[0]?.[0]?.abortSignal,
+      );
+      releaseEncryption?.();
+      const client = await pendingClient;
+      expect(created).toBe(true);
+      await client.stop();
+    } finally {
+      releaseEncryption?.();
+      await rm(outputDir, { force: true, recursive: true });
+    }
+  });
+
+  it.each(Array.from({ length: 4 }, (_, row) => [Boolean(row & 2), Boolean(row & 1)]))(
+    "settles bootstrap lifecycle %#",
+    async (runFails, stopFails) => {
+      const runError = new Error("bootstrap-secret");
+      const stopError = new Error("persist-secret");
+      if (runFails) {
+        scenarioClientMocks.client.bootstrapOwnDeviceVerification.mockRejectedValueOnce(runError);
+      }
+      if (stopFails) {
+        scenarioClientMocks.client.stopAndPersist.mockRejectedValueOnce(stopError);
+      }
+
+      const outcome = await runMatrixQaE2eeBootstrap({
+        accessToken: "driver-token",
+        actorId: "driver",
+        baseUrl: "https://matrix-qa.test",
+        outputDir: os.tmpdir(),
+        scenarioId: "matrix-e2ee-bootstrap-success",
+        timeoutMs: 1_000,
+        userId: "@driver:matrix-qa.test",
+      }).catch((error: unknown) => error);
+      const expected = [...(runFails ? [runError] : []), ...(stopFails ? [stopError] : [])];
+
+      if (expected.length === 0) {
+        expect(outcome).toEqual({ success: true });
+      } else if (expected.length === 1) {
+        expect(outcome).toBe(expected[0]);
+      } else {
+        expect(outcome).toMatchObject({
+          cause: runError,
+          errors: expected,
+          message: "Matrix E2EE bootstrap lifecycle failed",
+        });
+        expect((outcome as Error).message).not.toMatch(/secret/u);
+      }
+      expect(scenarioClientMocks.client.stopAndPersist).toHaveBeenCalledOnce();
+      expect(scenarioClientMocks.client.waitForEncryptedRoomReady).not.toHaveBeenCalled();
+    },
+  );
+
+  it("aborts timed-out readiness and cleans up the partially constructed client", async () => {
+    vi.useFakeTimers();
+    const outputDir = await mkdtemp(path.join(os.tmpdir(), "matrix-qa-e2ee-timeout-"));
+    let authorityRequestActive = false;
+    let releaseAuthorityAbort: (() => void) | undefined;
+    let readinessSignal: AbortSignal | undefined;
+    let markReadinessStarted: (() => void) | undefined;
+    const readinessStarted = new Promise<void>((resolve) => {
+      markReadinessStarted = resolve;
+    });
+    scenarioClientMocks.client.stopAndPersist.mockImplementationOnce(async () => {
+      expect(authorityRequestActive).toBe(false);
+    });
+    scenarioClientMocks.client.waitForEncryptedRoomReady.mockImplementationOnce(
+      async (_roomId, opts) =>
+        await new Promise<never>((_resolve, reject) => {
+          readinessSignal = opts?.abortSignal;
+          authorityRequestActive = true;
+          markReadinessStarted?.();
+          const noteAbort = () => {
+            releaseAuthorityAbort = () => {
+              authorityRequestActive = false;
+              const error = new Error("readiness aborted");
+              error.name = "AbortError";
+              reject(error);
+            };
+          };
+          if (readinessSignal?.aborted) {
+            noteAbort();
+            return;
+          }
+          readinessSignal?.addEventListener("abort", noteAbort, { once: true });
+        }),
+    );
+
+    try {
+      const pendingClient = createMatrixQaE2eeScenarioClient({
+        accessToken: "driver-token",
+        actorId: "driver",
+        baseUrl: "https://matrix-qa.test",
+        observedEvents: [],
+        outputDir,
+        readyRoomIds: ["!target:matrix-qa.test"],
+        scenarioId: "matrix-e2ee-basic-reply",
+        timeoutMs: 50,
+        userId: "@driver:matrix-qa.test",
+      });
+      let clientSettled = false;
+      void pendingClient
+        .finally(() => {
+          clientSettled = true;
+        })
+        .catch(() => undefined);
+      const rejection = pendingClient.catch((error: unknown) => error);
+      await readinessStarted;
+      await vi.advanceTimersByTimeAsync(50);
+
+      expect(readinessSignal?.aborted).toBe(true);
+      expect(authorityRequestActive).toBe(true);
+      expect(clientSettled).toBe(false);
+      expect(scenarioClientMocks.client.stopAndPersist).not.toHaveBeenCalled();
+
+      releaseAuthorityAbort?.();
+      const error = await rejection;
+
+      expect(error).toMatchObject({
+        message: "Matrix E2EE client startup timed out after 50ms",
+      });
+      expect(authorityRequestActive).toBe(false);
+      expect(scenarioClientMocks.client.off).toHaveBeenCalledWith(
+        "room.message",
+        expect.any(Function),
+      );
+      expect(scenarioClientMocks.client.off).toHaveBeenCalledWith(
+        "verification.summary",
+        expect.any(Function),
+      );
+      expect(scenarioClientMocks.client.stopAndPersist).toHaveBeenCalledTimes(1);
+      expect(scenarioClientMocks.client.stopWithoutPersist).not.toHaveBeenCalled();
+    } finally {
+      releaseAuthorityAbort?.();
+      vi.useRealTimers();
+      await rm(outputDir, { force: true, recursive: true });
+    }
+  });
+
+  it("cleans up when listener setup fails before startup", async () => {
+    const constructionError = new Error("listener setup failed");
+    scenarioClientMocks.client.on
+      .mockImplementationOnce(() => undefined)
+      .mockImplementationOnce(() => {
+        throw constructionError;
+      });
+    const outputDir = await mkdtemp(path.join(os.tmpdir(), "matrix-qa-e2ee-listener-"));
+
+    try {
+      const failure = await createMatrixQaE2eeScenarioClient({
+        accessToken: "driver-token",
+        actorId: "driver",
+        baseUrl: "https://matrix-qa.test",
+        observedEvents: [],
+        outputDir,
+        scenarioId: "matrix-e2ee-bootstrap-success",
+        timeoutMs: 1_000,
+        userId: "@driver:matrix-qa.test",
+      }).catch((error: unknown) => error);
+
+      expect(failure).toBe(constructionError);
+      expect(scenarioClientMocks.client.stopAndPersist).toHaveBeenCalledTimes(1);
+      expect(scenarioClientMocks.client.off).toHaveBeenCalledTimes(2);
+    } finally {
+      await rm(outputDir, { force: true, recursive: true });
+    }
+  });
+
+  it("preserves construction and cleanup failures when both fail", async () => {
+    const constructionError = new Error("listener setup failed");
+    const cleanupError = new Error("crypto persistence cleanup failed");
+    scenarioClientMocks.client.on
+      .mockImplementationOnce(() => undefined)
+      .mockImplementationOnce(() => {
+        throw constructionError;
+      });
+    scenarioClientMocks.client.stopAndPersist.mockRejectedValueOnce(cleanupError);
+    const outputDir = await mkdtemp(path.join(os.tmpdir(), "matrix-qa-e2ee-dual-failure-"));
+
+    try {
+      const failure = await createMatrixQaE2eeScenarioClient({
+        accessToken: "driver-token",
+        actorId: "driver",
+        baseUrl: "https://matrix-qa.test",
+        observedEvents: [],
+        outputDir,
+        scenarioId: "matrix-e2ee-bootstrap-success",
+        timeoutMs: 1_000,
+        userId: "@driver:matrix-qa.test",
+      }).catch((error: unknown) => error);
+
+      expect(failure).toBeInstanceOf(AggregateError);
+      expect(failure).toMatchObject({
+        cause: constructionError,
+        errors: [constructionError, cleanupError],
+        message: "Matrix E2EE client construction and cleanup both failed",
+      });
+      expect(scenarioClientMocks.client.stopAndPersist).toHaveBeenCalledTimes(1);
+      expect(scenarioClientMocks.client.off).toHaveBeenCalledTimes(2);
+    } finally {
+      await rm(outputDir, { force: true, recursive: true });
+    }
   });
 
   it("shares persisted crypto and sync state by actor account", async () => {

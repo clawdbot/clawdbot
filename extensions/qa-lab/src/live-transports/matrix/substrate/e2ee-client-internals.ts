@@ -19,8 +19,8 @@ async function withMatrixQaE2eeTimeout<T>(
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => {
-      onTimeout?.();
       reject(new Error(message));
+      onTimeout?.();
     }, timeoutMs);
     timer.unref();
   });
@@ -41,7 +41,7 @@ export function createMatrixQaE2eeClientLifecycle(params: {
   stopAndPersist: () => Promise<void>;
   stopWithoutPersist: () => Promise<void>;
 }) {
-  const activeOperations = new Set<Promise<unknown>>();
+  const activeOperations = new Map<Promise<unknown>, AbortController>();
   let shutdownStarted = false;
   let stopPromise: Promise<void> | undefined;
 
@@ -64,10 +64,13 @@ export function createMatrixQaE2eeClientLifecycle(params: {
     stopPromise = (async () => {
       const deadline = Date.now() + params.shutdownTimeoutMs;
       params.detachListeners();
+      for (const controller of activeOperations.values()) {
+        controller.abort();
+      }
       if (activeOperations.size > 0) {
         const graceMs = Math.min(1_000, Math.max(0, deadline - Date.now()));
         await withMatrixQaE2eeTimeout(
-          Promise.allSettled(activeOperations),
+          Promise.allSettled(activeOperations.keys()),
           graceMs,
           "active Matrix SDK operations did not settle before shutdown",
         ).catch((error: unknown) =>
@@ -86,7 +89,7 @@ export function createMatrixQaE2eeClientLifecycle(params: {
 
   const runMatrixQaE2eeClientOperation = async <T>(operation: {
     label: string;
-    run: () => Promise<T>;
+    run: (abortSignal: AbortSignal) => Promise<T>;
     timeoutMs: number;
   }): Promise<T> => {
     if (shutdownStarted) {
@@ -94,15 +97,19 @@ export function createMatrixQaE2eeClientLifecycle(params: {
         `Matrix E2EE client shutdown has started; cannot start ${operation.label}. Retry the QA scenario with a fresh client.`,
       );
     }
-    const active = operation.run();
-    activeOperations.add(active);
+    const controller = new AbortController();
+    const active = Promise.resolve().then(() => operation.run(controller.signal));
+    activeOperations.set(active, controller);
     void active.finally(() => activeOperations.delete(active)).catch(() => undefined);
 
     return withMatrixQaE2eeTimeout(
       active,
       operation.timeoutMs,
       `${operation.label} timed out after ${operation.timeoutMs}ms`,
-      () => void stop().catch(() => undefined),
+      () => {
+        controller.abort();
+        void stop().catch(() => undefined);
+      },
     );
   };
 

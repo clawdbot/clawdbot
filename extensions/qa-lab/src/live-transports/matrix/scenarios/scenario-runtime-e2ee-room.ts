@@ -49,6 +49,22 @@ import type { MatrixQaReplyArtifact } from "./scenario-types.js";
 
 type MatrixQaE2eeBootstrapResult = Awaited<ReturnType<typeof runMatrixQaE2eeBootstrap>>;
 
+async function runMatrixQaRoomLifecycle<T>(
+  run: () => Promise<T>,
+  cleanups: ReadonlyArray<() => Promise<unknown>>,
+  message: string,
+): Promise<T> {
+  const errors: unknown[] = [];
+  const result = await run().catch((error: unknown) => errors.push(error));
+  for (const cleanup of cleanups) {
+    await cleanup().catch((error: unknown) => errors.push(error));
+  }
+  if (errors.length === 0) {
+    return result as T;
+  }
+  throw errors.length === 1 ? errors[0] : new AggregateError(errors, message, { cause: errors[0] });
+}
+
 export function buildMatrixE2eeReplyArtifact(
   event: MatrixQaObservedEvent,
   token: string,
@@ -156,25 +172,24 @@ export async function runMatrixQaFaultedE2eeBootstrap(context: MatrixQaScenarioC
     ...context.faultProxyObserver,
     rules: [buildRoomKeyBackupUnavailableFaultRule(context.driverAccessToken)],
   });
-  try {
-    const result = await runMatrixQaE2eeBootstrap({
-      accessToken: context.driverAccessToken,
-      actorId: "driver",
-      baseUrl: proxy.baseUrl,
-      deviceId: context.driverDeviceId,
-      outputDir: requireMatrixQaE2eeOutputDir(context),
-      ...(context.driverPassword ? { password: context.driverPassword } : {}),
-      scenarioId: "matrix-e2ee-key-bootstrap-failure",
-      timeoutMs: context.timeoutMs,
-      userId: context.driverUserId,
-    });
-    return {
-      faultHits: proxy.hits(),
-      result,
-    };
-  } finally {
-    await proxy.stop();
-  }
+  return await runMatrixQaRoomLifecycle(
+    async () => {
+      const result = await runMatrixQaE2eeBootstrap({
+        accessToken: context.driverAccessToken,
+        actorId: "driver",
+        baseUrl: proxy.baseUrl,
+        deviceId: context.driverDeviceId,
+        outputDir: requireMatrixQaE2eeOutputDir(context),
+        ...(context.driverPassword ? { password: context.driverPassword } : {}),
+        scenarioId: "matrix-e2ee-key-bootstrap-failure",
+        timeoutMs: context.timeoutMs,
+        userId: context.driverUserId,
+      });
+      return { faultHits: proxy.hits(), result };
+    },
+    [() => proxy.stop()],
+    "Matrix E2EE faulted bootstrap lifecycle failed",
+  );
 }
 
 export async function runMatrixQaFaultedRecoveryOwnerVerification(params: {
@@ -193,33 +208,31 @@ export async function runMatrixQaFaultedRecoveryOwnerVerification(params: {
     ...params.context.faultProxyObserver,
     rules: [buildOwnerSignatureUploadBlockedFaultRule(params.accessToken)],
   });
-  const recoveryClient = await createMatrixQaE2eeScenarioClient({
-    accessToken: params.accessToken,
-    actorId: `driver-recovery-${randomUUID().slice(0, 8)}`,
-    baseUrl: proxy.baseUrl,
-    deviceId: params.deviceId,
-    observedEvents: params.context.observedEvents,
-    outputDir: requireMatrixQaE2eeOutputDir(params.context),
-    scenarioId: "matrix-e2ee-recovery-owner-verification-required",
-    timeoutMs: params.context.timeoutMs,
-    userId: params.userId,
-  });
-  try {
-    const verification = await recoveryClient.verifyWithRecoveryKey(params.encodedRecoveryKey);
-    const restore = await waitForMatrixQaNonEmptyRoomKeyRestore({
-      client: recoveryClient,
-      recoveryKey: params.encodedRecoveryKey,
-      timeoutMs: params.context.timeoutMs,
-    });
-    return {
-      faultHits: proxy.hits(),
-      restore,
-      verification,
-    };
-  } finally {
-    await recoveryClient.stop().catch(() => undefined);
-    await proxy.stop();
-  }
+  let recoveryClient: MatrixQaE2eeScenarioClient | undefined;
+  return await runMatrixQaRoomLifecycle(
+    async () => {
+      recoveryClient = await createMatrixQaE2eeScenarioClient({
+        accessToken: params.accessToken,
+        actorId: `driver-recovery-${randomUUID().slice(0, 8)}`,
+        baseUrl: proxy.baseUrl,
+        deviceId: params.deviceId,
+        observedEvents: params.context.observedEvents,
+        outputDir: requireMatrixQaE2eeOutputDir(params.context),
+        scenarioId: "matrix-e2ee-recovery-owner-verification-required",
+        timeoutMs: params.context.timeoutMs,
+        userId: params.userId,
+      });
+      const verification = await recoveryClient.verifyWithRecoveryKey(params.encodedRecoveryKey);
+      const restore = await waitForMatrixQaNonEmptyRoomKeyRestore({
+        client: recoveryClient,
+        recoveryKey: params.encodedRecoveryKey,
+        timeoutMs: params.context.timeoutMs,
+      });
+      return { faultHits: proxy.hits(), restore, verification };
+    },
+    [async () => await recoveryClient?.stop(), () => proxy.stop()],
+    "Matrix E2EE recovery owner verification lifecycle failed",
+  );
 }
 
 export function assertMatrixQaFaultedRecoveryOwnerVerificationRequired(
@@ -272,20 +285,24 @@ export async function withMatrixQaE2eeDriver<T>(
   context: MatrixQaScenarioContext,
   scenarioId: MatrixQaE2eeScenarioId,
   run: (client: MatrixQaE2eeScenarioClient) => Promise<T>,
-  opts: { actorId?: "driver" | `driver-${string}` } = {},
+  opts: {
+    actorId?: "driver" | `driver-${string}`;
+    readyRoomIds?: string[];
+  } = {},
 ) {
   const client = await createMatrixQaE2eeDriverClient(context, scenarioId, opts);
-  try {
-    return await run(client);
-  } finally {
-    await client.stop();
-  }
+  return await runMatrixQaRoomLifecycle(
+    () => run(client),
+    [() => client.stop()],
+    "Matrix E2EE driver lifecycle failed",
+  );
 }
 
 async function createMatrixQaE2eeRegisteredScenarioClient(params: {
   account: Awaited<ReturnType<typeof registerMatrixQaE2eeScenarioAccount>>;
   actorId: `driver-${string}`;
   context: MatrixQaScenarioContext;
+  roomId: string;
   scenarioId: MatrixQaE2eeScenarioId;
 }) {
   return await createMatrixQaE2eeScenarioClient({
@@ -296,6 +313,7 @@ async function createMatrixQaE2eeRegisteredScenarioClient(params: {
     observedEvents: params.context.observedEvents,
     outputDir: requireMatrixQaE2eeOutputDir(params.context),
     password: params.account.password,
+    readyRoomIds: [params.roomId],
     scenarioId: params.scenarioId,
     timeoutMs: params.context.timeoutMs,
     userId: params.account.userId,
@@ -361,7 +379,9 @@ export async function withMatrixQaIsolatedE2eeDriverRoom<T>(
       requireMention: true,
     },
   };
-  const applyPatch = async (accountPatch: Record<string, unknown>) => {
+  let patchedGateway = false;
+  let client: MatrixQaE2eeScenarioClient | undefined;
+  const applyPatch = async (accountPatch: Record<string, unknown>, afterWrite?: () => void) => {
     await context.restartGatewayAfterStateMutation?.(
       async () => {
         await patchMatrixQaGatewayMatrixAccount({
@@ -369,6 +389,7 @@ export async function withMatrixQaIsolatedE2eeDriverRoom<T>(
           accountPatch,
           configPath,
         });
+        afterWrite?.();
       },
       {
         timeoutMs: context.timeoutMs,
@@ -377,54 +398,57 @@ export async function withMatrixQaIsolatedE2eeDriverRoom<T>(
     );
   };
 
-  let patchedGateway;
-  let client: MatrixQaE2eeScenarioClient | undefined;
-  try {
-    await applyPatch({
-      groupAllowFrom: [driverAccount.userId],
-      groupPolicy: "allowlist",
-      groups: isolatedGroups,
-    });
-    patchedGateway = true;
-    const actorId: `driver-${string}` = `driver-${scenarioId
-      .replace(/^matrix-e2ee-/, "")
-      .replace(/[^A-Za-z0-9_-]/g, "-")
-      .slice(0, 28)}`;
-    client = await createMatrixQaE2eeRegisteredScenarioClient({
-      account: driverAccount,
-      actorId,
-      context,
-      scenarioId,
-    });
-    await Promise.all([
-      client.waitForJoinedMember({
+  return await runMatrixQaRoomLifecycle(
+    async () => {
+      await applyPatch(
+        {
+          groupAllowFrom: [driverAccount.userId],
+          groupPolicy: "allowlist",
+          groups: isolatedGroups,
+        },
+        () => {
+          patchedGateway = true;
+        },
+      );
+      const actorId: `driver-${string}` = `driver-${scenarioId
+        .replace(/^matrix-e2ee-/, "")
+        .replace(/[^A-Za-z0-9_-]/g, "-")
+        .slice(0, 28)}`;
+      client = await createMatrixQaE2eeRegisteredScenarioClient({
+        account: driverAccount,
+        actorId,
+        context,
         roomId,
-        timeoutMs: context.timeoutMs,
-        userId: context.sutUserId,
-      }),
-      client.waitForJoinedMember({
-        roomId,
-        timeoutMs: context.timeoutMs,
-        userId: context.observerUserId,
-      }),
-    ]);
-    return await run({
-      client,
-      driverUserId: driverAccount.userId,
-      roomId,
-      roomKey,
-    });
-  } finally {
-    await client?.stop().catch(() => undefined);
-    if (patchedGateway) {
-      const restorePatch: Record<string, unknown> = {
-        groupAllowFrom: originalGroupAllowFrom,
-        groupPolicy: originalGroupPolicy,
-        groups: originalGroups,
-      };
-      await applyPatch(restorePatch).catch(() => undefined);
-    }
-  }
+        scenarioId,
+      });
+      await Promise.all([
+        client.waitForJoinedMember({
+          roomId,
+          timeoutMs: context.timeoutMs,
+          userId: context.sutUserId,
+        }),
+        client.waitForJoinedMember({
+          roomId,
+          timeoutMs: context.timeoutMs,
+          userId: context.observerUserId,
+        }),
+      ]);
+      return await run({ client, driverUserId: driverAccount.userId, roomId, roomKey });
+    },
+    [
+      async () => await client?.stop(),
+      async () => {
+        if (patchedGateway) {
+          await applyPatch({
+            groupAllowFrom: originalGroupAllowFrom,
+            groupPolicy: originalGroupPolicy,
+            groups: originalGroups,
+          });
+        }
+      },
+    ],
+    "Matrix E2EE isolated driver room lifecycle failed",
+  );
 }
 
 export async function runMatrixQaE2eeTopLevelWithClient(
@@ -476,13 +500,18 @@ export async function runMatrixQaE2eeTopLevelScenario(
   },
 ) {
   const { roomId, roomKey } = resolveMatrixQaE2eeScenarioGroupRoom(context, params.scenarioId);
-  return await withMatrixQaE2eeDriver(context, params.scenarioId, async (client) => {
-    return await runMatrixQaE2eeTopLevelWithClient(context, {
-      client,
-      driverUserId: context.driverUserId,
-      roomId,
-      roomKey,
-      tokenPrefix: params.tokenPrefix,
-    });
-  });
+  return await withMatrixQaE2eeDriver(
+    context,
+    params.scenarioId,
+    async (client) => {
+      return await runMatrixQaE2eeTopLevelWithClient(context, {
+        client,
+        driverUserId: context.driverUserId,
+        roomId,
+        roomKey,
+        tokenPrefix: params.tokenPrefix,
+      });
+    },
+    { readyRoomIds: [roomId] },
+  );
 }

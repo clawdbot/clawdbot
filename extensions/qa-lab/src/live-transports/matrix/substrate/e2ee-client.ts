@@ -36,6 +36,23 @@ import type { MatrixQaRoomEventWaitResult } from "./sync.js";
 
 type MatrixQaE2eeRuntime = typeof import("@openclaw/matrix/test-api.js");
 
+async function runMatrixQaBootstrapLifecycle<T>(
+  run: () => Promise<T>,
+  stop: () => Promise<unknown>,
+): Promise<T> {
+  const errors: unknown[] = [];
+  const result = await run().catch((error: unknown) => errors.push(error));
+  await stop().catch((error: unknown) => errors.push(error));
+  if (errors.length === 0) {
+    return result as T;
+  }
+  throw errors.length === 1
+    ? errors[0]
+    : new AggregateError(errors, "Matrix E2EE bootstrap lifecycle failed", {
+        cause: errors[0],
+      });
+}
+
 type MatrixQaE2eeClientParams = {
   accessToken: string;
   actorId: MatrixQaE2eeActorId;
@@ -311,6 +328,7 @@ async function createMatrixQaE2eeMatrixClient(params: MatrixQaE2eeClientParams) 
 export async function createMatrixQaE2eeScenarioClient(
   params: MatrixQaE2eeClientParams & {
     observedEvents: MatrixQaObservedEvent[];
+    readyRoomIds?: string[];
   },
 ): Promise<MatrixQaE2eeScenarioClient> {
   const client: MatrixClient = await createMatrixQaE2eeMatrixClient(params);
@@ -329,11 +347,9 @@ export async function createMatrixQaE2eeScenarioClient(
   const recordEvent = (roomId: string, event: MatrixRawEvent) => {
     observedEventRecorder.record(normalizeMatrixQaObservedEvent(roomId, event));
   };
-  client.on("room.message", recordEvent);
   const recordVerificationSummary = (summary: MatrixVerificationSummary) => {
     verificationSummaries.push(summary);
   };
-  client.on("verification.summary", recordVerificationSummary);
 
   const shutdownTimeoutMs = Math.max(1, Math.min(10_000, params.timeoutMs));
   const lifecycle = createMatrixQaE2eeClientLifecycle({
@@ -348,9 +364,34 @@ export async function createMatrixQaE2eeScenarioClient(
   });
 
   try {
-    await client.start({ readyTimeoutMs: Math.min(45_000, Math.max(15_000, params.timeoutMs)) });
+    client.on("room.message", recordEvent);
+    client.on("verification.summary", recordVerificationSummary);
+    await lifecycle.runOperation({
+      label: "Matrix E2EE client startup",
+      timeoutMs: params.timeoutMs,
+      run: async (abortSignal) => {
+        await client.start({
+          abortSignal,
+          readyTimeoutMs: Math.min(45_000, Math.max(15_000, params.timeoutMs)),
+        });
+        for (const roomId of new Set(params.readyRoomIds ?? [])) {
+          await client.waitForEncryptedRoomReady(roomId, {
+            abortSignal,
+            timeoutMs: params.timeoutMs,
+          });
+        }
+      },
+    });
   } catch (error) {
-    await lifecycle.stop().catch(() => undefined);
+    try {
+      await lifecycle.stop();
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "Matrix E2EE client construction and cleanup both failed",
+        { cause: error },
+      );
+    }
     throw error;
   }
 
@@ -527,9 +568,8 @@ export async function runMatrixQaE2eeBootstrap(
 ): Promise<MatrixVerificationBootstrapResult> {
   const client: MatrixClient = await createMatrixQaE2eeMatrixClient(params);
 
-  try {
-    return await client.bootstrapOwnDeviceVerification();
-  } finally {
-    await client.stopAndPersist().catch(() => undefined);
-  }
+  return await runMatrixQaBootstrapLifecycle(
+    () => client.bootstrapOwnDeviceVerification(),
+    () => client.stopAndPersist(),
+  );
 }

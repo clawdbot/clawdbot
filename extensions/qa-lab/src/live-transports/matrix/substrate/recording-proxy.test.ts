@@ -161,6 +161,21 @@ describe("Matrix QA recording proxy", () => {
       `${proxy.baseUrl}/_matrix/client/v3/sync?timeout=0&since=${encodeURIComponent(firstBody.next_batch)}`,
       { headers: { authorization: "Bearer secret-header" } },
     );
+    proxy.setScenarioId("matrix-registration-redaction-test");
+    await fetch(`${proxy.baseUrl}/_matrix/client/v3/register`, {
+      body: JSON.stringify({
+        auth: {
+          token: "secret-registration-token",
+          type: "m.login.registration_token",
+        },
+        device_display_name: "QA driver",
+        password: "secret-registration-password",
+        username: "qa-driver",
+      }),
+      headers: { "content-type": "application/json" },
+      method: "POST",
+    });
+    proxy.setScenarioId("matrix-recording-test");
     const postState = async () => {
       await fetch(
         `${proxy.baseUrl}/_matrix/client/v3/rooms/!secret:matrix.test/state/m.room.name`,
@@ -241,6 +256,8 @@ describe("Matrix QA recording proxy", () => {
     expect(serialized).not.toContain("secret-query");
     expect(serialized).not.toContain("secret-header");
     expect(serialized).not.toContain("secret-password");
+    expect(serialized).not.toContain("secret-registration-token");
+    expect(serialized).not.toContain("secret-registration-password");
     expect(serialized).not.toContain("secret-message");
     expect(serialized).not.toContain("secret-sync");
     expect(serialized).not.toContain("secret-response");
@@ -285,6 +302,11 @@ describe("Matrix QA recording proxy", () => {
       kind: "json",
       fields: ["encrypted.{keyId}.ciphertext"],
     });
+    const registration = records.find((record) => record.request.route.endsWith("/register"));
+    expect(registration?.request.body).toEqual({
+      kind: "json",
+      fields: ["auth", "device_display_name", "password", "username"],
+    });
     expect(records[1]?.sync).toMatchObject({ continuity: true, since: "sync-1" });
 
     const manifest = proxy.buildManifest({
@@ -293,6 +315,7 @@ describe("Matrix QA recording proxy", () => {
       scenarioIds: ["matrix-recording-test"],
       substrate: { id: "tuwunel", version: "v1.5.1" },
     });
+    expect(JSON.stringify(manifest)).not.toContain("secret-registration-token");
     const expectation = manifest.scenarios["matrix-recording-test"];
     expect(manifest.profile).toEqual({
       derivedFrom: "observed-request-response-traffic",

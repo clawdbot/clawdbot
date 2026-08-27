@@ -31,6 +31,7 @@ export class MatrixAuthedHttpClient {
     body?: unknown;
     timeoutMs: number;
     allowAbsoluteEndpoint?: boolean;
+    abortSignal?: AbortSignal;
   }): Promise<unknown> {
     const { response, text } = await performMatrixRequest({
       homeserver: this.homeserver,
@@ -43,6 +44,7 @@ export class MatrixAuthedHttpClient {
       ssrfPolicy: this.ssrfPolicy,
       dispatcherPolicy: this.dispatcherPolicy,
       allowAbsoluteEndpoint: params.allowAbsoluteEndpoint,
+      signal: params.abortSignal,
     });
     if (!response.ok) {
       throw buildHttpError(response.status, text);

@@ -87,6 +87,7 @@ function requireMatrixQaRegistrationToken(context: MatrixQaScenarioContext) {
 async function createMatrixQaDriverPersistentClient(
   context: MatrixQaScenarioContext,
   scenarioId: MatrixQaE2eeScenarioId,
+  roomId: string,
 ) {
   return await createMatrixQaE2eeScenarioClient({
     accessToken: context.driverAccessToken,
@@ -96,6 +97,7 @@ async function createMatrixQaDriverPersistentClient(
     observedEvents: context.observedEvents,
     outputDir: requireMatrixQaE2eeOutputDir(context),
     password: context.driverPassword,
+    readyRoomIds: [roomId],
     scenarioId,
     timeoutMs: context.timeoutMs,
     userId: context.driverUserId,
@@ -131,6 +133,7 @@ async function registerMatrixQaDestructiveOwner(
 async function createMatrixQaDestructiveOwnerClient(params: {
   account: Awaited<ReturnType<typeof registerMatrixQaDestructiveOwner>>;
   context: MatrixQaScenarioContext;
+  roomId: string;
   scenarioId: MatrixQaE2eeScenarioId;
 }) {
   return await createMatrixQaE2eeScenarioClient({
@@ -141,6 +144,7 @@ async function createMatrixQaDestructiveOwnerClient(params: {
     observedEvents: params.context.observedEvents,
     outputDir: requireMatrixQaE2eeOutputDir(params.context),
     password: params.account.password,
+    readyRoomIds: [params.roomId],
     scenarioId: params.scenarioId,
     timeoutMs: params.context.timeoutMs,
     userId: params.account.userId,
@@ -223,7 +227,12 @@ async function prepareMatrixQaDestructiveSetup(
     inviteUserIds: [],
     name: `Matrix QA ${scenarioId}`,
   });
-  const owner = await createMatrixQaDestructiveOwnerClient({ account, context, scenarioId });
+  const owner = await createMatrixQaDestructiveOwnerClient({
+    account,
+    context,
+    roomId,
+    scenarioId,
+  });
   try {
     const ready = await ensureMatrixQaOwnerReady({ client: owner, label: "destructive owner" });
     const seededEventId = await owner.sendTextMessage({
@@ -1088,6 +1097,7 @@ export async function runMatrixQaE2eeSyncStateLossCryptoIntactScenario(
     driver = await createMatrixQaDriverPersistentClient(
       context,
       "matrix-e2ee-sync-state-loss-crypto-intact",
+      roomId,
     );
     const token = buildMatrixQaToken("MATRIX_QA_E2EE_SYNC_LOSS");
     const driverStartSince = await driver.prime();

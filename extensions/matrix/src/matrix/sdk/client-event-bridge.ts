@@ -3,6 +3,7 @@ import {
   ClientEvent,
   type MatrixClient as MatrixJsClient,
   type MatrixEvent,
+  type SyncStateData,
 } from "matrix-js-sdk/lib/matrix.js";
 import type { Room } from "matrix-js-sdk/lib/models/room.js";
 import type { MatrixSyncState } from "../sync-state.js";
@@ -16,7 +17,7 @@ export function registerMatrixClientBridge(params: {
   emitter: EventEmitter;
   emitMembershipForRoom: (room: Room) => void;
   getSelfUserId: () => string;
-  setCurrentSyncState: (state: MatrixSyncState, error?: unknown) => void;
+  setCurrentSyncState: (state: MatrixSyncState, error?: unknown, fromCache?: boolean) => void;
 }): void {
   params.client.on(ClientEvent.Event, (event: MatrixEvent) => {
     const roomId = event.getRoomId();
@@ -56,13 +57,9 @@ export function registerMatrixClientBridge(params: {
   params.client.on(ClientEvent.Room, params.emitMembershipForRoom);
   params.client.on(
     ClientEvent.Sync,
-    (state: MatrixSyncState, prevState: string | null, data?: unknown) => {
-      const error =
-        data && typeof data === "object" && "error" in data
-          ? (data as { error?: unknown }).error
-          : undefined;
-      params.setCurrentSyncState(state, error);
-      params.emitter.emit("sync.state", state, prevState, error);
+    (state: MatrixSyncState, prevState: string | null, data?: SyncStateData) => {
+      params.setCurrentSyncState(state, data?.error, data?.fromCache);
+      params.emitter.emit("sync.state", state, prevState, data?.error, data?.fromCache);
     },
   );
   params.client.on(ClientEvent.SyncUnexpectedError, (error: Error) => {

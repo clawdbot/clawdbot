@@ -317,6 +317,7 @@ export async function performMatrixRequest(params: {
   ssrfPolicy?: SsrFPolicy;
   dispatcherPolicy?: PinnedDispatcherPolicy;
   allowAbsoluteEndpoint?: boolean;
+  signal?: AbortSignal;
 }): Promise<{ response: Response; text: string; buffer: Buffer }> {
   const isAbsoluteEndpoint =
     params.endpoint.startsWith("http://") || params.endpoint.startsWith("https://");
@@ -358,6 +359,7 @@ export async function performMatrixRequest(params: {
       headers,
       body,
     },
+    signal: params.signal,
     timeoutMs: params.timeoutMs,
     ssrfPolicy: params.ssrfPolicy,
     dispatcherPolicy: params.dispatcherPolicy,

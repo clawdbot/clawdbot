@@ -11,6 +11,10 @@ const dockerRuntime = createQaDockerRuntime({
   auditContext: "qa-lab-docker-health-check",
   commandTimeoutMs: null,
 });
+const cleanupDockerRuntime = createQaDockerRuntime({
+  auditContext: "qa-lab-docker-cleanup",
+  commandTimeoutMs: 90_000,
+});
 
 export const {
   execCommand,
@@ -20,3 +24,4 @@ export const {
   waitForDockerServiceHealth,
   waitForHealth,
 } = dockerRuntime;
+export const execCleanupCommand = cleanupDockerRuntime.execCommand;

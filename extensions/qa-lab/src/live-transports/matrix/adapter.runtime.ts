@@ -1,6 +1,5 @@
 // Qa Lab plugin module implements Matrix live transport adapter behavior.
 import { randomUUID } from "node:crypto";
-import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
@@ -178,16 +177,29 @@ async function waitForMatrixChannelReady(
   );
 }
 
+async function stopMatrixQaHarnessAfterStartupFailure(
+  harness: Awaited<ReturnType<typeof startMatrixQaHarness>>,
+  error: unknown,
+): Promise<never> {
+  try {
+    await harness.stop();
+  } catch (cleanupError) {
+    throw new AggregateError(
+      [error, cleanupError],
+      "Matrix QA adapter startup and cleanup both failed",
+      { cause: error },
+    );
+  }
+  throw error;
+}
+
 export async function createMatrixQaTransportAdapter(
   context: FactoryContext,
 ): Promise<AdapterDefinition> {
   const options = context.adapterOptions ?? {};
   const repoRoot = options.repoRoot?.trim() || process.cwd();
   const suffix = randomUUID().slice(0, 8);
-  // Compose derives its default project name from this basename. Keep it unique so
-  // programmatic parallel suite workers cannot stop or replace another harness.
   const harness = await startMatrixQaHarness({
-    outputDir: path.join(context.outputDir, `matrix-harness-${suffix}`),
     repoRoot,
   });
   let provisioning: Awaited<ReturnType<typeof provisionMatrixQaRoom>>;
@@ -202,8 +214,7 @@ export async function createMatrixQaTransportAdapter(
       topology: resolveMatrixQaAdapterTopology(options.scenarioIds),
     });
   } catch (error) {
-    await harness.stop().catch(() => undefined);
-    throw error;
+    return await stopMatrixQaHarnessAfterStartupFailure(harness, error);
   }
   const accountId = options.sutAccountId?.trim() || "sut";
   const observedEvents: MatrixQaObservedEvent[] = [];
@@ -222,8 +233,7 @@ export async function createMatrixQaTransportAdapter(
   try {
     await Promise.all(roomObservers.map(({ observer }) => observer.prime()));
   } catch (error) {
-    await harness.stop().catch(() => undefined);
-    throw error;
+    return await stopMatrixQaHarnessAfterStartupFailure(harness, error);
   }
   const driverClient = createMatrixQaClient({
     accessToken: provisioning.driver.accessToken,

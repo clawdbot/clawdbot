@@ -308,5 +308,6 @@ export async function runMatrixQaE2eeDmSasVerificationScenario(
         ].join("\n"),
       };
     },
+    { readyRoomIds: [roomId] },
   );
 }

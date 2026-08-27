@@ -60,14 +60,14 @@ export async function runMatrixQaE2eeRecoveryKeyLifecycleScenario(
   context: MatrixQaScenarioContext,
 ): Promise<MatrixQaScenarioExecution> {
   const driverPassword = requireMatrixQaPassword(context, "driver");
+  const { roomId } = resolveMatrixQaE2eeScenarioGroupRoom(
+    context,
+    "matrix-e2ee-recovery-key-lifecycle",
+  );
   return await withMatrixQaE2eeDriver(
     context,
     "matrix-e2ee-recovery-key-lifecycle",
     async (client) => {
-      const { roomId } = resolveMatrixQaE2eeScenarioGroupRoom(
-        context,
-        "matrix-e2ee-recovery-key-lifecycle",
-      );
       const ready = await ensureMatrixQaE2eeOwnDeviceVerified({
         client,
         label: "driver",
@@ -177,6 +177,7 @@ export async function runMatrixQaE2eeRecoveryKeyLifecycleScenario(
         }
       }
     },
+    { readyRoomIds: [roomId] },
   );
 }
 
@@ -184,14 +185,14 @@ export async function runMatrixQaE2eeRecoveryOwnerVerificationRequiredScenario(
   context: MatrixQaScenarioContext,
 ): Promise<MatrixQaScenarioExecution> {
   const driverPassword = requireMatrixQaPassword(context, "driver");
+  const { roomId } = resolveMatrixQaE2eeScenarioGroupRoom(
+    context,
+    "matrix-e2ee-recovery-owner-verification-required",
+  );
   return await withMatrixQaE2eeDriver(
     context,
     "matrix-e2ee-recovery-owner-verification-required",
     async (client) => {
-      const { roomId } = resolveMatrixQaE2eeScenarioGroupRoom(
-        context,
-        "matrix-e2ee-recovery-owner-verification-required",
-      );
       const ready = await ensureMatrixQaE2eeOwnDeviceVerified({
         client,
         label: "driver",
@@ -256,6 +257,7 @@ export async function runMatrixQaE2eeRecoveryOwnerVerificationRequiredScenario(
         await client.deleteOwnDevices([recoveryDevice.deviceId]).catch(() => undefined);
       }
     },
+    { readyRoomIds: [roomId] },
   );
 }
 

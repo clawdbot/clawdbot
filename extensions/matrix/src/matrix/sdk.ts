@@ -611,9 +611,10 @@ export class MatrixClient extends MatrixClientVerification {
       emitter: this.emitter,
       emitMembershipForRoom: (room) => this.emitMembershipForRoom(room),
       getSelfUserId: () => this.client.getUserId() ?? this.selfUserId ?? "",
-      setCurrentSyncState: (state, error) => {
+      setCurrentSyncState: (state, error, fromCache) => {
         this.currentSyncState = state;
         this.currentSyncError = error;
+        this.currentSyncFromCache = fromCache;
       },
     });
   }
