@@ -189,9 +189,11 @@ async function sendMediaReply(
   gatewayClient: GatewayClient,
   sessionKey: string,
   fixtureNames: readonly string[],
+  includeText = true,
 ): Promise<unknown[]> {
   const runId = randomUUID();
-  const exactReply = `Artifacts ready\n${fixtureNames.map((name) => `MEDIA:./${name}`).join("\n")}`;
+  const mediaDirectives = fixtureNames.map((name) => `MEDIA:./${name}`).join("\n");
+  const exactReply = includeText ? `Artifacts ready\n${mediaDirectives}` : mediaDirectives;
   const started = await gatewayClient.request<{ runId?: string }>("chat.send", {
     sessionKey,
     message: `Reply exactly \`${exactReply}\``,
@@ -252,7 +254,7 @@ describe("WebChat managed media artifact matrix", () => {
       }> = [];
       for (const fixture of REJECTED_FIXTURES) {
         const sessionKey = `agent:qa:rejected-${fixture[0].replace(/[^a-z0-9]+/giu, "-")}`;
-        const rejectedContent = await sendMediaReply(client, sessionKey, [fixture[0]]);
+        const rejectedContent = await sendMediaReply(client, sessionKey, [fixture[0]], false);
         const serialized = JSON.stringify(rejectedContent);
         expect(serialized, fixture[0]).toContain(MEDIA_FAILURE_WARNING);
         expect(rejectedContent.some((block) => isExpectedMediaBlock(block, fixture))).toBe(false);

@@ -147,9 +147,6 @@ function mergeManagedMediaIntoAssistantContent(params: {
     ? (params.message.content as AssistantDisplayContentBlock[])
     : [];
   const managedBlocks = params.replacement.filter((block) => block?.type !== "text");
-  if (managedBlocks.length === 0) {
-    return null;
-  }
   const mediaFailureWarning = appendReplyMediaFailureWarning(undefined);
   const preserveMediaFailureWarning = params.replacement.some(
     (block) =>
@@ -157,6 +154,9 @@ function mergeManagedMediaIntoAssistantContent(params: {
       typeof block.text === "string" &&
       block.text.includes(mediaFailureWarning),
   );
+  if (managedBlocks.length === 0 && !preserveMediaFailureWarning) {
+    return null;
+  }
   let replaced = false;
   const merged: AssistantDisplayContentBlock[] = [];
   for (const block of original) {
@@ -181,6 +181,9 @@ function mergeManagedMediaIntoAssistantContent(params: {
       merged.push(...managedBlocks);
       replaced = true;
     }
+  }
+  if (replaced && preserveMediaFailureWarning && merged.length === 0) {
+    merged.push({ type: "text", text: mediaFailureWarning });
   }
   return replaced ? merged : null;
 }

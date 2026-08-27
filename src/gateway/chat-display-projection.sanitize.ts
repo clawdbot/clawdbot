@@ -229,7 +229,8 @@ export function sanitizeChatHistoryContentBlock(
     changed = true;
   }
   const mediaChanged = projectChatHistoryMediaBlock(entry);
-  changed ||= mediaChanged || projectChatHistoryAttachmentBlock(entry);
+  const attachmentChanged = projectChatHistoryAttachmentBlock(entry);
+  changed ||= mediaChanged || attachmentChanged;
   return { block: changed ? entry : block, changed, truncated };
 }
 

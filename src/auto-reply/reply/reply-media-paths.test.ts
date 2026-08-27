@@ -508,6 +508,7 @@ describe("createReplyMediaPathNormalizer", () => {
       "⚠️ Media failed. Try sending a smaller supported file or a different format.",
     );
     expectNoMedia(result);
+    expect(getReplyPayloadMetadata(result)?.assistantMediaNormalizationFailed).toBe(true);
   });
 
   it("threads requester context into shared outbound media access", async () => {

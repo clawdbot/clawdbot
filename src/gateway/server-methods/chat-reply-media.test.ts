@@ -2,11 +2,15 @@
  * Tests chat reply media handling for gateway message delivery.
  */
 import fs from "node:fs/promises";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { consumePendingToolMediaIntoReply } from "../../agents/embedded-agent-subscribe.handlers.messages.replies.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createPinnedLookup } from "../../infra/net/ssrf.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
+import { setMediaStoreNetworkDepsForTest } from "../../media/store.test-support.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -47,6 +51,7 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
   });
 
   afterEach(async () => {
+    setMediaStoreNetworkDepsForTest();
     await testState.cleanup();
   });
 
@@ -182,35 +187,84 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     );
   });
 
-  it("preserves a visible warning when mixed media normalization rejects one item", async () => {
+  it("preserves ordered document and image metadata beside one rejected SVG", async () => {
     const { workspaceDir, cfg } = createMediaTestContext({ allowRead: true });
-    const imagePath = path.join(workspaceDir, "image.png");
-    const unsupportedPath = path.join(workspaceDir, "script.js");
+    const documentPath = path.join(workspaceDir, "artifact.json");
+    const localImagePath = path.join(workspaceDir, "local.png");
+    const unsupportedPath = path.join(workspaceDir, "vector.svg");
     await fs.mkdir(workspaceDir, { recursive: true });
-    await fs.writeFile(imagePath, PNG_BYTES);
-    await fs.writeFile(unsupportedPath, "export default true;\n");
+    await fs.writeFile(documentPath, '{"ready":true}\n');
+    await fs.writeFile(localImagePath, PNG_BYTES);
+    await fs.writeFile(unsupportedPath, "<svg><script/></svg>\n");
+    const upstream = http.createServer((req, res) => {
+      expect(req.url).toBe("/remote.png?sig=secret");
+      res.statusCode = 200;
+      res.setHeader("content-type", "image/png");
+      res.end(PNG_BYTES);
+    });
+    await new Promise<void>((resolve) => {
+      upstream.listen(0, "127.0.0.1", resolve);
+    });
+    const address = upstream.address() as AddressInfo;
+    setMediaStoreNetworkDepsForTest({
+      resolvePinnedHostname: async (hostname) => ({
+        hostname,
+        addresses: ["127.0.0.1"],
+        lookup: createPinnedLookup({ hostname, addresses: ["127.0.0.1"] }),
+      }),
+    });
 
-    const payload = await normalizeReplyMedia({
-      cfg,
-      payloads: [
+    try {
+      const remoteImageUrl = `http://127.0.0.1:${address.port}/remote.png?sig=secret`;
+      const payload = await normalizeReplyMedia({
+        cfg,
+        payloads: [
+          {
+            text: "Artifacts ready",
+            mediaUrls: [documentPath, remoteImageUrl, localImagePath, unsupportedPath],
+          },
+        ],
+      });
+
+      expect(payload).toMatchObject({
+        text: "Artifacts ready\n⚠️ Media failed. Try sending a smaller supported file or a different format.",
+        attachments: [
+          expect.objectContaining({ name: "artifact.json", mimeType: "application/json" }),
+          {},
+          expect.objectContaining({ name: "local.png", mimeType: "image/png" }),
+        ],
+      });
+      expect(payload?.mediaUrls).toHaveLength(3);
+      const content = await buildAssistantDisplayContentFromReplyPayloads({
+        sessionKey: TEST_SESSION_KEY,
+        agentId: "main",
+        payloads: payload ? [payload] : [],
+        managedMediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, "main"),
+      });
+      expect(content).toEqual([
         {
-          text: "Artifacts ready",
-          mediaUrls: [imagePath, unsupportedPath],
+          type: "text",
+          text: "Artifacts ready\n⚠️ Media failed. Try sending a smaller supported file or a different format.",
         },
-      ],
-    });
-
-    expect(payload).toMatchObject({
-      text: "Artifacts ready\n⚠️ Media failed. Try sending a smaller supported file or a different format.",
-      mediaUrls: [expect.stringMatching(/\.png$/u)],
-      attachments: [
         expect.objectContaining({
-          name: "image.png",
-          mimeType: "image/png",
-          trustedLocalMedia: true,
+          type: "attachment",
+          attachment: expect.objectContaining({
+            label: "artifact.json",
+            mimeType: "application/json",
+          }),
         }),
-      ],
-    });
+        expect.objectContaining({ type: "image", alt: "remote.png", mimeType: "image/png" }),
+        expect.objectContaining({ type: "image", alt: "local.png", mimeType: "image/png" }),
+      ]);
+      const serialized = JSON.stringify(content);
+      expect(serialized).not.toContain("vector.svg");
+      expect(serialized.match(/Media failed/gu)).toHaveLength(1);
+      expect(serialized).not.toContain("sig=secret");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        upstream.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
   });
 
   it("preserves rejection warnings and metadata beside trusted local audio", async () => {
