@@ -619,7 +619,7 @@ extensions/line/src/flex-templates/basic-cards.ts	19
 extensions/line/src/flex-templates/common.ts	2
 extensions/line/src/flex-templates/media-control-cards.ts	35
 extensions/line/src/flex-templates/schedule-cards.ts	28
-extensions/line/src/gateway.ts	4
+extensions/line/src/gateway.ts	1
 extensions/line/src/group-keys.ts	1
 extensions/line/src/markdown-to-line.ts	7
 extensions/line/src/monitor-durable.ts	1
@@ -878,7 +878,7 @@ extensions/mxc/src/fs-bridge.ts	1
 extensions/nextcloud-talk/src/approval-auth.ts	1
 extensions/nextcloud-talk/src/channel.ts	2
 extensions/nextcloud-talk/src/doctor.ts	2
-extensions/nextcloud-talk/src/gateway.ts	8
+extensions/nextcloud-talk/src/gateway.ts	2
 extensions/nextcloud-talk/src/inbound.ts	9
 extensions/nextcloud-talk/src/message-actions.ts	3
 extensions/nextcloud-talk/src/message-adapter.ts	2
@@ -1267,7 +1267,6 @@ extensions/telegram/src/bot/delivery.resolve-media.ts	1
 extensions/telegram/src/bot/helpers.ts	2
 extensions/telegram/src/callback-query-answer-state.ts	1
 extensions/telegram/src/channel-actions.ts	1
-extensions/telegram/src/channel.ts	1
 extensions/telegram/src/client-fetch.ts	5
 extensions/telegram/src/doctor-contract.ts	3
 extensions/telegram/src/doctor.ts	12

@@ -1,13 +1,11 @@
 // Line plugin module implements gateway behavior.
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
-import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
+import { clearAccountFieldsFromConfigSection } from "openclaw/plugin-sdk/channel-config-helpers";
+import type { ChannelPlugin, PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-outbound";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { clearAccountEntryFields, type ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveLineAccount } from "./accounts.js";
 import { getLineRuntime } from "./runtime.js";
-import type { LineConfig, ResolvedLineAccount } from "./types.js";
+import type { ResolvedLineAccount } from "./types.js";
 
 const loadLineProbeRuntime = createLazyRuntimeModule(() => import("./probe.runtime.js"));
 const loadLineMonitorRuntime = createLazyRuntimeModule(() => import("./monitor.runtime.js"));
@@ -67,66 +65,22 @@ export const lineGatewayAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>[
   },
   logoutAccount: async ({ accountId, cfg }) => {
     const envToken = process.env.LINE_CHANNEL_ACCESS_TOKEN?.trim() ?? "";
-    const nextCfg = { ...cfg } as OpenClawConfig;
-    const lineConfig = (cfg.channels?.line ?? {}) as LineConfig;
-    const nextLine = { ...lineConfig };
-    let cleared = false;
-    let changed = false;
-
-    if (accountId === DEFAULT_ACCOUNT_ID) {
-      if (
-        nextLine.channelAccessToken ||
-        nextLine.channelSecret ||
-        nextLine.tokenFile ||
-        nextLine.secretFile
-      ) {
-        delete nextLine.channelAccessToken;
-        delete nextLine.channelSecret;
-        delete nextLine.tokenFile;
-        delete nextLine.secretFile;
-        cleared = true;
-        changed = true;
-      }
-    }
-
-    const accountCleanup = clearAccountEntryFields({
-      accounts: nextLine.accounts,
+    const { nextConfig, changed, cleared } = clearAccountFieldsFromConfigSection({
+      cfg,
+      sectionKey: "line",
       accountId,
       fields: ["channelAccessToken", "channelSecret", "tokenFile", "secretFile"],
       markClearedOnFieldPresence: true,
     });
-    if (accountCleanup.changed) {
-      changed = true;
-      if (accountCleanup.cleared) {
-        cleared = true;
-      }
-      if (accountCleanup.nextAccounts) {
-        nextLine.accounts = accountCleanup.nextAccounts;
-      } else {
-        delete nextLine.accounts;
-      }
-    }
-
     if (changed) {
-      if (Object.keys(nextLine).length > 0) {
-        nextCfg.channels = { ...nextCfg.channels, line: nextLine };
-      } else {
-        const nextChannels = { ...nextCfg.channels };
-        delete (nextChannels as Record<string, unknown>).line;
-        if (Object.keys(nextChannels).length > 0) {
-          nextCfg.channels = nextChannels;
-        } else {
-          delete nextCfg.channels;
-        }
-      }
       await getLineRuntime().config.replaceConfigFile({
-        nextConfig: nextCfg,
+        nextConfig,
         afterWrite: { mode: "auto" },
       });
     }
 
     const resolved = resolveLineAccount({
-      cfg: changed ? nextCfg : cfg,
+      cfg: nextConfig,
       accountId,
     });
     const loggedOut = resolved.tokenSource === "none";

@@ -939,6 +939,19 @@ unrelated inbound runtime helpers.
 
     For channels that accept both canonical top-level DM keys and legacy nested keys, use the helpers from `plugin-sdk/channel-config-helpers`: `resolveChannelDmAccess`, `resolveChannelDmPolicy`, `resolveChannelDmAllowFrom`, and `normalizeChannelDmPolicy` keep account-local values ahead of inherited root values. Pair the same resolver with doctor repair through `normalizeLegacyDmAliases` so runtime and migration read the same contract.
 
+    Config-backed logout handlers can use `clearAccountFieldsFromConfigSection`
+    from `openclaw/plugin-sdk/channel-config-helpers`. Pass `cfg`, `sectionKey`,
+    `accountId`, and the plugin-owned `fields` to remove. It returns
+    `{ nextConfig, changed, cleared }` without writing config or resolving
+    credentials. Root fields clear together only for the exact `default` account
+    when at least one value is truthy. Nested fields use `clearAccountEntryFields`
+    semantics: an empty account ID selects `accounts.default`, and empty or
+    whitespace strings are removed without reporting `cleared` unless
+    `markClearedOnFieldPresence: true` is set. Unchanged config retains its object
+    identity; cleanup prunes only branches it changes. Keep file-reference
+    selection, persistence, environment reporting, and other logout side effects
+    in the plugin.
+
     If a channel intentionally applies stricter DM session routing than the
     global config, expose that behavior through `security.dmRouting` so Doctor
     and security audit resolve the same session owner as runtime. The optional
