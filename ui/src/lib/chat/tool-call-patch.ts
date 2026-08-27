@@ -184,7 +184,7 @@ function finish(collector: PatchCollector): PatchViewData | null {
       if (lines.length > 0 && lines.at(-1)?.kind !== "skip") {
         append({ kind: "skip", text: "" });
       }
-      append({ kind: "file", text: sectionLabel(section) });
+      append({ kind: "file", path: section.path, text: sectionLabel(section) });
     }
     for (const line of section.lines) {
       append(line);

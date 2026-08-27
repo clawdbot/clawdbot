@@ -1,4 +1,6 @@
 // Control UI tests cover the session diff panel (sessions.diff RPC).
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
 import { chromium, type Browser, type BrowserContext } from "playwright";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
@@ -22,6 +24,8 @@ const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/diff-highlighting");
 
 let server: ControlUiE2eServer;
 // Browser contexts preserve test isolation; keep one process warm for this file.
@@ -50,20 +54,20 @@ const APP_PATCH = [
   "--- a/src/app.ts",
   "+++ b/src/app.ts",
   "@@ -30,3 +30,4 @@",
-  " context line",
-  "-removed line",
-  "+replacement line",
-  "+extra line",
-  " trailing context",
+  " // context line",
+  '-const message = "removed line";',
+  '+const message = "replacement line";',
+  '+console.log("extra line");',
+  " // trailing context",
   "",
 ].join("\n");
 
 const APP_FILE_TEXT = [
-  ...Array.from({ length: 29 }, (_, index) => `unchanged line ${index + 1}`),
-  "context line",
-  "replacement line",
-  "extra line",
-  "trailing context",
+  ...Array.from({ length: 29 }, (_, index) => `// unchanged line ${index + 1}`),
+  "// context line",
+  'const message = "replacement line";',
+  'console.log("extra line");',
+  "// trailing context",
   "",
 ].join("\n");
 
@@ -570,6 +574,20 @@ describeControlUiE2e("session diff panel", () => {
     await expect
       .poll(() => modified.locator(".chat-diff__row--add").first().textContent())
       .toContain("replacement line");
+    await expect
+      .poll(() => modified.locator(".chat-diff__row--add .tok-keyword").textContent())
+      .toBe("const");
+    expect(
+      await modified
+        .locator(".chat-diff__row--add .tok-keyword")
+        .evaluate(
+          (token) => getComputedStyle(token).color !== getComputedStyle(token.parentElement!).color,
+        ),
+    ).toBe(true);
+    if (captureProof) {
+      await mkdir(artifactDir, { recursive: true });
+      await panelSurface.screenshot({ path: path.join(artifactDir, "unified-light.png") });
+    }
 
     await modified.getByRole("button", { name: "Show next 20 unmodified lines" }).click();
     await expect.poll(async () => (await gateway.getRequests("sessions.diff")).length).toBe(2);
@@ -600,6 +618,20 @@ describeControlUiE2e("session diff panel", () => {
     await panel.getByRole("button", { name: "Change view options" }).click();
     await page.getByRole("menuitem", { name: "Switch to Split Diff" }).click();
     await expect.poll(() => modified.locator(".session-diff-split").count()).toBe(1);
+    await expect
+      .poll(() => modified.locator(".session-diff-split__side--right .tok-keyword").textContent())
+      .toBe("const");
+    if (captureProof) {
+      await page.emulateMedia({ colorScheme: "dark" });
+      await page.evaluate(() => {
+        document.documentElement.dataset.themeMode = "dark";
+        document.documentElement.dataset.themeResolved = "dark";
+      });
+      await modified
+        .locator(".session-diff-split__side--right .tok-keyword")
+        .scrollIntoViewIfNeeded();
+      await panelSurface.screenshot({ path: path.join(artifactDir, "split-dark.png") });
+    }
     await panel.getByRole("button", { name: "Change view options" }).click();
     await page.getByRole("menuitem", { name: "Switch to Unified Diff" }).click();
     await expect.poll(() => modified.locator(".chat-diff").count()).toBe(1);

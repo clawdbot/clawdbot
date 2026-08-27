@@ -80,6 +80,47 @@ afterEach(() => {
 });
 
 describe("SessionDiffPanel", () => {
+  it.each([false, true])(
+    "highlights source in split=%s without changing its text",
+    async (split) => {
+      setNativeGatewayTestState(null);
+      localStorage.setItem("openclaw.control.sessionDiff.v1", JSON.stringify({ split }));
+      const panel = document.createElement("openclaw-session-diff") as SessionDiffElement;
+      localStorage.removeItem("openclaw.control.sessionDiff.v1");
+      const patch = [
+        "--- a/example.ts",
+        "+++ b/example.ts",
+        "@@ -1,4 +1,4 @@",
+        " /* comment",
+        "-old comment",
+        "+new comment",
+        " */",
+        '-const value = "before";',
+        '+const value = "<img src=x onerror=alert(1)>";',
+      ].join("\n");
+      const data = fileResult(patch);
+      data.files[0]!.path = "example.ts";
+      panel.loader = async () => data;
+      document.body.append(panel);
+      await vi.waitFor(() =>
+        expect(panel.querySelector(".tok-string")?.textContent).toContain("before"),
+      );
+      expect([...panel.querySelectorAll(".tok-comment")].map((node) => node.textContent)).toContain(
+        "new comment",
+      );
+      expect(panel.querySelector(".tok-keyword")?.textContent).toBe("const");
+      expect(panel.textContent).toContain("<img src=x onerror=alert(1)>");
+      expect(panel.querySelector("img")).toBeNull();
+
+      // Reusing the panel for an unknown file type must discard the prior language.
+      panel.loader = async () => ({ ...data, files: [{ ...data.files[0]!, path: "example.txt" }] });
+      await vi.waitFor(() =>
+        expect(panel.querySelector(".session-diff__filename")?.textContent).toBe("example.txt"),
+      );
+      expect(panel.querySelector(".tok-keyword")).toBeNull();
+    },
+  );
+
   it.each([
     { surface: "file", failed: false, feedback: "Copied!" },
     { surface: "file", failed: true, feedback: "Copy failed" },

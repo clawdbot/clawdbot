@@ -673,6 +673,7 @@ function renderToolCardModes(
   diff: NonNullable<ToolCallView["diff"]>,
   outcome: ToolCardOutcome,
   isError: boolean,
+  path: string,
 ) {
   const active = isError ? "raw" : "diff";
   const modeLabel = t("chat.toolCards.viewMode");
@@ -692,7 +693,7 @@ function renderToolCardModes(
         ${t("chat.toolCards.raw")}
       </wa-tab>
       <wa-tab-panel id=${`${card.id}-diff-panel`} name="diff" ?active=${active === "diff"}>
-        ${renderDiffBlock(diff, outcome)}
+        ${renderDiffBlock(diff, outcome, undefined, path)}
       </wa-tab-panel>
       <wa-tab-panel id=${`${card.id}-raw-panel`} name="raw" ?active=${active === "raw"}>
         ${renderToolDataBlock({
@@ -1021,8 +1022,8 @@ export function renderExpandedToolCardContent(
           <div class="chat-tool-card__actions">${diffCopyAction}${sidebarAction}</div>
         </div>
         ${hasOutput
-          ? renderToolCardModes(card, view.diff, outcome, isError)
-          : renderDiffBlock(view.diff, outcome)}
+          ? renderToolCardModes(card, view.diff, outcome, isError, view.target ?? "")
+          : renderDiffBlock(view.diff, outcome, undefined, view.target ?? "")}
         ${renderToolOutcome(outcome, card.exitCode)}
       </div>
     `;

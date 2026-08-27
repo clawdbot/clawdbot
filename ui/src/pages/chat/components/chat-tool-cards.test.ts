@@ -39,6 +39,58 @@ function pointerClick(element: Element) {
 }
 
 describe("tool-cards", () => {
+  it.each([
+    {
+      name: "edit",
+      args: {
+        path: "example.ts",
+        oldText: 'const value = "old";',
+        newText: 'const value = "new";',
+      },
+      outputText: "Updated file",
+    },
+    {
+      name: "edit",
+      args: {
+        path: "example.ts",
+        oldText: "/* removed comment\ncontinued",
+        newText: 'const value = "new";',
+      },
+    },
+    { name: "write", args: { path: "example.ts", content: 'const value = "new";' } },
+    {
+      name: "apply_patch",
+      args: {
+        patch: [
+          "*** Begin Patch",
+          "*** Add File: example.ts",
+          '+const value = "new";',
+          "*** Add File: example.py",
+          "+def greet():",
+          '+    return "hello"',
+          "*** End Patch",
+        ].join("\n"),
+      },
+    },
+  ])("highlights $name previews using their file languages", async (card) => {
+    const container = document.createElement("div");
+    render(
+      renderToolCard({ id: "highlight", ...card }, { expanded: true, onToggleExpanded: vi.fn() }),
+      container,
+    );
+    await vi.waitFor(() =>
+      expect(container.querySelector(".tok-keyword")?.textContent).toBe("const"),
+    );
+    expect(container.querySelector(".tok-string")?.textContent).toMatch(/"(?:old|new)"/);
+    if (card.name === "apply_patch") {
+      expect(
+        [...container.querySelectorAll(".tok-keyword")].map((node) => node.textContent),
+      ).toContain("def");
+      expect(container.querySelector(".chat-diff__row--file .tok-keyword")).toBeNull();
+    }
+    render(null, container);
+  });
+
   it("routes MCP App previews through the dedicated double-iframe host", async () => {
     const container = document.createElement("div");
     render(

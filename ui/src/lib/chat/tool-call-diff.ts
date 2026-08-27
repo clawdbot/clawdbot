@@ -17,6 +17,8 @@ export type DiffLineGap = {
 
 export type DiffLine = {
   kind: DiffLineKind;
+  /** Source filename on file separators, for language selection. */
+  path?: string;
   /** 1-based line number in the file (new file for adds/ctx, old file for dels). */
   lineNo?: number;
   /** Session-diff coordinates for an expandable unchanged-lines marker. */
