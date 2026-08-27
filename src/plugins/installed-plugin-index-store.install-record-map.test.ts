@@ -87,8 +87,8 @@ describe("installed plugin index install-record persistence", () => {
     expect(getPluginInstallRecordMapEntry(persisted?.installRecords, "demo")).toEqual(
       acceptedRecord,
     );
-    expect(JSON.parse(readInstallRecordRow(stateDir).install_records_json)).toEqual({
-      demo: acceptedRecord,
+    expect(JSON.parse(readInstallRecordRow(stateDir).value_json)).toMatchObject({
+      index: { installRecords: { demo: acceptedRecord } },
     });
   });
 

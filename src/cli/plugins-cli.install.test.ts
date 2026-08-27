@@ -1612,7 +1612,11 @@ describe("plugins cli install", () => {
       update: { channel: "beta" },
     } as OpenClawConfig);
 
-    await runPluginsCommand(["plugins", "install", "clawhub:@openclaw/brave-plugin"]);
+    await runCapabilityAcceptedPluginsInstallCommand([
+      "plugins",
+      "install",
+      "clawhub:@openclaw/brave-plugin",
+    ]);
 
     expect(clawHubInstallCall().spec).toBe("clawhub:@openclaw/brave-plugin@beta");
   });
@@ -1649,7 +1653,7 @@ describe("plugins cli install", () => {
       update: { channel: "beta" },
     } as OpenClawConfig);
 
-    await runPluginsCommand(["plugins", "install", "clawhub:demo"]);
+    await runCapabilityAcceptedPluginsInstallCommand(["plugins", "install", "clawhub:demo"]);
 
     expect(clawHubInstallCall().spec).toBe("clawhub:demo");
   });
@@ -2021,7 +2025,7 @@ describe("plugins cli install", () => {
       findBundledPluginSourceMock.mockReturnValue(undefined);
       installPluginFromNpmSpecMock.mockResolvedValue(createNpmPluginInstallResult("brave"));
 
-      await runPluginsCommand(["plugins", "install", arg]);
+      await runCapabilityAcceptedPluginsInstallCommand(["plugins", "install", arg]);
 
       expect(npmInstallCall().spec).toBe("@openclaw/brave-plugin@beta");
       expect(npmInstallCall().trustedSourceLinkedOfficialInstall).toBe(true);
