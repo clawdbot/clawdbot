@@ -281,6 +281,7 @@ describe("registerDirectoryCli", () => {
     expect(mocks.resolveMessageChannelSelection).toHaveBeenCalledWith({
       cfg: autoEnabledConfig,
       channel: null,
+      accountResolution: "read_only",
     });
     expect(self).toHaveBeenCalledTimes(1);
     expect(firstRecordArg(self).cfg).toBe(autoEnabledConfig);
@@ -288,6 +289,84 @@ describe("registerDirectoryCli", () => {
       nextConfig: autoEnabledConfig,
       baseHash: "config-1",
     });
+  });
+
+  it("inspects an implicit channel before resolving only that account's secrets", async () => {
+    const tokenRef = {
+      source: "env",
+      provider: "default",
+      id: "DIRECTORY_TEST_SLACK_TOKEN",
+    } as const;
+    const sourceConfig = { channels: { slack: { botToken: tokenRef } } };
+    const runtimeConfig = {
+      ...sourceConfig,
+      messages: { responsePrefix: "runtime-default" },
+    };
+    const calls: string[] = [];
+    const self = vi.fn().mockImplementation(async () => {
+      calls.push("directory");
+      return { id: "U123", name: "Slack Bot" };
+    });
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      ...createTestConfigSnapshot(sourceConfig, runtimeConfig),
+      hash: "config-1",
+    });
+    mocks.loadConfig.mockReturnValue(runtimeConfig);
+    mocks.applyPluginAutoEnable.mockImplementation(({ config }) => ({ config, changes: [] }));
+    mocks.resolveMessageChannelSelection.mockImplementation(
+      async ({ accountResolution }: { accountResolution?: string }) => {
+        calls.push("selection");
+        if (accountResolution !== "read_only") {
+          throw new Error("unresolved SecretRef");
+        }
+        return {
+          channel: "slack",
+          plugin: { id: "slack", directory: { self } },
+          configured: ["slack"],
+          source: "single-configured",
+        };
+      },
+    );
+    mocks.getScopedChannelsCommandSecretTargets.mockImplementationOnce(() => {
+      calls.push("scope");
+      return {
+        targetIds: new Set(["channels.slack.botToken"]),
+        allowedPaths: new Set(["channels.slack.botToken"]),
+      };
+    });
+    mocks.resolveCommandSecretRefsViaGateway.mockImplementation(async ({ config }) => {
+      calls.push("secrets");
+      return {
+        resolvedConfig: {
+          ...config,
+          channels: { slack: { botToken: "resolved-directory-token" } },
+        },
+        diagnostics: [],
+      };
+    });
+
+    const program = new Command().name("openclaw");
+    registerDirectoryCli(program);
+
+    await program.parseAsync(["directory", "self", "--json"], { from: "user" });
+
+    expect(mocks.resolveMessageChannelSelection).toHaveBeenCalledWith({
+      cfg: runtimeConfig,
+      channel: null,
+      accountResolution: "read_only",
+    });
+    expect(mocks.getScopedChannelsCommandSecretTargets).toHaveBeenCalledWith({
+      config: runtimeConfig,
+      channel: "slack",
+      accountId: "default",
+    });
+    expect(firstRecordArg(self).cfg).toEqual({
+      ...runtimeConfig,
+      channels: { slack: { botToken: "resolved-directory-token" } },
+    });
+    expect(calls).toEqual(["selection", "scope", "secrets", "directory"]);
+    expect(mocks.resolveInstallableChannelPlugin).not.toHaveBeenCalled();
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
   });
 
   it.each([

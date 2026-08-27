@@ -155,6 +155,7 @@ export function registerDirectoryCli(program: Command) {
       : await resolveMessageChannelSelection({
           cfg: runtimeConfig,
           channel: opts.channel ?? null,
+          accountResolution: "read_only",
         });
     const selectedChannelId = selection.channel;
     const plugin = selection.plugin;
