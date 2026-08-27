@@ -1,3 +1,4 @@
+import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply.js";
 import {
   HEARTBEAT_IDLE_RETRY_GRACE_MS,
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
@@ -45,6 +46,7 @@ export async function executeJobCore(
       delivered?: boolean;
       deliveryAttempted?: boolean;
       deliveryError?: string;
+      deliverySuppressionReason?: NormalizeReplySkipReason;
       delivery?: CronDeliveryTrace;
       nextCheck?: CronNextCheckProposal;
       scriptStateChanged?: boolean;
@@ -369,6 +371,7 @@ async function executeDetachedCronJob(
       delivered?: boolean;
       deliveryAttempted?: boolean;
       deliveryError?: string;
+      deliverySuppressionReason?: NormalizeReplySkipReason;
       delivery?: CronDeliveryTrace;
       nextCheck?: CronNextCheckProposal;
     }
@@ -464,6 +467,7 @@ async function executeDetachedCronJob(
     // successful run so the service can persist it as `lastDeliveryError` and
     // emit it on the finished event for CLI/UI/API run logs (#95419).
     deliveryError: res.deliveryError,
+    deliverySuppressionReason: res.deliverySuppressionReason,
     nextCheck: res.nextCheck,
     summary: res.summary,
     delivered: res.delivered,

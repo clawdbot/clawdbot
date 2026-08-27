@@ -16582,6 +16582,7 @@ public struct CronJob: Codable, Sendable {
     public let lastdelivered: Bool?
     public let lastdeliverystatus: AnyCodable?
     public let lastdeliveryerror: String?
+    public let deliverysuppressionreason: String?
     public let lastfailurenotificationdelivered: Bool?
     public let lastfailurenotificationdeliverystatus: AnyCodable?
     public let lastfailurenotificationdeliveryerror: String?
@@ -16617,6 +16618,7 @@ public struct CronJob: Codable, Sendable {
         lastdelivered: Bool? = nil,
         lastdeliverystatus: AnyCodable? = nil,
         lastdeliveryerror: String? = nil,
+        deliverysuppressionreason: String? = nil,
         lastfailurenotificationdelivered: Bool? = nil,
         lastfailurenotificationdeliverystatus: AnyCodable? = nil,
         lastfailurenotificationdeliveryerror: String? = nil)
@@ -16651,6 +16653,7 @@ public struct CronJob: Codable, Sendable {
         self.lastdelivered = lastdelivered
         self.lastdeliverystatus = lastdeliverystatus
         self.lastdeliveryerror = lastdeliveryerror
+        self.deliverysuppressionreason = deliverysuppressionreason
         self.lastfailurenotificationdelivered = lastfailurenotificationdelivered
         self.lastfailurenotificationdeliverystatus = lastfailurenotificationdeliverystatus
         self.lastfailurenotificationdeliveryerror = lastfailurenotificationdeliveryerror
@@ -16687,6 +16690,7 @@ public struct CronJob: Codable, Sendable {
         case lastdelivered = "lastDelivered"
         case lastdeliverystatus = "lastDeliveryStatus"
         case lastdeliveryerror = "lastDeliveryError"
+        case deliverysuppressionreason = "deliverySuppressionReason"
         case lastfailurenotificationdelivered = "lastFailureNotificationDelivered"
         case lastfailurenotificationdeliverystatus = "lastFailureNotificationDeliveryStatus"
         case lastfailurenotificationdeliveryerror = "lastFailureNotificationDeliveryError"
@@ -16948,6 +16952,7 @@ public struct CronRunLogEntry: Codable, Sendable {
     public let delivered: Bool?
     public let deliverystatus: AnyCodable?
     public let deliveryerror: String?
+    public let deliverysuppressionreason: String?
     public let failurenotificationdelivery: [String: AnyCodable]?
     public let delivery: [String: AnyCodable]?
     public let sessionid: String?
@@ -16975,6 +16980,7 @@ public struct CronRunLogEntry: Codable, Sendable {
         delivered: Bool? = nil,
         deliverystatus: AnyCodable? = nil,
         deliveryerror: String? = nil,
+        deliverysuppressionreason: String? = nil,
         failurenotificationdelivery: [String: AnyCodable]? = nil,
         delivery: [String: AnyCodable]? = nil,
         sessionid: String? = nil,
@@ -17001,6 +17007,7 @@ public struct CronRunLogEntry: Codable, Sendable {
         self.delivered = delivered
         self.deliverystatus = deliverystatus
         self.deliveryerror = deliveryerror
+        self.deliverysuppressionreason = deliverysuppressionreason
         self.failurenotificationdelivery = failurenotificationdelivery
         self.delivery = delivery
         self.sessionid = sessionid
@@ -17029,6 +17036,7 @@ public struct CronRunLogEntry: Codable, Sendable {
         case delivered
         case deliverystatus = "deliveryStatus"
         case deliveryerror = "deliveryError"
+        case deliverysuppressionreason = "deliverySuppressionReason"
         case failurenotificationdelivery = "failureNotificationDelivery"
         case delivery
         case sessionid = "sessionId"
