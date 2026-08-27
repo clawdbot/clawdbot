@@ -177,7 +177,6 @@ function parseGatewayCloseCode(message: string): number | undefined {
 }
 
 function resolveTransportActivityAt(event: unknown): number {
-  // SAFETY: event is a Discord debug event with an optional numeric timestamp.
   const at = (event as { at?: unknown } | undefined)?.at;
   const timestampMs = asDateTimestampMs(at);
   return timestampMs !== undefined && timestampMs >= 0 ? timestampMs : Date.now();
@@ -251,8 +250,7 @@ function createGatewayStatusObserver(params: {
       if (shouldStop() || params.gateway?.isConnected) {
         return;
       }
-      // SAFETY: ws is a DiscordGatewaySocket whose readyState matches the
-      // standard WebSocket readyState constants (0=CONNECTING, 1=OPEN).
+      // SAFETY: ws is a DiscordGatewaySocket whose readyState matches the standard WebSocket readyState constants (0=CONNECTING, 1=OPEN).
       const ws = params.gateway?.ws as { readyState?: number } | null | undefined;
       if (
         ws &&
@@ -376,7 +374,6 @@ function createGatewayStatusObserver(params: {
       // Fatal gateway closes require operator repair. Keep the outer channel supervisor from
       // turning an invalid credential or configuration into an automatic restart loop.
       const terminalDisconnect =
-        // SAFETY: code is a valid Discord gateway WebSocket close code from the close event.
         code !== undefined && isFatalGatewayCloseCode(code as GatewayCloseCodes);
       params.pushStatus({
         connected: false,
