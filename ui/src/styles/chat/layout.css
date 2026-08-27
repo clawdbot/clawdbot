@@ -6189,6 +6189,7 @@ button.chat-pr__diff {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+  padding-bottom: 9px;
 }
 
 .chat-controls__permission-learn-more {
