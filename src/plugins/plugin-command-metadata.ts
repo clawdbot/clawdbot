@@ -51,7 +51,7 @@ export function projectPluginCommandNativeMetadata(
     ? Object.freeze({ ...command.descriptionLocalizations })
     : undefined;
   return Object.freeze({
-    name,
+    name: normalizeOptionalLowercaseString(name) ?? name,
     description: command.description.trim(),
     ...(descriptionLocalizations ? { descriptionLocalizations } : {}),
     acceptsArgs: command.acceptsArgs ?? false,

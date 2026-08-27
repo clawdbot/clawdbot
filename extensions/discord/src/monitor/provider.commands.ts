@@ -19,6 +19,7 @@ import { DISCORD_VOICE_COMMAND_SPEC } from "../voice/command.js";
 
 export type DiscordProviderCommandSpec = NativeCommandSpec | PluginCommandNativeCandidate;
 
+const DISCORD_COMMAND_NAME_MAX_LENGTH = 32;
 const loadPluginCommandRuntime = createLazyRuntimeModule(
   () => import("openclaw/plugin-sdk/plugin-command-runtime"),
 );
@@ -44,7 +45,19 @@ export async function resolveDiscordProviderCommandSpecs(params: {
   if (params.nativeEnabled) {
     pluginCommandRuntime = (await loadPluginCommandRuntime()).createPluginCommandRuntime();
   }
-  const pluginCommandSpecs = pluginCommandRuntime?.listNativeCandidates("discord") ?? [];
+  const pluginCommandSpecs = (pluginCommandRuntime?.listNativeCandidates("discord") ?? []).filter(
+    (command) => {
+      if (command.name.length <= DISCORD_COMMAND_NAME_MAX_LENGTH) {
+        return true;
+      }
+      params.runtime.error?.(
+        danger(
+          `discord: plugin command "/${command.name.slice(0, DISCORD_COMMAND_NAME_MAX_LENGTH)}…" exceeds the ${DISCORD_COMMAND_NAME_MAX_LENGTH}-character name limit. Set a shorter Discord native alias. Skipping.`,
+        ),
+      );
+      return false;
+    },
+  );
   const onCollision = (normalizedName: string) => {
     params.runtime.error?.(
       danger(

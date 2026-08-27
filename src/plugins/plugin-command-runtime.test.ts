@@ -7,6 +7,7 @@ vi.mock("./host-hook-cleanup.js", () => ({ cleanupReplacedPluginHostRegistry }))
 
 import { getPluginCommandExecutionCount } from "./command-execution-lock.js";
 import { registerPluginCommandInRegistry } from "./command-registration.js";
+import { listProviderPluginCommandSpecs } from "./command-specs.js";
 import { withPluginCommandAccountStartScope } from "./plugin-command-account-start-scope.js";
 import {
   createPluginCommandRuntime,
@@ -38,7 +39,7 @@ function registerCommand(
     pluginId: string;
     name: string;
     channels?: string[];
-    nativeNames?: Record<string, string>;
+    nativeNames?: Partial<Record<string, string>>;
     acceptsArgs?: boolean;
     handler: (args?: string) => Promise<{ text: string }>;
   },
@@ -130,6 +131,71 @@ describe("plugin command runtime", () => {
     expect(scopedHandler).toHaveBeenCalledOnce();
     expect(ambientHandler).not.toHaveBeenCalled();
   });
+
+  it.each([
+    {
+      label: "primary name",
+      name: "MiXeDPrimary",
+      nativeNames: undefined,
+      provider: "discord",
+      expectedName: "mixedprimary",
+    },
+    {
+      label: "default alias",
+      name: "OriginalDefault",
+      nativeNames: { default: "MiXeDDefault" },
+      provider: "telegram",
+      expectedName: "mixeddefault",
+    },
+    {
+      label: "provider alias",
+      name: "OriginalProvider",
+      nativeNames: { default: "MiXeDDefault", discord: "MiXeDDiscord" },
+      provider: "discord",
+      expectedName: "mixeddiscord",
+    },
+  ])(
+    "normalizes the $label native identity while preserving dispatch and collision ownership",
+    async ({ name, nativeNames, provider, expectedName }) => {
+      const registry = createEmptyPluginRegistry();
+      const handler = vi.fn(async (args?: string) => ({ text: `original:${args}` }));
+      registerCommand(registry, {
+        pluginId: "original-plugin",
+        name,
+        nativeNames,
+        acceptsArgs: true,
+        handler,
+      });
+      setActivePluginRegistry(registry);
+
+      expect(registry.commands[0]?.command.name).toBe(name);
+      expect(registry.commands[0]?.command.nativeNames).toEqual(nativeNames);
+      expect(
+        registerPluginCommandInRegistry(registry, "colliding-plugin", {
+          name: expectedName.toUpperCase(),
+          description: "Colliding command",
+          handler: async () => ({ text: "wrong handler" }),
+        }),
+      ).toEqual({
+        ok: false,
+        error: `Command "${expectedName}" already registered by plugin "original-plugin"`,
+      });
+      expect(listProviderPluginCommandSpecs(provider).map((spec) => spec.name)).toEqual([
+        expectedName,
+      ]);
+
+      const candidate = createPluginCommandRuntime().listNativeCandidates(provider)[0]!;
+      expect(candidate.name).toBe(expectedName);
+      await expect(
+        requirePluginDispatch(candidate, "payload").execute({
+          ...executionContext,
+          channel: provider,
+          commandBody: `/${expectedName} payload`,
+        }),
+      ).resolves.toEqual({ text: "original:payload" });
+      expect(handler).toHaveBeenCalledExactlyOnceWith("payload");
+    },
+  );
 
   it("rejects forged, cross-runtime, wrong-channel, and retired selections", async () => {
     const registry = createEmptyPluginRegistry();
