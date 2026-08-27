@@ -152,23 +152,23 @@ function deferRequesterSettleWakeBatch(params: {
   batchRunIds: readonly string[];
   state: RequesterSettleWakeBatchState;
   transitionBatch: (runIds: readonly string[], state: RequesterSettleWakeBatchState) => void;
+  completeBatch(
+    runIds: readonly string[],
+    rearmGeneration?: number,
+    delivery?: SubagentAnnounceDeliveryResult,
+  ): void;
 }): void {
   const deferralCount = (params.state.deferralCount ?? 0) + 1;
   if (deferralCount >= REQUESTER_SETTLE_WAKE_MAX_DEFERRALS) {
-    // Max deferrals reached; complete the batch with a recorded reason.
-    params.transitionBatch(params.batchRunIds, {
-      status: "pending",
-      attemptCount: params.state.attemptCount,
-      ...(params.state.replayCount !== undefined ? { replayCount: params.state.replayCount } : {}),
-      nextAttemptAt: Date.now(),
-      batchRunIds: [...params.batchRunIds],
-      ...(params.state.requesterYieldBatch === true ? { requesterYieldBatch: true } : {}),
-      ...(params.state.afterRequesterYield === true ? { afterRequesterYield: true } : {}),
-      ...(params.state.rearmGeneration !== undefined
-        ? { rearmGeneration: params.state.rearmGeneration }
-        : {}),
-      lastError: "requester settle wake deferred too many times",
-      deferralCount,
+    completeRequesterSettleWakeBatch({
+      runIds: params.batchRunIds,
+      state: params.state,
+      completeBatch: params.completeBatch,
+      delivery: {
+        delivered: false,
+        path: "none",
+        error: "requester settle wake deferred too many times",
+      },
     });
     return;
   }
@@ -323,6 +323,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
         batchRunIds,
         state: selectedState,
         transitionBatch: params.transitionBatch,
+        completeBatch,
       });
     }
     return false;
@@ -416,6 +417,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
         batchRunIds,
         state,
         transitionBatch: params.transitionBatch,
+        completeBatch,
       });
       return false;
     }

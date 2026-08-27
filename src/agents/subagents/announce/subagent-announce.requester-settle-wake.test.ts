@@ -967,6 +967,44 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       }
     });
 
+    it("terminalizes a repeatedly deferred batch once and rejects a stale wake", async () => {
+      const child = makeSettledChild({
+        runId: "run-a",
+        delivery: { status: "pending" },
+        requesterSettleWake: {
+          status: "pending",
+          attemptCount: 0,
+          batchRunIds: ["run-a"],
+          requesterYieldBatch: true,
+          rearmGeneration: 1,
+          deferralCount: 9,
+        },
+      });
+      registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([child]);
+      registryRuntimeMock.hasDescendantRunAwaitingSettle.mockReturnValue(true);
+
+      await expect(
+        maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: child })),
+      ).resolves.toBe(false);
+
+      expect(transitionBatchSpy).not.toHaveBeenCalled();
+      expect(deliverSpy).not.toHaveBeenCalled();
+      expect(completeBatchSpy).toHaveBeenCalledOnce();
+      expect(completeBatchSpy).toHaveBeenCalledWith(["run-a"], 1, {
+        delivered: false,
+        path: "none",
+        error: "requester settle wake deferred too many times",
+      });
+      expect(child.requesterSettleWake).toBeUndefined();
+
+      registryRuntimeMock.hasDescendantRunAwaitingSettle.mockReturnValue(false);
+      await expect(
+        maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: child })),
+      ).resolves.toBe(false);
+      expect(completeBatchSpy).toHaveBeenCalledOnce();
+      expect(deliverSpy).not.toHaveBeenCalled();
+    });
+
     it("coalesces concurrent row restores for one persisted batch", async () => {
       const state = {
         status: "dispatching" as const,
