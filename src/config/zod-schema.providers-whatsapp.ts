@@ -68,7 +68,6 @@ const WhatsAppCommonShape = {
   pluginHooks: WhatsAppPluginHooksSchema,
 };
 
-
 function enforceOpenDmPolicyAllowFromStar(params: {
   dmPolicy: unknown;
   allowFrom: unknown;
