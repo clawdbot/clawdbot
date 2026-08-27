@@ -451,7 +451,13 @@ describe("openai transport stream", () => {
         name: "GPT-5.4",
         api: "openai-chatgpt-responses",
         baseUrl: "https://proxy.example.com/v1",
-      }),
+        // Unrecognized custom base URL: instructions default off unless
+        // verified. This fixture is specifically testing param preservation
+        // once instructions is in play, so opt in explicitly. `compat` types
+        // to `never` for this API variant (no recognized branch in
+        // Model<TApi>), matching the sibling `as never` casts in this file.
+        compat: { supportsInstructions: true },
+      } as never),
       {
         systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
         messages: [{ role: "user", content: "Hello", timestamp: 1 }],
