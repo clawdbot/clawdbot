@@ -1,5 +1,5 @@
 ---
-summary: Everything is a node — one placement model where paired machines and cloud boxes host sessions through the worker admission path; clients attach to sessions, never to runners.
+summary: Everything is a node — one placement model where paired machines and cloud boxes run OpenClaw worker turns or Codex remote execution through mode-specific admission; clients attach to sessions, never to runners.
 title: Runners plan
 read_when:
   - Designing or reviewing where sessions run (gateway, device, cloud)
@@ -27,7 +27,7 @@ advances a milestone.
 | 6   | Node worker provider (device runners)                      | in progress | #122683, #122769, #122829, #122939, #123013, #123033, #122966, #123157, #123280, #123612, #123641, #123665, #123673, #123700, #123696, #123785, #123859, #123889, #123901, #125708 |
 | 7   | Bundle push consent + runner updates                       | in progress | #123985, #124037, #124356, #124590                                                                                                                                                 |
 | 8   | Stop-and-continue moves and offline device recovery        | landed      | #125036, #126284                                                                                                                                                                   |
-| 9   | Node exec-server carrier and contract-preserving cleanup   | in progress | #125503, #125524, #125587                                                                                                                                                          |
+| 9   | Node exec-server carrier and contract-preserving cleanup   | in progress | #125503, #125524, #125587, #127202                                                                                                                                                 |
 | 10  | Cloud convergence (provisioners run `openclaw connect`)    | landed      | #125288, #125384, #125465                                                                                                                                                          |
 
 Revision history: revision 1 (2026-08-08) established the session/runner
@@ -79,12 +79,12 @@ Node      a paired machine holding an outbound connection to the gateway
           copy says "device". EVERY remote machine is a node — personal
           workstations, servers, cloud leases. Phones are nodes that never
           advertise session hosting.
-Runner    anything that can host a session's turn loop: the gateway itself,
-          or a session-capable node. "Runner" is internal/docs vocabulary;
-          UI copy says "Runs on …".
-Worker    the per-turn child process (`openclaw worker`) that hosts a
-          session's loop under worker admission. On paired devices and cloud
-          leases alike, it is a supervised child of the node host.
+Runner    anything that can own a session's turn loop or delegated execution:
+          the gateway itself or a session-capable node. "Runner" is
+          internal/docs vocabulary; UI copy says "Runs on …".
+Worker    the per-turn child process (`openclaw worker`) used only by
+          `worker-turn` placement. Codex `remote-exec` keeps its turn loop on the
+          gateway and runs its managed exec-server on the enrolled node.
 Isolation a property OF the runner (none | docker | podman), not a place.
 Project   repo identity: normalized remote.origin.url, with the existing
           16-char repo fingerprint as the no-remote fallback. Derived,
@@ -131,7 +131,7 @@ channel.
 
 ### Worker ingress on the public endpoint (milestone 5)
 
-Worker admission is exposed only on a path-tagged upgrade route on the public TLS endpoint (`connectionKind = "worker"` is forced by the route). Node-hosted worker children dial that endpoint directly. The former loopback listener and SSH reverse-forward carrier were removed after Crabbox converged onto node-backed worker turns; SSH remains only for `remote-exec` workspace transport and separately owned desktop tunnels.
+Worker admission is exposed only on a path-tagged upgrade route on the public TLS endpoint (`connectionKind = "worker"` is forced by the route). Node-hosted `worker-turn` children dial that endpoint directly; node-backed Codex `remote-exec` instead uses the explicitly authorized duplex node carrier and never starts a worker child. The former loopback listener and SSH reverse-forward carrier were removed after Crabbox converged onto enrolled cloud nodes; SSH remains available for explicitly SSH-backed `remote-exec` providers and separately owned desktop tunnels.
 
 Hardening that ships with the exposure, not after it:
 
@@ -215,13 +215,22 @@ stated honestly (revision 1 undersold this):
   visibly. Public node/environment inventory projects the same slot snapshot.
   Terminal node launch receipts retain a 24-hour replay window and prune in
   bounded batches; `pending` and `running` capacity reservations never age out.
+  Codex `remote-exec` starts its managed node exec-server directly and does not
+  consume a worker slot; eligibility instead requires its current, effectively
+  invocable command and separate per-attempt approval.
 - **Multi-gateway safety.** The worker install/workspace root on a node is
   namespaced by gateway identity so two gateways pairing one machine cannot
   corrupt each other's state.
 
-Isolation on node runners: optional worker-in-docker/podman, same sandbox
-axis as gateway-local sessions. Cloud leases keep full-permission-within-the-
-box (the machine is the boundary).
+Node runners can opt into per-worker Docker-compatible container isolation
+with `nodeHost.workerRuns.isolation: "container"`; the default `"none"`
+preserves direct host execution. The node resolves its engine at startup,
+fails closed when the requested boundary is unavailable, and owns durable
+container identity, cancellation, restart reconciliation, and orphan cleanup.
+The verified bundle remains read-only, the session workspace remains writable,
+and both retain their exact host paths inside the container. This is the same
+isolation axis as gateway-local sessions, not a separate placement type. Cloud
+leases keep full-permission-within-the-box because the machine is the boundary.
 
 Milestone 6 now has the public worker ingress, transport-neutral launch
 descriptor, durable node-host supervisor, private launch/status/cancel dialect,
@@ -245,8 +254,8 @@ and then removes retired generations, transfer siblings, unreachable manifests,
 and empty workspace parents in bounded passes. The Gateway bundle producer
 also prunes unreferenced local tarballs only after a successful current build,
 while preserving hashes named by durable environments and placements. Durable
-offline recovery is complete; isolation and checkout ownership remain milestone
-6 work.
+offline recovery and opt-in container isolation are complete; checkout
+ownership remains milestone 6 work.
 
 ### Trust model (operator-decided, v1)
 
@@ -370,11 +379,14 @@ speak. Additions:
 - **Where picker regrouped** (`ui/src/pages/new-session/device-placement.ts`):
   sections "This gateway" / "Devices" / "Cloud". Device rows come only from
   node entries in `environments.list`. A device is selectable only when its
-  current status is available, `sessionHost` is true, and its exact bounded
-  worker slots are valid with `available > 0`. Offline known session hosts,
-  connected non-hosts, saturated hosts, hosts without capacity, outdated
-  hosts, and unavailable hosts stay visible but disabled with a next step.
-  Cloud profiles remain their separate list.
+  current status is available, `sessionHost` is true, and the selected runtime
+  has its required authority. OpenClaw `worker-turn` requires exact bounded
+  worker slots with `available > 0`; Codex `remote-exec` requires its
+  effectively invocable exec-server command and can run with zero free worker
+  slots. Offline known session hosts, connected non-hosts, incompatible or
+  saturated hosts, outdated hosts, and unavailable hosts stay visible but
+  disabled with a next step. Cloud profiles remain their separate list and are
+  filtered by membership in their complete advertised execution-mode set.
 - **Remote placement uses one session path.** Device and cloud selections use
   a Gateway project or folder, force a managed worktree, create the session
   without `execNode`, dispatch by exact `{ deviceId }` or `{ profileId }`, and
@@ -406,18 +418,26 @@ speak. Additions:
 
 ### Cloud convergence (milestone 10)
 
-The bundled Crabbox provider now boots the box and runs
+The bundled Crabbox provider boots the box and runs
 `openclaw connect <setup code> --ephemeral` in an isolated per-lease state
-directory. The Gateway persists one replay-safe setup identity, atomically
-binds the authenticated device identity to the worker environment, pushes the
-current bundle through the node channel, and removes the node role after
-provider teardown. `destroy` = release lease plus pairing cleanup. Codex now
-supports paired-device `remote-exec` over the approved duplex node carrier;
-disconnect ends the attempt, and reconnect starts a fresh attempt without
-resume. Crabbox cloud profiles remain `worker-turn` only. The replaced
-reverse-tunnel/rsync cloud carrier has been deleted. Distinct stable SSH,
-OpenShell, Claude, and exec-host contracts remain intact; broader replacement
-and reconnect or resume are later work.
+directory. One configured cloud profile advertises both `worker-turn` and
+`remote-exec`; the selected session runtime determines provider setup and
+placement ownership, while both modes return the same enrolled node transport.
+The Gateway persists one replay-safe setup identity, atomically binds the
+authenticated device identity to the environment, pushes the current pinned
+bundle through the node channel, and removes the node role after provider
+teardown. `destroy` releases the lease and cleans up its pairing and children.
+
+OpenClaw launches a restricted node-supervised worker child. Codex instead uses
+the bundled, pinned managed exec-server over the approved duplex node carrier;
+its app-server, model authentication, and transcript remain Gateway-owned.
+The Codex command requires explicit Gateway allowlisting and critical
+per-attempt allow-once approval, and consumes no worker slot. Disconnect ends
+the attempt; reconnection permits only a fresh attempt without process or
+stream resumption. The replaced reverse-tunnel/rsync cloud carrier remains
+deleted. Distinct stable SSH, OpenShell, Claude, and exec-host contracts remain
+intact; broader replacement, reconnect or resume, node-child isolation, and
+device-project checkouts remain later work.
 
 ## What the adversarial reviews killed or reshaped
 
@@ -518,7 +538,8 @@ Independently mergeable PR series; 3–5 can interleave after 1c.
    admission; invalid attempts are cheap and unenumerable.
 6. **Node worker provider**: lease union, dispatch target union, node tunnel
    handle, durable supervised launch, HTTPS delta sync + origin fetch,
-   tri-state inspect + reaper + GC, concurrency slots, `runner-offline`
+   tri-state inspect + reaper + GC, concurrency slots, opt-in container
+   isolation with durable container lifecycle reconciliation, `runner-offline`
    placement semantics, gateway-namespaced install root, approver-provenance
    column. Fault-injection tests gate exit: device sleep mid-turn, node WS
    blip mid-turn (turn survives), gateway restart with offline device,
@@ -538,14 +559,19 @@ Independently mergeable PR series; 3–5 can interleave after 1c.
 8. **Stop-and-continue moves** (landed): drain + reclaim + re-dispatch to
    another runner, plus durable offline-device waiting and explicit destructive
    Gateway continuation.
-9. **Node exec-server carrier and contract-preserving cleanup**: the missing
-   node exec-server carrier must first reproduce existing remote-exec and
-   approval behavior. Keep the stable SSH sandbox, OpenShell, Claude one-shot,
-   and exec-host contracts until their individual replacements are proved;
-   none is deletable merely because node-backed session hosting exists.
+9. **Node exec-server carrier and contract-preserving cleanup**: the approved
+   duplex node exec-server carrier supports paired-device and cloud-node
+   Codex remote execution while retaining explicit command authorization,
+   per-attempt approval, Gateway-owned authentication, terminal disconnects,
+   and fresh-attempt-only recovery. Keep the stable SSH sandbox, OpenShell,
+   Claude one-shot, and exec-host contracts until their individual replacements
+   are proved; none is deletable merely because node-backed session hosting
+   exists.
 10. **Cloud convergence** (landed): `--ephemeral` enrollment, provisioners run
-    `openclaw connect`, and the former worker reverse-tunnel/rsync carrier is
-    removed. Stable SSH-backed remote-exec and desktop contracts remain.
+    `openclaw connect`, and one bundled Crabbox profile supports both OpenClaw
+    `worker-turn` and Codex `remote-exec` through enrolled outbound nodes. The
+    former worker reverse-tunnel/rsync carrier stays removed. Stable
+    SSH-backed remote-exec and desktop contracts remain.
 
 Net production LOC across the plan is targeted negative: milestones 3–5 are
 small additions, 6–7 are mostly a provider + one transport implementation

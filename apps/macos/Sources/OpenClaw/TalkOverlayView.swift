@@ -54,7 +54,7 @@ struct TalkOverlayView: View {
     private static let defaultSeamColor = Color(red: 79 / 255.0, green: 122 / 255.0, blue: 154 / 255.0)
 
     private var seamColor: Color {
-        ColorHexSupport.color(fromHex: self.appState.seamColorHex) ?? Self.defaultSeamColor
+        ColorHexSupport.color(fromHex: self.appState.effectiveAccentHex) ?? Self.defaultSeamColor
     }
 }
 

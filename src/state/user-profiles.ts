@@ -25,7 +25,12 @@ import {
   type UserProfileRow,
   userProfilesDb,
 } from "./user-profiles-internal.js";
-import { ensureUserProfilesSchema, UserProfileNotFoundError } from "./user-profiles-schema.js";
+import {
+  ensureUserProfileRoleSchema,
+  ensureUserProfilesSchema,
+  hasEnsuredUserProfileRoleSchema,
+  UserProfileNotFoundError,
+} from "./user-profiles-schema.js";
 import {
   fetchTailscaleAvatar,
   MAX_USER_PROFILE_AVATAR_BYTES,
@@ -46,6 +51,7 @@ type UserProfile = {
   displayName: string | null;
   avatarMime: UserProfileAvatarMime | null;
   mergedInto: string | null;
+  role?: string;
   createdAt: number;
   updatedAt: number;
 };
@@ -77,6 +83,7 @@ type UserProfileListRow = Pick<
   UserProfileRow,
   "id" | "display_name" | "avatar_mime" | "merged_into" | "created_at" | "updated_at"
 > & {
+  role?: string | null;
   has_avatar: unknown;
 };
 
@@ -101,6 +108,7 @@ function toUserProfile(row: UserProfileRow): UserProfile {
     displayName: row.display_name,
     avatarMime: normalizeUserProfileAvatarMime(row.avatar_mime),
     mergedInto: row.merged_into,
+    ...(row.role ? { role: row.role } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -135,6 +143,7 @@ function toUserProfileListItem(
     displayName: row.display_name,
     avatarMime: normalizeUserProfileAvatarMime(row.avatar_mime),
     mergedInto: row.merged_into,
+    ...(row.role ? { role: row.role } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     emails,
@@ -158,6 +167,7 @@ function selectUserProfileListItemById(db: DatabaseSync, profileId: string): Use
         "display_name",
         "avatar_mime",
         "merged_into",
+        ...(hasEnsuredUserProfileRoleSchema(db) ? (["role"] as const) : []),
         "created_at",
         "updated_at",
         hasAvatarColumn(),
@@ -200,6 +210,41 @@ export function getUserProfileListItem(
   ensureUserProfilesSchema(options);
   const { db } = openOpenClawStateDatabase(options);
   return selectUserProfileListItemById(db, requireResolvedUserProfileById(db, profileId).id);
+}
+
+/** Reads the role assigned to an existing profile's current merge head. */
+export function getUserProfileRole(
+  profileId: string,
+  options: OpenClawStateDatabaseOptions = {},
+): string | null {
+  ensureUserProfileRoleSchema(options);
+  const { db } = openOpenClawStateDatabase(options);
+  return requireResolvedUserProfileById(db, profileId).role ?? null;
+}
+
+/** Assigns or clears the role on an existing profile's current merge head. */
+export function setUserProfileRole(
+  profileId: string,
+  role: string | null,
+  options: OpenClawStateDatabaseOptions = {},
+): UserProfileListItem {
+  ensureUserProfileRoleSchema(options);
+  const now = Date.now();
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const profile = requireResolvedUserProfileById(db, profileId);
+      executeSqliteQuerySync(
+        db,
+        userProfilesDb(db)
+          .updateTable("user_profiles")
+          .set({ role, updated_at: now })
+          .where("id", "=", profile.id),
+      );
+      return selectUserProfileListItemById(db, profile.id);
+    },
+    options,
+    { operationLabel: "user-profiles.set-role" },
+  );
 }
 
 /** Reads merge-aware display data without exposing avatar content through list/RPC shapes. */

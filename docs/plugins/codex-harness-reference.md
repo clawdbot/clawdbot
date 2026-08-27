@@ -172,7 +172,7 @@ flags, and plugin allow/deny references into this block. Explicit canonical
 ## App-server transport
 
 For ordinary harness turns, OpenClaw starts the managed Codex binary shipped
-with the official plugin (currently `@openai/codex` `0.148.0`):
+with the official plugin (currently `@openai/codex` `0.149.1`):
 
 ```bash
 codex app-server --listen stdio://
@@ -317,11 +317,11 @@ If the normal app-server runtime would be `danger-full-access`, enabling
 permission profile instead. Codex-managed network enforcement is sandboxed
 networking, so a full-access profile would not protect outbound traffic.
 
-The plugin ships Codex app-server `0.148.0` and accepts external versions at or
-above `0.147.0`. Older, malformed, and unversioned handshakes are rejected.
-Build metadata does not affect SemVer precedence. The same minimum applies to
-explicit custom executables, remote app-servers, and macOS desktop binaries;
-admission is not readiness proof.
+The plugin manages stable Codex app-server `0.149.1`. Explicit custom
+executables, remote app-servers, and macOS desktop binaries must report a
+parseable semantic version of `0.149.0` or newer. Older, malformed, and
+unversioned handshakes are rejected. Newer versions log a compatibility warning
+and continue through normal runtime and capability validation.
 
 OpenClaw treats non-loopback WebSocket app-server URLs as remote and requires
 identity-bearing WebSocket auth through `appServer.authToken` or an
@@ -370,7 +370,7 @@ configured plugin's details to reserve the denied app IDs. It does not scan
 unrelated marketplaces or install, enable, or authenticate the disabled plugin;
 missing ownership fails closed.
 
-Only connect OpenClaw to a remote app-server in the supported range trusted to accept
+Only connect OpenClaw to a `0.149.0` or newer remote app-server trusted to accept
 configured marketplace plugin installs and inventory refreshes. Missing modern
 inventory methods and server, authentication, or transport failures fail closed.
 
@@ -446,7 +446,7 @@ The stable default is fail-closed: active OpenClaw sandboxing disables native
 Codex execution surfaces that would otherwise run from the Codex app-server
 host. Use `appServer.experimental.sandboxExecServer: true` only when you want
 to try Codex's remote environment support with OpenClaw's sandbox backend.
-This preview path uses the pinned Codex `0.148.0` app-server.
+This preview path uses the pinned Codex `0.149.1` app-server.
 
 ```json5
 {
@@ -482,27 +482,30 @@ This preview path is local-only. A remote WebSocket app-server cannot reach
 the loopback exec-server unless it is running on the same host, so OpenClaw
 rejects that combination.
 
-Paired-device `remote-exec` placement is a separate, placement-owned execution
-path and does not require `appServer.experimental.sandboxExecServer`. The
-Gateway keeps Codex app-server and provider auth local, while the authorized
-paired device runs the managed Codex exec-server over its existing duplex node
-connection. It requires explicit `gateway.nodes.commands.allow` authorization
-for `codex.exec-server.stdio.v1`, the approved pairing surface, and normal node
-invocation approval. The node receives a fresh private home and sanitized
-environments, never Gateway provider, cloud, or GitHub credentials. A lost
-node connection terminates the attempt and process instead of resuming it.
-Each paired-device attempt uses its own Gateway app-server client because
-Codex can register a remote environment but cannot remove one from a running
-app-server. The device exec-server does not consume an OpenClaw worker slot.
-HTTP requests containing authentication, cookies, API keys, or other
-credential-bearing headers are rejected before reaching the device; use a
-Gateway-owned authenticated request or a credential-free endpoint instead.
+Node-backed `remote-exec` placement on a paired device or enrolled Crabbox
+cloud worker is a separate, placement-owned execution path and does not require
+`appServer.experimental.sandboxExecServer`. The Gateway keeps Codex
+app-server and provider auth local, while the authorized node runs the managed,
+pinned Codex exec-server over its existing duplex connection. It requires
+explicit `gateway.nodes.commands.allow` authorization for
+`codex.exec-server.stdio.v1`, the approved pairing surface, and separate
+allow-once node invocation approval for each attempt. The node receives a
+fresh private home and sanitized environments, never Gateway provider, cloud,
+or GitHub credentials. A lost node connection terminates the attempt and
+process instead of resuming it. Each node-backed attempt uses its own Gateway
+app-server client because Codex can register a remote environment but cannot
+remove one from a running app-server. The node exec-server does not consume an
+OpenClaw worker slot. HTTP requests containing authentication, cookies, API
+keys, or other credential-bearing headers are rejected before reaching the
+node; use a Gateway-owned authenticated request or a credential-free endpoint
+instead.
 Normal Codex turns are supported, but `/btw` side questions are unavailable
 until they can be bound to the active placement.
 The managed placement workspace is not an OS sandbox: approved processes and
 files have the node account's full access. Use a separate least-privilege node
 account when isolation is required.
-See [Run Codex on a paired device](/plugins/codex-harness#run-codex-on-a-paired-device).
+See [Run Codex on a paired device](/plugins/codex-harness#run-codex-on-a-paired-device)
+and [Run Codex on a cloud worker](/plugins/codex-harness#run-codex-on-a-cloud-worker).
 
 ## Auth and environment isolation
 
@@ -768,8 +771,8 @@ response remains authoritative even if it contains no visible models; HTTP
 `401` and `403` return an empty catalog rather than exposing fallback models.
 
 <Note>
-The current bundled harness is `@openai/codex` `0.148.0`. A live `model/list`
-probe against the official `0.148.0` app-server returned these public picker
+The current bundled harness is `@openai/codex` `0.149.1`. A live `model/list`
+probe against the official `0.149.0` app-server returned these public picker
 rows:
 
 | Model id        | Input modalities | Reasoning efforts                    |

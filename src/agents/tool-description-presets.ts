@@ -161,8 +161,22 @@ export function describeAskUserTool(): string {
   return [
     "Ask the human user 1-3 structured questions and wait for their answer; `multiSelect` allows picking several options and `timeoutSeconds` bounds the wait.",
     "Use only when blocked on a decision genuinely theirs that cannot be resolved from the request, code, or sensible defaults; never ask whether to proceed or confirm a plan.",
-    "Prefer one question. Put the recommended option first and suffix its label with ` (Recommended)`.",
+    "Ask exactly one question per call unless several answers must be submitted together; one single-select question uses native controls on supported messaging channels.",
+    "Put every selectable choice in `options`, never only in the question text. Put the recommended option first and suffix its label with ` (Recommended)`.",
+    "Use `multiSelect` only when the user may choose several options at once; otherwise omit it.",
     "Do not include an Other option; free text is added automatically.",
     "If the result is no_answer, continue with best judgment.",
+  ].join(" ");
+}
+
+/** Describes the secrets tool and the store semantics the model cannot observe. */
+export function describeSecretsTool(): string {
+  return [
+    "Obtain and manage credentials you never see: `request` asks the human to type a value into a trusted prompt that stores it directly, `list` returns entry metadata, and `delete` removes an entry.",
+    "A requested value is never readable back by any action; use `request` when you need a credential you do not have instead of asking for one in conversation, and never repeat a credential a human pasted into chat.",
+    "`request` blocks until the human answers, so ask only for a credential the current task actually needs.",
+    "Only protected secrets may be requested, and they reach a service through config references or, where the egress proxy is enabled, substitution into outbound requests; plain environment values are set by the operator in Settings or the CLI, never requested here.",
+    "List every hostname that will receive the value in `allowedHosts`: a secret with no allowed hosts can never be substituted, so the request silently produces an unusable credential.",
+    '`reason` is shown to the human deciding whether to provide the value. Stored entries are referenced elsewhere as {source:"store", id:NAME}; if the result is no_answer, continue with best judgment.',
   ].join(" ");
 }

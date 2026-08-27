@@ -97,11 +97,15 @@ class ChatControllerMessageIdentityTest {
               """
               {
                 "messages": [
-                  { "role": "user", "content": "hello" },
+                  { "role": "user", "content": "hello", "senderLabel": "  Alex (Slack)  " },
+                  { "role": "user", "content": "numeric sender", "senderLabel": 42 },
+                  { "role": "user", "content": "boolean sender", "senderLabel": true },
+                  { "role": "user", "content": "blank sender", "senderLabel": "  " },
+                  { "role": "user", "content": "null sender", "senderLabel": null },
                   { "role": "toolResult", "content": "private tool output" },
                   { "role": "internal", "text": "private reasoning" },
                   { "role": "custom", "content": "visible plugin notice" },
-                  { "role": "Assistant", "content": "reply" }
+                  { "role": "Assistant", "content": "reply", "senderLabel": "Spoofed sender" }
                 ]
               }
               """.trimIndent()
@@ -114,11 +118,15 @@ class ChatControllerMessageIdentityTest {
       controller.load("main")
       advanceUntilIdle()
 
-      assertEquals(listOf("user", "custom", "assistant"), controller.messages.value.map { it.role })
       assertEquals(
-        listOf("hello", "visible plugin notice", "reply"),
+        listOf("user", "user", "user", "user", "user", "custom", "assistant"),
+        controller.messages.value.map { it.role },
+      )
+      assertEquals(
+        listOf("hello", "numeric sender", "boolean sender", "blank sender", "null sender", "visible plugin notice", "reply"),
         controller.messages.value.map { it.content.single().text },
       )
+      assertEquals(listOf("Alex (Slack)", null, null, null, null, null, null), controller.messages.value.map { it.senderLabel })
     }
 
   @Test

@@ -35,6 +35,7 @@ beforeEach(() => {
 
 function createRuntime() {
   return {
+    log: vi.fn(),
     error: vi.fn(),
     exit: vi.fn(),
   };
@@ -339,5 +340,55 @@ describe("resolveNonInteractiveApiKey", () => {
     expect(result).toBeNull();
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      rejection: "a missing required key",
+      expectedMessage: "Missing --fixture-api-key",
+    },
+    {
+      rejection: "a command-shaped key",
+      flagValue: "openclaw onboard --non-interactive --auth-choice fixture-api-key",
+      expectedMessage: "Paste the API key value",
+    },
+    {
+      rejection: "a literal key in reference mode",
+      flagValue: "fixture-api-key",
+      secretInputMode: "ref" as const,
+      expectedMessage: "cannot be used with --secret-input-mode ref",
+    },
+    {
+      rejection: "a provider-discovered key without an environment name",
+      envVar: "",
+      secretInputMode: "ref" as const,
+      resolvedEnv: { apiKey: "fixture-api-key", source: "provider discovery" },
+      expectedMessage: "requires an explicit environment variable",
+    },
+  ])("emits one options JSON object for $rejection", async (testCase) => {
+    const runtime = createRuntime();
+    resolveEnvApiKey.mockReturnValue(testCase.resolvedEnv ?? null);
+
+    const result = await resolveNonInteractiveApiKey({
+      provider: "fixture",
+      cfg: {},
+      flagName: "--fixture-api-key",
+      envVar: testCase.envVar ?? "OPENCLAW_ONBOARD_MISSING_FIXTURE_KEY",
+      flagValue: testCase.flagValue,
+      secretInputMode: testCase.secretInputMode,
+      runtime,
+      json: true,
+    });
+
+    expect(result).toBeNull();
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(runtime.log).toHaveBeenCalledOnce();
+    const payload = JSON.parse(String(runtime.log.mock.calls[0]?.[0]));
+    expect(payload).toEqual({
+      ok: false,
+      phase: "options",
+      message: expect.stringContaining(testCase.expectedMessage),
+    });
+    expect(runtime.error).toHaveBeenCalledWith(payload.message);
   });
 });

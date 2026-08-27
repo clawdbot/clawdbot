@@ -114,6 +114,7 @@ class WorkboardCardDashboard extends OpenClawLightDomElement {
     const hasBoard = Boolean(snapshot && boardExists(snapshot));
     const callbacks = provider
       ? ({
+          appViewGeneration: provider.appViewGeneration,
           applyOps: (ops) => provider.applyOps(ops),
           grant: (name, decision) => provider.grant(name, decision),
           selectTab: (tabId) => {

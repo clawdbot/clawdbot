@@ -3,7 +3,6 @@
  */
 import type { Command } from "commander";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveBrowserActExecutionBudgetMs } from "../../browser/act-policy.js";
 import type { BrowserActRequest } from "../../browser/client-actions.types.js";
 import { BROWSER_TAB_REFERENCE_HELP, type BrowserParentOpts } from "../browser-cli-shared.js";
 import { danger, defaultRuntime } from "../core-api.js";
@@ -74,8 +73,7 @@ export function registerBrowserBatchCommands(
         }>({
           parent,
           profile,
-          body,
-          timeoutMs: resolveBrowserActExecutionBudgetMs(request),
+          body: request,
         });
       } catch (err) {
         defaultRuntime.error(danger(String(err)));

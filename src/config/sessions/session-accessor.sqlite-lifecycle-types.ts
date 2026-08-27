@@ -9,6 +9,7 @@ import type { SessionEntry } from "./types.js";
 
 export type SessionEntryRemovalPlan = {
   expectedEntry: SessionEntry | undefined;
+  maintenanceReason?: "capped" | "model-run-pruned" | "pruned";
   sessionKey: string;
 };
 type SessionEntryMaintenanceCounts = {

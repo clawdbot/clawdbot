@@ -16,6 +16,8 @@ import {
   buildPersistedUserTurnMessage,
   type UserTurnInput,
 } from "../../sessions/user-turn-transcript.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as chatAttachments from "../chat-attachments.js";
 import { applyChatSendManagedMedia, prepareChatSendUserTurn } from "./chat-send-user-turn.js";
 
@@ -88,6 +90,63 @@ function createAttachments(
 }
 
 describe("prepareChatSendUserTurn", () => {
+  it("carries the authenticated guest's required sandbox into session creation", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const profile = ensureProfileForEmail("chat-sandbox-creator@example.com");
+      const { controller } = createUserTurnInputController();
+      const prepared = prepareChatSendUserTurn({
+        request: {
+          clientInfo: createClientInfo(),
+          normalizedAttachments: [],
+          suppressCommandInterpretation: false,
+          systemInputProvenance: undefined,
+          systemProvenanceReceipt: undefined,
+        },
+        session: {
+          agentId: "main",
+          clientRunId: "run-1",
+          sessionKey: "agent:main:dashboard:guest-chat",
+          cfg: {
+            gateway: {
+              roles: {
+                default: "guest",
+                definitions: {
+                  guest: {
+                    sessions: { others: "view" },
+                    agents: "*",
+                    scopes: ["operator.write"],
+                    sandbox: "required",
+                  },
+                },
+              },
+            },
+          },
+        },
+        admission: {
+          originatingRoute: { originatingChannel: "webchat", explicitDeliverRoute: false },
+        },
+        attachments: createAttachments(),
+        client: {
+          authenticatedUserProfile: {
+            profileId: profile.id,
+            displayName: profile.displayName,
+            hasAvatar: false,
+            updatedAt: profile.updatedAt,
+          },
+          connect: { scopes: ["operator.write"] },
+        } as never,
+        logGateway: { warn: vi.fn() } as never,
+        userTurn: controller,
+      });
+
+      expect(prepared.ctx.SessionCreation).toEqual({
+        via: "operator",
+        actor: { type: "human", id: profile.id },
+        sandbox: "required",
+      });
+    });
+  });
+
   it("assembles command, provenance, sender, and origin facts", async () => {
     const { controller, readInput } = createUserTurnInputController();
     const prepared = prepareChatSendUserTurn({

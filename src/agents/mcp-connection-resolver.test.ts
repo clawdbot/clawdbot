@@ -331,7 +331,6 @@ describe("mcp connection resolver helpers", () => {
           storePath: "/tmp/openclaw-mcp-gateway-reload-proof-cron",
           cronEnabled: false,
           reconcileExitWatchers: async () => {},
-          stopExitWatchers: () => {},
           reconcileStreamWatchers: async () => {},
           stopStreamWatchers: async () => {},
           reconcileHeartbeatJobs: async () => {},

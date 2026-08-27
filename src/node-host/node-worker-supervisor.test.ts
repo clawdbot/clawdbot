@@ -219,6 +219,21 @@ describe("node worker supervisor", () => {
     await recovered.close();
   });
 
+  it("rejects a mismatched launch and turn identity before durable admission", async () => {
+    const { env, supervisor, workspaceDir } = fixture();
+    const input = launchInput(workspaceDir, "launch-id");
+    input.descriptor.assignment.turnId = "other-turn-id";
+
+    try {
+      await expect(supervisor.launch(input, TEST_WORKER_ENDPOINT)).rejects.toThrow(
+        "launchId must match descriptor assignment turnId",
+      );
+      expect(new NodeWorkerLaunchStore({ env }).get(input.launchId)).toBeUndefined();
+    } finally {
+      await supervisor.close();
+    }
+  });
+
   it("launches idempotently and persists only bounded non-secret facts", async () => {
     const { env, supervisor, workspaceDir } = fixture();
     const input = launchInput(workspaceDir, "success-launch");
@@ -243,7 +258,7 @@ describe("node worker supervisor", () => {
       supervisor.launch(
         {
           ...input,
-          descriptor: testWorkerDescriptor(workspaceDir, "different-plan"),
+          descriptor: testWorkerDescriptor(workspaceDir, "different-plan", input.launchId),
         },
         TEST_WORKER_ENDPOINT,
       ),
@@ -617,31 +632,39 @@ describe("node worker supervisor", () => {
     await supervisor.close();
   });
 
-  it("records the child's last gateway connection failure when cancelling admission", async () => {
-    const { supervisor, workspaceDir } = fixture();
-    const input = launchInput(workspaceDir, "connection-failure-launch", "connection-failure");
-    expect(
+  it.each([
+    [
+      "connection-failure",
+      "cancelled",
+      "worker could not reach gateway gateway.example:18789: certificate rejected ",
+    ],
+    [
+      "connection-deadline",
+      "failed",
+      "worker admission deadline exceeded after 3 attempts to gateway.example:18789: connect failed: Opening handshake has timed out ",
+    ],
+  ] as const)(
+    "records the child's %s diagnosis in the terminal journal",
+    async (prompt, state, errorText) => {
+      const { supervisor, workspaceDir } = fixture();
+      const input = launchInput(workspaceDir, "connection-failure-launch", prompt);
       await supervisor.launch(input, {
         kind: "websocket",
-        url: "wss://gateway.example/__openclaw__/worker",
-      }),
-    ).toMatchObject({
-      state: "running",
-    });
-    await vi.waitFor(() =>
-      expect(fs.existsSync(path.join(workspaceDir, "connection-failure-reported"))).toBe(true),
-    );
-
-    const cancelled = await supervisor.cancel(testNodeWorkerLaunchIdentity(input));
-    expect(cancelled).toMatchObject({
-      state: "cancelled",
-      errorText: expect.stringMatching(
-        /^worker could not reach gateway gateway\.example: certificate rejected .+; check TLS pin\/publicUrl configuration$/u,
-      ),
-    });
-    expect(cancelled?.errorText).not.toContain(TEST_WORKER_CREDENTIAL);
-    await supervisor.close();
-  });
+        url: "wss://gateway.example:18789/__openclaw__/worker",
+      });
+      if (state === "cancelled") {
+        await vi.waitFor(() =>
+          expect(fs.existsSync(path.join(workspaceDir, "connection-failure-reported"))).toBe(true),
+        );
+        await supervisor.cancel(testNodeWorkerLaunchIdentity(input));
+      }
+      const terminal = await waitForTerminal(supervisor, input.launchId);
+      expect(terminal).toMatchObject({ state, errorText: expect.stringContaining(errorText) });
+      expect(Buffer.byteLength(terminal.errorText ?? "", "utf8")).toBeLessThanOrEqual(4 * 1024);
+      expect(terminal.errorText).not.toContain(TEST_WORKER_CREDENTIAL);
+      await supervisor.close();
+    },
+  );
 
   it.each([
     ["cancel", "cancelled"],

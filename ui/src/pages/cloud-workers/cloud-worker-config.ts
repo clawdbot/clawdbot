@@ -153,6 +153,9 @@ export function buildCloudWorkerUpsertPatch(
   }
   const id = editingId ?? draft.id;
   const existing = isRecord(profiles[id]) ? profiles[id] : {};
+  if (editingId && normalizeOptionalString(existing.provider) !== "crabbox") {
+    return { error: "profileMissing" };
+  }
   const existingSettings = profileSettings(existing);
   const settings = {
     ...existingSettings,
@@ -161,6 +164,11 @@ export function buildCloudWorkerUpsertPatch(
     ttl: draft.ttl.trim(),
     idleTimeout: draft.idleTimeout.trim(),
     setup: draft.setup.trim() || null,
+    ...(draft.setup.trim() ||
+    !Array.isArray(existingSettings.setupEnv) ||
+    existingSettings.setupEnv.length === 0
+      ? {}
+      : { setupEnv: null }),
     desktop: draft.desktop ? true : null,
     binary: draft.binary.trim() || null,
   };
@@ -187,10 +195,22 @@ export function buildCloudWorkerDeletePatch(
   if (!Object.hasOwn(profiles, profileId)) {
     return { error: "profileMissing" };
   }
+  const cloudWorkers = isRecord(config.cloudWorkers) ? config.cloudWorkers : null;
+  const projectProfiles = isRecord(cloudWorkers?.projectProfiles)
+    ? cloudWorkers.projectProfiles
+    : {};
+  const removedProjectProfiles = Object.fromEntries(
+    Object.entries(projectProfiles)
+      .filter(([, target]) => target === profileId)
+      .map(([project]) => [project, null]),
+  );
   return {
     patch: {
       cloudWorkers: {
         profiles: { ...profiles, [profileId]: null },
+        ...(Object.keys(removedProjectProfiles).length > 0
+          ? { projectProfiles: removedProjectProfiles }
+          : {}),
       },
     },
   };

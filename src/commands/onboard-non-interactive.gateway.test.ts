@@ -6,7 +6,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
-import { setTestEnvValue } from "../test-utils/env.js";
+import { setTestEnvValue, withEnv, withEnvAsync } from "../test-utils/env.js";
 import {
   capturedReplaceConfigFileCalls,
   configWritePluginLeaseDepths,
@@ -90,6 +90,103 @@ describe("logNonInteractiveOnboardingFailure", () => {
     ]);
   });
 
+  it.each([
+    {
+      name: "active profile",
+      env: { OPENCLAW_PROFILE: "work", OPENCLAW_CONTAINER_HINT: undefined },
+      selector: "--profile work",
+    },
+    {
+      name: "container precedence over the active profile",
+      env: { OPENCLAW_PROFILE: "work", OPENCLAW_CONTAINER_HINT: "preview" },
+      selector: "--container preview",
+    },
+  ])("keeps $name on every recovery command in human and JSON output", ({ env, selector }) => {
+    const cases = [
+      {
+        detail: "unauthorized: invalid token",
+        commands: ["doctor --fix"],
+      },
+      {
+        detail: "Cannot find module sqlite-vec",
+        commands: ["doctor --fix"],
+      },
+      {
+        detail: "Cannot find package 'typebox' imported from /app/plugin.mjs",
+        commands: ["doctor --fix"],
+      },
+      {
+        detail: "ERR_MODULE_NOT_FOUND",
+        commands: ["doctor --fix"],
+      },
+      {
+        detail: "connect ECONNREFUSED",
+        diagnostics: {
+          lastGatewayError: "Cannot find package '@openclaw/example' imported from /app/plugin.mjs",
+        },
+        commands: ["doctor --fix"],
+      },
+      {
+        detail: "connect ECONNREFUSED",
+        diagnostics: {
+          service: {
+            label: "Gateway",
+            loaded: false,
+            loadState: { status: "not-loaded" as const },
+            loadedText: "not loaded",
+          },
+        },
+        commands: ["gateway install --force"],
+      },
+      {
+        detail: "connect ECONNREFUSED",
+        diagnostics: {
+          service: {
+            label: "Gateway",
+            loaded: true,
+            loadState: { status: "loaded" as const },
+            loadedText: "loaded",
+            runtimeStatus: "stopped",
+          },
+        },
+        commands: ["gateway restart"],
+      },
+      {
+        detail: "startup timed out",
+        diagnostics: { lastGatewayError: "configuration parse failed" },
+        commands: ["gateway status --deep"],
+      },
+      {
+        detail: "connect ECONNREFUSED",
+        commands: ["gateway run", "gateway restart"],
+      },
+    ];
+
+    withEnv(env, () => {
+      for (const { detail, diagnostics, commands } of cases) {
+        for (const json of [false, true]) {
+          const output = vi.fn();
+          logNonInteractiveOnboardingFailure({
+            ...failure,
+            hints: undefined,
+            opts: { json },
+            runtime: { ...runtime, log: output, error: output },
+            detail,
+            diagnostics,
+          });
+
+          const emitted = String(output.mock.calls[0]?.[0]);
+          const hint = json
+            ? (JSON.parse(emitted) as { hints: string[] }).hints[0]
+            : emitted.split("\n").find((line) => line.startsWith("Fix:"));
+          for (const command of commands) {
+            expect(hint).toContain(`\`openclaw ${selector} ${command}\``);
+          }
+        }
+      }
+    });
+  });
+
   it("leaves hints for a non-gateway-health phase unchanged", () => {
     const hints = [callerFix, "Keep the configured environment available."];
     const { runtimeWithCapture, readCapturedJson } = createOnboardJsonCaptureRuntime();
@@ -138,6 +235,57 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     configWritePluginLeaseDepths.length = 0;
     vi.clearAllMocks();
   });
+
+  it.each([false, true])(
+    "rejects invalid existing config without writes while honoring JSON output (json: %s)",
+    async (json) => {
+      await withStateDir("state-invalid-config-", async (stateDir) => {
+        const snapshot = await readConfigFileSnapshotMock();
+        readConfigFileSnapshotMock.mockResolvedValueOnce({
+          ...snapshot,
+          exists: true,
+          valid: false,
+          issues: [{ path: "gateway.port", message: "invalid" }],
+        });
+        const output = vi.fn();
+        const error = vi.fn();
+        const captureRuntime: RuntimeEnv = {
+          log: output,
+          error,
+          exit: (code) => {
+            throw new Error(`exit:${code}`);
+          },
+        };
+        const message = "Config invalid. Run `openclaw doctor` to repair it, then re-run setup.";
+
+        await expect(
+          runNonInteractiveSetup(
+            {
+              ...createOnboardLocalDaemonOptions(stateDir),
+              installDaemon: false,
+              skipHealth: true,
+              json,
+            },
+            captureRuntime,
+          ),
+        ).rejects.toThrow("exit:1");
+
+        expect(error).toHaveBeenCalledWith(message);
+        if (json) {
+          expect(output).toHaveBeenCalledOnce();
+          expect(JSON.parse(String(output.mock.calls[0]?.[0]))).toEqual({
+            ok: false,
+            phase: "options",
+            message,
+          });
+        } else {
+          expect(output).not.toHaveBeenCalled();
+        }
+        expect(capturedReplaceConfigFileCalls).toHaveLength(0);
+        expect(ensureWorkspaceAndSessionsMock).not.toHaveBeenCalled();
+      });
+    },
+  );
 
   it("rejects concurrent onboarding runs sharing one state directory", async () => {
     await withStateDir("state-concurrent-onboard-", async (stateDir) => {
@@ -418,7 +566,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         url: `ws://127.0.0.1:${port}`,
         token,
       });
-      expect(cfg.hooks?.internal?.entries?.["session-memory"]).toEqual({ enabled: true });
+      expect(cfg.hooks).toBeUndefined();
     });
   }, 60_000);
 
@@ -445,9 +593,16 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
           },
         },
       ];
+      const seededHooks = {
+        internal: {
+          enabled: false,
+          entries: { "session-memory": { enabled: false } },
+        },
+      };
       testConfigStore.set(resolveTestConfigPath(), {
         agents: { list: seededAgents },
         bindings: seededBindings,
+        hooks: seededHooks,
         gateway: {
           mode: "remote",
           remote: {
@@ -473,6 +628,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       const cfg = readTestConfig();
       expect(cfg.agents?.list?.map((a) => a.id)).toEqual(["alpha", "beta"]);
       expect(cfg.bindings).toEqual(seededBindings);
+      expect(cfg.hooks).toEqual(seededHooks);
       expect(cfg.gateway?.remote).toEqual({
         url: `ws://127.0.0.1:${port}`,
         token: tokenRef,
@@ -818,7 +974,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     });
   }, 60_000);
 
-  it("classifies daemon health ECONNREFUSED failures with a recovery command", async () => {
+  it("classifies daemon health ECONNREFUSED failures with a profile-scoped recovery command", async () => {
     await withStateDir("state-local-daemon-health-refused-", async (stateDir) => {
       gatewayReachableState.mock = vi.fn(async () => ({
         ok: false,
@@ -832,11 +988,16 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       readLastGatewayErrorLineMock.mockResolvedValueOnce("");
 
       const { runtimeWithCapture, readCapturedJson } = createOnboardJsonCaptureRuntime();
-      await expectOnboardLocalJsonSetupFailure({
-        runSetup: runNonInteractiveSetup,
-        stateDir,
-        runtime: runtimeWithCapture,
-      });
+      await withEnvAsync(
+        { OPENCLAW_PROFILE: "work", OPENCLAW_CONTAINER_HINT: undefined },
+        async () => {
+          await expectOnboardLocalJsonSetupFailure({
+            runSetup: runNonInteractiveSetup,
+            stateDir,
+            runtime: runtimeWithCapture,
+          });
+        },
+      );
 
       const parsed = JSON.parse(readCapturedJson()) as {
         ok: boolean;
@@ -847,7 +1008,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       expect(parsed.ok).toBe(false);
       expect(parsed.phase).toBe("gateway-health");
       expect(parsed.classification).toBe("service-stopped");
-      expect(parsed.hints).toContain("Fix: run `openclaw gateway restart`.");
+      expect(parsed.hints).toContain("Fix: run `openclaw --profile work gateway restart`.");
     });
   }, 60_000);
 });

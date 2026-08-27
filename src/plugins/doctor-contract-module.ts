@@ -2,6 +2,7 @@ import type { LegacyConfigRule } from "../config/legacy.shared.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type {
   OpenKeyedStoreOptions,
+  PluginDoctorRawStateEntry,
   PluginStateKeyedStore,
 } from "../plugin-state/plugin-state-store.js";
 import { coerceDoctorSessionRouteStateOwners } from "./doctor-session-route-state-owner-types.js";
@@ -20,6 +21,23 @@ export type PluginDoctorStateMigrationContext = {
   ) => void;
   /** Plugin-wide live-row capacity for import preflight. Older test hosts may omit it. */
   getPluginStateCapacity?: () => { liveEntries: number; maxEntries: number };
+  readPluginStateEntriesInKeyRange?: (
+    namespace: string,
+    range: { prefix: string; after?: string; limit: number },
+  ) => PluginDoctorRawStateEntry[];
+  readSessionIdentityEvidenceBatch?: (
+    requests: readonly { agentId: string; sessionId: string }[],
+  ) => Promise<
+    (
+      | { agentId: string; sessionId: string; state: "current"; sessionKey: string }
+      | { agentId: string; sessionId: string; state: "absent" | "unknown" }
+    )[]
+  >;
+  /** Present only while the host owns the offline SQLite maintenance lock. */
+  deletePluginStateEntriesIfUnchanged?: (
+    namespace: string,
+    entries: readonly PluginDoctorRawStateEntry[],
+  ) => { deleted: number; changed: number };
 };
 
 export type PluginDoctorStateMigration = {
@@ -27,6 +45,7 @@ export type PluginDoctorStateMigration = {
   label: string;
   /** Import retired file state only during explicit `doctor --fix` repair. */
   doctorOnly?: boolean;
+  phase?: "after-session-repair";
   detectLegacyState: (params: {
     config: OpenClawConfig;
     env: NodeJS.ProcessEnv;
@@ -124,6 +143,7 @@ function coercePluginDoctorStateMigrations(value: unknown): PluginDoctorStateMig
     id: migration.id.trim(),
     label: migration.label.trim(),
     doctorOnly: migration.doctorOnly === true ? true : undefined,
+    phase: migration.phase === "after-session-repair" ? migration.phase : undefined,
     detectLegacyState: migration.detectLegacyState,
     migrateLegacyState: migration.migrateLegacyState,
   }));

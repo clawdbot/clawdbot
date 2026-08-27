@@ -17,7 +17,7 @@ import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { persistSessionBoardFace } from "./chat-board-face-persistence.ts";
-import { stillOwnsCanonicalLocation } from "./chat-canonical-location.ts";
+import { currentRouteLocation, stillOwnsCanonicalLocation } from "./chat-canonical-location.ts";
 import { renderChatPagePaneCell } from "./chat-page-pane-render.ts";
 import { ChatPageRetainedSessions } from "./chat-page-retained-sessions.ts";
 import { closeStagedPane, resumeStagedPanes } from "./chat-pane-attachment-handoff.ts";
@@ -403,12 +403,8 @@ export class ChatPage extends OpenClawLightDomElement {
 
   private updateRoute(sessionKey: string, replace = false, face = this.data.face ?? "chat") {
     const data = this.data;
-    if (
-      data?.sessionKey === sessionKey &&
-      (data.face ?? "chat") === face &&
-      !data.draft &&
-      !data.focusComposer
-    ) {
+    const sameSession = data && areUiSessionKeysEquivalent(data.sessionKey, sessionKey);
+    if (sameSession && (data.face ?? "chat") === face && !data.draft && !data.focusComposer) {
       return;
     }
     const options = sessionNavigationTarget({
@@ -419,7 +415,11 @@ export class ChatPage extends OpenClawLightDomElement {
       shortIdLength: data?.sessionKey === sessionKey ? data.shortId?.length : undefined,
     }).options;
     if (replace) {
-      this.context.replace(face, options);
+      const location =
+        sameSession && (data.draft || data.focusComposer)
+          ? locationWithoutDraft(currentRouteLocation(), options)
+          : options;
+      this.context.replace(face, location);
     } else {
       this.context.navigate(face, options);
     }
@@ -692,20 +692,16 @@ export class ChatPage extends OpenClawLightDomElement {
   override render() {
     const indicator = this.dropIndicator;
     const layout = this.layout ?? this.classicLayout();
-    const renderedPaneOwners = layout.columns.flatMap((column) =>
-      column.panes.map((pane) => ({ columnId: column.id, pane })),
-    );
-    const retainedSessions = this.retainedSessions.retain(
-      renderedPaneOwners.map(({ pane }) => pane),
-    );
-    const nextPaneKeys = new Set(
-      renderedPaneOwners.flatMap(({ columnId, pane }) => {
-        const ownerKey = JSON.stringify([columnId, pane.id]);
-        return (retainedSessions.get(pane.id) ?? []).map((sessionKey) =>
-          JSON.stringify([ownerKey, sessionKey]),
-        );
-      }),
-    );
+    const retainedSessions = this.retainedSessions.retain(panesOf(layout));
+    const nextPaneKeys = new Set<string>();
+    for (const column of layout.columns) {
+      for (const pane of column.panes) {
+        const ownerKey = JSON.stringify([column.id, pane.id]);
+        for (const sessionKey of retainedSessions.get(pane.id) ?? []) {
+          nextPaneKeys.add(JSON.stringify([ownerKey, sessionKey]));
+        }
+      }
+    }
     const renderValue = () => html`
       <div class="chat-split-view__drop-container">
         ${this.renderSplitLayout(layout, Boolean(this.layout), retainedSessions)}

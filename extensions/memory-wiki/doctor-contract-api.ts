@@ -90,6 +90,7 @@ function resolveConfiguredVaultRoots(params: {
   const homeDir = resolveHomeDir(params.env);
   const resolved = resolveMemoryWikiConfig(readConfiguredPluginConfig(params.config), {
     homedir: homeDir,
+    env: params.env,
   });
   if (resolved.vault.scope === "global") {
     return [resolved.vault.path];

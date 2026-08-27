@@ -10,24 +10,6 @@ import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import { callNodesGatewayCli, nodesCallOpts, resolveCliNodeId } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
 
-type NodesPushOpts = NodesRpcOpts & {
-  node?: string;
-  title?: string;
-  body?: string;
-  environment?: string;
-};
-
-function normalizeEnvironment(value: unknown): "sandbox" | "production" | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const normalized = normalizeOptionalLowercaseString(value);
-  if (normalized === "sandbox" || normalized === "production") {
-    return normalized;
-  }
-  return null;
-}
-
 /** Register the node push-test command. */
 export function registerNodesPushCommand(nodes: Command) {
   nodesCallOpts(
@@ -38,15 +20,15 @@ export function registerNodesPushCommand(nodes: Command) {
       .option("--title <text>", "Push title", "OpenClaw")
       .option("--body <text>", "Push body")
       .option("--environment <sandbox|production>", "Override APNs environment")
-      .action(async (opts: NodesPushOpts) => {
+      .action(async (opts: NodesRpcOpts & { environment?: string }) => {
         await runNodesCommand("push", async () => {
+          const environment = normalizeOptionalLowercaseString(opts.environment);
+          if (opts.environment && environment !== "sandbox" && environment !== "production") {
+            throw new Error("invalid --environment (use sandbox|production)");
+          }
           const nodeId = await resolveCliNodeId(opts, normalizeOptionalString(opts.node) ?? "");
           const title = normalizeOptionalString(opts.title) || "OpenClaw";
           const body = normalizeOptionalString(opts.body) || `Push test for node ${nodeId}`;
-          const environment = normalizeEnvironment(opts.environment);
-          if (opts.environment && !environment) {
-            throw new Error("invalid --environment (use sandbox|production)");
-          }
 
           const params: Record<string, unknown> = {
             nodeId,

@@ -77,11 +77,17 @@ export async function runPluginsListCommand(
     theme,
   } = await loadHumanListModules();
 
-  const workspaceScopeDiagnostic = report.diagnostics.find(
-    (diagnostic) => diagnostic.code === "workspace-scope-omitted",
+  const diagnostics = [...report.diagnostics, ...report.registryDiagnostics].filter(
+    (diagnostic) =>
+      diagnostic.level !== "info" &&
+      (diagnostic.level !== "error" ||
+        !list.some((plugin) => plugin.status === "error" && plugin.error === diagnostic.message)),
   );
-  if (workspaceScopeDiagnostic) {
-    runtime.log(theme.warn(`Warning: ${workspaceScopeDiagnostic.message}`));
+  for (const { level, message } of diagnostics) {
+    const format = level === "error" ? theme.error : theme.warn;
+    runtime.log(format(`${level === "error" ? "Error" : "Warning"}: ${message}`));
+  }
+  if (diagnostics.length > 0) {
     runtime.log("");
   }
 
@@ -108,12 +114,12 @@ export async function runPluginsListCommand(
     });
     const usedRoots = new Set<keyof typeof sourceRoots>();
     const rows = list.map((plugin) => {
-      const desc = plugin.description ? theme.muted(plugin.description) : "";
+      const error = plugin.status === "error" && plugin.error;
+      const desc = error ? theme.error(error) : theme.muted(plugin.description ?? "");
       const formattedSource = formatPluginSourceForTable(plugin, sourceRoots);
       if (formattedSource.rootKey) {
         usedRoots.add(formattedSource.rootKey);
       }
-      const sourceLine = desc ? `${formattedSource.value}\n${desc}` : formattedSource.value;
       return {
         Name: plugin.name || plugin.id,
         ID: plugin.name && plugin.name !== plugin.id ? plugin.id : "",
@@ -124,7 +130,7 @@ export async function runPluginsListCommand(
             : plugin.enabled
               ? theme.success("enabled")
               : theme.warn("disabled"),
-        Source: sourceLine,
+        Source: desc ? `${formattedSource.value}\n${desc}` : formattedSource.value,
         Version: plugin.version ?? "",
       };
     });
