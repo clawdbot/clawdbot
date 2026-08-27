@@ -583,10 +583,10 @@ suite.define(() => {
     const paletteAnimationName = await palette.evaluate(
       (element) => getComputedStyle(element).animationName,
     );
-    const paletteDialogAnimationName = await paletteDialog.evaluate((element) => {
+    const paletteDialogAnimationDuration = await paletteDialog.evaluate((element) => {
       const webAwesomeDialog = element.shadowRoot?.querySelector("wa-dialog");
       const dialog = webAwesomeDialog?.shadowRoot?.querySelector<HTMLElement>('[part~="dialog"]');
-      return dialog ? getComputedStyle(dialog).animationName : "missing";
+      return dialog ? getComputedStyle(dialog).animationDuration : "missing";
     });
     await page.keyboard.press("Escape");
 
@@ -633,7 +633,7 @@ suite.define(() => {
     );
 
     expect(paletteAnimationName).toBe("none");
-    expect(paletteDialogAnimationName).toBe("none");
+    expect(paletteDialogAnimationDuration).toBe("0s");
     expect(drawerAnimationName).toBe("none");
     expect(hoverCardMotion.animationDuration).toBe(140);
     expect(hoverCardMotion.placement).toMatch(/^top(?:-|$)/u);
