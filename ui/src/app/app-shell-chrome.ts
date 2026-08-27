@@ -151,6 +151,7 @@ export class ShellChromeOwner {
       capture: true,
       signal: this.listeners.signal,
     });
+    document.addEventListener("keydown", this.handleDocumentKeydown, options);
     window.addEventListener("resize", this.handleWindowResize, options);
     window.addEventListener("dragover", this.handleUnhandledFileDrag, options);
     window.addEventListener("drop", this.handleUnhandledFileDrag, options);
@@ -396,19 +397,32 @@ export class ShellChromeOwner {
 
   readonly handleDocumentKeydown = (event: KeyboardEvent): void => {
     const host = this.host;
+    if (event.eventPhase === Event.BUBBLING_PHASE) {
+      if (
+        host.navDrawerOpen &&
+        isMobileNavLayout() &&
+        !event.defaultPrevented &&
+        !document.openClawModalLayers?.size &&
+        matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.escape, event)
+      ) {
+        event.preventDefault();
+        host.closeNavDrawer({ restoreFocus: true });
+      }
+      return;
+    }
     if (host.navDrawerOpen && isMobileNavLayout()) {
       if (event.defaultPrevented || document.openClawModalLayers?.size) {
         return;
       }
-      if (
-        matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.escape, event) ||
-        matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSidebar, event)
-      ) {
+      if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.escape, event)) {
+        return;
+      } else if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSidebar, event)) {
         event.preventDefault();
         host.closeNavDrawer({ restoreFocus: true });
       } else if (event.key === "Tab") {
         trapNavDrawerFocus(host, event);
-      } else {
+      } else if (isCommandPaletteShortcut(event) || isTerminalPanelShortcut(event)) {
+        event.preventDefault();
         event.stopImmediatePropagation();
       }
       return;
