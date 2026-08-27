@@ -37,13 +37,13 @@ describeLive("Codex restricted MCP real-binary lifecycle", () => {
       });
       const request = vi.spyOn(client, "request");
       try {
+        const signal = AbortSignal.timeout(60_000);
         const params = createParams(path.join(root, "session.jsonl"), workspace);
         params.toolsAllow = ["openclaw"];
-        params.signal = AbortSignal.timeout(60_000);
         const binding = await startOrResumeThread({
           client,
           params,
-          signal: params.signal,
+          signal,
           cwd: workspace,
           dynamicTools: [],
           config: {
