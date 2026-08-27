@@ -163,7 +163,7 @@ export function getPreparedModelCatalogOwnerSnapshot(
   if (publishedFull && preparedModelRuntimeConfigsMatch(publishedFull.config, full.config)) {
     return publishedFull;
   }
-  if (activationFull && activationFull.workspaceDir !== full.workspaceDir) {
+  if (activationFull.workspaceDir !== full.workspaceDir) {
     const activatedFull = getPreparedModelRuntimeSnapshot(activationFull);
     if (activatedFull && preparedModelRuntimeConfigsMatch(activatedFull.config, full.config)) {
       return activatedFull;
@@ -176,7 +176,7 @@ export function getPreparedModelCatalogOwnerSnapshot(
   if (publishedExact && preparedModelRuntimeConfigsMatch(publishedExact.config, exact.config)) {
     return publishedExact;
   }
-  if (!activationExact || activationExact.workspaceDir === exact.workspaceDir) {
+  if (activationExact.workspaceDir === exact.workspaceDir) {
     return undefined;
   }
   const activatedExact = getPreparedModelRuntimeSnapshot(activationExact);
@@ -248,22 +248,6 @@ async function resolvePreparedModelCatalogOwnerSnapshotWithPolicy(
       return lease.snapshot;
     } finally {
       lease.release();
-    }
-  }
-  if (exact !== full) {
-    const fullCandidates =
-      activationFull.workspaceDir === full.workspaceDir ? [full] : [full, activationFull];
-    for (const candidate of fullCandidates) {
-      try {
-        const preparedFull = await prepareModelRuntimeSnapshot(candidate);
-        if (acceptsPreparedSnapshotConfig(preparedFull, full, configPolicy)) {
-          return preparedFull;
-        }
-      } catch (error) {
-        if (!(error instanceof PreparedModelRuntimeOwnerNotPublishedError)) {
-          throw error;
-        }
-      }
     }
   }
   try {
@@ -363,13 +347,6 @@ export async function loadProviderScopedThinkingCatalog(params: {
   agentDir?: string;
   workspaceDir?: string;
 }): Promise<ModelCatalogEntry[]> {
-  const { loadManifestModelCatalog } = await import("./model-catalog.js");
-  const manifestCatalog = normalizeThinkingCatalogProviders(
-    loadManifestModelCatalog({
-      config: params.config,
-      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-    }),
-  );
   const scopedParams = {
     config: params.config,
     ...(params.agentId ? { agentId: params.agentId } : {}),
@@ -401,6 +378,13 @@ export async function loadProviderScopedThinkingCatalog(params: {
   if (publishedCatalog && entryResolved(publishedCatalog.entries)) {
     return await augmentHarnessCatalog(publishedCatalog);
   }
+  const { loadManifestModelCatalog } = await import("./model-catalog.js");
+  const manifestCatalog = normalizeThinkingCatalogProviders(
+    loadManifestModelCatalog({
+      config: params.config,
+      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    }),
+  );
   if (entryResolved(manifestCatalog)) {
     return await augmentHarnessCatalog({
       entries: manifestCatalog,
