@@ -102,14 +102,11 @@ export async function dispatchCronDelivery(
     recordDelivery("delivered");
   }
   let deliveryAttempted = verifiedMessageToolDelivery;
-  let directCronSessionCleanupHandled = false;
   let deferredDeletingSessionMirror: DirectCronTranscriptMirror | undefined;
   const buildDeliveryState = async (result?: RunCronAgentTurnResult) => {
     // Retained one-shots need their undelivered transcript for inspection too.
     if (deliveryState.status === "delivered" || deliveryState.status === "not-requested") {
       await cleanupDirectCronSessionIfNeeded();
-    } else {
-      directCronSessionCleanupHandled = true;
     }
     await params.queueSourceSessionMessageToolAwareness?.();
     return {
@@ -119,7 +116,6 @@ export async function dispatchCronDelivery(
       deliveryAttempted,
       deliveryError: deliveryState.error,
       deliverySuppressionReason: deliveryState.deliverySuppressionReason,
-      cronRunSessionCleanupHandled: directCronSessionCleanupHandled,
       summary,
       outputText,
       synthesizedText,
@@ -152,9 +148,6 @@ export async function dispatchCronDelivery(
       beforeDelete: params.beforeSessionDelete,
       reason: "cron-delete-after-run-fallback",
     });
-    if (cleanupOutcome !== "not-requested") {
-      directCronSessionCleanupHandled = true;
-    }
     const survivingMirror = deferredDeletingSessionMirror;
     deferredDeletingSessionMirror = undefined;
     if (cleanupOutcome !== "not-requested" && cleanupOutcome !== "deleted" && survivingMirror) {

@@ -497,6 +497,8 @@ export async function finalizeCronRun(params: {
       delivery: deliveryTrace,
     });
   }
+  // Dispatch owns transcript cleanup from here; a thrown delivery error must retain it too.
+  params.markCronRunSessionCleanupHandled();
   const { dispatchCronDelivery, resolveCronDeliveryBestEffort } = await loadCronDeliveryRuntime();
   const deliveryResult = await dispatchCronDelivery({
     cfg: prepared.input.cfg,
@@ -537,9 +539,6 @@ export async function finalizeCronRun(params: {
     abortReason: params.abortReason,
     withRunSession: prepared.withRunSession,
   });
-  if (deliveryResult.cronRunSessionCleanupHandled) {
-    params.markCronRunSessionCleanupHandled();
-  }
   const deliveryTrace = buildCronDeliveryTrace({
     deliveryPlan: prepared.deliveryPlan,
     resolvedDelivery: prepared.resolvedDelivery,

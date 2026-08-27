@@ -2166,7 +2166,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
     expect(state.result).toBeUndefined();
     expect(state.delivered).toBe(true);
-    expect(state.cronRunSessionCleanupHandled).toBe(true);
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
     expect(callGateway).toHaveBeenCalledWith({
       method: "sessions.delete",
@@ -2219,7 +2218,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
     expect(state.result).toBeUndefined();
     expect(state.delivered).toBe(true);
-    expect(state.cronRunSessionCleanupHandled).toBe(true);
     expect(retireSessionMcpRuntime).toHaveBeenCalledWith({
       sessionId: "test-session-id",
       reason: "cron-delete-after-run-fallback",
@@ -2288,10 +2286,9 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     params.agentSessionKey = "agent:main:cron:test-job";
     (params.job as { deleteAfterRun?: boolean }).deleteAfterRun = true;
 
-    const state = await dispatchCronDelivery(params);
+    await dispatchCronDelivery(params);
 
     expect(callGateway).toHaveBeenCalledTimes(1);
-    expect(state.cronRunSessionCleanupHandled).toBe(true);
     expect(retireSessionMcpRuntime).not.toHaveBeenCalled();
   });
 
@@ -2305,10 +2302,9 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     params.agentSessionKey = "agent:main:cron:test-job";
     (params.job as { deleteAfterRun?: boolean }).deleteAfterRun = true;
 
-    const state = await dispatchCronDelivery(params);
+    await dispatchCronDelivery(params);
 
     expect(callGateway).toHaveBeenCalledTimes(1);
-    expect(state.cronRunSessionCleanupHandled).toBe(true);
     expect(retireSessionMcpRuntime).not.toHaveBeenCalled();
   });
 
@@ -2384,7 +2380,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       status: "ok",
       delivered: false,
     });
-    expect(state.cronRunSessionCleanupHandled).toBe(true);
     expect(callGateway).not.toHaveBeenCalledWith(
       expect.objectContaining({
         method: "sessions.delete",

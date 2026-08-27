@@ -57,7 +57,6 @@ export type DispatchCronDeliveryState = {
   deliveryAttempted: boolean;
   deliveryError?: string;
   deliverySuppressionReason?: NormalizeReplySkipReason;
-  cronRunSessionCleanupHandled: boolean;
   summary?: string;
   outputText?: string;
   synthesizedText?: string;

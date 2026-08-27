@@ -71,7 +71,6 @@ function mockDeliveryFailure(error: string, deliveryPayloads: unknown[] = []) {
     result: withRunSession({ status: "error", error, deliveryAttempted: true }),
     delivered: false,
     deliveryAttempted: true,
-    cronRunSessionCleanupHandled: false,
     summary: undefined,
     outputText: undefined,
     synthesizedText: undefined,

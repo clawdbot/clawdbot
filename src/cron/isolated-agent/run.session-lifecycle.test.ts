@@ -293,6 +293,10 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
   });
 
   it("releases an isolated run lease before delete-after-run cleanup", async () => {
+    dispatchCronDeliveryMock.mockImplementationOnce(
+      (await vi.importActual<typeof import("./delivery-dispatch.js")>("./delivery-dispatch.js"))
+        .dispatchCronDelivery,
+    );
     const sessionKey = "agent:main:cron:test-job";
     const sessionId = "isolated-session";
     const storePath = inMemoryStorePath;
@@ -443,6 +447,10 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
   });
 
   it("releases a custom cron session lease before delete-after-run cleanup", async () => {
+    dispatchCronDeliveryMock.mockImplementationOnce(
+      (await vi.importActual<typeof import("./delivery-dispatch.js")>("./delivery-dispatch.js"))
+        .dispatchCronDelivery,
+    );
     const sessionKey = "agent:main:cron:cleanup";
     const sessionId = "custom-cron-session";
     const storePath = inMemoryStorePath;

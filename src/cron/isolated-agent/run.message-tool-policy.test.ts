@@ -2015,6 +2015,12 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
     // `lastDeliveryError` and emit it on the finished event for CLI/UI/API run
     // logs (#95419) without mislabeling the successful run as a failure.
     expect(result.deliveryError).toBe("Message failed");
+    expect(result.deliveryState).toEqual({
+      status: "not-delivered",
+      delivered: false,
+      error: "Message failed",
+      failureNotification: { status: "not-requested" },
+    });
     // Delivery failure metadata is preserved and decoupled from status.
     expect(result.delivered).toBe(false);
     expect(result.deliveryAttempted).toBe(true);

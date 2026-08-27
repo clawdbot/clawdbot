@@ -291,44 +291,6 @@ function emitFailureAlert(
   });
 }
 
-/** Emits a required-completion delivery failure only to an alternate route. */
-function maybeEmitDeliveryFailureAlert(
-  state: CronServiceState,
-  params: {
-    job: CronJob;
-    alertConfig: ResolvedFailureAlert | null;
-    error?: string;
-    runAtMs?: number;
-    deferredNotifications?: DeferredCronNotifications;
-  },
-): void {
-  if (!params.alertConfig?.alternateRoute) {
-    return;
-  }
-  markFailureNotificationRequested(params.job);
-  const job = structuredClone(params.job);
-  const safeJobName = job.name || job.id;
-  const detailLines =
-    params.alertConfig.mode === "webhook"
-      ? [`Last error: ${truncateUtf16Safe(params.error?.trim() || "unknown reason", 200)}`]
-      : cronFailureDetailLines(job.state.lastErrorReason);
-  const payload: ReplyPayload = {
-    text: [`Automation "${safeJobName}" delivery failed`, ...detailLines].join("\n"),
-  };
-  const notify = () =>
-    transportFailureAlert(state, {
-      job,
-      payload,
-      runAtMs: params.runAtMs,
-      route: params.alertConfig!,
-    });
-  if (params.deferredNotifications) {
-    params.deferredNotifications.push(notify);
-  } else {
-    notify();
-  }
-}
-
 /** Emits a failure alert when threshold, best-effort, and cooldown policy allow it. */
 export function maybeEmitFailureAlert(
   state: CronServiceState,
@@ -428,14 +390,36 @@ export function finalizeCronFailureNotifications(
   } else if (
     params.result.status === "ok" &&
     params.completionFailed &&
-    params.job.state.lastDeliveryStatus === "not-delivered"
+    params.job.state.lastDeliveryStatus === "not-delivered" &&
+    params.alertConfig?.alternateRoute
   ) {
-    maybeEmitDeliveryFailureAlert(state, {
-      job: params.job,
-      alertConfig: params.alertConfig,
-      error: params.job.state.lastDeliveryError,
-      runAtMs: params.result.startedAt,
-      deferredNotifications: params.deferredNotifications,
-    });
+    markFailureNotificationRequested(params.job);
+    // Finalized history owns replayed notification facts; recovery must not resend.
+    if (params.replayFailureAlertAtMs !== undefined) {
+      return;
+    }
+    const job = structuredClone(params.job);
+    const route = params.alertConfig;
+    const detailLines =
+      route.mode === "webhook"
+        ? [
+            `Last error: ${truncateUtf16Safe(job.state.lastDeliveryError?.trim() || "unknown reason", 200)}`,
+          ]
+        : cronFailureDetailLines(job.state.lastErrorReason);
+    const payload: ReplyPayload = {
+      text: [`Automation "${job.name || job.id}" delivery failed`, ...detailLines].join("\n"),
+    };
+    const notify = () =>
+      transportFailureAlert(state, {
+        job,
+        payload,
+        runAtMs: params.result.startedAt,
+        route,
+      });
+    if (params.deferredNotifications) {
+      params.deferredNotifications.push(notify);
+    } else {
+      notify();
+    }
   }
 }
