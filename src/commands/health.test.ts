@@ -11,6 +11,7 @@ import {
   GATEWAY_HEALTH_REACHABLE_LINE,
 } from "./gateway-health-auth-diagnostic.js";
 import { formatHealthCheckFailure } from "./health-format.js";
+import { formatRuntimeConfigHealthLine } from "./health-runtime-config.js";
 import type { HealthSummary } from "./health.js";
 import {
   formatConfigReloadHealthLine,
@@ -809,6 +810,73 @@ describe("healthCommand", () => {
       [GATEWAY_HEALTH_REACHABLE_LINE],
       [GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE],
     ]);
+  });
+});
+
+describe("formatRuntimeConfigHealthLine", () => {
+  it("returns null when runtimeConfig is absent or state is ok", () => {
+    const summary = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    expect(formatRuntimeConfigHealthLine(summary)).toBeNull();
+
+    summary.runtimeConfig = { state: "ok", liveDefaultModel: "openai/gpt-5.5" };
+    expect(formatRuntimeConfigHealthLine(summary)).toBeNull();
+  });
+
+  it("renders the drift warning with paths and live/observed model labels", () => {
+    const summary = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    summary.runtimeConfig = {
+      state: "drift",
+      driftPaths: ["gateway.auth"],
+      liveDefaultModel: "openai/gpt-5.5",
+      observedDefaultModel: "openai/gpt-5.5",
+      message: "Live gateway runtime config differs from the latest completed reload observation.",
+    };
+
+    expect(formatRuntimeConfigHealthLine(summary)).toBe(
+      "Runtime config: warning (live gateway differs from latest completed reload observation for gateway.auth; restart required or pending; live=openai/gpt-5.5 observed=openai/gpt-5.5)",
+    );
+  });
+
+  it("renders unknown-state messages with a source-neutral prefix", () => {
+    const summary = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    summary.runtimeConfig = {
+      state: "unknown",
+      message: "Latest completed reload source observation is unavailable.",
+    };
+
+    expect(formatRuntimeConfigHealthLine(summary)).toBe(
+      "Runtime config: warning (unknown source: Latest completed reload source observation is unavailable.)",
+    );
+
+    summary.runtimeConfig.message = "Runtime source config snapshot is unavailable.";
+    expect(formatRuntimeConfigHealthLine(summary)).toBe(
+      "Runtime config: warning (unknown source: Runtime source config snapshot is unavailable.)",
+    );
+  });
+
+  it("falls back to a generic reason when the unknown state has no message", () => {
+    const summary = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    summary.runtimeConfig = { state: "unknown" };
+
+    expect(formatRuntimeConfigHealthLine(summary)).toBe(
+      "Runtime config: warning (unknown source: config source unavailable)",
+    );
   });
 });
 

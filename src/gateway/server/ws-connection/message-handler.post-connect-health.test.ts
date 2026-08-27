@@ -138,6 +138,7 @@ vi.mock("../health-state.js", () => ({
   getHealthCache: getHealthCacheMock,
   getHealthVersion: getHealthVersionMock,
   incrementPresenceVersion: incrementPresenceVersionMock,
+  readCurrentRuntimeConfigHealth: vi.fn(() => undefined),
 }));
 
 import { attachGatewayWsMessageHandler } from "./message-handler.js";

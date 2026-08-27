@@ -6,6 +6,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { ChannelAccountSnapshot, ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { HealthSummary } from "../gateway/health/types.js";
 import { createPluginRecord } from "../plugins/status.test-fixtures.js";
+import { installHealthConfigMock } from "./health.config.test-mocks.js";
 import {
   createLegacyHealthSnapshotCollector,
   type LegacyHealthSnapshotParams,
@@ -55,10 +56,7 @@ type IMessageHealthAccount = {
 };
 
 async function loadFreshHealthModulesForTest() {
-  vi.doMock("../config/config.js", () => ({
-    getRuntimeConfig: () => testConfig,
-    loadConfig: () => testConfig,
-  }));
+  installHealthConfigMock(() => testConfig);
   vi.doMock("../config/sessions.js", () => ({
     resolveSessionStorePathCore: () => "/tmp/sessions.json",
     resolveSessionFilePathCore: vi.fn(() => "/tmp/sessions.json"),

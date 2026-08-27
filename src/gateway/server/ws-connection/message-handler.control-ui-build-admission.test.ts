@@ -78,6 +78,7 @@ vi.mock("../health-state.js", () => ({
   getHealthCache: vi.fn(() => null),
   getHealthVersion: vi.fn(() => 1),
   incrementPresenceVersion: incrementPresenceVersionMock,
+  readCurrentRuntimeConfigHealth: vi.fn(() => undefined),
 }));
 vi.mock("../../../version.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../version.js")>();

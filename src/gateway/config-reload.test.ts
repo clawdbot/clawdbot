@@ -5,7 +5,9 @@ import { tmpdir } from "node:os";
 import nodePath from "node:path";
 import chokidar from "chokidar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
+import { buildRuntimeConfigHealth } from "../commands/health-runtime-config.js";
 import { prepareConfigRuntimeEnv } from "../config/config-env-vars.js";
 import { fingerprintConfigSnapshotAuthoredConfig } from "../config/config-journal-snapshot.js";
 import type {
@@ -28,6 +30,7 @@ import {
 } from "../skills/runtime/refresh-state.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { diffConfigPaths, diffGatewayReloadPaths } from "./config-diff.js";
+import { getConfigReloadObservation } from "./config-reload-observed.js";
 import {
   buildGatewayReloadPlan,
   type ChannelKind,
@@ -1691,6 +1694,7 @@ describe("startGatewayConfigReloader", () => {
       const onConfigCandidateObserved = vi.fn();
       const readSnapshot = vi.fn(async () => snapshot);
       const harness = createReloaderHarness(readSnapshot, { onConfigCandidateObserved });
+      const observedGeneration = getConfigReloadObservation().generation;
 
       harness.watcher.emit("change");
 
@@ -1699,6 +1703,9 @@ describe("startGatewayConfigReloader", () => {
 
       await vi.runAllTimersAsync();
       expect(harness.onConfigAccepted).not.toHaveBeenCalled();
+      const observation = getConfigReloadObservation();
+      expect(observation.generation).toBeGreaterThan(observedGeneration);
+      expect(observation.sourceConfig).toBeNull();
       await harness.reloader.stop();
     },
   );
@@ -1736,22 +1743,185 @@ describe("startGatewayConfigReloader", () => {
 
   it("notifies change listeners when reload mode off skips the runtime apply", async () => {
     const initialConfig: OpenClawConfig = {
-      gateway: { reload: { mode: "off" } },
+      gateway: { reload: { mode: "off" }, auth: { mode: "token", token: "test-old" } },
     };
     const nextConfig: OpenClawConfig = {
-      gateway: { reload: { mode: "off" } },
-      ui: { prefs: { themeMode: "light" } },
+      gateway: { reload: { mode: "off" }, auth: { mode: "token", token: "test-new" } },
     };
     const readSnapshot = vi.fn(async () =>
       makeSnapshot({ config: nextConfig, hash: "mode-off-write" }),
     );
     const harness = createReloaderHarness(readSnapshot, { initialConfig });
+    const observedGeneration = getConfigReloadObservation().generation;
+    expect(getConfigReloadObservation().sourceConfig).toEqual(initialConfig);
 
     await flushWatcherChange(harness);
 
     expect(harness.onHotReload).not.toHaveBeenCalled();
     expect(harness.onRestart).not.toHaveBeenCalled();
     expect(harness.onConfigCandidateCommitted).toHaveBeenCalledOnce();
+    const observation = getConfigReloadObservation();
+    expect(observation.generation).toBeGreaterThan(observedGeneration);
+    expect(observation.sourceConfig).toEqual(nextConfig);
+    await harness.reloader.stop();
+  });
+
+  it("keeps health on the prior completed observation until the snapshot read completes", async () => {
+    const initialConfig: OpenClawConfig = {
+      gateway: { reload: { mode: "off" } },
+      agents: { defaults: { model: "openai/gpt-5.6-sol" } },
+    };
+    const nextConfig: OpenClawConfig = {
+      gateway: { reload: { mode: "off" } },
+      agents: { defaults: { model: "openai/gpt-5.6-terra" } },
+      ui: { prefs: { themeMode: "dark" } },
+    };
+    const snapshot = createDeferred<ConfigFileSnapshot>();
+    const readSnapshot = vi.fn(() => snapshot.promise);
+    const harness = createReloaderHarness(readSnapshot, { initialConfig });
+    const observedGeneration = getConfigReloadObservation().generation;
+
+    harness.watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(readSnapshot).toHaveBeenCalledOnce();
+    expect(getConfigReloadObservation().generation).toBe(observedGeneration);
+    expect(
+      buildRuntimeConfigHealth({
+        liveSourceConfig: initialConfig,
+        hasLiveSnapshot: true,
+        observedSourceConfig: getConfigReloadObservation().sourceConfig,
+      }),
+    ).toEqual({
+      state: "ok",
+      liveDefaultModel: "openai/gpt-5.6-sol",
+      observedDefaultModel: "openai/gpt-5.6-sol",
+    });
+
+    snapshot.resolve(makeSnapshot({ config: nextConfig, hash: "completed-observation" }));
+    await vi.runAllTimersAsync();
+
+    const observation = getConfigReloadObservation();
+    expect(observation.generation).toBeGreaterThan(observedGeneration);
+    expect(observation.sourceConfig).toEqual(nextConfig);
+    expect(
+      buildRuntimeConfigHealth({
+        liveSourceConfig: initialConfig,
+        hasLiveSnapshot: true,
+        observedSourceConfig: observation.sourceConfig,
+      }),
+    ).toEqual({
+      state: "drift",
+      liveDefaultModel: "openai/gpt-5.6-sol",
+      observedDefaultModel: "openai/gpt-5.6-terra",
+      driftPaths: ["agents.defaults.model"],
+      message:
+        "Live gateway runtime config differs from the latest completed reload observation for model/provider/auth paths; restart is required or pending.",
+    });
+    await harness.reloader.stop();
+  });
+
+  it("reports secret provider selection only after its source observation completes", async () => {
+    const providers = {
+      primary: { source: "env" as const },
+      secondary: { source: "env" as const },
+    };
+    const initialConfig: OpenClawConfig = {
+      gateway: { reload: { mode: "off" } },
+      secrets: { defaults: { env: "primary" }, providers },
+    };
+    const nextConfig: OpenClawConfig = {
+      gateway: { reload: { mode: "off" } },
+      secrets: { defaults: { env: "secondary" }, providers },
+    };
+    const snapshot = createDeferred<ConfigFileSnapshot>();
+    const readSnapshot = vi.fn(() => snapshot.promise);
+    const harness = createReloaderHarness(readSnapshot, { initialConfig });
+    const observedGeneration = getConfigReloadObservation().generation;
+
+    harness.watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(readSnapshot).toHaveBeenCalledOnce();
+    expect(getConfigReloadObservation().generation).toBe(observedGeneration);
+    expect(
+      buildRuntimeConfigHealth({
+        liveSourceConfig: initialConfig,
+        hasLiveSnapshot: true,
+        observedSourceConfig: getConfigReloadObservation().sourceConfig,
+      }),
+    ).toEqual({
+      state: "ok",
+      liveDefaultModel: null,
+      observedDefaultModel: null,
+    });
+
+    snapshot.resolve(makeSnapshot({ config: nextConfig, hash: "completed-secret-observation" }));
+    await vi.runAllTimersAsync();
+
+    const observation = getConfigReloadObservation();
+    expect(observation.generation).toBeGreaterThan(observedGeneration);
+    expect(observation.sourceConfig).toEqual(nextConfig);
+    expect(
+      buildRuntimeConfigHealth({
+        liveSourceConfig: initialConfig,
+        hasLiveSnapshot: true,
+        observedSourceConfig: observation.sourceConfig,
+      }),
+    ).toEqual({
+      state: "drift",
+      liveDefaultModel: null,
+      observedDefaultModel: null,
+      driftPaths: ["secrets"],
+      message:
+        "Live gateway runtime config differs from the latest completed reload observation for model/provider/auth paths; restart is required or pending.",
+    });
+    await harness.reloader.stop();
+  });
+
+  it("publishes only the newest source when a watcher supersedes an active read", async () => {
+    const initialConfig: OpenClawConfig = {
+      gateway: { reload: { mode: "off" } },
+      agents: { defaults: { model: "openai/gpt-5.6-sol" } },
+    };
+    const supersededConfig: OpenClawConfig = {
+      gateway: { reload: { mode: "off" } },
+      agents: { defaults: { model: "openai/gpt-5.6-terra" } },
+    };
+    const newestConfig: OpenClawConfig = {
+      gateway: { reload: { mode: "off" } },
+      agents: { defaults: { model: "openai/gpt-5.6-luna" } },
+    };
+    const supersededRead = createDeferred<ConfigFileSnapshot>();
+    const newestRead = createDeferred<ConfigFileSnapshot>();
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockImplementationOnce(() => supersededRead.promise)
+      .mockImplementationOnce(() => newestRead.promise);
+    const harness = createReloaderHarness(readSnapshot, { initialConfig });
+    const initialObservation = getConfigReloadObservation();
+
+    harness.watcher.emit("change");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(readSnapshot).toHaveBeenCalledOnce();
+
+    harness.watcher.emit("change");
+    supersededRead.resolve(
+      makeSnapshot({ config: supersededConfig, hash: "superseded-observation" }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(readSnapshot).toHaveBeenCalledTimes(2);
+
+    const observationAfterSupersededRead = getConfigReloadObservation();
+
+    newestRead.resolve(makeSnapshot({ config: newestConfig, hash: "newest-observation" }));
+    await vi.runAllTimersAsync();
+
+    expect(observationAfterSupersededRead).toEqual(initialObservation);
+    expect(getConfigReloadObservation()).toEqual({
+      generation: initialObservation.generation + 1,
+      sourceConfig: newestConfig,
+    });
     await harness.reloader.stop();
   });
 
@@ -3009,6 +3179,50 @@ describe("startGatewayConfigReloader", () => {
     await reloader.stop();
   });
 
+  it("honors model runtime restart write intent in hot mode", async () => {
+    const previousConfig: OpenClawConfig = {
+      gateway: { reload: { mode: "hot" } },
+      agents: { defaults: { model: "openai-codex/gpt-5.5" } },
+    };
+    const nextConfig: OpenClawConfig = {
+      gateway: { reload: { mode: "hot" } },
+      agents: { defaults: { model: "openai/gpt-5.5" } },
+    };
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
+      makeSnapshot({
+        sourceConfig: nextConfig,
+        runtimeConfig: nextConfig,
+        config: nextConfig,
+        hash: "hot-model-restart",
+      }),
+    );
+    const harness = createReloaderHarness(readSnapshot, {
+      initialConfig: previousConfig,
+      initialCompareConfig: previousConfig,
+    });
+
+    harness.emitWrite({
+      configPath: "/tmp/openclaw.json",
+      sourceConfig: nextConfig,
+      runtimeConfig: nextConfig,
+      persistedHash: "hot-model-restart",
+      revision: 1,
+      fingerprint: "runtime-hot-model-restart",
+      sourceFingerprint: "source-hot-model-restart",
+      writtenAtMs: Date.now(),
+      afterWrite: { mode: "restart", reason: "model/provider runtime changed" },
+    });
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(harness.onHotReload).not.toHaveBeenCalled();
+    const [plan, restartConfig] = getOnlyRestartCall(harness);
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toEqual(["model/provider runtime changed"]);
+    expect(restartConfig).toBe(nextConfig);
+
+    await harness.reloader.stop();
+  });
+
   it("skips invalid external config edits without recovery", async () => {
     const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
       makeSnapshot({
@@ -3525,10 +3739,11 @@ describe("startGatewayConfigReloader", () => {
       .mockResolvedValueOnce(makeZeroDebounceHookSnapshot("internal-restart"));
     const harness = createReloaderHarness(readSnapshot);
 
-    harness.emitWrite({
+    const write = {
       ...makeZeroDebounceHookWrite("internal-restart"),
       afterWrite: { mode: "restart", reason: "plugin runtime contract changed" },
-    });
+    } satisfies ConfigWriteNotification;
+    harness.emitWrite(write);
     await vi.runOnlyPendingTimersAsync();
 
     expect(harness.onHotReload).not.toHaveBeenCalled();
@@ -3539,6 +3754,7 @@ describe("startGatewayConfigReloader", () => {
       gateway: { reload: {} },
       hooks: { enabled: true },
     });
+    expect(getConfigReloadObservation().sourceConfig).toEqual(write.sourceConfig);
 
     await harness.reloader.stop();
   });

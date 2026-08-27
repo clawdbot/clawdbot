@@ -44,6 +44,7 @@ import {
   gatewayProbeResultWasRateLimited,
 } from "./gateway-health-auth-diagnostic.js";
 import { formatHealthChannelLines } from "./health-format.js";
+import { formatRuntimeConfigHealthLine } from "./health-runtime-config.js";
 import { logGatewayConnectionDetails } from "./status.gateway-connection.js";
 export { formatHealthChannelLines } from "./health-format.js";
 export type { HealthSummary } from "../gateway/health/types.js";
@@ -440,6 +441,10 @@ export async function healthCommand(
     const configReloadLine = formatConfigReloadHealthLine(summary);
     if (configReloadLine) {
       runtime.log(styleHealthChannelLine(configReloadLine, rich));
+    }
+    const runtimeConfigLine = formatRuntimeConfigHealthLine(summary);
+    if (runtimeConfigLine) {
+      runtime.log(styleHealthChannelLine(runtimeConfigLine, rich));
     }
     for (const plugin of displayPlugins) {
       const channelSummary = summary.channels?.[plugin.id];

@@ -9,12 +9,20 @@ import {
 const {
   buildGatewaySnapshotMock,
   emitGatewayAuthSecurityEventMock,
+  getHealthCacheMock,
   listControlUiPluginTabsMock,
   listControlUiPluginWidgetKindsMock,
+  readCurrentRuntimeConfigHealthMock,
+  redeemDeviceBootstrapTokenProfileMock,
 } = vi.hoisted(() => ({
   emitGatewayAuthSecurityEventMock: vi.fn(),
+  getHealthCacheMock: vi.fn<() => HelloOk["snapshot"]["health"] | null>(() => null),
   listControlUiPluginTabsMock: vi.fn((_scopes: readonly string[]) => []),
   listControlUiPluginWidgetKindsMock: vi.fn((_scopes: readonly string[]) => []),
+  readCurrentRuntimeConfigHealthMock: vi.fn<() => HelloOk["snapshot"]["health"]["runtimeConfig"]>(
+    () => undefined,
+  ),
+  redeemDeviceBootstrapTokenProfileMock: vi.fn(),
   buildGatewaySnapshotMock: vi.fn((opts?: { includeUpdateDetails?: boolean }) => {
     const updateAvailable = {
       currentVersion: "2026.8.7",
@@ -55,10 +63,23 @@ const {
   }),
 }));
 
+vi.mock("../../../infra/device-bootstrap.js", () => ({
+  redeemDeviceBootstrapTokenProfile: redeemDeviceBootstrapTokenProfileMock,
+  restoreGenericDeviceBootstrapToken: vi.fn(async () => undefined),
+}));
+
+vi.mock("../../device-pair-setup-completion.js", () => ({
+  broadcastSetupHandoffDeliveryUncertain: vi.fn(),
+  broadcastSetupHandoffCompletion: vi.fn(),
+  confirmSetupHandoffDelivery: vi.fn(async () => undefined),
+  consumeSetupHandoff: vi.fn(async () => undefined),
+}));
+
 vi.mock("../health-state.js", () => ({
   buildGatewaySnapshot: buildGatewaySnapshotMock,
-  getHealthCache: vi.fn(() => null),
+  getHealthCache: getHealthCacheMock,
   getHealthVersion: vi.fn(() => 1),
+  readCurrentRuntimeConfigHealth: readCurrentRuntimeConfigHealthMock,
 }));
 
 vi.mock("../../../state/user-profiles.js", () => ({
@@ -151,6 +172,147 @@ function expectRedactedHelloSnapshot(context: ReturnType<typeof makeContext>) {
 describe("sendGatewayHello update detail scope", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    getHealthCacheMock.mockReturnValue(null);
+    readCurrentRuntimeConfigHealthMock.mockReturnValue(undefined);
+    redeemDeviceBootstrapTokenProfileMock.mockResolvedValue({ fullyRedeemed: false });
+  });
+
+  it("includes the synchronously current shared health publication before passive refresh", async () => {
+    getHealthCacheMock.mockReturnValue({
+      ok: true,
+      ts: 1,
+      durationMs: 1,
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+      heartbeatSeconds: 0,
+      defaultAgentId: "main",
+      agents: [],
+      sessions: { path: "sessions.db", count: 0, recent: [] },
+      runtimeConfig: {
+        state: "drift",
+        driftPaths: ["gateway.auth"],
+        message:
+          "Live gateway runtime config differs from the latest completed reload observation; restart is required.",
+      },
+    });
+    const context = makeContext("operator", ["operator.admin"]);
+
+    await sendGatewayHello(
+      context as never,
+      makeState("operator", ["operator.admin"]) as never,
+      {},
+    );
+
+    expect(helloSnapshot(context)?.health.runtimeConfig).toEqual({
+      state: "drift",
+      driftPaths: ["gateway.auth"],
+      message:
+        "Live gateway runtime config differs from the latest completed reload observation; restart is required.",
+    });
+    expect(helloSnapshot(context)?.health.runtimeConfig).not.toHaveProperty(
+      "liveSourceFingerprint",
+    );
+    expect(helloSnapshot(context)?.health.runtimeConfig).not.toHaveProperty(
+      "observedSourceFingerprint",
+    );
+    expect(getHealthCacheMock.mock.invocationCallOrder[0]).toBeLessThan(
+      context.sendFrame.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(context.sendFrame.mock.invocationCallOrder[0]).toBeLessThan(
+      context.handler.refreshHealthSnapshot.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it("projects current config health when observation invalidation clears the full cache", async () => {
+    readCurrentRuntimeConfigHealthMock.mockReturnValue({
+      state: "drift",
+      driftPaths: ["agents.entries"],
+      message:
+        "Live gateway runtime config differs from the latest completed reload observation; restart is required.",
+    });
+    const context = makeContext("operator", ["operator.read"]);
+
+    await sendGatewayHello(context as never, makeState("operator", ["operator.read"]) as never, {});
+
+    expect(helloSnapshot(context)?.health.runtimeConfig).toEqual({
+      state: "drift",
+      driftPaths: ["agents.entries"],
+      message:
+        "Live gateway runtime config differs from the latest completed reload observation; restart is required.",
+    });
+    expect(getHealthCacheMock.mock.invocationCallOrder[0]).toBeLessThan(
+      readCurrentRuntimeConfigHealthMock.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(readCurrentRuntimeConfigHealthMock.mock.invocationCallOrder[0]).toBeLessThan(
+      context.sendFrame.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(context.sendFrame.mock.invocationCallOrder[0]).toBeLessThan(
+      context.handler.refreshHealthSnapshot.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it("finalizes config health after awaited bootstrap bookkeeping", async () => {
+    const oldHealth: HelloOk["snapshot"]["health"] = {
+      ok: true,
+      ts: 1,
+      durationMs: 1,
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+      heartbeatSeconds: 0,
+      defaultAgentId: "main",
+      agents: [],
+      sessions: { path: "sessions.db", count: 0, recent: [] },
+      runtimeConfig: { state: "ok" as const },
+    };
+    let releaseRedemption: (() => void) | undefined;
+    const redemptionStarted = new Promise<void>((resolve) => {
+      redeemDeviceBootstrapTokenProfileMock.mockImplementationOnce(async () => {
+        resolve();
+        await new Promise<void>((release) => {
+          releaseRedemption = release;
+        });
+        return { fullyRedeemed: false };
+      });
+    });
+    getHealthCacheMock.mockReturnValue(oldHealth);
+    const context = makeContext("operator", ["operator.read"]);
+    const state = {
+      ...makeState("operator", ["operator.read"]),
+      device: { id: "device-a" },
+      devicePublicKey: "public-key-a",
+      bootstrapTokenCandidate: "bootstrap-a",
+      authResult: { ok: true, method: "bootstrap-token" },
+      authMethod: "bootstrap-token",
+      issuedBootstrapProfile: { kind: "test" },
+    };
+
+    const hello = sendGatewayHello(context as never, state as never, {});
+    await redemptionStarted;
+    getHealthCacheMock.mockReturnValue(null);
+    readCurrentRuntimeConfigHealthMock.mockReturnValue({
+      state: "drift",
+      driftPaths: ["agents.entries"],
+      message:
+        "Live gateway runtime config differs from the latest completed reload observation; restart is required.",
+    });
+    releaseRedemption?.();
+    await hello;
+
+    expect(helloSnapshot(context)?.health).toEqual({
+      runtimeConfig: {
+        state: "drift",
+        driftPaths: ["agents.entries"],
+        message:
+          "Live gateway runtime config differs from the latest completed reload observation; restart is required.",
+      },
+    });
+    expect(helloSnapshot(context)?.health).not.toMatchObject(oldHealth);
+    expect(getHealthCacheMock).toHaveBeenCalledOnce();
+    expect(readCurrentRuntimeConfigHealthMock.mock.invocationCallOrder[0]).toBeLessThan(
+      context.sendFrame.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
   });
 
   it.each([

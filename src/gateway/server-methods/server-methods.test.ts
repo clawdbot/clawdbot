@@ -4697,6 +4697,40 @@ describe("gateway healthHandlers.health cache freshness", () => {
     expect(respond).toHaveBeenCalledWith(true, fresh, undefined);
   });
 
+  it.each([
+    { name: "fresh passive", requestParams: {}, scopes: ["operator.read"] },
+    {
+      name: "explicit admin probe",
+      requestParams: { probe: true },
+      scopes: ["operator.admin"],
+    },
+  ])(
+    "returns the publisher-owned diagnostic in a $name response",
+    async ({ requestParams, scopes }) => {
+      const fresh = createHealthSnapshot({
+        runtimeConfig: {
+          state: "drift",
+          driftPaths: ["agents.defaults.model"],
+        },
+      });
+
+      const { respond } = await requestHealthSnapshot({
+        cached: null,
+        fresh,
+        requestParams,
+        scopes,
+      });
+
+      expect(mockCallArg(respond, 0, 1)).toBe(fresh);
+      expect(mockCallArg(respond, 0, 1)).toMatchObject({
+        runtimeConfig: {
+          state: "drift",
+          driftPaths: ["agents.defaults.model"],
+        },
+      });
+    },
+  );
+
   it("maps health collection failures to UNAVAILABLE", async () => {
     const refreshHealthSnapshot = vi.fn().mockRejectedValue(new Error("collector failed"));
     const { respond } = await requestHealthSnapshot({
@@ -5110,6 +5144,25 @@ describe("gateway healthHandlers.health cache freshness", () => {
       expect(respond).toHaveBeenCalledWith(true, fresh, undefined);
     },
   );
+
+  it("returns the publisher-owned runtime-config diagnostic on cache hits", async () => {
+    const cached = createHealthSnapshot({
+      runtimeConfig: {
+        state: "drift",
+        driftPaths: ["gateway.auth"],
+        message:
+          "Live gateway runtime config differs from the latest completed reload observation; restart is required.",
+      },
+    });
+
+    const { respond } = await requestHealthSnapshot({ cached });
+
+    const payload = mockCallArg(respond, 0, 1) as {
+      runtimeConfig?: { state?: string; driftPaths?: string[] };
+    };
+    expect(payload?.runtimeConfig).toEqual(cached.runtimeConfig);
+    expect(mockCallArg(respond, 0, 3)).toEqual({ cached: true });
+  });
 });
 
 describe("logs.tail", () => {
