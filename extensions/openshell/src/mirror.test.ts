@@ -106,7 +106,9 @@ describe("replaceDirectoryContents", () => {
     );
     try {
       await Promise.all([failedCopyStarted.promise, delayedCopyStarted.promise]);
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
       expect(settled).toBe(false);
       releaseCopy.resolve();
       expect(await replacement).toBe(failure);

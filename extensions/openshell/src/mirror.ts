@@ -1,7 +1,7 @@
 // Openshell plugin module implements mirror behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { movePathWithCopyFallback } from "openclaw/plugin-sdk/security-runtime";
+import { extractErrorCode, movePathWithCopyFallback } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import pLimit from "p-limit";
 
@@ -16,8 +16,8 @@ function createExcludeMatcher(excludeDirs?: readonly string[]) {
 const runLimitedFs = pLimit(COPY_TREE_FS_CONCURRENCY);
 
 async function lstatIfExists(targetPath: string) {
-  return await runLimitedFs(fs.lstat, targetPath).catch((error: NodeJS.ErrnoException) => {
-    if (error.code === "ENOENT") {
+  return await runLimitedFs(fs.lstat, targetPath).catch((error: unknown) => {
+    if (extractErrorCode(error) === "ENOENT") {
       return null;
     }
     throw error;
