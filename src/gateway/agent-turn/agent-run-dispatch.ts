@@ -48,7 +48,8 @@ export function asPreparedAgentCommandRuntimeContext(runtime: {
   config: PreparedAgentCommandRuntimeContext["config"];
   pluginGeneration: object;
 }): PreparedAgentCommandRuntimeContext {
-  return runtime as unknown as PreparedAgentCommandRuntimeContext;
+  // SAFETY: Gateway publishes this opaque generation from the same prepared-runtime contract.
+  return runtime as PreparedAgentCommandRuntimeContext;
 }
 
 function resolveResolvedAgentTimeoutStopReason(
