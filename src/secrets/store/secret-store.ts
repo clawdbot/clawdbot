@@ -99,7 +99,7 @@ function assertSecretStoreMutationName(name: string): void {
   }
 }
 
-function assertSecretStoreValue(value: string, kind: SecretStoreKind): void {
+export function assertSecretStoreValue(value: string, kind: SecretStoreKind): void {
   const bytes = Buffer.byteLength(value, "utf8");
   if (bytes > SECRET_STORE_VALUE_MAX_BYTES) {
     throw new SecretStoreValidationError(
