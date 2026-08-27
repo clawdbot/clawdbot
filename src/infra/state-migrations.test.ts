@@ -1,4 +1,5 @@
 // Covers legacy state migration detection and repair behavior.
+import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -1361,14 +1362,47 @@ describe("state migrations", () => {
 
     expect(mutableLanePresentDuringMigration).toBe(true);
     expect(result.changes).toContain("ingress revocation test migrated");
-    // Both retained handles are now outside the section that owned the state.
+
+    // Durable-state evidence: the throw alone does not prove the write never reached
+    // SQLite. Hash the real database file and re-read the rows through a fresh queue,
+    // so a post-section mutation would have to surface as a changed digest.
+    const sqlitePath = resolveOpenClawStateSqlitePath(env);
+    // Hash the write-ahead log alongside the main file: committed rows can sit in the
+    // WAL, so hashing only the .sqlite file would be vacuously stable and prove nothing.
+    const digest = () => {
+      const hash = createHash("sha256");
+      for (const suffix of ["", "-wal", "-shm"]) {
+        const file = `${sqlitePath}${suffix}`;
+        hash.update(suffix);
+        hash.update(fsSync.existsSync(file) ? fsSync.readFileSync(file) : Buffer.alloc(0));
+      }
+      return hash.digest("hex");
+    };
+    const readPendingIds = async () =>
+      (
+        await createChannelIngressQueue<{ note: string }>({
+          channelId: "line",
+          accountId: "default",
+          stateDir,
+        }).listPending({ limit: "all", orderBy: "received" })
+      ).map((row) => row.id);
+
+    const beforeDigest = digest();
+    const beforeIds = await readPendingIds();
+    // The write the locked section DID make is on disk, so the file is a live witness.
+    expect(beforeIds).toContain("inside-section");
+
+    // Both retained handles are now outside the section that owned the state, and the
+    // guard refuses before any promise is created, so no write ever starts.
     expect(() => retainedOpen?.({ accountId: "default" })).toThrow(
       /ingress queue access has expired/i,
     );
-    // The guard refuses before any promise is created, so the write never starts.
     expect(() => retainedQueue?.enqueue("after-section", { note: "leaked" })).toThrow(
       /ingress queue access has expired/i,
     );
+
+    expect(digest()).toBe(beforeDigest);
+    expect(await readPendingIds()).toStrictEqual(beforeIds);
   });
 
   it("runs doctor-only plugin file imports only during explicit Doctor repair", async () => {
