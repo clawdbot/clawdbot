@@ -4835,6 +4835,18 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       expected: missingRequesterFinal,
     },
     {
+      name: "accepts a runtime-owned next wave followed by a successful yield",
+      response: {
+        result: {
+          payloads: [],
+          meta: { yielded: true },
+          runtimeContinuationStarted: true,
+        },
+      },
+      requireVisibleReply: true,
+      expected: deliveredRequesterFinal,
+    },
+    {
       name: "rejects a yielded turn without an accepted next wave",
       response: { result: { payloads: [], meta: { yielded: true } } },
       requireVisibleReply: true,
