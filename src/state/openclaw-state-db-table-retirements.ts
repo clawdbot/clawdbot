@@ -11,6 +11,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 
 const stateDbLog = createSubsystemLogger("state/db");
+export const logRetiredStateTableMigration = (message: string) => stateDbLog.info(message);
 
 export const RETIRED_COMMITMENTS_SCHEMA_VERSION = 7;
 

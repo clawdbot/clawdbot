@@ -68,6 +68,19 @@ import {
   replaceNamedIndexesWithNoncanonicalIndexes,
 } from "./sqlite-schema-shape.test-support.js";
 
+const stateDbLogInfo = vi.hoisted(() => vi.fn());
+
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => {
+      const logger = actual.createSubsystemLogger(subsystem);
+      return subsystem === "state/db" ? { ...logger, info: stateDbLogInfo } : logger;
+    },
+  };
+});
+
 type StateDbTestDatabase = Pick<
   OpenClawStateKyselyDatabase,
   "diagnostic_events" | "schema_meta" | "skill_usage"
@@ -1497,6 +1510,7 @@ afterAll(() => {
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
+  stateDbLogInfo.mockClear();
   vi.restoreAllMocks();
 });
 
@@ -2096,6 +2110,11 @@ describe("openclaw state database", () => {
         }
       }
       const migrated = openOpenClawStateDatabase(options);
+      if (migrationPath === "runtime open") {
+        expect(stateDbLogInfo).toHaveBeenCalledWith(
+          "Discarded retired shared-state commitments rows, table, and indexes",
+        );
+      }
 
       expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(
         OPENCLAW_STATE_SCHEMA_VERSION,
@@ -2135,6 +2154,36 @@ describe("openclaw state database", () => {
       });
     },
   );
+
+  it("logs a destructive retirement only after the schema transaction commits", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = materializeCurrentStateDatabase(stateDir);
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacy = new DatabaseSync(databasePath);
+    seedV6CommitmentSchema(legacy);
+    legacy.exec(`
+      CREATE TRIGGER fail_schema_meta_update
+      BEFORE UPDATE ON schema_meta
+      BEGIN
+        SELECT RAISE(ABORT, 'forced migration rollback');
+      END;
+    `);
+    legacy.close();
+
+    expect(() => openOpenClawStateDatabase(options)).toThrow(/forced migration rollback/);
+    expect(stateDbLogInfo).not.toHaveBeenCalledWith(
+      "Discarded retired shared-state commitments rows, table, and indexes",
+    );
+    const rolledBack = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(
+        rolledBack.prepare("SELECT name FROM sqlite_schema WHERE name = 'commitments'").get(),
+      ).toEqual({ name: "commitments" });
+    } finally {
+      rolledBack.close();
+    }
+  });
 
   // The canonical v6 case above proves both runtime and Doctor orchestration,
   // reporting, and markers; these variants isolate historical layout recognition.
