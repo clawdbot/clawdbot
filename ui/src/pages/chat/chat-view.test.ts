@@ -933,19 +933,30 @@ describe("inline approval card", () => {
 });
 
 describe("chat run error", () => {
-  it("renders a non-interactive alert in the composer overlay", () => {
-    const container = renderChatView({
-      runError: { summary: "Error: gateway disconnected" },
-    });
+  it.each(["run", "request"])(
+    "exposes the complete %s error as selectable text and a copy action",
+    (source) => {
+      const diagnostic =
+        "Error: gateway disconnected\n<img src=x onerror=alert(1)>\nFinal diagnostic line";
+      const container = renderChatView(
+        source === "run" ? { runError: { summary: diagnostic } } : { error: diagnostic },
+      );
 
-    const alert = requireElement(container, ".chat-error", "chat run error");
-    const summary = requireElement(alert, ".chat-error__content", "chat run error summary");
-    expect(alert.getAttribute("role")).toBe("alert");
-    expect(summary.textContent?.trim()).toBe("Error: gateway disconnected");
-    expect(alert.querySelector<HTMLButtonElement>('[aria-label="Dismiss error"]')).toBeNull();
-    expect(alert.closest(".agent-chat__composer-overlay")).not.toBeNull();
-    expect(alert.closest(".agent-chat__composer-shell")).not.toBeNull();
-  });
+      const alert = requireElement(container, ".chat-error", "chat run error");
+      expect(alert.getAttribute("role")).toBe("alert");
+      const details = requireElement(alert, "details", "error disclosure");
+      expect(details.hasAttribute("open")).toBe(false);
+      expect(requireElement(details, "pre", "full diagnostic").textContent).toBe(diagnostic);
+      expect(alert.querySelector("img")).toBeNull();
+      expect(alert.querySelector<HTMLButtonElement>('[aria-label="Copy error"]')).not.toBeNull();
+      expect(alert.querySelector<HTMLButtonElement>('[aria-label="Dismiss error"]') !== null).toBe(
+        source === "request",
+      );
+      expect(
+        alert.closest(source === "run" ? ".agent-chat__composer-overlay" : ".chat-topbar-notices"),
+      ).not.toBeNull();
+    },
+  );
 
   it("keeps dismiss on the error state owned by its callback", () => {
     const onDismissError = vi.fn();
@@ -955,6 +966,32 @@ describe("chat run error", () => {
 
     expect(onDismissError).toHaveBeenCalledOnce();
     expect(container.querySelector(".chat-error")?.closest(".chat-topbar-notices")).not.toBeNull();
+  });
+
+  it.each([false, true])("keeps startup Retry owned by retryable=%s", (retryable) => {
+    const onRetrySessionPlacementStartup = vi.fn();
+    const container = renderChatView({
+      placementStartup: {
+        sessionKey: "agent:main:startup",
+        phase: "failed",
+        startedAt: 1,
+        error: "Provisioning failed\nFinal diagnostic line",
+        retryable,
+      },
+      onRetrySessionPlacementStartup,
+    });
+    const alert = requireElement(container, ".chat-error", "startup error");
+    expect(requireElement(alert, "pre", "startup diagnostic").textContent).toContain(
+      "Provisioning failed\nFinal diagnostic line",
+    );
+    alert.querySelector<HTMLElement>("summary")?.click();
+    expect(onRetrySessionPlacementStartup).not.toHaveBeenCalled();
+    const retry = Array.from(alert.querySelectorAll("button")).find(
+      (button) => button.textContent?.trim() === "Retry",
+    );
+    expect(Boolean(retry)).toBe(retryable);
+    retry?.click();
+    expect(onRetrySessionPlacementStartup).toHaveBeenCalledTimes(retryable ? 1 : 0);
   });
 });
 

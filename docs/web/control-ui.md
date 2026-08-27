@@ -521,6 +521,8 @@ Capability toggles stay disabled until the Gateway, session, and runtime config 
 
 ## Chat behavior
 
+Chat error banners, including cloud runner failures, keep a compact preview. Open **Error details** to read and select the complete diagnostic received by the UI, then use **Copy error** to copy it. The disclosure works with Enter or Space; the expanded text wraps long lines and can be scrolled with the keyboard. Expanding or copying an error does not retry the failed operation.
+
 <AccordionGroup>
   <Accordion title="Send and history semantics">
     - `chat.send` is **non-blocking**: it acks immediately with `{ runId, status: "started" }` and the response streams via `chat` events. Trusted Control UI clients may also receive optional ACK timing metadata for local diagnostics.

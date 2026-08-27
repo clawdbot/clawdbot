@@ -79,8 +79,70 @@ openclaw-chat-page {
 }
 
 .chat-error__content {
+  flex: 1;
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.chat-error:has(details[open]) {
+  align-items: start;
+}
+
+.chat-error__summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  list-style: none;
+  cursor: var(--cursor-action);
+}
+
+.chat-error__summary::-webkit-details-marker {
+  display: none;
+}
+
+.chat-error__summary strong {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-error__summary > span {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.chat-error__chevron {
+  display: inline-flex;
+}
+
+.chat-error__chevron svg {
+  width: 14px;
+  height: 14px;
+}
+
+.chat-error__content[open] .chat-error__chevron {
+  transform: rotate(180deg);
+}
+
+/* Preserve the received diagnostic as text; only its collapsed preview clips. */
+.chat-error__diagnostic {
+  max-height: min(16rem, 35dvh);
+  margin: 10px 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  user-select: text;
+}
+
+.chat-error__summary:focus-visible,
+.chat-error__diagnostic:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-sm);
 }
 
 .chat-error__dismiss {
@@ -416,6 +478,10 @@ openclaw-chat-page {
   width: 24px;
   height: 24px;
   margin: -1px -3px -1px 0;
+}
+
+.chat-topbar-notices .chat-error:has(details[open]) {
+  border-radius: var(--radius-lg);
 }
 
 .chat-workspace-conflict-notice {
