@@ -15,7 +15,6 @@ export function resetEmbeddingMocks(): void {
 }
 
 vi.mock("./embeddings.js", () => ({
-  resolveEmbeddingProviderAdapterId: (providerId: string) => providerId,
   resolveEmbeddingProviderAdapterTransport: (providerId: string) =>
     providerId === "local" ? "local" : "remote",
   resolveEmbeddingProviderIndexIdentity: () => undefined,
@@ -25,7 +24,7 @@ vi.mock("./embeddings.js", () => ({
       id: "mock",
       model: "mock-embed",
       maxInputTokens: 8192,
-      embedQuery: hoisted.embedQuery,
+      embed: hoisted.embedQuery,
       embedBatch: hoisted.embedBatch,
     },
   }),

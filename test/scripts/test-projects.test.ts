@@ -288,19 +288,14 @@ describe("scripts/test-projects changed-target routing", () => {
     );
   });
 
-  it("routes Z.AI fallback repro script changes through its regression test", () => {
-    expectChangedTargets(
-      ["scripts/zai-fallback-repro.ts"],
-      ["test/scripts/zai-fallback-repro.test.ts"],
-    );
-  });
-
   it("routes group visible reply config changes through channel delivery regressions", () => {
     expectChangedTargets(
       ["src/config/types.messages.ts", "src/config/zod-schema.core.ts"],
       [
         "src/auto-reply/reply/dispatch-acp.test.ts",
         "src/auto-reply/reply/dispatch-from-config.test.ts",
+        "src/auto-reply/reply/dispatch-from-config.delivery.test.ts",
+        "src/auto-reply/reply/dispatch-from-config.lifecycle.test.ts",
         "src/auto-reply/reply/followup-runner.test.ts",
         "src/auto-reply/reply/groups.test.ts",
         "extensions/discord/src/monitor/message-handler.process.test.ts",
@@ -316,6 +311,8 @@ describe("scripts/test-projects changed-target routing", () => {
         "src/agents/system-prompt.test.ts",
         "src/auto-reply/reply/dispatch-acp.test.ts",
         "src/auto-reply/reply/dispatch-from-config.test.ts",
+        "src/auto-reply/reply/dispatch-from-config.delivery.test.ts",
+        "src/auto-reply/reply/dispatch-from-config.lifecycle.test.ts",
         "src/auto-reply/reply/followup-runner.test.ts",
         "src/auto-reply/reply/groups.test.ts",
         "extensions/discord/src/monitor/message-handler.process.test.ts",
@@ -330,6 +327,8 @@ describe("scripts/test-projects changed-target routing", () => {
       [
         "src/auto-reply/reply/dispatch-acp.test.ts",
         "src/auto-reply/reply/dispatch-from-config.test.ts",
+        "src/auto-reply/reply/dispatch-from-config.delivery.test.ts",
+        "src/auto-reply/reply/dispatch-from-config.lifecycle.test.ts",
         "src/auto-reply/reply/followup-runner.test.ts",
         "src/auto-reply/reply/groups.test.ts",
         "extensions/discord/src/monitor/message-handler.process.test.ts",
@@ -345,6 +344,8 @@ describe("scripts/test-projects changed-target routing", () => {
         "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
         "src/auto-reply/reply/dispatch-acp.test.ts",
         "src/auto-reply/reply/dispatch-from-config.test.ts",
+        "src/auto-reply/reply/dispatch-from-config.delivery.test.ts",
+        "src/auto-reply/reply/dispatch-from-config.lifecycle.test.ts",
         "src/auto-reply/reply/followup-runner.test.ts",
         "src/auto-reply/reply/groups.test.ts",
         "extensions/discord/src/monitor/message-handler.process.test.ts",
@@ -506,6 +507,40 @@ describe("scripts/test-projects changed-target routing", () => {
     );
   });
 
+  it.each([
+    {
+      workflowPath: ".github/workflows/docker-release.yml",
+      targets: [
+        "src/dockerfile.test.ts",
+        "test/scripts/docker-channel-promote.test.ts",
+        "test/scripts/vercel-container-registry-publish.test.ts",
+        "test/scripts/ci-workflow-guards.test.ts",
+      ],
+    },
+    {
+      workflowPath: ".github/workflows/openclaw-release-publish.yml",
+      targets: [
+        "test/scripts/package-acceptance-workflow.test.ts",
+        "test/scripts/vercel-container-registry-publish.test.ts",
+        "test/scripts/ci-workflow-guards.test.ts",
+      ],
+    },
+    {
+      workflowPath: ".github/workflows/vercel-container-registry-publish.yml",
+      targets: [
+        "test/scripts/docker-channel-promote.test.ts",
+        "test/scripts/release-plan-producer.test.ts",
+        "test/scripts/vercel-container-registry-publish.test.ts",
+        "test/scripts/ci-workflow-guards.test.ts",
+      ],
+    },
+  ])(
+    "routes release workflow edits through their owning regression tests for $workflowPath",
+    ({ workflowPath, targets }) => {
+      expectChangedTargets([workflowPath], targets);
+    },
+  );
+
   it("keeps generated locale publisher and inventory edits on workflow guards", () => {
     for (const actionPath of [
       ".github/actions/create-generated-pr-tokens/action.yml",
@@ -589,25 +624,25 @@ describe("scripts/test-projects changed-target routing", () => {
       [
         ".github/workflows/ios-periphery.yml",
         [
+          "test/scripts/ci-workflow-guards.test.ts",
           "test/scripts/ios-periphery-comment-workflow.test.ts",
           "test/scripts/periphery-scope-workflows.test.ts",
-          "test/scripts/ci-workflow-guards.test.ts",
         ],
       ],
       [
         ".github/workflows/macos-periphery.yml",
         [
+          "test/scripts/ci-workflow-guards.test.ts",
           "test/scripts/ios-periphery-comment-workflow.test.ts",
           "test/scripts/periphery-scope-workflows.test.ts",
-          "test/scripts/ci-workflow-guards.test.ts",
         ],
       ],
       [
         ".github/workflows/shared-openclawkit-periphery.yml",
         [
+          "test/scripts/ci-workflow-guards.test.ts",
           "test/scripts/periphery-intersection.test.ts",
           "test/scripts/periphery-scope-workflows.test.ts",
-          "test/scripts/ci-workflow-guards.test.ts",
         ],
       ],
     ]);
@@ -1007,6 +1042,14 @@ describe("scripts/test-projects changed-target routing", () => {
     ["src/agents/agent-scope.test.ts", "test/vitest/vitest.agents-core.config.ts"],
     [
       "src/agents/embedded-agent-runner/run.before-agent-reply-cron.test.ts",
+      "test/vitest/vitest.agents-embedded-agent.config.ts",
+    ],
+    [
+      "src/agents/embedded-agent-runner/run.inherited-auth-owner.test.ts",
+      "test/vitest/vitest.agents-embedded-agent.config.ts",
+    ],
+    [
+      "src/agents/embedded-agent-runner/run.session-permissions.test.ts",
       "test/vitest/vitest.agents-embedded-agent.config.ts",
     ],
     [
@@ -2490,11 +2533,30 @@ describe("scripts/test-projects changed-target routing", () => {
       [
         "src/auto-reply/reply/dispatch-acp.test.ts",
         "src/auto-reply/reply/dispatch-from-config.test.ts",
+        "src/auto-reply/reply/dispatch-from-config.delivery.test.ts",
+        "src/auto-reply/reply/dispatch-from-config.lifecycle.test.ts",
         "src/auto-reply/reply/followup-runner.test.ts",
         "src/auto-reply/reply/groups.test.ts",
         "extensions/discord/src/monitor/message-handler.process.test.ts",
         "extensions/slack/src/monitor.tool-result.test.ts",
         "src/auto-reply/reply/effective-reply-route.test.ts",
+      ],
+    );
+  });
+
+  it("routes effective reply changes through every dispatch entrypoint", () => {
+    expectChangedTargets(
+      ["src/auto-reply/reply/effective-reply-route.ts"],
+      [
+        "src/auto-reply/reply/effective-reply-route.test.ts",
+        "src/auto-reply/reply/dispatch-acp.test.ts",
+        "src/auto-reply/reply/dispatch-from-config.test.ts",
+        "src/auto-reply/reply/dispatch-from-config.delivery.test.ts",
+        "src/auto-reply/reply/dispatch-from-config.lifecycle.test.ts",
+        "src/auto-reply/reply/followup-runner.test.ts",
+        "src/auto-reply/reply/groups.test.ts",
+        "extensions/discord/src/monitor/message-handler.process.test.ts",
+        "extensions/slack/src/monitor.tool-result.test.ts",
       ],
     );
   });
@@ -2811,6 +2873,7 @@ describe("scripts/test-projects changed-target routing", () => {
       "test/helpers/agents/happy-path-prompt-snapshots.ts",
       "test/fixtures/agents/prompt-snapshots/codex-model-catalog/gpt-5.5.pragmatic.source.json",
       "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/telegram-direct-codex-message-tool.md",
+      "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/discord-group-codex-message-tool.md.diff",
     ]) {
       expectChangedTargets([target], ["test/scripts/prompt-snapshots.test.ts"]);
     }

@@ -1,6 +1,7 @@
 // Memory Host SDK module implements session files behavior.
 import fsSync from "node:fs";
 import path from "node:path";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeAgentId } from "./config-utils.js";
 import { readRegularFile, statRegularFile } from "./fs-utils.js";
 import { hashText } from "./hash.js";
@@ -98,6 +99,8 @@ export type BuildSessionEntryOptions = {
   updatedAtMs?: number;
   /** Override for tests or specialized callers that need a tighter parse yield cadence. */
   parseYieldEveryLines?: number;
+  /** Observe persisted messages before memory indexing drops tool-only content. */
+  onTranscriptMessage?: (message: unknown, observedAt: number) => void;
 };
 
 export type SessionTranscriptClassification = {
@@ -174,8 +177,8 @@ function isDreamingNarrativeBootstrapRecord(record: unknown): boolean {
   return typeof runId === "string" && runId.startsWith(DREAMING_NARRATIVE_RUN_PREFIX);
 }
 
-function hasDreamingNarrativeRunId(value: unknown): boolean {
-  return typeof value === "string" && value.startsWith(DREAMING_NARRATIVE_RUN_PREFIX);
+function hasDreamingNarrativeIdentity(value: unknown): boolean {
+  return typeof value === "string" && isDreamingNarrativeSessionStoreKey(value);
 }
 
 function isDreamingNarrativeGeneratedRecord(record: unknown): boolean {
@@ -186,15 +189,27 @@ function isDreamingNarrativeGeneratedRecord(record: unknown): boolean {
     return false;
   }
   const candidate = record as {
+    type?: unknown;
     runId?: unknown;
     sessionKey?: unknown;
     data?: unknown;
+    message?: unknown;
   };
   if (
-    hasDreamingNarrativeRunId(candidate.runId) ||
-    hasDreamingNarrativeRunId(candidate.sessionKey)
+    hasDreamingNarrativeIdentity(candidate.runId) ||
+    hasDreamingNarrativeIdentity(candidate.sessionKey)
   ) {
     return true;
+  }
+  const message = candidate.type === "message" ? asOptionalRecord(candidate.message) : undefined;
+  if (message) {
+    const metadata = asOptionalRecord(message["__openclaw"]);
+    if (
+      (message.role === "assistant" || message.role === "toolResult") &&
+      hasDreamingNarrativeIdentity(metadata?.runId)
+    ) {
+      return true;
+    }
   }
   if (!candidate.data || typeof candidate.data !== "object" || Array.isArray(candidate.data)) {
     return false;
@@ -203,7 +218,9 @@ function isDreamingNarrativeGeneratedRecord(record: unknown): boolean {
     runId?: unknown;
     sessionKey?: unknown;
   };
-  return hasDreamingNarrativeRunId(nested.runId) || hasDreamingNarrativeRunId(nested.sessionKey);
+  return (
+    hasDreamingNarrativeIdentity(nested.runId) || hasDreamingNarrativeIdentity(nested.sessionKey)
+  );
 }
 
 function hasCronRunSessionKey(value: unknown): boolean {
@@ -857,15 +874,15 @@ export async function buildSessionEntry(
       } catch {
         continue;
       }
-      if (!generatedByDreamingNarrative && isDreamingNarrativeGeneratedRecord(record)) {
-        generatedByDreamingNarrative = true;
-      }
-      if (
+      const identifiesDreamingNarrative =
+        !generatedByDreamingNarrative && isDreamingNarrativeGeneratedRecord(record);
+      const identifiesCronRun =
         !generatedByCronRun &&
         allowArchiveRecordCronClassification &&
-        isCronRunGeneratedRecord(record)
-      ) {
-        generatedByCronRun = true;
+        isCronRunGeneratedRecord(record);
+      if (identifiesDreamingNarrative || identifiesCronRun) {
+        generatedByDreamingNarrative ||= identifiesDreamingNarrative;
+        generatedByCronRun ||= identifiesCronRun;
         collected.length = 0;
         lineMap.length = 0;
         messageTimestampsMs.length = 0;
@@ -887,6 +904,11 @@ export async function buildSessionEntry(
       if (message.role !== "user" && message.role !== "assistant") {
         continue;
       }
+      const timestampMs = parseSessionTimestampMs(
+        record as { timestamp?: unknown },
+        message as { timestamp?: unknown },
+      );
+      opts.onTranscriptMessage?.(message, Math.max(0, Math.floor(timestampMs || mtimeMs)));
       const inputProvenance = message.provenance as
         | { kind?: unknown; sourceTool?: unknown }
         | undefined;
@@ -922,10 +944,6 @@ export async function buildSessionEntry(
       const safe = redactSensitiveText(text, { mode: "tools" });
       const label = message.role === "user" ? "User" : "Assistant";
       const renderedLines = renderSessionExportLines(label, safe);
-      const timestampMs = parseSessionTimestampMs(
-        record as { timestamp?: unknown },
-        message as { timestamp?: unknown },
-      );
       const memoryProvenance: MemoryEntryProvenance = {
         originClass: classifySessionMessageOrigin(message, turnOrigin),
         sessionKind,

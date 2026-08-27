@@ -53,10 +53,10 @@ describe("scripts/install-trufflehog.sh", () => {
     );
 
     expect(output).toContain(
-      "amd64=f6d1106b85107d79527ed7a5b98b592beadd8b770dc3c9e8c1ad99e1b2cf127e",
+      "amd64=62224de2f9dd7cd418800feb953760a302ed2f82a7c547fe1146a4874fb179e4",
     );
     expect(output).toContain(
-      "arm64=9d9c2ec4ea36a089a9c5aaafe1969d176013ddf9f44d68e8cd75291aed8c83ed",
+      "arm64=f48f57e3d4343377865b1b64653f96d381d61a7792d89d026e85524732039fde",
     );
   });
 
@@ -66,7 +66,7 @@ describe("scripts/install-trufflehog.sh", () => {
     const downloadMarker = join(root, "downloaded");
     mkdirSync(binDir);
     const trufflehog = join(binDir, "trufflehog");
-    writeFileSync(trufflehog, "#!/bin/sh\nprintf 'trufflehog 3.95.9\\n'\n");
+    writeFileSync(trufflehog, "#!/bin/sh\nprintf 'trufflehog 3.97.0\\n'\n");
     chmodSync(trufflehog, 0o755);
     const fakeCurl = join(binDir, "curl");
     writeFileSync(
@@ -87,7 +87,7 @@ describe("scripts/install-trufflehog.sh", () => {
     });
 
     expect(existsSync(downloadMarker)).toBe(false);
-    expect(readFileSync(trufflehog, "utf8")).toContain("3.95.9");
+    expect(readFileSync(trufflehog, "utf8")).toContain("3.97.0");
   });
 
   it("creates a missing user-writable install directory without sudo", () => {
@@ -153,7 +153,7 @@ describe("scripts/install-trufflehog.sh", () => {
       ),
     ).toThrow();
 
-    const archive = "trufflehog_3.95.9_linux_amd64.tar.gz";
+    const archive = "trufflehog_3.97.0_linux_amd64.tar.gz";
     const args = readFileSync(argsFile, "utf8").trimEnd().split("\n");
     const outputPath = args[10] ?? "";
     expect(args.slice(0, 10)).toEqual([
@@ -170,7 +170,7 @@ describe("scripts/install-trufflehog.sh", () => {
     ]);
     expect(outputPath).toBe(join(dirname(outputPath), archive));
     expect(args[11]).toBe(
-      `https://github.com/trufflesecurity/trufflehog/releases/download/v3.95.9/${archive}`,
+      `https://github.com/trufflesecurity/trufflehog/releases/download/v3.97.0/${archive}`,
     );
     expect(existsSync(dirname(outputPath))).toBe(false);
   });

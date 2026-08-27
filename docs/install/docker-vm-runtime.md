@@ -17,7 +17,8 @@ page owns the Docker setup shared by those hosts.
 You need:
 
 - A Debian or Ubuntu VM with Docker Engine and Docker Compose v2
-- At least 2 GB RAM for a source image build; 4 GB is more reliable
+- At least 6 GB RAM for a source image build; smaller hosts should use the
+  official pre-built image below
 - The OpenClaw source checkout on the VM
 - Provider and model credentials for onboarding
 - An SSH-only or otherwise restricted provider firewall; do not expose the

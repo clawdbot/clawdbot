@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import Anthropic from "@anthropic-ai/sdk";
 import { describe, expect, it } from "vitest";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../transports/transport-utils.js";
 import type { Context, Model } from "../types.js";
@@ -103,5 +104,78 @@ describe("Anthropic malformed SSE frames", () => {
 
     expect(result.stopReason).toBe("stop");
     expect(result.errorMessage).toBeUndefined();
+  });
+
+  it.each([
+    {
+      label: "rejects an empty first-party stream",
+      provider: "anthropic",
+      baseUrl: "https://api.anthropic.com",
+      frames: [],
+      stopReason: "error",
+    },
+    {
+      label: "rejects a ping-only first-party stream",
+      provider: "anthropic",
+      baseUrl: "https://api.anthropic.com",
+      frames: [["ping", '{"type":"ping"}']] as const,
+      stopReason: "error",
+    },
+    {
+      label: "still rejects a started first-party stream without message_stop",
+      provider: "anthropic",
+      baseUrl: "https://api.anthropic.com",
+      frames: WELL_FORMED_FRAMES.slice(0, -1),
+      stopReason: "error",
+    },
+    {
+      label: "still accepts an empty compatible provider stream",
+      provider: "openrouter",
+      baseUrl: "https://proxy.example.com/v1",
+      frames: [],
+      stopReason: "stop",
+    },
+    {
+      label: "still accepts a ping-only Anthropic-compatible custom endpoint",
+      provider: "anthropic",
+      baseUrl: "https://proxy.example.com/v1",
+      frames: [["ping", '{"type":"ping"}']] as const,
+      stopReason: "stop",
+    },
+    {
+      label: "accepts a complete compatible provider stream without message_stop",
+      provider: "openrouter",
+      baseUrl: "https://proxy.example.com/v1",
+      frames: WELL_FORMED_FRAMES.slice(0, -1),
+      stopReason: "stop",
+    },
+  ])("$label", async ({ provider, baseUrl, frames, stopReason }) => {
+    const client = new Anthropic({
+      apiKey: "test-api-key",
+      baseURL: baseUrl,
+      fetch: async () =>
+        new Response(frames.map(([event, data]) => `event: ${event}\ndata: ${data}\n\n`).join(""), {
+          headers: { "content-type": "text/event-stream" },
+        }),
+    });
+    const stream = streamAnthropic({ ...makeModel(baseUrl), provider }, context, {
+      apiKey: "test-api-key",
+      client,
+      maxRetries: 0,
+    });
+    const eventTypes: string[] = [];
+    for await (const event of stream) {
+      eventTypes.push(event.type);
+    }
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe(stopReason);
+    expect(eventTypes.at(-1)).toBe(stopReason === "error" ? "error" : "done");
+    expect(result.errorMessage).toBe(
+      stopReason === "error" ? "Anthropic stream ended before message_stop" : undefined,
+    );
+    if (frames.length > 1 && stopReason === "stop") {
+      expect(result.content).toEqual([expect.objectContaining({ type: "text", text: "ok" })]);
+    }
   });
 });

@@ -37,9 +37,10 @@ DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run --rm 
     set -euo pipefail
     # Main has one aggregate entry; frozen candidates may split binding cases into a second file.
     test_files=(src/auto-reply/reply/dispatch-from-config.test.ts)
-    if [[ -f src/auto-reply/reply/dispatch-from-config.lifecycle-and-bindings.test.ts ]]; then
+    if [[ -f src/auto-reply/reply/dispatch-from-config.lifecycle.test.ts ]]; then
       test_files=(
-        src/auto-reply/reply/dispatch-from-config.lifecycle-and-bindings.test.ts
+        src/auto-reply/reply/dispatch-from-config.delivery.test.ts
+        src/auto-reply/reply/dispatch-from-config.lifecycle.test.ts
         src/auto-reply/reply/dispatch-from-config.test.ts
       )
     fi

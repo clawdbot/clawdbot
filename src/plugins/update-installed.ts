@@ -28,6 +28,7 @@ import { auditDeclaredOpenClawHostDependency } from "./plugin-peer-link.js";
 import {
   buildClawHubTrustSkippedOutcome,
   buildDryRunPluginUpdateOutcome,
+  buildPluginUpdateVersionOutcome,
   formatClawHubInstallFailure,
   formatGitInstallFailure,
   formatMarketplaceInstallFailure,
@@ -42,7 +43,6 @@ import {
   type NpmPluginUpdateSuccess,
 } from "./update-attempt.js";
 import {
-  buildPluginUpdateVersionOutcome,
   createTrackedNpmUpdateInstaller,
   resolveClawHubRiskAcknowledgementOptions,
   resolveRecordedClawHubPackage,
@@ -701,6 +701,8 @@ export async function updateNpmInstalledPlugins(params: {
     outcomes.push(
       buildPluginUpdateVersionOutcome({
         pluginId,
+        record,
+        result,
         currentVersion,
         nextVersion,
         channelFallbackSuffix,

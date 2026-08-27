@@ -21,7 +21,11 @@ import { selectAgentHarness } from "../harness/selection.js";
 import type { ModelFallbackResultClassification } from "../model-fallback-attempt.js";
 import type { ModelFallbackStepFields } from "../model-fallback-observation.js";
 import { runWithModelFallback } from "../model-fallback-runner.js";
-import type { FallbackAttempt, ModelFallbackRouteResolution } from "../model-fallback.types.js";
+import type {
+  FallbackAttempt,
+  ModelFallbackAttemptProvenance,
+  ModelFallbackRouteResolution,
+} from "../model-fallback.types.js";
 import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
 import { resolveAgentRunAbortLifecycleFields } from "../run-termination.js";
 import {
@@ -34,6 +38,7 @@ type RunEntryCandidateOptions = {
   allowTransientCooldownProbe?: boolean;
   isFinalFallbackAttempt?: boolean;
   isFallbackRetry: boolean;
+  modelRoutingProvenance: ModelFallbackAttemptProvenance;
   contextEngineLogicalTurnLease: ContextEngineLogicalTurnLease;
   onContextEngineTurnCandidate: (facts: ContextEngineTurnAttemptFacts) => void;
 };
@@ -489,6 +494,9 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
             }),
           }),
       run: async (provider, model, options) => {
+        if (!options) {
+          throw new Error("Model fallback attempt is missing routing provenance");
+        }
         const isFallbackRetry = candidateIndex > 0;
         candidateIndex += 1;
         let contextEngineTurnCandidate: ContextEngineTurnAttemptFacts | undefined;
@@ -496,6 +504,7 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
           allowTransientCooldownProbe: options?.allowTransientCooldownProbe,
           isFinalFallbackAttempt: options?.isFinalFallbackAttempt,
           isFallbackRetry,
+          modelRoutingProvenance: options.modelRoutingProvenance,
           contextEngineLogicalTurnLease,
           onContextEngineTurnCandidate: (facts) => {
             contextEngineTurnCandidate = facts;

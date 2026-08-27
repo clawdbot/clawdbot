@@ -1,6 +1,7 @@
 // `openclaw plugins inspect`: renders plugin registry shape, capabilities, policy, diagnostics, and install records.
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
+import { listAgentIds } from "../agents/agent-scope-config.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
@@ -235,22 +236,29 @@ export async function runPluginsInspectCommand(
       }),
     { command: "inspect" },
   );
-  const targetPlugin = snapshotReport.plugins.find((entry) => entry.id === id || entry.name === id);
+  const targetPlugin =
+    snapshotReport.plugins.find((entry) => entry.id === id) ??
+    snapshotReport.plugins.find((entry) => entry.name === id);
   if (!targetPlugin) {
     if (id === "skill-workshop") {
       const { detectSkillWorkshopToolPolicyDiagnostic } =
         await import("../skills/workshop/tool-policy-diagnostic.js");
-      const diagnostic = detectSkillWorkshopToolPolicyDiagnostic({
-        config: cfg,
-        // Invoking the legacy inspect id is explicit Workshop intent even when
-        // autonomous capture is off; report manual-tool availability too.
-        workshopEnabled: true,
-      });
+      // An explicit multi-agent roster has no single default diagnostic owner.
+      const agentIds = listAgentIds(cfg);
       const lines = [
         "Skill Workshop is built into OpenClaw, not a plugin; configure it under skills.workshop.",
       ];
-      if (diagnostic) {
-        lines.push(diagnostic.message);
+      for (const agentId of agentIds.length > 0 ? agentIds : [undefined]) {
+        const diagnostic = detectSkillWorkshopToolPolicyDiagnostic({
+          config: cfg,
+          // Invoking the legacy inspect id is explicit Workshop intent even when
+          // autonomous capture is off; report manual-tool availability too.
+          workshopEnabled: true,
+          ...(agentId ? { agentId } : {}),
+        });
+        if (diagnostic) {
+          lines.push(diagnostic.message);
+        }
       }
       failPluginInspect(lines.join("\n"), opts.json);
       return;
@@ -365,6 +373,7 @@ export async function runPluginsInspectCommand(
   lines.push(...formatInspectSection("Commands", inspect.commands));
   lines.push(...formatInspectSection("CLI commands", inspect.cliCommands));
   lines.push(...formatInspectSection("Services", inspect.services));
+  lines.push(...formatInspectSection("Gateway discovery", inspect.gatewayDiscoveryServices));
   lines.push(...formatInspectSection("Gateway methods", inspect.gatewayMethods ?? []));
   lines.push(
     ...formatInspectSection(
@@ -413,7 +422,9 @@ export async function runPluginsInspectCommand(
   );
   lines.push(...formatInspectSection("Install", formatInstallLines(install)));
   if (inspect.plugin.error) {
-    lines.push("", `${theme.error("Error:")} ${inspect.plugin.error}`);
+    const label =
+      inspect.plugin.status === "error" ? theme.error("Error:") : theme.muted("Reason:");
+    lines.push("", `${label} ${inspect.plugin.error}`);
   }
   defaultRuntime.log(lines.join("\n"));
 }

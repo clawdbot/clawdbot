@@ -8,7 +8,12 @@ import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import { parseCronPacingBounds } from "../pacing.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import { assertSafeCronSessionTargetId } from "../session-target.js";
-import type { CronDelivery, CronJob, CronJobPatch } from "../types.js";
+import {
+  isSystemOwnedCronPayloadKind,
+  type CronDelivery,
+  type CronJob,
+  type CronJobPatch,
+} from "../types.js";
 import { normalizeHttpWebhookUrl } from "../webhook-url.js";
 
 function assertCronScriptSyntax(script: string, subject: "script payload" | "trigger script") {
@@ -43,7 +48,7 @@ export function assertSupportedJobSpec(
     job.sessionTarget === "main" &&
     job.payload.kind !== "systemEvent" &&
     job.payload.kind !== "script" &&
-    job.payload.kind !== "heartbeat"
+    !isSystemOwnedCronPayloadKind(job.payload.kind)
   ) {
     throw new Error('main cron jobs require payload.kind="systemEvent" or "script"');
   }
@@ -202,10 +207,9 @@ export function assertMainSessionAgentId(
   if (!job.agentId) {
     return;
   }
-  // Script payloads run no agent turn; heartbeat monitors only poke the wake
-  // bus and the heartbeat runner resolves the owning agent's main session
-  // itself, so both are valid for non-default agents.
-  if (job.payload.kind === "script" || job.payload.kind === "heartbeat") {
+  // Script payloads run no agent turn; system-owned monitors invoke Gateway
+  // dependencies directly, so both are valid for non-default agents.
+  if (job.payload.kind === "script" || isSystemOwnedCronPayloadKind(job.payload.kind)) {
     return;
   }
   const normalized = normalizeAgentId(job.agentId);

@@ -644,6 +644,46 @@ describe("runCapability image skip", () => {
     });
   });
 
+  it("uses a valid imageModel fallback after a malformed primary", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          imageModel: {
+            primary: "openrouter/",
+            fallbacks: ["openrouter/google/gemini-2.5-flash"],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    await expect(resolveAutoImageModel({ cfg })).resolves.toEqual({
+      provider: "openrouter",
+      model: "google/gemini-2.5-flash",
+    });
+  });
+
+  it("resolves a providerless imageModel on its unique configured provider", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          imageModel: { primary: "moondream" },
+        },
+      },
+      models: {
+        providers: {
+          ollama: {
+            models: [{ id: "moondream", input: ["text", "image"] }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    await expect(resolveAutoImageModel({ cfg })).resolves.toEqual({
+      provider: "ollama",
+      model: "moondream",
+    });
+  });
+
   it("runs providerless configured imageModel fallbacks on the unique configured provider", async () => {
     await withMediaFixture(
       {
@@ -1108,11 +1148,20 @@ describe("runCapability image skip", () => {
       await expect(
         resolveAutoImageModel({
           cfg,
+          agentId: "image-agent",
+          agentDir: "/tmp/openclaw-agent",
+          workspaceDir: "/tmp/openclaw-workspace",
           activeModel: { provider: "openrouter", model: "google/gemini-2.5-flash" },
         }),
       ).resolves.toEqual({
         provider: "openrouter",
         model: "google/gemini-2.5-flash",
+      });
+      expect(loadModelCatalog).toHaveBeenCalledWith({
+        config: cfg,
+        agentId: "image-agent",
+        agentDir: "/tmp/openclaw-agent",
+        workspaceDir: "/tmp/openclaw-workspace",
       });
     } finally {
       setActivePluginRegistry(createEmptyPluginRegistry());

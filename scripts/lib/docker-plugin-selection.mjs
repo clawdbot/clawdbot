@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { collectRootPackageExcludedExtensionDirs } from "./root-package-bundled-plugin-excludes.mjs";
 
 const PLUGIN_ID_RE = /^[a-z0-9][a-z0-9-]*$/u;
 
@@ -66,12 +67,53 @@ function resolveDockerPluginSelection(params) {
   return [...resolvedDirs].toSorted((left, right) => left.localeCompare(right));
 }
 
+function collectRequiredBundledPluginDirs(params) {
+  const excluded = collectRootPackageExcludedExtensionDirs({
+    cwd: path.dirname(params.rootPackagePath),
+  });
+  return collectPluginIdentities(params.extensionsRoot)
+    .filter(({ dirName }) => {
+      if (excluded.has(dirName)) {
+        return false;
+      }
+      const packageJsonPath = path.join(params.extensionsRoot, dirName, "package.json");
+      if (!fs.existsSync(packageJsonPath)) {
+        return false;
+      }
+      const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
+      return Object.keys(packageJson.dependencies ?? {}).length > 0;
+    })
+    .map(({ dirName }) => dirName);
+}
+
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   try {
-    const resolved = resolveDockerPluginSelection({
+    const params = {
       extensionsRoot: process.argv[2],
       selection: process.argv[3] ?? "",
-    });
+    };
+    let resolved = resolveDockerPluginSelection(params);
+    if (process.argv[4] === "--required-bundled") {
+      resolved = [
+        ...new Set([
+          ...resolved,
+          ...collectRequiredBundledPluginDirs({ ...params, rootPackagePath: process.argv[5] }),
+        ]),
+      ].toSorted((left, right) => left.localeCompare(right));
+    } else if (process.argv[4] === "--required-platform-packages") {
+      resolved = [
+        ...new Set(
+          resolved.flatMap((dirName) => {
+            const packageJsonPath = path.join(params.extensionsRoot, dirName, "package.json");
+            if (!fs.existsSync(packageJsonPath)) {
+              return [];
+            }
+            const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
+            return packageJson.openclaw?.install?.requiredPlatformPackages ?? [];
+          }),
+        ),
+      ].toSorted((left, right) => left.localeCompare(right));
+    }
     if (resolved.length > 0) {
       process.stdout.write(`${resolved.join("\n")}\n`);
     }

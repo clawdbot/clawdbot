@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { configureSqlitePreSchemaPragmas } from "../infra/sqlite-wal.js";
 import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
@@ -17,6 +18,57 @@ import {
   assertOpenClawStateWriteAllowed,
   runWithOpenClawStateWriteAccess,
 } from "./openclaw-state-ownership.js";
+
+// Native Swift stores may create only these canonical objects before Node owns schema bootstrap.
+const NATIVE_STARTUP_BOOTSTRAP_OBJECTS = new Set([
+  "table:device_auth_tokens",
+  "index:idx_device_auth_tokens_updated",
+  "table:device_identities",
+  "index:idx_device_identities_device",
+  "table:exec_approvals_config",
+  "table:macos_port_guardian_records",
+  "index:idx_macos_port_guardian_records_port",
+  "table:schema_meta",
+  "table:state_leases",
+  "index:idx_state_leases_expiry",
+  "index:idx_state_leases_owner",
+]);
+
+function isUninitializedNativeStartupDatabase(db: DatabaseSync): boolean {
+  if (readSqliteUserVersion(db) !== 0) {
+    return false;
+  }
+  const objects = db // sqlite-allow-raw -- Pre-bootstrap schema ownership is checked before Kysely exposure.
+    .prepare("SELECT type, name FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'")
+    .all();
+  if (
+    objects.some(
+      ({ type, name }) =>
+        typeof type !== "string" ||
+        typeof name !== "string" ||
+        !NATIVE_STARTUP_BOOTSTRAP_OBJECTS.has(`${type}:${name}`),
+    )
+  ) {
+    return false;
+  }
+  const tableNames = new Set(
+    objects.filter(({ type }) => type === "table").map(({ name }) => name),
+  );
+  if (
+    tableNames.has("schema_meta") &&
+    db // sqlite-allow-raw -- An existing metadata row means this is not an unowned fresh bootstrap.
+      .prepare("SELECT 1 FROM schema_meta LIMIT 1")
+      .get()
+  ) {
+    return false;
+  }
+  return !(
+    tableNames.has("state_leases") &&
+    db // sqlite-allow-raw -- Never initialize across another startup's existing migration lease.
+      .prepare("SELECT 1 FROM state_leases LIMIT 1")
+      .get()
+  );
+}
 
 function ensureStartupMigrationCheckpointSchema(
   db: DatabaseSync,
@@ -65,9 +117,10 @@ function ensureStartupMigrationCheckpointSchema(
   );
 }
 
-export function withOpenClawStateStartupMigrationCheckpointDatabase<T>(
+export function withOpenClawStateStartupCheckpointConnection<T>(
   callback: (db: DatabaseSync) => T,
-  options: OpenClawStateDatabaseOptions = {},
+  options: OpenClawStateDatabaseOptions,
+  initializeCanonicalSchema: (db: DatabaseSync, pathname: string, env: NodeJS.ProcessEnv) => void,
 ): T {
   const env = options.env ?? process.env;
   const pathname = resolveDatabasePath(options);
@@ -82,6 +135,9 @@ export function withOpenClawStateStartupMigrationCheckpointDatabase<T>(
           busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
         });
         assertSqliteIntegrity(db, pathname);
+        if (isUninitializedNativeStartupDatabase(db)) {
+          initializeCanonicalSchema(db, pathname, env);
+        }
         ensureStartupMigrationCheckpointSchema(db, pathname, env);
         return callback(db);
       } finally {

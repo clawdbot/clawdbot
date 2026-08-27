@@ -4,11 +4,16 @@ import path from "node:path";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import {
   resetAgentRunRegistryForTest,
   rotateAgentRunRegistryLifecycleGeneration,
   validateAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import {
+  bindGatewayContextResolver,
+  withPluginRuntimeGatewayRequestScope,
+} from "../../plugins/runtime/gateway-request-scope.js";
 import {
   closeAdmittedRunDelegatedAuthority,
   createOperationalRunInstanceRef,
@@ -29,6 +34,7 @@ import {
 import type { AnyAgentTool } from "../tools/common.js";
 import { getGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
 import { callGatewayTool } from "../tools/gateway.js";
+import { getInProcessGatewayToolContext } from "../tools/in-process-gateway.js";
 import {
   createAgentHarnessHostCapabilities,
   retainBeforeToolCallForNativeHookRelay,
@@ -240,6 +246,44 @@ describe("agent harness host capability", () => {
     });
     host.close();
     expect(() => host.capabilities.preparedEnvironment?.()).toThrow("no longer active");
+  });
+
+  it("rejects retained preparation after the admitted Gateway is replaced", async () => {
+    const { attempt } = await admittedAttempt("run-prepared-gateway");
+    const admitted = {} as GatewayRequestContext;
+    const replacement = {} as GatewayRequestContext;
+    let current = admitted;
+    bindGatewayContextResolver(attempt.admittedRunContext, () => current);
+    const preparedExecute = vi.fn(async () => ({ content: [], details: {} }));
+    const tool = attachInternalToolExecutionPreparer(testTool().tool, async () => {
+      expect(getInProcessGatewayToolContext()).toBe(admitted);
+      return {
+        kind: "ready",
+        args: {},
+        execute: preparedExecute,
+        dispose: vi.fn(),
+      };
+    });
+    const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+    const [bound] = host.capabilities.bindToolSurface([tool]);
+    const preparer = bound ? getInternalToolExecutionPreparer(bound) : undefined;
+    if (!preparer) {
+      throw new Error("expected bound preparer");
+    }
+
+    await withPluginRuntimeGatewayRequestScope(
+      { context: replacement, isWebchatConnect: () => false },
+      async () => {
+        const prepared = await preparer({ toolCallId: "prepare", args: {} });
+        expect(prepared.kind).toBe("ready");
+        current = replacement;
+        if (prepared.kind === "ready") {
+          await expect(prepared.execute()).rejects.toThrow("no longer active");
+        }
+      },
+    );
+
+    expect(preparedExecute).not.toHaveBeenCalled();
   });
 
   it("delegates trajectory events and rejects a flush that outlives the capability", async () => {

@@ -12,7 +12,12 @@ import * as capabilityNormalizers from "./manifest-capability-normalizers.js";
 import { normalizeManifestCommandAliases } from "./manifest-command-aliases.js";
 import * as modelProviderNormalizers from "./manifest-model-provider-normalizers.js";
 import * as setupNormalizers from "./manifest-setup-normalizers.js";
-import type { PluginManifest, PluginManifestDoctorContract } from "./manifest-types.js";
+import type {
+  PluginDiagnosticCode,
+  PluginManifest,
+  PluginManifestBackupResource,
+  PluginManifestDoctorContract,
+} from "./manifest-types.js";
 import { createPluginCacheKey, PluginLruCache } from "./plugin-cache-primitives.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
@@ -38,7 +43,12 @@ export function isCoreReservedPluginId(id: string): boolean {
 
 type PluginManifestLoadResult =
   | { ok: true; manifest: PluginManifest; manifestPath: string }
-  | { ok: false; error: string; manifestPath: string };
+  | {
+      ok: false;
+      error: string;
+      manifestPath: string;
+      diagnosticCode?: PluginDiagnosticCode;
+    };
 
 type PluginManifestLoadCacheEntry = {
   result: PluginManifestLoadResult;
@@ -125,6 +135,62 @@ function parsePluginKind(raw: unknown): PluginKind | PluginKind[] | undefined {
   return kinds.length === 0 ? undefined : kinds.length === 1 ? kinds[0] : kinds;
 }
 
+function parseManifestBackupResources(
+  raw: unknown,
+): { ok: true; resources?: PluginManifestBackupResource[] } | { ok: false; error: string } {
+  if (raw === undefined) {
+    return { ok: true };
+  }
+  if (!Array.isArray(raw)) {
+    return { ok: false, error: "backupResources must be an array" };
+  }
+  const resources = new Map<string, PluginManifestBackupResource>();
+  for (const [index, entry] of raw.entries()) {
+    if (
+      !isRecord(entry) ||
+      Object.keys(entry).length !== 3 ||
+      !("disposition" in entry) ||
+      !("scope" in entry) ||
+      !("relativePath" in entry)
+    ) {
+      return {
+        ok: false,
+        error: `backupResources[${index}] must contain only disposition, scope, and relativePath`,
+      };
+    }
+    const { disposition, scope, relativePath } = entry;
+    if (disposition !== "include" && disposition !== "regenerable") {
+      return { ok: false, error: `backupResources[${index}].disposition is invalid` };
+    }
+    if (scope !== "state" && scope !== "agent") {
+      return { ok: false, error: `backupResources[${index}].scope is invalid` };
+    }
+    if (
+      typeof relativePath !== "string" ||
+      !relativePath ||
+      relativePath.includes("\\") ||
+      relativePath.includes("\0") ||
+      path.posix.isAbsolute(relativePath) ||
+      path.win32.isAbsolute(relativePath) ||
+      /^[A-Za-z][A-Za-z\d+.-]*:/.test(relativePath) ||
+      relativePath.split("/").some((segment) => !segment || segment === "." || segment === "..")
+    ) {
+      return {
+        ok: false,
+        error: `backupResources[${index}].relativePath must be a strict relative POSIX path`,
+      };
+    }
+    const resource: PluginManifestBackupResource = { disposition, scope, relativePath };
+    resources.set(`${scope}\0${relativePath}\0${disposition}`, resource);
+  }
+  return {
+    ok: true,
+    resources: [...resources.entries()]
+      .toSorted(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+      .map(([, resource]) => resource),
+  };
+}
+
 export function loadPluginManifest(
   rootDir: string,
   rejectHardlinks = true,
@@ -199,6 +265,15 @@ export function loadPluginManifest(
   if (!configSchema) {
     return cacheResult({ ok: false, error: "plugin manifest requires configSchema", manifestPath });
   }
+  const backupResources = parseManifestBackupResources(raw.backupResources);
+  if (!backupResources.ok) {
+    return cacheResult({
+      ok: false,
+      error: `invalid plugin manifest backupResources: ${backupResources.error}`,
+      manifestPath,
+      diagnosticCode: "backup-resource-declaration-invalid",
+    });
+  }
 
   const requiresPlugins = normalizeTrimmedStringList(raw.requiresPlugins);
   const enabledByDefaultOnPlatforms = setupNormalizers.normalizeManifestDefaultPlatforms(
@@ -226,6 +301,9 @@ export function loadPluginManifest(
   const manifestBeforeDashboard = {
     id,
     configSchema,
+    ...(backupResources.resources !== undefined
+      ? { backupResources: backupResources.resources }
+      : {}),
     ...(requiresPlugins.length > 0 ? { requiresPlugins } : {}),
     ...(raw.enabledByDefault === true ? { enabledByDefault: true } : {}),
     ...(enabledByDefaultOnPlatforms.length > 0 ? { enabledByDefaultOnPlatforms } : {}),

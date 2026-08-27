@@ -80,29 +80,31 @@ describe("runGatewayHealthJsonRoute", () => {
     );
   });
 
-  it("formats local config resolution failures", async () => {
+  it("leaves local config resolution failures to the root CLI renderer", async () => {
     const runtime = createRuntime();
     const error = new Error("config unavailable");
     const callGateway = vi.fn();
 
-    await runGatewayHealthJsonRoute(
-      {
-        rpc: { json: true, timeout: "10000" },
-        localPortOverride: 19083,
-      },
-      runtime as never,
-      {
-        callGateway,
-        readNonObservingHealthConfig: vi.fn(async () => {
-          throw error;
-        }),
-      },
-    );
+    await expect(
+      runGatewayHealthJsonRoute(
+        {
+          rpc: { json: true, timeout: "10000" },
+          localPortOverride: 19083,
+        },
+        runtime as never,
+        {
+          callGateway,
+          readNonObservingHealthConfig: vi.fn(async () => {
+            throw error;
+          }),
+        },
+      ),
+    ).rejects.toBe(error);
 
     expect(callGateway).not.toHaveBeenCalled();
     expect(runtime.writeJson).not.toHaveBeenCalled();
-    expect(runtime.error).toHaveBeenCalledWith(error.message);
-    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 
   it("preserves structured transport errors", async () => {

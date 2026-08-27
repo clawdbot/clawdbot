@@ -1,11 +1,23 @@
 import { describe, expect, it } from "vitest";
 import {
+  describeAskUserTool,
   describeSessionsHistoryTool,
   describeSessionsListTool,
   describeSessionsSearchTool,
   describeSessionsSendTool,
   SESSIONS_SEND_TOOL_DISPLAY_SUMMARY,
 } from "./tool-description-presets.js";
+
+describe("ask_user tool guidance", () => {
+  it("keeps native-control requirements visible to the model", () => {
+    const description = describeAskUserTool();
+
+    expect(description).toContain("exactly one question per call");
+    expect(description).toContain("native controls");
+    expect(description).toContain("Put every selectable choice in `options`");
+    expect(description).toContain("Use `multiSelect` only");
+  });
+});
 
 const SESSION_LINK_BASE = "http://127.0.0.1:18789/control";
 const SESSION_LINK_LINE =

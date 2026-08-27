@@ -2,7 +2,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelAccountSnapshot, ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { HealthSummary } from "../gateway/health/types.js";
@@ -490,7 +489,7 @@ describe("collectGatewayHealthSnapshot", () => {
     vi.unstubAllEnvs();
   });
 
-  it("clamps oversized probe timeouts", async () => {
+  it("does not let callers widen the gateway probe deadline", async () => {
     testConfig = {
       session: { store: "/tmp/x" },
       channels: { telegram: { botToken: "123:test" } },
@@ -504,7 +503,9 @@ describe("collectGatewayHealthSnapshot", () => {
 
     await getHealthSnapshot({ timeoutMs: Number.MAX_SAFE_INTEGER });
 
-    expect(timeouts).toEqual([MAX_TIMER_TIMEOUT_MS]);
+    expect(timeouts).toHaveLength(1);
+    expect(timeouts[0]).toBeGreaterThan(0);
+    expect(timeouts[0]).toBeLessThanOrEqual(7_000);
   });
 
   it("includes active plugin load errors in the health snapshot", async () => {

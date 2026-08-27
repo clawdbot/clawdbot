@@ -1,14 +1,12 @@
 // Discord plugin module implements runtime.presence behavior.
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
+import type { ActionGate } from "openclaw/plugin-sdk/channel-actions";
+import { jsonResult, readStringParam } from "openclaw/plugin-sdk/channel-actions";
+import type { DiscordActionConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveDefaultDiscordAccountId } from "../accounts.js";
 import type { Activity, UpdatePresenceData } from "../internal/gateway.js";
 import { getGateway } from "../monitor/gateway-registry.js";
-import {
-  type ActionGate,
-  jsonResult,
-  readStringParam,
-  type DiscordActionConfig,
-} from "../runtime-api.js";
 
 const ACTIVITY_TYPE_MAP: Record<string, number> = {
   playing: 0,
@@ -25,6 +23,7 @@ export async function handleDiscordPresenceAction(
   action: string,
   params: Record<string, unknown>,
   isActionEnabled: ActionGate<DiscordActionConfig>,
+  cfg: OpenClawConfig,
 ): Promise<AgentToolResult<unknown>> {
   if (action !== "setPresence") {
     throw new Error(`Unknown presence action: ${action}`);
@@ -34,17 +33,15 @@ export async function handleDiscordPresenceAction(
     throw new Error("Discord presence changes are disabled.");
   }
 
-  const accountId = readStringParam(params, "accountId");
+  const accountId = readStringParam(params, "accountId") ?? resolveDefaultDiscordAccountId(cfg);
   const gateway = getGateway(accountId);
   if (!gateway) {
     throw new Error(
-      `Discord gateway not available${accountId ? ` for account "${accountId}"` : ""}. The bot may not be connected.`,
+      `Discord gateway not available for account "${accountId}". The bot may not be connected.`,
     );
   }
   if (!gateway.isConnected) {
-    throw new Error(
-      `Discord gateway is not connected${accountId ? ` for account "${accountId}"` : ""}.`,
-    );
+    throw new Error(`Discord gateway is not connected for account "${accountId}".`);
   }
 
   const statusRaw = readStringParam(params, "status") ?? "online";

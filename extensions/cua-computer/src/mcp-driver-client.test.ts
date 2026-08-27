@@ -138,7 +138,7 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
         fake.respond(request, {
           protocolVersion: "2025-06-18",
           capabilities: { tools: {} },
-          serverInfo: { name: "fake-cua-driver", version: "0.19.3" },
+          serverInfo: { name: "fake-cua-driver", version: "0.20.0" },
         });
         return;
       }
@@ -165,6 +165,9 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
               true,
             ),
           );
+          break;
+        case "get_cursor_position":
+          fake.respond(request, toolResult({ x: 11, y: 12, source: "core_graphics" }));
           break;
         case "click":
           fake.respond(
@@ -208,6 +211,8 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
         screenshot_width: 200,
       });
       expect(desktop.images).toHaveLength(1);
+      const cursor = await driver.getCursorPosition();
+      expect(JSON.parse(cursor.structuredJson!)).toMatchObject({ x: 11, y: 12 });
       const click = await driver.click({ x: 20, y: 30, button: ClickButton.Left, count: 1 });
       expect(click.action).toEqual({
         effect: 0,
@@ -226,35 +231,29 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
       const startCalls = endpoint.requests.filter(
         (request) => request.method === "tools/call" && request.params?.name === "start_session",
       );
-      expect(startCalls).toHaveLength(2);
-      const captureScopes = startCalls.flatMap((request) => {
-        const scope = request.params?.arguments?.capture_scope;
-        return typeof scope === "string" ? [scope] : [];
-      });
-      expect(captureScopes.toSorted((left, right) => left.localeCompare(right))).toEqual([
-        "desktop",
-        "window",
-      ]);
-      expect(new Set(startCalls.map((request) => request.params?.arguments?.session)).size).toBe(2);
-      const desktopSession = startCalls.find(
-        (request) => request.params?.arguments?.capture_scope === "desktop",
-      )?.params?.arguments?.session;
-      const windowSession = startCalls.find(
-        (request) => request.params?.arguments?.capture_scope === "window",
-      )?.params?.arguments?.session;
+      expect(startCalls).toHaveLength(1);
+      expect(startCalls[0]?.params?.arguments).not.toHaveProperty("capture_scope");
+      const session = startCalls[0]?.params?.arguments?.session;
+      expect(session).toEqual(expect.stringMatching(/^openclaw-/));
       expect(
         endpoint.requests.find(
           (request) =>
             request.method === "tools/call" && request.params?.name === "get_session_state",
         )?.params?.arguments?.session,
-      ).toBe(desktopSession);
+      ).toBe(session);
       expect(
         endpoint.requests
           .filter(
             (request) => request.method === "tools/call" && request.params?.name === "list_windows",
           )
           .map((request) => request.params?.arguments?.session),
-      ).toEqual([windowSession, windowSession]);
+      ).toEqual([session, session]);
+      expect(
+        endpoint.requests.find(
+          (request) =>
+            request.method === "tools/call" && request.params?.name === "get_cursor_position",
+        )?.params?.arguments,
+      ).toEqual({ session });
 
       await driver.dispose();
       await vi.waitFor(() => {
@@ -270,7 +269,13 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
         endpoint.requests.find(
           (request) => request.method === "tools/call" && request.params?.name === "click",
         )?.params?.arguments,
-      ).toMatchObject({ x: 20, y: 30, button: "left", count: 1, scope: "desktop" });
+      ).toMatchObject({
+        x: 20,
+        y: 30,
+        button: "left",
+        count: 1,
+        target: { kind: "desktop", display_id: "primary" },
+      });
     } finally {
       await endpoint.close();
     }
@@ -292,47 +297,6 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
     }
   });
 
-  it("ends a started window session when desktop startup fails", async () => {
-    let desktopStart: RpcRequest | undefined;
-    const endedSessions: unknown[] = [];
-    const endpoint = await createFakeEndpoint((request, fake) => {
-      if (request.method === "initialize") {
-        fake.respond(request, {
-          protocolVersion: "2025-06-18",
-          capabilities: { tools: {} },
-          serverInfo: { name: "fake-cua-driver", version: "0.19.3" },
-        });
-      } else if (request.method === "tools/call" && request.params?.name === "start_session") {
-        if (request.params.arguments?.capture_scope === "desktop") {
-          desktopStart = request;
-        } else {
-          fake.respond(request, sessionState("window"));
-        }
-      } else if (request.method === "tools/call" && request.params?.name === "list_windows") {
-        fake.respond(request, toolResult({ windows: [] }));
-      } else if (request.method === "tools/call" && request.params?.name === "end_session") {
-        endedSessions.push(request.params.arguments?.session);
-        fake.respond(request, toolResult({ session: request.params.arguments?.session }));
-      }
-    });
-    try {
-      const driver = createCuaMcpDriver(endpoint);
-      await vi.waitFor(() => expect(driver.isAvailable()).toBe(true));
-      await driver.callTool("list_windows", {});
-      const desktopCall = driver.getDesktopState().catch((error: unknown) => error);
-      await vi.waitFor(() => expect(desktopStart).toBeDefined());
-      const disposeCall = driver.dispose().catch((error: unknown) => error);
-      endpoint.respond(desktopStart!, { ...toolResult({}), isError: true });
-
-      await expect(desktopCall).resolves.toBeInstanceOf(Error);
-      await expect(disposeCall).resolves.toBeInstanceOf(Error);
-      expect(endedSessions).toHaveLength(1);
-      expect(endedSessions[0]).toEqual(expect.stringMatching(/^openclaw-window-/));
-    } finally {
-      await endpoint.close();
-    }
-  });
-
   it("bounds pending calls and tears down the proxy on cancellation", async () => {
     const held: RpcRequest[] = [];
     const endpoint = await createFakeEndpoint((request, fake) => {
@@ -340,7 +304,7 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
         fake.respond(request, {
           protocolVersion: "2025-06-18",
           capabilities: { tools: {} },
-          serverInfo: { name: "fake-cua-driver", version: "0.19.3" },
+          serverInfo: { name: "fake-cua-driver", version: "0.20.0" },
         });
       } else if (request.method === "tools/call" && request.params?.name === "start_session") {
         fake.respond(request, sessionState("window"));

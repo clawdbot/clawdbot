@@ -35,7 +35,7 @@ describe("skill_workshop model projection", () => {
       provider: "openai",
       model: "large-context",
       modelContextWindowTokens: 200_000,
-      maxChars: 20_000,
+      maxChars: 70_000,
       contentIncluded: true,
     },
   ])(
@@ -96,14 +96,14 @@ describe("skill_workshop model projection", () => {
     { modelContextWindowTokens: 8_192, contentIncluded: false },
     { modelContextWindowTokens: 200_000, contentIncluded: true },
   ])(
-    "binds collection read receipts to a complete $modelContextWindowTokens-token projection",
+    "handles a 21,000-character collection skill on a $modelContextWindowTokens-token model",
     async ({ modelContextWindowTokens, contentIncluded }) => {
       const workspaceDir = await tempDirs.make("openclaw-skill-collection-context-read-");
       await writeWorkspaceSkills(workspaceDir, [
         {
           name: "large",
           description: "Large procedure",
-          body: `MODEL_VISIBLE_SKILL_BODY\n${"x".repeat(10_000)}`,
+          body: `MODEL_VISIBLE_SKILL_BODY\n${"x".repeat(21_000)}`,
         },
       ]);
       const tool = createConfiguredSkillWorkshopTool({
@@ -121,15 +121,23 @@ describe("skill_workshop model projection", () => {
       const text = read.content[0]?.type === "text" ? read.content[0].text : "";
       expect(read.details).toMatchObject({ skillKey: "large", contentIncluded });
       expect(text.includes("MODEL_VISIBLE_SKILL_BODY")).toBe(contentIncluded);
-      const reconciliation = tool.execute("reconcile", {
-        action: "reconcile",
-        collection: [{ action: "keep", name: "large" }],
-      });
       if (contentIncluded) {
-        await expect(reconciliation).resolves.toMatchObject({ details: { kept: ["large"] } });
-      } else {
-        await expect(reconciliation).rejects.toThrow("Read every current skill");
+        expect(text.length).toBeGreaterThan(21_000);
       }
+      if (!contentIncluded) {
+        expect(text).toContain(
+          "Next: leave this skill unlisted in the reconcile call; only the operator can change it.",
+        );
+        await expect(
+          tool.execute("change-rejected", {
+            action: "reconcile",
+            collection: [{ action: "drop", name: "large", reason: "Oversized" }],
+          }),
+        ).rejects.toThrow("Read the skill before changing it: large");
+      }
+      await expect(
+        tool.execute("reconcile", { action: "reconcile", collection: [] }),
+      ).resolves.toMatchObject({ details: { kept: ["large"] } });
     },
   );
 

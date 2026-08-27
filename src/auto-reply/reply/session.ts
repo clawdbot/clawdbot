@@ -113,8 +113,7 @@ import { isResetAuthorizedForContext } from "./reset-authorization.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import {
   maybeRetireLegacyMainDeliveryRoute,
-  resolveLastChannelRaw,
-  resolveLastToRaw,
+  resolveSessionDeliveryRoute,
 } from "./session-delivery.js";
 import {
   createReplySessionEntryHandle,
@@ -414,6 +413,7 @@ function resolveReplySessionRolloverState(entry: SessionEntry): Partial<Internal
     createdVia: entry.createdVia,
     createdActor: entry.createdActor,
     createdAt: entry.createdAt,
+    ...(entry.sandbox === "required" ? { sandbox: "required" } : {}),
     spawnDepth: entry.spawnDepth,
     subagentRole: entry.subagentRole,
     subagentControlScope: entry.subagentControlScope,
@@ -824,17 +824,9 @@ async function initSessionStateAttemptLocked(
   const baseDeliveryContext = deliveryContextFromSession(baseEntry);
   const baseDeliveryRoute = sessionDeliveryRoute(baseEntry);
   const baseDeliveryOrigin = sessionDeliveryOrigin(baseEntry);
-  const lastChannelRaw = isSystemEvent
-    ? baseDeliveryContext?.channel
-    : resolveLastChannelRaw({
-        originatingChannelRaw,
-        persistedLastChannel: baseDeliveryContext?.channel,
-        sessionKey,
-        isInterSession,
-      });
-  const lastToRaw = isSystemEvent
-    ? baseDeliveryContext?.to
-    : resolveLastToRaw({
+  const deliveryRoute = isSystemEvent
+    ? { channel: baseDeliveryContext?.channel, to: baseDeliveryContext?.to }
+    : resolveSessionDeliveryRoute({
         originatingChannelRaw,
         originatingToRaw: ctx.OriginatingTo,
         toRaw: ctx.To,
@@ -843,6 +835,7 @@ async function initSessionStateAttemptLocked(
         sessionKey,
         isInterSession,
       });
+  const { channel: lastChannelRaw, to: lastToRaw } = deliveryRoute;
   const lastAccountIdRaw = isSystemEvent
     ? baseDeliveryContext?.accountId
     : resolveSessionDefaultAccountId({
