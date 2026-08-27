@@ -97,8 +97,8 @@ const GATEWAY_TRANSIENT_CONNECT_RETRY_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 
 /**
  * Transport error that occurs after the Gateway has already accepted a run.
  *
- * Carries the accepted run/session identity so callers can surface the
- * in-flight Gateway-owned run ID after post-acceptance transport loss
+ * Carries the accepted run identity so callers can surface the in-flight
+ * Gateway-owned run ID after post-acceptance transport loss
  * (timeout or connection close).  Without this, a long-running accepted
  * turn that hits the CLI deadline would silently discard the run ID,
  * leaving the operator unable to check whether the Gateway finished
@@ -106,12 +106,10 @@ const GATEWAY_TRANSIENT_CONNECT_RETRY_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 
  */
 class GatewayAcceptedRunTransportError extends Error {
   readonly acceptedRunId: string;
-  readonly acceptedSessionKey?: string;
   readonly fallbackReason: "gateway_timeout" | "gateway_closed";
 
   constructor(params: {
     acceptedRunId: string;
-    acceptedSessionKey?: string;
     fallbackReason: "gateway_timeout" | "gateway_closed";
     cause: unknown;
   }) {
@@ -121,7 +119,6 @@ class GatewayAcceptedRunTransportError extends Error {
     );
     this.name = "GatewayAcceptedRunTransportError";
     this.acceptedRunId = params.acceptedRunId;
-    this.acceptedSessionKey = params.acceptedSessionKey;
     this.fallbackReason = params.fallbackReason;
   }
 }
@@ -1209,7 +1206,6 @@ async function agentViaGatewayCommand(
       if (acceptedGatewayRun && isGatewayTransportError(err) && acceptedRunId) {
         throw new GatewayAcceptedRunTransportError({
           acceptedRunId,
-          acceptedSessionKey,
           fallbackReason: isGatewayAgentTimeoutError(err) ? "gateway_timeout" : "gateway_closed",
           cause: err,
         });
