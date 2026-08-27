@@ -1384,6 +1384,44 @@ describe("Codex app-server dynamic tool build", () => {
     );
   });
 
+  it("preserves the running caution while rewriting sandbox process follow-up", async () => {
+    const execTool = createRuntimeDynamicTool("exec");
+    vi.mocked(execTool.execute).mockResolvedValueOnce({
+      content: [
+        {
+          type: "text",
+          text: "Command still running (session exec-1, pid 123). Running means only that the session is alive, not that the command's work started or succeeded; do not report progress based on this result alone. Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.",
+        },
+      ],
+      details: { status: "running" },
+    });
+    setOpenClawCodingToolsFactoryForTests(() => [
+      execTool,
+      createRuntimeDynamicTool("process"),
+      createRuntimeDynamicTool("message"),
+    ]);
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+
+    const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+      sandbox: { enabled: true, backendId: "ssh" } as never,
+      nativeToolSurfaceEnabled: false,
+    });
+
+    const sandboxExec = tools.at(-2);
+    expect(sandboxExec?.name).toBe("sandbox_exec");
+    const result = await sandboxExec?.execute("call-1", { command: "sleep 1" }, undefined);
+    expect(result?.content).toEqual([
+      {
+        type: "text",
+        text: "Command still running (session exec-1, pid 123). Running means only that the session is alive, not that the command's work started or succeeded; do not report progress based on this result alone. Use sandbox_process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.",
+      },
+    ]);
+  });
+
   it("exposes Docker sandbox shell tools when OpenClaw sandboxing disables native Code Mode", async () => {
     setOpenClawCodingToolsFactoryForTests(() => [
       createRuntimeDynamicTool("exec"),
@@ -1432,7 +1470,7 @@ describe("Codex app-server dynamic tool build", () => {
       content: [
         {
           type: "text",
-          text: "Command still running (session exec-1, pid 123). Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.",
+          text: "Command still running (session exec-1, pid 123). Running means only that the session is alive, not that the command's work started or succeeded; do not report progress based on this result alone. Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.",
         },
       ],
       details: { status: "running" },
@@ -1489,7 +1527,7 @@ describe("Codex app-server dynamic tool build", () => {
     expect(result?.content).toEqual([
       {
         type: "text",
-        text: "Command still running (session exec-1, pid 123). Use gateway_process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.",
+        text: "Command still running (session exec-1, pid 123). Running means only that the session is alive, not that the command's work started or succeeded; do not report progress based on this result alone. Use gateway_process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.",
       },
     ]);
   });
@@ -1540,7 +1578,7 @@ describe("Codex app-server dynamic tool build", () => {
       content: [
         {
           type: "text",
-          text: "Command still running (session exec-1, pid 123). Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.",
+          text: "Command still running (session exec-1, pid 123). Running means only that the session is alive, not that the command's work started or succeeded; do not report progress based on this result alone. Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.",
         },
       ],
       details: { status: "running" },
@@ -1568,7 +1606,7 @@ describe("Codex app-server dynamic tool build", () => {
       expect(result.content).toEqual([
         {
           type: "text",
-          text: "Command still running (session exec-1, pid 123). Background session follow-up is unavailable because gateway_process is not exposed. Rerun without background=true and set yieldMs high enough to wait for completion.",
+          text: "Command still running (session exec-1, pid 123). Running means only that the session is alive, not that the command's work started or succeeded; do not report progress based on this result alone. Background session follow-up is unavailable because gateway_process is not exposed. Rerun without background=true and set yieldMs high enough to wait for completion.",
         },
       ]);
     }
@@ -1599,7 +1637,7 @@ describe("Codex app-server dynamic tool build", () => {
       content: [
         {
           type: "text",
-          text: "Command still running (session exec-1, pid 123). Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.",
+          text: "Command still running (session exec-1, pid 123). Running means only that the session is alive, not that the command's work started or succeeded; do not report progress based on this result alone. Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.",
         },
       ],
       details: { status: "running" },
@@ -1664,7 +1702,7 @@ describe("Codex app-server dynamic tool build", () => {
     expect(result?.content).toEqual([
       {
         type: "text",
-        text: "Command still running (session exec-1, pid 123). Remote-node background follow-up is unavailable. Wait for the command to complete.",
+        text: "Command still running (session exec-1, pid 123). Running means only that the session is alive, not that the command's work started or succeeded; do not report progress based on this result alone. Remote-node background follow-up is unavailable. Wait for the command to complete.",
       },
     ]);
 

@@ -156,6 +156,26 @@ describe("exec background task wiring", () => {
     );
 
     expect(result.details.status).toBe("running");
+    // A running session is not proof the requested work started, so the result
+    // text must prevent the model from reporting progress based on session
+    // liveness alone.
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining(
+        "Running means only that the session is alive, not that the command's work started or succeeded; do not report progress based on this result alone.",
+      ),
+    });
+    // Codex app-server execution surfaces rename or replace the follow-up
+    // guidance by String.replace on this exact literal
+    // (extensions/codex/src/app-server/dynamic-tool-build.ts and
+    // extensions/codex/src/app-server/shell-dynamic-tools.ts). Pin the producer
+    // here against real exec output; the adapters own matching rewrite tests.
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining(
+        "Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.",
+      ),
+    });
     if (result.details.status !== "running") {
       throw new Error("expected a running background process");
     }
