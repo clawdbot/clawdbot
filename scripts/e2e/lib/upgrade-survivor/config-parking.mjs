@@ -96,6 +96,15 @@ function parkRestartProbe(configPath, snapshotPath, rawPort) {
   });
 }
 
+function parkCompanionInstall(configPath, snapshotPath) {
+  requirePaths("park-companion-install", configPath, snapshotPath);
+  const authoredConfig = fs.readFileSync(configPath);
+  requireObject(JSON.parse(authoredConfig.toString("utf8")), "companion install config");
+  snapshotAndReplace(configPath, snapshotPath, authoredConfig, {
+    plugins: { enabled: false },
+  });
+}
+
 function restore(configPath, snapshotPath) {
   requirePaths("restore", configPath, snapshotPath);
   const authoredConfig = fs.readFileSync(snapshotPath);
@@ -116,12 +125,15 @@ try {
     case "park-restart-probe":
       parkRestartProbe(configPath, snapshotPath, port);
       break;
+    case "park-companion-install":
+      parkCompanionInstall(configPath, snapshotPath);
+      break;
     case "restore":
       restore(configPath, snapshotPath);
       break;
     default:
       throw new Error(
-        "usage: config-parking.mjs <park-prepublish|park-restart-probe|restore> <config-path> <snapshot-path> [port]",
+        "usage: config-parking.mjs <park-prepublish|park-restart-probe|park-companion-install|restore> <config-path> <snapshot-path> [port]",
       );
   }
 } catch (error) {

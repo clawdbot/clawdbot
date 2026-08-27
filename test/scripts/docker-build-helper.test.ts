@@ -2526,9 +2526,13 @@ docker_e2e_docker_run_cmd run demo
     const publishedRunner = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
     const updateRestartAuth = readFileSync(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH, "utf8");
 
-    expect(runner.indexOf("\nconfigure_plugin_registry\n")).toBeLessThan(
-      runner.indexOf('\necho "Running package update against the mounted tarball..."\n'),
+    const runnerPluginRegistryIndex = runner.indexOf("\nconfigure_plugin_registry\n");
+    const runnerCompanionInstallIndex = runner.indexOf("\ninstall_companion_plugins\n");
+    const runnerUpdateIndex = runner.indexOf(
+      '\necho "Running package update against the mounted tarball..."\n',
     );
+    expect(runnerPluginRegistryIndex).toBeLessThan(runnerCompanionInstallIndex);
+    expect(runnerCompanionInstallIndex).toBeLessThan(runnerUpdateIndex);
     expect(
       publishedRunner.indexOf("phase configure-plugin-registry configure_plugin_registry"),
     ).toBeLessThan(publishedRunner.indexOf("phase update-candidate update_candidate"));
@@ -2536,13 +2540,11 @@ docker_e2e_docker_run_cmd run demo
     const runnerPrepareIndex = runner.indexOf(
       'prepare_update_restart_probe_current_install "$PORT" "$GATEWAY_LOG"',
     );
-    const runnerPluginRegistryIndex = runner.indexOf("\nconfigure_plugin_registry\n");
     expect(runnerClawHubIndex).toBeGreaterThan(-1);
-    expect(runnerClawHubIndex).toBeLessThan(runnerPrepareIndex);
-    expect(runnerPrepareIndex).toBeLessThan(runnerPluginRegistryIndex);
-    expect(runnerPluginRegistryIndex).toBeLessThan(
-      runner.indexOf('\necho "Running package update against the mounted tarball..."\n'),
-    );
+    expect(runnerClawHubIndex).toBeLessThan(runnerPluginRegistryIndex);
+    expect(runnerPluginRegistryIndex).toBeLessThan(runnerCompanionInstallIndex);
+    expect(runnerCompanionInstallIndex).toBeLessThan(runnerPrepareIndex);
+    expect(runnerPrepareIndex).toBeLessThan(runnerUpdateIndex);
     const publishedClawHubIndex = publishedRunner.indexOf(
       "phase configure-clawhub-fixture configure_clawhub_fixture",
     );
@@ -2580,24 +2582,51 @@ docker_e2e_docker_run_cmd run demo
     expect(publishedRunner.indexOf("phase assert-prepublish-requests node")).toBeLessThan(
       publishedRunner.indexOf("phase doctor run_doctor"),
     );
-    expect(runner.indexOf('openclaw "${update_args[@]}"')).toBeLessThan(
-      runner.indexOf(
-        'assert-prepublish-requests "$OPENCLAW_CLAWHUB_URL" "@openclaw/whatsapp" "$package_version"',
-      ),
+    const discordInstallIndex = runner.indexOf(
+      'openclaw plugins install "npm:@openclaw/discord@$package_version" --pin --accept-capabilities',
     );
-    expect(
-      runner.indexOf(
-        'assert-prepublish-requests "$OPENCLAW_CLAWHUB_URL" "@openclaw/whatsapp" "$package_version"',
-      ),
-    ).toBeLessThan(runner.indexOf("openclaw doctor --fix --non-interactive"));
-    expect(runner).toContain(
-      'if [ "${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base}" = "feishu-channel" ]; then',
+    const whatsappInstallIndex = runner.indexOf(
+      'openclaw plugins install "clawhub:@openclaw/whatsapp@$package_version" --accept-capabilities',
     );
+    const clawhubRequestIndex = runner.indexOf(
+      'assert-prepublish-requests "$OPENCLAW_CLAWHUB_URL" "@openclaw/whatsapp" "$package_version"',
+    );
+    const codexInstallIndex = runner.indexOf(
+      'openclaw plugins install "npm:@openclaw/codex@$package_version" --pin --accept-capabilities',
+    );
+    const restoreCompanionIndex = runner.indexOf(
+      'restore "$OPENCLAW_CONFIG_PATH" "$authored_config"',
+    );
+    const assertCompanionIndex = runner.indexOf('assert-companion-installs "$package_version"');
+    expect(discordInstallIndex).toBeGreaterThan(-1);
+    expect(discordInstallIndex).toBeLessThan(whatsappInstallIndex);
+    expect(whatsappInstallIndex).toBeLessThan(clawhubRequestIndex);
+    expect(clawhubRequestIndex).toBeLessThan(codexInstallIndex);
+    expect(codexInstallIndex).toBeLessThan(restoreCompanionIndex);
+    expect(restoreCompanionIndex).toBeLessThan(assertCompanionIndex);
+    expect(assertCompanionIndex).toBeLessThan(runnerPrepareIndex);
+    expect(runner).toContain('park-companion-install "$OPENCLAW_CONFIG_PATH" "$authored_config"');
+    expectTextToIncludeAll(runner, [
+      "install_status=$?",
+      "restore_status=$?",
+      'if [ "$install_status" -ne 0 ]; then',
+      'return "$install_status"',
+      'if [ "$restore_status" -ne 0 ]; then',
+      'return "$restore_status"',
+    ]);
+    expect(runner).toContain('if [ "$SCENARIO" = "feishu-channel" ]; then');
     expect(publishedRunner).toContain('if [ "$SCENARIO" = "feishu-channel" ]; then');
     expect(publishedRunner).toContain(
       [
         'if [ "$SCENARIO" = "configured-plugin-installs" ] || [ "$SCENARIO" = "sqlite-volume" ]; then',
         '  export MATRIX_ACCESS_TOKEN="upgrade-survivor-matrix-token"',
+        '  export BRAVE_API_KEY="BSA_upgrade_survivor_brave_key"',
+        "fi",
+      ].join("\n"),
+    );
+    expect(runner).toContain(
+      [
+        'if [ "$SCENARIO" = "configured-plugin-installs" ] || [ "$SCENARIO" = "sqlite-volume" ]; then',
         '  export BRAVE_API_KEY="BSA_upgrade_survivor_brave_key"',
         "fi",
       ].join("\n"),
@@ -2651,6 +2680,12 @@ docker_e2e_docker_run_cmd run demo
     expect(publishedRunner).not.toContain(
       '\nexport BRAVE_API_KEY="BSA_upgrade_survivor_brave_key"\n',
     );
+    expect(runner).not.toContain('\nexport BRAVE_API_KEY="BSA_upgrade_survivor_brave_key"\n');
+    expect(runner).toContain(
+      'source "$HARNESS_ROOT_DIR/scripts/e2e/lib/prepublish-plugin-registry.sh"',
+    );
+    expect(runner).toContain("openclaw_prepublish_plugin_registry_configure_docker_args");
+    expect(runner).not.toContain("configure_prepublish_plugin_registry()");
     expect(
       runner.match(
         /-v "\$HARNESS_ROOT_DIR\/scripts\/e2e\/lib\/clawhub-fixture-server\.cjs:\/tmp\/openclaw-clawhub-fixture-server\.cjs:ro"/gu,
