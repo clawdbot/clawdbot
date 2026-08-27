@@ -87,7 +87,12 @@ share a workspace; the model does not own the origin rows.
 
 Origins for replaced entries remain while retained rewrite preimages still
 reference their promotion markers. Backup rotation prunes those origins only
-when live entries, retained preimages, and indexed snapshots no longer reference them.
+when live entries, retained preimages, diary excerpts, and indexed snapshots no longer reference them.
+
+New consolidation-history excerpts retain the replacement entry's lineage,
+including its merged or superseded parents. Their origin rows remain while
+those excerpts remain, even after backup rotation. Diary history has no
+automatic expiry; long revision histories can retain growing origin sets.
 
 When backfill coalesces the same claim from several sessions, it retains every
 source origin without counting the repeated claim as extra evidence.
@@ -200,7 +205,11 @@ reason `forgotten`.
 The memory plugin coordinates purges with its staging and file mutations.
 A pending dream narrative is skipped if its tracked source entries or prior
 diary context were removed before publication. This does not retroactively
-identify untracked paraphrases in older diary entries.
+identify untracked paraphrases in older diary entries. Historical consolidation
+highlights with quoted markers also lack reliable deletion boundaries. The
+report warns in `refusals` when it recognizes remaining highlights in that
+format; review them manually. The warning is not an inventory of all untracked
+history, and missing historical lineage is not reconstructed.
 
 Indexing checks again before publishing chunks or cached embeddings, so a
 result prepared before the purge cannot restore forgotten session data or a

@@ -369,30 +369,6 @@ function validateConsolidatedMemory(params: {
   return null;
 }
 
-function diffHighlights(previous: string, next: string): string[] {
-  const previousLines = new Set(
-    previous
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean),
-  );
-  const nextLines = new Set(
-    next
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean),
-  );
-  const highlights = [
-    ...[...nextLines]
-      .filter((line) => !previousLines.has(line))
-      .map((line) => `+ ${truncateUtf16Safe(line, 180)}`),
-    ...[...previousLines]
-      .filter((line) => !nextLines.has(line))
-      .map((line) => `- ${truncateUtf16Safe(line, 180)}`),
-  ];
-  return highlights.slice(0, 8);
-}
-
 export function applyMemoryConsolidationPlan(params: {
   existingMemory: string;
   plan: MemoryConsolidationPlan;
@@ -492,7 +468,15 @@ export function applyMemoryConsolidationPlan(params: {
     merged: params.plan.operations.filter((operation) => operation.action === "merged").length,
     superseded: params.plan.operations.filter((operation) => operation.action === "superseded")
       .length,
-    highlights: diffHighlights(params.existingMemory, content),
+    // Each excerpt uses its replacement's unioned origins so the ordinary scrubber can erase it.
+    highlights: params.plan.operations
+      .flatMap(({ candidateKey, resultEntry, priorEntries }) =>
+        [`+ ${resultEntry}`, ...priorEntries.map((entry) => `- ${entry}`)].map(
+          (line) =>
+            `${buildPromotionMarker(candidateKey)}\n- \`${truncateUtf16Safe(line, 180).replaceAll("`", "'")}\``,
+        ),
+      )
+      .slice(0, 8),
   };
 }
 

@@ -28,6 +28,7 @@ import {
   withOpenClawAgentDatabaseReadOnly,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { readMemoryPreimages } from "./dreaming-consolidation-artifacts.js";
+import { DREAMS_FILENAMES } from "./dreaming-dreams-file.js";
 import {
   DREAMING_MEMORY_BACKUP_NAMESPACE,
   SHORT_TERM_RECALL_NAMESPACE,
@@ -184,6 +185,7 @@ function scrubMemoryContent(params: {
       continue;
     }
     const heading = /^(#{1,6})\s/u.exec(lines[index] ?? "");
+    const rowIndent = /^(\s*)[-*+]\s/u.exec(lines[index] ?? "")?.[1]?.length;
     if (!heading && !/\bSession ID:/iu.test(lines[index] ?? "")) {
       continue;
     }
@@ -191,6 +193,7 @@ function scrubMemoryContent(params: {
     while (end < lines.length) {
       const nextHeading = /^(#{1,6})\s/u.exec(lines[end] ?? "");
       if (
+        (rowIndent !== undefined && (lines[end] ?? "").search(/\S/u) <= rowIndent) ||
         (nextHeading && (!heading || nextHeading[1]!.length <= heading[1]!.length)) ||
         /\bSession ID:/iu.test(lines[end] ?? "")
       ) {
@@ -388,6 +391,7 @@ async function forgetWorkspaceMemory(
       .map((origin) => origin.entryKey),
   );
   const untargetableEntryKeys = new Set<string>();
+  const refusals: string[] = [];
   const corpusDir = path.join(workspaceDir, SESSION_CORPUS_RELATIVE_DIR);
   const corpusFiles = await fs
     .readdir(corpusDir, { withFileTypes: true })
@@ -436,10 +440,10 @@ async function forgetWorkspaceMemory(
     scrubMemoryContent({ content, entryKeys, sessionIds, corpusSnippets, agentId: params.agentId });
   let removedMemoryEntries = 0;
   let removedMemoryLines = 0;
-  const memoryFiles = await listMemoryFiles(workspaceDir, [
-    path.join(workspaceDir, "DREAMS.md"),
-    path.join(workspaceDir, "dreams.md"),
-  ]);
+  const memoryFiles = await listMemoryFiles(
+    workspaceDir,
+    DREAMS_FILENAMES.map((name) => path.join(workspaceDir, name)),
+  );
   for (const absolutePath of memoryFiles) {
     // Corpus evidence must survive until every dependent artifact is clean.
     if (path.dirname(absolutePath) === corpusDir) {
@@ -453,6 +457,11 @@ async function forgetWorkspaceMemory(
       }
     }
     const scrubbed = scrub(content);
+    if (/^## Memory Consolidation History\r?$[\s\S]*^  - `[+-] /mu.test(scrubbed.content)) {
+      refusals.push(
+        `Cannot trace historical consolidation highlights in ${path.relative(workspaceDir, absolutePath)}; review them manually.`,
+      );
+    }
     if (scrubbed.content !== content) {
       memoryRewrites.push({
         absolutePath,
@@ -604,7 +613,7 @@ async function forgetWorkspaceMemory(
       backups: rewrittenBackups,
       originRows: allOrigins.filter((origin) => entryKeys.has(origin.entryKey)).length,
     },
-    refusals: [],
+    refusals,
   };
   if (params.dryRun || sessionIds.size === 0) {
     return report;

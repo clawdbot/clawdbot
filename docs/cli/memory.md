@@ -156,7 +156,7 @@ and remain selected.
 | `untargetableEntryKeys`            | Promotion markers found without origin rows in this agent's store. This does not enumerate unmarked prose.                                           |
 | `curatedWrites`                    | Files to review, with `relativePath` and `observedAt` (Unix milliseconds). Includes supported recorded write attempts, which may not have succeeded. |
 | `artifacts`                        | Counts of matching files, entries, lines, and store rows described below.                                                                            |
-| `refusals`                         | Reserved report list; currently empty. An empty list does not establish complete deletion coverage.                                                  |
+| `refusals`                         | Historical consolidation highlights needing manual review. An empty list does not establish complete deletion coverage.                              |
 
 Preview and apply use the same matching logic, but each reads current state;
 a preview is not an immutable plan or a lock on subsequent writes. Apply
@@ -188,7 +188,10 @@ backups, rather than deleting every backup.
 
 Consolidation preserves origins for replaced promotion markers while retained
 rewrite preimages reference them. Those origins are pruned only after live
-entries, retained preimages, and indexed snapshots stop referencing the keys.
+entries, retained preimages, diary excerpts, and indexed snapshots stop referencing the keys.
+New consolidation-history excerpts carry the replacement entry's lineage and
+are removed with it. Their origins remain while the excerpts remain, even
+after backup rotation; diary history has no automatic expiry.
 In a shared workspace, a later purge for another agent also checks its indexed
 snapshots, even when the first purge already removed the shared file content.
 

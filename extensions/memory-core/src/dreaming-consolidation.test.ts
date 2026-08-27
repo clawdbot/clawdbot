@@ -164,6 +164,30 @@ describe("memory consolidation", () => {
     expect(subagent.deleteSession).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps consolidation history bounded and attached to each operation's lineage", () => {
+    const operations = Array.from({ length: 5 }, (_, index) => ({
+      candidateKey: `revision-${index}`,
+      action: "merged" as const,
+      resultEntry: `- Result ${index} ${"🦞".repeat(110)}`,
+      priorEntries: [`- Prior ${index} ${"🦞".repeat(110)}`],
+    }));
+    const existingMemory = operations.flatMap((operation) => operation.priorEntries).join("\n");
+    const result = applyMemoryConsolidationPlan({
+      existingMemory,
+      plan: { memory: "", operations },
+      nowMs: 1_000,
+      maxPriorEntryLossFraction: 1,
+    });
+    expect(result).not.toBeNull();
+    expect(result!.highlights).toHaveLength(8);
+    for (const [index, highlight] of result!.highlights.entries()) {
+      const [marker, entry] = highlight.split("\n");
+      expect(marker).toBe(`<!-- openclaw-memory-promotion:revision-${Math.floor(index / 2)} -->`);
+      expect(entry!.length).toBeLessThanOrEqual(184); // 180 excerpt characters plus the Markdown bullet/quotes.
+      expect(entry).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
+    }
+  });
+
   it("rejects a rewrite that loses too many prior entries", async () => {
     const workspaceDir = await createTempWorkspace("memory-consolidation-reject-");
     const promoted = candidate("owner");

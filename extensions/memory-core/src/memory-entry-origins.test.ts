@@ -125,7 +125,7 @@ describe("memory entry origins", () => {
     expect(db.prepare("PRAGMA user_version").get()).toEqual(version);
   });
 
-  it("unions every parent session onto a merged entry and removes its retired parent key", () => {
+  it("unions every parent session onto a merged entry and removes its retired parent key", async () => {
     recordMemoryEntryOrigins({
       agentId: "main",
       origins: [origin("prior", "session-1"), origin("candidate", "session-2")],
@@ -145,7 +145,8 @@ describe("memory entry origins", () => {
         },
       ],
     });
-    pruneMemoryEntryOrigins({
+    await pruneMemoryEntryOrigins({
+      workspaceDir: stateDir,
       agentIds: ["main"],
       entryKeys: extractPromotionKeys(previousMemory),
       retainedEntryKeys: new Set(extractPromotionKeys(currentMemory)),
@@ -158,7 +159,7 @@ describe("memory entry origins", () => {
     expect(listMemoryEntryOrigins({ agentId: "main", entryKeys: ["prior"] })).toEqual([]);
   });
 
-  it("re-keys superseded session lineage while preserving unrelated live memory", () => {
+  it("re-keys superseded session lineage while preserving unrelated live memory", async () => {
     recordMemoryEntryOrigins({
       agentId: "main",
       origins: [origin("stale", "session-1"), origin("surviving", "session-3")],
@@ -178,7 +179,8 @@ describe("memory entry origins", () => {
         },
       ],
     });
-    pruneMemoryEntryOrigins({
+    await pruneMemoryEntryOrigins({
+      workspaceDir: stateDir,
       agentIds: ["main"],
       entryKeys: extractPromotionKeys(previousMemory),
       retainedEntryKeys: new Set(extractPromotionKeys(currentMemory)),
@@ -208,52 +210,73 @@ describe("memory entry origins", () => {
     expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual(original);
   });
 
-  it("releases expired backup lineage only after its last retained reference disappears", async () => {
-    const workspaceDir = path.join(stateDir, "workspace");
-    const retainedEntryKeys = new Set(["current", "staged"]);
-    const save = (keys: string[], nowMs: number) =>
-      storeMemoryPreimage({
+  it.each(["DREAMS.md", "dreams.md"])(
+    "retains diary-only lineage in %s after backup rotation",
+    async (diaryName) => {
+      const workspaceDir = path.join(stateDir, "workspace");
+      await fs.mkdir(workspaceDir);
+      const diaryPath = path.join(workspaceDir, diaryName);
+      await fs.writeFile(
+        diaryPath,
+        `${buildPromotionMarker("diary")}\n- Retained diary excerpt.\n`,
+      );
+      const retainedEntryKeys = new Set(["current", "staged"]);
+      const save = (keys: string[], nowMs: number) =>
+        storeMemoryPreimage({
+          workspaceDir,
+          agentIds: ["main"],
+          content: keys.map((key) => `${buildPromotionMarker(key)}\n- ${key}`).join("\n"),
+          retainedEntryKeys,
+          nowMs,
+        });
+      recordMemoryEntryOrigins({
+        agentId: "main",
+        origins: ["current", "diary", "expired", "indexed", "shared", "staged"].map((key) =>
+          origin(key, key),
+        ),
+      });
+      const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
+      db.prepare(
+        "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, 'memory', 1, 2, ?, 'fts-only', ?, '[]', 1000)",
+      ).run(
+        "older-memory",
+        "MEMORY.md",
+        "older-memory-hash",
+        `# Memory\n${buildPromotionMarker("indexed")}`,
+      );
+      await save(["diary", "expired", "indexed", "shared", "staged"], 1_000);
+      await save(["shared"], 2_000);
+      for (let index = 3; index <= 9; index += 1) {
+        await save(["current"], index * 1_000);
+      }
+      expect(await readMemoryPreimages(workspaceDir)).toHaveLength(8);
+      expect(listMemoryEntryOrigins({ agentId: "main" }).map((entry) => entry.entryKey)).toEqual([
+        "current",
+        "diary",
+        "indexed",
+        "shared",
+        "staged",
+      ]);
+
+      await save(["current"], 10_000);
+
+      expect(await readMemoryPreimages(workspaceDir)).toHaveLength(8);
+      expect(listMemoryEntryOrigins({ agentId: "main" }).map((entry) => entry.entryKey)).toEqual([
+        "current",
+        "diary",
+        "indexed",
+        "staged",
+      ]);
+      await fs.unlink(diaryPath);
+      await pruneMemoryEntryOrigins({
         workspaceDir,
         agentIds: ["main"],
-        content: keys.map((key) => `${buildPromotionMarker(key)}\n- ${key}`).join("\n"),
+        entryKeys: ["diary"],
         retainedEntryKeys,
-        nowMs,
       });
-    recordMemoryEntryOrigins({
-      agentId: "main",
-      origins: ["current", "expired", "indexed", "shared", "staged"].map((key) => origin(key, key)),
-    });
-    const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
-    db.prepare(
-      "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, 'memory', 1, 2, ?, 'fts-only', ?, '[]', 1000)",
-    ).run(
-      "older-memory",
-      "MEMORY.md",
-      "older-memory-hash",
-      `# Memory\n${buildPromotionMarker("indexed")}`,
-    );
-    await save(["expired", "indexed", "shared", "staged"], 1_000);
-    await save(["shared"], 2_000);
-    for (let index = 3; index <= 9; index += 1) {
-      await save(["current"], index * 1_000);
-    }
-    expect(await readMemoryPreimages(workspaceDir)).toHaveLength(8);
-    expect(listMemoryEntryOrigins({ agentId: "main" }).map((entry) => entry.entryKey)).toEqual([
-      "current",
-      "indexed",
-      "shared",
-      "staged",
-    ]);
-
-    await save(["current"], 10_000);
-
-    expect(await readMemoryPreimages(workspaceDir)).toHaveLength(8);
-    expect(listMemoryEntryOrigins({ agentId: "main" }).map((entry) => entry.entryKey)).toEqual([
-      "current",
-      "indexed",
-      "staged",
-    ]);
-  });
+      expect(listMemoryEntryOrigins({ agentId: "main", entryKeys: ["diary"] })).toEqual([]);
+    },
+  );
 
   it("records exact session identity when a transcript recall candidate is first produced", async () => {
     const workspaceDir = path.join(stateDir, "workspace");
